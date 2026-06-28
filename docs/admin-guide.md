@@ -74,7 +74,7 @@ RBAC is backend-authoritative. The following roles are seeded:
 |------|--------------|
 | **Super Administrator** | `Admin.All` — wildcard, unrestricted |
 | **Administrator** | every permission except the `Admin.All` wildcard |
-| **Operator** | `Host.View`, `Host.Connect`, `Host.Sudo`, `Host.Scan`, `Session.Start`, `Session.Replay`, `File.Transfer`, `Approval.Request` |
+| **Operator** | `Host.View`, `Host.Connect`, `Host.Sudo`, `Host.Scan`, `Session.Start`, `Session.Replay`, `File.Transfer`, `Approval.Request`, `Assistant.Use` |
 | **Auditor** | `Host.View`, `Host.Scan`, `Audit.View`, `Audit.Export`, `Session.Replay` |
 | **Read-Only** | `Host.View` |
 
@@ -168,6 +168,7 @@ dashboards.
 | `session_policy` | idle 30 min, absolute 12 h | session lifetime |
 | `require_mfa` | `{"enabled": false}` | when on, **all** users must enroll a second factor (Users → *Require MFA for all*) |
 | `branding` | `{"app_name": "Fleet Terminal"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
+| `assistant` | `{"enabled": false, "ollamaUrl": "", "model": ""}` | local-Ollama AI assistant (read-only NL queries over fleet data); edit via **Settings → AI assistant** |
 
 The **Settings → Branding** card edits the application name in the UI; the change
 takes effect immediately (no rebuild) and is served publicly so the login screen

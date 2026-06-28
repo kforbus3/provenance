@@ -340,6 +340,24 @@ under `FLEET_SCAN_DIR`, and records a parsed summary:
 
 ---
 
+## AI assistant (Ollama)
+
+Read-only natural-language queries over fleet data via a local Ollama instance.
+The model only calls a curated `query_hosts` tool (no SQL, no actions); results
+are scoped to hosts the caller can access and every question is audited.
+
+| Method | Path | Gate |
+|--------|------|------|
+| GET | `/api/v1/assistant/status` | `Assistant.Use` — `{enabled, model, reachable, ready}` |
+| GET | `/api/v1/assistant/models?url=` | `System.Configure` — list Ollama models (for setup) |
+| POST | `/api/v1/assistant/ask` | `Assistant.Use` — `{question}` → `202 {id}` (async) |
+| GET | `/api/v1/assistant/ask/{id}` | `Assistant.Use` — poll → `{status, answer, hosts[]}` |
+
+Configured via the `assistant` setting (`{enabled, ollamaUrl, model}`). Asks run
+in the background (local inference can exceed the request timeout); poll the `id`.
+
+---
+
 ## Certificates (CA lifecycle)
 
 | Method | Path | Required permission |

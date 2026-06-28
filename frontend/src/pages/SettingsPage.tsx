@@ -1,12 +1,13 @@
 import { useState } from "react";
 import {
-  Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton,
-  Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, TextField, Tooltip, Typography, Alert,
+  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
+  FormControlLabel, IconButton, MenuItem, Paper, Stack, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, Alert,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
+import { assistantModels } from "../api/assistant";
 import { downloadBackup } from "../api/system";
 
 // System settings editor. Values are arbitrary JSON; the editor exposes them as
@@ -49,6 +50,7 @@ export function SettingsPage() {
       <Typography variant="h5" sx={{ mb: 2 }}>System Settings</Typography>
 
       <BrandingCard current={settings["branding"]} />
+      <AssistantCard current={settings["assistant"]} />
       <WGSettingsCard current={settings["wireguard"]} />
       <RetentionCard current={settings["recordings"]} />
       <BackupCard />
@@ -137,6 +139,74 @@ function BrandingCard({ current }: { current: unknown }) {
         <Button variant="contained" sx={{ mt: 1 }} disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
         </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+// AssistantCard configures the local Ollama instance powering the read-only AI
+// assistant: enable, endpoint URL, and model (listed live from Ollama).
+function AssistantCard({ current }: { current: unknown }) {
+  const qc = useQueryClient();
+  const cur = (current ?? {}) as { enabled?: boolean; ollamaUrl?: string; model?: string };
+  const [enabled, setEnabled] = useState(Boolean(cur.enabled));
+  const [url, setUrl] = useState(cur.ollamaUrl ?? "");
+  const [model, setModel] = useState(cur.model ?? "");
+  const [models, setModels] = useState<string[]>(cur.model ? [cur.model] : []);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadModels = useMutation({
+    mutationFn: () => assistantModels(url.trim()),
+    onSuccess: (list) => { setModels(list); setError(list.length ? null : "No models found at that URL."); },
+    onError: () => setError("Could not reach Ollama at that URL."),
+  });
+
+  const save = useMutation({
+    mutationFn: () => setSetting("assistant", { enabled, ollamaUrl: url.trim(), model }),
+    onSuccess: () => {
+      setSaved(true);
+      void qc.invalidateQueries({ queryKey: ["settings"] });
+      void qc.invalidateQueries({ queryKey: ["assistant-status"] });
+    },
+  });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">AI assistant (local Ollama)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Point Fleet at a local Ollama instance to enable read-only natural-language queries over
+        your fleet (e.g. “hosts with less than 20% disk free”). Data never leaves your network;
+        queries are RBAC-scoped and audited.
+      </Typography>
+      {error && <Alert severity="warning" sx={{ mb: 1.5 }}>{error}</Alert>}
+      <Stack spacing={2}>
+        <FormControlLabel
+          control={<Checkbox checked={enabled} onChange={(e) => { setEnabled(e.target.checked); setSaved(false); }} />}
+          label="Enable the assistant"
+        />
+        <Stack direction="row" spacing={2} alignItems="flex-start">
+          <TextField
+            label="Ollama URL" value={url} placeholder="http://10.10.0.x:11434"
+            onChange={(e) => { setUrl(e.target.value); setSaved(false); }}
+            sx={{ flexGrow: 1 }} size="small"
+          />
+          <Button sx={{ mt: 0.5 }} disabled={!url.trim() || loadModels.isPending} onClick={() => loadModels.mutate()}>
+            {loadModels.isPending ? "Loading…" : "Load models"}
+          </Button>
+        </Stack>
+        <TextField
+          select size="small" label="Model" value={model} sx={{ maxWidth: 360 }}
+          onChange={(e) => { setModel(e.target.value); setSaved(false); }}
+          helperText={models.length ? undefined : "Load models from the URL above, then pick one."}
+        >
+          {models.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+        </TextField>
+        <Box>
+          <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+            {saved ? "Saved" : "Save"}
+          </Button>
+        </Box>
       </Stack>
     </Paper>
   );
