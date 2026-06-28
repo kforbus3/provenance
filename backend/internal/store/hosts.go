@@ -103,6 +103,7 @@ func (s *Store) attachHostDetails(ctx context.Context, h *models.Host) {
 			&st.LastSuccessAt, &st.LastFailureAt, &st.LastError, &st.CheckedAt); err == nil {
 		h.Status = &st
 	}
+	h.Metrics = s.loadMetrics(ctx, h.ID)
 }
 
 // ListHosts returns all hosts with details. Filtering/sorting is applied in the

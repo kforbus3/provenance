@@ -24,6 +24,41 @@ export interface HostStatus {
   checkedAt?: string;
 }
 
+export interface DiskFS {
+  mount: string;
+  sizeBytes: number;
+  usedBytes: number;
+  availBytes: number;
+  usePct: number;
+}
+
+export interface NetInterface {
+  name: string;
+  addrs: string[];
+}
+
+export interface HostNetwork {
+  interfaces?: NetInterface[];
+  primaryIp?: string;
+  defaultGateway?: string;
+  defaultIface?: string;
+}
+
+export interface HostMetrics {
+  disk?: DiskFS[];
+  minDiskFreePct?: number;
+  memTotalMb: number;
+  memAvailableMb: number;
+  memUsedPct?: number;
+  load1?: number;
+  load5?: number;
+  load15?: number;
+  loadPerCore?: number;
+  network?: HostNetwork;
+  primaryIp?: string;
+  collectedAt?: string;
+}
+
 export interface Host {
   id: string;
   hostname: string;
@@ -41,6 +76,7 @@ export interface Host {
   groups?: string[];
   inventory?: HostInventory;
   status?: HostStatus;
+  metrics?: HostMetrics;
 }
 
 export interface HostListResponse {

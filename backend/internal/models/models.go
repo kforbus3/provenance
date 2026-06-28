@@ -74,6 +74,47 @@ type Host struct {
 	Groups    []string       `json:"groups,omitempty"`
 	Inventory *HostInventory `json:"inventory,omitempty"`
 	Status    *HostStatus    `json:"status,omitempty"`
+	Metrics   *HostMetrics   `json:"metrics,omitempty"`
+}
+
+// DiskFS is one mounted filesystem's usage.
+type DiskFS struct {
+	Mount      string  `json:"mount"`
+	SizeBytes  int64   `json:"sizeBytes"`
+	UsedBytes  int64   `json:"usedBytes"`
+	AvailBytes int64   `json:"availBytes"`
+	UsePct     float64 `json:"usePct"`
+}
+
+// NetInterface is a network interface with its addresses (CIDR form).
+type NetInterface struct {
+	Name  string   `json:"name"`
+	Addrs []string `json:"addrs"`
+}
+
+// HostNetwork holds a host's network facts.
+type HostNetwork struct {
+	Interfaces     []NetInterface `json:"interfaces,omitempty"`
+	PrimaryIP      string         `json:"primaryIp,omitempty"`
+	DefaultGateway string         `json:"defaultGateway,omitempty"`
+	DefaultIface   string         `json:"defaultIface,omitempty"`
+}
+
+// HostMetrics is periodically-collected resource usage (disk, memory, load,
+// network), refreshed by the monitor on every probe.
+type HostMetrics struct {
+	Disk           []DiskFS     `json:"disk,omitempty"`
+	MinDiskFreePct *float64     `json:"minDiskFreePct,omitempty"`
+	MemTotalMB     int64        `json:"memTotalMb"`
+	MemAvailableMB int64        `json:"memAvailableMb"`
+	MemUsedPct     *float64     `json:"memUsedPct,omitempty"`
+	Load1          *float64     `json:"load1,omitempty"`
+	Load5          *float64     `json:"load5,omitempty"`
+	Load15         *float64     `json:"load15,omitempty"`
+	LoadPerCore    *float64     `json:"loadPerCore,omitempty"`
+	Network        *HostNetwork `json:"network,omitempty"`
+	PrimaryIP      string       `json:"primaryIp,omitempty"`
+	CollectedAt    *time.Time   `json:"collectedAt,omitempty"`
 }
 
 // HostInventory holds collected facts about a host.
