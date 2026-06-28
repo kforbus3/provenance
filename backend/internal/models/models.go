@@ -331,3 +331,16 @@ type ScanProfile struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 }
+
+// AssistantHostRow is a compact host record returned to the AI assistant's
+// query tool (one row per host, joined from status/metrics/inventory).
+type AssistantHostRow struct {
+	Hostname       string   `json:"hostname"`
+	Environment    string   `json:"environment,omitempty"`
+	Status         string   `json:"status"`
+	PrimaryIP      string   `json:"primaryIp,omitempty"`
+	OSName         string   `json:"os,omitempty"`
+	MinDiskFreePct *float64 `json:"diskFreePct,omitempty"`
+	MemUsedPct     *float64 `json:"memUsedPct,omitempty"`
+	LoadPerCore    *float64 `json:"loadPerCore,omitempty"`
+}
