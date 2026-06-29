@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { setAccessToken } from "../api/client";
+import { setAccessToken, setTokenChangeHandler } from "../api/client";
 import * as authApi from "../api/auth";
 import type { User } from "../api/auth";
 import { authenticatePasskey } from "../api/webauthn";
@@ -128,3 +128,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     return permissions.includes("Admin.All") || permissions.includes(perm);
   },
 }));
+
+// Keep the store's token in sync with background token refreshes from the api
+// client (so ?token= consumers like the report viewer use the fresh token).
+setTokenChangeHandler((t) => useAuthStore.setState({ accessToken: t }));
