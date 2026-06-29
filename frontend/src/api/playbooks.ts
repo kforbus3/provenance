@@ -95,15 +95,12 @@ export interface PlaybookRun {
   createdAt: string;
 }
 
-export async function runPlaybook(
-  id: string,
-  input: { targetId: string; checkMode: boolean },
-): Promise<PlaybookRun> {
-  const { data } = await api.post<PlaybookRun>(`/api/v1/playbooks/${id}/run`, {
-    targetKind: "host",
-    targetId: input.targetId,
-    checkMode: input.checkMode,
-  });
+export type RunTarget =
+  | { targetKind: "host"; hostIds: string[]; checkMode: boolean }
+  | { targetKind: "group"; groupId: string; checkMode: boolean };
+
+export async function runPlaybook(id: string, input: RunTarget): Promise<PlaybookRun> {
+  const { data } = await api.post<PlaybookRun>(`/api/v1/playbooks/${id}/run`, input);
   return data;
 }
 

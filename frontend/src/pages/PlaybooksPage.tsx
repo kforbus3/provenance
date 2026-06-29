@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   FormControlLabel, IconButton, LinearProgress, Paper, Stack, Switch, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
+  TableCell, TableContainer, TableHead, TableRow, TextField, ToggleButton,
+  ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
@@ -20,6 +21,7 @@ import {
   type CheckResult, type Playbook,
 } from "../api/playbooks";
 import { listHosts, type Host } from "../api/hosts";
+import { listGroups, type Group } from "../api/admin";
 import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 
@@ -149,19 +151,34 @@ export function PlaybooksPage() {
 
 const TERMINAL = new Set(["completed", "failed"]);
 
-// Run a playbook against a single accessible host. Pre-run: pick a host + choose
-// dry-run. After launch: poll the run and stream its output into a console until
-// it reaches a terminal state.
+// Run a playbook against one or more accessible hosts, or every host in a group.
+// Pre-run: choose targets + dry-run. After launch: poll the run and stream its
+// output into a console until it reaches a terminal state.
 function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose: () => void }) {
   const { data: hostData } = useQuery({ queryKey: ["hosts"], queryFn: listHosts });
+  const { data: groups = [] } = useQuery({ queryKey: ["groups"], queryFn: listGroups });
   const hosts = hostData?.hosts ?? [];
 
-  const [host, setHost] = useState<Host | null>(null);
+  const [mode, setMode] = useState<"host" | "group">("host");
+  const [selectedHosts, setSelectedHosts] = useState<Host[]>([]);
+  const [group, setGroup] = useState<Group | null>(null);
   const [checkMode, setCheckMode] = useState(true);
   const [runId, setRunId] = useState<string | null>(null);
 
+  const targetReady = mode === "host" ? selectedHosts.length > 0 : !!group;
+  const targetLabel =
+    mode === "host"
+      ? selectedHosts.length === 1 ? selectedHosts[0].hostname : `${selectedHosts.length} hosts`
+      : group ? `group “${group.name}”` : "the group";
+
   const startMut = useMutation({
-    mutationFn: () => runPlaybook(playbook.id, { targetId: host!.id, checkMode }),
+    mutationFn: () =>
+      runPlaybook(
+        playbook.id,
+        mode === "host"
+          ? { targetKind: "host", hostIds: selectedHosts.map((h) => h.id), checkMode }
+          : { targetKind: "group", groupId: group!.id, checkMode },
+      ),
     onSuccess: (r) => setRunId(r.id),
   });
 
@@ -183,23 +200,50 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
             <Alert severity="info">
               The playbook runs through the Fleet jump host as the privileged host account. Make sure
               its plays target <code>hosts: all</code> — Fleet supplies the inventory and limits it to
-              the host you pick.
+              the targets you pick.
             </Alert>
-            <Autocomplete
-              options={hosts}
-              value={host}
-              onChange={(_, v) => setHost(v)}
-              getOptionLabel={(h) => h.hostname}
-              isOptionEqualToValue={(a, b) => a.id === b.id}
-              renderInput={(params) => <TextField {...params} label="Target host" size="small" autoFocus />}
-            />
+            <ToggleButtonGroup
+              size="small" exclusive value={mode}
+              onChange={(_, v) => { if (v) setMode(v); }}
+            >
+              <ToggleButton value="host">Hosts</ToggleButton>
+              <ToggleButton value="group">Group</ToggleButton>
+            </ToggleButtonGroup>
+            {mode === "host" ? (
+              <Autocomplete
+                multiple
+                options={hosts}
+                value={selectedHosts}
+                onChange={(_, v) => setSelectedHosts(v)}
+                getOptionLabel={(h) => h.hostname}
+                isOptionEqualToValue={(a, b) => a.id === b.id}
+                renderInput={(params) => (
+                  <TextField {...params} label="Target hosts" size="small" autoFocus
+                    placeholder={selectedHosts.length ? "" : "Add one or more hosts"} />
+                )}
+              />
+            ) : (
+              <Autocomplete
+                options={groups}
+                value={group}
+                onChange={(_, v) => setGroup(v)}
+                getOptionLabel={(g) => g.name}
+                isOptionEqualToValue={(a, b) => a.id === b.id}
+                renderInput={(params) => <TextField {...params} label="Target group" size="small" autoFocus />}
+              />
+            )}
+            {mode === "group" && (
+              <Typography variant="body2" color="text.secondary">
+                The playbook runs on every host in the group that you can access.
+              </Typography>
+            )}
             <FormControlLabel
               control={<Switch checked={checkMode} onChange={(e) => setCheckMode(e.target.checked)} />}
               label="Dry run (check mode — report changes without applying them)"
             />
-            {!checkMode && (
+            {!checkMode && targetReady && (
               <Alert severity="warning">
-                This will apply changes on <strong>{host?.hostname ?? "the selected host"}</strong>.
+                This will apply changes on <strong>{targetLabel}</strong>.
               </Alert>
             )}
             {startMut.error != null && <Alert severity="error">{(startMut.error as Error).message}</Alert>}
@@ -209,7 +253,9 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
             <Stack direction="row" spacing={1} alignItems="center">
               <RunStatusChip status={run?.status} />
               {run?.checkMode && <Chip size="small" label="dry run" variant="outlined" />}
-              <Typography variant="body2" color="text.secondary">{host?.hostname}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {run?.targetName}{run && run.hostCount > 1 ? ` (${run.hostCount} hosts)` : ""}
+              </Typography>
               {run && TERMINAL.has(run.status) && run.exitCode != null && (
                 <Typography variant="body2" color="text.secondary">exit {run.exitCode}</Typography>
               )}
@@ -234,7 +280,7 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
         {!runId && (
           <Button
             variant="contained" startIcon={<PlayArrowIcon />}
-            disabled={!host || startMut.isPending}
+            disabled={!targetReady || startMut.isPending}
             onClick={() => startMut.mutate()}
           >
             {checkMode ? "Dry run" : "Run"}

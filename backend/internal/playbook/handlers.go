@@ -2,6 +2,7 @@ package playbook
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -196,9 +197,11 @@ func (h *handler) runnerStatus(w http.ResponseWriter, r *http.Request) {
 // --- execution (Playbook.Run) ---
 
 type runReq struct {
-	TargetKind string `json:"targetKind"` // host (group arrives in Phase 3)
-	TargetID   string `json:"targetId"`
-	CheckMode  bool   `json:"checkMode"`
+	TargetKind string   `json:"targetKind"`       // host | group
+	HostIDs    []string `json:"hostIds"`          // when targetKind=host (one or many)
+	GroupID    string   `json:"groupId"`          // when targetKind=group
+	TargetID   string   `json:"targetId"`         // back-compat: a single host id
+	CheckMode  bool     `json:"checkMode"`
 }
 
 func (h *handler) run(w http.ResponseWriter, r *http.Request) {
@@ -218,45 +221,121 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 	if rq.TargetKind == "" {
 		rq.TargetKind = "host"
 	}
-	if rq.TargetKind != "host" {
-		writeError(w, http.StatusBadRequest, "only single-host runs are supported")
-		return
-	}
-	hostID, err := uuid.Parse(rq.TargetID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad target id")
-		return
-	}
-	host, err := h.d.Store.GetHost(r.Context(), hostID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
-		return
-	}
 	p := auth.MustPrincipal(r)
-	if !h.canAccessHost(r, p, host.ID) {
-		writeError(w, http.StatusForbidden, "not authorized for host")
+
+	var (
+		hosts      []*models.Host
+		targetKind = rq.TargetKind
+		targetName string
+		groupID    *uuid.UUID
+	)
+
+	switch rq.TargetKind {
+	case "host":
+		// Accept either an explicit list (hostIds) or a single targetId.
+		ids := rq.HostIDs
+		if len(ids) == 0 && rq.TargetID != "" {
+			ids = []string{rq.TargetID}
+		}
+		if len(ids) == 0 {
+			writeError(w, http.StatusBadRequest, "no target hosts")
+			return
+		}
+		seen := map[uuid.UUID]bool{}
+		for _, raw := range ids {
+			hid, err := uuid.Parse(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad host id")
+				return
+			}
+			if seen[hid] {
+				continue
+			}
+			seen[hid] = true
+			host, err := h.d.Store.GetHost(r.Context(), hid)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "host not found")
+				return
+			}
+			if !h.canAccessHost(r, p, host.ID) {
+				writeError(w, http.StatusForbidden, "not authorized for host "+host.Hostname)
+				return
+			}
+			hosts = append(hosts, host)
+		}
+		if len(hosts) == 1 {
+			targetName = hosts[0].Hostname
+		} else {
+			targetName = fmt.Sprintf("%d hosts", len(hosts))
+		}
+
+	case "group":
+		gid, err := uuid.Parse(rq.GroupID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad group id")
+			return
+		}
+		g, err := h.d.Store.GetGroup(r.Context(), gid)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		members, err := h.d.Store.HostsInGroup(r.Context(), gid)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not resolve group hosts")
+			return
+		}
+		// Only target hosts the requester can actually reach (super admins: all).
+		for i := range members {
+			m := members[i]
+			if h.canAccessHost(r, p, m.ID) {
+				hosts = append(hosts, &m)
+			}
+		}
+		if len(hosts) == 0 {
+			writeError(w, http.StatusForbidden, "no hosts in this group are accessible to you")
+			return
+		}
+		groupID = &g.ID
+		targetName = g.Name
+
+	default:
+		writeError(w, http.StatusBadRequest, "unknown target kind")
 		return
+	}
+
+	var targetID *uuid.UUID
+	switch {
+	case targetKind == "group":
+		targetID = groupID
+	case len(hosts) == 1:
+		targetID = &hosts[0].ID
 	}
 
 	rec, err := h.d.Store.CreatePlaybookRun(r.Context(), models.PlaybookRun{
 		PlaybookID:      pb.ID,
 		PlaybookVersion: pb.Version,
 		Requester:       p.Username,
-		TargetKind:      "host",
-		TargetID:        &host.ID,
-		TargetName:      host.Hostname,
-		HostCount:       1,
+		TargetKind:      targetKind,
+		TargetID:        targetID,
+		TargetName:      targetName,
+		HostCount:       len(hosts),
 		CheckMode:       rq.CheckMode,
 	}, &p.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create run")
 		return
 	}
-	go h.svc.Run(rec.ID, pb.Content, []*models.Host{host}, rq.CheckMode)
+	go h.svc.Run(rec.ID, pb.Content, hosts, rq.CheckMode)
 
+	names := make([]string, 0, len(hosts))
+	for _, hh := range hosts {
+		names = append(names, hh.Hostname)
+	}
 	h.audit(r, "playbook.run", pb.ID.String(), map[string]any{
 		"name": pb.Name, "version": pb.Version, "runId": rec.ID,
-		"hostId": host.ID, "hostname": host.Hostname, "checkMode": rq.CheckMode,
+		"targetKind": targetKind, "target": targetName, "hosts": names,
+		"hostCount": len(hosts), "checkMode": rq.CheckMode,
 	})
 	writeJSON(w, http.StatusAccepted, rec)
 }
