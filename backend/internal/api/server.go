@@ -26,6 +26,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/admin"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/approvals"
+	"github.com/fleet-terminal/backend/internal/assistant"
 	"github.com/fleet-terminal/backend/internal/auditapi"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/bootstrap"
@@ -406,6 +407,9 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, scan.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer))
+
+	// AI assistant (read-only NL queries over fleet data via local Ollama).
+	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)

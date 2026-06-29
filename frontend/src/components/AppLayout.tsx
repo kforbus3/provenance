@@ -5,6 +5,7 @@ import {
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import DashboardIcon from "@mui/icons-material/Dashboard";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
 import HistoryIcon from "@mui/icons-material/History";
 import ApprovalIcon from "@mui/icons-material/HowToReg";
 import GavelIcon from "@mui/icons-material/Gavel";
@@ -29,6 +30,7 @@ const DRAWER_WIDTH = 232;
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
+  { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
   { to: "/hosts", label: "Hosts", icon: <DnsIcon /> },
   { to: "/terminals", label: "Terminals", icon: <TerminalIcon /> },
   { to: "/sessions", label: "Session Replay", icon: <HistoryIcon /> },
@@ -54,6 +56,7 @@ export function AppLayout() {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const logout = useAuthStore((s) => s.logout);
   const username = useAuthStore((s) => s.user?.username);
+  const has = useAuthStore((s) => s.has);
   const navigate = useNavigate();
   const appName = useAppName();
   useDocumentTitle();
@@ -116,7 +119,7 @@ export function AppLayout() {
         <Toolbar variant="dense" />
         <Box sx={{ overflow: "auto" }}>
           <List dense>
-            {NAV.map((item) => {
+            {NAV.filter((item) => !item.perm || has(item.perm)).map((item) => {
               const selected =
                 item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
               return (

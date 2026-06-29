@@ -79,7 +79,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if !h.Enrolled {
 			continue
 		}
-		st, inv := m.probe(ctx, signer, &h)
+		st, inv, metrics := m.probe(ctx, signer, &h)
 		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 			continue
@@ -87,6 +87,11 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if inv != nil {
 			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
+			}
+		}
+		if metrics != nil {
+			if err := m.store.UpsertMetrics(ctx, h.ID, *metrics); err != nil {
+				m.log.Warn("monitor update metrics", "host", h.Hostname, "err", err)
 			}
 		}
 		m.hub.Broadcast("host.status", map[string]any{
@@ -105,7 +110,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 // records latency, uptime, and SSH/WireGuard health. When the host is online and
 // its inventory is missing or stale, it also re-collects host facts (distro,
 // kernel, etc.) over the same connection and returns them for persistence.
-func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, h *models.Host) (models.HostStatus, *models.HostInventory) {
+func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, h *models.Host) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
 	now := time.Now()
 	st := models.HostStatus{Status: "unknown", CheckedAt: &now}
 
@@ -128,7 +133,7 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, h *models.Host) 
 		st.SSHOK = false
 		st.LastError = trunc(errStr(dialErr), 240)
 		st.LastFailureAt = &now
-		return st, nil
+		return st, nil, nil
 	}
 	defer conn.Close()
 	st.SSHOK = true
@@ -157,7 +162,19 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, h *models.Host) 
 			inv = &collected
 		}
 	}
-	return st, inv
+
+	// Resource metrics (disk/memory/load/network) change continuously, so collect
+	// them every probe. CPU count (for load-per-core) comes from inventory.
+	cpu := 0
+	if h.Inventory != nil {
+		cpu = h.Inventory.CPUCount
+	}
+	if inv != nil && inv.CPUCount > 0 {
+		cpu = inv.CPUCount
+	}
+	metrics := collectMetrics(conn, cpu)
+
+	return st, inv, metrics
 }
 
 // inventoryTTL bounds how often the monitor re-collects host facts.

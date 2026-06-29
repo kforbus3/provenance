@@ -636,6 +636,7 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
   const h = data ?? host;
   const inv = h?.inventory;
   const st = h?.status;
+  const met = h?.metrics;
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{h?.hostname ?? "Host"} · details</DialogTitle>
@@ -659,6 +660,29 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
           ["WireGuard", st ? (st.wgOk ? "healthy" : "—") : ""],
           ["Last checked", st?.checkedAt ? fmtDate(st.checkedAt) : ""],
         ]} />
+        {met && (
+          <>
+            <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>Resources</Typography>
+            <DetailRows rows={[
+              ["Memory", met.memTotalMb ? `${met.memUsedPct != null ? Math.round(met.memUsedPct) + "% used · " : ""}${fmtMem(met.memTotalMb)} total` : ""],
+              ["Load 1/5/15m", met.load1 != null ? `${met.load1} / ${met.load5 ?? "—"} / ${met.load15 ?? "—"}${met.loadPerCore != null ? `  (${met.loadPerCore.toFixed(2)}/core)` : ""}` : ""],
+              ["Primary IP", met.primaryIp],
+              ["Gateway", met.network?.defaultGateway],
+            ]} />
+            {met.disk && met.disk.length > 0 && (
+              <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                {met.disk.map((d) => (
+                  <Stack key={d.mount} direction="row" spacing={2}>
+                    <Typography variant="body2" color="text.secondary" sx={{ width: 150, flexShrink: 0 }}>{d.mount}</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                      {fmtBytes(d.usedBytes)} / {fmtBytes(d.sizeBytes)} ({Math.round(d.usePct)}% used)
+                    </Typography>
+                  </Stack>
+                ))}
+              </Stack>
+            )}
+          </>
+        )}
         {!inv && (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             No facts collected yet — they're gathered at enrollment and refreshed periodically by the monitor.
@@ -683,6 +707,14 @@ function DetailRows({ rows }: { rows: [string, string | undefined][] }) {
       ))}
     </Stack>
   );
+}
+
+function fmtBytes(b: number): string {
+  if (!b) return "0";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let v = b, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 
 function fmtMem(mb?: number): string {

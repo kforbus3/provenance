@@ -95,8 +95,24 @@ The dashboard subscribes to a WebSocket and updates in real time.
 
 During the same check it also re-collects **host facts** — distro + version, kernel,
 architecture, CPU count, memory, and SSH version — but at most once an hour per host (over the
-already-open connection, so it adds no extra SSH dials). View them per host via the **Details**
-(ⓘ) button on the **Hosts** page, which fetches that single host on demand.
+already-open connection, so it adds no extra SSH dials). Every probe also captures **resource
+metrics**: disk usage per filesystem, memory used, load average, and network facts (interfaces,
+primary IP, default gateway). View them per host via the **Details** (ⓘ) button on the **Hosts**
+page (a "Resources" section), which fetches that single host on demand.
+
+## AI assistant (Ask Fleet)
+
+An optional, **local-only** assistant answers natural-language questions about the fleet —
+"which hosts have less than 20% disk free?", "offline debian hosts", "prod hosts under heavy
+load". It's **read-only**: a local Ollama model translates the question into a curated
+`query_hosts` filter, the backend runs that query (scoped to hosts *you* can access) and shows
+the **actual matching hosts** beside the answer — no data leaves your network, and every
+question is audited.
+
+**Enable it (admin):** **Settings → AI assistant** — turn it on, enter your Ollama URL
+(e.g. `http://10.10.0.x:11434`), click **Load models**, pick a model, **Save**. Then users with
+the `Assistant.Use` permission get an **Ask** item in the sidebar. The assistant never runs
+commands or changes anything; treat answers as a starting point and verify before acting.
 
 ## Two-factor authentication (TOTP / passkeys)
 

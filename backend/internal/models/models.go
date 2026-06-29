@@ -74,6 +74,47 @@ type Host struct {
 	Groups    []string       `json:"groups,omitempty"`
 	Inventory *HostInventory `json:"inventory,omitempty"`
 	Status    *HostStatus    `json:"status,omitempty"`
+	Metrics   *HostMetrics   `json:"metrics,omitempty"`
+}
+
+// DiskFS is one mounted filesystem's usage.
+type DiskFS struct {
+	Mount      string  `json:"mount"`
+	SizeBytes  int64   `json:"sizeBytes"`
+	UsedBytes  int64   `json:"usedBytes"`
+	AvailBytes int64   `json:"availBytes"`
+	UsePct     float64 `json:"usePct"`
+}
+
+// NetInterface is a network interface with its addresses (CIDR form).
+type NetInterface struct {
+	Name  string   `json:"name"`
+	Addrs []string `json:"addrs"`
+}
+
+// HostNetwork holds a host's network facts.
+type HostNetwork struct {
+	Interfaces     []NetInterface `json:"interfaces,omitempty"`
+	PrimaryIP      string         `json:"primaryIp,omitempty"`
+	DefaultGateway string         `json:"defaultGateway,omitempty"`
+	DefaultIface   string         `json:"defaultIface,omitempty"`
+}
+
+// HostMetrics is periodically-collected resource usage (disk, memory, load,
+// network), refreshed by the monitor on every probe.
+type HostMetrics struct {
+	Disk           []DiskFS     `json:"disk,omitempty"`
+	MinDiskFreePct *float64     `json:"minDiskFreePct,omitempty"`
+	MemTotalMB     int64        `json:"memTotalMb"`
+	MemAvailableMB int64        `json:"memAvailableMb"`
+	MemUsedPct     *float64     `json:"memUsedPct,omitempty"`
+	Load1          *float64     `json:"load1,omitempty"`
+	Load5          *float64     `json:"load5,omitempty"`
+	Load15         *float64     `json:"load15,omitempty"`
+	LoadPerCore    *float64     `json:"loadPerCore,omitempty"`
+	Network        *HostNetwork `json:"network,omitempty"`
+	PrimaryIP      string       `json:"primaryIp,omitempty"`
+	CollectedAt    *time.Time   `json:"collectedAt,omitempty"`
 }
 
 // HostInventory holds collected facts about a host.
@@ -289,4 +330,31 @@ type HostScan struct {
 type ScanProfile struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+}
+
+// AssistantHostRow is a compact host record returned to the AI assistant's
+// query tool (one row per host, joined from status/metrics/inventory).
+type AssistantHostRow struct {
+	Hostname       string   `json:"hostname"`
+	Environment    string   `json:"environment,omitempty"`
+	Status         string   `json:"status"`
+	PrimaryIP      string   `json:"primaryIp,omitempty"`
+	OSName         string     `json:"os,omitempty"`
+	OSVersion      string     `json:"osVersion,omitempty"`
+	Kernel         string     `json:"kernel,omitempty"`
+	Architecture   string     `json:"arch,omitempty"`
+	CPUCount       int        `json:"cpuCount,omitempty"`
+	MemoryTotalMB  int64      `json:"memoryMb,omitempty"`
+	SSHVersion     string     `json:"sshVersion,omitempty"`
+	UptimeSeconds  *int64     `json:"uptimeSeconds,omitempty"`
+	MinDiskFreePct *float64   `json:"diskFreePct,omitempty"`
+	MemUsedPct     *float64   `json:"memUsedPct,omitempty"`
+	LoadPerCore    *float64   `json:"loadPerCore,omitempty"`
+	LatencyMS      *int       `json:"latencyMs,omitempty"`
+	WGOK           *bool      `json:"wireguardOk,omitempty"`
+	LastSeen       *time.Time `json:"lastSeen,omitempty"`
+	Groups         []string   `json:"groups,omitempty"`
+	Tags           []string   `json:"tags,omitempty"`
+	Owner          string     `json:"owner,omitempty"`
+	Enrolled       bool       `json:"enrolled"`
 }
