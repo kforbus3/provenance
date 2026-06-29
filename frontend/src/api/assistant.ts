@@ -1,4 +1,5 @@
 import { api } from "./client";
+import type { Host } from "./hosts";
 
 // AI assistant: read-only natural-language queries over fleet data via Ollama.
 
@@ -20,10 +21,19 @@ export interface AssistantHost {
   loadPerCore?: number;
 }
 
+export interface AssistantSession {
+  username: string;
+  hostname: string;
+  clientIp?: string;
+  startedAt: string;
+}
+
 export interface AskResult {
   status: string; // pending|done|error
   answer?: string;
   hosts?: AssistantHost[];
+  sessions?: AssistantSession[];
+  host?: Host;
   error?: string;
 }
 

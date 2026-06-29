@@ -80,13 +80,31 @@ func (s *Service) Models(ctx context.Context, urlOverride string) ([]string, err
 	return newOllama(url).listModels(ctx)
 }
 
-// AskResult is the (eventual) outcome of a question.
+// SessionRow is one active SSH session for the list_sessions panel.
+type SessionRow struct {
+	Username  string `json:"username"`
+	Hostname  string `json:"hostname"`
+	ClientIP  string `json:"clientIp,omitempty"`
+	StartedAt string `json:"startedAt"`
+}
+
+// AskResult is the (eventual) outcome of a question, with structured data the UI
+// renders beneath the answer (whichever tool the model used).
 type AskResult struct {
-	Status  string                    `json:"status"` // pending|done|error
-	Answer  string                    `json:"answer,omitempty"`
-	Hosts   []models.AssistantHostRow `json:"hosts,omitempty"`
-	Error   string                    `json:"error,omitempty"`
-	created time.Time
+	Status   string                    `json:"status"` // pending|done|error
+	Answer   string                    `json:"answer,omitempty"`
+	Hosts    []models.AssistantHostRow `json:"hosts,omitempty"`
+	Sessions []SessionRow              `json:"sessions,omitempty"`
+	Host     *models.Host              `json:"host,omitempty"`
+	Error    string                    `json:"error,omitempty"`
+	created  time.Time
+}
+
+// answerData bundles structured tool output collected during a conversation.
+type answerData struct {
+	hosts    []models.AssistantHostRow
+	sessions []SessionRow
+	host     *models.Host
 }
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
@@ -128,33 +146,36 @@ func (s *Service) run(id, question string, who Caller, cfg Settings) {
 	defer cancel()
 	s.cleanup()
 
-	answer, hosts, err := s.converse(ctx, cfg, question, who)
+	answer, data, err := s.converse(ctx, cfg, question, who)
 	if err != nil {
 		s.log.Warn("assistant ask failed", "user", who.Username, "err", err)
 		s.asks.Store(id, &AskResult{Status: "error", Error: friendlyErr(err), created: time.Now()})
 		return
 	}
-	s.asks.Store(id, &AskResult{Status: "done", Answer: answer, Hosts: hosts, created: time.Now()})
+	s.asks.Store(id, &AskResult{
+		Status: "done", Answer: answer,
+		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, created: time.Now(),
+	})
 }
 
 // converse runs the tool-calling loop: the model picks query_hosts + filters, we
 // run the RBAC-scoped query, feed results back, and the model narrates.
-func (s *Service) converse(ctx context.Context, cfg Settings, question string, who Caller) (string, []models.AssistantHostRow, error) {
+func (s *Service) converse(ctx context.Context, cfg Settings, question string, who Caller) (string, answerData, error) {
 	client := newOllama(cfg.OllamaURL)
 	messages := []chatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: question},
 	}
-	var collected []models.AssistantHostRow
+	var data answerData
 
 	for i := 0; i < maxToolIterations; i++ {
 		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: tools})
 		if err != nil {
-			return "", nil, err
+			return "", data, err
 		}
 		msg := resp.Message
 		if len(msg.ToolCalls) == 0 {
-			return strings.TrimSpace(msg.Content), collected, nil
+			return strings.TrimSpace(msg.Content), data, nil
 		}
 		messages = append(messages, msg)
 		for _, tc := range msg.ToolCalls {
@@ -162,12 +183,20 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 			switch tc.Function.Name {
 			case "query_hosts":
 				rows := s.runQueryHosts(ctx, tc.Function.Arguments, who)
-				collected = rows
+				data.hosts = rows
 				result = map[string]any{"count": len(rows), "hosts": rows}
 			case "list_sessions":
-				result = s.runListSessions(ctx, who)
+				sessions, payload := s.listSessions(ctx, who)
+				if sessions != nil {
+					data.sessions = sessions
+				}
+				result = payload
 			case "host_detail":
-				result = s.runHostDetail(ctx, tc.Function.Arguments, who)
+				host, payload := s.hostDetail(ctx, tc.Function.Arguments, who)
+				if host != nil {
+					data.host = host
+				}
+				result = payload
 			default:
 				result = map[string]any{"error": "unknown tool"}
 			}
@@ -176,7 +205,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 		}
 	}
 	// Ran out of iterations; summarize from what we have.
-	return "I couldn't fully resolve that. Here are the hosts I found.", collected, nil
+	return "I couldn't fully resolve that. Here is the data I found.", data, nil
 }
 
 func (s *Service) runQueryHosts(ctx context.Context, raw json.RawMessage, who Caller) []models.AssistantHostRow {
@@ -190,46 +219,45 @@ func (s *Service) runQueryHosts(ctx context.Context, raw json.RawMessage, who Ca
 	return rows
 }
 
-func (s *Service) runListSessions(ctx context.Context, who Caller) any {
+// listSessions returns the structured sessions (nil on error/denied) plus the
+// payload to feed the model.
+func (s *Service) listSessions(ctx context.Context, who Caller) ([]SessionRow, any) {
 	if !who.CanViewSessions && !who.IsSuperAdmin {
-		return map[string]any{"error": "you do not have permission to view sessions"}
+		return nil, map[string]any{"error": "you do not have permission to view sessions"}
 	}
 	rows, err := s.store.ActiveSSHSessions(ctx, 200)
 	if err != nil {
 		s.log.Warn("assistant list_sessions", "err", err)
-		return map[string]any{"error": "could not list sessions"}
+		return nil, map[string]any{"error": "could not list sessions"}
 	}
-	type sess struct {
-		Username  string `json:"username"`
-		Hostname  string `json:"hostname"`
-		ClientIP  string `json:"clientIp,omitempty"`
-		StartedAt string `json:"startedAt"`
-	}
-	out := make([]sess, 0, len(rows))
+	out := make([]SessionRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, sess{Username: r.Username, Hostname: r.Hostname, ClientIP: r.ClientIP, StartedAt: r.StartedAt.Format(time.RFC3339)})
+		out = append(out, SessionRow{
+			Username: r.Username, Hostname: r.Hostname, ClientIP: r.ClientIP,
+			StartedAt: r.StartedAt.Format(time.RFC3339),
+		})
 	}
-	return map[string]any{"count": len(out), "sessions": out}
+	return out, map[string]any{"count": len(out), "sessions": out}
 }
 
-func (s *Service) runHostDetail(ctx context.Context, raw json.RawMessage, who Caller) any {
+// hostDetail returns the full host (nil on error/denied) plus the model payload.
+func (s *Service) hostDetail(ctx context.Context, raw json.RawMessage, who Caller) (*models.Host, any) {
 	var a hostDetailArgs
 	_ = json.Unmarshal(raw, &a)
 	if a.Hostname == "" {
-		return map[string]any{"error": "hostname is required"}
+		return nil, map[string]any{"error": "hostname is required"}
 	}
 	host, err := s.store.HostByHostname(ctx, a.Hostname)
 	if err != nil {
-		return map[string]any{"error": "no host named " + a.Hostname}
+		return nil, map[string]any{"error": "no host named " + a.Hostname}
 	}
 	if !who.IsSuperAdmin {
 		ok, err := s.store.UserCanAccessHost(ctx, who.UserID, host.ID)
 		if err != nil || !ok {
-			return map[string]any{"error": "you do not have access to that host"}
+			return nil, map[string]any{"error": "you do not have access to that host"}
 		}
 	}
-	// Return the host with details; internal ids are harmless and ignored.
-	return host
+	return host, host
 }
 
 // cleanup drops results older than the ask timeout to bound memory.
