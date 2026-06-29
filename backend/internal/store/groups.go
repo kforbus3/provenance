@@ -87,6 +87,40 @@ func (s *Store) ListGroups(ctx context.Context) ([]models.Group, error) {
 	return out, rows.Err()
 }
 
+// GetGroup loads one group by id.
+func (s *Store) GetGroup(ctx context.Context, id uuid.UUID) (*models.Group, error) {
+	var g models.Group
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, name, description, created_at FROM groups WHERE id=$1`, id).
+		Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	return &g, nil
+}
+
+// HostsInGroup returns the hosts that belong to a group (identity + connection
+// fields only; no status/inventory fan-out — enough to run against them).
+func (s *Store) HostsInGroup(ctx context.Context, groupID uuid.UUID) ([]models.Host, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+hostCols+` FROM hosts h
+		 JOIN host_groups hg ON hg.host_id = h.id
+		 WHERE hg.group_id = $1 ORDER BY h.hostname`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Host
+	for rows.Next() {
+		h, err := scanHost(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *h)
+	}
+	return out, rows.Err()
+}
+
 // CreateGroup creates a group.
 func (s *Store) CreateGroup(ctx context.Context, name, description string) (*models.Group, error) {
 	var g models.Group

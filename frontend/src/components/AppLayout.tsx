@@ -16,6 +16,7 @@ import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import SettingsIcon from "@mui/icons-material/Settings";
 import ShieldIcon from "@mui/icons-material/Shield";
+import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import WorkHistoryIcon from "@mui/icons-material/WorkHistory";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
@@ -34,6 +35,7 @@ const NAV = [
   { to: "/hosts", label: "Hosts", icon: <DnsIcon /> },
   { to: "/terminals", label: "Terminals", icon: <TerminalIcon /> },
   { to: "/sessions", label: "Session Replay", icon: <HistoryIcon /> },
+  { to: "/playbooks", label: "Playbooks", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
   { to: "/audit", label: "Audit", icon: <GavelIcon /> },
   { to: "/users", label: "Users", icon: <PeopleIcon /> },

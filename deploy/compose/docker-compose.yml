@@ -57,6 +57,7 @@ services:
       FLEET_SCAN_TIMEOUT: ${FLEET_SCAN_TIMEOUT:-60m}
       FLEET_SCAP_CONTENT_DIR: /var/lib/fleet/scap-content
       FLEET_SCAP_CONTENT_VERSION: ${FLEET_SCAP_CONTENT_VERSION:-}
+      FLEET_ANSIBLE_RUNNER_URL: ${FLEET_ANSIBLE_RUNNER_URL:-http://ansible-runner:8000}
       FLEET_MAX_UPLOAD_BYTES: ${FLEET_MAX_UPLOAD_BYTES:-5368709120}
       # WireGuard overlay — managed-host enrollment uses these. Empty falls back
       # to the binary's defaults (see .env.example). FLEET_WG_JUMP_ENDPOINT MUST
@@ -116,6 +117,16 @@ services:
       - backend
     ports:
       - "5173:80"
+    networks: [fleet]
+
+  # Sidecar that validates/lints (and, later, runs) Ansible playbooks for the
+  # backend. Internal-only: not published on the host, reachable on the fleet
+  # network at http://ansible-runner:8000.
+  ansible-runner:
+    build:
+      context: ../ansible-runner
+      dockerfile: Dockerfile
+    restart: unless-stopped
     networks: [fleet]
 
 volumes:

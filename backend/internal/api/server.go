@@ -42,6 +42,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/monitor"
+	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
@@ -142,6 +143,9 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	}
 	if n, err := s.Store.FailStaleRemediations(ctx); err == nil && n > 0 {
 		s.Log.Info("failed stale remediations on startup", "count", n)
+	}
+	if n, err := s.Store.FailStalePlaybookRuns(ctx); err == nil && n > 0 {
+		s.Log.Info("failed stale playbook runs on startup", "count", n)
 	}
 	go s.renewalLoop(ctx)
 	go s.reaperLoop(ctx)
@@ -417,6 +421,8 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
 	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
+
+	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log, s.Issuer))
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)
