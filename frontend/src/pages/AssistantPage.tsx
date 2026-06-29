@@ -62,10 +62,21 @@ export function AssistantPage() {
 
       <Stack spacing={2} sx={{ mb: 2 }}>
         {turns.length === 0 && ready && (
-          <Typography variant="body2" color="text.secondary">
-            Ask about your fleet — e.g. “which hosts have less than 20% disk free?”, “offline debian
-            hosts”, or “production hosts under heavy load”.
-          </Typography>
+          <Box sx={{ color: "text.secondary" }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Ask about your fleet in plain language. The assistant can answer using each host's
+              status, OS &amp; kernel version, CPU/memory specs, uptime, disk/memory/load, IP &amp;
+              VPN health, groups, tags, and owner. For example:
+            </Typography>
+            <Box component="ul" sx={{ m: 0, pl: 3 }}>
+              <li>“Which hosts have less than 20% disk free?”</li>
+              <li>“List the kernel versions of all hosts.”</li>
+              <li>“What production hosts are under heavy load?”</li>
+              <li>“Which hosts have their WireGuard tunnel down?”</li>
+              <li>“Show offline Debian hosts in the dba group.”</li>
+              <li>“How much memory does each host have?”</li>
+            </Box>
+          </Box>
         )}
         {turns.map((t, i) => <TurnView key={i} turn={t} />)}
       </Stack>

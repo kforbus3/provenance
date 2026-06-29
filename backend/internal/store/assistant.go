@@ -22,6 +22,10 @@ type HostQuery struct {
 	DiskFreePctMin   *float64
 	MemUsedPctMin    *float64
 	LoadPerCoreMin   *float64
+	Group            string
+	Tag              string
+	Enrolled         *bool
+	WGDown           *bool // tunnel down (wg_ok = false)
 	Limit            int
 
 	UserID       uuid.UUID
@@ -62,6 +66,18 @@ func buildHostQueryWhere(q HostQuery) (string, []any) {
 	if q.LoadPerCoreMin != nil {
 		add("m.load_per_core >= $%d", *q.LoadPerCoreMin)
 	}
+	if q.Tag != "" {
+		add("$%d = ANY(h.tags)", q.Tag)
+	}
+	if q.Group != "" {
+		add("h.id IN (SELECT hg.host_id FROM host_groups hg JOIN groups g ON g.id=hg.group_id WHERE g.name=$%d)", q.Group)
+	}
+	if q.Enrolled != nil {
+		add("h.enrolled = $%d", *q.Enrolled)
+	}
+	if q.WGDown != nil && *q.WGDown {
+		conds = append(conds, "COALESCE(s.wg_ok,false) = false")
+	}
 	// Authorization: non-super-admins only see hosts they can reach.
 	if !q.IsSuperAdmin {
 		args = append(args, q.UserID)
@@ -87,8 +103,14 @@ func (s *Store) QueryHostsForAssistant(ctx context.Context, q HostQuery) ([]mode
 	args = append(args, q.Limit)
 	sql := `
 		SELECT h.hostname, h.environment, COALESCE(s.status,'unknown'),
-			COALESCE(m.primary_ip,''), COALESCE(i.os_name,''),
-			m.min_disk_free_pct, m.mem_used_pct, m.load_per_core
+			COALESCE(m.primary_ip,''), COALESCE(i.os_name,''), COALESCE(i.os_version,''),
+			COALESCE(i.kernel_version,''), COALESCE(i.architecture,''),
+			COALESCE(i.cpu_count,0), COALESCE(i.memory_mb,0), COALESCE(i.ssh_version,''),
+			s.uptime_seconds, m.min_disk_free_pct, m.mem_used_pct, m.load_per_core,
+			s.latency_ms, s.wg_ok, s.last_success_at, h.owner, h.enrolled,
+			COALESCE(h.tags, '{}'),
+			COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM host_groups hg
+				JOIN groups g ON g.id=hg.group_id WHERE hg.host_id=h.id), '{}')
 		FROM hosts h
 		LEFT JOIN host_status s ON s.host_id=h.id
 		LEFT JOIN host_metrics m ON m.host_id=h.id
@@ -104,7 +126,9 @@ func (s *Store) QueryHostsForAssistant(ctx context.Context, q HostQuery) ([]mode
 	for rows.Next() {
 		var r models.AssistantHostRow
 		if err := rows.Scan(&r.Hostname, &r.Environment, &r.Status, &r.PrimaryIP, &r.OSName,
-			&r.MinDiskFreePct, &r.MemUsedPct, &r.LoadPerCore); err != nil {
+			&r.OSVersion, &r.Kernel, &r.Architecture, &r.CPUCount, &r.MemoryTotalMB, &r.SSHVersion,
+			&r.UptimeSeconds, &r.MinDiskFreePct, &r.MemUsedPct, &r.LoadPerCore,
+			&r.LatencyMS, &r.WGOK, &r.LastSeen, &r.Owner, &r.Enrolled, &r.Tags, &r.Groups); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

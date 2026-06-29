@@ -339,8 +339,22 @@ type AssistantHostRow struct {
 	Environment    string   `json:"environment,omitempty"`
 	Status         string   `json:"status"`
 	PrimaryIP      string   `json:"primaryIp,omitempty"`
-	OSName         string   `json:"os,omitempty"`
-	MinDiskFreePct *float64 `json:"diskFreePct,omitempty"`
-	MemUsedPct     *float64 `json:"memUsedPct,omitempty"`
-	LoadPerCore    *float64 `json:"loadPerCore,omitempty"`
+	OSName         string     `json:"os,omitempty"`
+	OSVersion      string     `json:"osVersion,omitempty"`
+	Kernel         string     `json:"kernel,omitempty"`
+	Architecture   string     `json:"arch,omitempty"`
+	CPUCount       int        `json:"cpuCount,omitempty"`
+	MemoryTotalMB  int64      `json:"memoryMb,omitempty"`
+	SSHVersion     string     `json:"sshVersion,omitempty"`
+	UptimeSeconds  *int64     `json:"uptimeSeconds,omitempty"`
+	MinDiskFreePct *float64   `json:"diskFreePct,omitempty"`
+	MemUsedPct     *float64   `json:"memUsedPct,omitempty"`
+	LoadPerCore    *float64   `json:"loadPerCore,omitempty"`
+	LatencyMS      *int       `json:"latencyMs,omitempty"`
+	WGOK           *bool      `json:"wireguardOk,omitempty"`
+	LastSeen       *time.Time `json:"lastSeen,omitempty"`
+	Groups         []string   `json:"groups,omitempty"`
+	Tags           []string   `json:"tags,omitempty"`
+	Owner          string     `json:"owner,omitempty"`
+	Enrolled       bool       `json:"enrolled"`
 }

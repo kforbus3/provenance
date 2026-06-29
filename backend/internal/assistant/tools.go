@@ -5,11 +5,15 @@ import "github.com/fleet-terminal/backend/internal/store"
 const systemPrompt = `You are Fleet Assistant, a read-only helper for a fleet of Linux hosts.
 
 Answer questions about the fleet ONLY by calling the query_hosts tool — never invent
-host names, counts, or metrics. Translate the user's request into the tool's filter
-fields, for example:
+host names, counts, or metrics. query_hosts returns each host's kernel version, OS
+name + version, architecture, CPU count, total memory, uptime, primary IP, status,
+and disk/memory/load metrics, so use it for ALL host questions (specs and inventory
+too, not just metrics). Translate the request into filter fields, for example:
 - "hosts with less than 20% disk free" -> diskFreePctMax: 20
 - "offline debian boxes" -> status: "offline", osContains: "debian"
 - "prod hosts under heavy load" -> environment: "production", loadPerCoreMin: 1
+- "list the kernel versions of all hosts" -> call query_hosts with no filters, then
+  read the kernel field from each returned host
 
 All percentages are 0-100. After the tool returns, give a brief, factual answer that
 references the host list the user will see. If the question is not about the fleet's
@@ -21,7 +25,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "query_hosts",
-		Description: "Find managed hosts matching structured filters. Returns matching hosts with status, OS, primary IP, disk-free %, memory-used %, and load per core. All filters are optional and combined with AND.",
+		Description: "Find managed hosts matching structured filters. Returns, per host: hostname, environment, status, primary IP, OS name + version, kernel version, architecture, CPU count, total memory (MB), SSH version, uptime, disk-free %, memory-used %, load per core, latency, WireGuard tunnel health, last-seen time, groups, tags, owner, and enrolled state. Use it for ANY question about hosts (kernel/OS/specs/uptime/groups/tags/owner/VPN health included). All filters are optional and combined with AND; call with no filters to list all hosts.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -29,10 +33,14 @@ var tools = []toolDef{{
 				"environment":      map[string]any{"type": "string", "description": "exact environment label, e.g. production"},
 				"osContains":       map[string]any{"type": "string", "description": "substring match on OS name, e.g. debian"},
 				"hostnameContains": map[string]any{"type": "string", "description": "substring match on hostname"},
+				"group":            map[string]any{"type": "string", "description": "exact group name the host belongs to"},
+				"tag":              map[string]any{"type": "string", "description": "exact tag on the host"},
 				"diskFreePctMax":   map[string]any{"type": "number", "description": "max free disk % on the tightest filesystem (e.g. 20 = less than 20% free)"},
 				"diskFreePctMin":   map[string]any{"type": "number", "description": "min free disk %"},
 				"memUsedPctMin":    map[string]any{"type": "number", "description": "min memory used %"},
 				"loadPerCoreMin":   map[string]any{"type": "number", "description": "min load average per CPU core"},
+				"enrolled":         map[string]any{"type": "boolean", "description": "filter by enrolled state"},
+				"wireguardDown":    map[string]any{"type": "boolean", "description": "true = only hosts whose WireGuard tunnel is down"},
 				"limit":            map[string]any{"type": "integer", "description": "max rows (default/cap 200)"},
 			},
 		},
@@ -45,10 +53,14 @@ type queryHostsArgs struct {
 	Environment      string   `json:"environment"`
 	OSContains       string   `json:"osContains"`
 	HostnameContains string   `json:"hostnameContains"`
+	Group            string   `json:"group"`
+	Tag              string   `json:"tag"`
 	DiskFreePctMax   *float64 `json:"diskFreePctMax"`
 	DiskFreePctMin   *float64 `json:"diskFreePctMin"`
 	MemUsedPctMin    *float64 `json:"memUsedPctMin"`
 	LoadPerCoreMin   *float64 `json:"loadPerCoreMin"`
+	Enrolled         *bool    `json:"enrolled"`
+	WireguardDown    *bool    `json:"wireguardDown"`
 	Limit            int      `json:"limit"`
 }
 
@@ -58,10 +70,14 @@ func (a queryHostsArgs) toQuery(who Caller) store.HostQuery {
 		Environment:      a.Environment,
 		OSContains:       a.OSContains,
 		HostnameContains: a.HostnameContains,
+		Group:            a.Group,
+		Tag:              a.Tag,
 		DiskFreePctMax:   a.DiskFreePctMax,
 		DiskFreePctMin:   a.DiskFreePctMin,
 		MemUsedPctMin:    a.MemUsedPctMin,
 		LoadPerCoreMin:   a.LoadPerCoreMin,
+		Enrolled:         a.Enrolled,
+		WGDown:           a.WireguardDown,
 		Limit:            a.Limit,
 		UserID:           who.UserID,
 		IsSuperAdmin:     who.IsSuperAdmin,
