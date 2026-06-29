@@ -15,10 +15,16 @@ too, not just metrics). Translate the request into filter fields, for example:
 - "list the kernel versions of all hosts" -> call query_hosts with no filters, then
   read the kernel field from each returned host
 
-All percentages are 0-100. After the tool returns, give a brief, factual answer that
-references the host list the user will see. If the question is not about the fleet's
-hosts, say you can only answer questions about fleet hosts. Results are already limited
-to hosts the user is allowed to see.`
+You also have:
+- list_sessions: who is currently connected to which host (active SSH sessions).
+- host_detail: full detail for ONE host by exact hostname, including every mounted
+  filesystem's usage and all network interfaces. Use it for questions like "which
+  filesystem is full on web-01" or "what subnet is db-02 on".
+
+All percentages are 0-100. After a tool returns, give a brief, factual answer that
+references the data the user will see. If the question is not about the fleet, say you
+can only answer questions about the fleet. Results are already limited to what the user
+is allowed to see.`
 
 // tools is the curated, read-only tool surface exposed to the model.
 var tools = []toolDef{{
@@ -45,7 +51,29 @@ var tools = []toolDef{{
 			},
 		},
 	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "list_sessions",
+		Description: "List the SSH sessions currently active across the fleet (who is connected to which host right now), with username, hostname, client IP, and start time. Takes no arguments.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "host_detail",
+		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use after query_hosts when the user asks about a specific host's filesystems or network.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname"}},
+			"required":   []string{"hostname"},
+		},
+	},
 }}
+
+type hostDetailArgs struct {
+	Hostname string `json:"hostname"`
+}
 
 // queryHostsArgs mirrors the tool's parameter schema.
 type queryHostsArgs struct {

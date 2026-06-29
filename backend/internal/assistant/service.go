@@ -91,9 +91,10 @@ type AskResult struct {
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
 type Caller struct {
-	UserID       uuid.UUID
-	IsSuperAdmin bool
-	Username     string
+	UserID          uuid.UUID
+	IsSuperAdmin    bool
+	Username        string
+	CanViewSessions bool // Session.Replay — gates the list_sessions tool
 }
 
 // Ask starts answering a question in the background and returns a poll id. Async
@@ -157,13 +158,20 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 		}
 		messages = append(messages, msg)
 		for _, tc := range msg.ToolCalls {
-			if tc.Function.Name != "query_hosts" {
-				messages = append(messages, chatMessage{Role: "tool", Content: `{"error":"unknown tool"}`})
-				continue
+			var result any
+			switch tc.Function.Name {
+			case "query_hosts":
+				rows := s.runQueryHosts(ctx, tc.Function.Arguments, who)
+				collected = rows
+				result = map[string]any{"count": len(rows), "hosts": rows}
+			case "list_sessions":
+				result = s.runListSessions(ctx, who)
+			case "host_detail":
+				result = s.runHostDetail(ctx, tc.Function.Arguments, who)
+			default:
+				result = map[string]any{"error": "unknown tool"}
 			}
-			rows := s.runQueryHosts(ctx, tc.Function.Arguments, who)
-			collected = rows
-			payload, _ := json.Marshal(map[string]any{"count": len(rows), "hosts": rows})
+			payload, _ := json.Marshal(result)
 			messages = append(messages, chatMessage{Role: "tool", Content: string(payload)})
 		}
 	}
@@ -180,6 +188,48 @@ func (s *Service) runQueryHosts(ctx context.Context, raw json.RawMessage, who Ca
 		return nil
 	}
 	return rows
+}
+
+func (s *Service) runListSessions(ctx context.Context, who Caller) any {
+	if !who.CanViewSessions && !who.IsSuperAdmin {
+		return map[string]any{"error": "you do not have permission to view sessions"}
+	}
+	rows, err := s.store.ActiveSSHSessions(ctx, 200)
+	if err != nil {
+		s.log.Warn("assistant list_sessions", "err", err)
+		return map[string]any{"error": "could not list sessions"}
+	}
+	type sess struct {
+		Username  string `json:"username"`
+		Hostname  string `json:"hostname"`
+		ClientIP  string `json:"clientIp,omitempty"`
+		StartedAt string `json:"startedAt"`
+	}
+	out := make([]sess, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, sess{Username: r.Username, Hostname: r.Hostname, ClientIP: r.ClientIP, StartedAt: r.StartedAt.Format(time.RFC3339)})
+	}
+	return map[string]any{"count": len(out), "sessions": out}
+}
+
+func (s *Service) runHostDetail(ctx context.Context, raw json.RawMessage, who Caller) any {
+	var a hostDetailArgs
+	_ = json.Unmarshal(raw, &a)
+	if a.Hostname == "" {
+		return map[string]any{"error": "hostname is required"}
+	}
+	host, err := s.store.HostByHostname(ctx, a.Hostname)
+	if err != nil {
+		return map[string]any{"error": "no host named " + a.Hostname}
+	}
+	if !who.IsSuperAdmin {
+		ok, err := s.store.UserCanAccessHost(ctx, who.UserID, host.ID)
+		if err != nil || !ok {
+			return map[string]any{"error": "you do not have access to that host"}
+		}
+	}
+	// Return the host with details; internal ids are harmless and ignored.
+	return host
 }
 
 // cleanup drops results older than the ask timeout to bound memory.

@@ -93,6 +93,39 @@ func buildHostQueryWhere(q HostQuery) (string, []any) {
 	return "WHERE " + strings.Join(conds, " AND "), args
 }
 
+// ActiveSSHSessions returns currently-open SSH sessions for the assistant's
+// list_sessions tool (newest first).
+func (s *Store) ActiveSSHSessions(ctx context.Context, limit int) ([]models.SSHSession, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+sshSessionCols+` FROM ssh_sessions WHERE status='active' ORDER BY started_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.SSHSession{}
+	for rows.Next() {
+		ss, err := scanSSHSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *ss)
+	}
+	return out, rows.Err()
+}
+
+// HostByHostname resolves a host by exact hostname and returns it with details
+// (inventory, status, metrics) attached.
+func (s *Store) HostByHostname(ctx context.Context, hostname string) (*models.Host, error) {
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM hosts WHERE hostname=$1`, hostname).Scan(&id); err != nil {
+		return nil, err
+	}
+	return s.GetHost(ctx, id)
+}
+
 // QueryHostsForAssistant runs a HostQuery and returns compact rows. Single query
 // (no per-host fan-out). Limit is clamped to [1,200].
 func (s *Store) QueryHostsForAssistant(ctx context.Context, q HostQuery) ([]models.AssistantHostRow, error) {
