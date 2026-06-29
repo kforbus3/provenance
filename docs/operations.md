@@ -139,10 +139,33 @@ host (CIS, STIG, PCI-DSS, …) and defaults to the standard baseline — then **
   it) — the list fills in once it's ready.
 - The backend runs `oscap` over the gateway as the privileged host account, **auto-installing
   the scanner + SCAP content** if missing (so the first scan on a host can take a few minutes).
+- Strict profiles (e.g. **ANSSI High**) run many filesystem-walking checks and can take **tens of
+  minutes** on a busy host (the cost is the number of files in users' home directories, not bytes).
+  Fleet caps a scan at the **scan timeout** — adjust it in **Settings → Security scans** (5–480 min;
+  overrides the `FLEET_SCAN_TIMEOUT` default of 60m). Raise it for hosts with very large
+  filesystems, or use a lighter profile for routine checks.
+- Alternatively, tick **"Skip slow filesystem rules"** in the scan dialog to exclude the
+  filesystem-walking rules (home-dir ownership/permissions, world-writable/SUID/SGID/unowned-file
+  audits) — High then finishes in minutes. An advanced field accepts additional rule IDs to skip.
+  Skipped rules are excluded from the scan and its score (`oscap --skip-rule`).
 - Scans run in the background; the history list updates as they finish, showing the **score**
   and pass/fail counts.
 - **View** opens the full HTML report in a sandboxed in-app viewer; **Download** saves it for
   offline viewing. Reports are stored under `FLEET_SCAN_DIR` (`/var/lib/fleet/scans`).
+
+### Remediating failures
+
+On a completed scan with failures, **Remediate** (needs `Host.Remediate`, admin-only by default)
+lists the failed rules so you can **select which to fix**:
+
+- **Preview** shows the exact bash `oscap` would run for the selected rules — review before applying.
+- **Apply** generates the fixes on the host, runs them under sudo, then **re-scans** to verify; the
+  new score appears as the latest scan in the history. The run's output is shown in the dialog and
+  audited (`host.remediate`).
+- Rules that touch SSH, the firewall, or account lockout are flagged **⚠ access-impacting** because
+  their fixes can sever Fleet's own access to the host; applying any of them requires an explicit
+  extra confirmation. **Remediation changes host configuration and is not automatically reversible —
+  test on non-critical hosts first.**
 - The scan needs SCAP content matching the host's **OS version** (e.g. `ssg-debian13-ds.xml`
   for Debian 13). If a host's distro is newer than its packaged `scap-security-guide`, Fleet
   **auto-provisions** the right datastream: the backend downloads the ComplianceAsCode release

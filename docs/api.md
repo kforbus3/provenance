@@ -329,6 +329,15 @@ embedded/downloaded by the browser.
 | GET | `/api/v1/hosts/{id}/scans` | List recent scans for the host |
 | GET | `/api/v1/scans/{id}` | One scan's status + summary (poll while running) |
 | GET | `/api/v1/scans/{id}/report?token=<jwt>[&download=1]` | Stored HTML report (sandboxed view / download) |
+| GET | `/api/v1/scans/{id}/findings` | `Host.Scan` — failed rules (id, title, severity, accessImpacting) |
+| POST | `/api/v1/scans/{id}/remediation/preview` | `Host.Remediate` — `{ruleIds}` → `{script}` (no changes) |
+| POST | `/api/v1/scans/{id}/remediate` | `Host.Remediate` — `{ruleIds, confirmAccessImpacting}` → run id (async); 409 if access-impacting rules selected without confirmation |
+| GET | `/api/v1/remediations/{id}` | `Host.Remediate` — run status/output/exit + verification re-scan id |
+
+Remediation applies `oscap`-generated bash fixes for the **selected** failed rules
+over the gateway (sudo), then re-scans to verify. All scan/remediation routes also
+require host access. Rules touching SSH/firewall/lockout are flagged
+`accessImpacting` and need an explicit confirmation.
 
 The backend runs `oscap` over the gateway as the privileged host account
 (installing `openscap-scanner` + SCAP content if missing), stores the HTML report

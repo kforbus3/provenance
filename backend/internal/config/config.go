@@ -75,7 +75,8 @@ type Config struct {
 	RecordingDir string
 
 	// OpenSCAP scan report storage
-	ScanDir string
+	ScanDir     string
+	ScanTimeout time.Duration // max duration of a scan/remediation (oscap can be slow)
 
 	// SCAP content cache (datastreams the backend provisions to hosts whose OS
 	// is newer than their packaged content). Empty disables auto-provisioning.
@@ -131,6 +132,7 @@ func Load() (*Config, error) {
 		WGPort:             envInt("FLEET_WG_PORT", 51820),
 		RecordingDir:       env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),
 		ScanDir:            env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
+		ScanTimeout:        envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
 		ScapContentDir:     env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion: env("FLEET_SCAP_CONTENT_VERSION", ""),
 		MaxUploadBytes:     envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default

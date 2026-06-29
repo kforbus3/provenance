@@ -321,6 +321,7 @@ type HostScan struct {
 	OtherCount   int        `json:"otherCount"`
 	TotalRules   int        `json:"totalRules"`
 	Error        string     `json:"error,omitempty"`
+	SkipRules    []string   `json:"skipRules,omitempty"`
 	StartedAt    *time.Time `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
@@ -335,10 +336,10 @@ type ScanProfile struct {
 // AssistantHostRow is a compact host record returned to the AI assistant's
 // query tool (one row per host, joined from status/metrics/inventory).
 type AssistantHostRow struct {
-	Hostname       string   `json:"hostname"`
-	Environment    string   `json:"environment,omitempty"`
-	Status         string   `json:"status"`
-	PrimaryIP      string   `json:"primaryIp,omitempty"`
+	Hostname       string     `json:"hostname"`
+	Environment    string     `json:"environment,omitempty"`
+	Status         string     `json:"status"`
+	PrimaryIP      string     `json:"primaryIp,omitempty"`
 	OSName         string     `json:"os,omitempty"`
 	OSVersion      string     `json:"osVersion,omitempty"`
 	Kernel         string     `json:"kernel,omitempty"`
@@ -357,4 +358,31 @@ type AssistantHostRow struct {
 	Tags           []string   `json:"tags,omitempty"`
 	Owner          string     `json:"owner,omitempty"`
 	Enrolled       bool       `json:"enrolled"`
+}
+
+// ScanFinding is one rule outcome from a scan (used to list failures the user
+// can choose to remediate).
+type ScanFinding struct {
+	RuleID          string `json:"ruleId"`
+	Title           string `json:"title"`
+	Severity        string `json:"severity,omitempty"`
+	Result          string `json:"result"`
+	AccessImpacting bool   `json:"accessImpacting"`
+}
+
+// HostRemediation is one remediation run: the selected rules and its outcome.
+type HostRemediation struct {
+	ID         uuid.UUID  `json:"id"`
+	ScanID     uuid.UUID  `json:"scanId"`
+	HostID     uuid.UUID  `json:"hostId"`
+	Requester  string     `json:"requester,omitempty"`
+	RuleIDs    []string   `json:"ruleIds"`
+	Status     string     `json:"status"` // pending|running|completed|failed
+	ExitCode   *int       `json:"exitCode,omitempty"`
+	Output     string     `json:"output,omitempty"`
+	RescanID   *uuid.UUID `json:"rescanId,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
 }

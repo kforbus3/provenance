@@ -9,14 +9,14 @@ import (
 )
 
 const scanCols = `id, host_id, requested_by, requester, profile, profile_title, benchmark,
-	status, score, pass_count, fail_count, other_count, total_rules, error,
+	status, score, pass_count, fail_count, other_count, total_rules, error, skip_rules,
 	started_at, finished_at, created_at`
 
 func scanScan(row interface{ Scan(...any) error }) (*models.HostScan, error) {
 	var s models.HostScan
 	if err := row.Scan(&s.ID, &s.HostID, &s.RequestedBy, &s.Requester, &s.Profile,
 		&s.ProfileTitle, &s.Benchmark, &s.Status, &s.Score, &s.PassCount, &s.FailCount,
-		&s.OtherCount, &s.TotalRules, &s.Error, &s.StartedAt, &s.FinishedAt, &s.CreatedAt); err != nil {
+		&s.OtherCount, &s.TotalRules, &s.Error, &s.SkipRules, &s.StartedAt, &s.FinishedAt, &s.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &s, nil
@@ -41,21 +41,46 @@ func (s *Store) StartHostScan(ctx context.Context, id uuid.UUID, profile, profil
 
 // ScanSummary holds parsed results persisted on completion.
 type ScanSummary struct {
-	Score      *float64
-	PassCount  int
-	FailCount  int
-	OtherCount int
-	TotalRules int
-	ReportPath string
+	Score       *float64
+	PassCount   int
+	FailCount   int
+	OtherCount  int
+	TotalRules  int
+	ReportPath  string
+	ResultsPath string
+	SkipRules   []string
 }
 
-// CompleteHostScan marks a scan completed with its summary + report path.
+// CompleteHostScan marks a scan completed with its summary + report/results paths.
 func (s *Store) CompleteHostScan(ctx context.Context, id uuid.UUID, sum ScanSummary) error {
+	skip := sum.SkipRules
+	if skip == nil {
+		skip = []string{} // column is NOT NULL
+	}
 	_, err := s.pool.Exec(ctx,
 		`UPDATE host_scans SET status='completed', score=$2, pass_count=$3, fail_count=$4,
-		 other_count=$5, total_rules=$6, report_path=$7, finished_at=now() WHERE id=$1`,
-		id, sum.Score, sum.PassCount, sum.FailCount, sum.OtherCount, sum.TotalRules, sum.ReportPath)
+		 other_count=$5, total_rules=$6, report_path=$7, results_path=$8, skip_rules=$9, finished_at=now() WHERE id=$1`,
+		id, sum.Score, sum.PassCount, sum.FailCount, sum.OtherCount, sum.TotalRules, sum.ReportPath, sum.ResultsPath, skip)
 	return err
+}
+
+// FailStaleScans marks scans still pending/running as failed. A scan's worker
+// runs in memory, so any such row at startup was orphaned by a restart.
+func (s *Store) FailStaleScans(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE host_scans SET status='failed', error='interrupted (server restarted)', finished_at=now()
+		 WHERE status IN ('pending','running')`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ScanResultsPath returns the on-disk results XML path for a scan.
+func (s *Store) ScanResultsPath(ctx context.Context, id uuid.UUID) (string, error) {
+	var p string
+	err := s.pool.QueryRow(ctx, `SELECT results_path FROM host_scans WHERE id=$1`, id).Scan(&p)
+	return p, err
 }
 
 // FailHostScan marks a scan failed with an error message.

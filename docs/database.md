@@ -18,6 +18,8 @@ automatically on startup when `FLEET_MIGRATE_ON_START=true` (the default).
 | `0009_host_scans.sql` | `host_scans` table + `Host.Scan` permission (OpenSCAP scans) |
 | `0010_host_metrics.sql` | `host_metrics` table (disk/memory/load/network per host) |
 | `0011_assistant.sql` | `Assistant.Use` permission + `assistant` setting (AI assistant) |
+| `0010_host_remediation.sql` | `host_remediations` table + `Host.Remediate` permission; `host_scans.results_path` |
+| `0011_scan_skip_rules.sql` | `host_scans.skip_rules` (rules excluded from a scan) |
 
 **Extensions:** `pgcrypto` (`gen_random_uuid()`), `citext` (case-insensitive
 usernames/emails).
@@ -130,7 +132,7 @@ Seeded keys: `Host.View`, `Host.Connect`, `Host.Sudo`, `Host.Enroll`, `Host.Edit
 `User.Edit`, `User.Delete`, `User.ResetPassword`, `Group.Create`, `Group.Edit`,
 `Group.Delete`, `Role.Create`, `Role.Edit`, `Role.Delete`, `Approval.Request`,
 `Approval.Decide`, `Certificate.Manage`, `System.Configure`, `Host.Scan`,
-`Assistant.Use`, `Admin.All` (wildcard).
+`Assistant.Use`, `Host.Remediate`, `Admin.All` (wildcard).
 
 ### `role_permissions`
 Join table. PK `(role_id, permission_key)`; both FKs CASCADE.

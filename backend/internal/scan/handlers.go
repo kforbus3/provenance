@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -26,6 +27,11 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Post("/hosts/{id}/scan", h.start)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/hosts/{id}/scans", h.list)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/scans/{id}", h.get)
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/scans/{id}/findings", h.findings)
+		// Remediation modifies hosts -> Host.Remediate (admin-only by default).
+		pr.With(d.Auth.RequirePermission("Host.Remediate")).Post("/scans/{id}/remediation/preview", h.remediatePreview)
+		pr.With(d.Auth.RequirePermission("Host.Remediate")).Post("/scans/{id}/remediate", h.remediate)
+		pr.With(d.Auth.RequirePermission("Host.Remediate")).Get("/remediations/{id}", h.remediationStatus)
 	})
 	r.Get("/scans/{id}/report", h.report)
 }
@@ -98,7 +104,9 @@ func (h *handler) prepare(w http.ResponseWriter, r *http.Request) {
 }
 
 type startReq struct {
-	Profile string `json:"profile"`
+	Profile              string   `json:"profile"`
+	SkipExpensiveFsRules bool     `json:"skipExpensiveFsRules"`
+	SkipRules            []string `json:"skipRules"`
 }
 
 // start creates a scan record and kicks off the scan in the background.
@@ -111,15 +119,35 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&rq) // body optional; empty profile -> standard
 	p := auth.MustPrincipal(r)
 
+	// Rules to exclude: the expensive-filesystem preset (if requested) plus any
+	// explicit ids, de-duplicated.
+	skip := map[string]bool{}
+	var skipRules []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id != "" && !skip[id] {
+			skip[id] = true
+			skipRules = append(skipRules, id)
+		}
+	}
+	if rq.SkipExpensiveFsRules {
+		for _, id := range ExpensiveFSRules {
+			add(id)
+		}
+	}
+	for _, id := range rq.SkipRules {
+		add(id)
+	}
+
 	rec, err := h.d.Store.CreateHostScan(r.Context(), host.ID, &p.UserID, p.Username, rq.Profile)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create scan")
 		return
 	}
-	go h.svc.Run(rec.ID, host, rq.Profile)
+	go h.svc.Run(rec.ID, host, rq.Profile, skipRules)
 
 	h.audit(r, "host.scan", rec.ID.String(), map[string]any{
-		"hostId": host.ID, "hostname": host.Hostname, "profile": rq.Profile,
+		"hostId": host.ID, "hostname": host.Hostname, "profile": rq.Profile, "skipped": len(skipRules),
 	})
 	writeJSON(w, http.StatusAccepted, rec)
 }
@@ -216,6 +244,137 @@ func (h *handler) audit(r *http.Request, action, targetID string, detail map[str
 		ActorID: actorID, ActorName: name, Action: action,
 		TargetKind: "host", TargetID: targetID, Detail: detail,
 	})
+}
+
+// scanWithAccess loads a scan by URL id, its host, and verifies access.
+func (h *handler) scanWithAccess(w http.ResponseWriter, r *http.Request) (*models.HostScan, *models.Host, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad scan id")
+		return nil, nil, false
+	}
+	scan, err := h.d.Store.GetHostScan(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "scan not found")
+		return nil, nil, false
+	}
+	if !h.canAccess(r, auth.MustPrincipal(r), scan.HostID) {
+		writeError(w, http.StatusForbidden, "not authorized for host")
+		return nil, nil, false
+	}
+	host, err := h.d.Store.GetHost(r.Context(), scan.HostID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return nil, nil, false
+	}
+	return scan, host, true
+}
+
+// findings lists the failed rules of a scan (with severity + access-impacting flag).
+func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
+	scan, _, ok := h.scanWithAccess(w, r)
+	if !ok {
+		return
+	}
+	f, err := h.svc.Findings(r.Context(), scan.ID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"findings": f, "count": len(f)})
+}
+
+type remediateReq struct {
+	RuleIDs                []string `json:"ruleIds"`
+	ConfirmAccessImpacting bool     `json:"confirmAccessImpacting"`
+}
+
+// remediatePreview returns the bash that would run for the selected rules.
+func (h *handler) remediatePreview(w http.ResponseWriter, r *http.Request) {
+	scan, host, ok := h.scanWithAccess(w, r)
+	if !ok {
+		return
+	}
+	var rq remediateReq
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || len(rq.RuleIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ruleIds required")
+		return
+	}
+	findings, err := h.svc.Findings(r.Context(), scan.ID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := validateRules(rq.RuleIDs, findings); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	script, err := h.svc.PreviewFix(r.Context(), scan, host, rq.RuleIDs)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "preview failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"script": script})
+}
+
+// remediate applies fixes for the selected rules (background) then re-scans.
+func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
+	scan, host, ok := h.scanWithAccess(w, r)
+	if !ok {
+		return
+	}
+	var rq remediateReq
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || len(rq.RuleIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ruleIds required")
+		return
+	}
+	findings, err := h.svc.Findings(r.Context(), scan.ID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	impacting, err := validateRules(rq.RuleIDs, findings)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Access-impacting rules need an explicit second confirmation.
+	if len(impacting) > 0 && !rq.ConfirmAccessImpacting {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "selection includes access-impacting rules; confirmation required",
+			"accessImpacting": impacting,
+		})
+		return
+	}
+	p := auth.MustPrincipal(r)
+	rec, err := h.d.Store.CreateRemediation(r.Context(), scan.ID, host.ID, &p.UserID, p.Username, rq.RuleIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start remediation")
+		return
+	}
+	go h.svc.Remediate(rec.ID, scan, host, rq.RuleIDs, &p.UserID, p.Username)
+	h.audit(r, "host.remediate", rec.ID.String(), map[string]any{
+		"hostId": host.ID, "hostname": host.Hostname, "rules": rq.RuleIDs, "accessImpacting": impacting,
+	})
+	writeJSON(w, http.StatusAccepted, rec)
+}
+
+func (h *handler) remediationStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	rec, err := h.d.Store.GetRemediation(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if !h.canAccess(r, auth.MustPrincipal(r), rec.HostID) {
+		writeError(w, http.StatusForbidden, "not authorized for host")
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

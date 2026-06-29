@@ -28,7 +28,8 @@ import {
 import { listGroups, listUsers } from "../api/admin";
 import {
   listScanProfiles, listHostScans, startScan, prepareScan, scanReportUrl, fetchScanReport,
-  type HostScan,
+  listFindings, previewRemediation, remediate, remediationStatus,
+  type HostScan, type ScanFinding,
 } from "../api/scans";
 import { useAuthStore } from "../store/auth";
 import {
@@ -454,8 +455,12 @@ function HostScanDialog({ host, onClose }: { host: Host | null; onClose: () => v
   const qc = useQueryClient();
   const hostId = host?.id ?? "";
   const token = useAuthStore((s) => s.accessToken) ?? "";
+  const canRemediate = useAuthStore((s) => s.has)("Host.Remediate");
   const [profile, setProfile] = useState("");
+  const [skipExpensive, setSkipExpensive] = useState(false);
+  const [skipRulesText, setSkipRulesText] = useState("");
   const [reportId, setReportId] = useState<string | null>(null);
+  const [remediateScan, setRemediateScan] = useState<HostScan | null>(null);
 
   const { data: prof, isLoading: profLoading } = useQuery({
     queryKey: ["scan-profiles", hostId],
@@ -488,7 +493,10 @@ function HostScanDialog({ host, onClose }: { host: Host | null; onClose: () => v
   });
 
   const runMut = useMutation({
-    mutationFn: () => startScan(hostId, profile),
+    mutationFn: () => startScan(hostId, profile, {
+      skipExpensiveFsRules: skipExpensive,
+      skipRules: skipRulesText.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+    }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["host-scans", hostId] }),
   });
 
@@ -517,6 +525,19 @@ function HostScanDialog({ host, onClose }: { host: Host | null; onClose: () => v
             </Button>
           </Stack>
 
+          <FormControlLabel
+            control={<Checkbox size="small" checked={skipExpensive} onChange={(e) => setSkipExpensive(e.target.checked)} />}
+            label="Skip slow filesystem rules (home-dir / world-writable / SUID audits)"
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, ml: 4, mt: -0.5 }}>
+            Much faster on hosts with many files; those rules are excluded from this scan and its score.
+          </Typography>
+          <TextField
+            size="small" fullWidth label="Also skip these rule IDs (optional, comma/space separated)"
+            value={skipRulesText} onChange={(e) => setSkipRulesText(e.target.value)} sx={{ mb: 1 }}
+            placeholder="xccdf_org.ssgproject.content_rule_…"
+          />
+
           {/* The picker needs the scanner installed AND content matching the host OS. */}
           {prof && (!prof.installed || !prof.exact) && (
             prof.installing || prepareMut.isPending ? (
@@ -542,18 +563,28 @@ function HostScanDialog({ host, onClose }: { host: Host | null; onClose: () => v
 
           <Typography variant="overline" color="text.secondary">History</Typography>
           <Stack spacing={1} sx={{ mt: 0.5 }}>
-            {scans.map((s) => <ScanRow key={s.id} scan={s} token={token} onView={() => setReportId(s.id)} />)}
+            {scans.map((s) => (
+              <ScanRow key={s.id} scan={s} token={token} onView={() => setReportId(s.id)}
+                onRemediate={canRemediate ? () => setRemediateScan(s) : undefined} />
+            ))}
             {scans.length === 0 && <Typography variant="body2" color="text.secondary">No scans yet.</Typography>}
           </Stack>
         </DialogContent>
         <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
       </Dialog>
       <ScanReportViewer scanId={reportId} token={token} onClose={() => setReportId(null)} />
+      <RemediateDialog
+        key={remediateScan?.id ?? "rem-none"} scan={remediateScan}
+        onClose={() => setRemediateScan(null)}
+        onApplied={() => void qc.invalidateQueries({ queryKey: ["host-scans", hostId] })}
+      />
     </>
   );
 }
 
-function ScanRow({ scan, token, onView }: { scan: HostScan; token: string; onView: () => void }) {
+function ScanRow({ scan, token, onView, onRemediate }: {
+  scan: HostScan; token: string; onView: () => void; onRemediate?: () => void;
+}) {
   const active = scan.status === "pending" || scan.status === "running";
   return (
     <Paper variant="outlined" sx={{ p: 1.5 }}>
@@ -564,6 +595,7 @@ function ScanRow({ scan, token, onView }: { scan: HostScan; token: string; onVie
           <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
             {fmtDate(scan.createdAt)}{scan.requester ? ` · ${scan.requester}` : ""}
             {scan.benchmark ? ` · ${scan.benchmark.split("/").pop()}` : ""}
+            {scan.skipRules && scan.skipRules.length > 0 ? ` · ${scan.skipRules.length} rules skipped` : ""}
           </Typography>
         </Box>
         {active && <CircularProgress size={18} />}
@@ -584,10 +616,156 @@ function ScanRow({ scan, token, onView }: { scan: HostScan; token: string; onVie
             </Box>
             <Button size="small" onClick={onView}>View</Button>
             <Button size="small" component="a" href={scanReportUrl(scan.id, token, true)}>Download</Button>
+            {onRemediate && scan.failCount > 0 && (
+              <Button size="small" color="warning" onClick={onRemediate}>Remediate</Button>
+            )}
           </Stack>
         )}
       </Stack>
     </Paper>
+  );
+}
+
+// RemediateDialog lists a scan's failed rules, lets an admin select which to fix,
+// preview the exact bash, and apply (with an extra confirm for rules that could
+// cut off Fleet's own access). It then polls the run and shows the re-scan score.
+function RemediateDialog({ scan, onClose, onApplied }: {
+  scan: HostScan | null; onClose: () => void; onApplied: () => void;
+}) {
+  const scanId = scan?.id ?? "";
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirm, setConfirm] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [run, setRun] = useState<{ status: string; exitCode?: number; output?: string; rescanId?: string; error?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: findings = [], isLoading } = useQuery({
+    queryKey: ["scan-findings", scanId],
+    queryFn: () => listFindings(scanId),
+    enabled: Boolean(scan),
+    retry: false,
+  });
+
+  const selectedIds = [...selected];
+  const anyImpacting = findings.some((f) => selected.has(f.ruleId) && f.accessImpacting);
+  const toggle = (id: string) => setSelected((s) => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  async function doPreview() {
+    setError(null); setPreview(null); setBusy(true);
+    try { setPreview(await previewRemediation(scanId, selectedIds)); }
+    catch { setError("Could not generate the preview."); }
+    finally { setBusy(false); }
+  }
+
+  async function apply() {
+    setError(null); setBusy(true); setRun({ status: "running" });
+    try {
+      const rec = await remediate(scanId, selectedIds, confirm);
+      for (let i = 0; i < 200; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await remediationStatus(rec.id);
+        if (st.status !== "pending" && st.status !== "running") { setRun(st); onApplied(); break; }
+      }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(msg || "Remediation failed to start.");
+      setRun(null);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={Boolean(scan)} onClose={onClose} fullWidth maxWidth="md">
+      <DialogTitle>Remediate failures · {scan?.profileTitle || scan?.profile}</DialogTitle>
+      <DialogContent dividers>
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Remediation <b>changes this host's configuration</b>. Rules marked <b>⚠ access-impacting</b>
+          (SSH, firewall, account lockout) can cut off Fleet's own access — review the preview and
+          apply with care.
+        </Alert>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        {isLoading && <Box sx={{ p: 2, textAlign: "center" }}><CircularProgress /></Box>}
+
+        {!run && findings.length > 0 && (
+          <Stack spacing={0.5} sx={{ mb: 2 }}>
+            {findings.map((f) => (
+              <FindingRow key={f.ruleId} f={f} checked={selected.has(f.ruleId)} onToggle={() => toggle(f.ruleId)} />
+            ))}
+          </Stack>
+        )}
+        {!run && !isLoading && findings.length === 0 && (
+          <Typography variant="body2" color="text.secondary">No failed rules to remediate.</Typography>
+        )}
+
+        {anyImpacting && !run && (
+          <FormControlLabel
+            control={<Checkbox checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />}
+            label="I understand the selected access-impacting rules may cut off Fleet's access to this host."
+          />
+        )}
+
+        {preview != null && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="overline" color="text.secondary">Remediation script (preview)</Typography>
+            <Box component="pre" sx={{ m: 0, p: 1.5, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, overflow: "auto", maxHeight: 280 }}>
+              {preview || "(oscap produced no fix for the selected rules)"}
+            </Box>
+          </Box>
+        )}
+
+        {run && (
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Remediation {run.status}{run.exitCode != null ? ` (exit ${run.exitCode})` : ""}
+              {run.status === "running" && <CircularProgress size={14} sx={{ ml: 1 }} />}
+            </Typography>
+            {run.error && <Alert severity="error" sx={{ mb: 1 }}>{run.error}</Alert>}
+            {run.output && (
+              <Box component="pre" sx={{ m: 0, p: 1.5, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, overflow: "auto", maxHeight: 280 }}>
+                {run.output}
+              </Box>
+            )}
+            {run.status === "completed" && (
+              <Typography variant="body2" sx={{ mt: 1 }} color="text.secondary">
+                A verification re-scan was run — see the latest scan in the history for the new score.
+              </Typography>
+            )}
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+        {!run && (
+          <>
+            <Button disabled={selectedIds.length === 0 || busy} onClick={doPreview}>Preview</Button>
+            <Button
+              variant="contained" color="warning"
+              disabled={selectedIds.length === 0 || busy || (anyImpacting && !confirm)}
+              onClick={apply}
+            >
+              Apply {selectedIds.length > 0 ? `(${selectedIds.length})` : ""}
+            </Button>
+          </>
+        )}
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function FindingRow({ f, checked, onToggle }: { f: ScanFinding; checked: boolean; onToggle: () => void }) {
+  const sevColor = f.severity === "high" ? "error" : f.severity === "medium" ? "warning" : "default";
+  return (
+    <Stack direction="row" alignItems="center" spacing={1}>
+      <Checkbox size="small" checked={checked} onChange={onToggle} sx={{ p: 0.5 }} />
+      {f.severity && <Chip size="small" label={f.severity} color={sevColor as "error" | "warning" | "default"} variant="outlined" />}
+      {f.accessImpacting && <Tooltip title="May cut off Fleet's access (SSH/firewall/lockout)"><Chip size="small" color="warning" label="⚠ access" /></Tooltip>}
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="body2" noWrap>{f.title}</Typography>
+        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>{f.ruleId}</Typography>
+      </Box>
+    </Stack>
   );
 }
 

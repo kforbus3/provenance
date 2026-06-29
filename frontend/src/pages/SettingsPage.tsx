@@ -51,6 +51,7 @@ export function SettingsPage() {
 
       <BrandingCard current={settings["branding"]} />
       <AssistantCard current={settings["assistant"]} />
+      <ScanCard current={settings["scan_policy"]} />
       <WGSettingsCard current={settings["wireguard"]} />
       <RetentionCard current={settings["recordings"]} />
       <BackupCard />
@@ -214,6 +215,40 @@ function AssistantCard({ current }: { current: unknown }) {
 
 // WGSettingsCard configures the VPN (jump host) WireGuard endpoint that managed
 // hosts dial, so it doesn't have to be entered for every enrollment.
+// ScanCard sets the OpenSCAP scan/remediation time budget. Strict profiles
+// (ANSSI High) on hosts with many files can run for a long time; raise this to
+// avoid them being cut off. Overrides the FLEET_SCAN_TIMEOUT default.
+function ScanCard({ current }: { current: unknown }) {
+  const qc = useQueryClient();
+  const cur = (current ?? {}) as { timeoutMinutes?: number };
+  const [minutes, setMinutes] = useState(String(cur.timeoutMinutes ?? 60));
+  const [saved, setSaved] = useState(false);
+  const save = useMutation({
+    mutationFn: () => setSetting("scan_policy", { timeoutMinutes: Math.min(480, Math.max(5, Number(minutes) || 60)) }),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["settings"] }); },
+  });
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Security scans</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Maximum time a scan or remediation may run before it's stopped. Strict profiles (e.g.
+        ANSSI High) on hosts with very large filesystems can take a long time — raise this so they
+        aren't cut off. Range 5–480 minutes; overrides the <code>FLEET_SCAN_TIMEOUT</code> default.
+      </Typography>
+      <Stack direction="row" spacing={2} alignItems="flex-start">
+        <TextField
+          label="Scan timeout (minutes)" type="number" value={minutes}
+          onChange={(e) => { setMinutes(e.target.value); setSaved(false); }}
+          inputProps={{ min: 5, max: 480 }} sx={{ width: 220 }} size="small"
+        />
+        <Button variant="contained" sx={{ mt: 0.5 }} disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
 function WGSettingsCard({ current }: { current: unknown }) {
   const qc = useQueryClient();
   const cur = (current ?? {}) as { jumpHost?: string; jumpPort?: number };
