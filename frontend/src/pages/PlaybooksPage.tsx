@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   FormControlLabel, IconButton, LinearProgress, Paper, Stack, Switch, Table, TableBody,
@@ -191,6 +191,20 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
 
   const running = !!runId && (!run || !TERMINAL.has(run.status));
 
+  // Auto-scroll the live console to the bottom as output streams in, unless the
+  // user has scrolled up to read (then leave them be until they return to the
+  // bottom).
+  const logRef = useRef<HTMLPreElement>(null);
+  const stickToBottom = useRef(true);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [run?.output]);
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
   return (
     <Dialog open fullWidth maxWidth="md" onClose={running ? undefined : onClose}>
       <DialogTitle>Run “{playbook.name}”</DialogTitle>
@@ -263,6 +277,8 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
             {running && <LinearProgress />}
             <Box
               component="pre"
+              ref={logRef}
+              onScroll={onLogScroll}
               sx={{
                 m: 0, p: 1.5, bgcolor: "#0b0b0b", color: "#e0e0e0", borderRadius: 1,
                 fontFamily: "monospace", fontSize: 12.5, whiteSpace: "pre-wrap",
