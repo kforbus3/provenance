@@ -83,6 +83,11 @@ type Config struct {
 	ScapContentDir     string
 	ScapContentVersion string // ComplianceAsCode release tag; empty = latest
 
+	// Ansible runner sidecar base URL (e.g. http://ansible-runner:8000). The
+	// backend delegates playbook validation/lint (and, later, execution) to it.
+	// Empty disables the Ansible playbook feature's runner-backed operations.
+	AnsibleRunnerURL string
+
 	// SFTP upload size cap in bytes (0 = unlimited).
 	MaxUploadBytes int64
 
@@ -135,6 +140,7 @@ func Load() (*Config, error) {
 		ScanTimeout:        envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
 		ScapContentDir:     env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion: env("FLEET_SCAP_CONTENT_VERSION", ""),
+		AnsibleRunnerURL:   env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
 		MaxUploadBytes:     envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
 		LogLevel:           env("FLEET_LOG_LEVEL", "info"),
 		LogFormat:          env("FLEET_LOG_FORMAT", "json"),
