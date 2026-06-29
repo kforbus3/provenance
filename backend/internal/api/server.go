@@ -422,7 +422,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
 	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
 
-	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log))
+	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log, s.Issuer))
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)

@@ -14,26 +14,34 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
-// Service talks to the ansible-runner sidecar.
+// Service talks to the ansible-runner sidecar and orchestrates playbook runs.
+// The backend mints the ephemeral SSH credential; the sidecar performs the
+// actual SSH (through the Fleet jump host), keeping Python/Ansible out of the
+// backend.
 type Service struct {
 	store  *store.Store
 	cfg    *config.Config
 	log    *slog.Logger
+	issuer *identity.Issuer
 	client *http.Client
+	live   sync.Map // runID -> *liveRun (in-flight output buffers)
 }
 
 // New constructs the playbook service.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger) *Service {
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, issuer *identity.Issuer) *Service {
 	return &Service{
 		store:  st,
 		cfg:    cfg,
 		log:    log,
+		issuer: issuer,
 		client: &http.Client{Timeout: 60 * time.Second},
 	}
 }

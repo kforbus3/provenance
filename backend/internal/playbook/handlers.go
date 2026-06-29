@@ -31,6 +31,10 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Playbook.Edit")).Delete("/playbooks/{id}", h.delete)
 		pr.With(d.Auth.RequirePermission("Playbook.Edit")).Get("/playbooks/{id}/versions", h.versions)
 		pr.With(d.Auth.RequirePermission("Playbook.Edit")).Get("/playbooks/{id}/versions/{version}", h.version)
+		// Execution requires Playbook.Run (admin-only by default) and host access.
+		pr.With(d.Auth.RequirePermission("Playbook.Run")).Post("/playbooks/{id}/run", h.run)
+		pr.With(d.Auth.RequirePermission("Playbook.Run")).Get("/playbooks/{id}/runs", h.runs)
+		pr.With(d.Auth.RequirePermission("Playbook.Run")).Get("/playbook-runs/{runId}", h.runStatus)
 	})
 }
 
@@ -187,6 +191,119 @@ func (h *handler) lint(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) runnerStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"available": h.svc.Healthy(r.Context())})
+}
+
+// --- execution (Playbook.Run) ---
+
+type runReq struct {
+	TargetKind string `json:"targetKind"` // host (group arrives in Phase 3)
+	TargetID   string `json:"targetId"`
+	CheckMode  bool   `json:"checkMode"`
+}
+
+func (h *handler) run(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	pb, err := h.d.Store.GetPlaybook(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "playbook not found")
+		return
+	}
+	var rq runReq
+	if !decode(w, r, &rq) {
+		return
+	}
+	if rq.TargetKind == "" {
+		rq.TargetKind = "host"
+	}
+	if rq.TargetKind != "host" {
+		writeError(w, http.StatusBadRequest, "only single-host runs are supported")
+		return
+	}
+	hostID, err := uuid.Parse(rq.TargetID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad target id")
+		return
+	}
+	host, err := h.d.Store.GetHost(r.Context(), hostID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	p := auth.MustPrincipal(r)
+	if !h.canAccessHost(r, p, host.ID) {
+		writeError(w, http.StatusForbidden, "not authorized for host")
+		return
+	}
+
+	rec, err := h.d.Store.CreatePlaybookRun(r.Context(), models.PlaybookRun{
+		PlaybookID:      pb.ID,
+		PlaybookVersion: pb.Version,
+		Requester:       p.Username,
+		TargetKind:      "host",
+		TargetID:        &host.ID,
+		TargetName:      host.Hostname,
+		HostCount:       1,
+		CheckMode:       rq.CheckMode,
+	}, &p.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create run")
+		return
+	}
+	go h.svc.Run(rec.ID, pb.Content, []*models.Host{host}, rq.CheckMode)
+
+	h.audit(r, "playbook.run", pb.ID.String(), map[string]any{
+		"name": pb.Name, "version": pb.Version, "runId": rec.ID,
+		"hostId": host.ID, "hostname": host.Hostname, "checkMode": rq.CheckMode,
+	})
+	writeJSON(w, http.StatusAccepted, rec)
+}
+
+func (h *handler) runs(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	rs, err := h.d.Store.ListPlaybookRuns(r.Context(), id, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list runs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": rs, "count": len(rs)})
+}
+
+func (h *handler) runStatus(w http.ResponseWriter, r *http.Request) {
+	runID, err := uuid.Parse(chi.URLParam(r, "runId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad run id")
+		return
+	}
+	rec, err := h.d.Store.GetPlaybookRun(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	// While running, the persisted output is empty; serve the live buffer so the
+	// browser sees output stream in by polling.
+	if out, live := h.svc.LiveOutput(runID); live {
+		rec.Output = out
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+// canAccessHost mirrors the scan/terminal gate: super admins bypass; otherwise
+// the user must have access to the host (group/direct/temporary).
+func (h *handler) canAccessHost(r *http.Request, p *auth.Principal, hostID uuid.UUID) bool {
+	if p == nil {
+		return false
+	}
+	if p.IsSuperAdmin {
+		return true
+	}
+	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
+	return err == nil && ok
 }
 
 // --- helpers ---

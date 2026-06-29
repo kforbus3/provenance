@@ -73,3 +73,46 @@ export async function runnerStatus(): Promise<{ available: boolean }> {
   const { data } = await api.get<{ available: boolean }>("/api/v1/playbooks/runner");
   return data;
 }
+
+// --- execution ---
+
+export interface PlaybookRun {
+  id: string;
+  playbookId: string;
+  playbookVersion: number;
+  requester?: string;
+  targetKind: string; // host|group
+  targetId?: string;
+  targetName?: string;
+  hostCount: number;
+  checkMode: boolean;
+  status: string; // pending|running|completed|failed
+  exitCode?: number;
+  output?: string;
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+}
+
+export async function runPlaybook(
+  id: string,
+  input: { targetId: string; checkMode: boolean },
+): Promise<PlaybookRun> {
+  const { data } = await api.post<PlaybookRun>(`/api/v1/playbooks/${id}/run`, {
+    targetKind: "host",
+    targetId: input.targetId,
+    checkMode: input.checkMode,
+  });
+  return data;
+}
+
+export async function listPlaybookRuns(id: string): Promise<PlaybookRun[]> {
+  const { data } = await api.get<{ runs: PlaybookRun[] }>(`/api/v1/playbooks/${id}/runs`);
+  return data.runs ?? [];
+}
+
+export async function getPlaybookRun(runId: string): Promise<PlaybookRun> {
+  const { data } = await api.get<PlaybookRun>(`/api/v1/playbook-runs/${runId}`);
+  return data;
+}

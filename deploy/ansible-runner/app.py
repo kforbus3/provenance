@@ -13,13 +13,17 @@ managed host:
 Execution (POST /run, streaming) lands in Phase 2.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import tempfile
+from typing import List
 
 from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 
 app = FastAPI(title="fleet-ansible-runner", version="1")
 
@@ -102,3 +106,131 @@ def lint(req: ContentRequest):
         lambda path: ["ansible-lint", "--nocolor", "--parseable", path],
         req.content,
     )
+
+
+# --- execution -------------------------------------------------------------
+
+class RunHost(BaseModel):
+    name: str
+    address: str
+    user: str = "fleet"
+    port: int = 22
+
+
+class RunRequest(BaseModel):
+    # Accept the Go backend's camelCase keys (privateKey, jumpHost, …) while
+    # keeping Pythonic field names.
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    playbook: str
+    private_key: str = ""       # OpenSSH private key (the run credential)
+    certificate: str = ""       # matching user certificate (authorized_keys form)
+    hosts: List[RunHost] = []
+    jump_host: str = ""         # host:port of the Fleet jump host
+    jump_user: str = "fleet"
+    check_mode: bool = False    # ansible --check (dry run)
+    become: bool = True
+    timeout_secs: int = 1800
+
+
+def _ndjson(obj) -> str:
+    return json.dumps(obj) + "\n"
+
+
+def _build_inventory(req: RunRequest, key_path: str) -> str:
+    # All hosts reach their target through the Fleet jump host (ProxyJump). The
+    # same certificate authenticates both hops, exactly as the Go gateway does.
+    # Host-key checking is disabled because trust is established by the
+    # certificate, mirroring the backend's own jump-host posture.
+    common = (
+        f"-o ProxyJump={req.jump_user}@{req.jump_host} "
+        "-o StrictHostKeyChecking=no "
+        "-o UserKnownHostsFile=/dev/null "
+        "-o IdentitiesOnly=yes "
+        "-o ConnectTimeout=15"
+    )
+    lines = ["[all]"]
+    for h in req.hosts:
+        lines.append(f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}")
+    lines += [
+        "",
+        "[all:vars]",
+        f"ansible_ssh_private_key_file={key_path}",
+        f"ansible_ssh_common_args={common}",
+    ]
+    if req.become:
+        lines += ["ansible_become=true", "ansible_become_method=sudo"]
+    return "\n".join(lines) + "\n"
+
+
+def _stream_run(req: RunRequest):
+    if not req.hosts:
+        yield _ndjson({"done": True, "rc": 1, "error": "no target hosts"})
+        return
+    if len(req.playbook) > MAX_CONTENT:
+        yield _ndjson({"done": True, "rc": 1, "error": "playbook is too large"})
+        return
+
+    workdir = tempfile.mkdtemp(prefix="fleet-run-")
+    proc = None
+    try:
+        pb_path = os.path.join(workdir, "playbook.yml")
+        inv_path = os.path.join(workdir, "inventory.ini")
+        key_path = os.path.join(workdir, "id")
+        cert_path = os.path.join(workdir, "id-cert.pub")
+
+        with open(pb_path, "w", encoding="utf-8") as fh:
+            fh.write(req.playbook)
+        # Private key must be 0600 or OpenSSH refuses it.
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(req.private_key if req.private_key.endswith("\n") else req.private_key + "\n")
+        with open(cert_path, "w", encoding="utf-8") as fh:
+            fh.write(req.certificate if req.certificate.endswith("\n") else req.certificate + "\n")
+        with open(inv_path, "w", encoding="utf-8") as fh:
+            fh.write(_build_inventory(req, key_path))
+
+        argv = ["ansible-playbook", "-i", inv_path]
+        if req.check_mode:
+            argv.append("--check")
+        argv.append(pb_path)
+        # `timeout` makes the run self-terminate (rc 124) so a wedged play can't
+        # hang the stream — same wrapper the backend uses for oscap.
+        timeout = max(60, int(req.timeout_secs))
+        argv = ["timeout", str(timeout)] + argv
+
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": workdir,
+            "ANSIBLE_NOCOLOR": "1",
+            "ANSIBLE_HOST_KEY_CHECKING": "False",
+            "ANSIBLE_RETRY_FILES_ENABLED": "0",
+            "ANSIBLE_LOCAL_TEMP": workdir,
+            "ANSIBLE_FORCE_COLOR": "0",
+            "PYTHONUNBUFFERED": "1",
+        }
+        if req.check_mode:
+            yield _ndjson({"line": "[check mode — no changes will be made]"})
+
+        proc = subprocess.Popen(
+            argv, cwd=workdir, env=env, text=True, bufsize=1,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        for line in iter(proc.stdout.readline, ""):
+            yield _ndjson({"line": line.rstrip("\n")})
+        proc.wait()
+        rc = proc.returncode
+        msg = f"run timed out after {timeout}s" if rc == 124 else ""
+        yield _ndjson({"done": True, "rc": rc, "error": msg})
+    except Exception as exc:  # noqa: BLE001 — report any failure to the caller
+        if proc and proc.poll() is None:
+            proc.kill()
+        yield _ndjson({"done": True, "rc": 1, "error": f"runner error: {exc}"})
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+@app.post("/run")
+def run(req: RunRequest):
+    # NDJSON stream: {"line": "..."} per output line, then {"done": true, "rc": N}.
+    return StreamingResponse(_stream_run(req), media_type="application/x-ndjson")

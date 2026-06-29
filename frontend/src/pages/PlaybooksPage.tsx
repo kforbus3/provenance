@@ -1,22 +1,27 @@
 import { useEffect, useState } from "react";
 import {
-  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, TextField, Tooltip, Typography,
+  Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  FormControlLabel, IconButton, LinearProgress, Paper, Stack, Switch, Table, TableBody,
+  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import RuleIcon from "@mui/icons-material/Rule";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import HistoryIcon from "@mui/icons-material/History";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import {
-  createPlaybook, deletePlaybook, getPlaybook, listPlaybooks, lintPlaybook,
-  runnerStatus, updatePlaybook, validatePlaybook, type CheckResult,
+  createPlaybook, deletePlaybook, getPlaybook, getPlaybookRun, listPlaybookRuns, listPlaybooks,
+  lintPlaybook, runPlaybook, runnerStatus, updatePlaybook, validatePlaybook,
+  type CheckResult, type Playbook,
 } from "../api/playbooks";
+import { listHosts, type Host } from "../api/hosts";
 import { useUIStore } from "../store/ui";
+import { useAuthStore } from "../store/auth";
 
 const STARTER = `---
 - name: Example playbook
@@ -34,10 +39,14 @@ const STARTER = `---
 // against hosts arrives in a later phase.
 export function PlaybooksPage() {
   const qc = useQueryClient();
+  const has = useAuthStore((s) => s.has);
+  const canRun = has("Playbook.Run");
   const { data: playbooks = [], isLoading } = useQuery({ queryKey: ["playbooks"], queryFn: listPlaybooks });
   const { data: runner } = useQuery({ queryKey: ["playbook-runner"], queryFn: runnerStatus });
 
   const [editorId, setEditorId] = useState<string | null>(null); // playbook id, "" = new, null = closed
+  const [runTarget, setRunTarget] = useState<Playbook | null>(null);
+  const [runsTarget, setRunsTarget] = useState<Playbook | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["playbooks"] });
 
   const deleteMut = useMutation({
@@ -86,6 +95,20 @@ export function PlaybooksPage() {
                   {new Date(p.updatedAt).toLocaleString()}
                 </TableCell>
                 <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                  {canRun && (
+                    <>
+                      <Tooltip title="Run">
+                        <IconButton size="small" color="primary" onClick={() => setRunTarget(p)}>
+                          <PlayArrowIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Run history">
+                        <IconButton size="small" onClick={() => setRunsTarget(p)}>
+                          <HistoryIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </>
+                  )}
                   <Tooltip title="Edit">
                     <IconButton size="small" onClick={() => setEditorId(p.id)}><EditIcon fontSize="small" /></IconButton>
                   </Tooltip>
@@ -118,8 +141,194 @@ export function PlaybooksPage() {
           onSaved={() => { setEditorId(null); invalidate(); }}
         />
       )}
+      {runTarget && <PlaybookRunDialog playbook={runTarget} onClose={() => setRunTarget(null)} />}
+      {runsTarget && <PlaybookRunsDialog playbook={runsTarget} onClose={() => setRunsTarget(null)} />}
     </Box>
   );
+}
+
+const TERMINAL = new Set(["completed", "failed"]);
+
+// Run a playbook against a single accessible host. Pre-run: pick a host + choose
+// dry-run. After launch: poll the run and stream its output into a console until
+// it reaches a terminal state.
+function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose: () => void }) {
+  const { data: hostData } = useQuery({ queryKey: ["hosts"], queryFn: listHosts });
+  const hosts = hostData?.hosts ?? [];
+
+  const [host, setHost] = useState<Host | null>(null);
+  const [checkMode, setCheckMode] = useState(true);
+  const [runId, setRunId] = useState<string | null>(null);
+
+  const startMut = useMutation({
+    mutationFn: () => runPlaybook(playbook.id, { targetId: host!.id, checkMode }),
+    onSuccess: (r) => setRunId(r.id),
+  });
+
+  const { data: run } = useQuery({
+    queryKey: ["playbook-run", runId],
+    queryFn: () => getPlaybookRun(runId as string),
+    enabled: !!runId,
+    refetchInterval: (q) => (q.state.data && TERMINAL.has(q.state.data.status) ? false : 1000),
+  });
+
+  const running = !!runId && (!run || !TERMINAL.has(run.status));
+
+  return (
+    <Dialog open fullWidth maxWidth="md" onClose={running ? undefined : onClose}>
+      <DialogTitle>Run “{playbook.name}”</DialogTitle>
+      <DialogContent dividers>
+        {!runId ? (
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Alert severity="info">
+              The playbook runs through the Fleet jump host as the privileged host account. Make sure
+              its plays target <code>hosts: all</code> — Fleet supplies the inventory and limits it to
+              the host you pick.
+            </Alert>
+            <Autocomplete
+              options={hosts}
+              value={host}
+              onChange={(_, v) => setHost(v)}
+              getOptionLabel={(h) => h.hostname}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              renderInput={(params) => <TextField {...params} label="Target host" size="small" autoFocus />}
+            />
+            <FormControlLabel
+              control={<Switch checked={checkMode} onChange={(e) => setCheckMode(e.target.checked)} />}
+              label="Dry run (check mode — report changes without applying them)"
+            />
+            {!checkMode && (
+              <Alert severity="warning">
+                This will apply changes on <strong>{host?.hostname ?? "the selected host"}</strong>.
+              </Alert>
+            )}
+            {startMut.error != null && <Alert severity="error">{(startMut.error as Error).message}</Alert>}
+          </Stack>
+        ) : (
+          <Stack spacing={1} sx={{ mt: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <RunStatusChip status={run?.status} />
+              {run?.checkMode && <Chip size="small" label="dry run" variant="outlined" />}
+              <Typography variant="body2" color="text.secondary">{host?.hostname}</Typography>
+              {run && TERMINAL.has(run.status) && run.exitCode != null && (
+                <Typography variant="body2" color="text.secondary">exit {run.exitCode}</Typography>
+              )}
+            </Stack>
+            {running && <LinearProgress />}
+            <Box
+              component="pre"
+              sx={{
+                m: 0, p: 1.5, bgcolor: "#0b0b0b", color: "#e0e0e0", borderRadius: 1,
+                fontFamily: "monospace", fontSize: 12.5, whiteSpace: "pre-wrap",
+                maxHeight: 420, minHeight: 200, overflow: "auto",
+              }}
+            >
+              {run?.output || (running ? "Starting…" : "(no output)")}
+            </Box>
+            {run?.error && <Alert severity="error">{run.error}</Alert>}
+          </Stack>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={running}>{runId ? "Close" : "Cancel"}</Button>
+        {!runId && (
+          <Button
+            variant="contained" startIcon={<PlayArrowIcon />}
+            disabled={!host || startMut.isPending}
+            onClick={() => startMut.mutate()}
+          >
+            {checkMode ? "Dry run" : "Run"}
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// Past runs for a playbook, with a drill-down into a run's captured output.
+function PlaybookRunsDialog({ playbook, onClose }: { playbook: Playbook; onClose: () => void }) {
+  const { data: runs = [] } = useQuery({
+    queryKey: ["playbook-runs", playbook.id],
+    queryFn: () => listPlaybookRuns(playbook.id),
+  });
+  const [openRun, setOpenRun] = useState<string | null>(null);
+  const { data: detail } = useQuery({
+    queryKey: ["playbook-run", openRun],
+    queryFn: () => getPlaybookRun(openRun as string),
+    enabled: !!openRun,
+  });
+
+  return (
+    <Dialog open fullWidth maxWidth="md" onClose={onClose}>
+      <DialogTitle>Run history — {playbook.name}</DialogTitle>
+      <DialogContent dividers>
+        {openRun ? (
+          <Stack spacing={1}>
+            <Button size="small" onClick={() => setOpenRun(null)} sx={{ alignSelf: "flex-start" }}>
+              ← Back to history
+            </Button>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <RunStatusChip status={detail?.status} />
+              {detail?.checkMode && <Chip size="small" label="dry run" variant="outlined" />}
+              <Typography variant="body2" color="text.secondary">{detail?.targetName}</Typography>
+            </Stack>
+            <Box
+              component="pre"
+              sx={{
+                m: 0, p: 1.5, bgcolor: "#0b0b0b", color: "#e0e0e0", borderRadius: 1,
+                fontFamily: "monospace", fontSize: 12.5, whiteSpace: "pre-wrap",
+                maxHeight: 420, overflow: "auto",
+              }}
+            >
+              {detail?.output || "(no output)"}
+            </Box>
+          </Stack>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>When</TableCell>
+                  <TableCell>Target</TableCell>
+                  <TableCell>Mode</TableCell>
+                  <TableCell>By</TableCell>
+                  <TableCell>Status</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {runs.map((r) => (
+                  <TableRow key={r.id} hover sx={{ cursor: "pointer" }} onClick={() => setOpenRun(r.id)}>
+                    <TableCell>{new Date(r.createdAt).toLocaleString()}</TableCell>
+                    <TableCell>{r.targetName}</TableCell>
+                    <TableCell>{r.checkMode ? "dry run" : "apply"}</TableCell>
+                    <TableCell>{r.requester}</TableCell>
+                    <TableCell><RunStatusChip status={r.status} /></TableCell>
+                  </TableRow>
+                ))}
+                {runs.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} align="center" sx={{ color: "text.secondary", py: 3 }}>
+                      No runs yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function RunStatusChip({ status }: { status?: string }) {
+  const color =
+    status === "completed" ? "success" : status === "failed" ? "error" :
+    status === "running" ? "info" : "default";
+  return <Chip size="small" color={color as "success" | "error" | "info" | "default"} label={status ?? "…"} />;
 }
 
 function PlaybookEditor({ id, onClose, onSaved }: { id: string | null; onClose: () => void; onSaved: () => void }) {

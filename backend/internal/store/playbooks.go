@@ -162,6 +162,85 @@ func (s *Store) GetPlaybookVersion(ctx context.Context, playbookID uuid.UUID, ve
 	return &v, nil
 }
 
+// --- playbook runs ---
+
+const playbookRunCols = `id, playbook_id, playbook_version, requester, target_kind, target_id,
+	target_name, host_count, check_mode, status, exit_code, output, error,
+	started_at, finished_at, created_at`
+
+func scanPlaybookRun(row interface{ Scan(...any) error }) (*models.PlaybookRun, error) {
+	var r models.PlaybookRun
+	if err := row.Scan(&r.ID, &r.PlaybookID, &r.PlaybookVersion, &r.Requester, &r.TargetKind,
+		&r.TargetID, &r.TargetName, &r.HostCount, &r.CheckMode, &r.Status, &r.ExitCode,
+		&r.Output, &r.Error, &r.StartedAt, &r.FinishedAt, &r.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// CreatePlaybookRun inserts a pending run and returns it.
+func (s *Store) CreatePlaybookRun(ctx context.Context, in models.PlaybookRun, requestedBy *uuid.UUID) (*models.PlaybookRun, error) {
+	row := s.pool.QueryRow(ctx,
+		`INSERT INTO playbook_runs(playbook_id, playbook_version, requested_by, requester,
+			target_kind, target_id, target_name, host_count, check_mode, status)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') RETURNING `+playbookRunCols,
+		in.PlaybookID, in.PlaybookVersion, requestedBy, in.Requester, in.TargetKind,
+		in.TargetID, in.TargetName, in.HostCount, in.CheckMode)
+	return scanPlaybookRun(row)
+}
+
+// StartPlaybookRun marks a run as running.
+func (s *Store) StartPlaybookRun(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE playbook_runs SET status='running', started_at=now() WHERE id=$1`, id)
+	return err
+}
+
+// CompletePlaybookRun records the terminal state, captured output, and exit code.
+func (s *Store) CompletePlaybookRun(ctx context.Context, id uuid.UUID, status, output string, exitCode *int, errMsg string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE playbook_runs SET status=$2, output=$3, exit_code=$4, error=$5, finished_at=now()
+		 WHERE id=$1`, id, status, output, exitCode, errMsg)
+	return err
+}
+
+// GetPlaybookRun returns one run.
+func (s *Store) GetPlaybookRun(ctx context.Context, id uuid.UUID) (*models.PlaybookRun, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+playbookRunCols+` FROM playbook_runs WHERE id=$1`, id)
+	r, err := scanPlaybookRun(row)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	return r, nil
+}
+
+// ListPlaybookRuns returns recent runs for a playbook, newest first, without the
+// (potentially large) output body.
+func (s *Store) ListPlaybookRuns(ctx context.Context, playbookID uuid.UUID, limit int) ([]*models.PlaybookRun, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, playbook_id, playbook_version, requester, target_kind, target_id,
+			target_name, host_count, check_mode, status, exit_code, '' AS output, error,
+			started_at, finished_at, created_at
+		 FROM playbook_runs WHERE playbook_id=$1 ORDER BY created_at DESC LIMIT $2`,
+		playbookID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.PlaybookRun
+	for rows.Next() {
+		r, err := scanPlaybookRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // FailStalePlaybookRuns marks any pending/running runs as failed on startup,
 // since their in-memory goroutines did not survive the restart.
 func (s *Store) FailStalePlaybookRuns(ctx context.Context) (int64, error) {
