@@ -24,6 +24,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -87,6 +88,7 @@ type Service struct {
 	log    *slog.Logger
 	gw     *sshgw.Gateway
 	issuer *identity.Issuer
+	nfy    *notify.Service
 
 	// installing tracks hosts with an in-flight background scanner install, so
 	// repeated "prepare" requests don't kick off duplicate installs.
@@ -97,8 +99,8 @@ type Service struct {
 	contentMu sync.Mutex
 }
 
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer) *Service {
-	return &Service{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer}
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, nfy *notify.Service) *Service {
+	return &Service{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, nfy: nfy}
 }
 
 // dial opens a privileged connection to the host, trying its candidate
@@ -299,6 +301,16 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host, profile string, skipRule
 	}
 	s.log.Info("host scan completed", "host", h.Hostname, "scan", scanID,
 		"profile", meta["PROFILE"], "pass", pass, "fail", failCnt)
+
+	if failCnt > 0 && s.nfy != nil {
+		s.nfy.Notify(context.Background(), notify.Event{
+			Type: notify.EventScanFindings, Severity: notify.SeverityWarning,
+			Title: fmt.Sprintf("Scan found %d failed rule(s) on %s", failCnt, h.Hostname),
+			Body: fmt.Sprintf("OpenSCAP scan of %s (profile %s) finished: %d passed, %d failed, %d other.",
+				h.Hostname, meta["PROFILE"], pass, failCnt, other),
+			DedupeKey: h.ID.String(),
+		})
+	}
 }
 
 // --- remote scripts ---

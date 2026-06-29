@@ -19,6 +19,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/identity"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -31,17 +32,19 @@ type Service struct {
 	cfg    *config.Config
 	log    *slog.Logger
 	issuer *identity.Issuer
+	nfy    *notify.Service
 	client *http.Client
 	live   sync.Map // runID -> *liveRun (in-flight output buffers)
 }
 
 // New constructs the playbook service.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, issuer *identity.Issuer) *Service {
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, issuer *identity.Issuer, nfy *notify.Service) *Service {
 	return &Service{
 		store:  st,
 		cfg:    cfg,
 		log:    log,
 		issuer: issuer,
+		nfy:    nfy,
 		client: &http.Client{Timeout: 60 * time.Second},
 	}
 }

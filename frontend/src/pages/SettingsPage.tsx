@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, MenuItem, Paper, Stack, Table, TableBody, TableCell,
+  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, Alert,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
@@ -9,6 +9,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
 import { assistantModels } from "../api/assistant";
 import { downloadBackup } from "../api/system";
+import {
+  getNotifications, listEventTypes, saveNotifications, testNotification,
+  type NotificationConfig,
+} from "../api/notifications";
 
 // System settings editor. Values are arbitrary JSON; the editor exposes them as
 // raw JSON text and validates before PUTting the new value.
@@ -54,6 +58,7 @@ export function SettingsPage() {
       <ScanCard current={settings["scan_policy"]} />
       <WGSettingsCard current={settings["wireguard"]} />
       <RetentionCard current={settings["recordings"]} />
+      <NotificationsCard />
       <BackupCard />
 
       <TableContainer component={Paper} variant="outlined">
@@ -335,6 +340,189 @@ function BackupCard() {
       <Button variant="contained" onClick={() => backupMut.mutate()} disabled={backupMut.isPending}>
         {backupMut.isPending ? "Preparing…" : "Download backup"}
       </Button>
+    </Paper>
+  );
+}
+
+// NotificationsCard configures outbound alerts (email/webhook) and which events
+// go to which channel. Everything is off until enabled. The SMTP password is
+// write-only — the server stores it encrypted and never returns it.
+function NotificationsCard() {
+  const qc = useQueryClient();
+  const { data: loaded } = useQuery({ queryKey: ["notifications"], queryFn: getNotifications });
+  const { data: eventTypes = [] } = useQuery({ queryKey: ["notification-events"], queryFn: listEventTypes });
+
+  const [cfg, setCfg] = useState<NotificationConfig | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      const e = loaded.email ?? ({} as NotificationConfig["email"]);
+      const w = loaded.webhook ?? ({} as NotificationConfig["webhook"]);
+      setCfg({
+        email: {
+          enabled: e.enabled ?? false, host: e.host ?? "", port: e.port || 587,
+          username: e.username ?? "", from: e.from ?? "", to: e.to ?? "",
+          security: e.security || "starttls",
+        },
+        webhook: { enabled: w.enabled ?? false, url: w.url ?? "", format: w.format || "json" },
+        events: loaded.events ?? {},
+        throttleMinutes: loaded.throttleMinutes || 5,
+        passwordSet: loaded.passwordSet,
+      });
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => saveNotifications(cfg as NotificationConfig),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["notifications"] }); },
+  });
+  const test = useMutation({
+    mutationFn: (channel: "email" | "webhook") => testNotification(channel),
+    onSuccess: (r) => setTestMsg(r.ok ? "Test sent successfully." : `Test failed: ${r.error}`),
+    onError: () => setTestMsg("Test failed."),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Notifications</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+
+  const dirty = () => { setSaved(false); setTestMsg(null); };
+  const setEmail = (patch: Partial<NotificationConfig["email"]>) => { setCfg({ ...cfg, email: { ...cfg.email, ...patch } }); dirty(); };
+  const setWebhook = (patch: Partial<NotificationConfig["webhook"]>) => { setCfg({ ...cfg, webhook: { ...cfg.webhook, ...patch } }); dirty(); };
+  const setRoute = (key: string, ch: "email" | "webhook", on: boolean) => {
+    const row = cfg.events[key] ?? { email: false, webhook: false };
+    setCfg({ ...cfg, events: { ...cfg.events, [key]: { ...row, [ch]: on } } });
+    dirty();
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Notifications</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Send alerts on key events (host offline, pending approvals, scan findings, failed playbook
+        runs). Configure a channel, choose which events route to it, then Save. Everything is off by
+        default.
+      </Typography>
+
+      {/* Email channel */}
+      <FormControlLabel
+        control={<Switch checked={cfg.email.enabled} onChange={(e) => setEmail({ enabled: e.target.checked })} />}
+        label="Email (SMTP)"
+      />
+      {cfg.email.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1, mb: 1, pl: 1 }}>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="SMTP host" size="small" value={cfg.email.host}
+              onChange={(e) => setEmail({ host: e.target.value })} sx={{ flexGrow: 1 }} placeholder="smtp.example.com" />
+            <TextField label="Port" size="small" type="number" value={cfg.email.port}
+              onChange={(e) => setEmail({ port: Number(e.target.value) || 587 })} sx={{ width: 110 }} />
+            <TextField label="Security" size="small" select value={cfg.email.security}
+              onChange={(e) => setEmail({ security: e.target.value })} sx={{ width: 150 }}>
+              <MenuItem value="starttls">STARTTLS</MenuItem>
+              <MenuItem value="tls">TLS (SMTPS)</MenuItem>
+              <MenuItem value="none">None</MenuItem>
+            </TextField>
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Username" size="small" value={cfg.email.username}
+              onChange={(e) => setEmail({ username: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="off" />
+            <TextField label="Password" size="small" type="password" value={cfg.email.password ?? ""}
+              onChange={(e) => setEmail({ password: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="new-password"
+              placeholder={cfg.passwordSet ? "•••••••• (unchanged)" : ""} />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="From" size="small" value={cfg.email.from}
+              onChange={(e) => setEmail({ from: e.target.value })} sx={{ flexGrow: 1 }} placeholder="fleet@example.com" />
+            <TextField label="To (comma-separated)" size="small" value={cfg.email.to}
+              onChange={(e) => setEmail({ to: e.target.value })} sx={{ flexGrow: 1 }} placeholder="you@example.com" />
+          </Stack>
+          <Box>
+            <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("email")}>
+              Send test email
+            </Button>
+          </Box>
+        </Stack>
+      )}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* Webhook channel */}
+      <FormControlLabel
+        control={<Switch checked={cfg.webhook.enabled} onChange={(e) => setWebhook({ enabled: e.target.checked })} />}
+        label="Webhook"
+      />
+      {cfg.webhook.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1, mb: 1, pl: 1 }}>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Webhook URL" size="small" value={cfg.webhook.url}
+              onChange={(e) => setWebhook({ url: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="https://hooks.example.com/…" />
+            <TextField label="Format" size="small" select value={cfg.webhook.format}
+              onChange={(e) => setWebhook({ format: e.target.value })} sx={{ width: 160 }}>
+              <MenuItem value="json">Generic JSON</MenuItem>
+              <MenuItem value="slack">Slack / Mattermost</MenuItem>
+              <MenuItem value="discord">Discord</MenuItem>
+            </TextField>
+          </Stack>
+          <Box>
+            <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("webhook")}>
+              Send test webhook
+            </Button>
+          </Box>
+        </Stack>
+      )}
+
+      {testMsg && <Alert severity={testMsg.startsWith("Test sent") ? "success" : "error"} sx={{ my: 1 }}>{testMsg}</Alert>}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* Event routing matrix */}
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Which events to send</Typography>
+      <TableContainer>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Event</TableCell>
+              <TableCell align="center">Email</TableCell>
+              <TableCell align="center">Webhook</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {eventTypes.map((ev) => {
+              const row = cfg.events[ev.key] ?? { email: false, webhook: false };
+              return (
+                <TableRow key={ev.key}>
+                  <TableCell>{ev.label}</TableCell>
+                  <TableCell align="center">
+                    <Checkbox size="small" checked={row.email} disabled={!cfg.email.enabled}
+                      onChange={(e) => setRoute(ev.key, "email", e.target.checked)} />
+                  </TableCell>
+                  <TableCell align="center">
+                    <Checkbox size="small" checked={row.webhook} disabled={!cfg.webhook.enabled}
+                      onChange={(e) => setRoute(ev.key, "webhook", e.target.checked)} />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1.5 }}>
+        <TextField label="Throttle (minutes)" size="small" type="number" value={cfg.throttleMinutes}
+          onChange={(e) => { setCfg({ ...cfg, throttleMinutes: Number(e.target.value) || 5 }); dirty(); }}
+          sx={{ width: 180 }} helperText="Suppress repeats of the same event" />
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
     </Paper>
   );
 }

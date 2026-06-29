@@ -42,6 +42,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/monitor"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
@@ -69,6 +70,7 @@ type Server struct {
 	Hub     *ws.Hub
 	Jobs    *jobs.Registry
 	Live    *livesessions.Registry
+	Notify  *notify.Service
 
 	router chi.Router
 }
@@ -92,6 +94,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Hub:     ws.NewHub(),
 		Jobs:    jobs.NewRegistry(),
 		Live:    livesessions.New(),
+		Notify:  notify.New(st, cfg, log),
 	}
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
@@ -151,7 +154,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
 	go s.krlLoop(ctx)
-	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs).Run(ctx)
+	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx)
 	return nil
 }
 
@@ -391,7 +394,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 		writeJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
 	})
 
-	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub}
+	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub, Notify: s.Notify}
 	deps.DistributeKRL = s.distributeKRL
 
 	// M2 — first-run wizard + authentication.
@@ -417,12 +420,14 @@ func (s *Server) registerRoutes(r chi.Router) {
 	fleetsftp.Mount(r, deps, s.Gateway)
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
-	scan.Mount(r, deps, scan.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer))
+	scan.Mount(r, deps, scan.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Notify))
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
 	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
 
-	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log, s.Issuer))
+	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log, s.Issuer, s.Notify))
+
+	notify.Mount(r, s.Auth, s.Notify)
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)

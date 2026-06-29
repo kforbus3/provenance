@@ -5,6 +5,7 @@ package monitor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/ws"
@@ -31,13 +33,39 @@ type Monitor struct {
 	issuer *identity.Issuer
 	hub    *ws.Hub
 	jobs   *jobs.Registry
+	nfy    *notify.Service
 
 	interval time.Duration
 }
 
 // New constructs a Monitor.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, hub *ws.Hub, reg *jobs.Registry) *Monitor {
-	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, interval: 30 * time.Second}
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, hub *ws.Hub, reg *jobs.Registry, nfy *notify.Service) *Monitor {
+	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, nfy: nfy, interval: 30 * time.Second}
+}
+
+// notifyTransition emits an alert when a host crosses the online/offline
+// boundary. The first observation (no prior status) is skipped to avoid a burst
+// of spurious alerts on startup.
+func (m *Monitor) notifyTransition(ctx context.Context, h models.Host, prev, now string) {
+	if m.nfy == nil || prev == "" || prev == now {
+		return
+	}
+	switch {
+	case prev == "online" && now == "offline":
+		m.nfy.Notify(ctx, notify.Event{
+			Type: notify.EventHostOffline, Severity: notify.SeverityError,
+			Title: "Host offline: " + h.Hostname,
+			Body:  fmt.Sprintf("Fleet can no longer reach %s (%s). It was last seen online.", h.Hostname, h.Environment),
+			DedupeKey: h.ID.String(),
+		})
+	case prev != "online" && now == "online":
+		m.nfy.Notify(ctx, notify.Event{
+			Type: notify.EventHostRecovered, Severity: notify.SeverityInfo,
+			Title: "Host recovered: " + h.Hostname,
+			Body:  fmt.Sprintf("%s (%s) is reachable again.", h.Hostname, h.Environment),
+			DedupeKey: h.ID.String(),
+		})
+	}
 }
 
 // Run drives the monitoring loop until ctx is cancelled.
@@ -79,11 +107,16 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if !h.Enrolled {
 			continue
 		}
+		prev := ""
+		if h.Status != nil {
+			prev = h.Status.Status
+		}
 		st, inv, metrics := m.probe(ctx, signer, &h)
 		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 			continue
 		}
+		m.notifyTransition(ctx, h, prev, st.Status)
 		if inv != nil {
 			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
