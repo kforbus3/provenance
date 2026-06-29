@@ -137,18 +137,48 @@ def _ndjson(obj) -> str:
     return json.dumps(obj) + "\n"
 
 
-def _build_inventory(req: RunRequest, key_path: str) -> str:
-    # All hosts reach their target through the Fleet jump host (ProxyJump). The
-    # same certificate authenticates both hops, exactly as the Go gateway does.
-    # Host-key checking is disabled because trust is established by the
-    # certificate, mirroring the backend's own jump-host posture.
-    common = (
-        f"-o ProxyJump={req.jump_user}@{req.jump_host} "
-        "-o StrictHostKeyChecking=no "
-        "-o UserKnownHostsFile=/dev/null "
-        "-o IdentitiesOnly=yes "
-        "-o ConnectTimeout=15"
-    )
+def _split_host_port(hostport: str, default_port: int = 22):
+    if ":" in hostport:
+        h, _, p = hostport.rpartition(":")
+        try:
+            return h, int(p)
+        except ValueError:
+            return hostport, default_port
+    return hostport, default_port
+
+
+def _build_ssh_config(req: RunRequest, key_path: str) -> str:
+    # A real ssh_config so BOTH hops use the certificate and relaxed host-key
+    # handling. Command-line -i / -o options do NOT propagate to a ProxyJump's
+    # inner connection, so the jump hop must be configured explicitly here. The
+    # certificate (<key>-cert.pub) is loaded automatically alongside the key.
+    jhost, jport = _split_host_port(req.jump_host)
+    return "\n".join([
+        "Host fleet-jump",
+        f"    HostName {jhost}",
+        f"    Port {jport}",
+        f"    User {req.jump_user}",
+        f"    IdentityFile {key_path}",
+        "    IdentitiesOnly yes",
+        "    StrictHostKeyChecking no",
+        "    UserKnownHostsFile /dev/null",
+        "    ConnectTimeout 15",
+        "",
+        # Every managed host (anything that is not the jump itself) is reached
+        # through the jump host.
+        "Host * !fleet-jump",
+        "    ProxyJump fleet-jump",
+        f"    IdentityFile {key_path}",
+        "    IdentitiesOnly yes",
+        "    StrictHostKeyChecking no",
+        "    UserKnownHostsFile /dev/null",
+        "    ConnectTimeout 15",
+        "",
+    ])
+
+
+def _build_inventory(req: RunRequest, key_path: str, ssh_config_path: str) -> str:
+    common = f"-F {ssh_config_path}"
     lines = ["[all]"]
     for h in req.hosts:
         lines.append(f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}")
@@ -176,6 +206,7 @@ def _stream_run(req: RunRequest):
     try:
         pb_path = os.path.join(workdir, "playbook.yml")
         inv_path = os.path.join(workdir, "inventory.ini")
+        cfg_path = os.path.join(workdir, "ssh_config")
         key_path = os.path.join(workdir, "id")
         cert_path = os.path.join(workdir, "id-cert.pub")
 
@@ -187,8 +218,10 @@ def _stream_run(req: RunRequest):
             fh.write(req.private_key if req.private_key.endswith("\n") else req.private_key + "\n")
         with open(cert_path, "w", encoding="utf-8") as fh:
             fh.write(req.certificate if req.certificate.endswith("\n") else req.certificate + "\n")
+        with open(cfg_path, "w", encoding="utf-8") as fh:
+            fh.write(_build_ssh_config(req, key_path))
         with open(inv_path, "w", encoding="utf-8") as fh:
-            fh.write(_build_inventory(req, key_path))
+            fh.write(_build_inventory(req, key_path, cfg_path))
 
         argv = ["ansible-playbook", "-i", inv_path]
         if req.check_mode:
