@@ -17,6 +17,7 @@ import {
 import { listHosts, type Host } from "../api/hosts";
 import { listGroups, type Group } from "../api/admin";
 import { listPlaybooks, type Playbook } from "../api/playbooks";
+import { listScanProfiles } from "../api/scans";
 import { formatDateTime } from "../lib/datetime";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -173,6 +174,18 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
     }
   }, [hosts, groups, playbooks]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // For a scan schedule, discover available profiles from the target host (or a
+  // member of the target group) so the user can pick from a dropdown.
+  const repHostId =
+    targetKind === "host"
+      ? host?.id
+      : hosts.find((h) => (h.groups ?? []).includes(group?.name ?? ""))?.id;
+  const { data: prof, isLoading: profLoading } = useQuery({
+    queryKey: ["scan-profiles", repHostId],
+    queryFn: () => listScanProfiles(repHostId as string),
+    enabled: kind === "scan" && !!repHostId,
+  });
+
   const recurrence = (): Recurrence => {
     if (recType === "interval") return { type: "interval", everyMinutes: Number(everyMinutes) || 60 };
     if (recType === "weekly") return { type: "weekly", weekday, timeOfDay };
@@ -211,9 +224,25 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
 
           {kind === "scan" ? (
             <Stack direction="row" spacing={2} alignItems="center">
-              <TextField label="Profile (blank = standard)" size="small" value={profile}
+              <TextField
+                select label="Profile" size="small" value={profile}
                 onChange={(e) => setProfile(e.target.value)} sx={{ flexGrow: 1 }}
-                placeholder="xccdf_org…_profile_cis" />
+                helperText={
+                  !repHostId ? "Pick a target to load its profiles"
+                  : profLoading ? "Loading profiles from the host…"
+                  : prof ? `${prof.profiles.length} profiles available${targetKind === "group" ? " (from a group member)" : ""}`
+                  : undefined
+                }
+              >
+                <MenuItem value="">Standard (default)</MenuItem>
+                {/* keep a previously-saved profile that isn't in the loaded list */}
+                {profile && !(prof?.profiles ?? []).some((p) => p.id === profile) && (
+                  <MenuItem value={profile}>{profile}</MenuItem>
+                )}
+                {prof?.profiles.map((p) => (
+                  <MenuItem key={p.id} value={p.id}>{p.title || p.id}</MenuItem>
+                ))}
+              </TextField>
               <FormControlLabel control={<Switch checked={skipFs} onChange={(e) => setSkipFs(e.target.checked)} />}
                 label="Skip slow FS rules" />
             </Stack>
