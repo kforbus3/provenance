@@ -44,9 +44,9 @@ func TestParseFailedFindings(t *testing.T) {
 
 func TestIsAccessImpacting(t *testing.T) {
 	cases := map[string]bool{
-		"xccdf_org.ssgproject.content_rule_sshd_set_idle_timeout":   true,
-		"xccdf_org.ssgproject.content_rule_service_nftables_enabled": true,
-		"xccdf_org.ssgproject.content_rule_accounts_pam_faillock":    true,
+		"xccdf_org.ssgproject.content_rule_sshd_set_idle_timeout":     true,
+		"xccdf_org.ssgproject.content_rule_service_nftables_enabled":  true,
+		"xccdf_org.ssgproject.content_rule_accounts_pam_faillock":     true,
 		"xccdf_org.ssgproject.content_rule_package_rsyslog_installed": false,
 		"xccdf_org.ssgproject.content_rule_sysctl_kernel_randomize":   false,
 	}

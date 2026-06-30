@@ -14,21 +14,21 @@ import (
 // natural-language question. All fields are optional; nil/empty means "no
 // constraint". Results are always scoped to hosts the user may access.
 type HostQuery struct {
-	Status           string // online|offline|unknown
-	Environment      string
-	OSContains       string
-	HostnameContains string
-	DiskFreePctMax   *float64
-	DiskFreePctMin   *float64
-	MemUsedPctMin    *float64
-	LoadPerCoreMin   *float64
+	Status              string // online|offline|unknown
+	Environment         string
+	OSContains          string
+	HostnameContains    string
+	DiskFreePctMax      *float64
+	DiskFreePctMin      *float64
+	MemUsedPctMin       *float64
+	LoadPerCoreMin      *float64
 	UpdatesAvailableMin *int // hosts with at least this many pending updates
 	SecurityUpdatesMin  *int // hosts with at least this many pending security updates
-	Group            string
-	Tag              string
-	Enrolled         *bool
-	WGDown           *bool // tunnel down (wg_ok = false)
-	Limit            int
+	Group               string
+	Tag                 string
+	Enrolled            *bool
+	WGDown              *bool // tunnel down (wg_ok = false)
+	Limit               int
 
 	UserID       uuid.UUID
 	IsSuperAdmin bool

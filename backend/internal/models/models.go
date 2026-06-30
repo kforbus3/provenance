@@ -259,17 +259,17 @@ type TemporaryPermission struct {
 
 // EnrollmentJob tracks an automated host onboarding run.
 type EnrollmentJob struct {
-	ID         uuid.UUID         `json:"id"`
-	HostID     *uuid.UUID        `json:"hostId,omitempty"`
-	Target     string            `json:"target"`
-	OSHint     string            `json:"osHint,omitempty"`
-	Status     string            `json:"status"`
-	Steps      []EnrollmentStep  `json:"steps"`
-	Error      string            `json:"error,omitempty"`
-	CreatedBy  *uuid.UUID        `json:"createdBy,omitempty"`
-	CreatedAt  time.Time         `json:"createdAt"`
-	StartedAt  *time.Time        `json:"startedAt,omitempty"`
-	FinishedAt *time.Time        `json:"finishedAt,omitempty"`
+	ID         uuid.UUID        `json:"id"`
+	HostID     *uuid.UUID       `json:"hostId,omitempty"`
+	Target     string           `json:"target"`
+	OSHint     string           `json:"osHint,omitempty"`
+	Status     string           `json:"status"`
+	Steps      []EnrollmentStep `json:"steps"`
+	Error      string           `json:"error,omitempty"`
+	CreatedBy  *uuid.UUID       `json:"createdBy,omitempty"`
+	CreatedAt  time.Time        `json:"createdAt"`
+	StartedAt  *time.Time       `json:"startedAt,omitempty"`
+	FinishedAt *time.Time       `json:"finishedAt,omitempty"`
 }
 
 // EnrollmentStep is one recorded step in an enrollment job.
@@ -343,30 +343,30 @@ type ScanProfile struct {
 // AssistantHostRow is a compact host record returned to the AI assistant's
 // query tool (one row per host, joined from status/metrics/inventory).
 type AssistantHostRow struct {
-	Hostname       string     `json:"hostname"`
-	Environment    string     `json:"environment,omitempty"`
-	Status         string     `json:"status"`
-	PrimaryIP      string     `json:"primaryIp,omitempty"`
-	OSName         string     `json:"os,omitempty"`
-	OSVersion      string     `json:"osVersion,omitempty"`
-	Kernel         string     `json:"kernel,omitempty"`
-	Architecture   string     `json:"arch,omitempty"`
-	CPUCount       int        `json:"cpuCount,omitempty"`
-	MemoryTotalMB  int64      `json:"memoryMb,omitempty"`
-	SSHVersion     string     `json:"sshVersion,omitempty"`
-	UptimeSeconds  *int64     `json:"uptimeSeconds,omitempty"`
-	MinDiskFreePct *float64   `json:"diskFreePct,omitempty"`
-	MemUsedPct     *float64   `json:"memUsedPct,omitempty"`
-	LoadPerCore    *float64   `json:"loadPerCore,omitempty"`
-	LatencyMS      *int       `json:"latencyMs,omitempty"`
-	WGOK           *bool      `json:"wireguardOk,omitempty"`
-	LastSeen       *time.Time `json:"lastSeen,omitempty"`
-	UpdatesAvailable *int     `json:"updatesAvailable,omitempty"`
-	SecurityUpdates  *int     `json:"securityUpdates,omitempty"`
-	Groups         []string   `json:"groups,omitempty"`
-	Tags           []string   `json:"tags,omitempty"`
-	Owner          string     `json:"owner,omitempty"`
-	Enrolled       bool       `json:"enrolled"`
+	Hostname         string     `json:"hostname"`
+	Environment      string     `json:"environment,omitempty"`
+	Status           string     `json:"status"`
+	PrimaryIP        string     `json:"primaryIp,omitempty"`
+	OSName           string     `json:"os,omitempty"`
+	OSVersion        string     `json:"osVersion,omitempty"`
+	Kernel           string     `json:"kernel,omitempty"`
+	Architecture     string     `json:"arch,omitempty"`
+	CPUCount         int        `json:"cpuCount,omitempty"`
+	MemoryTotalMB    int64      `json:"memoryMb,omitempty"`
+	SSHVersion       string     `json:"sshVersion,omitempty"`
+	UptimeSeconds    *int64     `json:"uptimeSeconds,omitempty"`
+	MinDiskFreePct   *float64   `json:"diskFreePct,omitempty"`
+	MemUsedPct       *float64   `json:"memUsedPct,omitempty"`
+	LoadPerCore      *float64   `json:"loadPerCore,omitempty"`
+	LatencyMS        *int       `json:"latencyMs,omitempty"`
+	WGOK             *bool      `json:"wireguardOk,omitempty"`
+	LastSeen         *time.Time `json:"lastSeen,omitempty"`
+	UpdatesAvailable *int       `json:"updatesAvailable,omitempty"`
+	SecurityUpdates  *int       `json:"securityUpdates,omitempty"`
+	Groups           []string   `json:"groups,omitempty"`
+	Tags             []string   `json:"tags,omitempty"`
+	Owner            string     `json:"owner,omitempty"`
+	Enrolled         bool       `json:"enrolled"`
 }
 
 // AssistantScanRow is a recent security scan surfaced to the AI assistant.

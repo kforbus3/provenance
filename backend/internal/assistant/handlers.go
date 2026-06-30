@@ -9,6 +9,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -30,19 +31,19 @@ type handler struct {
 }
 
 func (h *handler) status(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.svc.Status(r.Context()))
+	httpx.WriteJSON(w, http.StatusOK, h.svc.Status(r.Context()))
 }
 
 func (h *handler) models(w http.ResponseWriter, r *http.Request) {
 	list, err := h.svc.Models(r.Context(), r.URL.Query().Get("url"))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "could not reach Ollama: "+err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "could not reach Ollama: "+err.Error())
 		return
 	}
 	if list == nil {
 		list = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": list})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"models": list})
 }
 
 type askReq struct {
@@ -52,7 +53,7 @@ type askReq struct {
 func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 	var rq askReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || len(rq.Question) == 0 {
-		writeError(w, http.StatusBadRequest, "question is required")
+		httpx.WriteError(w, http.StatusBadRequest, "question is required")
 		return
 	}
 	if len(rq.Question) > 2000 {
@@ -66,20 +67,20 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		CanViewRuns:     p.Has("Playbook.Run"),
 	})
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "assistant is not enabled")
+		httpx.WriteError(w, http.StatusServiceUnavailable, "assistant is not enabled")
 		return
 	}
 	h.audit(r, "assistant.query", map[string]any{"question": rq.Question})
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": id})
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"id": id})
 }
 
 func (h *handler) result(w http.ResponseWriter, r *http.Request) {
 	res, ok := h.svc.Result(chi.URLParam(r, "id"))
 	if !ok {
-		writeError(w, http.StatusNotFound, "no such request")
+		httpx.WriteError(w, http.StatusNotFound, "no such request")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *handler) audit(r *http.Request, action string, detail map[string]any) {
@@ -93,14 +94,4 @@ func (h *handler) audit(r *http.Request, action string, detail map[string]any) {
 	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: actorID, ActorName: name, Action: action, TargetKind: "assistant", Detail: detail,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

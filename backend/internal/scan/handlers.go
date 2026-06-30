@@ -12,6 +12,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -57,16 +58,16 @@ func (h *handler) canAccess(r *http.Request, p *auth.Principal, hostID uuid.UUID
 func (h *handler) hostFromURL(w http.ResponseWriter, r *http.Request) (*models.Host, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad host id")
+		httpx.WriteError(w, http.StatusBadRequest, "bad host id")
 		return nil, false
 	}
 	host, err := h.d.Store.GetHost(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return nil, false
 	}
 	if !h.canAccess(r, auth.MustPrincipal(r), host.ID) {
-		writeError(w, http.StatusForbidden, "not authorized for host")
+		httpx.WriteError(w, http.StatusForbidden, "not authorized for host")
 		return nil, false
 	}
 	return host, true
@@ -80,13 +81,13 @@ func (h *handler) profiles(w http.ResponseWriter, r *http.Request) {
 	}
 	installed, exact, datastream, profiles, err := h.svc.DiscoverProfiles(r.Context(), host)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "discover profiles: "+err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "discover profiles: "+err.Error())
 		return
 	}
 	if profiles == nil {
 		profiles = []models.ScanProfile{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"installed": installed, "exact": exact, "installing": h.svc.IsInstalling(host.ID),
 		"datastream": datastream, "profiles": profiles,
 	})
@@ -100,7 +101,7 @@ func (h *handler) prepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.svc.EnsureInstalled(host)
-	writeJSON(w, http.StatusAccepted, map[string]any{"installing": h.svc.IsInstalling(host.ID)})
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"installing": h.svc.IsInstalling(host.ID)})
 }
 
 type startReq struct {
@@ -141,7 +142,7 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 
 	rec, err := h.d.Store.CreateHostScan(r.Context(), host.ID, &p.UserID, p.Username, rq.Profile, false)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create scan")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create scan")
 		return
 	}
 	go h.svc.Run(rec.ID, host, rq.Profile, skipRules)
@@ -149,7 +150,7 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "host.scan", rec.ID.String(), map[string]any{
 		"hostId": host.ID, "hostname": host.Hostname, "profile": rq.Profile, "skipped": len(skipRules),
 	})
-	writeJSON(w, http.StatusAccepted, rec)
+	httpx.WriteJSON(w, http.StatusAccepted, rec)
 }
 
 // list returns recent scans for a host.
@@ -160,29 +161,29 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	scans, err := h.d.Store.ListHostScans(r.Context(), host.ID, 50)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list scans")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list scans")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scans": scans, "count": len(scans)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"scans": scans, "count": len(scans)})
 }
 
 // get returns one scan's status + summary (polled by the UI while running).
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad scan id")
+		httpx.WriteError(w, http.StatusBadRequest, "bad scan id")
 		return
 	}
 	rec, err := h.d.Store.GetHostScan(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "scan not found")
+		httpx.WriteError(w, http.StatusNotFound, "scan not found")
 		return
 	}
 	if !h.canAccess(r, auth.MustPrincipal(r), rec.HostID) {
-		writeError(w, http.StatusForbidden, "not authorized for host")
+		httpx.WriteError(w, http.StatusForbidden, "not authorized for host")
 		return
 	}
-	writeJSON(w, http.StatusOK, rec)
+	httpx.WriteJSON(w, http.StatusOK, rec)
 }
 
 // report serves the stored HTML report for in-UI viewing (sandboxed iframe) or
@@ -250,21 +251,21 @@ func (h *handler) audit(r *http.Request, action, targetID string, detail map[str
 func (h *handler) scanWithAccess(w http.ResponseWriter, r *http.Request) (*models.HostScan, *models.Host, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad scan id")
+		httpx.WriteError(w, http.StatusBadRequest, "bad scan id")
 		return nil, nil, false
 	}
 	scan, err := h.d.Store.GetHostScan(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "scan not found")
+		httpx.WriteError(w, http.StatusNotFound, "scan not found")
 		return nil, nil, false
 	}
 	if !h.canAccess(r, auth.MustPrincipal(r), scan.HostID) {
-		writeError(w, http.StatusForbidden, "not authorized for host")
+		httpx.WriteError(w, http.StatusForbidden, "not authorized for host")
 		return nil, nil, false
 	}
 	host, err := h.d.Store.GetHost(r.Context(), scan.HostID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return nil, nil, false
 	}
 	return scan, host, true
@@ -278,10 +279,10 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := h.svc.Findings(r.Context(), scan.ID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"findings": f, "count": len(f)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"findings": f, "count": len(f)})
 }
 
 type remediateReq struct {
@@ -297,24 +298,24 @@ func (h *handler) remediatePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	var rq remediateReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || len(rq.RuleIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "ruleIds required")
+		httpx.WriteError(w, http.StatusBadRequest, "ruleIds required")
 		return
 	}
 	findings, err := h.svc.Findings(r.Context(), scan.ID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if _, err := validateRules(rq.RuleIDs, findings); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	script, err := h.svc.PreviewFix(r.Context(), scan, host, rq.RuleIDs)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "preview failed: "+err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "preview failed: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"script": script})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"script": script})
 }
 
 // remediate applies fixes for the selected rules (background) then re-scans.
@@ -325,23 +326,23 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 	}
 	var rq remediateReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || len(rq.RuleIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "ruleIds required")
+		httpx.WriteError(w, http.StatusBadRequest, "ruleIds required")
 		return
 	}
 	findings, err := h.svc.Findings(r.Context(), scan.ID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	impacting, err := validateRules(rq.RuleIDs, findings)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// Access-impacting rules need an explicit second confirmation.
 	if len(impacting) > 0 && !rq.ConfirmAccessImpacting {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "selection includes access-impacting rules; confirmation required",
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":           "selection includes access-impacting rules; confirmation required",
 			"accessImpacting": impacting,
 		})
 		return
@@ -349,40 +350,30 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	rec, err := h.d.Store.CreateRemediation(r.Context(), scan.ID, host.ID, &p.UserID, p.Username, rq.RuleIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not start remediation")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not start remediation")
 		return
 	}
 	go h.svc.Remediate(rec.ID, scan, host, rq.RuleIDs, &p.UserID, p.Username)
 	h.audit(r, "host.remediate", rec.ID.String(), map[string]any{
 		"hostId": host.ID, "hostname": host.Hostname, "rules": rq.RuleIDs, "accessImpacting": impacting,
 	})
-	writeJSON(w, http.StatusAccepted, rec)
+	httpx.WriteJSON(w, http.StatusAccepted, rec)
 }
 
 func (h *handler) remediationStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad id")
+		httpx.WriteError(w, http.StatusBadRequest, "bad id")
 		return
 	}
 	rec, err := h.d.Store.GetRemediation(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not found")
+		httpx.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	if !h.canAccess(r, auth.MustPrincipal(r), rec.HostID) {
-		writeError(w, http.StatusForbidden, "not authorized for host")
+		httpx.WriteError(w, http.StatusForbidden, "not authorized for host")
 		return
 	}
-	writeJSON(w, http.StatusOK, rec)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteJSON(w, http.StatusOK, rec)
 }

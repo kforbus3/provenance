@@ -4,11 +4,10 @@
 package sftp
 
 import (
-	"encoding/json"
+	"archive/tar"
 	"errors"
 	"fmt"
 	"io"
-	"archive/tar"
 	"net/http"
 	"path"
 	"sort"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -54,30 +54,30 @@ func (h *handler) connect(w http.ResponseWriter, r *http.Request) (client *pkgsf
 	p = auth.MustPrincipal(r)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return nil, nil, nil, noop, false
 	}
 	if !p.IsSuperAdmin {
 		allowed, aerr := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
 		if aerr != nil || !allowed {
-			writeError(w, http.StatusForbidden, "not authorized for host")
+			httpx.WriteError(w, http.StatusForbidden, "not authorized for host")
 			return nil, nil, nil, noop, false
 		}
 	}
 	host, err = h.d.Store.GetHost(r.Context(), hostID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return nil, nil, nil, noop, false
 	}
 	conn, derr := h.dial(r, p, host)
 	if derr != nil {
-		writeError(w, http.StatusBadGateway, "connection failed: "+derr.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "connection failed: "+derr.Error())
 		return nil, nil, nil, noop, false
 	}
 	client, serr := pkgsftp.NewClient(conn.Client)
 	if serr != nil {
 		conn.Close()
-		writeError(w, http.StatusBadGateway, "sftp subsystem failed: "+serr.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "sftp subsystem failed: "+serr.Error())
 		return nil, nil, nil, noop, false
 	}
 	var dereg func()
@@ -134,7 +134,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	infos, err := client.ReadDir(dir)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "read dir: "+err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, "read dir: "+err.Error())
 		return
 	}
 	entries := make([]entry, 0, len(infos))
@@ -151,7 +151,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		return entries[i].Name < entries[j].Name
 	})
 	abs, _ := client.RealPath(dir)
-	writeJSON(w, http.StatusOK, map[string]any{"path": abs, "entries": entries})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": abs, "entries": entries})
 }
 
 func (h *handler) download(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +163,12 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 
 	remote := r.URL.Query().Get("path")
 	if remote == "" {
-		writeError(w, http.StatusBadRequest, "path required")
+		httpx.WriteError(w, http.StatusBadRequest, "path required")
 		return
 	}
 	f, err := client.Open(remote)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "open: "+err.Error())
+		httpx.WriteError(w, http.StatusNotFound, "open: "+err.Error())
 		return
 	}
 	defer f.Close()
@@ -199,7 +199,7 @@ func (h *handler) downloadDir(w http.ResponseWriter, r *http.Request) {
 
 	root := r.URL.Query().Get("path")
 	if root == "" {
-		writeError(w, http.StatusBadRequest, "path required")
+		httpx.WriteError(w, http.StatusBadRequest, "path required")
 		return
 	}
 	base := path.Base(root)
@@ -248,14 +248,14 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("path")
 	name := r.URL.Query().Get("name")
 	if dir == "" || name == "" {
-		writeError(w, http.StatusBadRequest, "path and name required")
+		httpx.WriteError(w, http.StatusBadRequest, "path and name required")
 		return
 	}
 	// name may include a relative subpath (folder uploads). Sanitize it to stay
 	// inside dir — reject absolute paths and any ".." traversal.
 	rel := strings.TrimPrefix(path.Clean("/"+name), "/")
 	if rel == "" || rel == "." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "/../") {
-		writeError(w, http.StatusBadRequest, "invalid file name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid file name")
 		return
 	}
 	remote := path.Join(dir, rel)
@@ -264,7 +264,7 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	dst, err := client.Create(remote)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "create: "+err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "create: "+err.Error())
 		return
 	}
 	rec, _ := h.d.Store.RecordSFTPTransfer(r.Context(), store.SFTPTransferInput{
@@ -276,7 +276,7 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 		if rec != nil {
 			_ = h.d.Store.CompleteSFTPTransfer(r.Context(), rec.ID, 0, "failed")
 		}
-		writeError(w, status, msg)
+		httpx.WriteError(w, status, msg)
 	}
 	// Enforce the configured cap (0 = unlimited) and REJECT oversized uploads
 	// rather than silently truncating. The partial remote file is removed.
@@ -318,21 +318,21 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	h.finishTransfer(r, rec, n)
 	h.audit(r, p, "sftp.upload", host.ID, remote, n)
-	writeJSON(w, http.StatusOK, map[string]any{"path": remote, "size": n})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": remote, "size": n})
 }
 
 func (h *handler) transfers(w http.ResponseWriter, r *http.Request) {
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	list, err := h.d.Store.ListSFTPTransfers(r.Context(), store.SFTPTransferFilter{HostID: &hostID, Limit: 100})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "list failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"transfers": list})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"transfers": list})
 }
 
 func (h *handler) finishTransfer(r *http.Request, rec *store.SFTPTransfer, n int64) {
@@ -361,14 +361,4 @@ func dedupe(in []string) []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

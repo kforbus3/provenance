@@ -14,6 +14,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -49,11 +50,11 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	var rq approvalReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if rq.RequestedSecs <= 0 {
-		writeError(w, http.StatusBadRequest, "requestedSecs must be positive")
+		httpx.WriteError(w, http.StatusBadRequest, "requestedSecs must be positive")
 		return
 	}
 	in := store.ApprovalRequestInput{
@@ -67,24 +68,24 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	case "host":
 		id, err := uuid.Parse(rq.HostID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "valid hostId is required")
+			httpx.WriteError(w, http.StatusBadRequest, "valid hostId is required")
 			return
 		}
 		in.HostID = &id
 	case "group":
 		id, err := uuid.Parse(rq.GroupID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "valid groupId is required")
+			httpx.WriteError(w, http.StatusBadRequest, "valid groupId is required")
 			return
 		}
 		in.GroupID = &id
 	default:
-		writeError(w, http.StatusBadRequest, "targetKind must be host or group")
+		httpx.WriteError(w, http.StatusBadRequest, "targetKind must be host or group")
 		return
 	}
 	ar, err := h.d.Store.CreateApprovalRequest(r.Context(), in)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create approval request")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create approval request")
 		return
 	}
 	h.audit(r, "approval.request", ar.ID.String(), map[string]any{
@@ -99,7 +100,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 				p.Username, ar.TargetKind, ar.TargetName),
 		})
 	}
-	writeJSON(w, http.StatusCreated, ar)
+	httpx.WriteJSON(w, http.StatusCreated, ar)
 }
 
 // requestTarget is a host or group a requester can pick when filing an access
@@ -129,12 +130,12 @@ func (h *handler) targets(w http.ResponseWriter, r *http.Request) {
 	case "", "host":
 		hosts, err := h.d.Store.SearchHosts(ctx, q, limit*2)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not search hosts")
+			httpx.WriteError(w, http.StatusInternalServerError, "could not search hosts")
 			return
 		}
 		have, err := h.d.Store.AccessibleHostIDs(ctx, p.UserID, p.IsSuperAdmin)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not load access")
+			httpx.WriteError(w, http.StatusInternalServerError, "could not load access")
 			return
 		}
 		for _, hh := range hosts {
@@ -149,12 +150,12 @@ func (h *handler) targets(w http.ResponseWriter, r *http.Request) {
 	case "group":
 		groups, err := h.d.Store.SearchGroups(ctx, q, limit*2)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not search groups")
+			httpx.WriteError(w, http.StatusInternalServerError, "could not search groups")
 			return
 		}
 		have, err := h.d.Store.AccessibleGroupIDs(ctx, p.UserID, p.IsSuperAdmin)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not load access")
+			httpx.WriteError(w, http.StatusInternalServerError, "could not load access")
 			return
 		}
 		for _, g := range groups {
@@ -167,11 +168,11 @@ func (h *handler) targets(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	default:
-		writeError(w, http.StatusBadRequest, "kind must be host or group")
+		httpx.WriteError(w, http.StatusBadRequest, "kind must be host or group")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"targets": out})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"targets": out})
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
@@ -184,13 +185,13 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	reqs, err := h.d.Store.ListApprovalRequests(r.Context(), status, requester)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list approval requests")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list approval requests")
 		return
 	}
 	if reqs == nil {
 		reqs = []models.ApprovalRequest{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"approvals": reqs, "count": len(reqs)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"approvals": reqs, "count": len(reqs)})
 }
 
 func (h *handler) listMine(w http.ResponseWriter, r *http.Request) {
@@ -198,26 +199,26 @@ func (h *handler) listMine(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	reqs, err := h.d.Store.ListApprovalRequests(r.Context(), status, &p.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list approval requests")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list approval requests")
 		return
 	}
 	if reqs == nil {
 		reqs = []models.ApprovalRequest{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"approvals": reqs, "count": len(reqs)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"approvals": reqs, "count": len(reqs)})
 }
 
 func (h *handler) grantsMine(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	grants, err := h.d.Store.ListTemporaryPermissions(r.Context(), p.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list grants")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list grants")
 		return
 	}
 	if grants == nil {
 		grants = []models.TemporaryPermission{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"grants": grants, "count": len(grants)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"grants": grants, "count": len(grants)})
 }
 
 type decideReq struct {
@@ -229,12 +230,12 @@ type decideReq struct {
 func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid approval id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid approval id")
 		return
 	}
 	var rq decideReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	var status string
@@ -244,16 +245,16 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 	case "deny", "denied":
 		status = "denied"
 	default:
-		writeError(w, http.StatusBadRequest, "decision must be approve or deny")
+		httpx.WriteError(w, http.StatusBadRequest, "decision must be approve or deny")
 		return
 	}
 	existing, err := h.d.Store.GetApprovalRequest(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "approval request not found")
+		httpx.WriteError(w, http.StatusNotFound, "approval request not found")
 		return
 	}
 	if existing.Status != "pending" {
-		writeError(w, http.StatusConflict, "approval request is not pending")
+		httpx.WriteError(w, http.StatusConflict, "approval request is not pending")
 		return
 	}
 	grantedSecs := rq.GrantedSecs
@@ -263,13 +264,13 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	ar, err := h.d.Store.DecideApprovalRequest(r.Context(), id, p.UserID, status, rq.Note, grantedSecs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not record decision")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not record decision")
 		return
 	}
 	h.audit(r, "approval.decide", ar.ID.String(), map[string]any{
 		"status": ar.Status, "grantedSecs": grantedSecs, "note": rq.Note,
 	})
-	writeJSON(w, http.StatusOK, ar)
+	httpx.WriteJSON(w, http.StatusOK, ar)
 }
 
 func (h *handler) audit(r *http.Request, action, targetID string, detail map[string]any) {
@@ -297,14 +298,4 @@ func Reaper(ctx context.Context, d *app.Deps) {
 	if n > 0 {
 		d.Log.Info("expired temporary permissions", "count", n)
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

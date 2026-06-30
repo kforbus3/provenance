@@ -29,22 +29,23 @@ import (
 	"github.com/fleet-terminal/backend/internal/assistant"
 	"github.com/fleet-terminal/backend/internal/auditapi"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/backup"
 	"github.com/fleet-terminal/backend/internal/bootstrap"
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/certificates"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/enrollment"
 	"github.com/fleet-terminal/backend/internal/hosts"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/livesessions"
-	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/metrics"
-	"github.com/fleet-terminal/backend/internal/backup"
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
+	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/scheduler"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
@@ -407,7 +408,7 @@ func (s *Server) buildRouter() chi.Router {
 // Each milestone mounts its module here.
 func (s *Server) registerRoutes(r chi.Router) {
 	r.Get("/ping", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
 	})
 
 	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub, Notify: s.Notify}
@@ -460,21 +461,21 @@ func (s *Server) registerRoutes(r chi.Router) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 2*time.Second)
 	defer cancel()
 	if err := s.DB.Ping(ctx); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "db_unavailable"})
+		httpx.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "db_unavailable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{
 		"version":     s.Version,         // build label (FLEET_VERSION; "dev" if unset)
 		"environment": s.Cfg.Environment, // runtime mode (FLEET_ENV: production|development)
 		"appName":     s.appName(r),      // customizable brand name (settings.branding)
@@ -505,7 +506,7 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				s.Log.Error("panic recovered", "err", rec, "path", r.URL.Path)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+				httpx.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -525,10 +526,4 @@ func (s *Server) metricsMW(next http.Handler) http.Handler {
 		metrics.HTTPRequests.WithLabelValues(r.Method, route, strconv.Itoa(ww.Status())).Inc()
 		metrics.HTTPDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fleet-terminal/backend/internal/app"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -41,29 +42,29 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	if actor := r.URL.Query().Get("actor"); actor != "" {
 		id, err := uuid.Parse(actor)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid actor id")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid actor id")
 			return
 		}
 		f.ActorID = &id
 	}
 	events, err := h.d.Store.ListAudit(r.Context(), f)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list audit events")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list audit events")
 		return
 	}
 	if events == nil {
 		events = []models.AuditEvent{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
 }
 
 func (h *handler) verify(w http.ResponseWriter, r *http.Request) {
 	intact, brokenAt, err := h.d.Store.VerifyAuditChain(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not verify audit chain")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not verify audit chain")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"intact": intact, "brokenAtSeq": brokenAt})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"intact": intact, "brokenAtSeq": brokenAt})
 }
 
 // export streams the entire audit log as a JSON array, paging through the store
@@ -94,14 +95,4 @@ func (h *handler) export(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, _ = w.Write([]byte("]"))
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

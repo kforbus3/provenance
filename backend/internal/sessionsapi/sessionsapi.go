@@ -4,7 +4,6 @@
 package sessionsapi
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -55,7 +55,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	if user := r.URL.Query().Get("user"); user != "" {
 		id, err := uuid.Parse(user)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid user id")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
 			return
 		}
 		f.UserID = &id
@@ -63,14 +63,14 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	if host := r.URL.Query().Get("host"); host != "" {
 		id, err := uuid.Parse(host)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid host id")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 			return
 		}
 		f.HostID = &id
 	}
 	sessions, err := h.d.Store.ListSSHSessions(r.Context(), f)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list sessions")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list sessions")
 		return
 	}
 	if sessions == nil {
@@ -83,32 +83,32 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 			sessions[i].HasRecording = withRec[sessions[i].ID]
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "count": len(sessions)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "count": len(sessions)})
 }
 
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid session id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
 	sess, err := h.d.Store.GetSSHSession(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
+		httpx.WriteError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, sess)
+	httpx.WriteJSON(w, http.StatusOK, sess)
 }
 
 func (h *handler) recording(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid session id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
 	rec, err := h.d.Store.GetRecordingBySession(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	// Resolve the on-disk path; relative paths are taken under the configured
@@ -119,27 +119,27 @@ func (h *handler) recording(w http.ResponseWriter, r *http.Request) {
 	}
 	cast, err := os.ReadFile(path)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording file not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"recording": rec, "cast": string(cast)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"recording": rec, "cast": string(cast)})
 }
 
 // downloadRecording streams the asciicast file as a download (export).
 func (h *handler) downloadRecording(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid session id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
 	rec, err := h.d.Store.GetRecordingBySession(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	f, err := os.Open(h.resolvePath(rec.Path))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording file not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
 		return
 	}
 	defer f.Close()
@@ -153,17 +153,17 @@ func (h *handler) downloadRecording(w http.ResponseWriter, r *http.Request) {
 func (h *handler) playerRecording(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid session id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
 	rec, err := h.d.Store.GetRecordingBySession(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	cast, err := os.ReadFile(h.resolvePath(rec.Path))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording file not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
 		return
 	}
 	sess, _ := h.d.Store.GetSSHSession(r.Context(), id)
@@ -180,12 +180,12 @@ func (h *handler) deleteRecording(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid session id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
 	path, err := h.d.Store.DeleteRecordingBySession(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	_ = os.Remove(h.resolvePath(path))
@@ -193,7 +193,7 @@ func (h *handler) deleteRecording(w http.ResponseWriter, r *http.Request) {
 		ActorID: &p.UserID, ActorName: p.Username, Action: "recording.delete",
 		TargetKind: "session", TargetID: id.String(),
 	})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // prune deletes recordings older than the given number of days (retention).
@@ -201,13 +201,13 @@ func (h *handler) prune(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	days, _ := strconv.Atoi(r.URL.Query().Get("olderThanDays"))
 	if days <= 0 {
-		writeError(w, http.StatusBadRequest, "olderThanDays must be > 0")
+		httpx.WriteError(w, http.StatusBadRequest, "olderThanDays must be > 0")
 		return
 	}
 	before := time.Now().AddDate(0, 0, -days)
 	paths, bytes, err := h.d.Store.PruneRecordingsBefore(r.Context(), before)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "prune failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "prune failed")
 		return
 	}
 	for _, path := range paths {
@@ -217,25 +217,15 @@ func (h *handler) prune(w http.ResponseWriter, r *http.Request) {
 		ActorID: &p.UserID, ActorName: p.Username, Action: "recording.prune",
 		Detail: map[string]any{"olderThanDays": days, "deleted": len(paths), "bytesReclaimed": bytes},
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": len(paths), "bytesReclaimed": bytes})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": len(paths), "bytesReclaimed": bytes})
 }
 
 // stats reports recording count and total storage.
 func (h *handler) stats(w http.ResponseWriter, r *http.Request) {
 	count, total, err := h.d.Store.RecordingsStorageBytes(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "stats failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "stats failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"count": count, "bytes": total})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"count": count, "bytes": total})
 }

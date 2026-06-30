@@ -13,6 +13,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -55,27 +56,27 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		hosts, err = h.d.Store.ListAccessibleHosts(r.Context(), p.UserID, p.IsSuperAdmin)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list hosts")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list hosts")
 		return
 	}
 	if hosts == nil {
 		hosts = []models.Host{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "count": len(hosts)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "count": len(hosts)})
 }
 
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	host, err := h.d.Store.GetHost(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, host)
+	httpx.WriteJSON(w, http.StatusOK, host)
 }
 
 // nextWG returns the next free overlay address so the create dialog can show
@@ -88,19 +89,19 @@ func (h *handler) nextWG(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := h.d.Store.NextFreeWGAddress(r.Context(), h.d.Cfg.WGJumpIP)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"nextWgAddress": "", "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "exhausted": true})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": "", "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "exhausted": true})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"nextWgAddress": next, "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": next, "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint})
 }
 
 func (h *handler) statusStats(w http.ResponseWriter, r *http.Request) {
 	counts, err := h.d.Store.CountHostsByStatus(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load stats")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load stats")
 		return
 	}
-	writeJSON(w, http.StatusOK, counts)
+	httpx.WriteJSON(w, http.StatusOK, counts)
 }
 
 type hostReq struct {
@@ -126,80 +127,80 @@ func (rq hostReq) toInput() store.HostInput {
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	var rq hostReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.Hostname == "" {
-		writeError(w, http.StatusBadRequest, "hostname is required")
+		httpx.WriteError(w, http.StatusBadRequest, "hostname is required")
 		return
 	}
 	host, err := h.d.Store.CreateHost(r.Context(), rq.toInput())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create host")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create host")
 		return
 	}
 	h.audit(r, "host.create", host.ID.String(), map[string]any{"hostname": host.Hostname})
-	writeJSON(w, http.StatusCreated, host)
+	httpx.WriteJSON(w, http.StatusCreated, host)
 }
 
 func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	var rq hostReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	host, err := h.d.Store.UpdateHost(r.Context(), id, rq.toInput())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not update host")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not update host")
 		return
 	}
 	h.audit(r, "host.update", id.String(), map[string]any{"hostname": host.Hostname})
-	writeJSON(w, http.StatusOK, host)
+	httpx.WriteJSON(w, http.StatusOK, host)
 }
 
 func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	if err := h.d.Store.DeleteHost(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not delete host")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not delete host")
 		return
 	}
 	h.audit(r, "host.delete", id.String(), nil)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (h *handler) addGroup(w http.ResponseWriter, r *http.Request) {
 	hostID, err1 := uuid.Parse(chi.URLParam(r, "id"))
 	groupID, err2 := uuid.Parse(chi.URLParam(r, "groupId"))
 	if err1 != nil || err2 != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	if err := h.d.Store.AddHostToGroup(r.Context(), hostID, groupID); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not add to group")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not add to group")
 		return
 	}
 	h.audit(r, "host.group_add", hostID.String(), map[string]any{"groupId": groupID.String()})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "added"})
 }
 
 func (h *handler) removeGroup(w http.ResponseWriter, r *http.Request) {
 	hostID, err1 := uuid.Parse(chi.URLParam(r, "id"))
 	groupID, err2 := uuid.Parse(chi.URLParam(r, "groupId"))
 	if err1 != nil || err2 != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	if err := h.d.Store.RemoveHostFromGroup(r.Context(), hostID, groupID); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not remove from group")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not remove from group")
 		return
 	}
 	h.audit(r, "host.group_remove", hostID.String(), map[string]any{"groupId": groupID.String()})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 // access returns who can reach a host: the groups it belongs to and the users
@@ -207,53 +208,53 @@ func (h *handler) removeGroup(w http.ResponseWriter, r *http.Request) {
 func (h *handler) access(w http.ResponseWriter, r *http.Request) {
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	host, err := h.d.Store.GetHost(r.Context(), hostID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
 	users, err := h.d.Store.HostDirectUsers(r.Context(), hostID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load access")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load access")
 		return
 	}
 	if users == nil {
 		users = []models.User{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"groups": host.Groups, "users": users})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": host.Groups, "users": users})
 }
 
 func (h *handler) addUser(w http.ResponseWriter, r *http.Request) {
 	hostID, err1 := uuid.Parse(chi.URLParam(r, "id"))
 	userID, err2 := uuid.Parse(chi.URLParam(r, "userId"))
 	if err1 != nil || err2 != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	if err := h.d.Store.AddUserToHost(r.Context(), hostID, userID); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not grant access")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not grant access")
 		return
 	}
 	h.audit(r, "host.user_add", hostID.String(), map[string]any{"userId": userID.String()})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "added"})
 }
 
 func (h *handler) removeUser(w http.ResponseWriter, r *http.Request) {
 	hostID, err1 := uuid.Parse(chi.URLParam(r, "id"))
 	userID, err2 := uuid.Parse(chi.URLParam(r, "userId"))
 	if err1 != nil || err2 != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	if err := h.d.Store.RemoveUserFromHost(r.Context(), hostID, userID); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not revoke access")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke access")
 		return
 	}
 	h.audit(r, "host.user_remove", hostID.String(), map[string]any{"userId": userID.String()})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 func (h *handler) audit(r *http.Request, action, targetID string, detail map[string]any) {
@@ -268,14 +269,4 @@ func (h *handler) audit(r *http.Request, action, targetID string, detail map[str
 		ActorID: actorID, ActorName: name, Action: action,
 		TargetKind: "host", TargetID: targetID, Detail: detail,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

@@ -54,15 +54,15 @@ func (m *Monitor) notifyTransition(ctx context.Context, h models.Host, prev, now
 	case prev == "online" && now == "offline":
 		m.nfy.Notify(ctx, notify.Event{
 			Type: notify.EventHostOffline, Severity: notify.SeverityError,
-			Title: "Host offline: " + h.Hostname,
-			Body:  fmt.Sprintf("Fleet can no longer reach %s (%s). It was last seen online.", h.Hostname, h.Environment),
+			Title:     "Host offline: " + h.Hostname,
+			Body:      fmt.Sprintf("Fleet can no longer reach %s (%s). It was last seen online.", h.Hostname, h.Environment),
 			DedupeKey: h.ID.String(),
 		})
 	case prev != "online" && now == "online":
 		m.nfy.Notify(ctx, notify.Event{
 			Type: notify.EventHostRecovered, Severity: notify.SeverityInfo,
-			Title: "Host recovered: " + h.Hostname,
-			Body:  fmt.Sprintf("%s (%s) is reachable again.", h.Hostname, h.Environment),
+			Title:     "Host recovered: " + h.Hostname,
+			Body:      fmt.Sprintf("%s (%s) is reachable again.", h.Hostname, h.Environment),
 			DedupeKey: h.ID.String(),
 		})
 	}

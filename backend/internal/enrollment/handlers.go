@@ -10,6 +10,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 )
 
 // Mount attaches enrollment routes. Enrollment uses the caller's live session
@@ -52,22 +53,22 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	host, err := h.d.Store.GetHost(r.Context(), hostID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
 	var req enrollReq
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; defaults to trusted
 	if req.Method == "password" && req.Password == "" {
-		writeError(w, http.StatusBadRequest, "password is required for password bootstrap")
+		httpx.WriteError(w, http.StatusBadRequest, "password is required for password bootstrap")
 		return
 	}
 	if req.Method == "key" && req.PrivateKey == "" {
-		writeError(w, http.StatusBadRequest, "private key is required for key bootstrap")
+		httpx.WriteError(w, http.StatusBadRequest, "private key is required for key bootstrap")
 		return
 	}
 	res, err := h.svc.Enroll(r.Context(), p.SessionID, host, &p.UserID, EnrollParams{
@@ -78,10 +79,10 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		// Surface the failed job so the UI can show which step failed.
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		httpx.WriteJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 // enrollScript returns the host bootstrap script for the no-install flow as
@@ -90,17 +91,17 @@ func (h *handler) enrollScript(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	host, err := h.d.Store.GetHost(r.Context(), hostID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
 	script, err := h.svc.EnrollScript(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -113,59 +114,49 @@ func (h *handler) enrollFinish(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid host id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
 	host, err := h.d.Store.GetHost(r.Context(), hostID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "host not found")
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
 	var req struct {
 		HostPublicKey string `json:"hostPublicKey"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	res, err := h.svc.FinishScriptEnroll(r.Context(), p.SessionID, host, &p.UserID, req.HostPublicKey)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		httpx.WriteJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *handler) listJobs(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	jobs, err := h.d.Store.ListEnrollmentJobs(r.Context(), limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list jobs")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list jobs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
 func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid job id")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
 	job, err := h.d.Store.GetEnrollmentJob(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "job not found")
+		httpx.WriteError(w, http.StatusNotFound, "job not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteJSON(w, http.StatusOK, job)
 }

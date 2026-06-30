@@ -1,7 +1,6 @@
 package playbook
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -47,23 +47,23 @@ type handler struct {
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	pbs, err := h.d.Store.ListPlaybooks(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list playbooks")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list playbooks")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"playbooks": pbs, "count": len(pbs)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"playbooks": pbs, "count": len(pbs)})
 }
 
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	pb, err := h.d.Store.GetPlaybook(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "playbook not found")
+		httpx.WriteError(w, http.StatusNotFound, "playbook not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, pb)
+	httpx.WriteJSON(w, http.StatusOK, pb)
 }
 
 type writeReq struct {
@@ -74,90 +74,90 @@ type writeReq struct {
 
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	var rq writeReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	rq.Name = strings.TrimSpace(rq.Name)
 	if rq.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		httpx.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	p := auth.MustPrincipal(r)
 	pb, err := h.d.Store.CreatePlaybook(r.Context(), rq.Name, rq.Description, rq.Content, &p.UserID, p.Username)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create playbook")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create playbook")
 		return
 	}
 	h.audit(r, "playbook.create", pb.ID.String(), map[string]any{"name": pb.Name})
-	writeJSON(w, http.StatusCreated, pb)
+	httpx.WriteJSON(w, http.StatusCreated, pb)
 }
 
 func (h *handler) update(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	var rq writeReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	rq.Name = strings.TrimSpace(rq.Name)
 	if rq.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		httpx.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	p := auth.MustPrincipal(r)
 	pb, err := h.d.Store.UpdatePlaybook(r.Context(), id, rq.Name, rq.Description, rq.Content, &p.UserID, p.Username)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not update playbook")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not update playbook")
 		return
 	}
 	h.audit(r, "playbook.update", pb.ID.String(), map[string]any{"name": pb.Name, "version": pb.Version})
-	writeJSON(w, http.StatusOK, pb)
+	httpx.WriteJSON(w, http.StatusOK, pb)
 }
 
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	if err := h.d.Store.DeletePlaybook(r.Context(), id); err != nil {
-		writeError(w, http.StatusNotFound, "playbook not found")
+		httpx.WriteError(w, http.StatusNotFound, "playbook not found")
 		return
 	}
 	h.audit(r, "playbook.delete", id.String(), nil)
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 func (h *handler) versions(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	vs, err := h.d.Store.ListPlaybookVersions(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list versions")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list versions")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"versions": vs, "count": len(vs)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"versions": vs, "count": len(vs)})
 }
 
 func (h *handler) version(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	n, err := strconv.Atoi(chi.URLParam(r, "version"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad version")
+		httpx.WriteError(w, http.StatusBadRequest, "bad version")
 		return
 	}
 	v, err := h.d.Store.GetPlaybookVersion(r.Context(), id, n)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "version not found")
+		httpx.WriteError(w, http.StatusNotFound, "version not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, v)
+	httpx.WriteJSON(w, http.StatusOK, v)
 }
 
 type contentReq struct {
@@ -166,56 +166,56 @@ type contentReq struct {
 
 func (h *handler) validate(w http.ResponseWriter, r *http.Request) {
 	var rq contentReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	res, err := h.svc.SyntaxCheck(r.Context(), rq.Content)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *handler) lint(w http.ResponseWriter, r *http.Request) {
 	var rq contentReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	res, err := h.svc.Lint(r.Context(), rq.Content)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *handler) runnerStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"available": h.svc.Healthy(r.Context())})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"available": h.svc.Healthy(r.Context())})
 }
 
 // --- execution (Playbook.Run) ---
 
 type runReq struct {
-	TargetKind string   `json:"targetKind"`       // host | group
-	HostIDs    []string `json:"hostIds"`          // when targetKind=host (one or many)
-	GroupID    string   `json:"groupId"`          // when targetKind=group
-	TargetID   string   `json:"targetId"`         // back-compat: a single host id
+	TargetKind string   `json:"targetKind"` // host | group
+	HostIDs    []string `json:"hostIds"`    // when targetKind=host (one or many)
+	GroupID    string   `json:"groupId"`    // when targetKind=group
+	TargetID   string   `json:"targetId"`   // back-compat: a single host id
 	CheckMode  bool     `json:"checkMode"`
 }
 
 func (h *handler) run(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	pb, err := h.d.Store.GetPlaybook(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "playbook not found")
+		httpx.WriteError(w, http.StatusNotFound, "playbook not found")
 		return
 	}
 	var rq runReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	if rq.TargetKind == "" {
@@ -238,14 +238,14 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 			ids = []string{rq.TargetID}
 		}
 		if len(ids) == 0 {
-			writeError(w, http.StatusBadRequest, "no target hosts")
+			httpx.WriteError(w, http.StatusBadRequest, "no target hosts")
 			return
 		}
 		seen := map[uuid.UUID]bool{}
 		for _, raw := range ids {
 			hid, err := uuid.Parse(raw)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "bad host id")
+				httpx.WriteError(w, http.StatusBadRequest, "bad host id")
 				return
 			}
 			if seen[hid] {
@@ -254,11 +254,11 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 			seen[hid] = true
 			host, err := h.d.Store.GetHost(r.Context(), hid)
 			if err != nil {
-				writeError(w, http.StatusNotFound, "host not found")
+				httpx.WriteError(w, http.StatusNotFound, "host not found")
 				return
 			}
 			if !h.canAccessHost(r, p, host.ID) {
-				writeError(w, http.StatusForbidden, "not authorized for host "+host.Hostname)
+				httpx.WriteError(w, http.StatusForbidden, "not authorized for host "+host.Hostname)
 				return
 			}
 			hosts = append(hosts, host)
@@ -272,17 +272,17 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 	case "group":
 		gid, err := uuid.Parse(rq.GroupID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad group id")
+			httpx.WriteError(w, http.StatusBadRequest, "bad group id")
 			return
 		}
 		g, err := h.d.Store.GetGroup(r.Context(), gid)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "group not found")
+			httpx.WriteError(w, http.StatusNotFound, "group not found")
 			return
 		}
 		members, err := h.d.Store.HostsInGroup(r.Context(), gid)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not resolve group hosts")
+			httpx.WriteError(w, http.StatusInternalServerError, "could not resolve group hosts")
 			return
 		}
 		// Only target hosts the requester can actually reach (super admins: all).
@@ -293,14 +293,14 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(hosts) == 0 {
-			writeError(w, http.StatusForbidden, "no hosts in this group are accessible to you")
+			httpx.WriteError(w, http.StatusForbidden, "no hosts in this group are accessible to you")
 			return
 		}
 		groupID = &g.ID
 		targetName = g.Name
 
 	default:
-		writeError(w, http.StatusBadRequest, "unknown target kind")
+		httpx.WriteError(w, http.StatusBadRequest, "unknown target kind")
 		return
 	}
 
@@ -323,7 +323,7 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 		CheckMode:       rq.CheckMode,
 	}, &p.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create run")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create run")
 		return
 	}
 	go h.svc.Run(rec.ID, pb.Content, hosts, rq.CheckMode)
@@ -337,31 +337,31 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 		"targetKind": targetKind, "target": targetName, "hosts": names,
 		"hostCount": len(hosts), "checkMode": rq.CheckMode,
 	})
-	writeJSON(w, http.StatusAccepted, rec)
+	httpx.WriteJSON(w, http.StatusAccepted, rec)
 }
 
 func (h *handler) runs(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	rs, err := h.d.Store.ListPlaybookRuns(r.Context(), id, 50)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list runs")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list runs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": rs, "count": len(rs)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"runs": rs, "count": len(rs)})
 }
 
 func (h *handler) runStatus(w http.ResponseWriter, r *http.Request) {
 	runID, err := uuid.Parse(chi.URLParam(r, "runId"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad run id")
+		httpx.WriteError(w, http.StatusBadRequest, "bad run id")
 		return
 	}
 	rec, err := h.d.Store.GetPlaybookRun(r.Context(), runID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "run not found")
+		httpx.WriteError(w, http.StatusNotFound, "run not found")
 		return
 	}
 	// While running, the persisted output is empty; serve the live buffer so the
@@ -369,7 +369,7 @@ func (h *handler) runStatus(w http.ResponseWriter, r *http.Request) {
 	if out, live := h.svc.LiveOutput(runID); live {
 		rec.Output = out
 	}
-	writeJSON(w, http.StatusOK, rec)
+	httpx.WriteJSON(w, http.StatusOK, rec)
 }
 
 // canAccessHost mirrors the scan/terminal gate: super admins bypass; otherwise
@@ -387,23 +387,6 @@ func (h *handler) canAccessHost(r *http.Request, p *auth.Principal, hostID uuid.
 
 // --- helpers ---
 
-func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad playbook id")
-		return uuid.Nil, false
-	}
-	return id, true
-}
-
-func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return false
-	}
-	return true
-}
-
 func (h *handler) audit(r *http.Request, action, targetID string, detail map[string]any) {
 	p := auth.MustPrincipal(r)
 	var actorID *uuid.UUID
@@ -416,14 +399,4 @@ func (h *handler) audit(r *http.Request, action, targetID string, detail map[str
 		ActorID: actorID, ActorName: name, Action: action,
 		TargetKind: "playbook", TargetID: targetID, Detail: detail,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

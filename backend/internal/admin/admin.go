@@ -5,7 +5,6 @@
 package admin
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -74,14 +73,4 @@ func (h *handler) audit(r *http.Request, action, targetKind, targetID string, de
 		ActorID: actorID, ActorName: name, Action: action,
 		TargetKind: targetKind, TargetID: targetID, Detail: detail,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

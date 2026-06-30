@@ -20,11 +20,11 @@ import (
 // Event types. Stable string keys — they also index Config.Events and appear in
 // the settings UI.
 const (
-	EventHostOffline    = "host.offline"
-	EventHostRecovered  = "host.recovered"
+	EventHostOffline     = "host.offline"
+	EventHostRecovered   = "host.recovered"
 	EventApprovalPending = "approval.pending"
-	EventScanFindings   = "scan.findings"
-	EventPlaybookFailed = "playbook.failed"
+	EventScanFindings    = "scan.findings"
+	EventPlaybookFailed  = "playbook.failed"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label).
@@ -89,10 +89,10 @@ type Route struct {
 
 // Config is the persisted notification configuration.
 type Config struct {
-	Email          EmailConfig      `json:"email"`
-	Webhook        WebhookConfig    `json:"webhook"`
-	Events         map[string]Route `json:"events"`
-	ThrottleMinutes int             `json:"throttleMinutes"`
+	Email           EmailConfig      `json:"email"`
+	Webhook         WebhookConfig    `json:"webhook"`
+	Events          map[string]Route `json:"events"`
+	ThrottleMinutes int              `json:"throttleMinutes"`
 }
 
 // Service loads config from settings and dispatches events.

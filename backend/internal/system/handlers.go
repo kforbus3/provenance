@@ -4,7 +4,6 @@ package system
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/models"
 )
@@ -37,15 +37,15 @@ type handler struct {
 func (h *handler) jobs(w http.ResponseWriter, r *http.Request) {
 	enrollJobs, err := h.d.Store.ListEnrollmentJobs(r.Context(), 50)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list enrollment jobs")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list enrollment jobs")
 		return
 	}
 	if enrollJobs == nil {
 		enrollJobs = []models.EnrollmentJob{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"schedulers":      h.reg.Snapshot(),
-		"enrollmentJobs":  enrollJobs,
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"schedulers":     h.reg.Snapshot(),
+		"enrollmentJobs": enrollJobs,
 	})
 }
 
@@ -54,7 +54,7 @@ func (h *handler) jobs(w http.ResponseWriter, r *http.Request) {
 // not exposed over the web UI.
 func (h *handler) backup(w http.ResponseWriter, r *http.Request) {
 	if _, err := exec.LookPath("pg_dump"); err != nil {
-		writeError(w, http.StatusNotImplemented, "pg_dump not available in this image")
+		httpx.WriteError(w, http.StatusNotImplemented, "pg_dump not available in this image")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
@@ -63,11 +63,11 @@ func (h *handler) backup(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(ctx, "pg_dump", "--no-owner", "--clean", "--if-exists", h.d.Cfg.DatabaseURL)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "backup failed to start")
+		httpx.WriteError(w, http.StatusInternalServerError, "backup failed to start")
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		writeError(w, http.StatusInternalServerError, "backup failed to start")
+		httpx.WriteError(w, http.StatusInternalServerError, "backup failed to start")
 		return
 	}
 	filename := fmt.Sprintf("fleet-backup-%d.sql", time.Now().Unix())
@@ -82,14 +82,4 @@ func (h *handler) backup(w http.ResponseWriter, r *http.Request) {
 			ActorID: &p.UserID, ActorName: p.Username, Action: "system.backup",
 		})
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -48,10 +49,10 @@ func (h *Handler) available(r *http.Request) (bool, error) {
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.available(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "status check failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "status check failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"bootstrapAvailable": ok})
+	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"bootstrapAvailable": ok})
 }
 
 type initReq struct {
@@ -64,29 +65,29 @@ type initReq struct {
 func (h *Handler) init(w http.ResponseWriter, r *http.Request) {
 	ok, err := h.available(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "status check failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "status check failed")
 		return
 	}
 	if !ok {
-		writeError(w, http.StatusConflict, "bootstrap is no longer available")
+		httpx.WriteError(w, http.StatusConflict, "bootstrap is no longer available")
 		return
 	}
 	var req initReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Username == "" {
-		writeError(w, http.StatusBadRequest, "username is required")
+		httpx.WriteError(w, http.StatusBadRequest, "username is required")
 		return
 	}
 	if err := auth.DefaultPolicy.Validate(req.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "hash failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
 	u, err := h.store.CreateUser(r.Context(), store.CreateUserParams{
@@ -94,7 +95,7 @@ func (h *Handler) init(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hash, IsSuperAdmin: true,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create administrator")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create administrator")
 		return
 	}
 	// Grant the built-in Super Administrator role for completeness.
@@ -104,15 +105,5 @@ func (h *Handler) init(w http.ResponseWriter, r *http.Request) {
 		TargetKind: "user", TargetID: u.ID.String(),
 		Detail: map[string]any{"username": u.Username},
 	})
-	writeJSON(w, http.StatusCreated, map[string]any{"status": "bootstrapped", "user": u})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"status": "bootstrapped", "user": u})
 }

@@ -94,8 +94,8 @@ func (s *Store) DecideApprovalRequest(ctx context.Context, id, decidedBy uuid.UU
 			gs = &grantedSecs
 		}
 		var (
-			requesterID    uuid.UUID
-			targetKind     string
+			requesterID     uuid.UUID
+			targetKind      string
 			hostID, groupID *uuid.UUID
 		)
 		err := tx.QueryRow(ctx, `

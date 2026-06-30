@@ -11,6 +11,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -38,22 +39,22 @@ type handler struct {
 }
 
 type scheduleReq struct {
-	Name       string             `json:"name"`
-	Kind       string             `json:"kind"`
-	Enabled    bool               `json:"enabled"`
-	TargetKind string             `json:"targetKind"`
-	TargetID   string             `json:"targetId"`
-	Recurrence models.Recurrence  `json:"recurrence"`
-	Payload    json.RawMessage    `json:"payload"`
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Enabled    bool              `json:"enabled"`
+	TargetKind string            `json:"targetKind"`
+	TargetID   string            `json:"targetId"`
+	Recurrence models.Recurrence `json:"recurrence"`
+	Payload    json.RawMessage   `json:"payload"`
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	items, err := h.d.Store.ListSchedules(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list schedules")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list schedules")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"schedules": items, "count": len(items)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"schedules": items, "count": len(items)})
 }
 
 // resolve validates the target and returns its display name + kind.
@@ -94,101 +95,101 @@ func (h *handler) toModel(r *http.Request, rq *scheduleReq) (*models.Schedule, s
 
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	var rq scheduleReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	m, msg, ok := h.toModel(r, &rq)
 	if !ok {
-		writeError(w, http.StatusBadRequest, msg)
+		httpx.WriteError(w, http.StatusBadRequest, msg)
 		return
 	}
 	p := auth.MustPrincipal(r)
 	m.Requester = p.Username
 	sc, err := h.d.Store.CreateSchedule(r.Context(), m, &p.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create schedule")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create schedule")
 		return
 	}
 	h.audit(r, "schedule.create", sc.ID.String(), map[string]any{"name": sc.Name, "kind": sc.Kind})
-	writeJSON(w, http.StatusCreated, sc)
+	httpx.WriteJSON(w, http.StatusCreated, sc)
 }
 
 func (h *handler) update(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	var rq scheduleReq
-	if !decode(w, r, &rq) {
+	if !httpx.Decode(w, r, &rq) {
 		return
 	}
 	m, msg, ok := h.toModel(r, &rq)
 	if !ok {
-		writeError(w, http.StatusBadRequest, msg)
+		httpx.WriteError(w, http.StatusBadRequest, msg)
 		return
 	}
 	sc, err := h.d.Store.UpdateSchedule(r.Context(), id, m)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "schedule not found")
+		httpx.WriteError(w, http.StatusNotFound, "schedule not found")
 		return
 	}
 	h.audit(r, "schedule.update", sc.ID.String(), map[string]any{"name": sc.Name})
-	writeJSON(w, http.StatusOK, sc)
+	httpx.WriteJSON(w, http.StatusOK, sc)
 }
 
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	if err := h.d.Store.DeleteSchedule(r.Context(), id); err != nil {
-		writeError(w, http.StatusNotFound, "schedule not found")
+		httpx.WriteError(w, http.StatusNotFound, "schedule not found")
 		return
 	}
 	h.audit(r, "schedule.delete", id.String(), nil)
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 func (h *handler) enable(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if !decode(w, r, &body) {
+	if !httpx.Decode(w, r, &body) {
 		return
 	}
 	sc, err := h.d.Store.SetScheduleEnabled(r.Context(), id, body.Enabled)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "schedule not found")
+		httpx.WriteError(w, http.StatusNotFound, "schedule not found")
 		return
 	}
 	h.audit(r, "schedule.enable", id.String(), map[string]any{"enabled": body.Enabled})
-	writeJSON(w, http.StatusOK, sc)
+	httpx.WriteJSON(w, http.StatusOK, sc)
 }
 
 func (h *handler) getTimezone(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"timezone": h.d.Store.DisplayTimezone(r.Context())})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"timezone": h.d.Store.DisplayTimezone(r.Context())})
 }
 
 func (h *handler) putTimezone(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Timezone string `json:"timezone"`
 	}
-	if !decode(w, r, &body) {
+	if !httpx.Decode(w, r, &body) {
 		return
 	}
 	// Validate against the IANA database (empty = use the server default).
 	if body.Timezone != "" {
 		if _, err := time.LoadLocation(body.Timezone); err != nil {
-			writeError(w, http.StatusBadRequest, "unknown timezone")
+			httpx.WriteError(w, http.StatusBadRequest, "unknown timezone")
 			return
 		}
 	}
 	if err := h.d.Store.SetSetting(r.Context(), "timezone", map[string]string{"timezone": body.Timezone}); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save timezone")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not save timezone")
 		return
 	}
 	// Existing schedules' next-run times were computed in the old zone; refresh.
@@ -196,42 +197,25 @@ func (h *handler) putTimezone(w http.ResponseWriter, r *http.Request) {
 		h.d.Log.Warn("recompute schedules after timezone change", "err", err)
 	}
 	h.audit(r, "system.timezone", "", map[string]any{"timezone": body.Timezone})
-	writeJSON(w, http.StatusOK, map[string]string{"timezone": body.Timezone})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"timezone": body.Timezone})
 }
 
 func (h *handler) runNow(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
+	id, ok := httpx.ParseID(w, r)
 	if !ok {
 		return
 	}
 	sc, err := h.d.Store.GetSchedule(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "schedule not found")
+		httpx.WriteError(w, http.StatusNotFound, "schedule not found")
 		return
 	}
 	status := h.eng.Fire(r.Context(), sc)
 	h.audit(r, "schedule.run", id.String(), map[string]any{"name": sc.Name, "status": status})
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": status})
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"status": status})
 }
 
 // --- helpers ---
-
-func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad schedule id")
-		return uuid.Nil, false
-	}
-	return id, true
-}
-
-func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return false
-	}
-	return true
-}
 
 func (h *handler) audit(r *http.Request, action, targetID string, detail map[string]any) {
 	p := auth.MustPrincipal(r)
@@ -245,14 +229,4 @@ func (h *handler) audit(r *http.Request, action, targetID string, detail map[str
 		ActorID: actorID, ActorName: name, Action: action,
 		TargetKind: "schedule", TargetID: targetID, Detail: detail,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

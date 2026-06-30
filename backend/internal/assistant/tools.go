@@ -46,21 +46,21 @@ var tools = []toolDef{{
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"status":           map[string]any{"type": "string", "enum": []string{"online", "offline", "unknown"}, "description": "host reachability"},
-				"environment":      map[string]any{"type": "string", "description": "exact environment label, e.g. production"},
-				"osContains":       map[string]any{"type": "string", "description": "substring match on OS name, e.g. debian"},
-				"hostnameContains": map[string]any{"type": "string", "description": "substring match on hostname"},
-				"group":            map[string]any{"type": "string", "description": "exact group name the host belongs to"},
-				"tag":              map[string]any{"type": "string", "description": "exact tag on the host"},
-				"diskFreePctMax":   map[string]any{"type": "number", "description": "max free disk % on the tightest filesystem (e.g. 20 = less than 20% free)"},
-				"diskFreePctMin":   map[string]any{"type": "number", "description": "min free disk %"},
-				"memUsedPctMin":    map[string]any{"type": "number", "description": "min memory used %"},
-				"loadPerCoreMin":   map[string]any{"type": "number", "description": "min load average per CPU core"},
+				"status":              map[string]any{"type": "string", "enum": []string{"online", "offline", "unknown"}, "description": "host reachability"},
+				"environment":         map[string]any{"type": "string", "description": "exact environment label, e.g. production"},
+				"osContains":          map[string]any{"type": "string", "description": "substring match on OS name, e.g. debian"},
+				"hostnameContains":    map[string]any{"type": "string", "description": "substring match on hostname"},
+				"group":               map[string]any{"type": "string", "description": "exact group name the host belongs to"},
+				"tag":                 map[string]any{"type": "string", "description": "exact tag on the host"},
+				"diskFreePctMax":      map[string]any{"type": "number", "description": "max free disk % on the tightest filesystem (e.g. 20 = less than 20% free)"},
+				"diskFreePctMin":      map[string]any{"type": "number", "description": "min free disk %"},
+				"memUsedPctMin":       map[string]any{"type": "number", "description": "min memory used %"},
+				"loadPerCoreMin":      map[string]any{"type": "number", "description": "min load average per CPU core"},
 				"updatesAvailableMin": map[string]any{"type": "integer", "description": "min number of pending package updates (e.g. 1 = hosts that have any updates available)"},
 				"securityUpdatesMin":  map[string]any{"type": "integer", "description": "min number of pending SECURITY updates (e.g. 1 = hosts with security updates available)"},
-				"enrolled":         map[string]any{"type": "boolean", "description": "filter by enrolled state"},
-				"wireguardDown":    map[string]any{"type": "boolean", "description": "true = only hosts whose WireGuard tunnel is down"},
-				"limit":            map[string]any{"type": "integer", "description": "max rows (default/cap 200)"},
+				"enrolled":            map[string]any{"type": "boolean", "description": "filter by enrolled state"},
+				"wireguardDown":       map[string]any{"type": "boolean", "description": "true = only hosts whose WireGuard tunnel is down"},
+				"limit":               map[string]any{"type": "integer", "description": "max rows (default/cap 200)"},
 			},
 		},
 	},
@@ -122,41 +122,41 @@ type hostDetailArgs struct {
 
 // queryHostsArgs mirrors the tool's parameter schema.
 type queryHostsArgs struct {
-	Status           string   `json:"status"`
-	Environment      string   `json:"environment"`
-	OSContains       string   `json:"osContains"`
-	HostnameContains string   `json:"hostnameContains"`
-	Group            string   `json:"group"`
-	Tag              string   `json:"tag"`
-	DiskFreePctMax   *float64 `json:"diskFreePctMax"`
-	DiskFreePctMin   *float64 `json:"diskFreePctMin"`
-	MemUsedPctMin    *float64 `json:"memUsedPctMin"`
-	LoadPerCoreMin   *float64 `json:"loadPerCoreMin"`
-	UpdatesAvailableMin *int  `json:"updatesAvailableMin"`
-	SecurityUpdatesMin  *int  `json:"securityUpdatesMin"`
-	Enrolled         *bool    `json:"enrolled"`
-	WireguardDown    *bool    `json:"wireguardDown"`
-	Limit            int      `json:"limit"`
+	Status              string   `json:"status"`
+	Environment         string   `json:"environment"`
+	OSContains          string   `json:"osContains"`
+	HostnameContains    string   `json:"hostnameContains"`
+	Group               string   `json:"group"`
+	Tag                 string   `json:"tag"`
+	DiskFreePctMax      *float64 `json:"diskFreePctMax"`
+	DiskFreePctMin      *float64 `json:"diskFreePctMin"`
+	MemUsedPctMin       *float64 `json:"memUsedPctMin"`
+	LoadPerCoreMin      *float64 `json:"loadPerCoreMin"`
+	UpdatesAvailableMin *int     `json:"updatesAvailableMin"`
+	SecurityUpdatesMin  *int     `json:"securityUpdatesMin"`
+	Enrolled            *bool    `json:"enrolled"`
+	WireguardDown       *bool    `json:"wireguardDown"`
+	Limit               int      `json:"limit"`
 }
 
 func (a queryHostsArgs) toQuery(who Caller) store.HostQuery {
 	return store.HostQuery{
-		Status:           a.Status,
-		Environment:      a.Environment,
-		OSContains:       a.OSContains,
-		HostnameContains: a.HostnameContains,
-		Group:            a.Group,
-		Tag:              a.Tag,
-		DiskFreePctMax:   a.DiskFreePctMax,
-		DiskFreePctMin:   a.DiskFreePctMin,
-		MemUsedPctMin:    a.MemUsedPctMin,
-		LoadPerCoreMin:   a.LoadPerCoreMin,
+		Status:              a.Status,
+		Environment:         a.Environment,
+		OSContains:          a.OSContains,
+		HostnameContains:    a.HostnameContains,
+		Group:               a.Group,
+		Tag:                 a.Tag,
+		DiskFreePctMax:      a.DiskFreePctMax,
+		DiskFreePctMin:      a.DiskFreePctMin,
+		MemUsedPctMin:       a.MemUsedPctMin,
+		LoadPerCoreMin:      a.LoadPerCoreMin,
 		UpdatesAvailableMin: a.UpdatesAvailableMin,
 		SecurityUpdatesMin:  a.SecurityUpdatesMin,
-		Enrolled:         a.Enrolled,
-		WGDown:           a.WireguardDown,
-		Limit:            a.Limit,
-		UserID:           who.UserID,
-		IsSuperAdmin:     who.IsSuperAdmin,
+		Enrolled:            a.Enrolled,
+		WGDown:              a.WireguardDown,
+		Limit:               a.Limit,
+		UserID:              who.UserID,
+		IsSuperAdmin:        who.IsSuperAdmin,
 	}
 }

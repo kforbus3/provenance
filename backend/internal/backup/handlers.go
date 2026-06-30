@@ -10,6 +10,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -36,10 +37,10 @@ type handler struct {
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.List(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list backups")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list backups")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"backups": items, "dir": h.d.Cfg.BackupDir, "count": len(items),
 	})
 }
@@ -47,29 +48,29 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	info, err := h.svc.Create(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.audit(r, "system.backup", map[string]any{"name": info.Name, "size": info.Size})
-	writeJSON(w, http.StatusCreated, info)
+	httpx.WriteJSON(w, http.StatusCreated, info)
 }
 
 func (h *handler) getPolicy(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.svc.LoadPolicy(r.Context()))
+	httpx.WriteJSON(w, http.StatusOK, h.svc.LoadPolicy(r.Context()))
 }
 
 func (h *handler) putPolicy(w http.ResponseWriter, r *http.Request) {
 	var p Policy
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&p); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if err := h.svc.SavePolicy(r.Context(), p); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save policy")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not save policy")
 		return
 	}
 	h.audit(r, "system.backup_policy", map[string]any{"enabled": p.Enabled, "intervalHours": p.IntervalHours})
-	writeJSON(w, http.StatusOK, p)
+	httpx.WriteJSON(w, http.StatusOK, p)
 }
 
 func (h *handler) download(w http.ResponseWriter, r *http.Request) {
@@ -99,14 +100,4 @@ func (h *handler) audit(r *http.Request, action string, detail map[string]any) {
 	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: action, Detail: detail,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

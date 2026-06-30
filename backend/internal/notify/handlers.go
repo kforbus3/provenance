@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 )
 
 // Mount attaches notification settings routes (System.Configure only). It takes
@@ -30,24 +31,24 @@ type handler struct {
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	red, err := h.svc.Redacted(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load settings")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, red)
+	httpx.WriteJSON(w, http.StatusOK, red)
 }
 
 func (h *handler) put(w http.ResponseWriter, r *http.Request) {
 	var cfg Config
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if err := h.svc.Save(r.Context(), &cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save settings")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not save settings")
 		return
 	}
 	red, _ := h.svc.Redacted(r.Context())
-	writeJSON(w, http.StatusOK, red)
+	httpx.WriteJSON(w, http.StatusOK, red)
 }
 
 func (h *handler) test(w http.ResponseWriter, r *http.Request) {
@@ -55,14 +56,14 @@ func (h *handler) test(w http.ResponseWriter, r *http.Request) {
 		Channel string `json:"channel"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if err := h.svc.SendTest(r.Context(), body.Channel); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // events lists the event-type catalogue for the UI matrix.
@@ -71,15 +72,5 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	for _, e := range AllEventTypes {
 		out = append(out, map[string]string{"key": e.Key, "label": e.Label})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": out})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"events": out})
 }

@@ -104,10 +104,10 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq 
 	prev := ""
 	for rows.Next() {
 		var (
-			seq                                        int64
-			actorID                                    *uuid.UUID
-			actorName, action, tk, tid, ip, prevH, h   string
-			detail                                     map[string]any
+			seq                                      int64
+			actorID                                  *uuid.UUID
+			actorName, action, tk, tid, ip, prevH, h string
+			detail                                   map[string]any
 		)
 		if err := rows.Scan(&seq, &actorID, &actorName, &action, &tk, &tid, &ip, &detail, &prevH, &h); err != nil {
 			return false, 0, err
