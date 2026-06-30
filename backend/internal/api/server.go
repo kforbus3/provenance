@@ -458,6 +458,12 @@ func (s *Server) registerRoutes(r chi.Router) {
 	sessionsapi.Mount(r, deps)
 	approvals.Mount(r, deps)
 	system.Mount(r, deps, s.Jobs)
+
+	// System health (admin): live status of DB, CA, jump host, runner, backups, jobs.
+	r.Group(func(pr chi.Router) {
+		pr.Use(s.Auth.RequireAuth)
+		pr.With(s.Auth.RequirePermission("System.Configure")).Get("/system/health", s.handleSystemHealth)
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
