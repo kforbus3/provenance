@@ -45,6 +45,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/scan"
+	"github.com/fleet-terminal/backend/internal/scheduler"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
 	"github.com/fleet-terminal/backend/internal/sshgw"
@@ -72,6 +73,10 @@ type Server struct {
 	Live    *livesessions.Registry
 	Notify  *notify.Service
 
+	scanSvc     *scan.Service
+	playbookSvc *playbook.Service
+	scheduler   *scheduler.Engine
+
 	router chi.Router
 }
 
@@ -96,6 +101,12 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Live:    livesessions.New(),
 		Notify:  notify.New(st, cfg, log),
 	}
+
+	// Scan + playbook services are shared between their HTTP handlers and the
+	// scheduler, so construct them once here.
+	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
+	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
+	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
 	// zeroize the key and revoke its certificates.
@@ -154,6 +165,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
 	go s.krlLoop(ctx)
+	go s.scheduler.Run(ctx)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx)
 	return nil
 }
@@ -420,14 +432,17 @@ func (s *Server) registerRoutes(r chi.Router) {
 	fleetsftp.Mount(r, deps, s.Gateway)
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
-	scan.Mount(r, deps, scan.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Notify))
+	scan.Mount(r, deps, s.scanSvc)
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
 	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
 
-	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log, s.Issuer, s.Notify))
+	playbook.Mount(r, deps, s.playbookSvc)
 
 	notify.Mount(r, s.Auth, s.Notify)
+
+	// Recurring scans / playbook runs.
+	scheduler.Mount(r, deps, s.scheduler)
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)
