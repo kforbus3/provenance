@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -51,9 +52,20 @@ func (s *Store) GetPlaybook(ctx context.Context, id uuid.UUID) (*models.Playbook
 	return p, nil
 }
 
+// normalizeContent ensures a non-empty playbook ends with exactly one newline,
+// so it is a well-formed text file (and avoids the trivial "no newline at end of
+// file" lint rule).
+func normalizeContent(content string) string {
+	if content == "" {
+		return content
+	}
+	return strings.TrimRight(content, "\n") + "\n"
+}
+
 // CreatePlaybook inserts a new playbook at version 1 and records the first
 // version snapshot, atomically.
 func (s *Store) CreatePlaybook(ctx context.Context, name, description, content string, author *uuid.UUID, authorName string) (*models.Playbook, error) {
+	content = normalizeContent(content)
 	var p *models.Playbook
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
@@ -80,6 +92,7 @@ func (s *Store) CreatePlaybook(ctx context.Context, name, description, content s
 // UpdatePlaybook saves new metadata/content. When the content changes, the
 // version is bumped and the new content is snapshotted into playbook_versions.
 func (s *Store) UpdatePlaybook(ctx context.Context, id uuid.UUID, name, description, content string, author *uuid.UUID, authorName string) (*models.Playbook, error) {
+	content = normalizeContent(content)
 	var p *models.Playbook
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		var curContent string
