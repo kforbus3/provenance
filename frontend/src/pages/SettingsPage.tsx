@@ -20,7 +20,10 @@ import { getTimezone, saveTimezone } from "../api/timezone";
 import {
   getAuditForwarding, saveAuditForwarding, testAuditForwarding, type AuditForwardConfig,
 } from "../api/auditForwarding";
-import { getOidcConfig, saveOidcConfig, type OidcConfig } from "../api/sso";
+import {
+  getOidcConfig, saveOidcConfig, getLdapConfig, saveLdapConfig,
+  type OidcConfig, type LdapConfig,
+} from "../api/sso";
 import {
   browserTimezone, formatDateTime, setDisplayTimezone, supportedTimezones,
 } from "../lib/datetime";
@@ -72,6 +75,7 @@ export function SettingsPage() {
       <RetentionCard current={settings["recordings"]} />
       <NotificationsCard />
       <SSOCard />
+      <LDAPCard />
       <AuditForwardingCard />
       <BackupCard />
 
@@ -477,6 +481,108 @@ function SSOCard() {
           <TextField label="Group → role mappings (one per line: idpGroup=FleetRole)" size="small" multiline minRows={2}
             value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
             placeholder={"fleet-admins=Administrator\nops=Operator"} />
+        </Stack>
+      )}
+      <Box sx={{ mt: 1.5 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Box>
+    </Paper>
+  );
+}
+
+// LDAPCard configures LDAP / Active Directory authentication. Users sign in on
+// the normal form with their directory credentials; accounts are provisioned
+// from directory attributes and group→role mappings.
+function LDAPCard() {
+  const { data: loaded } = useQuery({ queryKey: ["ldap-config"], queryFn: getLdapConfig });
+  const [cfg, setCfg] = useState<LdapConfig | null>(null);
+  const [groupMap, setGroupMap] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      setCfg({ ...loaded.config, bindPassword: "" });
+      setGroupMap(Object.entries(loaded.config.groupRoleMap ?? {}).map(([g, r]) => `${g}=${r}`).join("\n"));
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const groupRoleMap: Record<string, string> = {};
+      for (const line of groupMap.split("\n")) {
+        const [g, r] = line.split("=");
+        if (g?.trim() && r?.trim()) groupRoleMap[g.trim()] = r.trim();
+      }
+      return saveLdapConfig({ ...(cfg as LdapConfig), groupRoleMap });
+    },
+    onSuccess: () => setSaved(true),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">LDAP / Active Directory</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+  const set = (patch: Partial<LdapConfig>) => { setCfg({ ...cfg, ...patch }); setSaved(false); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">LDAP / Active Directory</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Let users sign in with their directory credentials on the normal sign-in form. A service
+        account looks up the user, then their password is verified by a bind.
+      </Typography>
+      <FormControlLabel
+        control={<Switch checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Enable LDAP/AD sign-on"
+      />
+      {cfg.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1 }}>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Server URL" size="small" value={cfg.url}
+              onChange={(e) => set({ url: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="ldaps://dc.example.com:636" />
+            <FormControlLabel control={<Switch checked={cfg.startTls} onChange={(e) => set({ startTls: e.target.checked })} />}
+              label="StartTLS" />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Bind DN (service account)" size="small" value={cfg.bindDn}
+              onChange={(e) => set({ bindDn: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="CN=svc-fleet,OU=Service,DC=example,DC=com" />
+            <TextField label="Bind password" size="small" type="password" value={cfg.bindPassword ?? ""}
+              onChange={(e) => set({ bindPassword: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="new-password"
+              placeholder={loaded?.secretSet ? "•••••••• (unchanged)" : ""} />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Base DN" size="small" value={cfg.baseDn}
+              onChange={(e) => set({ baseDn: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="OU=Users,DC=example,DC=com" />
+            <TextField label="User filter (%s = username)" size="small" value={cfg.userFilter ?? ""}
+              onChange={(e) => set({ userFilter: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="(sAMAccountName=%s)" />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Username attr" size="small" value={cfg.usernameAttr ?? ""}
+              onChange={(e) => set({ usernameAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="sAMAccountName" />
+            <TextField label="Email attr" size="small" value={cfg.emailAttr ?? ""}
+              onChange={(e) => set({ emailAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="mail" />
+            <TextField label="Groups attr" size="small" value={cfg.groupsAttr ?? ""}
+              onChange={(e) => set({ groupsAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="memberOf" />
+          </Stack>
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <TextField label="Default role (new users)" size="small" value={cfg.defaultRole ?? ""}
+              onChange={(e) => set({ defaultRole: e.target.value })} sx={{ width: 220 }} placeholder="Read-Only" />
+            <FormControlLabel control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
+              label="Auto-provision new users" />
+          </Stack>
+          <TextField label="Group → role mappings (one per line: GroupCN=FleetRole)" size="small" multiline minRows={2}
+            value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
+            placeholder={"Domain Admins=Administrator\nFleet-Operators=Operator"} />
         </Stack>
       )}
       <Box sx={{ mt: 1.5 }}>

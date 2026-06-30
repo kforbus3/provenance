@@ -41,3 +41,31 @@ export async function getOidcStatus(): Promise<OidcStatus> {
 export function oidcLoginUrl(): string {
   return "/api/v1/auth/oidc/login";
 }
+
+// --- LDAP / Active Directory ---
+
+export interface LdapConfig {
+  enabled: boolean;
+  url: string;
+  startTls: boolean;
+  bindDn: string;
+  bindPassword?: string; // write-only
+  baseDn: string;
+  userFilter?: string;
+  usernameAttr?: string;
+  emailAttr?: string;
+  displayNameAttr?: string;
+  groupsAttr?: string;
+  defaultRole?: string;
+  autoProvision: boolean;
+  groupRoleMap?: Record<string, string>;
+}
+
+export async function getLdapConfig(): Promise<{ config: LdapConfig; secretSet: boolean }> {
+  const { data } = await api.get<{ config: LdapConfig; secretSet: boolean }>("/api/v1/auth/ldap/config");
+  return data;
+}
+
+export async function saveLdapConfig(cfg: LdapConfig): Promise<void> {
+  await api.put("/api/v1/auth/ldap/config", cfg);
+}
