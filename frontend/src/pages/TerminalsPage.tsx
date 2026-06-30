@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  Box, Button, Card, CardActions, CardContent, Chip, InputAdornment,
+  Autocomplete, Box, Button, Card, CardActions, CardContent, Chip, InputAdornment,
   Stack, TextField, Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
@@ -21,22 +21,30 @@ const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> 
 export function TerminalsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["hosts"], queryFn: listHosts });
   const [q, setQ] = useState("");
+  const [groups, setGroups] = useState<string[]>([]);
+
+  // Group filter options come from the hosts themselves (the groups they belong
+  // to), so it works without a groups API call and only lists relevant groups.
+  const groupOptions = useMemo(
+    () => Array.from(new Set((data?.hosts ?? []).flatMap((h) => h.groups ?? []))).sort(),
+    [data],
+  );
 
   const hosts = useMemo(() => {
     const all = data?.hosts ?? [];
     const needle = q.trim().toLowerCase();
-    const matched = needle
-      ? all.filter((h) =>
-          [h.hostname, h.description, h.environment, ...(h.tags ?? [])]
-            .join(" ").toLowerCase().includes(needle),
-        )
-      : all;
+    const matched = all.filter((h) => {
+      if (needle && ![h.hostname, h.description, h.environment, ...(h.tags ?? [])]
+        .join(" ").toLowerCase().includes(needle)) return false;
+      if (groups.length && !(h.groups ?? []).some((g) => groups.includes(g))) return false;
+      return true;
+    });
     // Online first, then by hostname.
     return [...matched].sort((a, b) => {
       const rank = (h: Host) => (h.status?.status === "online" ? 0 : h.status?.status === "unknown" ? 1 : 2);
       return rank(a) - rank(b) || a.hostname.localeCompare(b.hostname);
     });
-  }, [data, q]);
+  }, [data, q, groups]);
 
   const openTerminal = (id: string) => window.open(`/terminals/${id}`, "_blank", "noopener");
   const openFiles = (id: string) => window.open(`/files/${id}`, "_blank", "noopener");
@@ -49,15 +57,23 @@ export function TerminalsPage() {
         with a unique, ephemeral SSH certificate.
       </Typography>
 
-      <TextField
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search hosts by name, environment, or tag…"
-        size="small"
-        fullWidth
-        sx={{ mb: 2, maxWidth: 480 }}
-        InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
-      />
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }}>
+        <TextField
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search hosts by name, environment, or tag…"
+          size="small"
+          sx={{ flexGrow: 1, maxWidth: 480 }}
+          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+        />
+        {groupOptions.length > 0 && (
+          <Autocomplete
+            multiple size="small" options={groupOptions} value={groups}
+            onChange={(_, v) => setGroups(v)} sx={{ minWidth: 240 }}
+            renderInput={(params) => <TextField {...params} label="Filter by group" />}
+          />
+        )}
+      </Stack>
 
       {!isLoading && hosts.length === 0 && (
         <Typography color="text.secondary">

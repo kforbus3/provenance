@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
-  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, Stack, TextField, Tooltip, Typography,
 } from "@mui/material";
 import {
@@ -189,6 +189,7 @@ export function HostsPage() {
   });
 
   const [selection, setSelection] = useState<GridRowSelectionModel>([]);
+  const [groupFilter, setGroupFilter] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [enrollResult, setEnrollResult] = useState<EnrollmentResult | null>(null);
   const [enrollError, setEnrollError] = useState<string | null>(null);
@@ -364,14 +365,25 @@ export function HostsPage() {
     },
   ], [deleteMut, enrollMut]);
 
-  const rows = data?.hosts ?? [];
+  const allHosts = data?.hosts ?? [];
+  const groupOptions = Array.from(new Set(allHosts.flatMap((h) => h.groups ?? []))).sort();
+  const rows = groupFilter.length
+    ? allHosts.filter((h) => (h.groups ?? []).some((g) => groupFilter.includes(g)))
+    : allHosts;
 
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
         Host Inventory
       </Typography>
-      <Box sx={{ width: "100%", height: "calc(100vh - 180px)" }}>
+      {groupOptions.length > 0 && (
+        <Autocomplete
+          multiple size="small" options={groupOptions} value={groupFilter}
+          onChange={(_, v) => setGroupFilter(v)} sx={{ mb: 1.5, maxWidth: 480 }}
+          renderInput={(params) => <TextField {...params} label="Filter by group" />}
+        />
+      )}
+      <Box sx={{ width: "100%", height: "calc(100vh - 230px)" }}>
         <DataGrid<Host>
           rows={rows}
           columns={columns}
