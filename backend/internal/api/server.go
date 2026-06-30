@@ -82,6 +82,9 @@ type Server struct {
 	backups     *backup.Service
 	auditFwd    *auditfwd.Forwarder
 
+	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
+	lastCANotify time.Time
+
 	router chi.Router
 }
 
@@ -333,8 +336,38 @@ func (s *Server) renewalLoop(ctx context.Context) {
 		case <-t.C:
 			s.Issuer.RenewExpiring(ctx)
 			s.Jobs.Record("certificate-renewal", nil)
+			s.checkCAAge(ctx)
 		}
 	}
+}
+
+// checkCAAge sends a rotation-reminder notification when the active SSH CA key
+// is older than the configured threshold (it never auto-expires). Throttled to
+// roughly weekly so it nudges rather than spams.
+func (s *Server) checkCAAge(ctx context.Context) {
+	if s.Cfg.CARotateAfter <= 0 {
+		return
+	}
+	created, err := s.Store.ActiveCACreatedAt(ctx, "user")
+	if err != nil {
+		return
+	}
+	age := time.Since(created)
+	if age < s.Cfg.CARotateAfter {
+		return
+	}
+	if time.Since(s.lastCANotify) < 6*24*time.Hour {
+		return
+	}
+	s.lastCANotify = time.Now()
+	days := int(age.Hours() / 24)
+	s.Notify.Notify(ctx, notify.Event{
+		Type: notify.EventCAKeyAging, Severity: notify.SeverityWarning,
+		Title: "SSH CA key due for rotation",
+		Body: fmt.Sprintf("Fleet's active SSH certificate authority key is %d days old. "+
+			"Consider rotating it (fleetctl rotate-ca, or the Certificates page).", days),
+		DedupeKey: "ca-user",
+	})
 }
 
 func dedupe(in []string) []string {

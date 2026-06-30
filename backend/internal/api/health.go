@@ -36,11 +36,18 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		add("Database", "ok", "connected")
 	}
 
-	// Certificate authority
-	if id := s.CA.ActiveID(); id != "" {
-		add("Certificate authority", "ok", "active CA loaded ("+shortID(id)+")")
-	} else {
+	// Certificate authority (loaded + key age vs the rotation threshold)
+	if id := s.CA.ActiveID(); id == "" {
 		add("Certificate authority", "error", "no active CA key loaded")
+	} else if created, err := s.Store.ActiveCACreatedAt(ctx, "user"); err == nil {
+		days := int(time.Since(created).Hours() / 24)
+		st := "ok"
+		if s.Cfg.CARotateAfter > 0 && time.Since(created) >= s.Cfg.CARotateAfter {
+			st = "warn"
+		}
+		add("Certificate authority", st, fmt.Sprintf("active CA loaded (%s), key is %d days old", shortID(id), days))
+	} else {
+		add("Certificate authority", "ok", "active CA loaded ("+shortID(id)+")")
 	}
 
 	// Jump host reachability (TCP)

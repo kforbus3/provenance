@@ -25,6 +25,7 @@ const (
 	EventApprovalPending = "approval.pending"
 	EventScanFindings    = "scan.findings"
 	EventPlaybookFailed  = "playbook.failed"
+	EventCAKeyAging      = "ca.aging"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label).
@@ -34,6 +35,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventApprovalPending, "Access request pending approval"},
 	{EventScanFindings, "Security scan found failures"},
 	{EventPlaybookFailed, "Playbook run failed"},
+	{EventCAKeyAging, "CA key due for rotation"},
 }
 
 const settingKey = "notifications"

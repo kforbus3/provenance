@@ -43,6 +43,19 @@ func (s *Store) GetActiveCAKey(ctx context.Context, kind string) (*models.CACert
 	return &c, priv, nil
 }
 
+// ActiveCACreatedAt returns when the active CA key of a kind was created (for
+// rotation-age checks), without fetching private material.
+func (s *Store) ActiveCACreatedAt(ctx context.Context, kind string) (time.Time, error) {
+	var t time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT created_at FROM ca_keys WHERE kind=$1 AND active=true ORDER BY created_at DESC LIMIT 1`, kind).
+		Scan(&t)
+	if err != nil {
+		return time.Time{}, mapNotFound(err)
+	}
+	return t, nil
+}
+
 // ListCAKeys returns CA metadata (no private material).
 func (s *Store) ListCAKeys(ctx context.Context) ([]models.CACert, error) {
 	rows, err := s.pool.Query(ctx, `
