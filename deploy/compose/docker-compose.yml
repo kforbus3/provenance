@@ -41,6 +41,10 @@ services:
         VERSION: ${FLEET_VERSION:-dev}
     environment:
       FLEET_ENV: ${FLEET_ENV:-development}
+      # Server timezone — schedules compute their next run in this zone. Set TZ
+      # in .env to your local zone (e.g. America/New_York) so "03:00" means your
+      # 3 AM; defaults to UTC.
+      TZ: ${TZ:-UTC}
       FLEET_HTTP_ADDR: ":8080"
       FLEET_PUBLIC_URL: ${FLEET_PUBLIC_URL:-http://localhost:8080}
       FLEET_DATABASE_URL: postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable

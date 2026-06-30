@@ -53,7 +53,9 @@ export function SchedulesPage() {
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Run scans or playbooks on a recurring basis. New schedules are disabled until you turn them
-        on. Times are in the server's timezone.
+        on. The <strong>recurrence</strong> time is in the server's timezone (set <code>TZ</code> on
+        the backend to your local zone); <strong>Next run</strong> is shown in your browser's
+        timezone, so the two can differ if they don't match.
       </Typography>
 
       <TableContainer component={Paper} variant="outlined">
@@ -82,7 +84,9 @@ export function SchedulesPage() {
                 <TableCell>{s.targetName} <Typography component="span" variant="caption" color="text.secondary">({s.targetKind})</Typography></TableCell>
                 <TableCell>{recurrenceText(s.recurrence)}</TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>
-                  {s.enabled && s.nextRunAt ? new Date(s.nextRunAt).toLocaleString() : "—"}
+                  {s.enabled && s.nextRunAt
+                    ? new Date(s.nextRunAt).toLocaleString(undefined, { timeZoneName: "short" })
+                    : "—"}
                 </TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>
                   {s.lastRunAt ? `${new Date(s.lastRunAt).toLocaleString()} (${s.lastStatus})` : "never"}
