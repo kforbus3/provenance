@@ -27,8 +27,64 @@ func scanSchedule(row interface{ Scan(...any) error }) (*models.Schedule, error)
 	return &s, nil
 }
 
-// NextRun computes the next fire time for a recurrence after `from` (server local
-// time). Returns zero time if the recurrence is malformed.
+// scheduleLoc returns the configured display/scheduling timezone (settings key
+// "timezone", an IANA name), falling back to the server's local zone.
+func (s *Store) scheduleLoc(ctx context.Context) *time.Location {
+	if name := s.DisplayTimezone(ctx); name != "" {
+		if loc, lerr := time.LoadLocation(name); lerr == nil {
+			return loc
+		}
+	}
+	return time.Local
+}
+
+// DisplayTimezone returns the configured IANA timezone name (empty if unset).
+func (s *Store) DisplayTimezone(ctx context.Context) string {
+	raw, err := s.GetSetting(ctx, "timezone")
+	if err != nil || len(raw) == 0 {
+		return ""
+	}
+	var cfg struct {
+		Timezone string `json:"timezone"`
+	}
+	if json.Unmarshal(raw, &cfg) == nil {
+		return cfg.Timezone
+	}
+	return ""
+}
+
+// ScheduleNextRun computes the next fire time for a recurrence, interpreting
+// daily/weekly clock times in the configured scheduling timezone.
+func (s *Store) ScheduleNextRun(ctx context.Context, r models.Recurrence) time.Time {
+	return NextRun(r, time.Now().In(s.scheduleLoc(ctx)))
+}
+
+// RecomputeEnabledNextRuns recomputes next_run_at for every enabled schedule
+// (used after the scheduling timezone changes).
+func (s *Store) RecomputeEnabledNextRuns(ctx context.Context) error {
+	scheds, err := s.ListSchedules(ctx)
+	if err != nil {
+		return err
+	}
+	for _, sc := range scheds {
+		if !sc.Enabled {
+			continue
+		}
+		next := s.ScheduleNextRun(ctx, sc.Recurrence)
+		var nextPtr *time.Time
+		if !next.IsZero() {
+			nextPtr = &next
+		}
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE schedules SET next_run_at=$2, updated_at=now() WHERE id=$1`, sc.ID, nextPtr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NextRun computes the next fire time for a recurrence after `from` (in from's
+// location). Returns zero time if the recurrence is malformed.
 func NextRun(r models.Recurrence, from time.Time) time.Time {
 	switch r.Type {
 	case "interval":
@@ -78,7 +134,7 @@ func (s *Store) CreateSchedule(ctx context.Context, in *models.Schedule, created
 	}
 	var next *time.Time
 	if in.Enabled {
-		n := NextRun(in.Recurrence, time.Now())
+		n := s.ScheduleNextRun(ctx, in.Recurrence)
 		if !n.IsZero() {
 			next = &n
 		}
@@ -101,7 +157,7 @@ func (s *Store) UpdateSchedule(ctx context.Context, id uuid.UUID, in *models.Sch
 	}
 	var next *time.Time
 	if in.Enabled {
-		n := NextRun(in.Recurrence, time.Now())
+		n := s.ScheduleNextRun(ctx, in.Recurrence)
 		if !n.IsZero() {
 			next = &n
 		}
@@ -127,7 +183,7 @@ func (s *Store) SetScheduleEnabled(ctx context.Context, id uuid.UUID, enabled bo
 	}
 	var next *time.Time
 	if enabled {
-		n := NextRun(cur.Recurrence, time.Now())
+		n := s.ScheduleNextRun(ctx, cur.Recurrence)
 		if !n.IsZero() {
 			next = &n
 		}

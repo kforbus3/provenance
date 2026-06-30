@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Table, TableBody,
   TableCell, TableHead, TableRow, TextField, Typography,
@@ -170,11 +171,7 @@ function HostResults({ hosts }: { hosts: AssistantHost[] }) {
   );
 }
 
-function fmtTime(iso?: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
+const fmtTime = (iso?: string): string => formatDateTime(iso);
 
 function fmtBytes(b: number): string {
   if (!b) return "0";

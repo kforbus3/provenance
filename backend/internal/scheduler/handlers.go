@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,6 +19,10 @@ func Mount(r chi.Router, d *app.Deps, eng *Engine) {
 	h := &handler{d: d, eng: eng}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
+		// The display timezone affects every timestamp in the UI, so any signed-in
+		// user can read it; only System.Configure can change it.
+		pr.Get("/timezone", h.getTimezone)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Put("/timezone", h.putTimezone)
 		pr.With(d.Auth.RequirePermission("Schedule.Manage")).Get("/schedules", h.list)
 		pr.With(d.Auth.RequirePermission("Schedule.Manage")).Post("/schedules", h.create)
 		pr.With(d.Auth.RequirePermission("Schedule.Manage")).Put("/schedules/{id}", h.update)
@@ -162,6 +167,36 @@ func (h *handler) enable(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "schedule.enable", id.String(), map[string]any{"enabled": body.Enabled})
 	writeJSON(w, http.StatusOK, sc)
+}
+
+func (h *handler) getTimezone(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"timezone": h.d.Store.DisplayTimezone(r.Context())})
+}
+
+func (h *handler) putTimezone(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Timezone string `json:"timezone"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	// Validate against the IANA database (empty = use the server default).
+	if body.Timezone != "" {
+		if _, err := time.LoadLocation(body.Timezone); err != nil {
+			writeError(w, http.StatusBadRequest, "unknown timezone")
+			return
+		}
+	}
+	if err := h.d.Store.SetSetting(r.Context(), "timezone", map[string]string{"timezone": body.Timezone}); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save timezone")
+		return
+	}
+	// Existing schedules' next-run times were computed in the old zone; refresh.
+	if err := h.d.Store.RecomputeEnabledNextRuns(r.Context()); err != nil {
+		h.d.Log.Warn("recompute schedules after timezone change", "err", err)
+	}
+	h.audit(r, "system.timezone", "", map[string]any{"timezone": body.Timezone})
+	writeJSON(w, http.StatusOK, map[string]string{"timezone": body.Timezone})
 }
 
 func (h *handler) runNow(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import {
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
 import { getJobs, type EnrollmentJob, type SchedulerStatus } from "../api/system";
+import { formatDateTime, formatTime } from "../lib/datetime";
 
 // Background jobs: scheduler heartbeats (cert renewal, approval expiry, host
 // monitoring) and recent host-enrollment jobs. Auto-refreshes.
@@ -34,7 +35,7 @@ export function JobsPage() {
                   <Chip size="small" label={s.ok ? "ok" : "error"} color={s.ok ? "success" : "error"} />
                 </TableCell>
                 <TableCell>{s.runs}</TableCell>
-                <TableCell>{s.lastRunAt ? new Date(s.lastRunAt).toLocaleTimeString() : "—"}</TableCell>
+                <TableCell>{formatTime(s.lastRunAt)}</TableCell>
                 <TableCell sx={{ color: "error.main" }}>{s.lastError || ""}</TableCell>
               </TableRow>
             ))}
@@ -69,7 +70,7 @@ export function JobsPage() {
                     <span>{(j.steps ?? []).filter((s) => s.status === "ok").length}/{(j.steps ?? []).length} ok</span>
                   </Tooltip>
                 </TableCell>
-                <TableCell>{new Date(j.createdAt).toLocaleString()}</TableCell>
+                <TableCell>{formatDateTime(j.createdAt)}</TableCell>
                 <TableCell sx={{ color: "error.main" }}>{j.error || ""}</TableCell>
               </TableRow>
             ))}

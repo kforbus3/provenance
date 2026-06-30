@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, Paper, Stack, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, Typography,
@@ -74,7 +75,7 @@ export function AuditPage() {
             {events.map((ev) => (
               <TableRow key={ev.id} hover>
                 <TableCell>{ev.seq}</TableCell>
-                <TableCell>{new Date(ev.createdAt).toLocaleString()}</TableCell>
+                <TableCell>{formatDateTime(ev.createdAt)}</TableCell>
                 <TableCell>{ev.actorName || ev.actorId || "system"}</TableCell>
                 <TableCell><Chip label={ev.action} size="small" /></TableCell>
                 <TableCell>{ev.targetKind ? `${ev.targetKind}:${ev.targetId ?? ""}` : ""}</TableCell>

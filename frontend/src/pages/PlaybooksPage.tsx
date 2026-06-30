@@ -24,6 +24,7 @@ import { listHosts, type Host } from "../api/hosts";
 import { listGroups, type Group } from "../api/admin";
 import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
+import { formatDateTime } from "../lib/datetime";
 
 const STARTER = `---
 - name: Example playbook
@@ -94,7 +95,7 @@ export function PlaybooksPage() {
                 <TableCell sx={{ color: "text.secondary" }}>{p.description}</TableCell>
                 <TableCell><Chip size="small" label={`v${p.version}`} /></TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>
-                  {new Date(p.updatedAt).toLocaleString()}
+                  {formatDateTime(p.updatedAt)}
                 </TableCell>
                 <TableCell align="right" onClick={(e) => e.stopPropagation()}>
                   {canRun && (
@@ -360,7 +361,7 @@ function PlaybookRunsDialog({ playbook, onClose }: { playbook: Playbook; onClose
               <TableBody>
                 {runs.map((r) => (
                   <TableRow key={r.id} hover sx={{ cursor: "pointer" }} onClick={() => setOpenRun(r.id)}>
-                    <TableCell>{new Date(r.createdAt).toLocaleString()}</TableCell>
+                    <TableCell>{formatDateTime(r.createdAt)}</TableCell>
                     <TableCell>{r.targetName}</TableCell>
                     <TableCell>{r.checkMode ? "dry run" : "apply"}</TableCell>
                     <TableCell>{r.requester}</TableCell>

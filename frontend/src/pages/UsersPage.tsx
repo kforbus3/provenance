@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControlLabel, IconButton, List, ListItem, ListItemText, Menu,
@@ -260,7 +261,7 @@ export function UsersPage() {
               <ListItem key={e.id} disableGutters>
                 <ListItemText
                   primary={`${e.event}${e.ip ? "  ·  " + e.ip : ""}`}
-                  secondary={new Date(e.createdAt).toLocaleString()}
+                  secondary={formatDateTime(e.createdAt)}
                 />
               </ListItem>
             ))}

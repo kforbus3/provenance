@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, Stack, TextField, Tooltip, Typography,
@@ -47,11 +48,7 @@ const EMPTY_FORM: HostInput = {
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
 };
 
-function fmtDate(value?: string): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
-}
+const fmtDate = (value?: string): string => formatDateTime(value);
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import {
-  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
-  FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, Alert,
+  Alert, Autocomplete, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody,
+  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,6 +16,10 @@ import {
 import {
   backupDownloadUrl, createBackup, getBackupPolicy, listBackups, saveBackupPolicy,
 } from "../api/backups";
+import { getTimezone, saveTimezone } from "../api/timezone";
+import {
+  browserTimezone, formatDateTime, setDisplayTimezone, supportedTimezones,
+} from "../lib/datetime";
 
 // System settings editor. Values are arbitrary JSON; the editor exposes them as
 // raw JSON text and validates before PUTting the new value.
@@ -56,6 +60,7 @@ export function SettingsPage() {
     <Box>
       <Typography variant="h5" sx={{ mb: 2 }}>System Settings</Typography>
 
+      <TimezoneCard />
       <BrandingCard current={settings["branding"]} />
       <AssistantCard current={settings["assistant"]} />
       <ScanCard current={settings["scan_policy"]} />
@@ -112,6 +117,55 @@ export function SettingsPage() {
         </DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+// TimezoneCard sets the app-wide display timezone. It controls how every
+// timestamp is rendered and how schedule clock-times are interpreted, so saving
+// it refreshes all views.
+function TimezoneCard() {
+  const qc = useQueryClient();
+  const { data: current } = useQuery({ queryKey: ["timezone"], queryFn: getTimezone });
+  const [tz, setTz] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // "" = follow the browser's local zone.
+  const value = tz ?? (current ?? "");
+  const zones = ["", ...supportedTimezones()];
+  const label = (z: string) => (z === "" ? `Browser default (${browserTimezone()})` : z);
+
+  const save = useMutation({
+    mutationFn: () => saveTimezone(value),
+    onSuccess: () => {
+      setSaved(true);
+      setDisplayTimezone(value);
+      // Re-render every view (and re-read the recomputed schedule next-runs).
+      void qc.invalidateQueries();
+    },
+  });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Time zone</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        The timezone used to display all dates/times in the app and to interpret the clock times you
+        set for schedules. Defaults to your browser's zone.
+      </Typography>
+      <Stack direction="row" spacing={2} alignItems="center">
+        <Autocomplete
+          options={zones}
+          value={value}
+          onChange={(_, v) => { setTz(v ?? ""); setSaved(false); }}
+          getOptionLabel={label}
+          disableClearable
+          sx={{ width: 360 }}
+          renderInput={(params) => <TextField {...params} label="Time zone" size="small" />}
+        />
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+    </Paper>
   );
 }
 
@@ -413,7 +467,7 @@ function BackupCard() {
                 <TableRow key={b.name} hover>
                   <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>{b.name}</TableCell>
                   <TableCell>{fmtSize(b.size)}</TableCell>
-                  <TableCell sx={{ color: "text.secondary" }}>{new Date(b.createdAt).toLocaleString()}</TableCell>
+                  <TableCell sx={{ color: "text.secondary" }}>{formatDateTime(b.createdAt)}</TableCell>
                   <TableCell align="right">
                     <Button size="small" href={backupDownloadUrl(b.name)}>Download</Button>
                   </TableCell>

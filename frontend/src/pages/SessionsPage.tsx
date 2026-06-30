@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, Drawer, IconButton, Paper, Snackbar, Stack, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, Divider,
@@ -190,7 +191,7 @@ export function SessionsPage() {
                 sx={{ cursor: s.hasRecording ? "pointer" : "default" }}
                 onClick={() => s.hasRecording && setActive(s)}
               >
-                <TableCell>{new Date(s.startedAt).toLocaleString()}</TableCell>
+                <TableCell>{formatDateTime(s.startedAt)}</TableCell>
                 <TableCell>{s.username}</TableCell>
                 <TableCell>{s.hostname}</TableCell>
                 <TableCell><Chip label={s.status} size="small" /></TableCell>
@@ -247,11 +248,11 @@ export function SessionsPage() {
             </Stack>
             <Stack direction="row" spacing={2} sx={{ mb: 1 }}>
               <Typography variant="caption" color="text.secondary">
-                Started {new Date(active.startedAt).toLocaleString()}
+                Started {formatDateTime(active.startedAt)}
               </Typography>
               {active.endedAt && (
                 <Typography variant="caption" color="text.secondary">
-                  Ended {new Date(active.endedAt).toLocaleString()}
+                  Ended {formatDateTime(active.endedAt)}
                 </Typography>
               )}
               {active.exitCode !== undefined && (

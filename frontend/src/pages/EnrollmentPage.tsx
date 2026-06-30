@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Chip, Collapse, IconButton, List, ListItem, ListItemText, Paper,
   Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography,
@@ -58,7 +59,7 @@ export function EnrollmentPage() {
 function JobRow({ job }: { job: EnrollmentJob }) {
   const [open, setOpen] = useState(false);
   const okCount = (job.steps ?? []).filter((s) => s.status === "ok").length;
-  const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : "—");
+  const fmt = (s?: string) => formatDateTime(s);
   return (
     <>
       <TableRow hover sx={{ cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>

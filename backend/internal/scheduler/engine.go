@@ -54,7 +54,7 @@ func (e *Engine) tick(ctx context.Context) {
 	}
 	for _, sc := range due {
 		status := e.Fire(ctx, sc)
-		next := store.NextRun(sc.Recurrence, now)
+		next := e.store.ScheduleNextRun(ctx, sc.Recurrence)
 		if err := e.store.MarkScheduleFired(ctx, sc.ID, now, status, next); err != nil {
 			e.log.Warn("scheduler: mark fired", "schedule", sc.ID, "err", err)
 		}

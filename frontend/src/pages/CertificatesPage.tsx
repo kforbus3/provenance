@@ -9,6 +9,7 @@ import {
   listCAs, listCertificates, revokeCertificate, rotateCA,
 } from "../api/certificates";
 import { useAuthStore } from "../store/auth";
+import { formatDateTime } from "../lib/datetime";
 
 // Certificate lifecycle: the internal SSH CA(s) and the ephemeral per-session
 // certificates it has issued, with rotate (CA) and revoke (cert) actions.
@@ -27,7 +28,7 @@ export function CertificatesPage() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["certs"] }); },
   });
 
-  const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : "—");
+  const fmt = (s?: string) => formatDateTime(s);
   const now = Date.now();
 
   return (
