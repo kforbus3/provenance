@@ -24,6 +24,10 @@ Operators ──HTTPS/WSS──> Reverse proxy ──> frontend (nginx) ──/a
 - The **browser never speaks SSH** and never holds a key. The backend is the only
   SSH client; it dials each host through the jump host over WireGuard using a
   short-lived, per-(user,host) certificate.
+- The compose stack also starts an **`ansible-runner` sidecar** — an internal-only
+  container (not published on the host) that validates/lints and runs Ansible
+  playbooks so the lean Go backend never needs a Python toolchain. The backend
+  reaches it at `FLEET_ANSIBLE_RUNNER_URL` (default `http://ansible-runner:8000`).
 - **You provide:** a host for the app stack (Docker), a **jump host** reachable
   from your managed hosts on a UDP WireGuard port, and the managed hosts
   themselves. The bundled test fabric provides all of this locally for evaluation.
@@ -84,6 +88,20 @@ Key variables (full list in `.env.example`):
 | `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` / `FLEET_WG_PORT` | WireGuard overlay |
 | `FLEET_WG_JUMP_ENDPOINT` | Public `host:port` managed hosts dial to reach the jump |
 | `FLEET_ALLOW_BOOTSTRAP` | `false` after the first admin exists (also self-seals) |
+| `FLEET_BACKUP_DIR` | Where encrypted DB backups are written (default `/var/lib/fleet/backups`, the `backups` volume) |
+| `FLEET_BACKUP_PASSPHRASE` | Encrypts DB backups (`openssl` AES-256); falls back to `FLEET_CA_PASSPHRASE` if empty — keep it **off-host** |
+| `FLEET_ANSIBLE_RUNNER_URL` | Base URL of the `ansible-runner` sidecar (default `http://ansible-runner:8000`) |
+| `TZ` | *(optional)* server timezone for the backend; schedules compute next-run in this zone (default `UTC`) |
+
+> **Backups** are produced under **Settings → Backup & Restore** (encrypted,
+> schedulable, with retention) and written to `FLEET_BACKUP_DIR`. See
+> [break-glass.md](./break-glass.md) and [disaster-recovery.md](./disaster-recovery.md).
+> The `TZ` env sets the server timezone, but the **in-app Time zone setting is
+> preferred** for schedule display/computation.
+>
+> **Notifications** (SMTP email + webhooks) are configured **in the UI**
+> (Settings → Notifications) — no environment variables needed; the SMTP password
+> is encrypted at rest.
 
 ---
 
@@ -112,9 +130,11 @@ Common to both layouts:
    (after first run), and `FLEET_WG_JUMP_ENDPOINT` set to the jump host's
    **publicly routable** `host:port` (not an internal name) — this is what your
    managed hosts dial over UDP.
-2. **Persist data.** PostgreSQL data and recordings live in named volumes; back
-   them up (see [disaster-recovery.md](./disaster-recovery.md)). Point the DB at a
-   managed Postgres in production by overriding `FLEET_DATABASE_URL`.
+2. **Persist data.** PostgreSQL data, recordings, and encrypted backups live in
+   named volumes (`pgdata`, `recordings`, `backups`); back them up and store the
+   backup files off-host (see [disaster-recovery.md](./disaster-recovery.md) and
+   [break-glass.md](./break-glass.md)). Point the DB at a managed Postgres in
+   production by overriding `FLEET_DATABASE_URL`.
 3. **Front it with TLS.** Put a reverse proxy in front, terminate HTTPS, and
    forward to the `frontend` container (which proxies `/api` to the backend).
    Only the proxy should be internet-reachable. Reverse-proxy, rate-limit, and
@@ -149,6 +169,12 @@ default `jumphost:22`.
 > Co-locating is ideal for small/single-server deployments. For larger or
 > higher-security setups, keep the jump host on a separate minimal box (§5b) so
 > public WireGuard ingress isn't on the control-plane server.
+
+To manage the Fleet server itself as a host, enroll it with the **Directly
+reachable / skip WireGuard** option: a host co-located with the jump host can't run
+a second WireGuard endpoint on the jump's port, so enrollment skips the overlay and
+the gateway reaches it at its management address through the jump host (see the
+[Host Enrollment Guide](./host-enrollment-guide.md)).
 
 ### 5b. External jump host (separate box)
 
@@ -203,7 +229,10 @@ principal `fleet`) and run WireGuard yourself.
 - [ ] Only the reverse proxy is internet-reachable; DB/Redis/jump/WireGuard stay
       internal.
 - [ ] `FLEET_JUMP_KNOWN_HOSTS` set so the gateway pins the jump host key.
-- [ ] Backups configured for Postgres + recordings.
+- [ ] **Encrypted, scheduled backups** enabled (Settings → Backup & Restore) with
+      retention, written to `FLEET_BACKUP_DIR` and copied **off-host**; recordings
+      backed up; `FLEET_BACKUP_PASSPHRASE` (and `FLEET_CA_PASSPHRASE`) stored
+      off-server. Restore-tested — see [break-glass.md](./break-glass.md).
 
 ---
 

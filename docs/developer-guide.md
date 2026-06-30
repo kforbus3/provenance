@@ -11,21 +11,33 @@ backend/                Go service (chi, pgx)
   internal/
     api/                router wiring (server.go), helpers
     app/                Deps container (shared services)
+    httpx/              shared HTTP helpers (WriteJSON/WriteError/Decode/ParseID/Audit)
     auth/               authN/Z: tokens, middleware, password policy
     bootstrap/          first-run wizard
     hosts/              host inventory (canonical HTTP module)
+    enrollment/         host enrollment (5 methods, incl. skip-WireGuard)
     admin/              users / roles / groups / settings
     auditapi/           audit list / verify / export
     sessionsapi/        recorded session replay
     approvals/          just-in-time access workflow
     certificates/       CA + certificate lifecycle
     terminal/           WebSocket SSH terminal
-    ca/ identity/ sshgw/ recorder/   SSH plumbing
+    sftp/               audited SFTP file transfer
+    scan/               OpenSCAP scans + remediation
+    playbook/           Ansible playbook author/lint/run (via runner sidecar)
+    scheduler/          recurring scans & playbook runs
+    notify/             outbound email + webhook notifications
+    backup/             encrypted DB backups + retention
+    system/             background-job status, operational settings
+    monitor/            authenticated SSH health checks, pending updates
+    assistant/          AI assistant (inventory/metrics/scans/runs/updates)
+    ca/ identity/ sshgw/ recorder/ ws/   SSH + WebSocket plumbing
     store/              SQL data access (one file per aggregate)
     db/migrations/      SQL migrations (applied on start)
     config/ models/ metrics/ telemetry/
 frontend/               React + Vite SPA (nginx in prod)
-deploy/compose/         docker-compose.yml (local stack)
+deploy/compose/         docker-compose.yml (local stack, incl. ansible-runner)
+deploy/ansible-runner/  Python/Ansible sidecar (playbook lint + run)
 deploy/k8s/             Kubernetes manifests
 docs/                   this documentation
 Makefile                developer entrypoints
@@ -46,7 +58,9 @@ make ps       # show running services
 make logs     # tail logs
 ```
 
-`make up` brings up PostgreSQL, Redis, the backend, the frontend, and the local
+`make up` brings up PostgreSQL, Redis, the backend, the frontend, the
+**`ansible-runner`** sidecar (Python/Ansible service the `playbook` module calls
+to lint and run playbooks — built from `deploy/ansible-runner`), and the local
 **test fabric** (jump host + managed hosts used for end-to-end SSH testing).
 Use `make up-app` to start only the application stack without the test fabric.
 
@@ -135,19 +149,24 @@ Modules follow the canonical shape in `internal/hosts/handlers.go`:
 4. Get the caller with `auth.MustPrincipal(r)`.
 5. Use **only parameterized SQL** via the store. If you need a new query, add a
    method to the matching `internal/store/*.go` file.
-6. Audit every state change:
+6. Use the shared **`internal/httpx`** helpers rather than per-package copies for
+   responses, decoding, and IDs — `httpx.WriteJSON` / `httpx.WriteError`,
+   `httpx.Decode(w, r, &req)`, and `httpx.ParseID(w, r)` for the `{id}` URL param.
+7. Audit every state change. Newer handlers call `httpx.Audit`, which wraps the
+   best-effort append:
    ```go
-   _, _ = d.Store.AppendAudit(r.Context(), models.AuditEvent{
+   httpx.Audit(r, d.Store, models.AuditEvent{
        ActorID: &p.UserID, ActorName: p.Username, Action: "thing.create",
        TargetKind: "thing", TargetID: id.String(), Detail: map[string]any{…},
    })
    ```
-7. Mount it from the router seam in `internal/api/server.go`
+8. Mount it from the router seam in `internal/api/server.go`
    (`registerRoutes` / `mountModules`), e.g. `mything.Mount(r, deps)`.
 
-Match the existing code style exactly: package doc comment, `writeJSON` /
-`writeError` helpers, request structs with `json:"…"` tags, and `_ =` on
-best-effort audit/event writes.
+Match the existing code style exactly: package doc comment, the shared
+`internal/httpx` helpers (not per-package `writeJSON` / `writeError` copies),
+request structs with `json:"…"` tags, and best-effort audit/event writes via
+`httpx.Audit`.
 
 ## Frontend
 

@@ -100,14 +100,29 @@ metrics**: disk usage per filesystem, memory used, load average, and network fac
 primary IP, default gateway). View them per host via the **Details** (ⓘ) button on the **Hosts**
 page (a "Resources" section), which fetches that single host on demand.
 
+## Pending package updates
+
+During the hourly facts pass the monitor also collects each host's count of **available package
+updates** — apt or dnf, with the **security-only** subset broken out — read from the host's
+cached package metadata (no extra SSH dials, no network refresh on the host). View it per host
+via the **Details** (ⓘ) button on the **Hosts** page ("Updates available", shown as
+`N (M security)`). The AI assistant can answer about it too (below).
+
+## Filtering by group
+
+The **Hosts** and **Terminals** pages have a **Filter by group** multi-select — pick one or more
+groups to narrow the list to their member hosts.
+
 ## AI assistant (Ask Fleet)
 
 An optional, **local-only** assistant answers natural-language questions about the fleet —
 "which hosts have less than 20% disk free?", "offline debian hosts", "prod hosts under heavy
-load". It's **read-only**: a local Ollama model translates the question into a curated
-`query_hosts` filter, the backend runs that query (scoped to hosts *you* can access) and shows
-the **actual matching hosts** beside the answer — no data leaves your network, and every
-question is audited.
+load", "hosts with pending security updates". It's **read-only**: a local Ollama model
+translates the question into a curated query, the backend runs it (scoped to data *you* can
+access) and shows the **actual matching results** beside the answer — no data leaves your
+network, and every question is audited. Beyond host data and active sessions, it can also report
+**pending package updates** and **recent security scans and playbook runs** — including whether
+each was **scheduled or run manually** (recent runs need `Playbook.Run`).
 
 **Enable it (admin):** **Settings → AI assistant** — turn it on, enter your Ollama URL
 (e.g. `http://10.10.0.x:11434`), click **Load models**, pick a model, **Save**. Then users with
@@ -175,6 +190,75 @@ lists the failed rules so you can **select which to fix**:
   empty to disable auto-provisioning. The scan row shows which `ssg-*-ds.xml` was used.
 - Debian/Ubuntu have **no DISA STIG** profile; the closest hardening baseline is
   **ANSSI-BP-028 (High / Enforced)**.
+
+## Ansible playbooks
+
+The **Playbooks** page (needs `Playbook.Edit`) is an authoring and run console for Ansible.
+Write a YAML playbook in the editor, then:
+
+- **Validate** — syntax-check (`ansible-playbook --syntax-check`).
+- **Lint** — `ansible-lint` style/correctness checks.
+
+Both run in the **ansible-runner sidecar** (a separate container, `FLEET_ANSIBLE_RUNNER_URL`);
+if it's unreachable the dialog says so and Validate/Lint are unavailable. Every save keeps a
+**version** history.
+
+**Run** (needs `Playbook.Run`, admin-only by default) executes the playbook against one or more
+**hosts** or a **group**. **Dry run (check mode)** is on by default — it reports what *would*
+change without applying anything; clear it to apply for real. Output **streams live**
+(auto-scrolling) and each playbook keeps its own **run history**.
+
+Runs go through the jump host as the privileged **`fleet`** account over certificate auth (the
+same path as scans) and execute under sudo, so your plays should target **`hosts: all`** — Fleet
+supplies the inventory and limits it to the hosts/group you selected. The default new-playbook
+template is already set up this way.
+
+> **`Playbook.Run` is effectively arbitrary root-level change on the selected hosts.** Keep it
+> admin-only, dry-run first, and test on non-critical hosts.
+
+## Schedules
+
+The **Schedules** page (needs `Schedule.Manage`) runs scans or playbook runs on a recurring
+basis. Create a schedule (**interval**, **daily**, or **weekly**), pick its target, and it's
+**disabled until you enable it**. Each row shows the **enable toggle**, **next run**, **last
+run** (and status), and a **Run now** action. Results land in the normal scan / playbook **run
+history**, tagged **scheduled** so you can tell automated runs from manual ones. Daily/weekly
+clock times are interpreted in the configured **app time zone**.
+
+## Time zone
+
+**Settings → Time zone** sets the app-wide **IANA** zone (e.g. `America/Chicago`). It drives
+**all displayed timestamps** and how schedule clock-times are interpreted — changing it
+recomputes upcoming schedule runs.
+
+## Notifications
+
+**Settings → Notifications** (admin) routes events to **Email** (generic SMTP) and/or a
+**Webhook** (raw **JSON**, **Slack**, or **Discord**). For each channel, choose which events go
+to it:
+
+- **Host went offline / recovered**
+- **Access request pending approval**
+- **Security scan found failures**
+- **Failed playbook run**
+
+Set a **throttle** (minutes) to dedupe repeats, and use **Send test** to confirm delivery.
+Notifications are **off by default** — nothing is sent until you enable a channel.
+
+## Backup & Restore
+
+**Settings → Backup & Restore** (admin) takes **encrypted database backups**: `pg_dump` piped
+through `openssl` **AES-256**, written as `fleet-backup-<ts>.sql.enc`. **Back up now** runs one
+immediately; an optional **schedule** (interval) plus **retention** (keep last N) automates it;
+**Download** saves a backup file.
+
+Restore is an **offline** operation — decrypt and load straight into Postgres, e.g.
+`openssl enc -d -aes-256-cbc -pbkdf2 -in <file>.sql.enc | psql …`. The full, tested procedure is
+the [Break-Glass & Recovery Runbook](./break-glass.md).
+
+> Map **`FLEET_BACKUP_DIR`** (default `/var/lib/fleet/backups`) to **off-host** storage, and keep
+> **`FLEET_BACKUP_PASSPHRASE`** **off the server** (password manager / sealed envelope). It is
+> deliberately *not* in the backup, so a stolen backup can't be decrypted.
 
 ## Just-in-time access
 

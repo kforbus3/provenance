@@ -36,15 +36,19 @@ Browser ──HTTPS/WS──> React SPA ──REST/WS──> Go Backend ──SS
 
 | Area | Capability |
 |------|-----------|
-| Access | Browser SSH terminal (xterm.js), multi-tab, full PTY, session recording & replay; **real-time dashboard** (quick-connect, live "who's connected to which host") |
+| Access | Browser SSH terminal (xterm.js), multi-tab, full PTY, session recording & replay; **real-time dashboard** (quick-connect, live "who's connected to which host"); **Hosts/Terminals group filter** |
 | Identity | Self-contained auth, Argon2id, MFA (TOTP + WebAuthn passkeys) — optional or **enforced** globally/per-user, first-run bootstrap wizard |
 | AuthZ | RBAC (built-in + custom roles), host groups **and direct user→host grants**, **root vs login-only host access** (`Host.Sudo`), just-in-time temporary access with auto-expiry |
-| Hosts | Inventory + **quick-connect Terminals launcher**, live SSH health monitoring, automated enrollment (password / private key / **SSH agent** / **no-install ssh-pipe**) |
+| Hosts | Inventory + **quick-connect Terminals launcher**, live SSH health monitoring, **per-host pending package updates**, automated enrollment (password / private key / **SSH agent** / **no-install ssh-pipe** / **direct "skip-WireGuard" host**) |
 | CA | **Unique ephemeral cert per (user, host)**, CA rotation, revocation, lifecycle API |
+| Automation | **Ansible playbook management** (author, lint/syntax-check, run via an isolated `ansible-runner` sidecar); **scheduling** of recurring scans & playbook runs |
 | Hardening | Per-IP rate limiting, idle/absolute session reaper, live-session termination, internet-exposure guide |
 | Compliance | One-click **OpenSCAP** security scans per host (auto-installs scanner; CIS/STIG/… profiles) with in-UI HTML reports + offline export |
 | Audit | Hash-chained audit with integrity verification + export; full auth event log |
-| Ops | Prometheus metrics, structured logs, health/ready endpoints, Docker/K8s/Helm/systemd artifacts |
+| Resilience | **Encrypted database backups** + retention policy and **break-glass recovery** runbook |
+| Notifications | Outbound **email (SMTP) + webhook** notifications on key events |
+| Assistant | AI assistant aware of host inventory/metrics, **security scans, playbook runs, and pending updates** |
+| Ops | Prometheus metrics, structured logs, health/ready endpoints, **app-wide display timezone**, Docker/K8s/Helm/systemd artifacts |
 
 ## Quick start
 
@@ -92,19 +96,27 @@ Working and verified end-to-end (see `git log` for the milestone history):
 - Auth (Argon2id, JWT + rotating refresh, CSRF, lockout), **MFA (TOTP + WebAuthn passkeys),
   optional or enforced** globally/per-user, first-run bootstrap
 - RBAC + host groups + **direct user→host grants** + **just-in-time approvals** with auto-expiry
-- Host inventory + **quick-connect Terminals launcher**; **enroll hosts four ways** — SSH
-  password, SSH private key, **forwarded SSH agent** (key stays local), or a **no-install
-  ssh-pipe** script — each installs CA trust + WireGuard and verifies per-user cert login
+- Host inventory + **quick-connect Terminals launcher** with **group filter** and **per-host
+  pending package updates**; **enroll hosts five ways** — SSH password, SSH private key,
+  **forwarded SSH agent** (key stays local), a **no-install ssh-pipe** script, or a **direct
+  "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Fleet itself).
+  WireGuard-routed methods install CA trust + WireGuard and verify per-user cert login
 - Internal SSH **CA + ephemeral certificates, unique per (user, host)** (in-RAM keys, 7-day,
   auto-renew, revoke via distributed KRL)
 - Backend-only **browser SSH terminal** (xterm.js) through jump host + WireGuard
 - **Session recording** (asciicast v2) + replay + offline export
 - **Live host monitoring** (authenticated SSH health checks, no ICMP) with WebSocket push
 - **Audited SFTP** file transfer (browse/upload/download/drag-and-drop, progress, cancel)
+- **OpenSCAP** security scans + remediation, and **Ansible playbook management** (author,
+  lint/syntax-check, run) executed through an isolated `ansible-runner` sidecar
+- **Scheduling** of recurring scans & playbook runs; **outbound notifications** (email + webhook)
+- **Encrypted database backups** + retention policy and a **break-glass recovery** runbook
 - **Hardening for internet exposure:** per-IP rate limiting, idle/absolute session reaper,
   live-session termination on revoke, hardened production config + reverse-proxy guide
 - Hash-chained **tamper-evident audit** with integrity verification
-- Admin suite (users/roles/groups/settings), Prometheus metrics, health/ready
+- **AI assistant** aware of inventory, metrics, scans, playbook runs, and pending updates
+- Admin suite (users/roles/groups/settings), **app-wide display timezone**, Prometheus
+  metrics, health/ready
 - Docker Compose + local SSH test fabric; K8s manifests, Helm chart, systemd units
 
 Documented for incremental deepening: distributed tracing (OTel), SAML/OIDC plugins.

@@ -107,6 +107,17 @@ and operational recommendations.
   enforced by sshd via `AuthorizedPrincipalsFile` (distinct principals per
   account), so a login-only certificate cannot open the sudo account. Both tiers
   still use unique per-user certs and are recorded and audited.
+- **Automation permissions (admin-only by default).** Three permissions gate the
+  Ansible/scheduling features and are granted to the Administrator role only:
+  - **`Playbook.Run`** is effectively **arbitrary root-level command execution
+    across hosts** — running a playbook applies changes on the targets through
+    Fleet's SSH path. It is therefore admin-only by default and granted
+    *separately* from `Playbook.Edit`. It is still **access-scoped** (the runner
+    can only target hosts the user can reach, via `UserCanAccessHost`) and every
+    run is **audited**. Treat granting it like granting root on the fleet.
+  - **`Playbook.Edit`** — author, upload, edit, delete, validate/lint playbooks
+    (no execution).
+  - **`Schedule.Manage`** — create and manage scheduled scans and playbook runs.
 - Prefer **least privilege**: narrow custom roles plus just-in-time approvals
   over broad standing access.
 
@@ -148,6 +159,14 @@ and operational recommendations.
   deterministic defaults** — never run production that way.
 - Generate secrets with `openssl rand -hex 32`. Inject via your secret manager
   (`deploy/k8s/11-secret.yaml` for Kubernetes), not committed files.
+- **`FLEET_BACKUP_PASSPHRASE`** encrypts database backups (`openssl` AES-256-CBC,
+  PBKDF2). If unset it **falls back to `FLEET_CA_PASSPHRASE`**. Like the CA
+  passphrase it is deliberately **not** stored in any backup — keep an offline
+  copy in a password manager. See [break-glass.md](./break-glass.md) and
+  [disaster-recovery.md](./disaster-recovery.md).
+- **Other secrets encrypted at rest in the DB.** The SMTP / notification password
+  is sealed (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`) and never returned by
+  the API — like the CA private key, it is stored only as ciphertext.
 
 ## 11. Rate limiting & abuse resistance
 

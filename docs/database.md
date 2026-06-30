@@ -20,6 +20,17 @@ automatically on startup when `FLEET_MIGRATE_ON_START=true` (the default).
 | `0011_assistant.sql` | `Assistant.Use` permission + `assistant` setting (AI assistant) |
 | `0010_host_remediation.sql` | `host_remediations` table + `Host.Remediate` permission; `host_scans.results_path` |
 | `0011_scan_skip_rules.sql` | `host_scans.skip_rules` (rules excluded from a scan) |
+| `0012_playbooks.sql` | `playbooks`, `playbook_versions`, `playbook_runs` tables + `Playbook.Edit`/`Playbook.Run` permissions (Ansible playbook management) |
+| `0013_schedules.sql` | `schedules` table + `Schedule.Manage` permission (recurring scans/playbook runs) |
+| `0014_host_updates.sql` | `host_inventory.updates_available`, `.security_updates`, `.updates_checked_at` (pending package updates per host) |
+| `0015_scheduled_flag.sql` | `scheduled` flag on `host_scans` and `playbook_runs` (distinguish scheduled from manual runs) |
+
+> **Duplicate numeric prefixes are intentional, not a bug.** There are two
+> `0010_*` and two `0011_*` files. The runner (`backend/internal/db/migrate.go`)
+> sorts files lexically and keys applied migrations in `schema_migrations` by the
+> full filename (e.g. `0010_host_metrics`, `0010_host_remediation`), not by the
+> numeric prefix — so each file is applied exactly once and the collisions are
+> harmless.
 
 **Extensions:** `pgcrypto` (`gen_random_uuid()`), `citext` (case-insensitive
 usernames/emails).
@@ -132,7 +143,13 @@ Seeded keys: `Host.View`, `Host.Connect`, `Host.Sudo`, `Host.Enroll`, `Host.Edit
 `User.Edit`, `User.Delete`, `User.ResetPassword`, `Group.Create`, `Group.Edit`,
 `Group.Delete`, `Role.Create`, `Role.Edit`, `Role.Delete`, `Approval.Request`,
 `Approval.Decide`, `Certificate.Manage`, `System.Configure`, `Host.Scan`,
-`Assistant.Use`, `Host.Remediate`, `Admin.All` (wildcard).
+`Assistant.Use`, `Host.Remediate`, `Playbook.Edit`, `Playbook.Run`,
+`Schedule.Manage`, `Admin.All` (wildcard).
+
+`Playbook.Edit` (author/edit/validate/lint playbooks), `Playbook.Run` (execute
+playbooks against hosts), and `Schedule.Manage` (manage scheduled scans/playbook
+runs) are added by migrations `0012`/`0013` and granted to **Administrator** by
+default.
 
 ### `role_permissions`
 Join table. PK `(role_id, permission_key)`; both FKs CASCADE.
@@ -192,6 +209,9 @@ Collected facts, 1:1 with host.
 | `os_name` / `os_version` / `kernel_version` / `architecture` / `ssh_version` | TEXT | |
 | `cpu_count` | INT | |
 | `memory_mb` | BIGINT | |
+| `updates_available` | INT | nullable; pending package updates (NULL = not yet checked, distinct from `0`) |
+| `security_updates` | INT | nullable; pending security updates |
+| `updates_checked_at` | TIMESTAMPTZ | nullable; when update counts were last collected |
 | `collected_at` | TIMESTAMPTZ | nullable |
 
 ### `host_fingerprints`
@@ -376,6 +396,98 @@ Tracks enrollment runs and their step log. Index: `idx_enrollment_status`.
 
 ---
 
+## Playbooks & scheduling
+
+Ansible playbooks authored in the UI, their version history, individual run
+records, and the recurring-schedule definitions that drive automated scans and
+playbook runs.
+
+### `playbooks`
+A single YAML document plus metadata. `version` is bumped on each content change;
+the prior content is snapshotted into `playbook_versions`.
+Index: `idx_playbooks_name` (on `lower(name)`).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `name` | TEXT | NOT NULL |
+| `description` | TEXT | default `''` |
+| `content` | TEXT | default `''`; the playbook YAML |
+| `version` | INT | default `1`; bumped on each content change |
+| `created_by` | UUID | FK → users ON DELETE SET NULL |
+| `updated_by` | UUID | FK → users ON DELETE SET NULL |
+| `created_at` / `updated_at` | TIMESTAMPTZ | |
+
+### `playbook_versions`
+Immutable revision history: one row per saved revision so edits are auditable and
+recoverable. UNIQUE `(playbook_id, version)`. Index: `idx_playbook_versions_pb`
+(`playbook_id, version DESC`).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `playbook_id` | UUID | FK → playbooks ON DELETE CASCADE |
+| `version` | INT | NOT NULL |
+| `content` | TEXT | default `''` |
+| `author_id` | UUID | FK → users ON DELETE SET NULL |
+| `author` | TEXT | denormalized author name, default `''` |
+| `created_at` | TIMESTAMPTZ | |
+
+### `playbook_runs`
+One execution of a playbook against a target (a single host or a Fleet group).
+`output` holds the captured log. Indexes: `idx_playbook_runs_pb`
+(`playbook_id, created_at DESC`), `idx_playbook_runs_status`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `playbook_id` | UUID | FK → playbooks ON DELETE CASCADE |
+| `playbook_version` | INT | default `0`; version run |
+| `requested_by` | UUID | FK → users ON DELETE SET NULL |
+| `requester` | TEXT | denormalized requester name, default `''` |
+| `target_kind` | TEXT | `host` or `group`, default `host` |
+| `target_id` | UUID | host id or group id (nullable) |
+| `target_name` | TEXT | display name, default `''` |
+| `host_count` | INT | number of targeted hosts, default `0` |
+| `check_mode` | BOOLEAN | `ansible --check` (dry run), default `false` |
+| `status` | TEXT | `pending`/`running`/`completed`/`failed`, default `pending` |
+| `exit_code` | INT | nullable |
+| `output` | TEXT | captured log, default `''` |
+| `error` | TEXT | default `''` |
+| `scheduled` | BOOLEAN | default `false`; set when fired by a schedule (added in `0015`) |
+| `started_at` / `finished_at` | TIMESTAMPTZ | nullable |
+| `created_at` | TIMESTAMPTZ | |
+
+> `host_scans` likewise gains a `scheduled BOOLEAN NOT NULL DEFAULT false` column
+> (migration `0015`) so scheduled scans can be filtered/reported separately from
+> manual ones.
+
+### `schedules`
+Recurring scans and playbook runs configured in the UI. Schedules are **disabled
+by default**; an operator enables one explicitly. A background engine fires due,
+enabled schedules by reusing the normal scan/playbook run paths.
+Index: `idx_schedules_due` (on `next_run_at`, partial `WHERE enabled`).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `name` | TEXT | NOT NULL |
+| `kind` | TEXT | `scan` or `playbook` |
+| `enabled` | BOOLEAN | default `false` |
+| `target_kind` | TEXT | `host` or `group`, default `host` |
+| `target_id` | UUID | host id or group id (nullable) |
+| `target_name` | TEXT | default `''` |
+| `recurrence` | JSONB | default `{}`; `{type, everyMinutes, timeOfDay, weekday}` |
+| `payload` | JSONB | default `{}`; scan or playbook parameters |
+| `created_by` | UUID | FK → users ON DELETE SET NULL |
+| `requester` | TEXT | default `''` |
+| `last_run_at` | TIMESTAMPTZ | nullable |
+| `last_status` | TEXT | default `''` |
+| `next_run_at` | TIMESTAMPTZ | nullable; `NULL` when disabled |
+| `created_at` / `updated_at` | TIMESTAMPTZ | |
+
+---
+
 ## Tamper-evident audit log
 
 ### `audit_events`
@@ -424,6 +536,11 @@ Key/value system settings.
 
 Seeded keys: `password_policy`, `lockout_policy`, `session_policy`, `require_mfa`,
 `branding`, `assistant`.
+
+Additional keys written on first use (not part of the `0002` seed):
+`notifications` (notification channels/events), `backup_policy` (automatic
+database-backup schedule), `timezone` (IANA display timezone for the UI and
+schedule calculations), `scan_policy` (scan/remediation timeout budget).
 
 ---
 

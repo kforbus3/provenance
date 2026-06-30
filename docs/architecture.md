@@ -36,14 +36,26 @@ no local Go/Node/Postgres toolchain is required (see the [Developer Guide](./dev
    |   ---------------      -------------        -----------       |
    |   bootstrap           RequireAuth          Store (pgx)        |
    |   auth                RequirePermission    CA (ssh-ed25519)   |
-   |   hosts               Principal            Issuer (ephemeral) |
+   |   hosts  enrollment   Principal            Issuer (ephemeral) |
    |   admin (users/...)   Audit chain          Identity Vault     |
-   |   auditapi                                  (in-RAM keys)     |
-   |   sessionsapi                               Gateway (sshgw)   |
-   |   approvals                                 Recorder          |
-   |   certificates                                               |
-   |   terminal (WS)                                              |
+   |   auditapi  system    (httpx helpers:      (in-RAM keys)      |
+   |   sessionsapi          WriteJSON /         Gateway (sshgw)    |
+   |   approvals            WriteError /        Recorder           |
+   |   certificates         Decode / ParseID /  Monitor (health)   |
+   |   terminal (WS)        Audit)              Scheduler engine   |
+   |   sftp   scan                              Notifier           |
+   |   playbook  scheduler                      Backup             |
+   |   notify  backup                                              |
+   |   assistant  monitor                                          |
    +--------------------------------------------------------------+
+                              |  HTTP (mint ephemeral cert)
+                              v
+                    +---------------------------+
+                    |  ansible-runner sidecar   |
+                    |  (Python/Ansible; lints & |
+                    |  runs playbooks, SSHes via |
+                    |  the Jump Host)           |
+                    +---------------------------+
         |                         |                       |
         | SQL (parameterized)     | mint/sign cert        | SSH (ephemeral cert)
         v                         v                       v
@@ -124,6 +136,41 @@ A user without standing access requests time-boxed access to a host or group
 (`POST /api/v1/approvals`). An approver decides (`POST /api/v1/approvals/{id}/decide`);
 an approval mints a `temporary_permissions` grant that expires automatically and
 is consulted during host authorization.
+
+### 5. Ansible playbooks and the runner sidecar
+Python and Ansible are kept out of the lean Go backend by isolating them in a
+separate **`ansible-runner`** sidecar container (`deploy/ansible-runner`, a small
+FastAPI service). The `playbook` module authors and stores playbooks, asks the
+runner to `--syntax-check` / lint YAML, and orchestrates runs:
+
+1. On a run, the backend mints a short-lived ephemeral key + user certificate
+   for the privileged `fleet` principal (via `Issuer.SystemKeyMaterial`, default
+   2h TTL) — the same in-RAM, never-persisted identity model used for terminals.
+2. It resolves each target's jump-reachable address (WireGuard tunnel IP, or the
+   direct address for skip-WireGuard hosts) and POSTs the playbook, inventory,
+   ephemeral certificate, and jump-host coordinates to the runner.
+3. The **sidecar** performs the actual SSH — connecting **through the Fleet jump
+   host** using the supplied certificate — and streams run output back; the
+   backend records the run and an audit event. The runner never holds long-lived
+   keys and is reachable only on the internal compose network.
+
+### 6. Scheduling, notifications, and backups
+- The **`scheduler`** engine fires recurring scans and playbook runs, reusing the
+  normal `scan` / `playbook` run paths so scheduled work appears in the usual
+  history; fire times honor the app-wide display timezone setting.
+- The **`notify`** service sends outbound **email (SMTP)** and **webhook**
+  notifications on key events; the SMTP password is encrypted at rest.
+- The **`backup`** service produces **encrypted database backups** under a
+  retention policy; recovery (including break-glass access) is documented in the
+  [break-glass runbook](./break-glass.md). The **`system`** module exposes
+  background-job status and operational settings; the **`monitor`** service runs
+  authenticated SSH health checks and caches per-host pending package updates;
+  the **`assistant`** module answers questions over inventory, metrics, scans,
+  playbook runs, and pending updates.
+
+All HTTP modules share the **`internal/httpx`** helpers
+(`WriteJSON` / `WriteError` / `Decode` / `ParseID` / `Audit`) for consistent
+responses, request decoding, ID parsing, and best-effort audit writes.
 
 ---
 

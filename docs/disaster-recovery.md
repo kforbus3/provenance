@@ -1,90 +1,91 @@
 # Fleet Terminal — Disaster Recovery
 
-This guide covers backup, restore, and recovery scenarios for Fleet Terminal. The
-platform's durable state lives in **PostgreSQL** and the **session recordings
-directory**; the CA private key (encrypted) lives in the database, protected by
-`FLEET_CA_PASSPHRASE`.
+This guide covers the **DR planning** side of Fleet Terminal: recovery objectives
+(RPO/RTO), what state must be protected, and the failure scenarios you should
+rehearse for. The platform's durable state lives in **PostgreSQL** and the
+**session recordings directory**; the CA private key (encrypted) lives in the
+database, protected by `FLEET_CA_PASSPHRASE`.
+
+> **The encrypted-backup and rebuild procedure lives in
+> [break-glass.md](./break-glass.md) — that runbook is authoritative.** Fleet's
+> shipped backups are produced under **Settings → Backup & Restore**: `pg_dump`
+> piped through `openssl` (AES-256-CBC, PBKDF2) into `FLEET_BACKUP_DIR`
+> (default `/var/lib/fleet/backups`), with optional scheduling + retention.
+> This document does **not** repeat those steps; it covers what to protect and
+> the recovery scenarios around them.
 
 ## What must be protected
 
 | Asset | Where | Notes |
 |-------|-------|-------|
-| Relational state | PostgreSQL (`pgdata` volume) | users, RBAC, hosts, certs, sessions, audit, settings |
-| CA private key | `ca_keys.private_enc` in PostgreSQL | encrypted with `FLEET_CA_PASSPHRASE` |
-| `FLEET_CA_PASSPHRASE` | secret store / `.env` | **without it the CA key is unrecoverable** |
+| Relational state | PostgreSQL (`pgdata` volume) | users, RBAC, hosts, certs, sessions, audit, settings — captured by the encrypted backup |
+| CA private key | `ca_keys.private_enc` in PostgreSQL | encrypted with `FLEET_CA_PASSPHRASE`; rides along inside the DB backup (still ciphertext) |
+| Encrypted backups | `backups` volume (`FLEET_BACKUP_DIR`, default `/var/lib/fleet/backups`) | `pg_dump` + `openssl` AES-256 files; **get them off the host** |
+| `FLEET_CA_PASSPHRASE` | password manager / sealed offline copy | **without it the CA key is unrecoverable**; deliberately **not** in any backup |
+| `FLEET_BACKUP_PASSPHRASE` | password manager / sealed offline copy | decrypts the backups; falls back to `FLEET_CA_PASSPHRASE`; deliberately **not** in any backup |
 | `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET` | secret store / `.env` | losing these invalidates live tokens (users re-login) |
+| Jump host volumes | `jump_wg`, `jump_ssh` Docker volumes | WireGuard peers + SSH host key; recoverable by re-enrolling hosts, but tedious |
 | Session recordings | `recordings` volume (`FLEET_RECORDING_DIR`) | asciicast files referenced by `session_recordings.path` |
 | Audit export | external archive | immutable copy of the hash chain |
 
-> **Critical:** back up the secrets (`FLEET_CA_PASSPHRASE` especially) **out of
-> band** from the database. A database backup is useless for CA recovery without
-> the passphrase. Losing the passphrase means rotating to a brand-new CA and
-> re-trusting it on every managed host.
+> **Critical:** keep `FLEET_CA_PASSPHRASE` and `FLEET_BACKUP_PASSPHRASE` **off the
+> server** — a copy in a password manager (or a sealed envelope). They are
+> deliberately excluded from backups, so a stolen backup can't be decrypted, but
+> that also means a backup is useless for recovery without them. Losing
+> `FLEET_CA_PASSPHRASE` means rotating to a brand-new CA and re-trusting it on
+> every managed host.
 
-## Backups
+## Backups (where DR fits)
 
-The stack is defined in `deploy/compose/docker-compose.yml` with named volumes
-`pgdata`, `redisdata`, and `recordings`. Redis is a cache/job broker and does not
-need backup.
+Fleet's **database backup is the encrypted `pg_dump | openssl` artifact** managed
+under **Settings → Backup & Restore** and documented step-by-step in
+[break-glass.md](./break-glass.md): enable scheduling + retention, get the files
+**off the host** (map `FLEET_BACKUP_DIR` to off-host storage or rsync the
+directory elsewhere), and rehearse the decrypt/restore. Do **not** treat an ad-hoc
+plain `pg_dump` as your backup path — it omits encryption, scheduling, and
+retention.
 
-### Database (logical dump)
+The database backup captures **everything in PostgreSQL**, including the encrypted
+CA key, RBAC, hosts, and the audit chain. The pieces it does **not** cover, and
+that DR planning must account for separately:
 
-```sh
-# from the repo root; service name is "postgres", db/user "fleet"
-docker compose -f deploy/compose/docker-compose.yml exec -T postgres \
-  pg_dump -U fleet -d fleet --format=custom \
-  > backups/fleet-$(date +%Y%m%d-%H%M%S).dump
-```
-
-Automate daily; retain per your compliance window. Test restores regularly.
-
-### Session recordings
-
-```sh
-docker run --rm -v compose_recordings:/data -v "$PWD/backups:/backup" alpine \
-  tar czf /backup/recordings-$(date +%Y%m%d).tar.gz -C /data .
-```
-
-(Volume name is `compose_recordings` under the default Compose project; confirm
-with `docker volume ls`.)
-
-### Audit chain export
-
-Independently of the DB dump, archive the tamper-evident chain to immutable
-storage:
-
-```sh
-curl -s "http://localhost:8080/api/v1/audit/export" \
-  -H "Authorization: Bearer $TOKEN" \
-  -o backups/audit-$(date +%Y%m%d).json
-```
-
-### Secrets
-
-Store `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, and `FLEET_CA_PASSPHRASE` in your
-secret manager (or `deploy/k8s/11-secret.yaml`). Keep a sealed offline copy of
-`FLEET_CA_PASSPHRASE`.
+- **Session recordings** — on the `recordings` volume (`FLEET_RECORDING_DIR`), not
+  in the database. Snapshot the volume alongside the DB backup:
+  ```sh
+  docker run --rm -v compose_recordings:/data -v "$PWD/backups:/backup" alpine \
+    tar czf /backup/recordings-$(date +%Y%m%d).tar.gz -C /data .
+  ```
+  (Volume name is `compose_recordings` under the default Compose project; confirm
+  with `docker volume ls`.)
+- **Jump host volumes** — `jump_wg` (WireGuard keypair + peers) and `jump_ssh`
+  (SSH host key). Recoverable by re-enrolling every host, but snapshotting these
+  avoids that churn after a jump-host rebuild.
+- **Audit chain export** — independently archive the tamper-evident chain to
+  immutable/write-once storage for an out-of-band copy:
+  ```sh
+  curl -s "http://localhost:8080/api/v1/audit/export" \
+    -H "Authorization: Bearer $TOKEN" \
+    -o backups/audit-$(date +%Y%m%d).json
+  ```
+- **Secrets** — keep `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`,
+  `FLEET_CA_PASSPHRASE`, and `FLEET_BACKUP_PASSPHRASE` in your secret manager (or
+  `deploy/k8s/11-secret.yaml`), with sealed offline copies of the two passphrases.
+  Redis (`redisdata`) is a cache/job broker and does not need backup.
 
 ## Restore (full)
 
-1. Provision a clean stack but **do not** let the app create a fresh DB you'll
-   overwrite. Bring up only the database:
-   ```sh
-   docker compose -f deploy/compose/docker-compose.yml up -d postgres
-   ```
-2. Restore the dump:
-   ```sh
-   docker compose -f deploy/compose/docker-compose.yml exec -T postgres \
-     pg_restore -U fleet -d fleet --clean --if-exists < backups/fleet-YYYYMMDD-HHMMSS.dump
-   ```
-3. Restore the recordings volume (reverse of the tar backup above).
-4. Provide the **same** `FLEET_CA_PASSPHRASE`, `FLEET_JWT_SECRET`, and
+The end-to-end **rebuild-from-backup** procedure — decrypting the backup with
+`openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE"` and
+piping into `psql "$FLEET_DATABASE_URL"`, then restarting the backend — is in
+[break-glass.md](./break-glass.md). DR-specific notes that complete that flow:
+
+1. Bring the stack up with the **same `.env`** — crucially the same
+   `FLEET_CA_PASSPHRASE`, `FLEET_BACKUP_PASSPHRASE`, `FLEET_JWT_SECRET`, and
    `FLEET_CSRF_SECRET` as the original deployment.
-5. Bring up the rest of the stack:
-   ```sh
-   make up-app
-   ```
-6. **Verify** (see below).
+2. After restoring the database, restore the **recordings volume** (reverse of the
+   tar above) and, if the jump host was lost, the **`jump_wg` / `jump_ssh`**
+   volumes.
+3. **Verify** (see below).
 
 On startup the backend runs migrations idempotently (`FLEET_MIGRATE_ON_START`)
 and `EnsureUserCA` finds the existing CA — it will **not** create a new one, so
@@ -162,15 +163,18 @@ as a security incident, and preserve evidence (DB snapshot + exports).
 
 ## Backup & Restore (operational)
 
-**Backup** — Admins can download a full logical backup from **Settings → Backup & Restore**
-(or `GET /api/v1/system/backup`, which streams `pg_dump --clean --if-exists --no-owner`).
-Automate it with a cron that calls the endpoint with an admin token, or run `pg_dump`
-directly against `FLEET_DATABASE_URL`.
+**Backup** — Admins manage encrypted backups under **Settings → Backup & Restore**:
+"Back up now", scheduled backups with a retention count, and download. Each file is
+`pg_dump` piped through `openssl` (AES-256-CBC, PBKDF2) into `FLEET_BACKUP_DIR`
+(default `/var/lib/fleet/backups`, the `backups` volume). See
+[break-glass.md](./break-glass.md) for the full procedure.
 
-**Restore** — performed offline (intentionally not exposed in the web UI):
+**Restore** — performed offline; the encrypted file is standard openssl, so it
+restores anywhere with no Fleet-specific tooling:
 
 ```bash
-psql "$FLEET_DATABASE_URL" < fleet-backup.sql
+openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \
+  -in fleet-backup-YYYYMMDD-HHMMSS.sql.enc | psql "$FLEET_DATABASE_URL"
 ```
 
 **Recovery when locked out** — use the bundled `fleetctl` CLI (ships in the backend image):
@@ -183,4 +187,4 @@ fleetctl rotate-ca                             # rotate the user CA
 ```
 
 Note: SSH **session recordings** live on the recordings volume (`FLEET_RECORDING_DIR`),
-not in the database — back that volume up alongside the SQL dump.
+not in the database — back that volume up alongside the database backup.

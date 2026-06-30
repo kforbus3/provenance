@@ -30,6 +30,13 @@ You can also set up or manage 2FA anytime under **Security** (including passkeys
 if your administrator has them enabled). The QR code there is generated in your
 browser, so your secret is never sent anywhere.
 
+#### Passkeys (Touch ID, Windows Hello, security keys)
+
+On the same **Security** page, the **Passkeys (WebAuthn)** card lets you
+**Register a passkey** — a hardware security key, Touch ID / Windows Hello, or a
+phone passkey — as a phishing-resistant second factor. Once registered, you can
+use it to confirm your identity at sign-in instead of typing a code.
+
 To **sign out**, use the button at the top-right of the page.
 
 ---
@@ -62,8 +69,20 @@ The quickest path is the **Terminals** page:
 4. Use it like any terminal — run commands, `sudo`, `vim`, `htop`, `tmux`.
    Resizing the window resizes the remote terminal too.
 
+With a long list, use **Filter by group** (a multi-select at the top of the page)
+to narrow the hosts down to one or more groups. The same control is available on
+the **Hosts** page.
+
 You can also start a terminal from the **Hosts** page using the terminal icon on
 a host row. To close a session, type `exit` or close the tab.
+
+### Host details and pending updates
+
+On the **Hosts** page, click the info button (ⓘ) on a host row to open its
+**details** dialog — OS, kernel, CPU/memory, uptime, and more. When the
+information is known, an **Updates available** row shows the number of pending
+package updates, with security updates called out separately (for example,
+`12 (3 security)`).
 
 > Each connection uses a unique, automatically-issued certificate just for you and
 > that server. You'll only see servers you're allowed to reach.
@@ -113,7 +132,32 @@ a self-contained file to watch offline.
 
 ---
 
-## 7. Tips & good habits
+## 7. Ask Fleet — the AI assistant
+
+If you have the `Assistant.Use` permission, an **Ask** item appears in the
+sidebar. It lets you ask questions about your fleet in plain language and get a
+written answer back.
+
+**Ask** is **read-only** — it answers questions, it never changes anything. You
+can ask about:
+
+- **Hosts and their specs/status** — OS and kernel, CPU and memory, uptime, disk,
+  memory, and load (e.g. *"which hosts have less than 20% disk free"*).
+- **Who's currently connected** — active SSH sessions.
+- **Full detail for one host** — including filesystems and network.
+- **Available package updates** per host (e.g. *"which hosts have updates
+  available"*).
+- **Recent security scans and playbook runs**, including whether they were
+  scheduled (e.g. *"when was the last scan on web-01"*, *"did any scheduled
+  playbook runs fail"*).
+
+Answers are always scoped to what you're allowed to see, and every question is
+recorded for audit. Treat an answer as a helpful starting point — verify it
+before you act on it.
+
+---
+
+## 8. Tips & good habits
 
 - **Show/hide the sidebar** with the menu (☰) button in the top bar — handy on
   wide tables like Hosts.
@@ -125,10 +169,13 @@ a self-contained file to watch offline.
   standing membership in broad groups.
 - **Protect your 2FA.** If you lose your authenticator, ask an administrator to
   reset your factors.
+- **Times you see are in the app's configured zone.** All dates and times are
+  shown in a time zone your administrator sets (**Settings → Time zone**), which
+  may differ from your own browser's zone.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | What to do |
 |---|---|

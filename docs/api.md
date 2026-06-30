@@ -20,11 +20,13 @@ the root.
   status (`400`, `401`, `403`, `404`, `409`, `500`).
 - **Pagination:** list endpoints accept `?limit=&offset=` query parameters.
 
-> Note on mounting: `bootstrap`, `auth`, `hosts`, and `certificates` are wired in
-> `registerRoutes`. The `admin`, `auditapi`, `sessionsapi`, `approvals`, and
-> `terminal` modules each expose `func Mount(r chi.Router, d *app.Deps)` and
-> attach at the same `/api/v1` mount seam (`mountModules`). Paths and permissions
-> below are taken directly from each module's `Mount`.
+> Note on mounting: every module is wired in `registerRoutes` (`server.go`).
+> `bootstrap`, `auth`, `hosts`, and `certificates` are mounted there directly; the
+> `terminal`, `enrollment`, `ws`, `sftp`, `scan`, `assistant`, `playbook`,
+> `notify`, `scheduler`, `backup`, `admin`, `auditapi`, `sessionsapi`,
+> `approvals`, and `system` modules each expose a `Mount` function that attaches
+> at the same `/api/v1` seam. Paths and permissions below are taken directly from
+> each module's `Mount`.
 
 ---
 
@@ -140,9 +142,13 @@ Inventory CRUD. The list endpoint shows all hosts to holders of `Host.Enroll` /
 
 **Enrollment methods** — `POST /hosts/{id}/enroll` body selects `method`:
 `"password"` (`+ bootstrapUser, password`), `"key"` (`+ privateKey, keyPassphrase`),
-`"trusted"`, or omit for trusted. `agent` uses the WebSocket (`fleet-enroll-agent`
-bridge); the no-install flow uses `GET …/enroll/script` (pipe through your own
-ssh) then `POST …/enroll/finish` `{ "hostPublicKey": "…" }`. See the
+`"trusted"`, or omit for trusted. The body also accepts `sudoPassword`,
+`wgEndpoint` (the jump host's public WireGuard endpoint), `viaJump` (route the
+bootstrap through the jump host), and `skipWireGuard` (boolean — enroll a host
+that is directly reachable from the jump host, skipping WireGuard tunnel
+provisioning). `agent` uses the WebSocket (`fleet-enroll-agent` bridge); the
+no-install flow uses `GET …/enroll/script` (pipe through your own ssh) then
+`POST …/enroll/finish` `{ "hostPublicKey": "…" }`. See the
 [Host Enrollment Guide](./host-enrollment-guide.md).
 
 **`GET /hosts/{id}/access`** → `{ "groups": ["ops"], "users": [ … ] }`
@@ -224,7 +230,11 @@ ssh) then `POST …/enroll/finish` `{ "hostPublicKey": "…" }`. See the
 | GET | `/api/v1/settings/{key}` | `System.Configure` |
 | PUT | `/api/v1/settings/{key}` | `System.Configure` |
 
-Known setting keys (seeded): `password_policy`, `lockout_policy`, `session_policy`.
+Known setting keys (seeded): `password_policy`, `lockout_policy`,
+`session_policy`, `require_mfa`, `branding`, `assistant`. Additional keys written
+on first use: `notifications`, `backup_policy`, `timezone`, `scan_policy`. Several
+of these have dedicated endpoints (e.g. notifications, backups, timezone) but are
+also readable/writable through this generic settings interface.
 
 ---
 
@@ -314,6 +324,32 @@ An approval mints a `temporary_permissions` grant that expires automatically.
 
 ---
 
+## SFTP (audited file transfer)
+
+Audited file transfer to managed hosts, brokered through the SSH gateway — the
+browser never speaks SFTP. All routes require `File.Transfer` **and** access to
+the target host (group / direct / temporary grant; super admins bypass), the same
+gate as terminals. Sudo-tier callers (`Host.Sudo` or super admin) land in the
+host's privileged account; everyone else in its login-only account.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/hosts/{id}/sftp/list` | `File.Transfer` |
+| GET | `/api/v1/hosts/{id}/sftp/download` | `File.Transfer` |
+| GET | `/api/v1/hosts/{id}/sftp/download-dir` | `File.Transfer` |
+| POST | `/api/v1/hosts/{id}/sftp/upload` | `File.Transfer` |
+| GET | `/api/v1/hosts/{id}/sftp/transfers` | `File.Transfer` |
+
+- **`GET …/sftp/list?path=`** → `{ "path": "<abs>", "entries": [ { name, size, isDir, mode, modTime } ] }` (defaults to `.`).
+- **`GET …/sftp/download?path=`** → streams the file (`application/octet-stream`, `Content-Disposition: attachment`).
+- **`GET …/sftp/download-dir?path=`** → streams the directory recursively as a `.tar` archive (`application/x-tar`).
+- **`POST …/sftp/upload?path=<dir>&name=<file>`** → request body is the raw file bytes; honours the configured upload cap (oversized → `413`). `name` may contain a relative subpath for folder uploads (traversal rejected). → `{ "path": "…", "size": n }`.
+- **`GET …/sftp/transfers`** → recent transfer audit records for the host (`{ "transfers": [ … ] }`).
+
+Every transfer is recorded in `sftp_transfers` and written to the audit log.
+
+---
+
 ## Security scans (OpenSCAP)
 
 All require `Host.Scan` **and** access to the target host (group / direct /
@@ -352,8 +388,8 @@ under `FLEET_SCAN_DIR`, and records a parsed summary:
 ## AI assistant (Ollama)
 
 Read-only natural-language queries over fleet data via a local Ollama instance.
-The model only calls a curated `query_hosts` tool (no SQL, no actions); results
-are scoped to hosts the caller can access and every question is audited.
+The model only calls a curated set of read-only tools (no SQL, no actions); all
+results are scoped to what the caller can access and every question is audited.
 
 | Method | Path | Gate |
 |--------|------|------|
@@ -362,8 +398,157 @@ are scoped to hosts the caller can access and every question is audited.
 | POST | `/api/v1/assistant/ask` | `Assistant.Use` — `{question}` → `202 {id}` (async) |
 | GET | `/api/v1/assistant/ask/{id}` | `Assistant.Use` — poll → `{status, answer, hosts[]}` |
 
+The model is offered these tools (each scoped to the caller's access, several
+additionally gated by the caller's permissions):
+
+- **`query_hosts`** — find managed hosts by structured filters. Returns, per host:
+  hostname, environment, status, IP, OS/kernel/architecture, CPU/memory, SSH
+  version, uptime, disk/memory/load metrics, latency, WireGuard health, last-seen,
+  groups, tags, owner, enrolled state, and pending-update counts
+  `updatesAvailable` / `securityUpdates`. Filters include
+  `updatesAvailableMin` and `securityUpdatesMin` (e.g. `1` = hosts that have any
+  updates / security updates available).
+- **`list_sessions`** — currently-connected SSH sessions (gated by `Session.Replay`).
+- **`host_detail`** — full detail for one host by exact hostname (filesystems, NICs).
+- **`recent_scans`** — recent OpenSCAP scans, scheduled or manual (gated by `Host.Scan`).
+- **`recent_playbook_runs`** — recent Ansible playbook runs, scheduled or manual
+  (gated by `Playbook.Run`).
+
 Configured via the `assistant` setting (`{enabled, ollamaUrl, model}`). Asks run
 in the background (local inference can exceed the request timeout); poll the `id`.
+
+---
+
+## Playbooks (Ansible)
+
+Author, validate, and run Ansible playbooks. Authoring/validation requires
+`Playbook.Edit`; execution requires `Playbook.Run` (both Administrator-only by
+default). Run routes additionally enforce host access (group / direct / temporary
+grant; super admins bypass) for every targeted host.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/playbooks` | `Playbook.Edit` |
+| POST | `/api/v1/playbooks` | `Playbook.Edit` |
+| GET | `/api/v1/playbooks/runner` | `Playbook.Edit` |
+| POST | `/api/v1/playbooks/validate` | `Playbook.Edit` |
+| POST | `/api/v1/playbooks/lint` | `Playbook.Edit` |
+| GET | `/api/v1/playbooks/{id}` | `Playbook.Edit` |
+| PUT | `/api/v1/playbooks/{id}` | `Playbook.Edit` |
+| DELETE | `/api/v1/playbooks/{id}` | `Playbook.Edit` |
+| GET | `/api/v1/playbooks/{id}/versions` | `Playbook.Edit` |
+| GET | `/api/v1/playbooks/{id}/versions/{version}` | `Playbook.Edit` |
+| POST | `/api/v1/playbooks/{id}/run` | `Playbook.Run` |
+| GET | `/api/v1/playbooks/{id}/runs` | `Playbook.Run` |
+| GET | `/api/v1/playbook-runs/{runId}` | `Playbook.Run` |
+
+**`POST /playbooks`** / **`PUT /playbooks/{id}`** → `{ "name": "…", "description": "…", "content": "<yaml>" }`.
+Saving new content bumps `version` and snapshots the prior content into the
+version history.
+
+**`POST /playbooks/validate`** / **`POST /playbooks/lint`** → `{ "content": "<yaml>" }`
+→ syntax-check / `ansible-lint` results. `GET /playbooks/runner` →
+`{ "available": true|false }` (whether the runner tooling is installed).
+
+**`POST /playbooks/{id}/run`**
+```json
+{ "targetKind": "host", "hostIds": ["…"], "checkMode": false }
+```
+`targetKind` is `host` (supply `hostIds`, or `targetId` for a single host) or
+`group` (supply `groupId`; only hosts the caller can reach are targeted).
+`checkMode` runs `ansible --check` (dry run). → `202` with the run record. Poll
+`GET /playbook-runs/{runId}` for streaming status/output;
+`GET /playbooks/{id}/runs` lists recent runs.
+
+---
+
+## Schedules (recurring scans & playbook runs)
+
+Recurring scans and playbook runs. `Schedule.Manage` (Administrator-only by
+default) is required for all schedule routes. Schedules are disabled by default; a
+background engine fires due, enabled schedules through the normal scan/playbook
+paths. The display timezone is readable by any signed-in user but only writable
+with `System.Configure`.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/timezone` | authenticated |
+| PUT | `/api/v1/timezone` | `System.Configure` |
+| GET | `/api/v1/schedules` | `Schedule.Manage` |
+| POST | `/api/v1/schedules` | `Schedule.Manage` |
+| PUT | `/api/v1/schedules/{id}` | `Schedule.Manage` |
+| DELETE | `/api/v1/schedules/{id}` | `Schedule.Manage` |
+| POST | `/api/v1/schedules/{id}/enable` | `Schedule.Manage` |
+| POST | `/api/v1/schedules/{id}/run` | `Schedule.Manage` |
+
+**`POST /schedules`** / **`PUT /schedules/{id}`**
+```json
+{ "name": "Nightly scan", "kind": "scan", "enabled": true,
+  "targetKind": "host", "targetId": "…",
+  "recurrence": { "type": "daily", "timeOfDay": "02:00", "weekday": 0, "everyMinutes": 0 },
+  "payload": { } }
+```
+`kind` is `scan` or `playbook`; `payload` carries the scan/playbook parameters.
+
+**`POST /schedules/{id}/enable`** → `{ "enabled": true|false }`.
+**`POST /schedules/{id}/run`** → fires the schedule immediately → `202 { "status": "…" }`.
+
+**`GET /timezone`** → `{ "timezone": "America/New_York" }`. **`PUT /timezone`**
+`{ "timezone": "<IANA name>" }` (empty = server default; validated against the
+IANA database) recomputes enabled schedules' next-run times.
+
+---
+
+## Notifications
+
+Notification channel and event configuration (`System.Configure` only).
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/notifications` | `System.Configure` |
+| PUT | `/api/v1/notifications` | `System.Configure` |
+| POST | `/api/v1/notifications/test` | `System.Configure` |
+| GET | `/api/v1/notifications/events` | `System.Configure` |
+
+**`GET /notifications`** → the current config with secrets redacted.
+**`PUT /notifications`** → saves the config (stored under the `notifications`
+setting) and returns the redacted result. **`POST /notifications/test`**
+`{ "channel": "…" }` → sends a test message → `{ "ok": true }` or
+`{ "ok": false, "error": "…" }`. **`GET /notifications/events`** → the event-type
+catalogue (`{ "events": [ { "key", "label" } ] }`) for the UI matrix.
+
+---
+
+## Backups & system
+
+Encrypted database backups, the on-demand `pg_dump` download, and background-job
+status. All require `System.Configure`. The encrypted backup download
+authenticates via a `token` query param so the browser can fetch it directly.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/system/backups` | `System.Configure` |
+| POST | `/api/v1/system/backups` | `System.Configure` |
+| GET | `/api/v1/system/backups/{name}?token=<accessToken>` | `System.Configure` (token) |
+| GET | `/api/v1/system/backup-policy` | `System.Configure` |
+| PUT | `/api/v1/system/backup-policy` | `System.Configure` |
+| GET | `/api/v1/system/jobs` | `System.Configure` |
+| GET | `/api/v1/system/backup` | `System.Configure` |
+
+**`GET /system/backups`** → `{ "backups": [ … ], "dir": "<BackupDir>", "count": n }`.
+**`POST /system/backups`** → creates an encrypted backup → `201` with its info.
+**`GET /system/backups/{name}`** → streams the encrypted backup file
+(`application/octet-stream`, token-authenticated).
+
+**`GET /system/backup-policy`** / **`PUT /system/backup-policy`** → the automatic
+backup schedule (`{ enabled, intervalHours, … }`, stored under the
+`backup_policy` setting).
+
+**`GET /system/jobs`** → `{ "schedulers": [ … ], "enrollmentJobs": [ … ] }`
+(background-scheduler snapshot + recent enrollment jobs). **`GET /system/backup`**
+streams a logical `pg_dump` of the database as a download
+(`application/sql`; `501` if `pg_dump` is unavailable). Restore is an out-of-band
+operation and is intentionally not exposed over the web UI.
 
 ---
 

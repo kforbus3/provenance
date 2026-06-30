@@ -31,10 +31,23 @@ the first Super Administrator. See the [Administrator Guide](./admin-guide.md).
 | [admin-guide.md](./admin-guide.md) | administrators | Bootstrap, users/roles/groups, host access, settings |
 | [user-guide.md](./user-guide.md) | end users | Signing in, 2FA, connecting, files, approvals, replay |
 | [developer-guide.md](./developer-guide.md) | developers | Build/test, layout, adding modules |
-| [host-enrollment-guide.md](./host-enrollment-guide.md) | operators | Enrolling hosts (4 methods), authorization |
+| [host-enrollment-guide.md](./host-enrollment-guide.md) | operators | Enrolling hosts (5 methods, incl. direct skip-WireGuard), authorization |
 | [security-guide.md](./security-guide.md) | security | Controls, MFA, rate limiting, hardening, checklist |
 | [certificate-lifecycle.md](./certificate-lifecycle.md) | operators | CA, issuance, renewal, revocation, rotation |
 | [disaster-recovery.md](./disaster-recovery.md) | operators | Backup, restore, recovery scenarios |
+| [break-glass.md](./break-glass.md) | operators / security | Emergency recovery runbook: encrypted backups + break-glass access |
+
+### Newer feature areas
+
+Beyond core SSH brokering, the platform now also covers: **Ansible playbook
+management** (author / lint / run via the `ansible-runner` sidecar) and
+**scheduling** of recurring scans and playbook runs (see
+[architecture.md](./architecture.md) for the runner data flow); **outbound
+notifications** (email + webhook); **encrypted database backups** with a
+**break-glass recovery** runbook (see [break-glass.md](./break-glass.md)); an
+**AI assistant** aware of inventory, metrics, security scans, playbook runs, and
+pending package updates; an **app-wide display timezone**; and **per-host pending
+package updates** surfaced in the inventory.
 
 ## Key make targets
 

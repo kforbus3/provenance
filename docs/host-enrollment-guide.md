@@ -61,6 +61,20 @@ SSH connection authenticates:
 | **No install (ssh-pipe)** | you want neither an install nor to upload a key | none | stays on your machine (your own `ssh`) |
 | **Trusted (re-provision)** | host already trusts the Fleet CA | none | session certificate |
 
+Any method can additionally set **Directly reachable / skip WireGuard** for a host
+that needs no overlay:
+
+| Option | Use when | Effect |
+|---|---|---|
+| **Directly reachable / skip WireGuard** | the host is on the **jump host's LAN**, or is **the host that runs Fleet itself** | the enroll request carries a `skipWireGuard` flag; enrollment installs CA trust + login accounts but **skips the WireGuard overlay** — no overlay address, no host WireGuard interface, no jump peer, and no tunnel verification. The gateway reaches the host at its **management `address`** through the jump host. |
+
+**Why this exists.** A host co-located with the jump host (the single-server
+deployment, where the jump host runs as a container on the same Docker server as
+Fleet) can't stand up a second WireGuard endpoint on the jump's UDP port. Skipping
+the overlay lets such a host enroll and be reached directly. When you select it,
+the management **Address must be reachable from the jump host** (the WireGuard
+endpoint field is disabled).
+
 **SSH agent** runs `fleet-enroll-agent` (build with `make enroll-agent-all`,
 distribute the per-OS binary). With your key loaded (`ssh-add`):
 
