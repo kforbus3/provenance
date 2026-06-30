@@ -9,15 +9,17 @@ runs through Docker, so **no local Go, Node, or PostgreSQL toolchain is required
 backend/                Go service (chi, pgx)
   cmd/fleetd/           main entrypoint
   internal/
-    api/                router wiring (server.go), helpers
+    api/                router wiring (server.go), helpers, system health (health.go)
     app/                Deps container (shared services)
     httpx/              shared HTTP helpers (WriteJSON/WriteError/Decode/ParseID/Audit)
     auth/               authN/Z: tokens, middleware, password policy
+                        (incl. oidc.go = OIDC SSO, ldap.go = LDAP/AD)
     bootstrap/          first-run wizard
     hosts/              host inventory (canonical HTTP module)
     enrollment/         host enrollment (5 methods, incl. skip-WireGuard)
     admin/              users / roles / groups / settings
     auditapi/           audit list / verify / export
+    auditfwd/           forward audit events to syslog / HTTP (SIEM) via the store's audit sink
     sessionsapi/        recorded session replay
     approvals/          just-in-time access workflow
     certificates/       CA + certificate lifecycle
@@ -42,6 +44,11 @@ deploy/k8s/             Kubernetes manifests
 docs/                   this documentation
 Makefile                developer entrypoints
 ```
+
+The SSO integrations pull in a few third-party libraries (run `make tidy` after
+changing them): `github.com/coreos/go-oidc/v3` and `golang.org/x/oauth2` for the
+OIDC authorization-code/PKCE flow, and `github.com/go-ldap/ldap/v3` for LDAP/AD
+sign-in.
 
 ## Prerequisites
 

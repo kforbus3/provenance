@@ -267,6 +267,9 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `timezone` | browser-detected IANA zone | display zone for all timestamps + schedule clock-times (§9, Time zone) |
 | `notifications` | both channels off | outbound alert channels + event routing (§10) |
 | `backup_policy` | `{"enabled": false, "intervalHours": 24, "retentionCount": 7}` | scheduled encrypted backups (§11) |
+| `oidc` | disabled | OIDC single sign-on — issuer, client, claims, role mapping (§15); secret encrypted at rest |
+| `ldap` | disabled | LDAP / Active Directory sign-in — server, bind account, filter, role mapping (§15); bind password encrypted at rest |
+| `audit_forward` | disabled | forward audit events to a syslog or HTTP SIEM endpoint (§16) |
 
 The **Settings → Branding** card edits the application name in the UI; the change
 takes effect immediately (no rebuild) and is served publicly so the login screen
@@ -301,6 +304,7 @@ A per-event **routing matrix** decides which events go to which channel. Events:
 - Access request pending approval
 - Security scan found failures
 - Playbook run failed
+- CA key due for rotation (§13)
 
 A **throttle** (minutes) suppresses repeats of the same event (e.g. a flapping
 host). Each channel has a **Send test** button.
@@ -341,6 +345,17 @@ Manage the CA and certificate lifecycle (`Certificate.Manage`) under
 `/api/v1/certificates`: list issued certs, rotate the CA, revoke a serial, and
 fetch the KRL. Details in [certificate-lifecycle.md](./certificate-lifecycle.md).
 
+### CA key rotation reminder
+
+The SSH CA key never auto-expires. To nudge you to rotate it, the certificate
+renewal loop checks the active CA key's age **hourly**; once it exceeds
+`FLEET_CA_ROTATE_AFTER` (default **365 days**) it raises a **"CA key due for
+rotation"** notification — a routable event in **Settings → Notifications**
+(§10), throttled to roughly weekly so it nudges rather than spams. Rotate the CA
+with `fleetctl rotate-ca` or from the **Certificates** page. Set
+`FLEET_CA_ROTATE_AFTER=0` to disable the reminder. The CA key's age is also shown
+on the **System Health** page (§17).
+
 ## 14. Routine operations
 
 | Task | Command / endpoint |
@@ -350,7 +365,108 @@ fetch the KRL. Details in [certificate-lifecycle.md](./certificate-lifecycle.md)
 | Stop (keep data) | `make down` |
 | Wipe everything | `make clean` (**destroys volumes**) |
 | Health / readiness | `GET /health`, `GET /ready` |
+| System Health (components + jobs) | `GET /api/v1/system/health` (`System.Configure`) — the **Health** page (§17) |
 | Verify audit chain | `GET /api/v1/audit/verify` |
 
 For backups see §11; for restore, recovery, and break-glass procedures see
 [break-glass.md](./break-glass.md) and [Disaster Recovery](./disaster-recovery.md).
+
+## 15. Single sign-on (SSO)
+
+Fleet Terminal can authenticate users against an external identity provider via
+**OIDC** or **LDAP / Active Directory**, in addition to local accounts. Every
+user now carries an **`auth_source`** (`local` | `oidc` | `ldap`); accounts
+backed by an external directory **cannot use a local password**. Both integrations
+are configured by `System.Configure` holders.
+
+### OIDC (Okta, Azure AD, Google Workspace, Keycloak, Authentik, …)
+
+**Settings → Single sign-on (OIDC)**. Configure:
+
+- **Issuer URL**, **Client ID**, and **Client secret** (write-only — **encrypted
+  at rest** and never returned by the API).
+- **Scopes** (default `openid` / `profile` / `email`).
+- **Username / email / groups claims** (defaults `preferred_username`, `email`,
+  `groups`).
+- **Default role** for newly provisioned users, an **auto-provision** toggle,
+  **group → role mappings** (one per line, `idpGroup=FleetRole`), and the login
+  **button text**.
+
+Set your IdP's redirect / callback URL to **`<PublicURL>/api/v1/auth/oidc/callback`**.
+Fleet uses the **authorization-code flow with PKCE** and verifies the ID token
+against the provider's **JWKS**. On first login it finds the user by **username,
+then email**; if not found and auto-provision is on, it creates the account
+(`auth_source = oidc`) with the default role. **Group → role mappings are applied
+additively** on top of the default role, then a normal Fleet session is issued.
+When OIDC is enabled the login page shows a **"Sign in with SSO"** button.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save OIDC config | `GET/PUT /api/v1/auth/oidc/config` (`System.Configure`) |
+| Provider status (drives the button) | `GET /api/v1/auth/oidc/status` |
+| Begin login / callback | `GET /api/v1/auth/oidc/login`, `GET /api/v1/auth/oidc/callback` |
+
+### LDAP / Active Directory
+
+**Settings → LDAP / Active Directory**. Configure:
+
+- **Server URL** (`ldap://` or `ldaps://`) and an optional **StartTLS** toggle.
+- **Bind DN** + **bind password** — a read-only **service account** (the bind
+  password is **encrypted at rest**).
+- **Base DN** and a **user filter** (`%s` = the entered username, e.g.
+  `(sAMAccountName=%s)`).
+- **Username / email / display-name / groups** attributes.
+- **Default role**, an **auto-provision** toggle, and **group → role mappings**
+  (`GroupCN=FleetRole`).
+
+Directory users sign in on the **normal sign-in form** with their directory
+credentials — the login flow **falls back to LDAP when local auth fails**. The
+service account looks the user up, then the password is verified by **binding as
+the user's own DN**; the account is found-or-provisioned (`auth_source = ldap`)
+and **group → role mappings are matched on each group's CN**.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save LDAP config | `GET/PUT /api/v1/auth/ldap/config` (`System.Configure`) |
+
+## 16. Audit forwarding (SIEM)
+
+**Settings → Audit forwarding (SIEM)** (`System.Configure`) forwards **every**
+audit event to an external collector. It is **best-effort and off by default** —
+the in-app **hash-chained audit log remains the system of record** (§12); a failed
+forward is logged and never blocks the action.
+
+| Field | Values |
+|-------|--------|
+| `enabled` | on / off |
+| `type` | `syslog` or `http` |
+| `address` | `host:port` for syslog, a full URL for HTTP |
+| `protocol` | `udp` or `tcp` (syslog only) |
+
+- **syslog** emits **RFC 5424** messages over UDP or TCP.
+- **http** POSTs each event as a **JSON** body to the endpoint.
+
+Use the **Send test event** button to confirm connectivity.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save config | `GET/PUT /api/v1/audit/forwarding` (`System.Configure`) |
+| Send a test event | `POST /api/v1/audit/forwarding/test` (`System.Configure`) |
+
+## 17. System Health page
+
+The **Health** sidebar page (`System.Configure`) shows the **live status** of the
+deployment and **auto-refreshes**. Each component reports **ok / warn / error**,
+and the page rolls them up into an overall status. It covers:
+
+- **Database** connectivity.
+- **Certificate authority** — whether an active CA key is loaded, and its **age**
+  (flagged once past `FLEET_CA_ROTATE_AFTER`; see §13).
+- **Jump host** reachability.
+- **Ansible runner** sidecar reachability (§7).
+- **Backups** — count stored and the **age of the latest** (§11).
+- **Every background job** — monitor, certificate renewal, the approval reaper,
+  retention, and KRL distribution — with each job's last run, run count, and last
+  error.
+
+It is served by `GET /api/v1/system/health`.

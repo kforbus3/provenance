@@ -142,6 +142,39 @@ commands or changes anything; treat answers as a starting point and verify befor
 a user has no factor, their next sign-in walks them through enrollment before any session is
 issued — no separate setup step needed.
 
+## Single sign-on (SSO)
+
+Fleet can authenticate users against an external identity provider as well as
+local accounts. Every user has an **`auth_source`** (`local`, `oidc`, or `ldap`);
+externally-backed accounts can't use a local password. Configure either under
+**Settings** (admin / `System.Configure`).
+
+**OIDC (Okta, Azure AD, Google Workspace, Keycloak, Authentik):** **Settings →
+Single sign-on (OIDC)**. Enter the **issuer URL**, **client ID**, **client
+secret** (stored encrypted), and — usually leaving the defaults — the scopes
+(`openid`/`profile`/`email`) and username/email/groups claims
+(`preferred_username`/`email`/`groups`). Set a **default role** for new users,
+optionally turn on **auto-provision**, add **group → role mappings** (one
+`idpGroup=FleetRole` per line), and set the **button text**. In your IdP, set the
+redirect/callback URL to **`<PublicURL>/api/v1/auth/oidc/callback`**. Once enabled,
+the login page shows a **"Sign in with SSO"** button; clicking it runs the
+auth-code + PKCE flow, and first-time users are matched by username then email (and
+auto-provisioned if enabled), with group mappings applied on top of the default
+role.
+
+**LDAP / Active Directory:** **Settings → LDAP / Active Directory**. Enter the
+**server URL** (`ldap://` or `ldaps://`), optional **StartTLS**, a **bind DN** +
+**bind password** for a read-only service account (stored encrypted), the **base
+DN**, and a **user filter** (`%s` = username, e.g. `(sAMAccountName=%s)`). Map the
+**username/email/display-name/groups** attributes, pick a **default role**, and
+add **group → role mappings** (`GroupCN=FleetRole`). Directory users sign in on the
+**normal sign-in form** — Fleet **falls back to LDAP when local auth fails**,
+looks the user up with the service account, then verifies the password by binding
+as the user's own DN, provisioning the account (and applying group mappings by CN)
+as needed.
+
+See the Administrator Guide for full field details and endpoints.
+
 ## Security scans (OpenSCAP)
 
 Click the **shield** (ⓗ) icon on a host row to run an OpenSCAP compliance scan. It needs
@@ -244,6 +277,29 @@ to it:
 
 Set a **throttle** (minutes) to dedupe repeats, and use **Send test** to confirm delivery.
 Notifications are **off by default** — nothing is sent until you enable a channel.
+
+There is also a **CA key due for rotation** event: the renewal loop checks the active
+SSH CA key's age hourly and, once it passes `FLEET_CA_ROTATE_AFTER` (default 365 days),
+raises this notification (throttled ~weekly). Rotate with `fleetctl rotate-ca` or from the
+**Certificates** page.
+
+## Audit forwarding (SIEM)
+
+**Settings → Audit forwarding (SIEM)** (admin) forwards **every** audit event to an external
+collector — **syslog** (RFC 5424, over **UDP** or **TCP**) or an **HTTP JSON** endpoint. Set
+the **type**, the **address** (`host:port` for syslog, a URL for HTTP), and the **protocol**
+(syslog only), then enable it. Use **Send test event** to confirm the collector receives it.
+Forwarding is **best-effort and off by default** — the in-app **hash-chained audit log stays
+the system of record**, so a dropped forward never blocks an action.
+
+## System Health
+
+The **Health** page (admin / `System.Configure`) shows the **live status** of the deployment
+and **auto-refreshes**. It reports ok/warn/error for the **database**, the **certificate
+authority** (including the **CA key's age**), **jump host** reachability, the **ansible-runner**
+sidecar, **backups** (count + age of the latest), and **every background job** (monitor,
+certificate renewal, the approval reaper, retention, and KRL distribution) with each job's last
+run and any last error. Check it first when something looks wrong fleet-wide.
 
 ## Backup & Restore
 

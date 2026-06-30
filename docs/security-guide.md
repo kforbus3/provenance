@@ -58,6 +58,12 @@ and operational recommendations.
 - **Export** the full chain with `GET /api/v1/audit/export` (streamed JSON) for
   off-box archival; archive to write-once/immutable storage for strongest
   guarantees.
+- **Audit forwarding (SIEM).** Every audit event can additionally be streamed to
+  an external collector — **syslog** (RFC 5424, UDP or TCP) or **HTTP JSON**.
+  Forwarding is **off by default**, configured in the UI, and **best-effort**: the
+  in-app hash-chained log remains the **system of record**, so a SIEM outage never
+  blocks operations or breaks the chain. Use it to centralize/correlate events,
+  not as a substitute for the tamper-evident chain.
 
 ## 4. Authentication & sessions
 
@@ -81,6 +87,24 @@ and operational recommendations.
   no factor is enrolled, login issues **no session** until the user completes
   forced TOTP enrollment. Prefer passkeys (phishing-resistant) for internet
   exposure.
+- **External identity providers (SSO).** In addition to local accounts, Fleet can
+  delegate sign-on to an external IdP; each user carries an `auth_source`
+  (`local` | `oidc` | `ldap`), and **external accounts cannot use a local
+  password**. Both providers are configured in **Settings** (`System.Configure`)
+  and support **find-or-provision** with **group→role mapping**:
+  - **OIDC single sign-on** (Okta, Azure AD, Google, Keycloak, Authentik) over
+    the authorization-code flow with **PKCE**. ID tokens are **JWKS-verified**
+    (signature, issuer, audience, and nonce). The OIDC **client secret is sealed
+    at rest** (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`) and never returned by
+    the API.
+  - **LDAP / Active Directory** sign-on via a service-account lookup followed by a
+    user-bind password verification, with group→role mapping by **CN**. Supports
+    `ldap://` / `ldaps://` and **StartTLS**; the **bind password is sealed at
+    rest** (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`).
+  - **Trade-off:** SSO **bypasses Fleet's local password and MFA** — the IdP is
+    the authenticator, so enforce strong authentication (MFA, conditional access)
+    at the IdP. Local-account controls (lockout, password policy, Fleet MFA) apply
+    only to `auth_source=local` users.
 - **Session reaping:** a background loop enforces idle (`FLEET_SESSION_IDLE_TTL`)
   and absolute (`FLEET_SESSION_ABSOLUTE_TTL`) limits even for connections that
   make no further HTTP requests. Logout, idle/absolute timeout, and account

@@ -81,6 +81,13 @@ Returns `409` once any user exists, `400` on weak password.
 | GET | `/api/v1/auth/me` | authenticated |
 | POST | `/api/v1/auth/change-password` | authenticated |
 | GET/POST | `/api/v1/auth/mfa[/totp/...]` | authenticated |
+| GET | `/api/v1/auth/oidc/status` | none (login-page probe) |
+| GET | `/api/v1/auth/oidc/login` | none (redirects to the IdP) |
+| GET | `/api/v1/auth/oidc/callback` | none (completes the auth-code flow) |
+| GET | `/api/v1/auth/oidc/config` | `System.Configure` |
+| PUT | `/api/v1/auth/oidc/config` | `System.Configure` |
+| GET | `/api/v1/auth/ldap/config` | `System.Configure` |
+| PUT | `/api/v1/auth/ldap/config` | `System.Configure` |
 
 **`POST /auth/login`**
 ```json
@@ -100,6 +107,11 @@ true, "setupToken": "…" }`; enroll via `POST /auth/mfa/setup/begin` `{ setupTo
 (returns a TOTP secret) then `POST /auth/mfa/setup/confirm` `{ setupToken, code }`,
 which completes login. No session is issued until a factor is confirmed.
 
+When local authentication fails and an LDAP/Active Directory directory is
+configured and enabled, login falls back to verifying the credentials against
+the directory (finding or provisioning the matching Fleet account) before
+returning `401`.
+
 **`POST /auth/refresh`** → rotates tokens using the `fleet_refresh` + `fleet_sid`
 cookies; returns a fresh `accessToken`, `accessExpiresAt`, and `csrfToken`.
 
@@ -114,6 +126,39 @@ cookies; returns a fresh `accessToken`, `accessExpiresAt`, and `csrfToken`.
 { "currentPassword": "…", "newPassword": "…" }
 ```
 → `{"status":"password_changed"}`
+
+### OIDC single sign-on
+
+The three browser-facing OIDC routes are public (a WebSocket-style redirect flow
+cannot carry a bearer token); the config routes require `System.Configure`.
+
+**`GET /auth/oidc/status`** → the login page polls this to decide whether to show
+the SSO button → `{ "enabled": true, "buttonText": "Sign in with SSO" }`
+(`enabled` is true only when SSO is configured with an issuer and client id).
+
+**`GET /auth/oidc/login`** → stores short-lived `state`/`nonce`/PKCE cookies and
+`302`-redirects to the identity provider's authorization endpoint. Redirects to
+`/login?sso=disabled|error` if SSO is off or provider discovery fails.
+
+**`GET /auth/oidc/callback`** → the IdP redirects here with `code`/`state`. The
+backend validates state, exchanges the code, verifies the ID token
+(signature/issuer/audience/nonce), finds-or-provisions the user, issues a Fleet
+session (sets the auth cookies), and `302`-redirects into the app (`/`). On
+failure it redirects to `/login?sso=…`.
+
+**`GET /auth/oidc/config`** → `{ "config": { … }, "secretSet": true }` — the
+current OIDC config with the client secret redacted (`secretSet` reports whether
+one is stored). **`PUT /auth/oidc/config`** saves the config (stored under the
+`oidc` setting); a newly-supplied `clientSecret` is sealed at rest and otherwise
+the stored secret is preserved → `{ "saved": true }`.
+
+### LDAP / Active Directory
+
+**`GET /auth/ldap/config`** / **`PUT /auth/ldap/config`** (`System.Configure`) —
+read/write the LDAP/AD directory config (stored under the `ldap` setting). As
+with OIDC, the bind password is write-only on input and sealed at rest; the read
+path redacts it. When enabled, this directory backs the `POST /auth/login`
+fallback described above.
 
 ---
 
@@ -232,8 +277,9 @@ no-install flow uses `GET …/enroll/script` (pipe through your own ssh) then
 
 Known setting keys (seeded): `password_policy`, `lockout_policy`,
 `session_policy`, `require_mfa`, `branding`, `assistant`. Additional keys written
-on first use: `notifications`, `backup_policy`, `timezone`, `scan_policy`. Several
-of these have dedicated endpoints (e.g. notifications, backups, timezone) but are
+on first use: `notifications`, `backup_policy`, `timezone`, `scan_policy`,
+`oidc`, `ldap`, `audit_forward`. Several of these have dedicated endpoints (e.g.
+notifications, backups, timezone, OIDC/LDAP config, audit forwarding) but are
 also readable/writable through this generic settings interface.
 
 ---
@@ -262,6 +308,22 @@ Hash-chained, tamper-evident audit log.
 
 **`GET /audit/export`** → streams the entire chain as a JSON array with
 `Content-Disposition: attachment; filename="audit-export.json"`.
+
+### Audit forwarding
+
+Forwarding of audit events to an external SIEM/collector. All routes require
+`System.Configure`.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/audit/forwarding` | `System.Configure` |
+| PUT | `/api/v1/audit/forwarding` | `System.Configure` |
+| POST | `/api/v1/audit/forwarding/test` | `System.Configure` |
+
+**`GET /audit/forwarding`** → the current forwarding config (`{ enabled, type, … }`,
+stored under the `audit_forward` setting). **`PUT /audit/forwarding`** saves it and
+echoes the saved config. **`POST /audit/forwarding/test`** sends a test event using
+the posted config → `{ "ok": true }` or `{ "ok": false, "error": "…" }`.
 
 ---
 
@@ -534,6 +596,7 @@ authenticates via a `token` query param so the browser can fetch it directly.
 | PUT | `/api/v1/system/backup-policy` | `System.Configure` |
 | GET | `/api/v1/system/jobs` | `System.Configure` |
 | GET | `/api/v1/system/backup` | `System.Configure` |
+| GET | `/api/v1/system/health` | `System.Configure` |
 
 **`GET /system/backups`** → `{ "backups": [ … ], "dir": "<BackupDir>", "count": n }`.
 **`POST /system/backups`** → creates an encrypted backup → `201` with its info.
@@ -549,6 +612,17 @@ backup schedule (`{ enabled, intervalHours, … }`, stored under the
 streams a logical `pg_dump` of the database as a download
 (`application/sql`; `501` if `pg_dump` is unavailable). Restore is an out-of-band
 operation and is intentionally not exposed over the web UI.
+
+**`GET /system/health`** → a live status report of Fleet's subsystems for the
+admin System Health page. Each component (database, certificate authority, jump
+host, Ansible runner, backups, and each background job) is checked with a bounded
+timeout so one slow dependency can't stall the report.
+```json
+{ "overall": "ok",
+  "components": [ { "name": "Database", "status": "ok", "detail": "connected" } ],
+  "checkedAt": "2026-06-26T11:00:00Z", "version": "<build>" }
+```
+`status` is `ok`, `warn`, or `error`; `overall` is the worst component status.
 
 ---
 

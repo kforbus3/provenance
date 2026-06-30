@@ -83,6 +83,7 @@ Key variables (full list in `.env.example`):
 | `FLEET_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Session inactivity / hard-cap lifetimes |
 | `FLEET_REFRESH_TOKEN_TTL` | Refresh-cookie lifetime (shorten for internet exposure) |
 | `FLEET_USER_CERT_TTL` | Ephemeral user-cert lifetime (default 7d, auto-renewed) |
+| `FLEET_CA_ROTATE_AFTER` | Age at which the active SSH CA key triggers a rotation reminder (default `8760h` = 365d) |
 | `FLEET_RATE_LIMIT_*` / `FLEET_AUTH_RATE_LIMIT_*` | Per-IP rate limits (0 disables) |
 | `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` | Jump host `host:port` + login user |
 | `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` / `FLEET_WG_PORT` | WireGuard overlay |
@@ -102,6 +103,11 @@ Key variables (full list in `.env.example`):
 > **Notifications** (SMTP email + webhooks) are configured **in the UI**
 > (Settings → Notifications) — no environment variables needed; the SMTP password
 > is encrypted at rest.
+>
+> **Single sign-on** (OIDC and LDAP/Active Directory) and **audit forwarding** to a
+> SIEM (syslog or HTTP JSON) are likewise configured **in the UI** (Settings) — no
+> environment variables needed. The OIDC client secret and LDAP bind password are
+> encrypted at rest. See [security-guide.md](./security-guide.md).
 
 ---
 
@@ -233,6 +239,10 @@ principal `fleet`) and run WireGuard yourself.
       retention, written to `FLEET_BACKUP_DIR` and copied **off-host**; recordings
       backed up; `FLEET_BACKUP_PASSPHRASE` (and `FLEET_CA_PASSPHRASE`) stored
       off-server. Restore-tested — see [break-glass.md](./break-glass.md).
+- [ ] Review the **System Health** admin page — it surfaces component status and
+      flags when the active SSH CA key exceeds `FLEET_CA_ROTATE_AFTER` (default
+      365d) so rotation can be scheduled. Use it to verify the stack after deploy
+      and upgrades.
 
 ---
 
