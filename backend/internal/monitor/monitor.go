@@ -253,7 +253,51 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 	if kb, perr := strconv.ParseInt(field(6), 10, 64); perr == nil {
 		inv.MemoryMB = kb / 1024
 	}
+	collectUpdates(conn, &inv)
 	return inv, true
+}
+
+// collectUpdates counts pending package updates from the host's *cached* package
+// metadata (no network refresh, so it's cheap and reflects the host's own update
+// cadence). Output is "total;security"; best-effort across apt/dnf/yum. A failure
+// leaves the fields nil so the last-known counts are preserved.
+func collectUpdates(conn *sshgw.Conn, inv *models.HostInventory) {
+	const cmd = `
+if command -v apt-get >/dev/null 2>&1; then
+  if [ -x /usr/lib/update-notifier/apt-check ]; then
+    /usr/lib/update-notifier/apt-check 2>&1
+  else
+    up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep -c '^Inst')
+    sec=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst' | grep -ci 'security')
+    echo "$up;$sec"
+  fi
+elif command -v dnf >/dev/null 2>&1; then
+  up=$(dnf -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
+  sec=$(dnf -q -C updateinfo list security 2>/dev/null | grep -cE '^[A-Za-z]')
+  echo "$up;$sec"
+elif command -v yum >/dev/null 2>&1; then
+  up=$(yum -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
+  echo "$up;0"
+fi`
+	out, err := runCmd(conn, cmd)
+	if err != nil {
+		return
+	}
+	line := strings.TrimSpace(out)
+	total, sec, ok := strings.Cut(line, ";")
+	if !ok {
+		return
+	}
+	t, terr := strconv.Atoi(strings.TrimSpace(total))
+	if terr != nil {
+		return
+	}
+	now := time.Now()
+	inv.UpdatesAvailable = &t
+	inv.UpdatesCheckedAt = &now
+	if s, serr := strconv.Atoi(strings.TrimSpace(sec)); serr == nil {
+		inv.SecurityUpdates = &s
+	}
 }
 
 func runCmd(conn *sshgw.Conn, cmd string) (string, error) {

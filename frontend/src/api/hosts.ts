@@ -10,6 +10,9 @@ export interface HostInventory {
   cpuCount: number;
   memoryMb: number;
   collectedAt?: string;
+  updatesAvailable?: number;
+  securityUpdates?: number;
+  updatesCheckedAt?: string;
 }
 
 export interface HostStatus {

@@ -828,6 +828,9 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
           ["CPUs", inv?.cpuCount ? String(inv.cpuCount) : ""],
           ["Memory", fmtMem(inv?.memoryMb)],
           ["SSH", inv?.sshVersion],
+          ["Updates available", inv?.updatesAvailable != null
+            ? `${inv.updatesAvailable}${inv.securityUpdates ? ` (${inv.securityUpdates} security)` : ""}`
+            : ""],
           ["Facts collected", inv?.collectedAt ? fmtDate(inv.collectedAt) : ""],
         ]} />
         <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>Status</Typography>

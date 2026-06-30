@@ -127,6 +127,12 @@ type HostInventory struct {
 	CPUCount      int        `json:"cpuCount"`
 	MemoryMB      int64      `json:"memoryMb"`
 	CollectedAt   *time.Time `json:"collectedAt,omitempty"`
+
+	// Pending package updates (nil = not yet checked). SecurityUpdates is the
+	// subset flagged as security fixes where the package manager reports it.
+	UpdatesAvailable *int       `json:"updatesAvailable,omitempty"`
+	SecurityUpdates  *int       `json:"securityUpdates,omitempty"`
+	UpdatesCheckedAt *time.Time `json:"updatesCheckedAt,omitempty"`
 }
 
 // HostStatus is the live health of a host.
@@ -354,6 +360,8 @@ type AssistantHostRow struct {
 	LatencyMS      *int       `json:"latencyMs,omitempty"`
 	WGOK           *bool      `json:"wireguardOk,omitempty"`
 	LastSeen       *time.Time `json:"lastSeen,omitempty"`
+	UpdatesAvailable *int     `json:"updatesAvailable,omitempty"`
+	SecurityUpdates  *int     `json:"securityUpdates,omitempty"`
 	Groups         []string   `json:"groups,omitempty"`
 	Tags           []string   `json:"tags,omitempty"`
 	Owner          string     `json:"owner,omitempty"`
