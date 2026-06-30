@@ -119,6 +119,24 @@ manage `authorized_keys` per user.
 3. On `POST /api/v1/auth/logout` the session's ephemeral key is zeroized and its
    certificates revoked.
 
+Each user carries an `auth_source` recording how they authenticate (`local`,
+`oidc`, or `ldap`). Two single sign-on (SSO) paths feed the same session +
+ephemeral-identity issuance once identity is established:
+
+- **OIDC (`internal/auth/oidc.go`)** — an OAuth 2.0 authorization-code flow with
+  PKCE. When OIDC is enabled the login page shows a **Sign in with SSO** button;
+  the backend redirects the browser to the configured IdP, then verifies the
+  returned ID token against the provider's JWKS, maps the username/email/groups
+  claims to a Fleet user (provisioning or role-mapping as configured), and issues
+  a normal Fleet session — from there the Issuer mints the ephemeral identity
+  exactly as for password login. Uses `github.com/coreos/go-oidc/v3` and
+  `golang.org/x/oauth2`.
+- **LDAP / Active Directory (`internal/auth/ldap.go`)** — directory users sign in
+  through the normal username/password form. The backend performs a
+  service-account (bind-DN) lookup to resolve the user's DN, then re-binds as that
+  user to verify the password, mapping directory attributes/groups to a Fleet
+  user. Uses `github.com/go-ldap/ldap/v3`.
+
 ### 3. Opening a terminal
 1. The SPA opens `WSS /api/v1/terminal/{hostId}?token=<access JWT>` (browsers
    cannot set `Authorization` on a WebSocket, so the short-lived token is passed
@@ -167,6 +185,14 @@ runner to `--syntax-check` / lint YAML, and orchestrates runs:
   authenticated SSH health checks and caches per-host pending package updates;
   the **`assistant`** module answers questions over inventory, metrics, scans,
   playbook runs, and pending updates.
+- The **`auditfwd`** package forwards audit events to an external **syslog** or
+  **HTTP** collector (SIEM). The store exposes an audit sink hook
+  (`Store.SetAuditSink`) invoked asynchronously from `AppendAudit` for every event
+  it writes, so forwarding never blocks or alters the hash-chained local trail.
+- The admin **System Health** page is backed by `GET /api/v1/system/health`
+  (`internal/api/health.go`), which aggregates the live status of the database,
+  CA, jump host, runner sidecar, backups, and background jobs into a single
+  bounded report.
 
 All HTTP modules share the **`internal/httpx`** helpers
 (`WriteJSON` / `WriteError` / `Decode` / `ParseID` / `Audit`) for consistent

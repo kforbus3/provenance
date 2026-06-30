@@ -27,6 +27,10 @@ func (h *Handler) Mount(r chi.Router) {
 	// Forced MFA enrollment (gated by the login setup token, not a session).
 	r.Post("/auth/mfa/setup/begin", h.mfaSetupBegin)
 	r.Post("/auth/mfa/setup/confirm", h.mfaSetupConfirm)
+	// OIDC SSO (public: browser redirects + the login-page status probe).
+	r.Get("/auth/oidc/status", h.oidcStatus)
+	r.Get("/auth/oidc/login", h.oidcLogin)
+	r.Get("/auth/oidc/callback", h.oidcCallback)
 	r.Group(func(pr chi.Router) {
 		pr.Use(h.svc.RequireAuth)
 		pr.Post("/auth/logout", h.logout)
@@ -36,6 +40,11 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Post("/auth/mfa/totp/enroll", h.mfaEnroll)
 		pr.Post("/auth/mfa/totp/confirm", h.mfaConfirm)
 		pr.Delete("/auth/mfa/{id}", h.mfaDelete)
+		// OIDC SSO admin config.
+		pr.With(h.svc.RequirePermission("System.Configure")).Get("/auth/oidc/config", h.oidcConfigGet)
+		pr.With(h.svc.RequirePermission("System.Configure")).Put("/auth/oidc/config", h.oidcConfigPut)
+		pr.With(h.svc.RequirePermission("System.Configure")).Get("/auth/ldap/config", h.ldapConfigGet)
+		pr.With(h.svc.RequirePermission("System.Configure")).Put("/auth/ldap/config", h.ldapConfigPut)
 	})
 	h.mountWebAuthn(r)
 }
@@ -53,6 +62,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	ip, ua := clientMeta(r)
 	u, err := h.svc.Authenticate(r.Context(), req.Username, req.Password)
+	// Fall back to LDAP/AD when local auth fails and a directory is configured.
+	if err != nil && h.svc.ldapEnabled(r.Context()) {
+		if lu, lerr := h.svc.authenticateLDAP(r.Context(), req.Username, req.Password); lerr == nil {
+			u, err = lu, nil
+		}
+	}
 	if err != nil {
 		_ = h.svc.store.RecordAuthEvent(r.Context(), models.AuthEvent{
 			Username: req.Username, Event: "login_failure", IP: ip, UserAgent: ua,

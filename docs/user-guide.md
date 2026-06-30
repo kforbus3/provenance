@@ -17,6 +17,16 @@ You never see or handle an SSH key. Behind the scenes, signing in creates a
 short-lived identity that lives only in the server's memory and is destroyed when
 you log out or your session times out (typically 30 minutes idle).
 
+### If your organization uses single sign-on (SSO)
+
+- **OIDC:** if SSO is enabled, the login page shows a **Sign in with SSO** button.
+  Click it and you'll be sent to your organization's identity provider to sign in;
+  you're returned to Fleet Terminal already authenticated — no separate password
+  to enter here.
+- **LDAP / Active Directory:** just sign in on the normal form with your usual
+  **directory username and password** — the same credentials you use elsewhere on
+  your network.
+
 ### If two-factor authentication (2FA) is required
 
 - **You already set up an authenticator:** after your password, enter the 6-digit

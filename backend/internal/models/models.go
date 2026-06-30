@@ -20,6 +20,7 @@ type User struct {
 	EmailVerified bool       `json:"emailVerified"`
 	MustChangePw  bool       `json:"mustChangePassword"`
 	RequireMFA    bool       `json:"requireMfa"`
+	AuthSource    string     `json:"authSource,omitempty"` // local | oidc | ldap
 	FailedLogins  int        `json:"-"`
 	LockedUntil   *time.Time `json:"lockedUntil,omitempty"`
 	LastLoginAt   *time.Time `json:"lastLoginAt,omitempty"`

@@ -84,6 +84,11 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	if u.IsDisabled {
 		return nil, ErrAccountDisabled
 	}
+	// External (SSO) accounts have no usable local password — they must sign in
+	// through their identity provider.
+	if u.AuthSource != "" && u.AuthSource != "local" {
+		return nil, ErrInvalidCredentials
+	}
 	if u.LockedUntil != nil && u.LockedUntil.After(time.Now()) {
 		return nil, ErrAccountLocked
 	}

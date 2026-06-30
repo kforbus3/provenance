@@ -28,6 +28,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/approvals"
 	"github.com/fleet-terminal/backend/internal/assistant"
 	"github.com/fleet-terminal/backend/internal/auditapi"
+	"github.com/fleet-terminal/backend/internal/auditfwd"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/backup"
 	"github.com/fleet-terminal/backend/internal/bootstrap"
@@ -79,6 +80,10 @@ type Server struct {
 	playbookSvc *playbook.Service
 	scheduler   *scheduler.Engine
 	backups     *backup.Service
+	auditFwd    *auditfwd.Forwarder
+
+	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
+	lastCANotify time.Time
 
 	router chi.Router
 }
@@ -111,6 +116,8 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)
+	s.auditFwd = auditfwd.New(st, log)
+	st.SetAuditSink(s.auditFwd.Forward) // forward audit events to syslog/SIEM when enabled
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
 	// zeroize the key and revoke its certificates.
@@ -329,8 +336,38 @@ func (s *Server) renewalLoop(ctx context.Context) {
 		case <-t.C:
 			s.Issuer.RenewExpiring(ctx)
 			s.Jobs.Record("certificate-renewal", nil)
+			s.checkCAAge(ctx)
 		}
 	}
+}
+
+// checkCAAge sends a rotation-reminder notification when the active SSH CA key
+// is older than the configured threshold (it never auto-expires). Throttled to
+// roughly weekly so it nudges rather than spams.
+func (s *Server) checkCAAge(ctx context.Context) {
+	if s.Cfg.CARotateAfter <= 0 {
+		return
+	}
+	created, err := s.Store.ActiveCACreatedAt(ctx, "user")
+	if err != nil {
+		return
+	}
+	age := time.Since(created)
+	if age < s.Cfg.CARotateAfter {
+		return
+	}
+	if time.Since(s.lastCANotify) < 6*24*time.Hour {
+		return
+	}
+	s.lastCANotify = time.Now()
+	days := int(age.Hours() / 24)
+	s.Notify.Notify(ctx, notify.Event{
+		Type: notify.EventCAKeyAging, Severity: notify.SeverityWarning,
+		Title: "SSH CA key due for rotation",
+		Body: fmt.Sprintf("Fleet's active SSH certificate authority key is %d days old. "+
+			"Consider rotating it (fleetctl rotate-ca, or the Certificates page).", days),
+		DedupeKey: "ca-user",
+	})
 }
 
 func dedupe(in []string) []string {
@@ -458,6 +495,15 @@ func (s *Server) registerRoutes(r chi.Router) {
 	sessionsapi.Mount(r, deps)
 	approvals.Mount(r, deps)
 	system.Mount(r, deps, s.Jobs)
+
+	// Audit forwarding to syslog/SIEM (admin-configurable).
+	auditfwd.Mount(r, s.Auth, s.auditFwd)
+
+	// System health (admin): live status of DB, CA, jump host, runner, backups, jobs.
+	r.Group(func(pr chi.Router) {
+		pr.Use(s.Auth.RequireAuth)
+		pr.With(s.Auth.RequirePermission("System.Configure")).Get("/system/health", s.handleSystemHealth)
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

@@ -24,6 +24,7 @@ automatically on startup when `FLEET_MIGRATE_ON_START=true` (the default).
 | `0013_schedules.sql` | `schedules` table + `Schedule.Manage` permission (recurring scans/playbook runs) |
 | `0014_host_updates.sql` | `host_inventory.updates_available`, `.security_updates`, `.updates_checked_at` (pending package updates per host) |
 | `0015_scheduled_flag.sql` | `scheduled` flag on `host_scans` and `playbook_runs` (distinguish scheduled from manual runs) |
+| `0016_external_auth.sql` | `users.auth_source` (external identity providers: OIDC SSO / LDAP) |
 
 > **Duplicate numeric prefixes are intentional, not a bug.** There are two
 > `0010_*` and two `0011_*` files. The runner (`backend/internal/db/migrate.go`)
@@ -58,6 +59,7 @@ The principal record. Password material is deliberately kept out of this row.
 | `failed_logins` | INT | drives lockout |
 | `locked_until` | TIMESTAMPTZ | nullable; lockout expiry |
 | `last_login_at` | TIMESTAMPTZ | nullable |
+| `auth_source` | TEXT | `local` \| `oidc` \| `ldap`; default `local` (added in `0016`). External (`oidc`/`ldap`) accounts are provisioned on first SSO/directory login and have no usable local password |
 | `created_at` / `updated_at` | TIMESTAMPTZ | |
 
 ### `user_credentials`
@@ -540,7 +542,11 @@ Seeded keys: `password_policy`, `lockout_policy`, `session_policy`, `require_mfa
 Additional keys written on first use (not part of the `0002` seed):
 `notifications` (notification channels/events), `backup_policy` (automatic
 database-backup schedule), `timezone` (IANA display timezone for the UI and
-schedule calculations), `scan_policy` (scan/remediation timeout budget).
+schedule calculations), `scan_policy` (scan/remediation timeout budget), `oidc`
+(OIDC SSO identity-provider config), `ldap` (LDAP/Active Directory directory
+config), `audit_forward` (external SIEM/collector audit forwarding). All three
+are JSON; `oidc` and `ldap` hold the IdP/directory configuration with the
+client/bind secret sealed at rest (the read path redacts it).
 
 ---
 

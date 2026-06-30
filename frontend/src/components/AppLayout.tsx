@@ -19,6 +19,7 @@ import ShieldIcon from "@mui/icons-material/Shield";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import WorkHistoryIcon from "@mui/icons-material/WorkHistory";
+import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -50,6 +51,7 @@ const NAV = [
   { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon /> },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon /> },
+  { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon /> },
 ];
 

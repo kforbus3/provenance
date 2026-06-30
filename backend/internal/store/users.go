@@ -25,18 +25,22 @@ type CreateUserParams struct {
 	PasswordHash string
 	IsSuperAdmin bool
 	MustChangePw bool
+	AuthSource   string // local (default) | oidc | ldap
 }
 
 // CreateUser inserts a user and its credential row atomically and returns it.
 func (s *Store) CreateUser(ctx context.Context, p CreateUserParams) (*models.User, error) {
+	if p.AuthSource == "" {
+		p.AuthSource = "local"
+	}
 	var u models.User
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO users (username, email, display_name, is_super_admin, must_change_pw)
-			VALUES ($1, NULLIF($2,''), $3, $4, $5)
+			INSERT INTO users (username, email, display_name, is_super_admin, must_change_pw, auth_source)
+			VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
 			RETURNING id, username, COALESCE(email,''), display_name, is_super_admin,
 			          is_disabled, email_verified, must_change_pw, created_at, updated_at`,
-			p.Username, p.Email, p.DisplayName, p.IsSuperAdmin, p.MustChangePw)
+			p.Username, p.Email, p.DisplayName, p.IsSuperAdmin, p.MustChangePw, p.AuthSource)
 		if err := row.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.IsSuperAdmin,
 			&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return err
@@ -53,13 +57,13 @@ func (s *Store) CreateUser(ctx context.Context, p CreateUserParams) (*models.Use
 }
 
 const userCols = `id, username, COALESCE(email,''), display_name, is_super_admin,
-	is_disabled, email_verified, must_change_pw, require_mfa, failed_logins, locked_until,
+	is_disabled, email_verified, must_change_pw, require_mfa, auth_source, failed_logins, locked_until,
 	last_login_at, created_at, updated_at`
 
 func scanUser(row pgx.Row) (*models.User, error) {
 	var u models.User
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.IsSuperAdmin,
-		&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.RequireMFA, &u.FailedLogins, &u.LockedUntil,
+		&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.RequireMFA, &u.AuthSource, &u.FailedLogins, &u.LockedUntil,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, mapNotFound(err)
@@ -77,6 +81,12 @@ func (s *Store) SetUserRequireMFA(ctx context.Context, id uuid.UUID, require boo
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	return scanUser(s.pool.QueryRow(ctx,
 		`SELECT `+userCols+` FROM users WHERE username = $1`, username))
+}
+
+// GetUserByEmail loads a user by (case-insensitive) email.
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	return scanUser(s.pool.QueryRow(ctx,
+		`SELECT `+userCols+` FROM users WHERE email = $1`, email))
 }
 
 // GetUserByID loads a user by id.

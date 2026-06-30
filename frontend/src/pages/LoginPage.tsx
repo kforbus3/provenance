@@ -9,6 +9,7 @@ import { useAuthStore } from "../store/auth";
 import { bootstrapStatus, mfaSetupBegin } from "../api/auth";
 import { webauthnSupported } from "../api/webauthn";
 import { useAppName, useDocumentTitle } from "../api/branding";
+import { getOidcStatus, oidcLoginUrl } from "../api/sso";
 
 // Credentials login form. On success the auth store holds the access token and
 // principal; we then route to the dashboard. On first run (no users yet) we send
@@ -30,6 +31,7 @@ export function LoginPage() {
   // Forced MFA enrollment state.
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [enroll, setEnroll] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [sso, setSso] = useState<{ enabled: boolean; buttonText: string } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -38,6 +40,7 @@ export function LoginPage() {
         if (active && s.bootstrapAvailable) navigate("/bootstrap", { replace: true });
       })
       .catch(() => {/* backend unreachable — stay on the sign-in form */});
+    getOidcStatus().then((s) => active && setSso(s)).catch(() => {/* SSO not configured */});
     return () => {
       active = false;
     };
@@ -158,6 +161,14 @@ export function LoginPage() {
               >
                 {submitting ? "Please wait…" : enrolling ? "Confirm & sign in" : challenge ? "Verify" : "Sign in"}
               </Button>
+              {sso?.enabled && !challenge && !enrolling && (
+                <>
+                  <Typography variant="caption" color="text.secondary" align="center">or</Typography>
+                  <Button variant="outlined" size="large" onClick={() => window.location.assign(oidcLoginUrl())}>
+                    {sso.buttonText || "Sign in with SSO"}
+                  </Button>
+                </>
+              )}
               {challenge && !enrolling && webauthnSupported() && (
                 <Button
                   variant="outlined"

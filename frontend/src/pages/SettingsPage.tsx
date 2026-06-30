@@ -18,6 +18,13 @@ import {
 } from "../api/backups";
 import { getTimezone, saveTimezone } from "../api/timezone";
 import {
+  getAuditForwarding, saveAuditForwarding, testAuditForwarding, type AuditForwardConfig,
+} from "../api/auditForwarding";
+import {
+  getOidcConfig, saveOidcConfig, getLdapConfig, saveLdapConfig,
+  type OidcConfig, type LdapConfig,
+} from "../api/sso";
+import {
   browserTimezone, formatDateTime, setDisplayTimezone, supportedTimezones,
 } from "../lib/datetime";
 
@@ -67,6 +74,9 @@ export function SettingsPage() {
       <WGSettingsCard current={settings["wireguard"]} />
       <RetentionCard current={settings["recordings"]} />
       <NotificationsCard />
+      <SSOCard />
+      <LDAPCard />
+      <AuditForwardingCard />
       <BackupCard />
 
       <TableContainer component={Paper} variant="outlined">
@@ -384,6 +394,286 @@ function RetentionCard({ current }: { current: unknown }) {
         <Button variant="contained" sx={{ mt: 1 }} disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
         </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+// SSOCard configures OIDC single sign-on (Okta, Azure AD, Google, Keycloak,
+// Authentik, …). The client secret is write-only; group→role mappings provision
+// access from the IdP's groups claim.
+function SSOCard() {
+  const { data: loaded } = useQuery({ queryKey: ["oidc-config"], queryFn: getOidcConfig });
+  const [cfg, setCfg] = useState<OidcConfig | null>(null);
+  const [groupMap, setGroupMap] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      setCfg({ ...loaded.config, clientSecret: "" });
+      setGroupMap(Object.entries(loaded.config.groupRoleMap ?? {}).map(([g, r]) => `${g}=${r}`).join("\n"));
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const groupRoleMap: Record<string, string> = {};
+      for (const line of groupMap.split("\n")) {
+        const [g, r] = line.split("=");
+        if (g?.trim() && r?.trim()) groupRoleMap[g.trim()] = r.trim();
+      }
+      return saveOidcConfig({ ...(cfg as OidcConfig), groupRoleMap });
+    },
+    onSuccess: () => setSaved(true),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Single sign-on (OIDC)</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+  const set = (patch: Partial<OidcConfig>) => { setCfg({ ...cfg, ...patch }); setSaved(false); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Single sign-on (OIDC)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Let users sign in via an OpenID Connect provider (Okta, Azure AD, Google, Keycloak,
+        Authentik…). Set the redirect/callback URL in your IdP to{" "}
+        <code>{window.location.origin}/api/v1/auth/oidc/callback</code>.
+      </Typography>
+      <FormControlLabel
+        control={<Switch checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Enable OIDC sign-on"
+      />
+      {cfg.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1 }}>
+          <TextField label="Issuer URL" size="small" value={cfg.issuer}
+            onChange={(e) => set({ issuer: e.target.value })} placeholder="https://idp.example.com/" />
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Client ID" size="small" value={cfg.clientId}
+              onChange={(e) => set({ clientId: e.target.value })} sx={{ flexGrow: 1 }} />
+            <TextField label="Client secret" size="small" type="password" value={cfg.clientSecret ?? ""}
+              onChange={(e) => set({ clientSecret: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="new-password"
+              placeholder={loaded?.secretSet ? "•••••••• (unchanged)" : ""} />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Button text" size="small" value={cfg.buttonText ?? ""}
+              onChange={(e) => set({ buttonText: e.target.value })} sx={{ flexGrow: 1 }} placeholder="Sign in with Okta" />
+            <TextField label="Default role (new users)" size="small" value={cfg.defaultRole ?? ""}
+              onChange={(e) => set({ defaultRole: e.target.value })} sx={{ flexGrow: 1 }} placeholder="Read-Only" />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Username claim" size="small" value={cfg.usernameClaim ?? ""}
+              onChange={(e) => set({ usernameClaim: e.target.value })} sx={{ flexGrow: 1 }} placeholder="preferred_username" />
+            <TextField label="Email claim" size="small" value={cfg.emailClaim ?? ""}
+              onChange={(e) => set({ emailClaim: e.target.value })} sx={{ flexGrow: 1 }} placeholder="email" />
+            <TextField label="Groups claim" size="small" value={cfg.groupsClaim ?? ""}
+              onChange={(e) => set({ groupsClaim: e.target.value })} sx={{ flexGrow: 1 }} placeholder="groups" />
+          </Stack>
+          <FormControlLabel
+            control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
+            label="Auto-provision new users on first sign-in"
+          />
+          <TextField label="Group → role mappings (one per line: idpGroup=FleetRole)" size="small" multiline minRows={2}
+            value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
+            placeholder={"fleet-admins=Administrator\nops=Operator"} />
+        </Stack>
+      )}
+      <Box sx={{ mt: 1.5 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Box>
+    </Paper>
+  );
+}
+
+// LDAPCard configures LDAP / Active Directory authentication. Users sign in on
+// the normal form with their directory credentials; accounts are provisioned
+// from directory attributes and group→role mappings.
+function LDAPCard() {
+  const { data: loaded } = useQuery({ queryKey: ["ldap-config"], queryFn: getLdapConfig });
+  const [cfg, setCfg] = useState<LdapConfig | null>(null);
+  const [groupMap, setGroupMap] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      setCfg({ ...loaded.config, bindPassword: "" });
+      setGroupMap(Object.entries(loaded.config.groupRoleMap ?? {}).map(([g, r]) => `${g}=${r}`).join("\n"));
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const groupRoleMap: Record<string, string> = {};
+      for (const line of groupMap.split("\n")) {
+        const [g, r] = line.split("=");
+        if (g?.trim() && r?.trim()) groupRoleMap[g.trim()] = r.trim();
+      }
+      return saveLdapConfig({ ...(cfg as LdapConfig), groupRoleMap });
+    },
+    onSuccess: () => setSaved(true),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">LDAP / Active Directory</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+  const set = (patch: Partial<LdapConfig>) => { setCfg({ ...cfg, ...patch }); setSaved(false); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">LDAP / Active Directory</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Let users sign in with their directory credentials on the normal sign-in form. A service
+        account looks up the user, then their password is verified by a bind.
+      </Typography>
+      <FormControlLabel
+        control={<Switch checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Enable LDAP/AD sign-on"
+      />
+      {cfg.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1 }}>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Server URL" size="small" value={cfg.url}
+              onChange={(e) => set({ url: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="ldaps://dc.example.com:636" />
+            <FormControlLabel control={<Switch checked={cfg.startTls} onChange={(e) => set({ startTls: e.target.checked })} />}
+              label="StartTLS" />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Bind DN (service account)" size="small" value={cfg.bindDn}
+              onChange={(e) => set({ bindDn: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="CN=svc-fleet,OU=Service,DC=example,DC=com" />
+            <TextField label="Bind password" size="small" type="password" value={cfg.bindPassword ?? ""}
+              onChange={(e) => set({ bindPassword: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="new-password"
+              placeholder={loaded?.secretSet ? "•••••••• (unchanged)" : ""} />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Base DN" size="small" value={cfg.baseDn}
+              onChange={(e) => set({ baseDn: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="OU=Users,DC=example,DC=com" />
+            <TextField label="User filter (%s = username)" size="small" value={cfg.userFilter ?? ""}
+              onChange={(e) => set({ userFilter: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="(sAMAccountName=%s)" />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Username attr" size="small" value={cfg.usernameAttr ?? ""}
+              onChange={(e) => set({ usernameAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="sAMAccountName" />
+            <TextField label="Email attr" size="small" value={cfg.emailAttr ?? ""}
+              onChange={(e) => set({ emailAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="mail" />
+            <TextField label="Groups attr" size="small" value={cfg.groupsAttr ?? ""}
+              onChange={(e) => set({ groupsAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="memberOf" />
+          </Stack>
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <TextField label="Default role (new users)" size="small" value={cfg.defaultRole ?? ""}
+              onChange={(e) => set({ defaultRole: e.target.value })} sx={{ width: 220 }} placeholder="Read-Only" />
+            <FormControlLabel control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
+              label="Auto-provision new users" />
+          </Stack>
+          <TextField label="Group → role mappings (one per line: GroupCN=FleetRole)" size="small" multiline minRows={2}
+            value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
+            placeholder={"Domain Admins=Administrator\nFleet-Operators=Operator"} />
+        </Stack>
+      )}
+      <Box sx={{ mt: 1.5 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Box>
+    </Paper>
+  );
+}
+
+// AuditForwardingCard streams audit events to an external collector (syslog or
+// HTTP) for a SIEM. Off until enabled; the in-app hash-chained log stays the
+// system of record.
+function AuditForwardingCard() {
+  const { data: loaded } = useQuery({ queryKey: ["audit-forwarding"], queryFn: getAuditForwarding });
+  const [cfg, setCfg] = useState<AuditForwardConfig | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      setCfg({
+        enabled: loaded.enabled ?? false,
+        type: loaded.type || "syslog",
+        address: loaded.address ?? "",
+        protocol: loaded.protocol || "udp",
+      });
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => saveAuditForwarding(cfg as AuditForwardConfig),
+    onSuccess: () => setSaved(true),
+  });
+  const test = useMutation({
+    mutationFn: () => testAuditForwarding(cfg as AuditForwardConfig),
+    onSuccess: (r) => setTestMsg(r.ok ? "Test event sent." : `Test failed: ${r.error}`),
+    onError: () => setTestMsg("Test failed."),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Audit forwarding (SIEM)</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+  const set = (patch: Partial<AuditForwardConfig>) => { setCfg({ ...cfg, ...patch }); setSaved(false); setTestMsg(null); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Audit forwarding (SIEM)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Stream every audit event to an external collector for your SIEM. Best-effort and off by
+        default; the in-app tamper-evident log remains the system of record.
+      </Typography>
+      <FormControlLabel
+        control={<Switch checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Forward audit events"
+      />
+      {cfg.enabled && (
+        <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1 }}>
+          <TextField select size="small" label="Collector" value={cfg.type}
+            onChange={(e) => set({ type: e.target.value as AuditForwardConfig["type"] })} sx={{ width: 150 }}>
+            <MenuItem value="syslog">Syslog</MenuItem>
+            <MenuItem value="http">HTTP (JSON)</MenuItem>
+          </TextField>
+          <TextField size="small" label={cfg.type === "http" ? "Collector URL" : "host:port"} value={cfg.address}
+            onChange={(e) => set({ address: e.target.value })} sx={{ flexGrow: 1 }}
+            placeholder={cfg.type === "http" ? "https://siem.example.com/audit" : "siem.example.com:514"} />
+          {cfg.type === "syslog" && (
+            <TextField select size="small" label="Protocol" value={cfg.protocol}
+              onChange={(e) => set({ protocol: e.target.value as AuditForwardConfig["protocol"] })} sx={{ width: 110 }}>
+              <MenuItem value="udp">UDP</MenuItem>
+              <MenuItem value="tcp">TCP</MenuItem>
+            </TextField>
+          )}
+        </Stack>
+      )}
+      {testMsg && <Alert severity={testMsg.startsWith("Test event") ? "success" : "error"} sx={{ mt: 1.5 }}>{testMsg}</Alert>}
+      <Stack direction="row" spacing={1.5} sx={{ mt: 1.5 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+        {cfg.enabled && (
+          <Button variant="outlined" disabled={test.isPending || !cfg.address} onClick={() => test.mutate()}>
+            Send test event
+          </Button>
+        )}
       </Stack>
     </Paper>
   );
