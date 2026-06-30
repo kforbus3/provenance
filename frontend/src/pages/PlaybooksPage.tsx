@@ -364,7 +364,11 @@ function PlaybookRunsDialog({ playbook, onClose }: { playbook: Playbook; onClose
                     <TableCell>{formatDateTime(r.createdAt)}</TableCell>
                     <TableCell>{r.targetName}</TableCell>
                     <TableCell>{r.checkMode ? "dry run" : "apply"}</TableCell>
-                    <TableCell>{r.requester}</TableCell>
+                    <TableCell>
+                      {r.scheduled
+                        ? <Chip size="small" variant="outlined" label="scheduled" />
+                        : r.requester}
+                    </TableCell>
                     <TableCell><RunStatusChip status={r.status} /></TableCell>
                   </TableRow>
                 ))}

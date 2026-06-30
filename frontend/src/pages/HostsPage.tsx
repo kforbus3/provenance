@@ -602,7 +602,7 @@ function ScanRow({ scan, token, onView, onRemediate }: {
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           <Typography variant="body2" noWrap>{scan.profileTitle || scan.profile || "Standard profile"}</Typography>
           <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
-            {fmtDate(scan.createdAt)}{scan.requester ? ` · ${scan.requester}` : ""}
+            {fmtDate(scan.createdAt)}{scan.scheduled ? " · scheduled" : scan.requester ? ` · ${scan.requester}` : ""}
             {scan.benchmark ? ` · ${scan.benchmark.split("/").pop()}` : ""}
             {scan.skipRules && scan.skipRules.length > 0 ? ` · ${scan.skipRules.length} rules skipped` : ""}
           </Typography>

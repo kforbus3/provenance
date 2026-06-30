@@ -113,7 +113,7 @@ func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*mod
 		skip = append(append([]string{}, scan.ExpensiveFSRules...), skip...)
 	}
 	for _, h := range hosts {
-		rec, err := e.store.CreateHostScan(ctx, h.ID, nil, sc.Requester, p.Profile)
+		rec, err := e.store.CreateHostScan(ctx, h.ID, nil, sc.Requester, p.Profile, true)
 		if err != nil {
 			e.log.Warn("scheduler: create scan", "host", h.Hostname, "err", err)
 			continue
@@ -148,6 +148,7 @@ func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []
 		TargetName:      targetName,
 		HostCount:       len(hosts),
 		CheckMode:       p.CheckMode,
+		Scheduled:       true,
 	}, nil)
 	if err != nil {
 		return "error: create run"

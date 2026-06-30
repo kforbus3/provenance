@@ -328,6 +328,7 @@ type HostScan struct {
 	TotalRules   int        `json:"totalRules"`
 	Error        string     `json:"error,omitempty"`
 	SkipRules    []string   `json:"skipRules,omitempty"`
+	Scheduled    bool       `json:"scheduled"`
 	StartedAt    *time.Time `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
@@ -377,6 +378,7 @@ type AssistantScanRow struct {
 	PassCount  int        `json:"passCount"`
 	FailCount  int        `json:"failCount"`
 	Requester  string     `json:"requester,omitempty"`
+	Scheduled  bool       `json:"scheduled"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 }
@@ -390,6 +392,7 @@ type AssistantPlaybookRunRow struct {
 	CheckMode  bool       `json:"checkMode"`
 	Status     string     `json:"status"`
 	Requester  string     `json:"requester,omitempty"`
+	Scheduled  bool       `json:"scheduled"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 }

@@ -86,6 +86,7 @@ export interface PlaybookRun {
   targetName?: string;
   hostCount: number;
   checkMode: boolean;
+  scheduled?: boolean;
   status: string; // pending|running|completed|failed
   exitCode?: number;
   output?: string;

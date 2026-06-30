@@ -86,7 +86,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_scans",
-		Description: "List recent OpenSCAP security scans, most recent first — including scheduled ones. Each entry has hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, and when it ran (createdAt/finishedAt). Use for questions like 'when was the last security scan on web-01' or 'which hosts were scanned recently'. Optionally filter by hostname.",
+		Description: "List recent OpenSCAP security scans, most recent first. Each entry has hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), and when it ran (createdAt/finishedAt). Use for questions like 'when was the last security scan on web-01' or 'which hosts were scanned recently'; for 'scheduled scans' specifically, keep entries where scheduled is true. Optionally filter by hostname.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -99,7 +99,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_playbook_runs",
-		Description: "List recent Ansible playbook runs, most recent first — including scheduled ones. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, status (completed/failed), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'.",
+		Description: "List recent Ansible playbook runs, most recent first. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), status (completed/failed), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'; for 'scheduled' runs specifically, keep entries where scheduled is true.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "max rows (default 50)"}},

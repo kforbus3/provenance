@@ -39,7 +39,7 @@ func (s *Store) RecentScansForAssistant(ctx context.Context, userID uuid.UUID, i
 	where += accessibleHostsSubquery("sc.host_id", userID, isSuperAdmin, &args)
 	args = append(args, limit)
 	sql := `SELECT h.hostname, COALESCE(NULLIF(sc.profile_title,''), sc.profile), sc.status, sc.score,
-			sc.pass_count, sc.fail_count, sc.requester, sc.finished_at, sc.created_at
+			sc.pass_count, sc.fail_count, sc.requester, sc.scheduled, sc.finished_at, sc.created_at
 		FROM host_scans sc JOIN hosts h ON h.id = sc.host_id ` + where +
 		` ORDER BY sc.created_at DESC LIMIT $` + fmt.Sprint(len(args))
 	rows, err := s.pool.Query(ctx, sql, args...)
@@ -51,7 +51,7 @@ func (s *Store) RecentScansForAssistant(ctx context.Context, userID uuid.UUID, i
 	for rows.Next() {
 		var r models.AssistantScanRow
 		if err := rows.Scan(&r.Hostname, &r.Profile, &r.Status, &r.Score,
-			&r.PassCount, &r.FailCount, &r.Requester, &r.FinishedAt, &r.CreatedAt); err != nil {
+			&r.PassCount, &r.FailCount, &r.Requester, &r.Scheduled, &r.FinishedAt, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -67,7 +67,7 @@ func (s *Store) RecentPlaybookRunsForAssistant(ctx context.Context, limit int) (
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT p.name, pr.target_kind, pr.target_name, pr.host_count, pr.check_mode,
-			pr.status, pr.requester, pr.finished_at, pr.created_at
+			pr.scheduled, pr.status, pr.requester, pr.finished_at, pr.created_at
 		 FROM playbook_runs pr JOIN playbooks p ON p.id = pr.playbook_id
 		 ORDER BY pr.created_at DESC LIMIT $1`, limit)
 	if err != nil {
@@ -78,7 +78,7 @@ func (s *Store) RecentPlaybookRunsForAssistant(ctx context.Context, limit int) (
 	for rows.Next() {
 		var r models.AssistantPlaybookRunRow
 		if err := rows.Scan(&r.Playbook, &r.TargetKind, &r.TargetName, &r.HostCount,
-			&r.CheckMode, &r.Status, &r.Requester, &r.FinishedAt, &r.CreatedAt); err != nil {
+			&r.CheckMode, &r.Scheduled, &r.Status, &r.Requester, &r.FinishedAt, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

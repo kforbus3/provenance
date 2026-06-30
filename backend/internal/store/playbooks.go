@@ -178,13 +178,13 @@ func (s *Store) GetPlaybookVersion(ctx context.Context, playbookID uuid.UUID, ve
 // --- playbook runs ---
 
 const playbookRunCols = `id, playbook_id, playbook_version, requester, target_kind, target_id,
-	target_name, host_count, check_mode, status, exit_code, output, error,
+	target_name, host_count, check_mode, scheduled, status, exit_code, output, error,
 	started_at, finished_at, created_at`
 
 func scanPlaybookRun(row interface{ Scan(...any) error }) (*models.PlaybookRun, error) {
 	var r models.PlaybookRun
 	if err := row.Scan(&r.ID, &r.PlaybookID, &r.PlaybookVersion, &r.Requester, &r.TargetKind,
-		&r.TargetID, &r.TargetName, &r.HostCount, &r.CheckMode, &r.Status, &r.ExitCode,
+		&r.TargetID, &r.TargetName, &r.HostCount, &r.CheckMode, &r.Scheduled, &r.Status, &r.ExitCode,
 		&r.Output, &r.Error, &r.StartedAt, &r.FinishedAt, &r.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -195,10 +195,10 @@ func scanPlaybookRun(row interface{ Scan(...any) error }) (*models.PlaybookRun, 
 func (s *Store) CreatePlaybookRun(ctx context.Context, in models.PlaybookRun, requestedBy *uuid.UUID) (*models.PlaybookRun, error) {
 	row := s.pool.QueryRow(ctx,
 		`INSERT INTO playbook_runs(playbook_id, playbook_version, requested_by, requester,
-			target_kind, target_id, target_name, host_count, check_mode, status)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') RETURNING `+playbookRunCols,
+			target_kind, target_id, target_name, host_count, check_mode, scheduled, status)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING `+playbookRunCols,
 		in.PlaybookID, in.PlaybookVersion, requestedBy, in.Requester, in.TargetKind,
-		in.TargetID, in.TargetName, in.HostCount, in.CheckMode)
+		in.TargetID, in.TargetName, in.HostCount, in.CheckMode, in.Scheduled)
 	return scanPlaybookRun(row)
 }
 
@@ -235,7 +235,7 @@ func (s *Store) ListPlaybookRuns(ctx context.Context, playbookID uuid.UUID, limi
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, playbook_id, playbook_version, requester, target_kind, target_id,
-			target_name, host_count, check_mode, status, exit_code, '' AS output, error,
+			target_name, host_count, check_mode, scheduled, status, exit_code, '' AS output, error,
 			started_at, finished_at, created_at
 		 FROM playbook_runs WHERE playbook_id=$1 ORDER BY created_at DESC LIMIT $2`,
 		playbookID, limit)

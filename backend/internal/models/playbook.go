@@ -44,6 +44,7 @@ type PlaybookRun struct {
 	TargetName      string     `json:"targetName,omitempty"`
 	HostCount       int        `json:"hostCount"`
 	CheckMode       bool       `json:"checkMode"`
+	Scheduled       bool       `json:"scheduled"`
 	Status          string     `json:"status"` // pending|running|completed|failed
 	ExitCode        *int       `json:"exitCode,omitempty"`
 	Output          string     `json:"output,omitempty"`
