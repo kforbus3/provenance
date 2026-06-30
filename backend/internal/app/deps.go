@@ -10,6 +10,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/livesessions"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -20,6 +21,10 @@ type Deps struct {
 	Log   *slog.Logger
 	Auth  *auth.Service
 	Live  *livesessions.Registry
+
+	// Notify delivers outbound alerts (email/webhook). Handlers call it on
+	// notable events (e.g. a new approval request).
+	Notify *notify.Service
 
 	// SSH services are populated once the gateway/CA are constructed. Modules
 	// that need them (terminal, sftp, enrollment, monitor) read these fields.

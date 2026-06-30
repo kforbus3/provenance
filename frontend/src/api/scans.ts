@@ -17,6 +17,7 @@ export interface HostScan {
   totalRules: number;
   error?: string;
   skipRules?: string[];
+  scheduled?: boolean;
   startedAt?: string;
   finishedAt?: string;
   createdAt: string;

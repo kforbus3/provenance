@@ -5,6 +5,7 @@ package monitor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/ws"
@@ -31,13 +33,39 @@ type Monitor struct {
 	issuer *identity.Issuer
 	hub    *ws.Hub
 	jobs   *jobs.Registry
+	nfy    *notify.Service
 
 	interval time.Duration
 }
 
 // New constructs a Monitor.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, hub *ws.Hub, reg *jobs.Registry) *Monitor {
-	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, interval: 30 * time.Second}
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, hub *ws.Hub, reg *jobs.Registry, nfy *notify.Service) *Monitor {
+	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, nfy: nfy, interval: 30 * time.Second}
+}
+
+// notifyTransition emits an alert when a host crosses the online/offline
+// boundary. The first observation (no prior status) is skipped to avoid a burst
+// of spurious alerts on startup.
+func (m *Monitor) notifyTransition(ctx context.Context, h models.Host, prev, now string) {
+	if m.nfy == nil || prev == "" || prev == now {
+		return
+	}
+	switch {
+	case prev == "online" && now == "offline":
+		m.nfy.Notify(ctx, notify.Event{
+			Type: notify.EventHostOffline, Severity: notify.SeverityError,
+			Title: "Host offline: " + h.Hostname,
+			Body:  fmt.Sprintf("Fleet can no longer reach %s (%s). It was last seen online.", h.Hostname, h.Environment),
+			DedupeKey: h.ID.String(),
+		})
+	case prev != "online" && now == "online":
+		m.nfy.Notify(ctx, notify.Event{
+			Type: notify.EventHostRecovered, Severity: notify.SeverityInfo,
+			Title: "Host recovered: " + h.Hostname,
+			Body:  fmt.Sprintf("%s (%s) is reachable again.", h.Hostname, h.Environment),
+			DedupeKey: h.ID.String(),
+		})
+	}
 }
 
 // Run drives the monitoring loop until ctx is cancelled.
@@ -79,11 +107,16 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if !h.Enrolled {
 			continue
 		}
+		prev := ""
+		if h.Status != nil {
+			prev = h.Status.Status
+		}
 		st, inv, metrics := m.probe(ctx, signer, &h)
 		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 			continue
 		}
+		m.notifyTransition(ctx, h, prev, st.Status)
 		if inv != nil {
 			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
@@ -220,7 +253,51 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 	if kb, perr := strconv.ParseInt(field(6), 10, 64); perr == nil {
 		inv.MemoryMB = kb / 1024
 	}
+	collectUpdates(conn, &inv)
 	return inv, true
+}
+
+// collectUpdates counts pending package updates from the host's *cached* package
+// metadata (no network refresh, so it's cheap and reflects the host's own update
+// cadence). Output is "total;security"; best-effort across apt/dnf/yum. A failure
+// leaves the fields nil so the last-known counts are preserved.
+func collectUpdates(conn *sshgw.Conn, inv *models.HostInventory) {
+	const cmd = `
+if command -v apt-get >/dev/null 2>&1; then
+  if [ -x /usr/lib/update-notifier/apt-check ]; then
+    /usr/lib/update-notifier/apt-check 2>&1
+  else
+    up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep -c '^Inst')
+    sec=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst' | grep -ci 'security')
+    echo "$up;$sec"
+  fi
+elif command -v dnf >/dev/null 2>&1; then
+  up=$(dnf -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
+  sec=$(dnf -q -C updateinfo list security 2>/dev/null | grep -cE '^[A-Za-z]')
+  echo "$up;$sec"
+elif command -v yum >/dev/null 2>&1; then
+  up=$(yum -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
+  echo "$up;0"
+fi`
+	out, err := runCmd(conn, cmd)
+	if err != nil {
+		return
+	}
+	line := strings.TrimSpace(out)
+	total, sec, ok := strings.Cut(line, ";")
+	if !ok {
+		return
+	}
+	t, terr := strconv.Atoi(strings.TrimSpace(total))
+	if terr != nil {
+		return
+	}
+	now := time.Now()
+	inv.UpdatesAvailable = &t
+	inv.UpdatesCheckedAt = &now
+	if s, serr := strconv.Atoi(strings.TrimSpace(sec)); serr == nil {
+		inv.SecurityUpdates = &s
+	}
 }
 
 func runCmd(conn *sshgw.Conn, cmd string) (string, error) {

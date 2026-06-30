@@ -22,6 +22,8 @@ type HostQuery struct {
 	DiskFreePctMin   *float64
 	MemUsedPctMin    *float64
 	LoadPerCoreMin   *float64
+	UpdatesAvailableMin *int // hosts with at least this many pending updates
+	SecurityUpdatesMin  *int // hosts with at least this many pending security updates
 	Group            string
 	Tag              string
 	Enrolled         *bool
@@ -65,6 +67,12 @@ func buildHostQueryWhere(q HostQuery) (string, []any) {
 	}
 	if q.LoadPerCoreMin != nil {
 		add("m.load_per_core >= $%d", *q.LoadPerCoreMin)
+	}
+	if q.UpdatesAvailableMin != nil {
+		add("i.updates_available >= $%d", *q.UpdatesAvailableMin)
+	}
+	if q.SecurityUpdatesMin != nil {
+		add("i.security_updates >= $%d", *q.SecurityUpdatesMin)
 	}
 	if q.Tag != "" {
 		add("$%d = ANY(h.tags)", q.Tag)
@@ -140,7 +148,8 @@ func (s *Store) QueryHostsForAssistant(ctx context.Context, q HostQuery) ([]mode
 			COALESCE(i.kernel_version,''), COALESCE(i.architecture,''),
 			COALESCE(i.cpu_count,0), COALESCE(i.memory_mb,0), COALESCE(i.ssh_version,''),
 			s.uptime_seconds, m.min_disk_free_pct, m.mem_used_pct, m.load_per_core,
-			s.latency_ms, s.wg_ok, s.last_success_at, h.owner, h.enrolled,
+			s.latency_ms, s.wg_ok, s.last_success_at, i.updates_available, i.security_updates,
+			h.owner, h.enrolled,
 			COALESCE(h.tags, '{}'),
 			COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM host_groups hg
 				JOIN groups g ON g.id=hg.group_id WHERE hg.host_id=h.id), '{}')
@@ -161,7 +170,8 @@ func (s *Store) QueryHostsForAssistant(ctx context.Context, q HostQuery) ([]mode
 		if err := rows.Scan(&r.Hostname, &r.Environment, &r.Status, &r.PrimaryIP, &r.OSName,
 			&r.OSVersion, &r.Kernel, &r.Architecture, &r.CPUCount, &r.MemoryTotalMB, &r.SSHVersion,
 			&r.UptimeSeconds, &r.MinDiskFreePct, &r.MemUsedPct, &r.LoadPerCore,
-			&r.LatencyMS, &r.WGOK, &r.LastSeen, &r.Owner, &r.Enrolled, &r.Tags, &r.Groups); err != nil {
+			&r.LatencyMS, &r.WGOK, &r.LastSeen, &r.UpdatesAvailable, &r.SecurityUpdates,
+			&r.Owner, &r.Enrolled, &r.Tags, &r.Groups); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

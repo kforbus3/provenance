@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
 )
 
 const (
@@ -218,5 +219,17 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 	defer pcancel()
 	if err := s.store.CompletePlaybookRun(pctx, runID, status, live.snapshot(), exitCode, errMsg); err != nil {
 		s.log.Error("playbook run: persist result", "err", err, "run", runID)
+	}
+
+	if status == "failed" && s.nfy != nil {
+		names := make([]string, 0, len(hosts))
+		for _, h := range hosts {
+			names = append(names, h.Hostname)
+		}
+		s.nfy.Notify(context.Background(), notify.Event{
+			Type: notify.EventPlaybookFailed, Severity: notify.SeverityError,
+			Title: "Playbook run failed",
+			Body:  fmt.Sprintf("A playbook run against %s failed: %s", strings.Join(names, ", "), errMsg),
+		})
 	}
 }

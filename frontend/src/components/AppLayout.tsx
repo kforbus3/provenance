@@ -17,15 +17,19 @@ import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import SettingsIcon from "@mui/icons-material/Settings";
 import ShieldIcon from "@mui/icons-material/Shield";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
+import ScheduleIcon from "@mui/icons-material/Schedule";
 import WorkHistoryIcon from "@mui/icons-material/WorkHistory";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import MenuIcon from "@mui/icons-material/Menu";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { Link as RouterLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
+import { getTimezone } from "../api/timezone";
+import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
 
@@ -36,6 +40,7 @@ const NAV = [
   { to: "/terminals", label: "Terminals", icon: <TerminalIcon /> },
   { to: "/sessions", label: "Session Replay", icon: <HistoryIcon /> },
   { to: "/playbooks", label: "Playbooks", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
+  { to: "/schedules", label: "Schedules", icon: <ScheduleIcon />, perm: "Schedule.Manage" },
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
   { to: "/audit", label: "Audit", icon: <GavelIcon /> },
   { to: "/users", label: "Users", icon: <PeopleIcon /> },
@@ -52,6 +57,10 @@ const NAV = [
 // renders into <Outlet/>.
 export function AppLayout() {
   const { pathname } = useLocation();
+  // Load the app-wide display timezone and apply it before rendering child pages
+  // so every timestamp formats in the configured zone. Re-applies if it changes.
+  const { data: tz } = useQuery({ queryKey: ["timezone"], queryFn: getTimezone });
+  setDisplayTimezone(tz);
   const mode = useUIStore((s) => s.mode);
   const toggleMode = useUIStore((s) => s.toggleMode);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);

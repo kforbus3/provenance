@@ -41,9 +41,12 @@ import (
 	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/metrics"
+	"github.com/fleet-terminal/backend/internal/backup"
 	"github.com/fleet-terminal/backend/internal/monitor"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/scan"
+	"github.com/fleet-terminal/backend/internal/scheduler"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
 	"github.com/fleet-terminal/backend/internal/sshgw"
@@ -69,6 +72,12 @@ type Server struct {
 	Hub     *ws.Hub
 	Jobs    *jobs.Registry
 	Live    *livesessions.Registry
+	Notify  *notify.Service
+
+	scanSvc     *scan.Service
+	playbookSvc *playbook.Service
+	scheduler   *scheduler.Engine
+	backups     *backup.Service
 
 	router chi.Router
 }
@@ -92,7 +101,15 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Hub:     ws.NewHub(),
 		Jobs:    jobs.NewRegistry(),
 		Live:    livesessions.New(),
+		Notify:  notify.New(st, cfg, log),
 	}
+
+	// Scan + playbook services are shared between their HTTP handlers and the
+	// scheduler, so construct them once here.
+	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
+	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
+	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
+	s.backups = backup.New(st, cfg, log)
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
 	// zeroize the key and revoke its certificates.
@@ -151,7 +168,9 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
 	go s.krlLoop(ctx)
-	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs).Run(ctx)
+	go s.scheduler.Run(ctx)
+	go s.backups.Run(ctx)
+	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx)
 	return nil
 }
 
@@ -391,7 +410,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 		writeJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
 	})
 
-	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub}
+	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub, Notify: s.Notify}
 	deps.DistributeKRL = s.distributeKRL
 
 	// M2 — first-run wizard + authentication.
@@ -417,12 +436,20 @@ func (s *Server) registerRoutes(r chi.Router) {
 	fleetsftp.Mount(r, deps, s.Gateway)
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
-	scan.Mount(r, deps, scan.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer))
+	scan.Mount(r, deps, s.scanSvc)
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
 	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
 
-	playbook.Mount(r, deps, playbook.New(s.Store, s.Cfg, s.Log, s.Issuer))
+	playbook.Mount(r, deps, s.playbookSvc)
+
+	notify.Mount(r, s.Auth, s.Notify)
+
+	// Recurring scans / playbook runs.
+	scheduler.Mount(r, deps, s.scheduler)
+
+	// Encrypted database backups (scheduled + on-demand).
+	backup.Mount(r, deps, s.backups)
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)

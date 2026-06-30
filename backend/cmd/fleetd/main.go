@@ -9,6 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// Embed the IANA timezone database in the binary so time.LoadLocation always
+	// resolves zones for schedule computation, even without an OS tzdata package.
+	_ "time/tzdata"
 
 	"github.com/fleet-terminal/backend/internal/api"
 	"github.com/fleet-terminal/backend/internal/config"

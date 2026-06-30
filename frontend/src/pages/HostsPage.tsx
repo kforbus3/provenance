@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
-  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, Stack, TextField, Tooltip, Typography,
 } from "@mui/material";
 import {
@@ -47,11 +48,7 @@ const EMPTY_FORM: HostInput = {
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
 };
 
-function fmtDate(value?: string): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
-}
+const fmtDate = (value?: string): string => formatDateTime(value);
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
@@ -192,6 +189,7 @@ export function HostsPage() {
   });
 
   const [selection, setSelection] = useState<GridRowSelectionModel>([]);
+  const [groupFilter, setGroupFilter] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [enrollResult, setEnrollResult] = useState<EnrollmentResult | null>(null);
   const [enrollError, setEnrollError] = useState<string | null>(null);
@@ -367,14 +365,25 @@ export function HostsPage() {
     },
   ], [deleteMut, enrollMut]);
 
-  const rows = data?.hosts ?? [];
+  const allHosts = data?.hosts ?? [];
+  const groupOptions = Array.from(new Set(allHosts.flatMap((h) => h.groups ?? []))).sort();
+  const rows = groupFilter.length
+    ? allHosts.filter((h) => (h.groups ?? []).some((g) => groupFilter.includes(g)))
+    : allHosts;
 
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
         Host Inventory
       </Typography>
-      <Box sx={{ width: "100%", height: "calc(100vh - 180px)" }}>
+      {groupOptions.length > 0 && (
+        <Autocomplete
+          multiple size="small" options={groupOptions} value={groupFilter}
+          onChange={(_, v) => setGroupFilter(v)} sx={{ mb: 1.5, maxWidth: 480 }}
+          renderInput={(params) => <TextField {...params} label="Filter by group" />}
+        />
+      )}
+      <Box sx={{ width: "100%", height: "calc(100vh - 230px)" }}>
         <DataGrid<Host>
           rows={rows}
           columns={columns}
@@ -593,7 +602,7 @@ function ScanRow({ scan, token, onView, onRemediate }: {
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           <Typography variant="body2" noWrap>{scan.profileTitle || scan.profile || "Standard profile"}</Typography>
           <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
-            {fmtDate(scan.createdAt)}{scan.requester ? ` · ${scan.requester}` : ""}
+            {fmtDate(scan.createdAt)}{scan.scheduled ? " · scheduled" : scan.requester ? ` · ${scan.requester}` : ""}
             {scan.benchmark ? ` · ${scan.benchmark.split("/").pop()}` : ""}
             {scan.skipRules && scan.skipRules.length > 0 ? ` · ${scan.skipRules.length} rules skipped` : ""}
           </Typography>
@@ -828,6 +837,9 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
           ["CPUs", inv?.cpuCount ? String(inv.cpuCount) : ""],
           ["Memory", fmtMem(inv?.memoryMb)],
           ["SSH", inv?.sshVersion],
+          ["Updates available", inv?.updatesAvailable != null
+            ? `${inv.updatesAvailable}${inv.securityUpdates ? ` (${inv.securityUpdates} security)` : ""}`
+            : ""],
           ["Facts collected", inv?.collectedAt ? fmtDate(inv.collectedAt) : ""],
         ]} />
         <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>Status</Typography>
@@ -1025,6 +1037,7 @@ function EnrollCredsDialog({
   const [sudoPassword, setSudoPassword] = useState("");
   const [wgEndpoint, setWgEndpoint] = useState("");
   const [viaJump, setViaJump] = useState(false);
+  const [skipWireGuard, setSkipWireGuard] = useState(false);
   // No-install (ssh-pipe) flow state.
   const [sshTarget, setSshTarget] = useState("");
   const [hostPubKey, setHostPubKey] = useState("");
@@ -1184,10 +1197,22 @@ function EnrollCredsDialog({
             />
           </Stack>
         )}
+        <FormControlLabel
+          sx={{ mt: 2, display: "block" }}
+          control={<Checkbox checked={skipWireGuard} onChange={(e) => setSkipWireGuard(e.target.checked)} />}
+          label="Directly reachable from the jump host — skip WireGuard"
+        />
+        {skipWireGuard && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4, mb: 1 }}>
+            For hosts on the jump host's LAN (or the host running Fleet itself). No overlay is set up;
+            the host is reached at its management address through the jump host.
+          </Typography>
+        )}
         <TextField
           fullWidth sx={{ mt: 2 }}
           label="Jump host WireGuard endpoint" value={wgEndpoint}
           onChange={(e) => setWgEndpoint(e.target.value)}
+          disabled={skipWireGuard}
           helperText="Public address:port the HOST uses to reach the VPN server (e.g. vpn.example.com:51820). Must be resolvable from the host — not an internal Docker name."
         />
         <FormControlLabel
@@ -1210,7 +1235,7 @@ function EnrollCredsDialog({
           <Button
             variant="contained"
             disabled={method === "agent" || (method === "password" && password === "") || (method === "key" && privateKey.trim() === "")}
-            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump })}
+            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump, skipWireGuard })}
           >
             Enroll
           </Button>

@@ -10,24 +10,26 @@ import (
 
 const scanCols = `id, host_id, requested_by, requester, profile, profile_title, benchmark,
 	status, score, pass_count, fail_count, other_count, total_rules, error, skip_rules,
-	started_at, finished_at, created_at`
+	scheduled, started_at, finished_at, created_at`
 
 func scanScan(row interface{ Scan(...any) error }) (*models.HostScan, error) {
 	var s models.HostScan
 	if err := row.Scan(&s.ID, &s.HostID, &s.RequestedBy, &s.Requester, &s.Profile,
 		&s.ProfileTitle, &s.Benchmark, &s.Status, &s.Score, &s.PassCount, &s.FailCount,
-		&s.OtherCount, &s.TotalRules, &s.Error, &s.SkipRules, &s.StartedAt, &s.FinishedAt, &s.CreatedAt); err != nil {
+		&s.OtherCount, &s.TotalRules, &s.Error, &s.SkipRules, &s.Scheduled,
+		&s.StartedAt, &s.FinishedAt, &s.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &s, nil
 }
 
-// CreateHostScan inserts a pending scan and returns it.
-func (s *Store) CreateHostScan(ctx context.Context, hostID uuid.UUID, requestedBy *uuid.UUID, requester, profile string) (*models.HostScan, error) {
+// CreateHostScan inserts a pending scan and returns it. scheduled marks a run
+// kicked off by the scheduler (vs a manual one).
+func (s *Store) CreateHostScan(ctx context.Context, hostID uuid.UUID, requestedBy *uuid.UUID, requester, profile string, scheduled bool) (*models.HostScan, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO host_scans(host_id, requested_by, requester, profile, status)
-		 VALUES($1,$2,$3,$4,'pending') RETURNING `+scanCols,
-		hostID, requestedBy, requester, profile)
+		`INSERT INTO host_scans(host_id, requested_by, requester, profile, scheduled, status)
+		 VALUES($1,$2,$3,$4,$5,'pending') RETURNING `+scanCols,
+		hostID, requestedBy, requester, profile, scheduled)
 	return scanScan(row)
 }
 

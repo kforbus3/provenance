@@ -1,14 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, MenuItem, Paper, Stack, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, Alert,
+  Alert, Autocomplete, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody,
+  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
 import { assistantModels } from "../api/assistant";
 import { downloadBackup } from "../api/system";
+import {
+  getNotifications, listEventTypes, saveNotifications, testNotification,
+  type NotificationConfig,
+} from "../api/notifications";
+import {
+  backupDownloadUrl, createBackup, getBackupPolicy, listBackups, saveBackupPolicy,
+} from "../api/backups";
+import { getTimezone, saveTimezone } from "../api/timezone";
+import {
+  browserTimezone, formatDateTime, setDisplayTimezone, supportedTimezones,
+} from "../lib/datetime";
 
 // System settings editor. Values are arbitrary JSON; the editor exposes them as
 // raw JSON text and validates before PUTting the new value.
@@ -49,11 +60,13 @@ export function SettingsPage() {
     <Box>
       <Typography variant="h5" sx={{ mb: 2 }}>System Settings</Typography>
 
+      <TimezoneCard />
       <BrandingCard current={settings["branding"]} />
       <AssistantCard current={settings["assistant"]} />
       <ScanCard current={settings["scan_policy"]} />
       <WGSettingsCard current={settings["wireguard"]} />
       <RetentionCard current={settings["recordings"]} />
+      <NotificationsCard />
       <BackupCard />
 
       <TableContainer component={Paper} variant="outlined">
@@ -104,6 +117,62 @@ export function SettingsPage() {
         </DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+// TimezoneCard sets the app-wide display timezone. It controls how every
+// timestamp is rendered and how schedule clock-times are interpreted, so saving
+// it refreshes all views.
+function TimezoneCard() {
+  const qc = useQueryClient();
+  const { data: current } = useQuery({ queryKey: ["timezone"], queryFn: getTimezone });
+  const [tz, setTz] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Always a concrete IANA zone: the saved value if set, otherwise the browser's
+  // detected zone (so it's a real zone the server can honor — never an empty
+  // "browser default" the backend can't resolve).
+  const value = tz ?? (current || browserTimezone());
+  const zones = supportedTimezones();
+  const unset = !current;
+
+  const save = useMutation({
+    mutationFn: () => saveTimezone(value),
+    onSuccess: () => {
+      setSaved(true);
+      setDisplayTimezone(value);
+      // Re-render every view (and re-read the recomputed schedule next-runs).
+      void qc.invalidateQueries();
+    },
+  });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Time zone</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        The timezone used to display all dates/times in the app and to interpret the clock times you
+        set for schedules. Pre-filled with your browser's detected zone; choose a specific zone and
+        Save to apply it across the app and the scheduler.
+      </Typography>
+      <Stack direction="row" spacing={2} alignItems="center">
+        <Autocomplete
+          options={zones}
+          value={value}
+          onChange={(_, v) => { if (v) { setTz(v); setSaved(false); } }}
+          disableClearable
+          sx={{ width: 360 }}
+          renderInput={(params) => <TextField {...params} label="Time zone" size="small" />}
+        />
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+      {unset && (
+        <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 1 }}>
+          No timezone is set yet — the server is using UTC for schedules. Save to apply your zone.
+        </Typography>
+      )}
+    </Paper>
   );
 }
 
@@ -320,21 +389,293 @@ function RetentionCard({ current }: { current: unknown }) {
   );
 }
 
-// BackupCard downloads a logical database backup. Restore is documented as an
-// out-of-band operation in the disaster-recovery guide.
+// BackupCard manages encrypted database backups: an optional recurring schedule
+// with retention, on-demand backups stored on the server, and a plaintext
+// download. Restore is an out-of-band openssl + psql one-liner (below / DR guide).
 function BackupCard() {
-  const backupMut = useMutation({ mutationFn: downloadBackup });
+  const qc = useQueryClient();
+  const { data: list } = useQuery({ queryKey: ["backups"], queryFn: listBackups });
+  const { data: policy } = useQuery({ queryKey: ["backup-policy"], queryFn: getBackupPolicy });
+
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [interval, setInterval] = useState("24");
+  const [retention, setRetention] = useState("7");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (policy && enabled === null) {
+      setEnabled(policy.enabled);
+      setInterval(String(policy.intervalHours));
+      setRetention(String(policy.retentionCount));
+    }
+  }, [policy, enabled]);
+
+  const savePolicy = useMutation({
+    mutationFn: () => saveBackupPolicy({
+      enabled: !!enabled,
+      intervalHours: Math.max(1, Number(interval) || 24),
+      retentionCount: Math.max(1, Number(retention) || 7),
+    }),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["backup-policy"] }); },
+  });
+  const backupNow = useMutation({
+    mutationFn: createBackup,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+  const plaintext = useMutation({ mutationFn: downloadBackup });
+
+  const fmtSize = (n: number) => (n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
       <Typography variant="h6">Backup &amp; Restore</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        Download a full logical database backup (pg_dump). Restore is performed offline:
-        <code> psql "$FLEET_DATABASE_URL" &lt; fleet-backup.sql</code> — see the disaster-recovery guide.
+        Encrypted database backups (pg_dump + AES-256). Backups are stored under{" "}
+        <code>{list?.dir ?? "the backup directory"}</code> — map that to off-host storage (NFS,
+        external disk, or an rsync target) so a lost host doesn't take the backups with it.
       </Typography>
-      {backupMut.isError && <Alert severity="error" sx={{ mb: 1 }}>Backup failed.</Alert>}
-      <Button variant="contained" onClick={() => backupMut.mutate()} disabled={backupMut.isPending}>
-        {backupMut.isPending ? "Preparing…" : "Download backup"}
-      </Button>
+
+      {/* Scheduled policy */}
+      <FormControlLabel
+        control={<Switch checked={!!enabled} onChange={(e) => { setEnabled(e.target.checked); setSaved(false); }} />}
+        label="Automatic scheduled backups"
+      />
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1, mb: 2 }}>
+        <TextField label="Every (hours)" type="number" size="small" value={interval}
+          onChange={(e) => { setInterval(e.target.value); setSaved(false); }} sx={{ width: 150 }}
+          inputProps={{ min: 1 }} disabled={!enabled} />
+        <TextField label="Keep last N" type="number" size="small" value={retention}
+          onChange={(e) => { setRetention(e.target.value); setSaved(false); }} sx={{ width: 150 }}
+          inputProps={{ min: 1 }} disabled={!enabled} />
+        <Button variant="contained" disabled={savePolicy.isPending} onClick={() => savePolicy.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+
+      <Stack direction="row" spacing={1.5} sx={{ mb: 1.5 }}>
+        <Button variant="outlined" onClick={() => backupNow.mutate()} disabled={backupNow.isPending}>
+          {backupNow.isPending ? "Backing up…" : "Back up now"}
+        </Button>
+        <Button variant="text" onClick={() => plaintext.mutate()} disabled={plaintext.isPending}>
+          Download plaintext (.sql)
+        </Button>
+      </Stack>
+      {backupNow.isError && <Alert severity="error" sx={{ mb: 1 }}>{(backupNow.error as Error).message}</Alert>}
+
+      {/* Stored backups */}
+      {(list?.backups.length ?? 0) > 0 && (
+        <TableContainer sx={{ mb: 1.5 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow><TableCell>Backup</TableCell><TableCell>Size</TableCell><TableCell>Created</TableCell><TableCell /></TableRow>
+            </TableHead>
+            <TableBody>
+              {list!.backups.map((b) => (
+                <TableRow key={b.name} hover>
+                  <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>{b.name}</TableCell>
+                  <TableCell>{fmtSize(b.size)}</TableCell>
+                  <TableCell sx={{ color: "text.secondary" }}>{formatDateTime(b.createdAt)}</TableCell>
+                  <TableCell align="right">
+                    <Button size="small" href={backupDownloadUrl(b.name)}>Download</Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <Alert severity="info" sx={{ mt: 1 }}>
+        <Typography variant="body2">Restore an encrypted backup (offline):</Typography>
+        <Box component="pre" sx={{ m: 0, mt: 0.5, fontSize: 12, whiteSpace: "pre-wrap" }}>
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:$FLEET_BACKUP_PASSPHRASE \{"\n"}
+          {"  "}-in fleet-backup-*.sql.enc | psql "$FLEET_DATABASE_URL"
+        </Box>
+        See the break-glass / disaster-recovery guide for the full procedure.
+      </Alert>
+    </Paper>
+  );
+}
+
+// NotificationsCard configures outbound alerts (email/webhook) and which events
+// go to which channel. Everything is off until enabled. The SMTP password is
+// write-only — the server stores it encrypted and never returns it.
+function NotificationsCard() {
+  const qc = useQueryClient();
+  const { data: loaded } = useQuery({ queryKey: ["notifications"], queryFn: getNotifications });
+  const { data: eventTypes = [] } = useQuery({ queryKey: ["notification-events"], queryFn: listEventTypes });
+
+  const [cfg, setCfg] = useState<NotificationConfig | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      const e = loaded.email ?? ({} as NotificationConfig["email"]);
+      const w = loaded.webhook ?? ({} as NotificationConfig["webhook"]);
+      setCfg({
+        email: {
+          enabled: e.enabled ?? false, host: e.host ?? "", port: e.port || 587,
+          username: e.username ?? "", from: e.from ?? "", to: e.to ?? "",
+          security: e.security || "starttls",
+        },
+        webhook: { enabled: w.enabled ?? false, url: w.url ?? "", format: w.format || "json" },
+        events: loaded.events ?? {},
+        throttleMinutes: loaded.throttleMinutes || 5,
+        passwordSet: loaded.passwordSet,
+      });
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => saveNotifications(cfg as NotificationConfig),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["notifications"] }); },
+  });
+  const test = useMutation({
+    mutationFn: (channel: "email" | "webhook") => testNotification(channel),
+    onSuccess: (r) => setTestMsg(r.ok ? "Test sent successfully." : `Test failed: ${r.error}`),
+    onError: () => setTestMsg("Test failed."),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Notifications</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+
+  const dirty = () => { setSaved(false); setTestMsg(null); };
+  const setEmail = (patch: Partial<NotificationConfig["email"]>) => { setCfg({ ...cfg, email: { ...cfg.email, ...patch } }); dirty(); };
+  const setWebhook = (patch: Partial<NotificationConfig["webhook"]>) => { setCfg({ ...cfg, webhook: { ...cfg.webhook, ...patch } }); dirty(); };
+  const setRoute = (key: string, ch: "email" | "webhook", on: boolean) => {
+    const row = cfg.events[key] ?? { email: false, webhook: false };
+    setCfg({ ...cfg, events: { ...cfg.events, [key]: { ...row, [ch]: on } } });
+    dirty();
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Notifications</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Send alerts on key events (host offline, pending approvals, scan findings, failed playbook
+        runs). Configure a channel, choose which events route to it, then Save. Everything is off by
+        default.
+      </Typography>
+
+      {/* Email channel */}
+      <FormControlLabel
+        control={<Switch checked={cfg.email.enabled} onChange={(e) => setEmail({ enabled: e.target.checked })} />}
+        label="Email (SMTP)"
+      />
+      {cfg.email.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1, mb: 1, pl: 1 }}>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="SMTP host" size="small" value={cfg.email.host}
+              onChange={(e) => setEmail({ host: e.target.value })} sx={{ flexGrow: 1 }} placeholder="smtp.example.com" />
+            <TextField label="Port" size="small" type="number" value={cfg.email.port}
+              onChange={(e) => setEmail({ port: Number(e.target.value) || 587 })} sx={{ width: 110 }} />
+            <TextField label="Security" size="small" select value={cfg.email.security}
+              onChange={(e) => setEmail({ security: e.target.value })} sx={{ width: 150 }}>
+              <MenuItem value="starttls">STARTTLS</MenuItem>
+              <MenuItem value="tls">TLS (SMTPS)</MenuItem>
+              <MenuItem value="none">None</MenuItem>
+            </TextField>
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Username" size="small" value={cfg.email.username}
+              onChange={(e) => setEmail({ username: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="off" />
+            <TextField label="Password" size="small" type="password" value={cfg.email.password ?? ""}
+              onChange={(e) => setEmail({ password: e.target.value })} sx={{ flexGrow: 1 }} autoComplete="new-password"
+              placeholder={cfg.passwordSet ? "•••••••• (unchanged)" : ""} />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="From" size="small" value={cfg.email.from}
+              onChange={(e) => setEmail({ from: e.target.value })} sx={{ flexGrow: 1 }} placeholder="fleet@example.com" />
+            <TextField label="To (comma-separated)" size="small" value={cfg.email.to}
+              onChange={(e) => setEmail({ to: e.target.value })} sx={{ flexGrow: 1 }} placeholder="you@example.com" />
+          </Stack>
+          <Box>
+            <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("email")}>
+              Send test email
+            </Button>
+          </Box>
+        </Stack>
+      )}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* Webhook channel */}
+      <FormControlLabel
+        control={<Switch checked={cfg.webhook.enabled} onChange={(e) => setWebhook({ enabled: e.target.checked })} />}
+        label="Webhook"
+      />
+      {cfg.webhook.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1, mb: 1, pl: 1 }}>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Webhook URL" size="small" value={cfg.webhook.url}
+              onChange={(e) => setWebhook({ url: e.target.value })} sx={{ flexGrow: 1 }}
+              placeholder="https://hooks.example.com/…" />
+            <TextField label="Format" size="small" select value={cfg.webhook.format}
+              onChange={(e) => setWebhook({ format: e.target.value })} sx={{ width: 160 }}>
+              <MenuItem value="json">Generic JSON</MenuItem>
+              <MenuItem value="slack">Slack / Mattermost</MenuItem>
+              <MenuItem value="discord">Discord</MenuItem>
+            </TextField>
+          </Stack>
+          <Box>
+            <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("webhook")}>
+              Send test webhook
+            </Button>
+          </Box>
+        </Stack>
+      )}
+
+      {testMsg && <Alert severity={testMsg.startsWith("Test sent") ? "success" : "error"} sx={{ my: 1 }}>{testMsg}</Alert>}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* Event routing matrix */}
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Which events to send</Typography>
+      <TableContainer>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Event</TableCell>
+              <TableCell align="center">Email</TableCell>
+              <TableCell align="center">Webhook</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {eventTypes.map((ev) => {
+              const row = cfg.events[ev.key] ?? { email: false, webhook: false };
+              return (
+                <TableRow key={ev.key}>
+                  <TableCell>{ev.label}</TableCell>
+                  <TableCell align="center">
+                    <Checkbox size="small" checked={row.email} disabled={!cfg.email.enabled}
+                      onChange={(e) => setRoute(ev.key, "email", e.target.checked)} />
+                  </TableCell>
+                  <TableCell align="center">
+                    <Checkbox size="small" checked={row.webhook} disabled={!cfg.webhook.enabled}
+                      onChange={(e) => setRoute(ev.key, "webhook", e.target.checked)} />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1.5 }}>
+        <TextField label="Throttle (minutes)" size="small" type="number" value={cfg.throttleMinutes}
+          onChange={(e) => { setCfg({ ...cfg, throttleMinutes: Number(e.target.value) || 5 }); dirty(); }}
+          sx={{ width: 180 }} helperText="Suppress repeats of the same event" />
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
     </Paper>
   );
 }

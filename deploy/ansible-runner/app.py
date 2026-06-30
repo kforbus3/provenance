@@ -57,8 +57,10 @@ def _run_against_tempfile(argv_builder, content: str) -> CheckResult:
     try:
         path = os.path.join(workdir, "playbook.yml")
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        argv = argv_builder(path)
+            # Always end with a single newline so the trivial "no newline at end
+            # of file" lint rule doesn't fire on pasted content.
+            fh.write(content if content.endswith("\n") else content + "\n")
+        argv = argv_builder(path, workdir)
         try:
             proc = subprocess.run(
                 argv,
@@ -67,8 +69,11 @@ def _run_against_tempfile(argv_builder, content: str) -> CheckResult:
                 text=True,
                 timeout=CHECK_TIMEOUT,
                 # Never inherit credentials/agents; nothing here should reach a host.
+                # HOME + XDG_CACHE_HOME point ansible-lint at a writable cache so it
+                # doesn't warn about an unwritable project/cache directory.
                 env={"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
                      "HOME": workdir,
+                     "XDG_CACHE_HOME": workdir,
                      "ANSIBLE_NOCOLOR": "1",
                      "ANSIBLE_LOCAL_TEMP": workdir,
                      "ANSIBLE_RETRY_FILES_ENABLED": "0"},
@@ -95,15 +100,19 @@ def syntax_check(req: ContentRequest):
     # `-i localhost,` gives an inline inventory so syntax-check never complains
     # about an empty hosts list; it still does not connect to anything.
     return _run_against_tempfile(
-        lambda path: ["ansible-playbook", "--syntax-check", "-i", "localhost,", path],
+        lambda path, workdir: ["ansible-playbook", "--syntax-check", "-i", "localhost,", path],
         req.content,
     )
 
 
 @app.post("/lint", response_model=CheckResult)
 def lint(req: ContentRequest):
+    # --project-dir gives ansible-lint a writable place for its cache (the temp
+    # dir), silencing the "project directory not writable" warnings.
     return _run_against_tempfile(
-        lambda path: ["ansible-lint", "--nocolor", "--parseable", path],
+        lambda path, workdir: [
+            "ansible-lint", "--nocolor", "--parseable", "--project-dir", workdir, path,
+        ],
         req.content,
     )
 

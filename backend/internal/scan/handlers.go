@@ -139,7 +139,7 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 		add(id)
 	}
 
-	rec, err := h.d.Store.CreateHostScan(r.Context(), host.ID, &p.UserID, p.Username, rq.Profile)
+	rec, err := h.d.Store.CreateHostScan(r.Context(), host.ID, &p.UserID, p.Username, rq.Profile, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create scan")
 		return

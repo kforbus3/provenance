@@ -10,6 +10,9 @@ export interface HostInventory {
   cpuCount: number;
   memoryMb: number;
   collectedAt?: string;
+  updatesAvailable?: number;
+  securityUpdates?: number;
+  updatesCheckedAt?: string;
 }
 
 export interface HostStatus {
@@ -208,6 +211,9 @@ export interface EnrollParams {
   // Route the bootstrap SSH connection through the jump host (for hosts the
   // backend can't reach directly but the jump host can).
   viaJump?: boolean;
+  // Skip WireGuard: the host is directly reachable from the jump host (same LAN,
+  // or the host that runs Fleet itself), so no overlay is set up.
+  skipWireGuard?: boolean;
 }
 
 // Enroll installs CA trust + WireGuard on the host (when bootstrapping), sets up

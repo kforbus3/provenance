@@ -127,6 +127,12 @@ type HostInventory struct {
 	CPUCount      int        `json:"cpuCount"`
 	MemoryMB      int64      `json:"memoryMb"`
 	CollectedAt   *time.Time `json:"collectedAt,omitempty"`
+
+	// Pending package updates (nil = not yet checked). SecurityUpdates is the
+	// subset flagged as security fixes where the package manager reports it.
+	UpdatesAvailable *int       `json:"updatesAvailable,omitempty"`
+	SecurityUpdates  *int       `json:"securityUpdates,omitempty"`
+	UpdatesCheckedAt *time.Time `json:"updatesCheckedAt,omitempty"`
 }
 
 // HostStatus is the live health of a host.
@@ -322,6 +328,7 @@ type HostScan struct {
 	TotalRules   int        `json:"totalRules"`
 	Error        string     `json:"error,omitempty"`
 	SkipRules    []string   `json:"skipRules,omitempty"`
+	Scheduled    bool       `json:"scheduled"`
 	StartedAt    *time.Time `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
@@ -354,10 +361,40 @@ type AssistantHostRow struct {
 	LatencyMS      *int       `json:"latencyMs,omitempty"`
 	WGOK           *bool      `json:"wireguardOk,omitempty"`
 	LastSeen       *time.Time `json:"lastSeen,omitempty"`
+	UpdatesAvailable *int     `json:"updatesAvailable,omitempty"`
+	SecurityUpdates  *int     `json:"securityUpdates,omitempty"`
 	Groups         []string   `json:"groups,omitempty"`
 	Tags           []string   `json:"tags,omitempty"`
 	Owner          string     `json:"owner,omitempty"`
 	Enrolled       bool       `json:"enrolled"`
+}
+
+// AssistantScanRow is a recent security scan surfaced to the AI assistant.
+type AssistantScanRow struct {
+	Hostname   string     `json:"hostname"`
+	Profile    string     `json:"profile,omitempty"`
+	Status     string     `json:"status"`
+	Score      *float64   `json:"score,omitempty"`
+	PassCount  int        `json:"passCount"`
+	FailCount  int        `json:"failCount"`
+	Requester  string     `json:"requester,omitempty"`
+	Scheduled  bool       `json:"scheduled"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}
+
+// AssistantPlaybookRunRow is a recent playbook run surfaced to the AI assistant.
+type AssistantPlaybookRunRow struct {
+	Playbook   string     `json:"playbook"`
+	TargetKind string     `json:"targetKind"`
+	TargetName string     `json:"targetName,omitempty"`
+	HostCount  int        `json:"hostCount"`
+	CheckMode  bool       `json:"checkMode"`
+	Status     string     `json:"status"`
+	Requester  string     `json:"requester,omitempty"`
+	Scheduled  bool       `json:"scheduled"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
 }
 
 // ScanFinding is one rule outcome from a scan (used to list failures the user

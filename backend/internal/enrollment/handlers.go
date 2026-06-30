@@ -45,6 +45,7 @@ type enrollReq struct {
 	SudoPassword  string `json:"sudoPassword"`  // sudo password (if sudo needs one)
 	WGEndpoint    string `json:"wgEndpoint"`    // jump host's public WireGuard endpoint
 	ViaJump       bool   `json:"viaJump"`       // route bootstrap through the jump host
+	SkipWireGuard bool   `json:"skipWireGuard"` // host is directly reachable from the jump host
 }
 
 func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +74,7 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 		Method: req.Method, BootstrapUser: req.BootstrapUser, Password: req.Password,
 		PrivateKey: req.PrivateKey, KeyPassphrase: req.KeyPassphrase,
 		SudoPassword: req.SudoPassword, WGEndpoint: req.WGEndpoint, ViaJump: req.ViaJump,
+		SkipWireGuard: req.SkipWireGuard,
 	})
 	if err != nil {
 		// Surface the failed job so the UI can show which step failed.

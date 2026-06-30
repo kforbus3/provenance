@@ -6,6 +6,7 @@ package approvals
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +15,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -88,6 +90,15 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "approval.request", ar.ID.String(), map[string]any{
 		"targetKind": ar.TargetKind, "targetName": ar.TargetName, "requestedSecs": ar.RequestedSecs,
 	})
+	if h.d.Notify != nil {
+		p := auth.MustPrincipal(r)
+		h.d.Notify.Notify(r.Context(), notify.Event{
+			Type: notify.EventApprovalPending, Severity: notify.SeverityInfo,
+			Title: "Access request pending approval",
+			Body: fmt.Sprintf("%s requested access to %s %q. Review it in Approvals → Queue.",
+				p.Username, ar.TargetKind, ar.TargetName),
+		})
+	}
 	writeJSON(w, http.StatusCreated, ar)
 }
 
