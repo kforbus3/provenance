@@ -131,4 +131,5 @@ for day-to-day flows (enroll, connect, transfer, MFA).
 
 ## License
 
-Internal / proprietary (adjust as appropriate for your organization).
+Licensed under the [Apache License, Version 2.0](LICENSE). See the [LICENSE](LICENSE)
+and [NOTICE](NOTICE) files for details.
