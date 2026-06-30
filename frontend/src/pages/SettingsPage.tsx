@@ -129,10 +129,12 @@ function TimezoneCard() {
   const [tz, setTz] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // "" = follow the browser's local zone.
-  const value = tz ?? (current ?? "");
-  const zones = ["", ...supportedTimezones()];
-  const label = (z: string) => (z === "" ? `Browser default (${browserTimezone()})` : z);
+  // Always a concrete IANA zone: the saved value if set, otherwise the browser's
+  // detected zone (so it's a real zone the server can honor — never an empty
+  // "browser default" the backend can't resolve).
+  const value = tz ?? (current || browserTimezone());
+  const zones = supportedTimezones();
+  const unset = !current;
 
   const save = useMutation({
     mutationFn: () => saveTimezone(value),
@@ -149,14 +151,14 @@ function TimezoneCard() {
       <Typography variant="h6">Time zone</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
         The timezone used to display all dates/times in the app and to interpret the clock times you
-        set for schedules. Defaults to your browser's zone.
+        set for schedules. Pre-filled with your browser's detected zone; choose a specific zone and
+        Save to apply it across the app and the scheduler.
       </Typography>
       <Stack direction="row" spacing={2} alignItems="center">
         <Autocomplete
           options={zones}
           value={value}
-          onChange={(_, v) => { setTz(v ?? ""); setSaved(false); }}
-          getOptionLabel={label}
+          onChange={(_, v) => { if (v) { setTz(v); setSaved(false); } }}
           disableClearable
           sx={{ width: 360 }}
           renderInput={(params) => <TextField {...params} label="Time zone" size="small" />}
@@ -165,6 +167,11 @@ function TimezoneCard() {
           {saved ? "Saved" : "Save"}
         </Button>
       </Stack>
+      {unset && (
+        <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 1 }}>
+          No timezone is set yet — the server is using UTC for schedules. Save to apply your zone.
+        </Typography>
+      )}
     </Paper>
   );
 }
