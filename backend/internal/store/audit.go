@@ -51,6 +51,13 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 	if err != nil {
 		return nil, err
 	}
+	// Forward to syslog/SIEM (best-effort, off the request path). Merge the
+	// input fields the INSERT didn't return so the forwarded event is complete.
+	if s.auditSink != nil {
+		out.ActorID, out.ActorName, out.IP, out.Detail = e.ActorID, e.ActorName, e.IP, e.Detail
+		ev := out
+		go s.auditSink(ev)
+	}
 	return &out, nil
 }
 

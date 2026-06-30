@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/fleet-terminal/backend/internal/models"
 )
 
 // ErrNotFound is returned when a lookup matches no rows.
@@ -16,11 +18,17 @@ var ErrNotFound = errors.New("not found")
 
 // Store wraps a pgx pool and exposes repository methods.
 type Store struct {
-	pool *pgxpool.Pool
+	pool      *pgxpool.Pool
+	auditSink func(models.AuditEvent) // optional: forward each appended audit event
 }
 
 // New constructs a Store.
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+// SetAuditSink registers a callback invoked (asynchronously) for every audit
+// event written via AppendAudit — used to forward events to syslog/SIEM. Set
+// once at startup before serving.
+func (s *Store) SetAuditSink(fn func(models.AuditEvent)) { s.auditSink = fn }
 
 // Pool exposes the underlying pool for advanced/transactional use.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }

@@ -28,6 +28,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/approvals"
 	"github.com/fleet-terminal/backend/internal/assistant"
 	"github.com/fleet-terminal/backend/internal/auditapi"
+	"github.com/fleet-terminal/backend/internal/auditfwd"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/backup"
 	"github.com/fleet-terminal/backend/internal/bootstrap"
@@ -79,6 +80,7 @@ type Server struct {
 	playbookSvc *playbook.Service
 	scheduler   *scheduler.Engine
 	backups     *backup.Service
+	auditFwd    *auditfwd.Forwarder
 
 	router chi.Router
 }
@@ -111,6 +113,8 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)
+	s.auditFwd = auditfwd.New(st, log)
+	st.SetAuditSink(s.auditFwd.Forward) // forward audit events to syslog/SIEM when enabled
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
 	// zeroize the key and revoke its certificates.
@@ -458,6 +462,9 @@ func (s *Server) registerRoutes(r chi.Router) {
 	sessionsapi.Mount(r, deps)
 	approvals.Mount(r, deps)
 	system.Mount(r, deps, s.Jobs)
+
+	// Audit forwarding to syslog/SIEM (admin-configurable).
+	auditfwd.Mount(r, s.Auth, s.auditFwd)
 
 	// System health (admin): live status of DB, CA, jump host, runner, backups, jobs.
 	r.Group(func(pr chi.Router) {

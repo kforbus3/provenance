@@ -18,6 +18,9 @@ import {
 } from "../api/backups";
 import { getTimezone, saveTimezone } from "../api/timezone";
 import {
+  getAuditForwarding, saveAuditForwarding, testAuditForwarding, type AuditForwardConfig,
+} from "../api/auditForwarding";
+import {
   browserTimezone, formatDateTime, setDisplayTimezone, supportedTimezones,
 } from "../lib/datetime";
 
@@ -67,6 +70,7 @@ export function SettingsPage() {
       <WGSettingsCard current={settings["wireguard"]} />
       <RetentionCard current={settings["recordings"]} />
       <NotificationsCard />
+      <AuditForwardingCard />
       <BackupCard />
 
       <TableContainer component={Paper} variant="outlined">
@@ -384,6 +388,91 @@ function RetentionCard({ current }: { current: unknown }) {
         <Button variant="contained" sx={{ mt: 1 }} disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
         </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+// AuditForwardingCard streams audit events to an external collector (syslog or
+// HTTP) for a SIEM. Off until enabled; the in-app hash-chained log stays the
+// system of record.
+function AuditForwardingCard() {
+  const { data: loaded } = useQuery({ queryKey: ["audit-forwarding"], queryFn: getAuditForwarding });
+  const [cfg, setCfg] = useState<AuditForwardConfig | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      setCfg({
+        enabled: loaded.enabled ?? false,
+        type: loaded.type || "syslog",
+        address: loaded.address ?? "",
+        protocol: loaded.protocol || "udp",
+      });
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => saveAuditForwarding(cfg as AuditForwardConfig),
+    onSuccess: () => setSaved(true),
+  });
+  const test = useMutation({
+    mutationFn: () => testAuditForwarding(cfg as AuditForwardConfig),
+    onSuccess: (r) => setTestMsg(r.ok ? "Test event sent." : `Test failed: ${r.error}`),
+    onError: () => setTestMsg("Test failed."),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Audit forwarding (SIEM)</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+  const set = (patch: Partial<AuditForwardConfig>) => { setCfg({ ...cfg, ...patch }); setSaved(false); setTestMsg(null); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Audit forwarding (SIEM)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Stream every audit event to an external collector for your SIEM. Best-effort and off by
+        default; the in-app tamper-evident log remains the system of record.
+      </Typography>
+      <FormControlLabel
+        control={<Switch checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Forward audit events"
+      />
+      {cfg.enabled && (
+        <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1 }}>
+          <TextField select size="small" label="Collector" value={cfg.type}
+            onChange={(e) => set({ type: e.target.value as AuditForwardConfig["type"] })} sx={{ width: 150 }}>
+            <MenuItem value="syslog">Syslog</MenuItem>
+            <MenuItem value="http">HTTP (JSON)</MenuItem>
+          </TextField>
+          <TextField size="small" label={cfg.type === "http" ? "Collector URL" : "host:port"} value={cfg.address}
+            onChange={(e) => set({ address: e.target.value })} sx={{ flexGrow: 1 }}
+            placeholder={cfg.type === "http" ? "https://siem.example.com/audit" : "siem.example.com:514"} />
+          {cfg.type === "syslog" && (
+            <TextField select size="small" label="Protocol" value={cfg.protocol}
+              onChange={(e) => set({ protocol: e.target.value as AuditForwardConfig["protocol"] })} sx={{ width: 110 }}>
+              <MenuItem value="udp">UDP</MenuItem>
+              <MenuItem value="tcp">TCP</MenuItem>
+            </TextField>
+          )}
+        </Stack>
+      )}
+      {testMsg && <Alert severity={testMsg.startsWith("Test event") ? "success" : "error"} sx={{ mt: 1.5 }}>{testMsg}</Alert>}
+      <Stack direction="row" spacing={1.5} sx={{ mt: 1.5 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+        {cfg.enabled && (
+          <Button variant="outlined" disabled={test.isPending || !cfg.address} onClick={() => test.mutate()}>
+            Send test event
+          </Button>
+        )}
       </Stack>
     </Paper>
   );
