@@ -88,6 +88,12 @@ type Config struct {
 	// Empty disables the Ansible playbook feature's runner-backed operations.
 	AnsibleRunnerURL string
 
+	// Encrypted database backups: destination directory and the passphrase used
+	// to encrypt them (openssl AES-256-CBC, PBKDF2). The passphrase falls back to
+	// the CA passphrase if unset; set a distinct one to decouple the two.
+	BackupDir        string
+	BackupPassphrase string
+
 	// SFTP upload size cap in bytes (0 = unlimited).
 	MaxUploadBytes int64
 
@@ -141,6 +147,8 @@ func Load() (*Config, error) {
 		ScapContentDir:     env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion: env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:   env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
+		BackupDir:          env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
+		BackupPassphrase:   env("FLEET_BACKUP_PASSPHRASE", ""),
 		MaxUploadBytes:     envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
 		LogLevel:           env("FLEET_LOG_LEVEL", "info"),
 		LogFormat:          env("FLEET_LOG_FORMAT", "json"),

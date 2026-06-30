@@ -98,6 +98,7 @@ services:
       - recordings:/var/lib/fleet/recordings
       - scans:/var/lib/fleet/scans
       - scap-content:/var/lib/fleet/scap-content
+      - backups:/var/lib/fleet/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,6 +136,7 @@ volumes:
   recordings:
   scans:
   scap-content:
+  backups:
 
 networks:
   fleet:

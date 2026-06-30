@@ -41,6 +41,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/metrics"
+	"github.com/fleet-terminal/backend/internal/backup"
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
@@ -76,6 +77,7 @@ type Server struct {
 	scanSvc     *scan.Service
 	playbookSvc *playbook.Service
 	scheduler   *scheduler.Engine
+	backups     *backup.Service
 
 	router chi.Router
 }
@@ -107,6 +109,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
+	s.backups = backup.New(st, cfg, log)
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
 	// zeroize the key and revoke its certificates.
@@ -166,6 +169,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.retentionLoop(ctx)
 	go s.krlLoop(ctx)
 	go s.scheduler.Run(ctx)
+	go s.backups.Run(ctx)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx)
 	return nil
 }
@@ -443,6 +447,9 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// Recurring scans / playbook runs.
 	scheduler.Mount(r, deps, s.scheduler)
+
+	// Encrypted database backups (scheduled + on-demand).
+	backup.Mount(r, deps, s.backups)
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)

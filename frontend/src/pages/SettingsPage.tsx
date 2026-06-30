@@ -13,6 +13,9 @@ import {
   getNotifications, listEventTypes, saveNotifications, testNotification,
   type NotificationConfig,
 } from "../api/notifications";
+import {
+  backupDownloadUrl, createBackup, getBackupPolicy, listBackups, saveBackupPolicy,
+} from "../api/backups";
 
 // System settings editor. Values are arbitrary JSON; the editor exposes them as
 // raw JSON text and validates before PUTting the new value.
@@ -325,21 +328,110 @@ function RetentionCard({ current }: { current: unknown }) {
   );
 }
 
-// BackupCard downloads a logical database backup. Restore is documented as an
-// out-of-band operation in the disaster-recovery guide.
+// BackupCard manages encrypted database backups: an optional recurring schedule
+// with retention, on-demand backups stored on the server, and a plaintext
+// download. Restore is an out-of-band openssl + psql one-liner (below / DR guide).
 function BackupCard() {
-  const backupMut = useMutation({ mutationFn: downloadBackup });
+  const qc = useQueryClient();
+  const { data: list } = useQuery({ queryKey: ["backups"], queryFn: listBackups });
+  const { data: policy } = useQuery({ queryKey: ["backup-policy"], queryFn: getBackupPolicy });
+
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [interval, setInterval] = useState("24");
+  const [retention, setRetention] = useState("7");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (policy && enabled === null) {
+      setEnabled(policy.enabled);
+      setInterval(String(policy.intervalHours));
+      setRetention(String(policy.retentionCount));
+    }
+  }, [policy, enabled]);
+
+  const savePolicy = useMutation({
+    mutationFn: () => saveBackupPolicy({
+      enabled: !!enabled,
+      intervalHours: Math.max(1, Number(interval) || 24),
+      retentionCount: Math.max(1, Number(retention) || 7),
+    }),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["backup-policy"] }); },
+  });
+  const backupNow = useMutation({
+    mutationFn: createBackup,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+  const plaintext = useMutation({ mutationFn: downloadBackup });
+
+  const fmtSize = (n: number) => (n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
       <Typography variant="h6">Backup &amp; Restore</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        Download a full logical database backup (pg_dump). Restore is performed offline:
-        <code> psql "$FLEET_DATABASE_URL" &lt; fleet-backup.sql</code> — see the disaster-recovery guide.
+        Encrypted database backups (pg_dump + AES-256). Backups are stored under{" "}
+        <code>{list?.dir ?? "the backup directory"}</code> — map that to off-host storage (NFS,
+        external disk, or an rsync target) so a lost host doesn't take the backups with it.
       </Typography>
-      {backupMut.isError && <Alert severity="error" sx={{ mb: 1 }}>Backup failed.</Alert>}
-      <Button variant="contained" onClick={() => backupMut.mutate()} disabled={backupMut.isPending}>
-        {backupMut.isPending ? "Preparing…" : "Download backup"}
-      </Button>
+
+      {/* Scheduled policy */}
+      <FormControlLabel
+        control={<Switch checked={!!enabled} onChange={(e) => { setEnabled(e.target.checked); setSaved(false); }} />}
+        label="Automatic scheduled backups"
+      />
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1, mb: 2 }}>
+        <TextField label="Every (hours)" type="number" size="small" value={interval}
+          onChange={(e) => { setInterval(e.target.value); setSaved(false); }} sx={{ width: 150 }}
+          inputProps={{ min: 1 }} disabled={!enabled} />
+        <TextField label="Keep last N" type="number" size="small" value={retention}
+          onChange={(e) => { setRetention(e.target.value); setSaved(false); }} sx={{ width: 150 }}
+          inputProps={{ min: 1 }} disabled={!enabled} />
+        <Button variant="contained" disabled={savePolicy.isPending} onClick={() => savePolicy.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+
+      <Stack direction="row" spacing={1.5} sx={{ mb: 1.5 }}>
+        <Button variant="outlined" onClick={() => backupNow.mutate()} disabled={backupNow.isPending}>
+          {backupNow.isPending ? "Backing up…" : "Back up now"}
+        </Button>
+        <Button variant="text" onClick={() => plaintext.mutate()} disabled={plaintext.isPending}>
+          Download plaintext (.sql)
+        </Button>
+      </Stack>
+      {backupNow.isError && <Alert severity="error" sx={{ mb: 1 }}>{(backupNow.error as Error).message}</Alert>}
+
+      {/* Stored backups */}
+      {(list?.backups.length ?? 0) > 0 && (
+        <TableContainer sx={{ mb: 1.5 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow><TableCell>Backup</TableCell><TableCell>Size</TableCell><TableCell>Created</TableCell><TableCell /></TableRow>
+            </TableHead>
+            <TableBody>
+              {list!.backups.map((b) => (
+                <TableRow key={b.name} hover>
+                  <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>{b.name}</TableCell>
+                  <TableCell>{fmtSize(b.size)}</TableCell>
+                  <TableCell sx={{ color: "text.secondary" }}>{new Date(b.createdAt).toLocaleString()}</TableCell>
+                  <TableCell align="right">
+                    <Button size="small" href={backupDownloadUrl(b.name)}>Download</Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <Alert severity="info" sx={{ mt: 1 }}>
+        <Typography variant="body2">Restore an encrypted backup (offline):</Typography>
+        <Box component="pre" sx={{ m: 0, mt: 0.5, fontSize: 12, whiteSpace: "pre-wrap" }}>
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:$FLEET_BACKUP_PASSPHRASE \{"\n"}
+          {"  "}-in fleet-backup-*.sql.enc | psql "$FLEET_DATABASE_URL"
+        </Box>
+        See the break-glass / disaster-recovery guide for the full procedure.
+      </Alert>
     </Paper>
   );
 }
