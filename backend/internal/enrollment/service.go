@@ -81,6 +81,11 @@ type EnrollParams struct {
 	// ViaJump routes the bootstrap SSH connection through the jump host instead
 	// of connecting directly from the backend.
 	ViaJump bool
+	// SkipWireGuard enrolls a host that is directly reachable from the jump host
+	// (e.g. on the jump host's LAN, or the host that runs Fleet itself), so the
+	// WireGuard overlay is unnecessary. The host keeps no overlay address and the
+	// gateway reaches it through the jump host at its management address.
+	SkipWireGuard bool
 }
 
 func (p EnrollParams) method() string {
@@ -298,58 +303,65 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	}
 
 	// 6) Determine the overlay address (operator-specified or auto-assigned).
-	wgIP := strings.TrimSpace(host.WGAddress)
-	if wgIP != "" {
-		if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
-			return fail("assign_overlay_address",
-				fmt.Errorf("WireGuard address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet))
+	//    Skipped for a directly-reachable host — it has no overlay address.
+	var wgIP, hostPub string
+	if !params.SkipWireGuard {
+		wgIP = strings.TrimSpace(host.WGAddress)
+		if wgIP != "" {
+			if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
+				return fail("assign_overlay_address",
+					fmt.Errorf("WireGuard address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet))
+			}
+			if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
+				return fail("assign_overlay_address",
+					fmt.Errorf("WireGuard address %s is already assigned to another host", wgIP))
+			}
+		} else {
+			wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
+			if err != nil {
+				return fail("assign_overlay_address", err)
+			}
 		}
-		if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
-			return fail("assign_overlay_address",
-				fmt.Errorf("WireGuard address %s is already assigned to another host", wgIP))
+
+		// 7) Bring up WireGuard on the host (kernel module preferred, userspace
+		//    wireguard-go fallback). The private key is generated on the host.
+		// The endpoint the managed host uses to reach the jump host (VPN server). Must
+		// be routable FROM the host. Precedence: per-enroll override -> DB setting ->
+		// config default (FLEET_WG_JUMP_ENDPOINT).
+		jumpEndpoint := strings.TrimSpace(params.WGEndpoint)
+		if jumpEndpoint == "" {
+			jumpEndpoint = s.store.WireGuardEndpoint(ctx)
 		}
-	} else {
-		wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
+		if jumpEndpoint == "" {
+			jumpEndpoint = s.cfg.WGJumpEndpoint
+		}
+		out, err := priv(s.hostWGScript(wgIP, jumpPub, jumpEndpoint))
 		if err != nil {
-			return fail("assign_overlay_address", err)
+			return fail("configure_host_wireguard", orErr(err, out))
 		}
-	}
+		hostPub = parseKV(out, "HOSTPUB")
+		if hostPub == "" {
+			return fail("configure_host_wireguard", fmt.Errorf("host public key not produced: %s", oneLine(out)))
+		}
+		wgAddr := parseKV(out, "WGADDR")
+		if wgAddr == "" {
+			return fail("configure_host_wireguard",
+				fmt.Errorf("wireguard interface did not come up: %s", oneLine(out)))
+		}
+		step("configure_host_wireguard", "ok",
+			fmt.Sprintf("%s up (addr %s) pub=%s", s.cfg.WGInterface, wgAddr, short(hostPub)))
 
-	// 7) Bring up WireGuard on the host (kernel module preferred, userspace
-	//    wireguard-go fallback). The private key is generated on the host.
-	// The endpoint the managed host uses to reach the jump host (VPN server). Must
-	// be routable FROM the host. Precedence: per-enroll override -> DB setting ->
-	// config default (FLEET_WG_JUMP_ENDPOINT).
-	jumpEndpoint := strings.TrimSpace(params.WGEndpoint)
-	if jumpEndpoint == "" {
-		jumpEndpoint = s.store.WireGuardEndpoint(ctx)
+		// 8) Add the host as a peer on the jump host (the VPN server).
+		hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
+		jumpScript := s.jumpPeerScript(host.Hostname, hostPub, hostEndpoint, wgIP)
+		if jout, jerr := run(jumpClient, "sudo sh -c "+shellQuote(jumpScript)); jerr != nil {
+			return fail("configure_jump_peer", orErr(jerr, jout))
+		}
+		step("configure_jump_peer", "ok", fmt.Sprintf("peer %s allowed-ips %s/32", short(hostPub), wgIP))
+	} else {
+		step("configure_host_wireguard", "skipped",
+			"host is directly reachable from the jump host — reached at its management address, no overlay")
 	}
-	if jumpEndpoint == "" {
-		jumpEndpoint = s.cfg.WGJumpEndpoint
-	}
-	out, err := priv(s.hostWGScript(wgIP, jumpPub, jumpEndpoint))
-	if err != nil {
-		return fail("configure_host_wireguard", orErr(err, out))
-	}
-	hostPub := parseKV(out, "HOSTPUB")
-	if hostPub == "" {
-		return fail("configure_host_wireguard", fmt.Errorf("host public key not produced: %s", oneLine(out)))
-	}
-	wgAddr := parseKV(out, "WGADDR")
-	if wgAddr == "" {
-		return fail("configure_host_wireguard",
-			fmt.Errorf("wireguard interface did not come up: %s", oneLine(out)))
-	}
-	step("configure_host_wireguard", "ok",
-		fmt.Sprintf("%s up (addr %s) pub=%s", s.cfg.WGInterface, wgAddr, short(hostPub)))
-
-	// 8) Add the host as a peer on the jump host (the VPN server).
-	hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
-	jumpScript := s.jumpPeerScript(host.Hostname, hostPub, hostEndpoint, wgIP)
-	if jout, jerr := run(jumpClient, "sudo sh -c "+shellQuote(jumpScript)); jerr != nil {
-		return fail("configure_jump_peer", orErr(jerr, jout))
-	}
-	step("configure_jump_peer", "ok", fmt.Sprintf("peer %s allowed-ips %s/32", short(hostPub), wgIP))
 
 	// 8b) Install the KRL + RevokedKeys directive so the host enforces certificate
 	//     revocation. A valid KRL is written BEFORE enabling the directive, and the
@@ -372,12 +384,15 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	// 9) Connectivity check: confirm the WireGuard tunnel actually establishes a
 	//    handshake. A failure here usually means the jump endpoint is not
 	//    reachable from the host (firewall / wrong address / UDP port closed).
-	if ok, detail := s.verifyWireGuard(priv); ok {
-		step("verify_connectivity", "ok", detail)
-	} else {
-		step("verify_connectivity", "warning", fmt.Sprintf(
-			"no WireGuard handshake yet — ensure the jump endpoint %s is reachable from the host on UDP %d (firewall/port-forward) and the jump host is listening. %s",
-			jumpEndpoint, s.cfg.WGPort, detail))
+	//    Skipped for a directly-reachable host (no tunnel to verify).
+	if !params.SkipWireGuard {
+		if ok, detail := s.verifyWireGuard(priv); ok {
+			step("verify_connectivity", "ok", detail)
+		} else {
+			step("verify_connectivity", "warning", fmt.Sprintf(
+				"no WireGuard handshake yet — ensure the jump endpoint %s is reachable from the host on UDP %d (firewall/port-forward) and the jump host is listening. %s",
+				s.cfg.WGJumpEndpoint, s.cfg.WGPort, detail))
+		}
 	}
 
 	// 10) Persist the address/enrolled state now so the validation dial can use it.

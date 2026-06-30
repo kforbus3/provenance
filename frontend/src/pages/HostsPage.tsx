@@ -1025,6 +1025,7 @@ function EnrollCredsDialog({
   const [sudoPassword, setSudoPassword] = useState("");
   const [wgEndpoint, setWgEndpoint] = useState("");
   const [viaJump, setViaJump] = useState(false);
+  const [skipWireGuard, setSkipWireGuard] = useState(false);
   // No-install (ssh-pipe) flow state.
   const [sshTarget, setSshTarget] = useState("");
   const [hostPubKey, setHostPubKey] = useState("");
@@ -1184,10 +1185,22 @@ function EnrollCredsDialog({
             />
           </Stack>
         )}
+        <FormControlLabel
+          sx={{ mt: 2, display: "block" }}
+          control={<Checkbox checked={skipWireGuard} onChange={(e) => setSkipWireGuard(e.target.checked)} />}
+          label="Directly reachable from the jump host — skip WireGuard"
+        />
+        {skipWireGuard && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4, mb: 1 }}>
+            For hosts on the jump host's LAN (or the host running Fleet itself). No overlay is set up;
+            the host is reached at its management address through the jump host.
+          </Typography>
+        )}
         <TextField
           fullWidth sx={{ mt: 2 }}
           label="Jump host WireGuard endpoint" value={wgEndpoint}
           onChange={(e) => setWgEndpoint(e.target.value)}
+          disabled={skipWireGuard}
           helperText="Public address:port the HOST uses to reach the VPN server (e.g. vpn.example.com:51820). Must be resolvable from the host — not an internal Docker name."
         />
         <FormControlLabel
@@ -1210,7 +1223,7 @@ function EnrollCredsDialog({
           <Button
             variant="contained"
             disabled={method === "agent" || (method === "password" && password === "") || (method === "key" && privateKey.trim() === "")}
-            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump })}
+            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump, skipWireGuard })}
           >
             Enroll
           </Button>
