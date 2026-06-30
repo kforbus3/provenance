@@ -23,6 +23,14 @@ You also have:
 - host_detail: full detail for ONE host by exact hostname, including every mounted
   filesystem's usage and all network interfaces. Use it for questions like "which
   filesystem is full on web-01" or "what subnet is db-02 on".
+- recent_scans: recent OpenSCAP security scans (scheduled or manual), most recent
+  first, with host, profile, status, score, and when they ran. Use for "when was
+  the last security scan on web-01" or "which hosts were scanned recently".
+- recent_playbook_runs: recent Ansible playbook runs (scheduled or manual), with
+  playbook name, target, status, and when they ran. Use for "when did the
+  apt-upgrade playbook last run" or "what playbooks ran recently". When the user
+  asks about the LAST scan or playbook run, read the most recent matching entry
+  and report its time.
 
 All percentages are 0-100. After a tool returns, give a brief, factual answer that
 references the data the user will see. If the question is not about the fleet, say you
@@ -74,7 +82,39 @@ var tools = []toolDef{{
 			"required":   []string{"hostname"},
 		},
 	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "recent_scans",
+		Description: "List recent OpenSCAP security scans, most recent first — including scheduled ones. Each entry has hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, and when it ran (createdAt/finishedAt). Use for questions like 'when was the last security scan on web-01' or 'which hosts were scanned recently'. Optionally filter by hostname.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname to filter to (optional)"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "recent_playbook_runs",
+		Description: "List recent Ansible playbook runs, most recent first — including scheduled ones. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, status (completed/failed), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "max rows (default 50)"}},
+		},
+	},
 }}
+
+type recentScansArgs struct {
+	Hostname string `json:"hostname"`
+	Limit    int    `json:"limit"`
+}
+
+type recentRunsArgs struct {
+	Limit int `json:"limit"`
+}
 
 type hostDetailArgs struct {
 	Hostname string `json:"hostname"`

@@ -113,6 +113,8 @@ type Caller struct {
 	IsSuperAdmin    bool
 	Username        string
 	CanViewSessions bool // Session.Replay — gates the list_sessions tool
+	CanViewScans    bool // Host.Scan — gates the recent_scans tool
+	CanViewRuns     bool // Playbook.Run — gates the recent_playbook_runs tool
 }
 
 // Ask starts answering a question in the background and returns a poll id. Async
@@ -197,6 +199,10 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 					data.host = host
 				}
 				result = payload
+			case "recent_scans":
+				result = s.runRecentScans(ctx, tc.Function.Arguments, who)
+			case "recent_playbook_runs":
+				result = s.runRecentPlaybookRuns(ctx, who)
 			default:
 				result = map[string]any{"error": "unknown tool"}
 			}
@@ -258,6 +264,34 @@ func (s *Service) hostDetail(ctx context.Context, raw json.RawMessage, who Calle
 		}
 	}
 	return host, host
+}
+
+// runRecentScans returns recent security scans (scoped to the caller's hosts).
+func (s *Service) runRecentScans(ctx context.Context, raw json.RawMessage, who Caller) any {
+	if !who.CanViewScans && !who.IsSuperAdmin {
+		return map[string]any{"error": "you do not have permission to view scans"}
+	}
+	var a recentScansArgs
+	_ = json.Unmarshal(raw, &a)
+	rows, err := s.store.RecentScansForAssistant(ctx, who.UserID, who.IsSuperAdmin, a.Hostname, a.Limit)
+	if err != nil {
+		s.log.Warn("assistant recent_scans", "err", err)
+		return map[string]any{"error": "could not list scans"}
+	}
+	return map[string]any{"count": len(rows), "scans": rows}
+}
+
+// runRecentPlaybookRuns returns recent playbook runs (gated by Playbook.Run).
+func (s *Service) runRecentPlaybookRuns(ctx context.Context, who Caller) any {
+	if !who.CanViewRuns && !who.IsSuperAdmin {
+		return map[string]any{"error": "you do not have permission to view playbook runs"}
+	}
+	rows, err := s.store.RecentPlaybookRunsForAssistant(ctx, 50)
+	if err != nil {
+		s.log.Warn("assistant recent_playbook_runs", "err", err)
+		return map[string]any{"error": "could not list playbook runs"}
+	}
+	return map[string]any{"count": len(rows), "runs": rows}
 }
 
 // cleanup drops results older than the ask timeout to bound memory.

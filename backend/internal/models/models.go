@@ -368,6 +368,32 @@ type AssistantHostRow struct {
 	Enrolled       bool       `json:"enrolled"`
 }
 
+// AssistantScanRow is a recent security scan surfaced to the AI assistant.
+type AssistantScanRow struct {
+	Hostname   string     `json:"hostname"`
+	Profile    string     `json:"profile,omitempty"`
+	Status     string     `json:"status"`
+	Score      *float64   `json:"score,omitempty"`
+	PassCount  int        `json:"passCount"`
+	FailCount  int        `json:"failCount"`
+	Requester  string     `json:"requester,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}
+
+// AssistantPlaybookRunRow is a recent playbook run surfaced to the AI assistant.
+type AssistantPlaybookRunRow struct {
+	Playbook   string     `json:"playbook"`
+	TargetKind string     `json:"targetKind"`
+	TargetName string     `json:"targetName,omitempty"`
+	HostCount  int        `json:"hostCount"`
+	CheckMode  bool       `json:"checkMode"`
+	Status     string     `json:"status"`
+	Requester  string     `json:"requester,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}
+
 // ScanFinding is one rule outcome from a scan (used to list failures the user
 // can choose to remediate).
 type ScanFinding struct {

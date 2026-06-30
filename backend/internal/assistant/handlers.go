@@ -62,6 +62,8 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 	id, ok := h.svc.Ask(r.Context(), rq.Question, Caller{
 		UserID: p.UserID, IsSuperAdmin: p.IsSuperAdmin, Username: p.Username,
 		CanViewSessions: p.Has("Session.Replay"),
+		CanViewScans:    p.Has("Host.Scan"),
+		CanViewRuns:     p.Has("Playbook.Run"),
 	})
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "assistant is not enabled")
