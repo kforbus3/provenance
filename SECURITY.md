@@ -8,12 +8,9 @@ security issues are taken seriously. Thank you for helping keep it and its users
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-Report privately using either of the following:
-
-- **GitHub Security Advisories** — open a draft advisory via the repository's
-  **Security → Report a vulnerability** tab (preferred; keeps the report private
-  and lets us collaborate on a fix and CVE).
-- **Email** — 123222302+kforbus3@users.noreply.github.com with the subject line `Fleet Terminal security`.
+Report privately through **GitHub Security Advisories** — open a draft advisory
+via the repository's **Security → Report a vulnerability** tab. This keeps the
+report private and lets us collaborate on a fix and CVE.
 
 Please include, as far as you can:
 
@@ -65,6 +62,11 @@ A few essentials, covered in more detail in [`docs/security.md`](docs/security.m
 
 ## Supported versions
 
-This project is under active development and has not yet cut a stable release.
-Security fixes are applied to `main`. Until a tagged release exists, please run a
-recent commit from `main`.
+This project is under active development. The current release is **v0.1.0**.
+Security fixes are applied to `main` and roll into the next tagged release; until
+the next tag, running a recent commit from `main` gets you the latest fixes.
+
+| Version | Supported |
+| ------- | --------- |
+| v0.1.x  | ✅        |
+| < v0.1  | ❌        |
