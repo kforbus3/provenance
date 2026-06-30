@@ -51,6 +51,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/scheduler"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
+	"github.com/fleet-terminal/backend/internal/support"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/system"
@@ -475,6 +476,9 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, s.scanSvc)
+
+	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).
+	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
 	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))

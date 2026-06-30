@@ -316,6 +316,25 @@ the [Break-Glass & Recovery Runbook](./break-glass.md).
 > **`FLEET_BACKUP_PASSPHRASE`** **off the server** (password manager / sealed envelope). It is
 > deliberately *not* in the backup, so a stolen backup can't be decrypted.
 
+## Host support bundle
+
+Click the **support bundle** (first-aid) icon on a host row to download a single
+`.tar.gz` of diagnostics for troubleshooting. It needs `Host.Scan` **and** access
+to the host (super admins bypass). The backend connects over the jump host as the
+privileged `fleet` account and collects, into one archive:
+
+- **Command outputs** — uname/OS, uptime + load, CPU, memory, `top`, disk usage
+  (`df`, inodes, largest dirs), block devices/mounts, network (addresses, routes,
+  listening sockets, link stats, DNS), top processes by CPU/memory, systemd
+  failed/running units, pending package updates, recent logins, WireGuard, and
+  firewall rules.
+- **Logs** (tail-bounded to keep the bundle small) — `syslog`/`messages`,
+  `auth.log`/`secure`, `kern.log`, the systemd journal (recent), and `dmesg`.
+
+Generation runs over SSH and takes a few seconds; the file downloads when ready.
+Nothing is stored on the server. Note the bundle includes auth/system logs, so
+treat it as sensitive.
+
 ## Just-in-time access
 
 Users without permanent group access request temporary access under **Approvals → My requests**.

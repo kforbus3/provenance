@@ -431,6 +431,7 @@ embedded/downloaded by the browser.
 | POST | `/api/v1/scans/{id}/remediation/preview` | `Host.Remediate` — `{ruleIds}` → `{script}` (no changes) |
 | POST | `/api/v1/scans/{id}/remediate` | `Host.Remediate` — `{ruleIds, confirmAccessImpacting}` → run id (async); 409 if access-impacting rules selected without confirmation |
 | GET | `/api/v1/remediations/{id}` | `Host.Remediate` — run status/output/exit + verification re-scan id |
+| GET | `/api/v1/hosts/{id}/support-bundle` | `Host.Scan` + host access — streams a `.tar.gz` of host diagnostics + recent logs (collected over SSH; nothing stored) |
 
 Remediation applies `oscap`-generated bash fixes for the **selected** failed rules
 over the gateway (sudo), then re-scans to verify. All scan/remediation routes also

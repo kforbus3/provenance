@@ -18,7 +18,8 @@ import LockPersonIcon from "@mui/icons-material/LockPerson";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import HealthAndSafetyIcon from "@mui/icons-material/HealthAndSafety";
-import { Alert, CircularProgress, List, ListItem, ListItemText, Paper } from "@mui/material";
+import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
+import { Alert, CircularProgress, List, ListItem, ListItemText, Paper, Snackbar } from "@mui/material";
 import { MenuItem, ListItemSecondaryAction, Divider } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -32,6 +33,7 @@ import {
   listFindings, previewRemediation, remediate, remediationStatus,
   type HostScan, type ScanFinding,
 } from "../api/scans";
+import { downloadSupportBundle } from "../api/support";
 import { useAuthStore } from "../store/auth";
 import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
@@ -49,6 +51,39 @@ const EMPTY_FORM: HostInput = {
 };
 
 const fmtDate = (value?: string): string => formatDateTime(value);
+
+// SupportBundleButton downloads a host's diagnostics+logs .tar.gz. Generation
+// runs over SSH and takes a few seconds, so it shows a spinner and surfaces
+// errors in a snackbar.
+function SupportBundleButton({ host }: { host: Host }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const onClick = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await downloadSupportBundle(host.id, host.hostname);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <>
+      <Tooltip title="Download support bundle (diagnostics + logs)">
+        <span>
+          <IconButton size="small" onClick={onClick} disabled={loading}>
+            {loading ? <CircularProgress size={16} /> : <MedicalServicesIcon fontSize="small" />}
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Snackbar open={!!error} autoHideDuration={6000} onClose={() => setError(null)}>
+        <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>
+      </Snackbar>
+    </>
+  );
+}
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
@@ -319,6 +354,7 @@ export function HostsPage() {
               <HealthAndSafetyIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          <SupportBundleButton host={params.row} />
           <Tooltip title="Open terminal in a new tab">
             <IconButton
               size="small" color="primary"
