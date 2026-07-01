@@ -680,17 +680,20 @@ function RemediateDialog({ scan, onClose, onApplied }: {
   const scanId = scan?.id ?? "";
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
+  const [confirmCP, setConfirmCP] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [run, setRun] = useState<{ status: string; exitCode?: number; output?: string; rescanId?: string; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: findings = [], isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["scan-findings", scanId],
     queryFn: () => listFindings(scanId),
     enabled: Boolean(scan),
     retry: false,
   });
+  const findings = data?.findings ?? [];
+  const controlPlane = Boolean(data?.controlPlane);
 
   const selectedIds = [...selected];
   const anyImpacting = findings.some((f) => selected.has(f.ruleId) && f.accessImpacting);
@@ -708,7 +711,7 @@ function RemediateDialog({ scan, onClose, onApplied }: {
   async function apply() {
     setError(null); setBusy(true); setRun({ status: "running" });
     try {
-      const rec = await remediate(scanId, selectedIds, confirm);
+      const rec = await remediate(scanId, selectedIds, confirm, confirmCP);
       for (let i = 0; i < 200; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         const st = await remediationStatus(rec.id);
@@ -730,6 +733,14 @@ function RemediateDialog({ scan, onClose, onApplied }: {
           (SSH, firewall, account lockout) can cut off Fleet's own access — review the preview and
           apply with care.
         </Alert>
+        {controlPlane && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            This is a <b>Fleet control-plane host</b>. Hardening it can lock Fleet out of the entire
+            fleet — for example, an <code>ip_forward</code> or <code>rp_filter</code> sysctl can break
+            the container/WireGuard networking that serves this UI. Only proceed if you have out-of-band
+            (console) access to recover.
+          </Alert>
+        )}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         {isLoading && <Box sx={{ p: 2, textAlign: "center" }}><CircularProgress /></Box>}
 
@@ -748,6 +759,12 @@ function RemediateDialog({ scan, onClose, onApplied }: {
           <FormControlLabel
             control={<Checkbox checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />}
             label="I understand the selected access-impacting rules may cut off Fleet's access to this host."
+          />
+        )}
+        {controlPlane && !run && (
+          <FormControlLabel
+            control={<Checkbox checked={confirmCP} onChange={(e) => setConfirmCP(e.target.checked)} />}
+            label="I understand this is a Fleet control-plane host and remediating it may lock Fleet out of the fleet."
           />
         )}
 
@@ -787,7 +804,7 @@ function RemediateDialog({ scan, onClose, onApplied }: {
             <Button disabled={selectedIds.length === 0 || busy} onClick={doPreview}>Preview</Button>
             <Button
               variant="contained" color="warning"
-              disabled={selectedIds.length === 0 || busy || (anyImpacting && !confirm)}
+              disabled={selectedIds.length === 0 || busy || (anyImpacting && !confirm) || (controlPlane && !confirmCP)}
               onClick={apply}
             >
               Apply {selectedIds.length > 0 ? `(${selectedIds.length})` : ""}

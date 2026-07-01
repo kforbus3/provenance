@@ -273,7 +273,7 @@ func (h *handler) scanWithAccess(w http.ResponseWriter, r *http.Request) (*model
 
 // findings lists the failed rules of a scan (with severity + access-impacting flag).
 func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
-	scan, _, ok := h.scanWithAccess(w, r)
+	scan, host, ok := h.scanWithAccess(w, r)
 	if !ok {
 		return
 	}
@@ -282,12 +282,17 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"findings": f, "count": len(f)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"findings":     f,
+		"count":        len(f),
+		"controlPlane": isControlPlaneHost(host, h.d.Cfg),
+	})
 }
 
 type remediateReq struct {
 	RuleIDs                []string `json:"ruleIds"`
 	ConfirmAccessImpacting bool     `json:"confirmAccessImpacting"`
+	ConfirmControlPlane    bool     `json:"confirmControlPlane"`
 }
 
 // remediatePreview returns the bash that would run for the selected rules.
@@ -347,6 +352,16 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Remediating Fleet's own control-plane host can lock Fleet out of the whole
+	// fleet (this is how the ip_forward sysctl took down the web UI). Require a
+	// distinct confirmation regardless of which rules are selected.
+	if isControlPlaneHost(host, h.d.Cfg) && !rq.ConfirmControlPlane {
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":        "target is a Fleet control-plane host; remediating it can lock Fleet out of the fleet — explicit confirmation required",
+			"controlPlane": true,
+		})
+		return
+	}
 	p := auth.MustPrincipal(r)
 	rec, err := h.d.Store.CreateRemediation(r.Context(), scan.ID, host.ID, &p.UserID, p.Username, rq.RuleIDs)
 	if err != nil {
@@ -355,7 +370,8 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 	}
 	go h.svc.Remediate(rec.ID, scan, host, rq.RuleIDs, &p.UserID, p.Username)
 	h.audit(r, "host.remediate", rec.ID.String(), map[string]any{
-		"hostId": host.ID, "hostname": host.Hostname, "rules": rq.RuleIDs, "accessImpacting": impacting,
+		"hostId": host.ID, "hostname": host.Hostname, "rules": rq.RuleIDs,
+		"accessImpacting": impacting, "controlPlane": isControlPlaneHost(host, h.d.Cfg),
 	})
 	httpx.WriteJSON(w, http.StatusAccepted, rec)
 }

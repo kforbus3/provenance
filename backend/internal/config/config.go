@@ -78,6 +78,13 @@ type Config struct {
 	ScanDir     string
 	ScanTimeout time.Duration // max duration of a scan/remediation (oscap can be slow)
 
+	// ControlPlaneHosts names Fleet's own control-plane host(s) — the box(es)
+	// running the backend/jump host. Remediating one can lock Fleet out of the
+	// whole fleet (e.g. an ip_forward/rp_filter sysctl breaking Docker's bridge),
+	// so it requires an extra confirmation. Hosts may also be marked with a
+	// "control-plane" or "protected" tag; the jump host is detected automatically.
+	ControlPlaneHosts []string
+
 	// SCAP content cache (datastreams the backend provisions to hosts whose OS
 	// is newer than their packaged content). Empty disables auto-provisioning.
 	ScapContentDir     string
@@ -149,6 +156,7 @@ func Load() (*Config, error) {
 		RecordingDir:        env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),
 		ScanDir:             env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
 		ScanTimeout:         envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
+		ControlPlaneHosts:   splitList(env("FLEET_CONTROL_PLANE_HOSTS", "")),
 		ScapContentDir:      env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion:  env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:    env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
@@ -236,6 +244,17 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitList parses a comma-separated env value into a trimmed, non-empty slice.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envInt(key string, def int) int {

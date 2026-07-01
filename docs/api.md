@@ -427,9 +427,9 @@ embedded/downloaded by the browser.
 | GET | `/api/v1/hosts/{id}/scans` | List recent scans for the host |
 | GET | `/api/v1/scans/{id}` | One scan's status + summary (poll while running) |
 | GET | `/api/v1/scans/{id}/report?token=<jwt>[&download=1]` | Stored HTML report (sandboxed view / download) |
-| GET | `/api/v1/scans/{id}/findings` | `Host.Scan` — failed rules (id, title, severity, accessImpacting) |
+| GET | `/api/v1/scans/{id}/findings` | `Host.Scan` — `{findings: [id, title, severity, accessImpacting], controlPlane}` (controlPlane=host is part of Fleet's control plane) |
 | POST | `/api/v1/scans/{id}/remediation/preview` | `Host.Remediate` — `{ruleIds}` → `{script}` (no changes) |
-| POST | `/api/v1/scans/{id}/remediate` | `Host.Remediate` — `{ruleIds, confirmAccessImpacting}` → run id (async); 409 if access-impacting rules selected without confirmation |
+| POST | `/api/v1/scans/{id}/remediate` | `Host.Remediate` — `{ruleIds, confirmAccessImpacting, confirmControlPlane}` → run id (async); 409 if access-impacting rules or a control-plane host are targeted without the matching confirmation |
 | GET | `/api/v1/remediations/{id}` | `Host.Remediate` — run status/output/exit + verification re-scan id |
 | GET | `/api/v1/hosts/{id}/support-bundle` | `Host.Scan` + host access — streams a `.tar.gz` of host diagnostics + recent logs (collected over SSH; nothing stored) |
 

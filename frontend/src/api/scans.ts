@@ -109,9 +109,18 @@ export interface HostRemediation {
   createdAt: string;
 }
 
-export async function listFindings(scanId: string): Promise<ScanFinding[]> {
-  const { data } = await api.get<{ findings: ScanFinding[] }>(`/api/v1/scans/${scanId}/findings`);
-  return data.findings ?? [];
+export interface FindingsResult {
+  findings: ScanFinding[];
+  // controlPlane is true when this host is one of Fleet's own control-plane
+  // hosts (jump host, or tagged/declared), where remediation is extra-dangerous.
+  controlPlane: boolean;
+}
+
+export async function listFindings(scanId: string): Promise<FindingsResult> {
+  const { data } = await api.get<{ findings: ScanFinding[]; controlPlane?: boolean }>(
+    `/api/v1/scans/${scanId}/findings`,
+  );
+  return { findings: data.findings ?? [], controlPlane: Boolean(data.controlPlane) };
 }
 
 export async function previewRemediation(scanId: string, ruleIds: string[]): Promise<string> {
@@ -119,8 +128,17 @@ export async function previewRemediation(scanId: string, ruleIds: string[]): Pro
   return data.script ?? "";
 }
 
-export async function remediate(scanId: string, ruleIds: string[], confirmAccessImpacting: boolean): Promise<HostRemediation> {
-  const { data } = await api.post<HostRemediation>(`/api/v1/scans/${scanId}/remediate`, { ruleIds, confirmAccessImpacting });
+export async function remediate(
+  scanId: string,
+  ruleIds: string[],
+  confirmAccessImpacting: boolean,
+  confirmControlPlane: boolean,
+): Promise<HostRemediation> {
+  const { data } = await api.post<HostRemediation>(`/api/v1/scans/${scanId}/remediate`, {
+    ruleIds,
+    confirmAccessImpacting,
+    confirmControlPlane,
+  });
   return data;
 }
 
