@@ -2,9 +2,11 @@
 
 This directory contains a self-contained, browser-demonstrable SSH fabric for
 Fleet Terminal. It lets you exercise the full connect path on a laptop —
-including **macOS + Docker Desktop**, which has **no WireGuard kernel module** —
-by running WireGuard entirely in userspace via
-[`wireguard-go`](https://git.zx2c4.com/wireguard-go) over `/dev/net/tun`.
+including **macOS + Docker Desktop**, which has **no WireGuard kernel module**.
+Each node prefers the **kernel** WireGuard module and falls back to userspace
+[`wireguard-go`](https://git.zx2c4.com/wireguard-go) over `/dev/net/tun` when the
+module is unavailable, so the fabric runs on a Mac (userspace) or a Linux host
+with the module loaded (kernel) without changes.
 
 ## Topology
 
@@ -31,13 +33,17 @@ by running WireGuard entirely in userspace via
 | host-ubuntu   | 172.30.0.21       | 10.100.0.21        | ubuntu:22.04    |
 | host-rocky    | 172.30.0.22       | 10.100.0.22        | rockylinux:9    |
 
-## Why userspace WireGuard
+## Kernel-first, userspace fallback
 
-The Linux WireGuard kernel module is not available inside the Docker Desktop
-LinuxKit VM on macOS. `wireguard-go` is the official userspace implementation;
-it creates a normal `tun` interface (`wg0`) through `/dev/net/tun`, so it works
-anywhere the container has the `NET_ADMIN` capability and the tun device. Both
-are granted in `docker-compose.testfabric.yml`:
+The jump host and managed hosts both try to create a **kernel** WireGuard
+interface first (`ip link add … type wireguard` / `wg-quick`), which requires the
+`wireguard` module to be loaded on the Docker **host** — on a Linux host, run
+`modprobe wireguard` (or let the distro autoload it). When the module is not
+available — as inside the Docker Desktop LinuxKit VM on macOS — they fall back to
+`wireguard-go`, the official userspace implementation. It creates a normal `tun`
+interface (`wg0`) through `/dev/net/tun`, so it works anywhere the container has
+the `NET_ADMIN` capability and the tun device. Both are granted in
+`docker-compose.testfabric.yml`:
 
 ```yaml
 cap_add:    [NET_ADMIN]

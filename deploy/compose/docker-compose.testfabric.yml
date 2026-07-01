@@ -3,7 +3,10 @@
 # Adds a jump host and two managed hosts (Ubuntu + Rocky) so the SSH path
 # (backend -> jumphost:22 -> WireGuard overlay -> managed host) is fully
 # demonstrable on macOS Docker Desktop, which has no WireGuard kernel module.
-# Every node runs WireGuard in userspace via wireguard-go over /dev/net/tun.
+# Each node prefers the kernel WireGuard module and falls back to userspace
+# wireguard-go over /dev/net/tun when the module is unavailable (as on Docker
+# Desktop). On a Linux host with the wireguard module loaded, the kernel path is
+# used automatically.
 #
 # Bring the whole stack up with:
 #   docker compose -f deploy/compose/docker-compose.yml \

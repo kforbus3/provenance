@@ -1,9 +1,12 @@
 #!/bin/sh
 # Fleet Terminal test fabric — jump host entrypoint.
 #
-# Brings up the userspace WireGuard hub (wg0) with a stable keypair, then starts
-# sshd. Managed-host *peers are NOT configured here* — the Fleet Terminal
-# enrollment flow adds each peer dynamically (wg set) when a host is enrolled.
+# Brings up the WireGuard hub (wg0) with a stable keypair, then starts sshd.
+# Prefers the kernel WireGuard module (faster) and falls back to userspace
+# wireguard-go when the module is unavailable (e.g. macOS Docker Desktop, or a
+# Linux host that has not loaded the wireguard module). Managed-host *peers are
+# NOT configured here* — the Fleet Terminal enrollment flow adds each peer
+# dynamically (wg set) when a host is enrolled.
 set -e
 
 WG_IFACE="${WG_INTERFACE:-wg0}"
@@ -20,15 +23,22 @@ if [ ! -f /etc/wireguard/privatekey ]; then
   wg pubkey < /etc/wireguard/privatekey > /etc/wireguard/publickey
 fi
 
-echo "[jumphost] starting userspace WireGuard hub on ${WG_IFACE}"
-wireguard-go "$WG_IFACE"
-
-# Wait for the userspace control socket.
-i=0
-while [ "$i" -lt 15 ]; do
-  if wg show "$WG_IFACE" >/dev/null 2>&1; then break; fi
-  i=$((i + 1)); sleep 1
-done
+# Create the hub interface. Prefer the kernel module; the interface is then
+# configured identically (wg set + ip) whether it is kernel- or userspace-backed.
+# A stale interface from a previous run (if the netns is reused) is cleared first.
+ip link del "$WG_IFACE" >/dev/null 2>&1 || true
+if ip link add dev "$WG_IFACE" type wireguard >/dev/null 2>&1; then
+  echo "[jumphost] using kernel WireGuard hub on ${WG_IFACE}"
+else
+  echo "[jumphost] kernel module unavailable; starting userspace wireguard-go hub on ${WG_IFACE}"
+  wireguard-go "$WG_IFACE"
+  # Wait for the userspace control socket to appear before configuring.
+  i=0
+  while [ "$i" -lt 15 ]; do
+    if wg show "$WG_IFACE" >/dev/null 2>&1; then break; fi
+    i=$((i + 1)); sleep 1
+  done
+fi
 
 wg set "$WG_IFACE" listen-port "$WG_PORT" private-key /etc/wireguard/privatekey
 ip address add "$WG_ADDR" dev "$WG_IFACE" 2>/dev/null || true
