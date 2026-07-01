@@ -9,6 +9,7 @@ import {
   createApproval, decideApproval, listApprovals, listMyApprovals, searchRequestTargets,
   type ApprovalRequest, type RequestTarget,
 } from "../api/approvals";
+import { formatDateTime } from "../lib/datetime";
 
 // Duration presets for both requests and decisions. "custom" reveals a minutes
 // field; every other option maps directly to a fixed number of seconds.
@@ -55,7 +56,19 @@ function ApprovalTable({
               <TableCell>{r.targetKind}: {r.targetName || r.hostId || r.groupId}</TableCell>
               <TableCell>{r.reason}</TableCell>
               <TableCell>{Math.round(r.requestedSecs / 60)}m</TableCell>
-              <TableCell><Chip label={r.status} size="small" color={statusColor(r.status)} /></TableCell>
+              <TableCell>
+                <Chip label={r.status} size="small" color={statusColor(r.status)} />
+                {r.decidedByName && (
+                  <Typography variant="caption" display="block" color="text.secondary">
+                    by {r.decidedByName}{r.decidedAt ? ` · ${formatDateTime(r.decidedAt)}` : ""}
+                  </Typography>
+                )}
+                {r.decisionNote && (
+                  <Typography variant="caption" display="block" color="text.secondary" sx={{ fontStyle: "italic" }}>
+                    “{r.decisionNote}”
+                  </Typography>
+                )}
+              </TableCell>
               {onDecide && <TableCell align="right">{onDecide(r)}</TableCell>}
             </TableRow>
           ))}

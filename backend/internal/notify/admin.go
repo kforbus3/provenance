@@ -65,7 +65,7 @@ func (s *Service) SendTest(ctx context.Context, channel string) error {
 		if !cfg.Email.Enabled {
 			return fmt.Errorf("email channel is disabled")
 		}
-		return s.sendEmail(ctx, cfg, ev)
+		return s.sendEmail(ctx, cfg, ev, "")
 	case "webhook":
 		if !cfg.Webhook.Enabled {
 			return fmt.Errorf("webhook channel is disabled")

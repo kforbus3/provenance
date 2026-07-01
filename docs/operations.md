@@ -280,11 +280,19 @@ to it:
 
 - **Host went offline / recovered**
 - **Access request pending approval**
+- **Access request approved or denied**
+- **Just-in-time access expired**
 - **Security scan found failures**
 - **Failed playbook run**
 
 Set a **throttle** (minutes) to dedupe repeats, and use **Send test** to confirm delivery.
 Notifications are **off by default** — nothing is sent until you enable a channel.
+
+The routing above governs the **admin distribution list / webhook**. For the two
+lifecycle events — a request being **resolved** and a grant **expiring** — the affected
+**requester is also emailed directly** at the address in their profile whenever the email
+channel is enabled (falling back silently if they have none), so users get closure on their
+own requests without an admin having to subscribe them.
 
 There is also a **CA key due for rotation** event: the renewal loop checks the active
 SSH CA key's age hourly and, once it passes `FLEET_CA_ROTATE_AFTER` (default 365 days),
@@ -349,8 +357,14 @@ Users without permanent group access request temporary access under **Approvals 
 Pick **Host** or **Group**, then choose one or more targets from a **searchable name picker**
 that queries the fleet as you type (targets you can already reach are omitted) — selecting
 several files a request for each.
-Add a reason, duration, and optional ticket. Approvers act under **Approvals → Queue**. Grants
-expire automatically; a background reaper revokes elapsed grants every minute.
+Add a reason, duration, and optional ticket. Approvers act under **Approvals → Queue**, where
+each request shows the requester, the target, and — once resolved — **who approved or denied it**,
+when, and any decision note. Grants expire automatically; a background reaper revokes elapsed
+grants every minute.
+
+When an approver resolves a request, Fleet notifies the configured admin channel **and** emails
+the requester directly (if they have a profile email); when a grant later expires, the requester
+is emailed again. See [Notifications](#notifications) to enable delivery.
 
 ## Audit integrity
 

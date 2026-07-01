@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -270,6 +271,28 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "approval.decide", ar.ID.String(), map[string]any{
 		"status": ar.Status, "grantedSecs": grantedSecs, "note": rq.Note,
 	})
+	// Notify that the request is resolved: the admin distribution/webhook (per the
+	// event's route) and the requester directly at their profile email, if set.
+	if h.d.Notify != nil {
+		body := fmt.Sprintf("Your access request for %s %q was %s by %s.",
+			ar.TargetKind, ar.TargetName, ar.Status, p.Username)
+		if ar.Status == "approved" && ar.GrantedSecs != nil {
+			body += fmt.Sprintf(" Access is granted for %s.", (time.Duration(*ar.GrantedSecs) * time.Second).String())
+		}
+		if ar.DecisionNote != "" {
+			body += " Note: " + ar.DecisionNote
+		}
+		var recipient string
+		if u, err := h.d.Store.GetUserByID(r.Context(), ar.RequesterID); err == nil {
+			recipient = u.Email
+		}
+		h.d.Notify.Notify(r.Context(), notify.Event{
+			Type: notify.EventApprovalResolved, Severity: notify.SeverityInfo,
+			Title:     "Access request " + ar.Status,
+			Body:      body,
+			Recipient: recipient,
+		})
+	}
 	httpx.WriteJSON(w, http.StatusOK, ar)
 }
 
@@ -287,15 +310,29 @@ func (h *handler) audit(r *http.Request, action, targetID string, detail map[str
 	})
 }
 
-// Reaper expires due temporary_permissions in a single pass. The main server
+// Reaper expires due temporary_permissions in a single pass and notifies each
+// affected user that their just-in-time access has ended. The main server
 // schedules this on an interval.
 func Reaper(ctx context.Context, d *app.Deps) {
-	n, err := d.Store.ExpireTemporaryPermissions(ctx)
+	grants, err := d.Store.ExpireTemporaryPermissions(ctx)
 	if err != nil {
 		d.Log.Error("approval grant reaper failed", "error", err)
 		return
 	}
-	if n > 0 {
-		d.Log.Info("expired temporary permissions", "count", n)
+	if len(grants) == 0 {
+		return
+	}
+	d.Log.Info("expired temporary permissions", "count", len(grants))
+	if d.Notify == nil {
+		return
+	}
+	for _, g := range grants {
+		d.Notify.Notify(ctx, notify.Event{
+			Type: notify.EventAccessExpired, Severity: notify.SeverityInfo,
+			Title: "Just-in-time access expired",
+			Body: fmt.Sprintf("Temporary access to %s %q for %s has expired.",
+				g.TargetKind, g.TargetName, g.Username),
+			Recipient: g.UserEmail,
+		})
 	}
 }

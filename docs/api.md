@@ -381,6 +381,10 @@ are excluded — so a super admin's picker is empty. `kind` defaults to `host`;
 { "decision": "approve", "note": "approved for 30m", "grantedSecs": 1800 }
 ```
 An approval mints a `temporary_permissions` grant that expires automatically.
+Resolving a request emits an `approval.resolved` notification (admin channel +
+the requester's profile email); when the grant later expires the reaper emits
+`access.expired` to the requester. Listed requests include `decidedByName` (the
+approver's username) alongside `decidedBy`/`decidedAt`/`decisionNote`.
 
 **`GET /approvals/grants/mine`** → `{ "grants": [ … ], "count": n }`
 

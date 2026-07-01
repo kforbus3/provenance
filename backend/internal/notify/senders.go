@@ -28,9 +28,15 @@ func (s *Service) emailPassword(cfg *Config) string {
 	return string(pw)
 }
 
-func (s *Service) sendEmail(_ context.Context, cfg *Config, ev Event) error {
+// sendEmail delivers ev over SMTP. toOverride, when non-empty, replaces the
+// configured admin distribution list (used to email a single direct recipient).
+func (s *Service) sendEmail(_ context.Context, cfg *Config, ev Event, toOverride string) error {
 	e := cfg.Email
-	if e.Host == "" || e.From == "" || e.To == "" {
+	to := e.To
+	if toOverride != "" {
+		to = toOverride
+	}
+	if e.Host == "" || e.From == "" || to == "" {
 		return fmt.Errorf("email channel is incompletely configured")
 	}
 	port := e.Port
@@ -39,9 +45,9 @@ func (s *Service) sendEmail(_ context.Context, cfg *Config, ev Event) error {
 	}
 	addr := net.JoinHostPort(e.Host, fmt.Sprintf("%d", port))
 
-	recipients := splitList(e.To)
+	recipients := splitList(to)
 	subject := fmt.Sprintf("[Fleet] %s", ev.Title)
-	msg := buildMessage(e.From, e.To, subject, ev.Body)
+	msg := buildMessage(e.From, to, subject, ev.Body)
 
 	var auth smtp.Auth
 	if e.Username != "" {

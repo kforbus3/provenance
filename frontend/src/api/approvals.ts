@@ -16,6 +16,7 @@ export interface ApprovalRequest {
   requestedSecs: number;
   status: string; // pending|approved|denied
   decidedBy?: string;
+  decidedByName?: string;
   decidedAt?: string;
   decisionNote?: string;
   grantedSecs?: number;

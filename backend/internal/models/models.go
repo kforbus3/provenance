@@ -240,10 +240,22 @@ type ApprovalRequest struct {
 	RequestedSecs int64      `json:"requestedSecs"`
 	Status        string     `json:"status"`
 	DecidedBy     *uuid.UUID `json:"decidedBy,omitempty"`
+	DecidedByName string     `json:"decidedByName,omitempty"`
 	DecidedAt     *time.Time `json:"decidedAt,omitempty"`
 	DecisionNote  string     `json:"decisionNote,omitempty"`
 	GrantedSecs   *int64     `json:"grantedSecs,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
+}
+
+// ExpiredGrant describes a temporary permission that the reaper just expired,
+// with enough context to notify the user whose access ended.
+type ExpiredGrant struct {
+	RequestID  *uuid.UUID
+	UserID     uuid.UUID
+	Username   string
+	UserEmail  string
+	TargetKind string // host|group
+	TargetName string
 }
 
 // TemporaryPermission is a time-boxed grant created from an approval.

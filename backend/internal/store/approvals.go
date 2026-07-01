@@ -14,10 +14,11 @@ import (
 const approvalCols = `ar.id, ar.requester_id, COALESCE(u.username,''), ar.target_kind,
 	ar.host_id, ar.group_id, COALESCE(h.hostname, g.name, ''),
 	ar.reason, ar.ticket_ref, ar.requested_secs, ar.status,
-	ar.decided_by, ar.decided_at, ar.decision_note, ar.granted_secs, ar.created_at`
+	ar.decided_by, COALESCE(d.username,''), ar.decided_at, ar.decision_note, ar.granted_secs, ar.created_at`
 
 const approvalFrom = `approval_requests ar
 	JOIN users u ON u.id = ar.requester_id
+	LEFT JOIN users d ON d.id = ar.decided_by
 	LEFT JOIN hosts h ON h.id = ar.host_id
 	LEFT JOIN groups g ON g.id = ar.group_id`
 
@@ -25,7 +26,7 @@ func scanApprovalRequest(row pgx.Row) (*models.ApprovalRequest, error) {
 	var a models.ApprovalRequest
 	err := row.Scan(&a.ID, &a.RequesterID, &a.Requester, &a.TargetKind, &a.HostID, &a.GroupID,
 		&a.TargetName, &a.Reason, &a.TicketRef, &a.RequestedSecs, &a.Status,
-		&a.DecidedBy, &a.DecidedAt, &a.DecisionNote, &a.GrantedSecs, &a.CreatedAt)
+		&a.DecidedBy, &a.DecidedByName, &a.DecidedAt, &a.DecisionNote, &a.GrantedSecs, &a.CreatedAt)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -161,19 +162,38 @@ func (s *Store) ListTemporaryPermissions(ctx context.Context, userID uuid.UUID) 
 // ExpireTemporaryPermissions revokes any grants whose lifetime has elapsed and
 // marks the originating approval requests 'expired'. It returns the number of
 // grants expired in this pass.
-func (s *Store) ExpireTemporaryPermissions(ctx context.Context) (int64, error) {
-	var count int64
-	err := s.pool.QueryRow(ctx, `
+func (s *Store) ExpireTemporaryPermissions(ctx context.Context) ([]models.ExpiredGrant, error) {
+	rows, err := s.pool.Query(ctx, `
 		WITH expired AS (
 			UPDATE temporary_permissions SET revoked_at=now()
 			WHERE revoked_at IS NULL AND expires_at<=now()
-			RETURNING request_id
+			RETURNING request_id, user_id, host_id, group_id
 		), bumped AS (
 			UPDATE approval_requests SET status='expired'
 			WHERE id IN (SELECT request_id FROM expired WHERE request_id IS NOT NULL)
 			  AND status='approved'
 			RETURNING id
 		)
-		SELECT count(*) FROM expired`).Scan(&count)
-	return count, err
+		SELECT e.request_id, e.user_id, COALESCE(u.username,''), COALESCE(u.email,''),
+		       CASE WHEN e.host_id IS NOT NULL THEN 'host'
+		            WHEN e.group_id IS NOT NULL THEN 'group' ELSE '' END,
+		       COALESCE(h.hostname, g.name, '')
+		FROM expired e
+		JOIN users u ON u.id = e.user_id
+		LEFT JOIN hosts h ON h.id = e.host_id
+		LEFT JOIN groups g ON g.id = e.group_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ExpiredGrant
+	for rows.Next() {
+		var g models.ExpiredGrant
+		if err := rows.Scan(&g.RequestID, &g.UserID, &g.Username, &g.UserEmail,
+			&g.TargetKind, &g.TargetName); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
 }

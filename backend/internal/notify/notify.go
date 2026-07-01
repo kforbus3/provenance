@@ -20,19 +20,25 @@ import (
 // Event types. Stable string keys — they also index Config.Events and appear in
 // the settings UI.
 const (
-	EventHostOffline     = "host.offline"
-	EventHostRecovered   = "host.recovered"
-	EventApprovalPending = "approval.pending"
-	EventScanFindings    = "scan.findings"
-	EventPlaybookFailed  = "playbook.failed"
-	EventCAKeyAging      = "ca.aging"
+	EventHostOffline      = "host.offline"
+	EventHostRecovered    = "host.recovered"
+	EventApprovalPending  = "approval.pending"
+	EventApprovalResolved = "approval.resolved"
+	EventAccessExpired    = "access.expired"
+	EventScanFindings     = "scan.findings"
+	EventPlaybookFailed   = "playbook.failed"
+	EventCAKeyAging       = "ca.aging"
 )
 
-// AllEventTypes is the catalogue surfaced in the settings UI (key + label).
+// AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
+// routing configured here controls the admin distribution/webhook; the user a
+// resolution or expiry concerns is always emailed directly (see Event.Recipient).
 var AllEventTypes = []struct{ Key, Label string }{
 	{EventHostOffline, "Host went offline"},
 	{EventHostRecovered, "Host recovered"},
 	{EventApprovalPending, "Access request pending approval"},
+	{EventApprovalResolved, "Access request approved or denied"},
+	{EventAccessExpired, "Just-in-time access expired"},
 	{EventScanFindings, "Security scan found failures"},
 	{EventPlaybookFailed, "Playbook run failed"},
 	{EventCAKeyAging, "CA key due for rotation"},
@@ -58,6 +64,11 @@ type Event struct {
 	// DedupeKey throttles repeats of the "same" event (e.g. a flapping host);
 	// empty means no per-event throttling beyond the type.
 	DedupeKey string
+	// Recipient, when set, is a direct email address the event also goes to (the
+	// user it concerns, e.g. an approval requester). It is delivered whenever the
+	// email channel is enabled, independent of the admin per-event route — the
+	// route only governs the admin distribution list and webhook.
+	Recipient string
 }
 
 // EmailConfig configures a generic SMTP relay (any provider).
@@ -135,18 +146,28 @@ func (s *Service) Notify(ctx context.Context, ev Event) {
 		return
 	}
 	route := cfg.Events[ev.Type]
-	if !route.Email && !route.Webhook {
+	adminEmail := route.Email && cfg.Email.Enabled
+	adminWebhook := route.Webhook && cfg.Webhook.Enabled
+	// A direct recipient is emailed whenever the email channel is enabled, even if
+	// the admin hasn't routed this event to the distribution list.
+	directEmail := ev.Recipient != "" && cfg.Email.Enabled
+	if !adminEmail && !adminWebhook && !directEmail {
 		return
 	}
 	if !s.allow(ev, cfg) {
 		return
 	}
-	if route.Email && cfg.Email.Enabled {
-		if err := s.sendEmail(ctx, cfg, ev); err != nil {
+	if adminEmail {
+		if err := s.sendEmail(ctx, cfg, ev, ""); err != nil {
 			s.log.Warn("notify email failed", "event", ev.Type, "err", err)
 		}
 	}
-	if route.Webhook && cfg.Webhook.Enabled {
+	if directEmail {
+		if err := s.sendEmail(ctx, cfg, ev, ev.Recipient); err != nil {
+			s.log.Warn("notify recipient email failed", "event", ev.Type, "err", err)
+		}
+	}
+	if adminWebhook {
 		if err := s.sendWebhook(ctx, cfg, ev); err != nil {
 			s.log.Warn("notify webhook failed", "event", ev.Type, "err", err)
 		}
