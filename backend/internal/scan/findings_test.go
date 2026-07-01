@@ -55,6 +55,10 @@ func TestIsAccessImpacting(t *testing.T) {
 		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_rp_filter":      true,
 		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_route_localnet": true,
 		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_tcp_syncookies":          false,
+		// Sudo / root-login fixes break Fleet's non-interactive sudo automation.
+		"xccdf_org.ssgproject.content_rule_sudo_add_noexec":       true,
+		"xccdf_org.ssgproject.content_rule_sudo_add_requiretty":   true,
+		"xccdf_org.ssgproject.content_rule_no_direct_root_logins": true,
 	}
 	for id, want := range cases {
 		if got := isAccessImpacting(id); got != want {

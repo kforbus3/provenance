@@ -210,11 +210,13 @@ lists the failed rules so you can **select which to fix**:
 - **Apply** generates the fixes on the host, runs them under sudo, then **re-scans** to verify; the
   new score appears as the latest scan in the history. The run's output is shown in the dialog and
   audited (`host.remediate`).
-- Rules that touch SSH, the firewall, account lockout, or networking sysctls (`ip_forward`,
-  `rp_filter`, `route_localnet`, `send_redirects`, `ip_local_port_range`) are flagged **⚠
-  access-impacting** because their fixes can sever Fleet's own access to the host; applying any of
-  them requires an explicit extra confirmation. **Remediation changes host configuration and is not
-  automatically reversible — test on non-critical hosts first.**
+- Rules that touch SSH, the firewall, account lockout, networking sysctls (`ip_forward`,
+  `rp_filter`, `route_localnet`, `send_redirects`, `ip_local_port_range`), or Fleet's privilege path
+  (`sudo_*` such as `noexec`/`requiretty`, and direct/root-login lockout) are flagged **⚠
+  access-impacting** because their fixes can sever Fleet's own access to or automation of the host —
+  enrollment and remediation run non-interactive `sudo bash`, which `Defaults noexec`/`requiretty`
+  breaks. Applying any of them requires an explicit extra confirmation. **Remediation changes host
+  configuration and is not automatically reversible — test on non-critical hosts first.**
 - Remediating a **control-plane host** — the jump host, a host tagged `control-plane`/`protected`, or
   one listed in `FLEET_CONTROL_PLANE_HOSTS` — requires a second, distinct confirmation. Hardening the
   box that runs Fleet (e.g. an `ip_forward=0` sysctl that breaks Docker's bridge networking) can lock

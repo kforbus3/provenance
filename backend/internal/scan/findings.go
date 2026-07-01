@@ -17,10 +17,16 @@ import (
 // filtering severs Docker's bridge networking (which serves the web UI) and the
 // jump-host WireGuard routing path. Tokens stay specific so unrelated sysctls
 // (e.g. sysctl_kernel_*) are not falsely flagged.
+//
+// The sudo/root_login tokens catch fixes that break Fleet's own privilege path:
+// enrollment and remediation run non-interactive `sudo bash` as the fleet user,
+// so `Defaults noexec`/`requiretty` (sudo_*) or disabling direct/root login
+// (no_direct_root_logins, sshd_*_root_login) can stop Fleet automating the host.
 var accessImpactingTokens = []string{
 	"sshd", "ssh_", "_ssh", "firewall", "firewalld", "nftables", "iptables",
 	"ufw", "_pam_", "faillock", "tally", "lockout", "wireless", "network_",
 	"ip_forward", "rp_filter", "route_localnet", "send_redirects", "ip_local_port_range",
+	"sudo", "root_login",
 }
 
 // parseFailedFindings extracts failed rules from an XCCDF results document.

@@ -88,10 +88,12 @@ can create custom roles and assign any subset of permissions.
 
 > **`Host.Remediate`** lets a user **apply OpenSCAP fixes**, which *modify host
 > configuration* and are not automatically reversible. It is granted to
-> **Administrator only** by default. Fixes for SSH/firewall/lockout rules — and
-> networking sysctls such as `ip_forward`/`rp_filter`/`route_localnet` — are
-> flagged "access-impacting" in the UI and require an extra confirmation, since
-> they can sever Fleet's own access to the host. Remediating a **control-plane
+> **Administrator only** by default. Fixes for SSH/firewall/lockout rules,
+> networking sysctls such as `ip_forward`/`rp_filter`/`route_localnet`, and
+> Fleet's privilege path (`sudo_*` such as `noexec`/`requiretty`, and root-login
+> lockout) are flagged "access-impacting" in the UI and require an extra
+> confirmation, since they can sever Fleet's own access to — or automation of —
+> the host. Remediating a **control-plane
 > host** (the jump host, a host tagged `control-plane`/`protected`, or one listed
 > in `FLEET_CONTROL_PLANE_HOSTS`) requires a second, distinct confirmation because
 > hardening the box that runs Fleet can lock Fleet out of the entire fleet.
