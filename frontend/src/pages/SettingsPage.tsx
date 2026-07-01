@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
-  Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
+  Alert, Autocomplete, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions,
+  DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack,
+  Switch, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip,
+  Typography,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -68,11 +69,20 @@ export function SettingsPage() {
       <Typography variant="h5" sx={{ mb: 2 }}>System Settings</Typography>
 
       <TimezoneCard />
-      <BrandingCard current={settings["branding"]} />
-      <AssistantCard current={settings["assistant"]} />
-      <ScanCard current={settings["scan_policy"]} />
-      <WGSettingsCard current={settings["wireguard"]} />
-      <RetentionCard current={settings["recordings"]} />
+      {/* These cards seed their form state from the loaded settings on first
+          mount, so they must not render until the query resolves — otherwise they
+          initialize blank and never re-sync when the data arrives. */}
+      {isLoading ? (
+        <Box sx={{ display: "flex", justifyContent: "center", my: 4 }}><CircularProgress /></Box>
+      ) : (
+        <>
+          <BrandingCard current={settings["branding"]} />
+          <AssistantCard current={settings["assistant"]} />
+          <ScanCard current={settings["scan_policy"]} />
+          <WGSettingsCard current={settings["wireguard"]} />
+          <RetentionCard current={settings["recordings"]} />
+        </>
+      )}
       <NotificationsCard />
       <SSOCard />
       <LDAPCard />
