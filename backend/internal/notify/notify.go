@@ -31,8 +31,9 @@ const (
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
-// routing configured here controls the admin distribution/webhook; the user a
-// resolution or expiry concerns is always emailed directly (see Event.Recipient).
+// routing configured here controls delivery; for events that concern a specific
+// user (resolution, expiry), enabling the Email route also emails that user
+// directly at their profile address (see Event.Recipient).
 var AllEventTypes = []struct{ Key, Label string }{
 	{EventHostOffline, "Host went offline"},
 	{EventHostRecovered, "Host recovered"},
@@ -65,9 +66,9 @@ type Event struct {
 	// empty means no per-event throttling beyond the type.
 	DedupeKey string
 	// Recipient, when set, is a direct email address the event also goes to (the
-	// user it concerns, e.g. an approval requester). It is delivered whenever the
-	// email channel is enabled, independent of the admin per-event route — the
-	// route only governs the admin distribution list and webhook.
+	// user it concerns, e.g. an approval requester). It is delivered when the event
+	// is routed to email — the same gate as the admin distribution — so disabling
+	// the event's email route silences both.
 	Recipient string
 }
 
@@ -148,9 +149,9 @@ func (s *Service) Notify(ctx context.Context, ev Event) {
 	route := cfg.Events[ev.Type]
 	adminEmail := route.Email && cfg.Email.Enabled
 	adminWebhook := route.Webhook && cfg.Webhook.Enabled
-	// A direct recipient is emailed whenever the email channel is enabled, even if
-	// the admin hasn't routed this event to the distribution list.
-	directEmail := ev.Recipient != "" && cfg.Email.Enabled
+	// A direct recipient is emailed only when this event is routed to email — same
+	// gate as the admin distribution, so disabling the event silences both.
+	directEmail := ev.Recipient != "" && route.Email && cfg.Email.Enabled
 	if !adminEmail && !adminWebhook && !directEmail {
 		return
 	}

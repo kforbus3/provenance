@@ -288,11 +288,11 @@ to it:
 Set a **throttle** (minutes) to dedupe repeats, and use **Send test** to confirm delivery.
 Notifications are **off by default** — nothing is sent until you enable a channel.
 
-The routing above governs the **admin distribution list / webhook**. For the two
-lifecycle events — a request being **resolved** and a grant **expiring** — the affected
-**requester is also emailed directly** at the address in their profile whenever the email
-channel is enabled (falling back silently if they have none), so users get closure on their
-own requests without an admin having to subscribe them.
+For the two lifecycle events — a request being **resolved** and a grant **expiring** —
+routing the event to **Email** also emails the affected **requester directly** at the address
+in their profile (in addition to the admin distribution list), falling back silently if they
+have none. The Email route is the single gate: disabling it silences both the admin copy and
+the requester's, so enable Email for these events if you want requesters to get closure.
 
 There is also a **CA key due for rotation** event: the renewal loop checks the active
 SSH CA key's age hourly and, once it passes `FLEET_CA_ROTATE_AFTER` (default 365 days),
