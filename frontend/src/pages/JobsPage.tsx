@@ -3,7 +3,7 @@ import {
   TableRow, Typography, Tooltip,
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
-import { getJobs, type EnrollmentJob, type SchedulerStatus } from "../api/system";
+import { getJobs, type EnrollmentJob, type RemediationJob, type SchedulerStatus } from "../api/system";
 import { formatDateTime, formatTime } from "../lib/datetime";
 
 // Background jobs: scheduler heartbeats (cert renewal, approval expiry, host
@@ -80,12 +80,47 @@ export function JobsPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <Typography variant="h6" sx={{ mt: 4, mb: 1 }}>Remediation jobs</Typography>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Host</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell>Rules</TableCell>
+              <TableCell>Requested by</TableCell>
+              <TableCell>Started</TableCell>
+              <TableCell>Finished</TableCell>
+              <TableCell>Error</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {(data?.remediationJobs ?? []).map((j: RemediationJob) => (
+              <TableRow key={j.id} hover>
+                <TableCell>{j.hostname || j.hostId}</TableCell>
+                <TableCell>
+                  <Chip size="small" label={j.status} color={statusColor(j.status)} />
+                </TableCell>
+                <TableCell>{j.ruleCount}</TableCell>
+                <TableCell>{j.requester || ""}</TableCell>
+                <TableCell>{formatDateTime(j.startedAt)}</TableCell>
+                <TableCell>{formatDateTime(j.finishedAt)}</TableCell>
+                <TableCell sx={{ color: "error.main" }}>{j.error || ""}</TableCell>
+              </TableRow>
+            ))}
+            {data && data.remediationJobs.length === 0 && (
+              <TableRow><TableCell colSpan={7}>No remediation jobs yet.</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
     </Box>
   );
 }
 
 function statusColor(s: string): "success" | "error" | "warning" | "default" {
-  if (s === "succeeded") return "success";
+  if (s === "succeeded" || s === "completed") return "success";
   if (s === "failed" || s === "rolled_back") return "error";
   if (s === "running" || s === "pending") return "warning";
   return "default";

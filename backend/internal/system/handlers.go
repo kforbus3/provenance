@@ -43,9 +43,15 @@ func (h *handler) jobs(w http.ResponseWriter, r *http.Request) {
 	if enrollJobs == nil {
 		enrollJobs = []models.EnrollmentJob{}
 	}
+	remJobs, err := h.d.Store.ListRemediationJobs(r.Context(), 50)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list remediation jobs")
+		return
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"schedulers":     h.reg.Snapshot(),
-		"enrollmentJobs": enrollJobs,
+		"schedulers":      h.reg.Snapshot(),
+		"enrollmentJobs":  enrollJobs,
+		"remediationJobs": remJobs,
 	})
 }
 

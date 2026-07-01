@@ -25,9 +25,24 @@ export interface EnrollmentJob {
   finishedAt?: string;
 }
 
+export interface RemediationJob {
+  id: string;
+  hostId: string;
+  hostname: string;
+  requester?: string;
+  ruleCount: number;
+  status: string; // pending | running | completed | failed
+  exitCode?: number;
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+}
+
 export interface JobsResponse {
   schedulers: SchedulerStatus[];
   enrollmentJobs: EnrollmentJob[];
+  remediationJobs: RemediationJob[];
 }
 
 export async function getJobs(): Promise<JobsResponse> {

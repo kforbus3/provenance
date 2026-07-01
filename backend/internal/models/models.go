@@ -424,3 +424,20 @@ type HostRemediation struct {
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 }
+
+// RemediationJob is a lightweight view of a remediation run for the background-
+// job log: enough to see which host it targeted, who started it, and whether it
+// is still running — without the (potentially large) output blob.
+type RemediationJob struct {
+	ID         uuid.UUID  `json:"id"`
+	HostID     uuid.UUID  `json:"hostId"`
+	Hostname   string     `json:"hostname"`
+	Requester  string     `json:"requester,omitempty"`
+	RuleCount  int        `json:"ruleCount"`
+	Status     string     `json:"status"` // pending|running|completed|failed
+	ExitCode   *int       `json:"exitCode,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}

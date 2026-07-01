@@ -71,3 +71,33 @@ func (s *Store) FailStaleRemediations(ctx context.Context) (int64, error) {
 func (s *Store) GetRemediation(ctx context.Context, id uuid.UUID) (*models.HostRemediation, error) {
 	return scanRemediation(s.pool.QueryRow(ctx, `SELECT `+remediationCols+` FROM host_remediations WHERE id=$1`, id))
 }
+
+// ListRemediationJobs returns recent remediation runs as lightweight job-log
+// views (joined to the host for its name, omitting the output blob). Most-recent
+// first so the job log surfaces in-progress runs at the top.
+func (s *Store) ListRemediationJobs(ctx context.Context, limit int) ([]models.RemediationJob, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.id, r.host_id, COALESCE(h.hostname, ''), r.requester,
+		       COALESCE(array_length(r.rule_ids, 1), 0), r.status, r.exit_code,
+		       r.error, r.started_at, r.finished_at, r.created_at
+		FROM host_remediations r
+		LEFT JOIN hosts h ON h.id = r.host_id
+		ORDER BY r.created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.RemediationJob{}
+	for rows.Next() {
+		var j models.RemediationJob
+		if err := rows.Scan(&j.ID, &j.HostID, &j.Hostname, &j.Requester, &j.RuleCount,
+			&j.Status, &j.ExitCode, &j.Error, &j.StartedAt, &j.FinishedAt, &j.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
