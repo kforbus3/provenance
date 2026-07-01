@@ -187,15 +187,3 @@ CI builds the backend and frontend images. Configuration is environment-driven,
 so promotion between environments is a matter of swapping env values and secrets;
 see [deploy/k8s](../deploy/k8s) for Kubernetes manifests and the
 [Disaster Recovery guide](./disaster-recovery.md) for backup/restore.
-
-## Mirroring to a second remote
-
-The public remote and a private mirror can carry equivalent content under
-different commit identities (the public history is scrubbed of personal emails,
-so the two histories are disjoint and won't fast-forward into each other).
-`scripts/mirror-to-gitlab.sh` replays new commits from the current branch onto
-the mirror's tip, re-authored with your mirror identity, and fast-forward-pushes
-(no force-push; the mirror's history is preserved). Configure it once with the
-`fleet.gitlab*` git-config keys documented in the script header, then run it
-after pushing to the public remote. It is idempotent — with nothing new to
-replay, it does nothing.
