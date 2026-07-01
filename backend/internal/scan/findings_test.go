@@ -49,6 +49,12 @@ func TestIsAccessImpacting(t *testing.T) {
 		"xccdf_org.ssgproject.content_rule_accounts_pam_faillock":     true,
 		"xccdf_org.ssgproject.content_rule_package_rsyslog_installed": false,
 		"xccdf_org.ssgproject.content_rule_sysctl_kernel_randomize":   false,
+		// Networking sysctls that break Docker/WireGuard routing must be flagged;
+		// unrelated kernel sysctls (above) must not be.
+		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_ip_forward":              true,
+		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_rp_filter":      true,
+		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_route_localnet": true,
+		"xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_tcp_syncookies":          false,
 	}
 	for id, want := range cases {
 		if got := isAccessImpacting(id); got != want {
