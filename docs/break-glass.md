@@ -17,7 +17,7 @@ from a backup, and (3) how to reach a host when Fleet itself is down.
 | **`FLEET_CA_PASSPHRASE`** | your `.env` (and your memory / password manager) | The CA private key in the DB can't be decrypted → you must **re-enroll every host**. |
 | **`FLEET_BACKUP_PASSPHRASE`** | your `.env` / password manager | Encrypted backups can't be decrypted. (Falls back to the CA passphrase if unset.) |
 | **Database backups** | `FLEET_BACKUP_DIR` (`/var/lib/fleet/backups`) | All state — users, RBAC, hosts, the (encrypted) CA key, audit — is gone. |
-| **Jump host volumes** | `jump_wg`, `jump_ssh` Docker volumes | WireGuard peers + the SSH host key; recoverable by re-enrolling hosts, but tedious. |
+| **Jump host volumes** | `jump_wg`, `jump_ssh` Docker volumes (capture with `make backup-volumes`) | WireGuard peers + the SSH host key; recoverable by re-enrolling hosts, but tedious. |
 
 **Store the two passphrases off the server** (a password manager or a sealed
 envelope). They are not in the database backup — by design — so a stolen backup
@@ -42,19 +42,45 @@ an external disk, or rsync the directory to another machine on a cron).
 The encrypted file format is standard openssl, so it restores **anywhere** with
 no Fleet-specific tooling — see below.
 
+### Also back up the state volumes (not in the DB dump)
+
+The database backup does **not** include the jump host's identity or on-disk
+media. Capture those Docker volumes alongside it so a rebuild is seamless:
+
+```sh
+make backup-volumes           # → ./volume-backups/{jump_wg,jump_ssh,recordings,scans}.tar.gz
+```
+
+- **`jump_wg`** — the jump host's WireGuard keypair + enrolled peers.
+- **`jump_ssh`** — the jump host's SSH host key (so known_hosts pinning still matches).
+- **`recordings`, `scans`** — session recordings and scan HTML reports (the DB holds
+  only their paths).
+
+Store `volume-backups/` off-host next to your encrypted DB backup. Without
+`jump_wg`/`jump_ssh` you can still recover, but every host must be re-enrolled to
+rebuild the WireGuard overlay. Run `make down-single` first for a fully consistent
+snapshot (optional for the mostly-static jump host files).
+
 ---
 
 ## 3. Rebuild Fleet from a backup
 
 On a fresh host (or after wiping a broken one):
 
-1. **Bring up the stack** with the **same `.env`** — crucially the same
-   `FLEET_CA_PASSPHRASE` (and `FLEET_BACKUP_PASSPHRASE`):
+1. **Restore config + state volumes first**, using the **same `.env`** — crucially
+   the same `FLEET_CA_PASSPHRASE` (and `FLEET_BACKUP_PASSPHRASE`). Restoring the
+   volumes *before* the first start means the jump host comes up with its original
+   WireGuard and SSH-host identity, so the overlay and known_hosts pinning still
+   line up and no host needs re-enrollment:
    ```sh
    git clone <repo> && cd fleet-terminal
    cp /secure/offsite/.env .env          # your saved env with the passphrases
+   cp -r /secure/offsite/volume-backups ./volume-backups   # if you have them
+   make restore-volumes                  # jump_wg, jump_ssh, recordings, scans
    make up-single
    ```
+   (No volume backups? Skip `restore-volumes`; the stack still comes up, but you'll
+   re-enroll each host to rebuild the WireGuard overlay.)
 2. **Restore the database** from your latest encrypted backup:
    ```sh
    openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \

@@ -8,6 +8,13 @@ COMPOSE        := docker compose --env-file .env -f deploy/compose/docker-compos
 COMPOSE_FABRIC := $(COMPOSE) -f deploy/compose/docker-compose.testfabric.yml
 COMPOSE_SINGLE := $(COMPOSE) -f deploy/compose/docker-compose.jumphost.yml
 
+# State that the database backup does NOT capture: the jump host's WireGuard
+# keypair/peers + SSH host key, and on-disk session recordings & scan reports.
+# PROJECT matches `name:` in docker-compose.yml (the Docker volume-name prefix).
+PROJECT        := fleet-terminal
+STATE_VOLUMES  := jump_wg jump_ssh recordings scans
+VOL_BACKUP_DIR ?= ./volume-backups
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -44,6 +51,31 @@ logs-single: ## Single-server: tail logs
 .PHONY: down-single
 down-single: ## Single-server: stop the stack (data volumes preserved)
 	$(COMPOSE_SINGLE) down
+
+.PHONY: backup-volumes
+backup-volumes: ## Archive jump-host + recordings/scans volumes to $(VOL_BACKUP_DIR) (complements the DB backup)
+	@mkdir -p $(VOL_BACKUP_DIR)
+	@for v in $(STATE_VOLUMES); do \
+	  if docker volume inspect $(PROJECT)_$$v >/dev/null 2>&1; then \
+	    echo "archiving $(PROJECT)_$$v -> $(VOL_BACKUP_DIR)/$$v.tar.gz"; \
+	    docker run --rm -v $(PROJECT)_$$v:/v:ro -v $(abspath $(VOL_BACKUP_DIR)):/backup busybox \
+	      tar czf /backup/$$v.tar.gz -C /v . ; \
+	  else echo "skip $$v ($(PROJECT)_$$v does not exist yet)"; fi ; \
+	done
+	@echo "Done. Store $(VOL_BACKUP_DIR)/ off-host alongside your encrypted DB backup."
+	@echo "Tip: run 'make down-single' first for a fully consistent snapshot."
+
+.PHONY: restore-volumes
+restore-volumes: ## Restore jump-host + recordings/scans volumes from $(VOL_BACKUP_DIR) (stack should be down)
+	@for v in $(STATE_VOLUMES); do \
+	  if [ -f $(VOL_BACKUP_DIR)/$$v.tar.gz ]; then \
+	    echo "restoring $(VOL_BACKUP_DIR)/$$v.tar.gz -> $(PROJECT)_$$v"; \
+	    docker volume create $(PROJECT)_$$v >/dev/null; \
+	    docker run --rm -v $(PROJECT)_$$v:/v -v $(abspath $(VOL_BACKUP_DIR)):/backup busybox \
+	      sh -c 'rm -rf /v/* /v/.[!.]* /v/..?* 2>/dev/null; tar xzf /backup/'"$$v"'.tar.gz -C /v' ; \
+	  else echo "skip $$v (no $(VOL_BACKUP_DIR)/$$v.tar.gz)"; fi ; \
+	done
+	@echo "Done. Now restore the database, then: make up-single"
 
 .PHONY: trust
 trust: ## Seed the test-fabric nodes with the backend's CA (run once after `make up`)

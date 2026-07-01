@@ -21,3 +21,7 @@ node_modules/
 /data/
 recordings/
 *.log
+
+# Volume backups (make backup-volumes)
+/volume-backups/
+*.tar.gz
