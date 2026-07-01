@@ -122,7 +122,67 @@ and WireGuard are intact, so a restored backend reconnects immediately.
 
 ---
 
-## 5. Periodic drill (quarterly)
+## 5. Recovering after hardening locked Fleet out of its own host
+
+**Symptom:** after a scan remediation (or manual hardening) is applied to the host
+that runs Fleet, the web UI stops loading or SSH brokering stalls. Fleet flags such
+rules **⚠ access-impacting** and requires an extra confirmation for control-plane
+hosts, but if a fix still slipped through, recover from the console (or a
+[break-glass key](#recommended-pre-provision-a-break-glass-key-do-this-now-not-in-a-crisis)).
+
+> If `Defaults noexec` is active in sudoers (see below), run recovery as individual
+> `sudo <cmd>` invocations — `noexec` blocks `sudo bash -c '…'` wrappers.
+
+### Networking sysctls (most common — breaks Docker / WireGuard)
+
+Hardening baselines (e.g. ANSSI-BP-028) set kernel networking sysctls that cut the
+container bridge and the WireGuard overlay:
+
+- `net.ipv4.ip_forward = 0` disables the Docker bridge's forwarding, so the
+  published ports that serve the UI go dark.
+- strict `rp_filter` / `route_localnet = 0` drop the asymmetric Docker/WireGuard paths.
+
+These are typically written to `/etc/sysctl.conf`, which `sysctl --system` applies
+**last** — so it overrides anything you add under `/etc/sysctl.d/`. Fix the values
+in `/etc/sysctl.conf` itself, then reload and restart Docker:
+
+```sh
+# see what the remediation changed
+sudo grep -nE 'ip_forward|rp_filter|route_localnet' /etc/sysctl.conf /etc/sysctl.d/
+# in /etc/sysctl.conf set: ip_forward = 1, *.rp_filter = 2 (loose), route_localnet = 1
+sudo sysctl --system
+sudo systemctl restart docker      # rebuilds the bridge NAT / forward rules
+```
+
+If the host uses **kernel** WireGuard, ensure the module is loaded
+(`sudo modprobe wireguard`); otherwise the jump host / enrollment fall back to
+userspace `wireguard-go`.
+
+### Sudo `noexec` / `requiretty` (breaks Fleet automation)
+
+`Defaults noexec` or `requiretty` in sudoers stops Fleet's non-interactive
+`sudo bash` (enrollment, remediation) from executing. Keep the hardening for
+everyone else but exempt the account Fleet connects as — edit the offending file
+with `visudo` and add, after the `Defaults` line it wrote:
+
+```
+Defaults:<fleet-ssh-user> !noexec
+```
+
+### Root / direct-login lockout
+
+`no_direct_root_logins` and `sshd_*_root_login` fixes are usually fine to leave in
+place — recover with a normal sudo account, not root. Only revert them if a
+workflow genuinely needs direct root login.
+
+> **Prevention.** Add Fleet's own host to `FLEET_CONTROL_PLANE_HOSTS` (or tag it
+> `control-plane`) so remediating it always demands the extra confirmation, and
+> prefer running host-hardening scans against managed hosts rather than the box
+> that runs Fleet.
+
+---
+
+## 6. Periodic drill (quarterly)
 
 1. Download the latest encrypted backup and **decrypt it** locally to confirm the
    passphrase works:
