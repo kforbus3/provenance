@@ -12,6 +12,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -60,6 +61,40 @@ func Mount(r chi.Router, d *app.Deps) {
 }
 
 type handler struct{ d *app.Deps }
+
+// permAdminAll is the wildcard permission that grants everything; only a super
+// admin may grant it or create/modify a super-admin, so an Administrator can't
+// escalate itself beyond its own privilege.
+const permAdminAll = "Admin.All"
+
+// actorSuper reports whether the caller is a super administrator.
+func actorSuper(r *http.Request) bool {
+	p := auth.MustPrincipal(r)
+	return p != nil && p.IsSuperAdmin
+}
+
+func containsPerm(perms []string, key string) bool {
+	for _, p := range perms {
+		if p == key {
+			return true
+		}
+	}
+	return false
+}
+
+// guardSuperTarget blocks a non-super-admin from mutating a super-administrator
+// account (reset password/MFA, disable, delete). Returns true — and writes 403 —
+// when the request must not proceed.
+func (h *handler) guardSuperTarget(w http.ResponseWriter, r *http.Request, targetID uuid.UUID) bool {
+	if actorSuper(r) {
+		return false
+	}
+	if t, err := h.d.Store.GetUserByID(r.Context(), targetID); err == nil && t.IsSuperAdmin {
+		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may modify a super-administrator account")
+		return true
+	}
+	return false
+}
 
 func (h *handler) audit(r *http.Request, action, targetKind, targetID string, detail map[string]any) {
 	p := auth.MustPrincipal(r)

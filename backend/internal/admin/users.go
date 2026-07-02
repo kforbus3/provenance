@@ -60,6 +60,10 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "password is required")
 		return
 	}
+	if rq.IsSuperAdmin && !actorSuper(r) {
+		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may create a super administrator")
+		return
+	}
 	if err := h.d.Auth.PasswordPolicy(r.Context()).Validate(rq.Password); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -93,6 +97,9 @@ func (h *handler) updateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
+	if h.guardSuperTarget(w, r, id) {
+		return
+	}
 	var rq updateUserReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -114,6 +121,9 @@ func (h *handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
+	if h.guardSuperTarget(w, r, id) {
+		return
+	}
 	// Destroy live sessions first (zeroize in-RAM private keys + revoke certs)
 	// before the row + cascade delete, so nothing outlives the account.
 	h.d.Auth.DestroyUserSessions(r.Context(), id)
@@ -133,6 +143,9 @@ func (h *handler) disableUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if h.guardSuperTarget(w, r, id) {
 		return
 	}
 	rq := disableReq{Disabled: true}
@@ -174,6 +187,9 @@ func (h *handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
+	if h.guardSuperTarget(w, r, id) {
+		return
+	}
 	var rq resetPasswordReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.NewPassword == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "newPassword is required")
@@ -207,6 +223,9 @@ func (h *handler) resetMFA(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if h.guardSuperTarget(w, r, id) {
 		return
 	}
 	if err := h.d.Store.ResetUserMFA(r.Context(), id); err != nil {
@@ -298,6 +317,12 @@ func (h *handler) assignRole(w http.ResponseWriter, r *http.Request) {
 	roleID, err2 := uuid.Parse(chi.URLParam(r, "roleId"))
 	if err1 != nil || err2 != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	// Don't let a non-super-admin hand out a role that grants Admin.All (which
+	// would let them escalate themselves to full access).
+	if perms, _ := h.d.Store.RolePermissions(r.Context(), roleID); containsPerm(perms, permAdminAll) && !actorSuper(r) {
+		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may assign a role that grants Admin.All")
 		return
 	}
 	if err := h.d.Store.AssignRole(r.Context(), userID, roleID); err != nil {
