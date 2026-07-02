@@ -99,11 +99,17 @@ func sendImplicitTLS(addr, host string, auth smtp.Auth, from string, to []string
 	return c.Quit()
 }
 
+// hdrSafe strips CR/LF so a value carried into a header (e.g. a hostname in the
+// Subject) can't inject extra headers or a forged body.
+func hdrSafe(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+}
+
 func buildMessage(from, to, subject, body string) []byte {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", to)
-	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&b, "From: %s\r\n", hdrSafe(from))
+	fmt.Fprintf(&b, "To: %s\r\n", hdrSafe(to))
+	fmt.Fprintf(&b, "Subject: %s\r\n", hdrSafe(subject))
 	fmt.Fprintf(&b, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&b, "Content-Type: text/plain; charset=UTF-8\r\n")
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))

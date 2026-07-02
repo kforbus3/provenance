@@ -135,10 +135,28 @@ func (rq hostReq) toInput() store.HostInput {
 	}
 }
 
+// validHostname rejects control characters (CR/LF etc.), which have no place in a
+// hostname and would otherwise be carried into notification email headers.
+func validHostname(s string) bool {
+	if len(s) > 253 {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	var rq hostReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.Hostname == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "hostname is required")
+		return
+	}
+	if !validHostname(rq.Hostname) {
+		httpx.WriteError(w, http.StatusBadRequest, "hostname contains invalid characters")
 		return
 	}
 	host, err := h.d.Store.CreateHost(r.Context(), rq.toInput())
@@ -159,6 +177,10 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	var rq hostReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !validHostname(rq.Hostname) {
+		httpx.WriteError(w, http.StatusBadRequest, "hostname contains invalid characters")
 		return
 	}
 	host, err := h.d.Store.UpdateHost(r.Context(), id, rq.toInput())

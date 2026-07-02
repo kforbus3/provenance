@@ -52,7 +52,9 @@ type askReq struct {
 
 func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 	var rq askReq
-	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || len(rq.Question) == 0 {
+	// Cap the body so a giant "question" can't exhaust memory (the 2000-char clamp
+	// below runs only after a full decode).
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&rq); err != nil || len(rq.Question) == 0 {
 		httpx.WriteError(w, http.StatusBadRequest, "question is required")
 		return
 	}
