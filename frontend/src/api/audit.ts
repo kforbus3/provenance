@@ -19,7 +19,9 @@ export interface AuditEvent {
 
 export interface AuditFilter {
   action?: string;
-  actor?: string;
+  // Case-insensitive substring match on the actor's name (friendlier than the
+  // raw actor UUID the API also accepts via `actor`).
+  actorName?: string;
   limit?: number;
   offset?: number;
 }
@@ -34,6 +36,11 @@ export async function listAudit(filter: AuditFilter = {}): Promise<AuditEvent[]>
     params: filter,
   });
   return data.events;
+}
+
+export async function listAuditActions(): Promise<string[]> {
+  const { data } = await api.get<{ actions: string[] }>("/api/v1/audit/actions");
+  return data.actions ?? [];
 }
 
 export async function verifyAudit(): Promise<VerifyResult> {

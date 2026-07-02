@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
-  Alert, Box, Button, Chip, Paper, Stack, Table, TableBody, TableCell,
+  Alert, Box, Button, Chip, MenuItem, Paper, Stack, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, Typography,
 } from "@mui/material";
 import VerifiedIcon from "@mui/icons-material/VerifiedUser";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { listAudit, verifyAudit, type AuditFilter, type VerifyResult } from "../api/audit";
+import {
+  listAudit, listAuditActions, verifyAudit,
+  type AuditFilter, type VerifyResult,
+} from "../api/audit";
 
 // Render an audit event's detail map as compact, readable "key: value" pairs.
 // Generic across every action; for approval decisions it surfaces the requester,
@@ -28,7 +31,7 @@ function DetailCell({ detail }: { detail?: Record<string, unknown> }) {
 // integrity-verification action that reports whether the hash chain is intact.
 export function AuditPage() {
   const [action, setAction] = useState("");
-  const [actor, setActor] = useState("");
+  const [actorName, setActorName] = useState("");
   const [filter, setFilter] = useState<AuditFilter>({ limit: 100 });
 
   const { data: events = [], isLoading } = useQuery({
@@ -36,14 +39,28 @@ export function AuditPage() {
     queryFn: () => listAudit(filter),
   });
 
+  // Populate the Action dropdown from the actions actually present in the log.
+  const { data: actions = [] } = useQuery({
+    queryKey: ["audit-actions"],
+    queryFn: listAuditActions,
+  });
+
   const verifyMut = useMutation<VerifyResult>({ mutationFn: verifyAudit });
 
-  const applyFilter = () => {
+  // Apply reads the current control values (passed explicitly so the dropdown can
+  // apply the freshly-selected value without waiting for a state flush).
+  const apply = (a = action, an = actorName) => {
     setFilter({
       limit: 100,
-      action: action || undefined,
-      actor: actor || undefined,
+      action: a || undefined,
+      actorName: an || undefined,
     });
+  };
+
+  const clear = () => {
+    setAction("");
+    setActorName("");
+    apply("", "");
   };
 
   return (
@@ -68,11 +85,26 @@ export function AuditPage() {
       )}
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-        <TextField label="Action" size="small" value={action}
-          onChange={(e) => setAction(e.target.value)} />
-        <TextField label="Actor ID" size="small" value={actor}
-          onChange={(e) => setActor(e.target.value)} />
-        <Button variant="contained" onClick={applyFilter}>Filter</Button>
+        <TextField
+          select label="Action" size="small" sx={{ minWidth: 200 }}
+          value={action}
+          onChange={(e) => { setAction(e.target.value); apply(e.target.value, actorName); }}
+        >
+          <MenuItem value="">All actions</MenuItem>
+          {actions.map((a) => (
+            <MenuItem key={a} value={a}>{a}</MenuItem>
+          ))}
+        </TextField>
+        <TextField
+          label="Actor name" size="small" value={actorName}
+          placeholder="e.g. alice"
+          onChange={(e) => setActorName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") apply(); }}
+        />
+        <Button variant="contained" onClick={() => apply()}>Filter</Button>
+        {(action || actorName) && (
+          <Button variant="text" onClick={clear}>Clear</Button>
+        )}
       </Stack>
 
       <TableContainer component={Paper} variant="outlined">

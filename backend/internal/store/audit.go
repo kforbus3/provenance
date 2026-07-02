@@ -63,10 +63,13 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 
 // AuditFilter narrows an audit query.
 type AuditFilter struct {
-	Action  string
-	ActorID *uuid.UUID
-	Limit   int
-	Offset  int
+	Action string
+	// ActorID matches an actor exactly; ActorName matches by (case-insensitive)
+	// substring so the UI can filter by a name a human actually knows.
+	ActorID   *uuid.UUID
+	ActorName string
+	Limit     int
+	Offset    int
 }
 
 // ListAudit returns audit events matching the filter, newest first.
@@ -78,9 +81,11 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]models.AuditEve
 		SELECT seq, id, actor_id, COALESCE(actor_name,''), action, target_kind, target_id,
 		       COALESCE(host(ip),''), detail, prev_hash, hash, created_at
 		FROM audit_events
-		WHERE ($1='' OR action=$1) AND ($2::uuid IS NULL OR actor_id=$2)
-		ORDER BY seq DESC LIMIT $3 OFFSET $4`,
-		f.Action, f.ActorID, f.Limit, f.Offset)
+		WHERE ($1='' OR action=$1)
+		  AND ($2::uuid IS NULL OR actor_id=$2)
+		  AND ($3='' OR actor_name ILIKE '%'||$3||'%')
+		ORDER BY seq DESC LIMIT $4 OFFSET $5`,
+		f.Action, f.ActorID, f.ActorName, f.Limit, f.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +98,25 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]models.AuditEve
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DistinctAuditActions returns the set of action values present in the log,
+// sorted, so the UI can offer them as a filter dropdown instead of free text.
+func (s *Store) DistinctAuditActions(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT action FROM audit_events ORDER BY action`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

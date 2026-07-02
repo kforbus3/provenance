@@ -24,6 +24,7 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.Use(d.Auth.RequireAuth)
 
 		pr.With(d.Auth.RequirePermission("Audit.View")).Get("/audit", h.list)
+		pr.With(d.Auth.RequirePermission("Audit.View")).Get("/audit/actions", h.actions)
 		pr.With(d.Auth.RequirePermission("Audit.View")).Get("/audit/verify", h.verify)
 		pr.With(d.Auth.RequirePermission("Audit.Export")).Get("/audit/export", h.export)
 	})
@@ -35,10 +36,13 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	f := store.AuditFilter{
-		Action: r.URL.Query().Get("action"),
-		Limit:  limit,
-		Offset: offset,
+		Action:    r.URL.Query().Get("action"),
+		ActorName: r.URL.Query().Get("actorName"),
+		Limit:     limit,
+		Offset:    offset,
 	}
+	// `actor` (an exact UUID) remains supported for programmatic callers; the UI
+	// filters by `actorName` (substring) instead.
 	if actor := r.URL.Query().Get("actor"); actor != "" {
 		id, err := uuid.Parse(actor)
 		if err != nil {
@@ -56,6 +60,17 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		events = []models.AuditEvent{}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
+}
+
+// actions lists the distinct action values in the log so the UI can present a
+// filter dropdown rather than a free-text box.
+func (h *handler) actions(w http.ResponseWriter, r *http.Request) {
+	actions, err := h.d.Store.DistinctAuditActions(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list audit actions")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"actions": actions})
 }
 
 func (h *handler) verify(w http.ResponseWriter, r *http.Request) {
