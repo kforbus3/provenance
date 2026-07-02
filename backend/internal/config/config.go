@@ -199,8 +199,13 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	var missing []string
-	if c.Environment == "production" {
+	// Secrets and the accept-any host-key toggle are only permitted their insecure
+	// defaults in an explicit "development" environment (the local test fabric).
+	// Every other environment — production, staging, or anything unrecognized —
+	// must supply real secrets; otherwise the CA signing key, tokens, and CSRF
+	// tokens would be protected by publicly-known constants. Fail closed.
+	if c.Environment != "development" {
+		var missing []string
 		if len(c.JWTSecret) < 32 {
 			missing = append(missing, "FLEET_JWT_SECRET (>=32 bytes)")
 		}
@@ -210,22 +215,25 @@ func (c *Config) validate() error {
 		if len(c.CAKeyPassphrase) < 16 {
 			missing = append(missing, "FLEET_CA_PASSPHRASE (>=16 bytes)")
 		}
-		if c.SSHInsecureHostKeys {
-			return fmt.Errorf("FLEET_SSH_INSECURE_HOST_KEYS must not be enabled in production")
+		if len(missing) > 0 {
+			return fmt.Errorf("missing required config for %q environment: %s",
+				c.Environment, strings.Join(missing, ", "))
 		}
-	}
-	// Development fallbacks: derive deterministic-but-warned secrets so the stack boots.
-	if len(c.JWTSecret) == 0 {
-		c.JWTSecret = []byte("dev-insecure-jwt-secret-change-me-0000000000")
-	}
-	if len(c.CSRFSecret) == 0 {
-		c.CSRFSecret = []byte("dev-insecure-csrf-secret-change")
-	}
-	if len(c.CAKeyPassphrase) == 0 {
-		c.CAKeyPassphrase = []byte("dev-insecure-ca-passphrase-change")
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("missing required production config: %s", strings.Join(missing, ", "))
+		if c.SSHInsecureHostKeys {
+			return fmt.Errorf("FLEET_SSH_INSECURE_HOST_KEYS must not be enabled outside development")
+		}
+	} else {
+		// Development-only fallbacks so the local stack boots without configured
+		// secrets. Never reached in production/staging (secrets required above).
+		if len(c.JWTSecret) == 0 {
+			c.JWTSecret = []byte("dev-insecure-jwt-secret-change-me-0000000000")
+		}
+		if len(c.CSRFSecret) == 0 {
+			c.CSRFSecret = []byte("dev-insecure-csrf-secret-change")
+		}
+		if len(c.CAKeyPassphrase) == 0 {
+			c.CAKeyPassphrase = []byte("dev-insecure-ca-passphrase-change")
+		}
 	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("FLEET_DATABASE_URL is required")
