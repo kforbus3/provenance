@@ -269,3 +269,10 @@ func (s *Store) ExpiringCertificates(ctx context.Context, before time.Time) ([]m
 	}
 	return out, rows.Err()
 }
+
+// ReSealCAKey replaces the encrypted private key blob for a CA key (used to
+// opportunistically upgrade the at-rest encryption envelope in place).
+func (s *Store) ReSealCAKey(ctx context.Context, id uuid.UUID, privateEnc []byte) error {
+	_, err := s.pool.Exec(ctx, `UPDATE ca_keys SET private_enc=$2 WHERE id=$1`, id, privateEnc)
+	return err
+}

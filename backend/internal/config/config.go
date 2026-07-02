@@ -90,6 +90,13 @@ type Config struct {
 	ScanDir     string
 	ScanTimeout time.Duration // max duration of a scan/remediation (oscap can be slow)
 
+	// ReencryptSecrets, when true, opportunistically re-encrypts existing at-rest
+	// secrets (the CA key) from the legacy SHA-256 envelope to the argon2id one on
+	// boot. Off by default so a fresh deploy stays roll-back-compatible (an older
+	// build can still read the legacy CA key); the dual-read path means new writes
+	// are argon2id either way. Enable once you won't need to roll back.
+	ReencryptSecrets bool
+
 	// ControlPlaneHosts names Fleet's own control-plane host(s) — the box(es)
 	// running the backend/jump host. Remediating one can lock Fleet out of the
 	// whole fleet (e.g. an ip_forward/rp_filter sysctl breaking Docker's bridge),
@@ -171,6 +178,7 @@ func Load() (*Config, error) {
 		ScanDir:             env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
 		ScanTimeout:         envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
 		ControlPlaneHosts:   splitList(env("FLEET_CONTROL_PLANE_HOSTS", "")),
+		ReencryptSecrets:    envBool("FLEET_REENCRYPT_SECRETS", false),
 		ScapContentDir:      env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion:  env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:    env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
