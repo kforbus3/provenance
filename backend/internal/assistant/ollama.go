@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/fleet-terminal/backend/internal/ssrf"
 )
 
 // ollamaClient is a minimal client for a local Ollama instance (/api/tags and
@@ -26,6 +28,9 @@ func newOllama(url string) *ollamaClient {
 
 // listModels returns the names of models available on the Ollama instance.
 func (c *ollamaClient) listModels(ctx context.Context) ([]string, error) {
+	if err := ssrf.ValidateURL(c.url); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/api/tags", nil)
 	if err != nil {
 		return nil, err
@@ -95,6 +100,9 @@ func (c *ollamaClient) chat(ctx context.Context, req chatRequest) (chatResponse,
 	req.Stream = false
 	b, err := json.Marshal(req)
 	if err != nil {
+		return chatResponse{}, err
+	}
+	if err := ssrf.ValidateURL(c.url); err != nil {
 		return chatResponse{}, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url+"/api/chat", bytes.NewReader(b))

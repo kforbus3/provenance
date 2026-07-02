@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fleet-terminal/backend/internal/secretbox"
+	"github.com/fleet-terminal/backend/internal/ssrf"
 )
 
 // emailPassword decrypts the stored SMTP password (empty if none/unset).
@@ -149,6 +150,9 @@ func (s *Service) sendWebhook(ctx context.Context, cfg *Config, ev Event) error 
 	}
 	body, _ := json.Marshal(payload)
 
+	if err := ssrf.ValidateURL(w.URL); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
 	if err != nil {
 		return err

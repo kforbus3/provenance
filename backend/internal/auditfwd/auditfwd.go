@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/ssrf"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -104,6 +105,15 @@ func (f *Forwarder) Forward(e models.AuditEvent) {
 // SendTest delivers a synthetic event to verify configuration, returning the
 // send error (nil on success).
 func (f *Forwarder) SendTest(cfg Config) error {
+	// The test address comes straight from the request body; refuse SSRF targets
+	// (metadata/loopback) before connecting.
+	if strings.ToLower(cfg.Type) == "http" {
+		if err := ssrf.ValidateURL(cfg.Address); err != nil {
+			return err
+		}
+	} else if err := ssrf.ValidateHostPort(cfg.Address); err != nil {
+		return err
+	}
 	return f.send(cfg, models.AuditEvent{
 		Action: "audit.forward_test", ActorName: "system", TargetKind: "system",
 		Detail: map[string]any{"message": "Fleet audit forwarding test"}, CreatedAt: time.Now(),
