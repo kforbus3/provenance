@@ -76,6 +76,17 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
+	// Same visibility rule as list(): privileged roles see every host; everyone
+	// else may only view hosts they can access. 404 (not 403) so an inaccessible
+	// host's existence isn't leaked.
+	p := auth.MustPrincipal(r)
+	if !p.Has("Host.Enroll") && !p.Has("Admin.All") {
+		allowed, aerr := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, id)
+		if aerr != nil || !allowed {
+			httpx.WriteError(w, http.StatusNotFound, "host not found")
+			return
+		}
+	}
 	httpx.WriteJSON(w, http.StatusOK, host)
 }
 

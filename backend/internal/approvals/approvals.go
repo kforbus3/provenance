@@ -263,6 +263,11 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 		grantedSecs = existing.RequestedSecs
 	}
 	p := auth.MustPrincipal(r)
+	// Separation of duties: you cannot approve/deny your own access request.
+	if existing.RequesterID == p.UserID {
+		httpx.WriteError(w, http.StatusForbidden, "you cannot decide your own access request")
+		return
+	}
 	ar, err := h.d.Store.DecideApprovalRequest(r.Context(), id, p.UserID, status, rq.Note, grantedSecs)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not record decision")

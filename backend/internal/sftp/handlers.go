@@ -327,6 +327,16 @@ func (h *handler) transfers(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
+	// Same host-access gate as the transfer routes: don't leak another host's
+	// transfer history (paths, sizes, who uploaded) to users without access.
+	p := auth.MustPrincipal(r)
+	if !p.IsSuperAdmin {
+		allowed, aerr := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
+		if aerr != nil || !allowed {
+			httpx.WriteError(w, http.StatusForbidden, "no access to this host")
+			return
+		}
+	}
 	list, err := h.d.Store.ListSFTPTransfers(r.Context(), store.SFTPTransferFilter{HostID: &hostID, Limit: 100})
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "list failed")
