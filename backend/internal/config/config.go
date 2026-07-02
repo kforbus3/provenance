@@ -64,6 +64,12 @@ type Config struct {
 	JumpUser           string
 	JumpKnownHostsFile string
 
+	// SSHInsecureHostKeys disables SSH host-key verification on the gateway. It
+	// exists only for the local test fabric (ephemeral containers with changing
+	// host keys); it is refused in production. Default false → trust-on-first-use
+	// verification.
+	SSHInsecureHostKeys bool
+
 	// WireGuard overlay (used by host enrollment to provision tunnels)
 	WGInterface    string // e.g. "wg0"
 	WGSubnet       string // CIDR of the overlay, e.g. "10.100.0.0/24"
@@ -148,6 +154,7 @@ func Load() (*Config, error) {
 		JumpHost:            env("FLEET_JUMP_HOST", "jumphost:22"),
 		JumpUser:            env("FLEET_JUMP_USER", "fleet"),
 		JumpKnownHostsFile:  env("FLEET_JUMP_KNOWN_HOSTS", ""),
+		SSHInsecureHostKeys: envBool("FLEET_SSH_INSECURE_HOST_KEYS", false),
 		WGInterface:         env("FLEET_WG_INTERFACE", "wg0"),
 		WGSubnet:            env("FLEET_WG_SUBNET", "10.100.0.0/24"),
 		WGJumpIP:            env("FLEET_WG_JUMP_IP", "10.100.0.1"),
@@ -202,6 +209,9 @@ func (c *Config) validate() error {
 		}
 		if len(c.CAKeyPassphrase) < 16 {
 			missing = append(missing, "FLEET_CA_PASSPHRASE (>=16 bytes)")
+		}
+		if c.SSHInsecureHostKeys {
+			return fmt.Errorf("FLEET_SSH_INSECURE_HOST_KEYS must not be enabled in production")
 		}
 	}
 	// Development fallbacks: derive deterministic-but-warned secrets so the stack boots.

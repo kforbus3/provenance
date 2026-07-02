@@ -15,6 +15,14 @@
 name: fleet-terminal
 
 services:
+  # The test-fabric jump host and managed hosts are ephemeral containers whose
+  # SSH host keys can change on rebuild, so accept-any host keys here. Production
+  # (docker-compose.jumphost.yml / real deployments) leaves this off and verifies
+  # host keys trust-on-first-use; the flag is refused when FLEET_ENV=production.
+  backend:
+    environment:
+      FLEET_SSH_INSECURE_HOST_KEYS: "true"
+
   jumphost:
     build:
       context: ../testfabric/jumphost

@@ -19,15 +19,16 @@ import (
 
 // Gateway establishes SSH connections through the jump host.
 type Gateway struct {
-	cfg    *config.Config
-	log    *slog.Logger
-	vault  *identity.Vault
-	issuer *identity.Issuer
+	cfg      *config.Config
+	log      *slog.Logger
+	vault    *identity.Vault
+	issuer   *identity.Issuer
+	hostKeys *hostKeyVerifier
 }
 
 // New constructs a Gateway.
 func New(cfg *config.Config, log *slog.Logger, vault *identity.Vault, issuer *identity.Issuer) *Gateway {
-	return &Gateway{cfg: cfg, log: log, vault: vault, issuer: issuer}
+	return &Gateway{cfg: cfg, log: log, vault: vault, issuer: issuer, hostKeys: newHostKeyVerifier(log)}
 }
 
 // Conn bundles a live SSH client and its underlying network connections so the
@@ -65,10 +66,9 @@ func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, h
 		return nil, fmt.Errorf("session credential unavailable")
 	}
 
-	// NOTE: host key verification uses a fixed known_hosts file in production
-	// (cfg.JumpKnownHostsFile). For the bundled local test fabric we accept the
-	// presented key; this is documented in the security guide.
-	hostKeyCB := ssh.InsecureIgnoreHostKey()
+	// Host keys are verified trust-on-first-use (see hostKeyCallback); the local
+	// test fabric sets FLEET_SSH_INSECURE_HOST_KEYS to accept ephemeral keys.
+	hostKeyCB := g.hostKeyCallback()
 
 	jumpCfg := &ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
@@ -162,7 +162,7 @@ func (g *Gateway) DialDirectPassword(ctx context.Context, addr string, port int,
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	}
 	d := net.Dialer{Timeout: 15 * time.Second}
@@ -194,7 +194,7 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	})
 	if err != nil {
@@ -209,7 +209,7 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	})
 	if err != nil {
@@ -235,7 +235,7 @@ func (g *Gateway) DialDirectAuth(ctx context.Context, addr string, port int, use
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{auth},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         20 * time.Second,
 	}
 	d := net.Dialer{Timeout: 15 * time.Second}
@@ -267,7 +267,7 @@ func (g *Gateway) DialAuthViaJump(ctx context.Context, sessionID, host string, p
 	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	})
 	if err != nil {
@@ -282,7 +282,7 @@ func (g *Gateway) DialAuthViaJump(ctx context.Context, sessionID, host string, p
 	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{auth},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         20 * time.Second,
 	})
 	if err != nil {
@@ -308,7 +308,7 @@ func (g *Gateway) DialKeyViaJump(ctx context.Context, sessionID, host string, po
 	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	})
 	if err != nil {
@@ -323,7 +323,7 @@ func (g *Gateway) DialKeyViaJump(ctx context.Context, sessionID, host string, po
 	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	})
 	if err != nil {
@@ -341,7 +341,7 @@ func (g *Gateway) DialWithSigner(ctx context.Context, signer ssh.Signer, host st
 	if signer == nil {
 		return nil, fmt.Errorf("nil signer")
 	}
-	hostKeyCB := ssh.InsecureIgnoreHostKey()
+	hostKeyCB := g.hostKeyCallback()
 	jumpCfg := &ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -388,7 +388,7 @@ func (g *Gateway) DialDirect(ctx context.Context, sessionID, addr string, port i
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         10 * time.Second,
 	}
 	d := net.Dialer{Timeout: 10 * time.Second}
