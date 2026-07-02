@@ -32,6 +32,9 @@ function DetailCell({ detail }: { detail?: Record<string, unknown> }) {
 export function AuditPage() {
   const [action, setAction] = useState("");
   const [actorName, setActorName] = useState("");
+  // `from`/`to` hold <input type="datetime-local"> values (local wall-clock).
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [filter, setFilter] = useState<AuditFilter>({ limit: 100 });
 
   const { data: events = [], isLoading } = useQuery({
@@ -47,20 +50,28 @@ export function AuditPage() {
 
   const verifyMut = useMutation<VerifyResult>({ mutationFn: verifyAudit });
 
+  // Convert a datetime-local value (local wall-clock, no zone) to an RFC3339
+  // timestamp for the API; empty stays empty.
+  const toRFC3339 = (v: string) => (v ? new Date(v).toISOString() : undefined);
+
   // Apply reads the current control values (passed explicitly so the dropdown can
   // apply the freshly-selected value without waiting for a state flush).
-  const apply = (a = action, an = actorName) => {
+  const apply = (a = action, an = actorName, fr = from, t = to) => {
     setFilter({
       limit: 100,
       action: a || undefined,
       actorName: an || undefined,
+      from: toRFC3339(fr),
+      to: toRFC3339(t),
     });
   };
 
   const clear = () => {
     setAction("");
     setActorName("");
-    apply("", "");
+    setFrom("");
+    setTo("");
+    apply("", "", "", "");
   };
 
   return (
@@ -84,7 +95,7 @@ export function AuditPage() {
         <Alert severity="error" sx={{ mb: 2 }}>Could not verify the audit chain.</Alert>
       )}
 
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mb: 2 }}>
         <TextField
           select label="Action" size="small" sx={{ minWidth: 200 }}
           value={action}
@@ -101,8 +112,18 @@ export function AuditPage() {
           onChange={(e) => setActorName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") apply(); }}
         />
+        <TextField
+          label="From" type="datetime-local" size="small" value={from}
+          InputLabelProps={{ shrink: true }}
+          onChange={(e) => setFrom(e.target.value)}
+        />
+        <TextField
+          label="To" type="datetime-local" size="small" value={to}
+          InputLabelProps={{ shrink: true }}
+          onChange={(e) => setTo(e.target.value)}
+        />
         <Button variant="contained" onClick={() => apply()}>Filter</Button>
-        {(action || actorName) && (
+        {(action || actorName || from || to) && (
           <Button variant="text" onClick={clear}>Clear</Button>
         )}
       </Stack>

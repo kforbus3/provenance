@@ -22,6 +22,9 @@ export interface AuditFilter {
   // Case-insensitive substring match on the actor's name (friendlier than the
   // raw actor UUID the API also accepts via `actor`).
   actorName?: string;
+  // RFC3339 timestamps bounding created_at (inclusive).
+  from?: string;
+  to?: string;
   limit?: number;
   offset?: number;
 }

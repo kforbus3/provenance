@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -50,6 +51,23 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.ActorID = &id
+	}
+	// from/to bound created_at; accept RFC3339 timestamps.
+	if from := r.URL.Query().Get("from"); from != "" {
+		t, err := time.Parse(time.RFC3339, from)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid from timestamp (want RFC3339)")
+			return
+		}
+		f.From = &t
+	}
+	if to := r.URL.Query().Get("to"); to != "" {
+		t, err := time.Parse(time.RFC3339, to)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid to timestamp (want RFC3339)")
+			return
+		}
+		f.To = &t
 	}
 	events, err := h.d.Store.ListAudit(r.Context(), f)
 	if err != nil {

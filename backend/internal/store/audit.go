@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -68,8 +69,11 @@ type AuditFilter struct {
 	// substring so the UI can filter by a name a human actually knows.
 	ActorID   *uuid.UUID
 	ActorName string
-	Limit     int
-	Offset    int
+	// From/To bound created_at (inclusive); nil means unbounded on that end.
+	From   *time.Time
+	To     *time.Time
+	Limit  int
+	Offset int
 }
 
 // ListAudit returns audit events matching the filter, newest first.
@@ -84,8 +88,10 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]models.AuditEve
 		WHERE ($1='' OR action=$1)
 		  AND ($2::uuid IS NULL OR actor_id=$2)
 		  AND ($3='' OR actor_name ILIKE '%'||$3||'%')
+		  AND ($6::timestamptz IS NULL OR created_at >= $6)
+		  AND ($7::timestamptz IS NULL OR created_at <= $7)
 		ORDER BY seq DESC LIMIT $4 OFFSET $5`,
-		f.Action, f.ActorID, f.ActorName, f.Limit, f.Offset)
+		f.Action, f.ActorID, f.ActorName, f.Limit, f.Offset, f.From, f.To)
 	if err != nil {
 		return nil, err
 	}
