@@ -229,18 +229,26 @@ func (h *Handler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "mfa challenge expired; sign in again")
 		return
 	}
+	// Enforce the account lockout on the MFA step too, so failed codes can't be
+	// brute-forced against a still-valid challenge after the account is locked.
+	u, err := h.svc.store.GetUserByID(r.Context(), userID)
+	if err != nil || u.IsDisabled {
+		writeError(w, http.StatusUnauthorized, "account unavailable")
+		return
+	}
+	if u.LockedUntil != nil && u.LockedUntil.After(time.Now()) {
+		writeError(w, http.StatusUnauthorized, "account is locked")
+		return
+	}
 	secrets, err := h.svc.store.ConfirmedTOTPSecrets(r.Context(), userID)
 	if err != nil || !h.svc.VerifyUserTOTP(secrets, req.Code) {
+		// Count MFA failures toward the same lockout policy as password failures.
+		h.svc.applyFailure(r.Context(), userID)
 		ip, ua := clientMeta(r)
 		_ = h.svc.store.RecordAuthEvent(r.Context(), models.AuthEvent{
 			UserID: &userID, Event: "mfa_failure", IP: ip, UserAgent: ua,
 		})
 		writeError(w, http.StatusUnauthorized, "invalid verification code")
-		return
-	}
-	u, err := h.svc.store.GetUserByID(r.Context(), userID)
-	if err != nil || u.IsDisabled {
-		writeError(w, http.StatusUnauthorized, "account unavailable")
 		return
 	}
 	ip, ua := clientMeta(r)
