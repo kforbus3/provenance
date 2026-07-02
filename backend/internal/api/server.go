@@ -51,9 +51,9 @@ import (
 	"github.com/fleet-terminal/backend/internal/scheduler"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
-	"github.com/fleet-terminal/backend/internal/support"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/support"
 	"github.com/fleet-terminal/backend/internal/system"
 	"github.com/fleet-terminal/backend/internal/terminal"
 	"github.com/fleet-terminal/backend/internal/ws"
@@ -394,7 +394,7 @@ func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(realIP(s.Cfg.TrustedProxies)) // trusted-proxy-aware; not chi's spoofable RealIP
 	r.Use(s.recoverer)
 	r.Use(s.metricsMW)
 	r.Use(middleware.Timeout(60 * time.Second))

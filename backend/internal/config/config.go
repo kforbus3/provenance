@@ -64,6 +64,12 @@ type Config struct {
 	JumpUser           string
 	JumpKnownHostsFile string
 
+	// TrustedProxies lists CIDRs whose X-Forwarded-For header is trusted when
+	// deriving the client IP for rate-limiting and audit. XFF from any other peer
+	// is ignored (so it can't be spoofed to bypass the auth rate limiter). Default:
+	// private + loopback ranges (covers a reverse proxy on the same host/network).
+	TrustedProxies []string
+
 	// SSHInsecureHostKeys disables SSH host-key verification on the gateway. It
 	// exists only for the local test fabric (ephemeral containers with changing
 	// host keys); it is refused in production. Default false → trust-on-first-use
@@ -155,6 +161,7 @@ func Load() (*Config, error) {
 		JumpUser:            env("FLEET_JUMP_USER", "fleet"),
 		JumpKnownHostsFile:  env("FLEET_JUMP_KNOWN_HOSTS", ""),
 		SSHInsecureHostKeys: envBool("FLEET_SSH_INSECURE_HOST_KEYS", false),
+		TrustedProxies:      trustedProxiesFromEnv(),
 		WGInterface:         env("FLEET_WG_INTERFACE", "wg0"),
 		WGSubnet:            env("FLEET_WG_SUBNET", "10.100.0.0/24"),
 		WGJumpIP:            env("FLEET_WG_JUMP_IP", "10.100.0.1"),
@@ -262,6 +269,20 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// defaultTrustedProxies are the private + loopback ranges trusted for
+// X-Forwarded-For by default — enough for a reverse proxy co-located on the host
+// or Docker network, while ignoring XFF from public (attacker) peers.
+var defaultTrustedProxies = []string{
+	"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
+}
+
+func trustedProxiesFromEnv() []string {
+	if v := splitList(env("FLEET_TRUSTED_PROXIES", "")); len(v) > 0 {
+		return v
+	}
+	return defaultTrustedProxies
 }
 
 // splitList parses a comma-separated env value into a trimmed, non-empty slice.
