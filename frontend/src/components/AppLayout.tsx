@@ -34,25 +34,30 @@ import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
 
+// Each item's `perm` mirrors the permission its route enforces in App.tsx, so the
+// menu shows a link only if the user can actually open the page. Items without a
+// `perm` (Dashboard, Approvals, Security) are available to every authenticated
+// user, matching their unguarded routes. The backend remains the sole
+// authorization authority — this filtering is cosmetic.
 const NAV = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
-  { to: "/hosts", label: "Hosts", icon: <DnsIcon /> },
-  { to: "/terminals", label: "Terminals", icon: <TerminalIcon /> },
-  { to: "/sessions", label: "Session Replay", icon: <HistoryIcon /> },
+  { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
+  { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
+  { to: "/sessions", label: "Session Replay", icon: <HistoryIcon />, perm: "Session.Replay" },
   { to: "/playbooks", label: "Playbooks", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
   { to: "/schedules", label: "Schedules", icon: <ScheduleIcon />, perm: "Schedule.Manage" },
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
-  { to: "/audit", label: "Audit", icon: <GavelIcon /> },
-  { to: "/users", label: "Users", icon: <PeopleIcon /> },
-  { to: "/roles", label: "Roles", icon: <SecurityIcon /> },
-  { to: "/groups", label: "Groups", icon: <GroupWorkIcon /> },
-  { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon /> },
-  { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon /> },
+  { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },
+  { to: "/users", label: "Users", icon: <PeopleIcon />, perm: "User.Edit" },
+  { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
+  { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },
+  { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
+  { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },
-  { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon /> },
+  { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
   { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
-  { to: "/settings", label: "Settings", icon: <SettingsIcon /> },
+  { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
 ];
 
 // Application chrome: top bar + persistent navigation drawer. The routed page
