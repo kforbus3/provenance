@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"time"
 
@@ -166,4 +167,49 @@ func (s *Service) VerifyUserTOTP(secrets [][]byte, code string) bool {
 		}
 	}
 	return false
+}
+
+// VerifyUserTOTPNoReplay validates a code and rejects one whose timestep was
+// already used (replay within the skew window). It is deliberately FAIL-OPEN: it
+// only ever returns false for an invalid code or a *provably* reused step; if the
+// step can't be determined or the store errors, a valid code is still accepted,
+// so a legitimate user is never locked out by this check.
+func (s *Service) VerifyUserTOTPNoReplay(ctx context.Context, userID uuid.UUID, secrets [][]byte, code string) bool {
+	for _, enc := range secrets {
+		sec, err := s.DecryptSecret(enc)
+		if err != nil || !ValidateTOTP(sec, code) {
+			continue
+		}
+		step, ok := matchTOTPStep(sec, code)
+		if !ok {
+			return true // valid but step indeterminate → accept (fail-open)
+		}
+		last, err := s.store.TOTPLastStep(ctx, userID)
+		if err != nil {
+			return true // DB error → don't block a valid code
+		}
+		if step <= last {
+			return false // this or an earlier step was already used → replay
+		}
+		_ = s.store.SetTOTPLastStep(ctx, userID, step)
+		return true
+	}
+	return false
+}
+
+// matchTOTPStep returns the timestep whose generated code equals code, within the
+// same skew window ValidateTOTP allows. ok is false if none matches.
+func matchTOTPStep(secret, code string) (int64, bool) {
+	const period, skew = int64(30), int64(1)
+	cur := time.Now().Unix() / period
+	for d := -skew; d <= skew; d++ {
+		step := cur + d
+		gen, err := totp.GenerateCodeCustom(secret, time.Unix(step*period, 0), totp.ValidateOpts{
+			Period: 30, Skew: 0, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1,
+		})
+		if err == nil && subtle.ConstantTimeCompare([]byte(gen), []byte(code)) == 1 {
+			return step, true
+		}
+	}
+	return 0, false
 }

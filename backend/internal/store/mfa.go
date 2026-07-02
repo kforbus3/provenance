@@ -114,3 +114,18 @@ func (s *Store) TouchMFA(ctx context.Context, id uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `UPDATE mfa_methods SET last_used_at=now() WHERE id=$1`, id)
 	return err
 }
+
+// TOTPLastStep returns the last accepted TOTP timestep for a user (0 if none).
+func (s *Store) TOTPLastStep(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var step int64
+	err := s.pool.QueryRow(ctx, `SELECT last_totp_step FROM users WHERE id=$1`, userID).Scan(&step)
+	return step, err
+}
+
+// SetTOTPLastStep advances the last accepted TOTP timestep, never regressing it
+// (so a concurrent verify can't lower the replay floor).
+func (s *Store) SetTOTPLastStep(ctx context.Context, userID uuid.UUID, step int64) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET last_totp_step=$2 WHERE id=$1 AND last_totp_step < $2`, userID, step)
+	return err
+}

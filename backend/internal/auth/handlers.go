@@ -241,7 +241,7 @@ func (h *Handler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secrets, err := h.svc.store.ConfirmedTOTPSecrets(r.Context(), userID)
-	if err != nil || !h.svc.VerifyUserTOTP(secrets, req.Code) {
+	if err != nil || !h.svc.VerifyUserTOTPNoReplay(r.Context(), userID, secrets, req.Code) {
 		// Count MFA failures toward the same lockout policy as password failures.
 		h.svc.applyFailure(r.Context(), userID)
 		ip, ua := clientMeta(r)
