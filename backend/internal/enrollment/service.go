@@ -351,8 +351,13 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		step("configure_host_wireguard", "ok",
 			fmt.Sprintf("%s up (addr %s) pub=%s", s.cfg.WGInterface, wgAddr, short(hostPub)))
 
-		// 8) Add the host as a peer on the jump host (the VPN server).
+		// 8) Add the host as a peer on the jump host (the VPN server). Validate the
+		// host-supplied key and the endpoint/IP before they reach the root-run
+		// jump-host script, so a malicious enrollee can't inject shell commands.
 		hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
+		if verr := validatePeerInputs(hostPub, hostEndpoint, wgIP); verr != nil {
+			return fail("configure_jump_peer", verr)
+		}
 		jumpScript := s.jumpPeerScript(host.Hostname, hostPub, hostEndpoint, wgIP)
 		if jout, jerr := run(jumpClient, "sudo sh -c "+shellQuote(jumpScript)); jerr != nil {
 			return fail("configure_jump_peer", orErr(jerr, jout))
@@ -568,7 +573,7 @@ func (s *Service) jumpPeerScript(hostname, hostPub, hostEndpoint, wgIP string) s
 IF=%s
 wg set $IF peer '%s' endpoint '%s' allowed-ips %s/32 persistent-keepalive 25
 mkdir -p /etc/wireguard/peers
-cat > /etc/wireguard/peers/%s.conf <<EOF
+cat > /etc/wireguard/peers/%s.conf <<'EOF'
 [Peer]
 PublicKey = %s
 Endpoint = %s

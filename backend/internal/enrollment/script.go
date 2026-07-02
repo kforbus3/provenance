@@ -134,6 +134,9 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	step("connect_jump_host", "ok", "jump host reachable")
 
 	hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
+	if verr := validatePeerInputs(hostPub, hostEndpoint, wgIP); verr != nil {
+		return fail("configure_jump_peer", verr)
+	}
 	jumpScript := s.jumpPeerScript(host.Hostname, hostPub, hostEndpoint, wgIP)
 	if jout, jerr := run(jumpClient, "sudo sh -c "+shellQuote(jumpScript)); jerr != nil {
 		return fail("configure_jump_peer", orErr(jerr, jout))
