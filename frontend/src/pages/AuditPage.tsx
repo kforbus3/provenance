@@ -8,6 +8,22 @@ import VerifiedIcon from "@mui/icons-material/VerifiedUser";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { listAudit, verifyAudit, type AuditFilter, type VerifyResult } from "../api/audit";
 
+// Render an audit event's detail map as compact, readable "key: value" pairs.
+// Generic across every action; for approval decisions it surfaces the requester,
+// the resource, and the decision (the approver/denier is the Actor column).
+function DetailCell({ detail }: { detail?: Record<string, unknown> }) {
+  if (!detail) return null;
+  const parts = Object.entries(detail)
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+  if (parts.length === 0) return null;
+  return (
+    <Typography variant="caption" color="text.secondary">
+      {parts.join(" · ")}
+    </Typography>
+  );
+}
+
 // Audit log viewer: a filterable table over the tamper-evident chain plus an
 // integrity-verification action that reports whether the hash chain is intact.
 export function AuditPage() {
@@ -68,6 +84,7 @@ export function AuditPage() {
               <TableCell>Actor</TableCell>
               <TableCell>Action</TableCell>
               <TableCell>Target</TableCell>
+              <TableCell>Details</TableCell>
               <TableCell>IP</TableCell>
             </TableRow>
           </TableHead>
@@ -79,11 +96,12 @@ export function AuditPage() {
                 <TableCell>{ev.actorName || ev.actorId || "system"}</TableCell>
                 <TableCell><Chip label={ev.action} size="small" /></TableCell>
                 <TableCell>{ev.targetKind ? `${ev.targetKind}:${ev.targetId ?? ""}` : ""}</TableCell>
+                <TableCell><DetailCell detail={ev.detail} /></TableCell>
                 <TableCell>{ev.ip}</TableCell>
               </TableRow>
             ))}
             {!isLoading && events.length === 0 && (
-              <TableRow><TableCell colSpan={6}>
+              <TableRow><TableCell colSpan={7}>
                 <Typography color="text.secondary">No audit events match the filter.</Typography>
               </TableCell></TableRow>
             )}

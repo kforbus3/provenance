@@ -268,14 +268,25 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not record decision")
 		return
 	}
+	// Record who was affected and what, so the audit page shows the full picture:
+	// the actor (recorded by h.audit) is the approver/denier; requester + target
+	// name the user and resource the decision was about.
 	h.audit(r, "approval.decide", ar.ID.String(), map[string]any{
-		"status": ar.Status, "grantedSecs": grantedSecs, "note": rq.Note,
+		"status": ar.Status, "requester": ar.Requester,
+		"targetKind": ar.TargetKind, "targetName": ar.TargetName,
+		"grantedSecs": grantedSecs, "note": rq.Note,
 	})
 	// Notify that the request is resolved: the admin distribution/webhook (per the
 	// event's route) and the requester directly at their profile email, if set.
 	if h.d.Notify != nil {
-		body := fmt.Sprintf("Your access request for %s %q was %s by %s.",
-			ar.TargetKind, ar.TargetName, ar.Status, p.Username)
+		// Name both the requester and the resource so the admin distribution is
+		// unambiguous; the requester's own copy still reads correctly.
+		requester := ar.Requester
+		if requester == "" {
+			requester = "A user"
+		}
+		body := fmt.Sprintf("%s's access request for %s %q was %s by %s.",
+			requester, ar.TargetKind, ar.TargetName, ar.Status, p.Username)
 		if ar.Status == "approved" && ar.GrantedSecs != nil {
 			body += fmt.Sprintf(" Access is granted for %s.", (time.Duration(*ar.GrantedSecs) * time.Second).String())
 		}
