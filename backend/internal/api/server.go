@@ -399,8 +399,13 @@ func (s *Server) buildRouter() chi.Router {
 	r.Use(s.recoverer)
 	r.Use(s.metricsMW)
 	r.Use(middleware.Timeout(60 * time.Second))
+	corsOrigins := []string{s.Cfg.PublicURL}
+	if s.Cfg.Environment == "development" {
+		// Vite dev server / direct backend — only trusted (with credentials) in dev.
+		corsOrigins = append(corsOrigins, "http://localhost:5173", "http://localhost:8080")
+	}
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{s.Cfg.PublicURL, "http://localhost:5173", "http://localhost:8080"},
+		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		AllowCredentials: true,

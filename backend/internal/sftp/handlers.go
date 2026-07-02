@@ -264,7 +264,8 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	dst, err := client.Create(remote)
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadGateway, "create: "+err.Error())
+		h.d.Log.Warn("sftp create remote file", "err", err)
+		httpx.WriteError(w, http.StatusBadGateway, "could not create the remote file")
 		return
 	}
 	rec, _ := h.d.Store.RecordSFTPTransfer(r.Context(), store.SFTPTransferInput{

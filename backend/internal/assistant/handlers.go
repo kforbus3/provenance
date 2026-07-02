@@ -37,7 +37,7 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 func (h *handler) models(w http.ResponseWriter, r *http.Request) {
 	list, err := h.svc.Models(r.Context(), r.URL.Query().Get("url"))
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadGateway, "could not reach Ollama: "+err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "could not reach Ollama at that URL")
 		return
 	}
 	if list == nil {
@@ -77,7 +77,7 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) result(w http.ResponseWriter, r *http.Request) {
-	res, ok := h.svc.Result(chi.URLParam(r, "id"))
+	res, ok := h.svc.Result(chi.URLParam(r, "id"), auth.MustPrincipal(r).UserID)
 	if !ok {
 		httpx.WriteError(w, http.StatusNotFound, "no such request")
 		return

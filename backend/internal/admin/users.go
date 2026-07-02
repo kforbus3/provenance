@@ -64,6 +64,10 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may create a super administrator")
 		return
 	}
+	if !validEmail(rq.Email) {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid email address")
+		return
+	}
 	if err := h.d.Auth.PasswordPolicy(r.Context()).Validate(rq.Password); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return

@@ -81,7 +81,8 @@ func (h *handler) profiles(w http.ResponseWriter, r *http.Request) {
 	}
 	installed, exact, datastream, profiles, err := h.svc.DiscoverProfiles(r.Context(), host)
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadGateway, "discover profiles: "+err.Error())
+		h.d.Log.Warn("discover scan profiles", "host", host.Hostname, "err", err)
+		httpx.WriteError(w, http.StatusBadGateway, "could not discover scan profiles on the host")
 		return
 	}
 	if profiles == nil {

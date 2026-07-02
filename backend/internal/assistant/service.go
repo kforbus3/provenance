@@ -98,6 +98,7 @@ type AskResult struct {
 	Host     *models.Host              `json:"host,omitempty"`
 	Error    string                    `json:"error,omitempty"`
 	created  time.Time
+	owner    uuid.UUID // the user who asked; only they may read the result
 }
 
 // answerData bundles structured tool output collected during a conversation.
@@ -125,18 +126,22 @@ func (s *Service) Ask(ctx context.Context, question string, who Caller) (string,
 		return "", false
 	}
 	id := uuid.NewString()
-	s.asks.Store(id, &AskResult{Status: "pending", created: time.Now()})
+	s.asks.Store(id, &AskResult{Status: "pending", created: time.Now(), owner: who.UserID})
 	go s.run(id, question, who, cfg)
 	return id, true
 }
 
-// Result returns and (when finished) removes a pending result.
-func (s *Service) Result(id string) (*AskResult, bool) {
+// Result returns and (when finished) removes a pending result, but only for the
+// user who created it (results can carry host/session data scoped to that caller).
+func (s *Service) Result(id string, caller uuid.UUID) (*AskResult, bool) {
 	v, ok := s.asks.Load(id)
 	if !ok {
 		return nil, false
 	}
 	r := v.(*AskResult)
+	if r.owner != caller {
+		return nil, false
+	}
 	if r.Status != "pending" {
 		s.asks.Delete(id)
 	}
@@ -151,12 +156,12 @@ func (s *Service) run(id, question string, who Caller, cfg Settings) {
 	answer, data, err := s.converse(ctx, cfg, question, who)
 	if err != nil {
 		s.log.Warn("assistant ask failed", "user", who.Username, "err", err)
-		s.asks.Store(id, &AskResult{Status: "error", Error: friendlyErr(err), created: time.Now()})
+		s.asks.Store(id, &AskResult{Status: "error", Error: friendlyErr(err), created: time.Now(), owner: who.UserID})
 		return
 	}
 	s.asks.Store(id, &AskResult{
 		Status: "done", Answer: answer,
-		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, created: time.Now(),
+		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, created: time.Now(), owner: who.UserID,
 	})
 }
 

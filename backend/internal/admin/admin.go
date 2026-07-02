@@ -6,6 +6,7 @@ package admin
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -71,6 +72,26 @@ const permAdminAll = "Admin.All"
 func actorSuper(r *http.Request) bool {
 	p := auth.MustPrincipal(r)
 	return p != nil && p.IsSuperAdmin
+}
+
+// validEmail rejects an email that is empty-or-single-address-safe. It refuses
+// the delimiters the notifier splits recipient lists on (comma/semicolon/space)
+// and control characters, so a profile email can't smuggle in extra recipients
+// or inject headers. Email is optional, so "" is allowed.
+func validEmail(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) > 320 {
+		return false
+	}
+	for _, r := range s {
+		if r <= 0x20 || r == 0x7f || r == ',' || r == ';' {
+			return false
+		}
+	}
+	at := strings.IndexByte(s, '@')
+	return at > 0 && at < len(s)-1
 }
 
 func containsPerm(perms []string, key string) bool {
