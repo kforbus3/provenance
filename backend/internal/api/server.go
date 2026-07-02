@@ -395,6 +395,7 @@ func (s *Server) buildRouter() chi.Router {
 
 	r.Use(middleware.RequestID)
 	r.Use(realIP(s.Cfg.TrustedProxies)) // trusted-proxy-aware; not chi's spoofable RealIP
+	r.Use(securityHeaders)
 	r.Use(s.recoverer)
 	r.Use(s.metricsMW)
 	r.Use(middleware.Timeout(60 * time.Second))

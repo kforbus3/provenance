@@ -41,6 +41,19 @@ func realIP(cidrs []string) func(http.Handler) http.Handler {
 	}
 }
 
+// securityHeaders adds baseline response headers to every backend response. The
+// SPA itself is served (and framed/CSP-protected) by the frontend nginx; these
+// cover the API and the backend's own HTML routes (which set their own CSP).
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func clientFromXFF(r *http.Request, trusted func(net.IP) bool) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

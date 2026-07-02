@@ -74,22 +74,33 @@ type Tokens struct {
 
 // Authenticate verifies credentials and returns the user on success, applying
 // lockout policy. It does not create a session (the handler does, after MFA).
+// dummyVerify runs an argon2id verify against a fixed dummy hash so that failed
+// logins take the same time whether or not the account exists (anti-enumeration).
+func dummyVerify(password string) {
+	_, _ = VerifyPassword(password, "$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+}
+
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*models.User, error) {
 	u, err := s.store.GetUserByUsername(ctx, username)
 	if err != nil {
-		// Run a dummy verify to keep timing roughly constant for unknown users.
-		_, _ = VerifyPassword(password, "$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+		dummyVerify(password)
 		return nil, ErrInvalidCredentials
 	}
+	// Run the dummy verify on every pre-password early return so response time
+	// doesn't reveal whether an account exists or its state. Unknown, disabled, and
+	// external (SSO) accounts all return the same generic error to prevent user
+	// enumeration; a locked account keeps its distinct message (the state is
+	// self-inflicted and operationally useful to surface).
 	if u.IsDisabled {
-		return nil, ErrAccountDisabled
+		dummyVerify(password)
+		return nil, ErrInvalidCredentials
 	}
-	// External (SSO) accounts have no usable local password — they must sign in
-	// through their identity provider.
 	if u.AuthSource != "" && u.AuthSource != "local" {
+		dummyVerify(password)
 		return nil, ErrInvalidCredentials
 	}
 	if u.LockedUntil != nil && u.LockedUntil.After(time.Now()) {
+		dummyVerify(password)
 		return nil, ErrAccountLocked
 	}
 	hash, err := s.store.GetPasswordHash(ctx, u.ID)
