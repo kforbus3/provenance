@@ -244,6 +244,17 @@ func (h *Handler) webauthnLoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "passkey verification failed")
 		return
 	}
+	// go-webauthn flags a sign-count regression rather than failing the ceremony;
+	// treat it as a possible cloned authenticator and refuse.
+	if cred.Authenticator.CloneWarning {
+		ip, ua := clientMeta(r)
+		_ = h.svc.store.RecordAuthEvent(r.Context(), models.AuthEvent{
+			UserID: &sess.userID, Event: "mfa_failure", IP: ip, UserAgent: ua,
+			Detail: map[string]any{"kind": "webauthn", "reason": "clone_warning"},
+		})
+		writeError(w, http.StatusUnauthorized, "passkey verification failed (authenticator may be cloned)")
+		return
+	}
 	// Persist the updated sign count to detect cloned authenticators.
 	if rowID, ok := idToRow[base64.RawStdEncoding.EncodeToString(cred.ID)]; ok {
 		blob, _ := json.Marshal(cred)

@@ -105,7 +105,10 @@ func (s *Service) IssueMFAChallenge(userID uuid.UUID) (string, error) {
 // ParseMFAChallenge validates a challenge token and returns the user id.
 func (s *Service) ParseMFAChallenge(token string) (uuid.UUID, error) {
 	claims := &mfaClaims{}
-	t, err := jwt.ParseWithClaims(token, claims, func(*jwt.Token) (any, error) {
+	t, err := jwt.ParseWithClaims(token, claims, func(tok *jwt.Token) (any, error) {
+		if _, ok := tok.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
 		return s.cfg.JWTSecret, nil
 	})
 	if err != nil || !t.Valid || claims.Purpose != "mfa" {
@@ -133,7 +136,10 @@ func (s *Service) IssueMFASetupToken(userID uuid.UUID) (string, error) {
 // ParseMFASetupToken validates a setup token and returns the user id.
 func (s *Service) ParseMFASetupToken(token string) (uuid.UUID, error) {
 	claims := &mfaClaims{}
-	t, err := jwt.ParseWithClaims(token, claims, func(*jwt.Token) (any, error) {
+	t, err := jwt.ParseWithClaims(token, claims, func(tok *jwt.Token) (any, error) {
+		if _, ok := tok.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
 		return s.cfg.JWTSecret, nil
 	})
 	if err != nil || !t.Valid || claims.Purpose != "mfa_setup" {
