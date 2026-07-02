@@ -190,6 +190,12 @@ func (s *Server) krlLoop(ctx context.Context) {
 	t := time.NewTicker(10 * time.Minute)
 	defer t.Stop()
 	var lastHash string
+	var sinceFull int
+	// Force a full re-push periodically even when the KRL is unchanged, so a host
+	// that was offline/unreachable when a revocation was pushed still converges to
+	// the current KRL (~hourly at a 10-minute tick). distributeKRL is best-effort
+	// per host, so this reconciliation is what makes revocation eventually reliable.
+	const reconcileEvery = 6
 	tick := func() {
 		if !krl.Available() {
 			return
@@ -202,15 +208,18 @@ func (s *Server) krlLoop(ctx context.Context) {
 			return
 		}
 		hash := fmt.Sprintf("%x", sha256.Sum256(krlBytes))
-		if hash == lastHash { // no change since last successful push
+		sinceFull++
+		if hash == lastHash && sinceFull < reconcileEvery {
 			s.Jobs.Record("krl-distribution", nil)
 			return
 		}
 		if _, err := s.distributeKRL(ctx); err != nil {
+			// Leave lastHash/sinceFull so we retry on the next tick until it lands.
 			s.Jobs.Record("krl-distribution", err)
 			return
 		}
 		lastHash = hash
+		sinceFull = 0
 		s.Jobs.Record("krl-distribution", nil)
 	}
 	tick()
