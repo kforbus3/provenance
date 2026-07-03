@@ -18,16 +18,23 @@ func has(list []string, want string) bool {
 	return false
 }
 
-func TestScopeForHostAdditiveKeepsGlobal(t *testing.T) {
-	id := uuid.New()
-	i := &Issuer{cfg: &config.Config{HostScopedOnly: false}}
+// scopeForHost adds the host-scoped principal while retaining the fleet-wide one
+// ("fleet" authenticates the jump-host hop). Crucially it must never leak another
+// host's principal — that distinctness is what stops a cert authenticating on a
+// host it was not minted for once that host is locked down.
+func TestScopeForHostAddsScopedKeepsGlobal(t *testing.T) {
+	id, other := uuid.New(), uuid.New()
+	i := &Issuer{cfg: &config.Config{}}
 
 	got := i.scopeForHost([]string{princ.Global, "alice"}, id)
 	if !has(got, princ.Global) {
-		t.Errorf("additive mode should keep the fleet-wide principal: %v", got)
+		t.Errorf("must keep the fleet-wide principal for the jump hop: %v", got)
 	}
 	if !has(got, princ.Host(id)) {
-		t.Errorf("additive mode should add the host-scoped principal: %v", got)
+		t.Errorf("must add the host-scoped principal: %v", got)
+	}
+	if has(got, princ.Host(other)) {
+		t.Errorf("cert leaked a different host's principal: %v", got)
 	}
 	if !has(got, "alice") {
 		t.Errorf("informational principal dropped: %v", got)
@@ -35,27 +42,6 @@ func TestScopeForHostAdditiveKeepsGlobal(t *testing.T) {
 
 	gotLogin := i.scopeForHost([]string{princ.GlobalLogin, "alice"}, id)
 	if !has(gotLogin, princ.GlobalLogin) || !has(gotLogin, princ.HostLogin(id)) {
-		t.Errorf("additive login tier wrong: %v", gotLogin)
-	}
-}
-
-func TestScopeForHostLockdownDropsGlobal(t *testing.T) {
-	id, other := uuid.New(), uuid.New()
-	i := &Issuer{cfg: &config.Config{HostScopedOnly: true}}
-
-	got := i.scopeForHost([]string{princ.Global, "alice"}, id)
-	if has(got, princ.Global) {
-		t.Errorf("lockdown must drop the fleet-wide principal: %v", got)
-	}
-	if !has(got, princ.Host(id)) {
-		t.Errorf("lockdown must keep the host-scoped principal: %v", got)
-	}
-	// The cert must NOT carry another host's principal — that is what stops it
-	// authenticating anywhere but its target host.
-	if has(got, princ.Host(other)) {
-		t.Errorf("cert leaked a different host's principal: %v", got)
-	}
-	if !has(got, "alice") {
-		t.Errorf("informational principal dropped: %v", got)
+		t.Errorf("login tier wrong: %v", gotLogin)
 	}
 }

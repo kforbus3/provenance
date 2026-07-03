@@ -76,18 +76,20 @@ type Config struct {
 	// verification.
 	SSHInsecureHostKeys bool
 
-	// HostScopedOnly locks certificate authorization down to host-scoped
-	// principals: every per-host certificate carries ONLY "fleet-h-<hostID>"
-	// (never the fleet-wide "fleet"), and enrollment writes only the host-scoped
-	// principal into each host's AuthorizedPrincipalsFile. A certificate minted
-	// for one host is then rejected by every other host, so it cannot be replayed
-	// against hosts the user was not granted.
+	// HostScopedOnly locks managed-host certificate authorization down to
+	// host-scoped principals: enrollment writes ONLY "fleet-h-<hostID>" into each
+	// managed host's AuthorizedPrincipalsFile (dropping the fleet-wide "fleet"),
+	// and system/playbook credentials add the target host's scoped principal.
+	// Certificates still also carry "fleet" — that authenticates the jump-host hop
+	// (the jump host always trusts "fleet") — but because a locked managed host no
+	// longer trusts "fleet", a certificate minted for one host is rejected by every
+	// other host, so it cannot be replayed to reach a host the user was not granted.
 	//
-	// Off by default because it requires every host to be (re-)enrolled first:
-	// with it off, hosts trust BOTH "fleet" and their host-scoped principal and
-	// certs carry both, so enabling host scoping is fully backwards compatible.
-	// Turn it on only AFTER re-enrolling every host, or hosts still trusting only
-	// "fleet" will reject the now scoped-only certificates.
+	// Off by default. Turning it on is safe and needs no ordering: certs always
+	// carry "fleet", so they keep working on hosts not yet re-enrolled, while each
+	// host that IS re-enrolled under lockdown immediately stops accepting any other
+	// host's certificate. Do NOT lock down the jump host itself — it must keep
+	// trusting "fleet".
 	HostScopedOnly bool
 
 	// WireGuard overlay (used by host enrollment to provision tunnels)

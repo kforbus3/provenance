@@ -127,13 +127,11 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 	// hosts. The runner writes this private key to its own filesystem to drive
 	// ansible, so a crafted playbook (e.g. a local_action reading the key) could
 	// exfiltrate it; binding the cert to this run's target-host principals means a
-	// leaked key only reaches hosts the run was already authorized for — never the
-	// whole fleet. In lockdown mode the fleet-wide "fleet" principal is omitted;
-	// otherwise it is included so the run still works on hosts not yet re-enrolled.
-	runPrincipals := make([]string, 0, len(hosts)+1)
-	if !s.cfg.HostScopedOnly {
-		runPrincipals = append(runPrincipals, princ.Global)
-	}
+	// leaked key only reaches hosts the run was already authorized for. "fleet"
+	// authenticates the jump-host hop (the runner reaches every host via ProxyJump);
+	// once hosts are locked down they trust only their scoped principal, so the run
+	// cert cannot reach a non-target host even though it carries "fleet".
+	runPrincipals := []string{princ.Global}
 	for _, h := range hosts {
 		runPrincipals = append(runPrincipals, princ.Host(h.ID))
 	}

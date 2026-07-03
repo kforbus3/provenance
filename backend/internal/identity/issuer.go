@@ -149,30 +149,23 @@ func (i *Issuer) EnsureHostCredential(ctx context.Context, sessionID, userID, ho
 	return cred.Serial, nil
 }
 
-// scopeForHost binds a certificate's principals to a single host: each fleet-wide
-// principal ("fleet"/"fleet-login") gains its host-scoped counterpart
-// ("fleet-h-<hostID>"/"fleet-login-h-<hostID>"). In lockdown mode
-// (cfg.HostScopedOnly) the fleet-wide principal is dropped entirely, so the
-// certificate authenticates ONLY to hostID and is rejected by every other host.
-// Otherwise both are kept, so the certificate still works on hosts that have not
-// yet been re-enrolled with the host-scoped principal. Non-fleet principals (e.g.
-// the informational username) pass through unchanged.
+// scopeForHost adds each fleet-wide principal's host-scoped counterpart to a
+// certificate: "fleet" also gets "fleet-h-<hostID>", "fleet-login" also gets
+// "fleet-login-h-<hostID>". The fleet-wide principals are always retained — they
+// are what authenticates the jump-host hop (the jump host always trusts "fleet"),
+// and once a managed host is locked down it trusts ONLY its host-scoped principal,
+// so a certificate minted for another host is rejected there regardless of also
+// carrying "fleet". Non-fleet principals (e.g. the informational username) pass
+// through unchanged.
 func (i *Issuer) scopeForHost(in []string, hostID uuid.UUID) []string {
 	out := make([]string, 0, len(in)+2)
 	for _, p := range in {
+		out = append(out, p)
 		switch p {
 		case princ.Global:
 			out = append(out, princ.Host(hostID))
-			if !i.cfg.HostScopedOnly {
-				out = append(out, p)
-			}
 		case princ.GlobalLogin:
 			out = append(out, princ.HostLogin(hostID))
-			if !i.cfg.HostScopedOnly {
-				out = append(out, p)
-			}
-		default:
-			out = append(out, p)
 		}
 	}
 	return dedupePrincipals(out)

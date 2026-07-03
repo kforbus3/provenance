@@ -31,12 +31,13 @@ and operational recommendations.
   session's session-level **and** all per-host keys together on teardown.
 - **Host-scoped principals.** Each certificate is stamped with a principal unique
   to its target host, `fleet-h-<hostID>` (or `fleet-login-h-<hostID>` for the
-  login-only tier), and enrollment configures each host to accept only its own.
-  A certificate — even if its private key were somehow extracted — is therefore
-  **rejected by every host except the one it was minted for**, so it cannot be
-  replayed to reach a host the user was never granted. This also bounds the Ansible
-  playbook runner: its run credential is scoped to just that run's target hosts, so
-  a playbook that reads the key off the runner still can't escape to the rest of the
+  login-only tier), alongside the fleet-wide `fleet` used only for the jump-host
+  hop. Under lockdown each managed host trusts **only its own** scoped principal, so
+  a certificate — even if its private key were somehow extracted — is **rejected by
+  every host except the one it was minted for**, and cannot be replayed to reach a
+  host the user was never granted. This also bounds the Ansible playbook runner: its
+  run credential carries only the scoped principals of that run's target hosts, so a
+  playbook that reads the key off the runner still can't escape to the rest of the
   fleet. Rollout is backwards compatible and gated by `FLEET_HOST_SCOPED_ONLY` —
   see [§13](#13-migrating-to-host-scoped-principals).
 
@@ -227,36 +228,38 @@ and operational recommendations.
 
 ## 13. Migrating to host-scoped principals
 
-Host scoping binds every certificate to a single host so it can't be replayed
-elsewhere (see [§4](#4-authentication)/[§5](#5-rbac--authorization)). It rolls out
-in two stages with **no window in which a host is locked out**:
+The model: **`fleet` is the jump-host principal; `fleet-h-<hostID>` is the
+managed-host principal.** Every SSH connection traverses the jump host, so every
+certificate keeps `fleet` (to authenticate that hop) and also carries its target's
+`fleet-h-<hostID>`. Locking down means a **managed host stops trusting `fleet`** and
+accepts only its own scoped principal — so a certificate minted for host A, even
+though it carries `fleet`, is rejected by host B (which trusts only `fleet-h-B`).
+The jump host always keeps trusting `fleet` and is never locked down.
 
-**Stage 1 — deploy (already backwards compatible).** With `FLEET_HOST_SCOPED_ONLY`
-unset/`false`:
-- Newly issued per-host certs carry **both** the fleet-wide `fleet` principal and
-  the host-scoped `fleet-h-<hostID>`. They authenticate on hosts old and new.
-- **Re-enroll each host** (Hosts → the host → *Re-enroll*, or the pipe-enroll
-  script). Re-enrollment rewrites `/etc/ssh/auth_principals/*` to trust that host's
-  scoped principal. A re-enrolled host immediately **stops accepting** any other
-  host's certificate, while still honoring `fleet` for anything not yet migrated.
-- Do this for every host, including the jump host's managed peers. Monitoring,
-  scans, SFTP, and playbook runs continue working throughout.
+Because certificates always carry `fleet`, **there is no lockout window and no
+required ordering** — a cert works on hosts whether or not they have been
+re-enrolled under lockdown.
 
-**Stage 2 — lock down.** Once **every** host has been re-enrolled, set
-`FLEET_HOST_SCOPED_ONLY=true` and restart the backend:
-- Certs are then minted with **only** the host-scoped principal — the fleet-wide
-  `fleet` is dropped from user, system (monitor/scan/support/KRL), and playbook
-  credentials.
-- Re-enroll once more (or let scheduled enrollment refresh) so hosts stop trusting
-  `fleet` entirely. From here a leaked certificate is useless anywhere but its one
-  host.
+**Steps:**
+1. Deploy the release (`git pull` → rebuild/restart). Nothing changes yet — hosts
+   still trust `fleet`.
+2. Set `FLEET_HOST_SCOPED_ONLY=true` in `.env` and restart the backend
+   (`make up-single`). Enrollment will now write scoped-only principal files, and
+   system/playbook credentials include each target's scoped principal.
+3. **Re-enroll every managed host** (Hosts → the host → *Re-enroll*, or the
+   pipe/"no-install" script — that path always reinstalls the principal files).
+   Each re-enrolled host rewrites `/etc/ssh/auth_principals/*` to trust only its
+   `fleet-h-<hostID>`, immediately refusing any other host's certificate. Terminal,
+   SFTP, monitoring, scans, and playbook runs keep working throughout.
+4. **Do NOT re-enroll the jump host** under lockdown — it must keep trusting
+   `fleet`, or the first hop of every connection fails.
 
-> **Ordering matters.** Do not set `FLEET_HOST_SCOPED_ONLY=true` before every host
-> is re-enrolled: a host that still trusts only `fleet` will reject the now
-> scoped-only certificates and become unreachable until you re-enroll it. If that
-> happens, unset the flag (or re-enroll the host over its bootstrap credentials) to
-> recover. The jump host itself is unaffected — the session cert used to reach it is
-> separate and always retains the `fleet` principal.
+> Order is not load-bearing (certs always carry `fleet`), but the "no-install"
+> re-enroll is the low-friction way to refresh a host — it always reinstalls the CA
+> trust and principal files, whereas the "host already trusts CA" method skips that
+> step and will not update the principals. If a host ever does become unreachable,
+> re-enroll it (its bootstrap credentials, or the no-install script) to rewrite its
+> principal files.
 
 ## Security checklist (production)
 
@@ -269,5 +272,5 @@ unset/`false`:
 - [ ] Least-privilege roles; `Admin.All` limited to break-glass accounts.
 - [ ] CA public key distributed; rotation and revocation procedures rehearsed.
 - [ ] Managed hosts reachable only via jump host + WireGuard.
-- [ ] All hosts re-enrolled, then `FLEET_HOST_SCOPED_ONLY=true` for host-scoped certs.
+- [ ] `FLEET_HOST_SCOPED_ONLY=true`, then re-enroll each managed host (not the jump host).
 - [ ] Database and recordings backed up and restore-tested.

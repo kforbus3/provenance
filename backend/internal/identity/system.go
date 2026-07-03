@@ -71,13 +71,14 @@ func (i *Issuer) SystemSigner(ctx context.Context, principals []string, ttl time
 }
 
 // SystemHostPrincipals returns the principal set a system worker should use to
-// authenticate to a specific host. In lockdown mode this is the host-scoped
-// principal alone (so the system certificate, like a user's, only works on that
-// host); otherwise it is the fleet-wide "fleet" principal (one cached cert reused
-// across the fleet, exactly as before host scoping).
+// authenticate to a specific host. It always includes the fleet-wide "fleet"
+// principal for the jump-host hop; in lockdown mode it also includes the host's
+// scoped principal, which the (now locked) managed host requires for the inner
+// hop. Outside lockdown, managed hosts still trust "fleet", so one cached "fleet"
+// cert is reused across the fleet exactly as before host scoping.
 func (i *Issuer) SystemHostPrincipals(hostID uuid.UUID) []string {
 	if i.cfg.HostScopedOnly {
-		return []string{princ.Host(hostID)}
+		return []string{princ.Global, princ.Host(hostID)}
 	}
 	return []string{princ.Global}
 }
