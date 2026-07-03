@@ -302,6 +302,10 @@ type AuditEvent struct {
 	Action     string         `json:"action"`
 	TargetKind string         `json:"targetKind,omitempty"`
 	TargetID   string         `json:"targetId,omitempty"`
+	// TargetName is a display-only, human-readable name for the target (e.g. the
+	// username or hostname behind TargetID). It is resolved at read time for the
+	// UI and never persisted or part of the hash chain.
+	TargetName string         `json:"targetName,omitempty"`
 	IP         string         `json:"ip,omitempty"`
 	Detail     map[string]any `json:"detail,omitempty"`
 	PrevHash   string         `json:"prevHash"`

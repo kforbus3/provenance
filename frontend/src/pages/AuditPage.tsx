@@ -148,7 +148,7 @@ export function AuditPage() {
                 <TableCell>{formatDateTime(ev.createdAt)}</TableCell>
                 <TableCell>{ev.actorName || ev.actorId || "system"}</TableCell>
                 <TableCell><Chip label={ev.action} size="small" /></TableCell>
-                <TableCell>{ev.targetKind ? `${ev.targetKind}:${ev.targetId ?? ""}` : ""}</TableCell>
+                <TableCell>{ev.targetKind ? `${ev.targetKind}: ${ev.targetName || ev.targetId || ""}` : ""}</TableCell>
                 <TableCell><DetailCell detail={ev.detail} /></TableCell>
                 <TableCell>{ev.ip}</TableCell>
               </TableRow>

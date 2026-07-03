@@ -84,6 +84,75 @@ func enrichApprovalEvents(r *http.Request, h *handler, events []models.AuditEven
 	}
 }
 
+// enrichEntityEvents resolves user and host UUIDs — in an event's target and in
+// its detail values — to their usernames and hostnames, so the audit log reads
+// "user: keith · hostId: control01" instead of bare UUIDs. It sets TargetName for a
+// user/host target and rewrites any detail value that is a UUID naming a known
+// user or host. Display-only: it mutates the response copy fetched for the UI,
+// never the hash-chained rows (and is not applied to the machine-readable export).
+func enrichEntityEvents(r *http.Request, h *handler, events []models.AuditEvent) {
+	// Collect every UUID referenced: the target id and any UUID-valued detail entry.
+	seen := map[uuid.UUID]bool{}
+	add := func(s string) {
+		if id, err := uuid.Parse(s); err == nil {
+			seen[id] = true
+		}
+	}
+	for i := range events {
+		add(events[i].TargetID)
+		for _, v := range events[i].Detail {
+			if s, ok := v.(string); ok {
+				add(s)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	users, _ := h.d.Store.UsernamesByIDs(r.Context(), ids)
+	hosts, _ := h.d.Store.HostnamesByIDs(r.Context(), ids)
+	// name resolves a UUID to a display name, preferring a user then a host.
+	name := func(s string) string {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return ""
+		}
+		if n, ok := users[id]; ok {
+			return n
+		}
+		if n, ok := hosts[id]; ok {
+			return n
+		}
+		return ""
+	}
+	applyEntityNames(events, name)
+}
+
+// applyEntityNames is the pure rewrite step of enrichEntityEvents: it sets a
+// user/host target's TargetName and replaces UUID-valued detail entries with the
+// name `resolve` returns (empty string = leave as-is). Split out so it is testable
+// without a database.
+func applyEntityNames(events []models.AuditEvent, resolve func(string) string) {
+	for i := range events {
+		if events[i].TargetName == "" {
+			if n := resolve(events[i].TargetID); n != "" {
+				events[i].TargetName = n
+			}
+		}
+		for k, v := range events[i].Detail {
+			if s, ok := v.(string); ok {
+				if n := resolve(s); n != "" {
+					events[i].Detail[k] = n
+				}
+			}
+		}
+	}
+}
+
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -129,6 +198,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		events = []models.AuditEvent{}
 	}
 	enrichApprovalEvents(r, h, events)
+	enrichEntityEvents(r, h, events)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
 }
 

@@ -83,6 +83,29 @@ func (s *Store) GetHost(ctx context.Context, id uuid.UUID) (*models.Host, error)
 	return h, nil
 }
 
+// HostnamesByIDs resolves a set of host IDs to their hostnames in one query,
+// returning a map of only those that exist. Used to make the audit log readable.
+func (s *Store) HostnamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	out := map[uuid.UUID]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, hostname FROM hosts WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) attachHostDetails(ctx context.Context, h *models.Host) {
 	h.Groups, _ = s.scanStrings(ctx, `
 		SELECT g.name FROM host_groups hg JOIN groups g ON g.id=hg.group_id

@@ -95,6 +95,29 @@ func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*models.User, er
 		`SELECT `+userCols+` FROM users WHERE id = $1`, id))
 }
 
+// UsernamesByIDs resolves a set of user IDs to their usernames in one query,
+// returning a map of only those that exist. Used to make the audit log readable.
+func (s *Store) UsernamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	out := map[uuid.UUID]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, username FROM users WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
+}
+
 // GetPasswordHash returns the stored Argon2id hash for a user.
 func (s *Store) GetPasswordHash(ctx context.Context, userID uuid.UUID) (string, error) {
 	var h string

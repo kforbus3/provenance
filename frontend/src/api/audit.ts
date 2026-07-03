@@ -10,6 +10,7 @@ export interface AuditEvent {
   action: string;
   targetKind?: string;
   targetId?: string;
+  targetName?: string;
   ip?: string;
   detail?: Record<string, unknown>;
   prevHash: string;
