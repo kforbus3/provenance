@@ -197,3 +197,26 @@ func (s *Store) ExpireTemporaryPermissions(ctx context.Context) ([]models.Expire
 	}
 	return out, rows.Err()
 }
+
+// ApprovalSummaries fetches approval requests by id (with the requester's username
+// and the human-readable target name joined), for enriching approval-targeted
+// audit events so old and new events both show who/what.
+func (s *Store) ApprovalSummaries(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]models.ApprovalRequest, error) {
+	out := map[uuid.UUID]models.ApprovalRequest{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+approvalCols+` FROM `+approvalFrom+` WHERE ar.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		a, err := scanApprovalRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[a.ID] = *a
+	}
+	return out, rows.Err()
+}

@@ -33,6 +33,57 @@ func Mount(r chi.Router, d *app.Deps) {
 
 type handler struct{ d *app.Deps }
 
+// enrichApprovalEvents fills in the requester + target resource on approval-
+// targeted audit events, resolved from the approval request that still exists in
+// the DB. This makes older events (recorded before the detail was captured
+// inline) readable — "approval:<uuid>" alone doesn't say who or what. It only
+// fills missing keys, so newer events that already carry the detail are untouched.
+// Display-only: it mutates the response copy, never the hash-chained rows.
+func enrichApprovalEvents(r *http.Request, h *handler, events []models.AuditEvent) {
+	var ids []uuid.UUID
+	for _, e := range events {
+		if e.TargetKind == "approval" {
+			if id, err := uuid.Parse(e.TargetID); err == nil {
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	summ, err := h.d.Store.ApprovalSummaries(r.Context(), ids)
+	if err != nil {
+		return
+	}
+	put := func(m map[string]any, k, v string) {
+		if v == "" {
+			return
+		}
+		if _, ok := m[k]; !ok {
+			m[k] = v
+		}
+	}
+	for i := range events {
+		if events[i].TargetKind != "approval" {
+			continue
+		}
+		id, err := uuid.Parse(events[i].TargetID)
+		if err != nil {
+			continue
+		}
+		ar, ok := summ[id]
+		if !ok {
+			continue // request row was deleted; nothing to resolve
+		}
+		if events[i].Detail == nil {
+			events[i].Detail = map[string]any{}
+		}
+		put(events[i].Detail, "requester", ar.Requester)
+		put(events[i].Detail, "targetKind", ar.TargetKind)
+		put(events[i].Detail, "targetName", ar.TargetName)
+	}
+}
+
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -77,6 +128,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	if events == nil {
 		events = []models.AuditEvent{}
 	}
+	enrichApprovalEvents(r, h, events)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
 }
 
