@@ -10,6 +10,7 @@ import {
 } from "@mui/x-data-grid";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
+import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import CableIcon from "@mui/icons-material/Cable";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -25,6 +26,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
   getHost, getHostAccess, listHosts, nextWGAddress, removeHostGroup, removeHostUser,
+  updateHost,
   type EnrollmentResult, type EnrollParams, type Host, type HostInput,
 } from "../api/hosts";
 import { listGroups, listUsers } from "../api/admin";
@@ -126,24 +128,46 @@ function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh }: ToolbarProp
   );
 }
 
-// NewHostDialog collects the minimal create payload; tags are entered as a
-// comma-separated list and normalized on submit.
+// hostToForm maps an existing host onto the editable form payload.
+const hostToForm = (h: Host): HostInput => ({
+  hostname: h.hostname, description: h.description ?? "", environment: h.environment ?? "",
+  owner: h.owner ?? "", address: h.address ?? "", wgAddress: h.wgAddress ?? "",
+  sshPort: h.sshPort || 22, sshUser: h.sshUser ?? "", tags: h.tags ?? [],
+});
+
+// NewHostDialog collects the create/edit payload; tags are entered as a
+// comma-separated list and normalized on submit. When `editHost` is set it edits
+// that host in place (e.g. to set a management Address) rather than creating one.
 interface NewHostDialogProps {
   open: boolean;
+  editHost?: Host | null;
   onClose: () => void;
   onSubmit: (input: HostInput) => void;
   submitting: boolean;
 }
 
-function NewHostDialog({ open, onClose, onSubmit, submitting }: NewHostDialogProps) {
+function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHostDialogProps) {
+  const isEdit = Boolean(editHost);
   const [form, setForm] = useState<HostInput>(EMPTY_FORM);
   const [tags, setTags] = useState("");
+
+  // Prefill from the host when editing; reset to blank when creating.
+  useEffect(() => {
+    if (!open) return;
+    if (editHost) {
+      setForm(hostToForm(editHost));
+      setTags((editHost.tags ?? []).join(", "));
+    } else {
+      setForm(EMPTY_FORM);
+      setTags("");
+    }
+  }, [open, editHost]);
 
   // Show what auto-assignment would pick from the overlay pool.
   const { data: nextWG } = useQuery({
     queryKey: ["next-wg"],
     queryFn: nextWGAddress,
-    enabled: open,
+    enabled: open && !isEdit,
   });
 
   const set = (key: keyof HostInput) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -159,7 +183,7 @@ function NewHostDialog({ open, onClose, onSubmit, submitting }: NewHostDialogPro
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>New Host</DialogTitle>
+      <DialogTitle>{isEdit ? `Edit ${editHost?.hostname}` : "New Host"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
@@ -207,7 +231,7 @@ function NewHostDialog({ open, onClose, onSubmit, submitting }: NewHostDialogPro
           variant="contained" onClick={handleSubmit}
           disabled={submitting || form.hostname.trim() === ""}
         >
-          Create
+          {isEdit ? "Save" : "Create"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -233,12 +257,21 @@ export function HostsPage() {
   const [accessTarget, setAccessTarget] = useState<Host | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<Host | null>(null);
   const [scanTarget, setScanTarget] = useState<Host | null>(null);
+  const [editTarget, setEditTarget] = useState<Host | null>(null);
 
   const createMut = useMutation({
     mutationFn: createHost,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["hosts"] });
       setDialogOpen(false);
+    },
+  });
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: HostInput }) => updateHost(id, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["hosts"] });
+      setEditTarget(null);
     },
   });
 
@@ -341,12 +374,17 @@ export function HostsPage() {
       valueFormatter: (value) => fmtDate(value ? String(value) : undefined),
     },
     {
-      field: "actions", headerName: "Actions", width: 290, sortable: false, filterable: false,
+      field: "actions", headerName: "Actions", width: 326, sortable: false, filterable: false,
       renderCell: (params) => (
         <Stack direction="row" spacing={0.5}>
           <Tooltip title="Host details">
             <IconButton size="small" onClick={() => setDetailsTarget(params.row)}>
               <InfoOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Edit host (address, SSH user/port, tags)">
+            <IconButton size="small" onClick={() => setEditTarget(params.row)}>
+              <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>
           <Tooltip title="Security scan (OpenSCAP)">
@@ -462,6 +500,14 @@ export function HostsPage() {
         onClose={() => setDialogOpen(false)}
         onSubmit={(input) => createMut.mutate(input)}
         submitting={createMut.isPending}
+      />
+      <NewHostDialog
+        key={editTarget?.id ?? "edit-none"}
+        open={Boolean(editTarget)}
+        editHost={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSubmit={(input) => editTarget && updateMut.mutate({ id: editTarget.id, input })}
+        submitting={updateMut.isPending}
       />
       <EnrollCredsDialog
         key={enrollTarget?.id ?? "enroll-none"}
