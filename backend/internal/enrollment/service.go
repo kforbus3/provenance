@@ -142,6 +142,20 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
+	// For a directly-reachable host, drop any stale WireGuard overlay address up
+	// front. The gateway tries a host's WireGuard address first; a leftover overlay
+	// IP on a host that has no tunnel is a dead end that shadows the reachable
+	// management address. Clearing it early means a later-failing enrollment can't
+	// leave the stale address behind (which is what made the Docker host itself
+	// unreachable until it was cleared by hand).
+	if params.SkipWireGuard {
+		if err := s.store.SetHostWGAddress(ctx, host.ID, ""); err != nil {
+			s.log.Warn("clear stale wg address", "host", host.Hostname, "err", err)
+		} else {
+			host.WGAddress = ""
+		}
+	}
+
 	// 1) Reach the jump host (the VPN server, which already trusts the CA) and
 	//    read its WireGuard public key.
 	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
