@@ -94,17 +94,14 @@ func (m *Monitor) sweep(ctx context.Context) {
 		}
 		return
 	}
-	signer, err := m.issuer.SystemSigner(ctx, []string{"fleet"}, 24*time.Hour)
-	if err != nil {
-		m.log.Warn("monitor system signer", "err", err)
-		if m.jobs != nil {
-			m.jobs.Record("host-monitor", err)
-		}
-		return
-	}
 	for i := range hosts {
 		h := hosts[i]
 		if !h.Enrolled {
+			continue
+		}
+		signer, err := m.issuer.SystemSigner(ctx, m.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
+		if err != nil {
+			m.log.Warn("monitor system signer", "host", h.Hostname, "err", err)
 			continue
 		}
 		prev := ""

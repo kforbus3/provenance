@@ -27,9 +27,18 @@ and operational recommendations.
   (`FLEET_CERT_RENEW_BEFORE`) so active sessions don't break.
 - **Unique per-host certificates.** Connecting to a host mints a credential scoped
   to that specific `(session, host)` pair — distinct key material and serial per
-  host. A cert issued for one host cannot be replayed against another, and the
-  blast radius of any single credential is one host. The vault zeroizes a
+  host. The blast radius of any single credential is one host. The vault zeroizes a
   session's session-level **and** all per-host keys together on teardown.
+- **Host-scoped principals.** Each certificate is stamped with a principal unique
+  to its target host, `fleet-h-<hostID>` (or `fleet-login-h-<hostID>` for the
+  login-only tier), and enrollment configures each host to accept only its own.
+  A certificate — even if its private key were somehow extracted — is therefore
+  **rejected by every host except the one it was minted for**, so it cannot be
+  replayed to reach a host the user was never granted. This also bounds the Ansible
+  playbook runner: its run credential is scoped to just that run's target hosts, so
+  a playbook that reads the key off the runner still can't escape to the rest of the
+  fleet. Rollout is backwards compatible and gated by `FLEET_HOST_SCOPED_ONLY` —
+  see [§13](#13-migrating-to-host-scoped-principals).
 
 ## 2. Certificate authority hardening
 
@@ -129,8 +138,10 @@ and operational recommendations.
   principal maps to the privileged account only when the user has `Host.Sudo` (or
   is a super admin); otherwise it maps to the login-only account. The split is
   enforced by sshd via `AuthorizedPrincipalsFile` (distinct principals per
-  account), so a login-only certificate cannot open the sudo account. Both tiers
-  still use unique per-user certs and are recorded and audited.
+  account), so a login-only certificate cannot open the sudo account. The
+  principals are **host-scoped** (`fleet-h-<hostID>` / `fleet-login-h-<hostID>`),
+  so the account split holds and the certificate is only valid on its own host.
+  Both tiers still use unique per-user certs and are recorded and audited.
 - **Automation permissions (admin-only by default).** Three permissions gate the
   Ansible/scheduling features and are granted to the Administrator role only:
   - **`Playbook.Run`** is effectively **arbitrary root-level command execution
@@ -214,6 +225,39 @@ and operational recommendations.
   disable/lock the user, verify the audit chain, and review `auth_events` and
   `ssh_sessions`. See [Disaster Recovery](./disaster-recovery.md).
 
+## 13. Migrating to host-scoped principals
+
+Host scoping binds every certificate to a single host so it can't be replayed
+elsewhere (see [§4](#4-authentication)/[§5](#5-rbac--authorization)). It rolls out
+in two stages with **no window in which a host is locked out**:
+
+**Stage 1 — deploy (already backwards compatible).** With `FLEET_HOST_SCOPED_ONLY`
+unset/`false`:
+- Newly issued per-host certs carry **both** the fleet-wide `fleet` principal and
+  the host-scoped `fleet-h-<hostID>`. They authenticate on hosts old and new.
+- **Re-enroll each host** (Hosts → the host → *Re-enroll*, or the pipe-enroll
+  script). Re-enrollment rewrites `/etc/ssh/auth_principals/*` to trust that host's
+  scoped principal. A re-enrolled host immediately **stops accepting** any other
+  host's certificate, while still honoring `fleet` for anything not yet migrated.
+- Do this for every host, including the jump host's managed peers. Monitoring,
+  scans, SFTP, and playbook runs continue working throughout.
+
+**Stage 2 — lock down.** Once **every** host has been re-enrolled, set
+`FLEET_HOST_SCOPED_ONLY=true` and restart the backend:
+- Certs are then minted with **only** the host-scoped principal — the fleet-wide
+  `fleet` is dropped from user, system (monitor/scan/support/KRL), and playbook
+  credentials.
+- Re-enroll once more (or let scheduled enrollment refresh) so hosts stop trusting
+  `fleet` entirely. From here a leaked certificate is useless anywhere but its one
+  host.
+
+> **Ordering matters.** Do not set `FLEET_HOST_SCOPED_ONLY=true` before every host
+> is re-enrolled: a host that still trusts only `fleet` will reject the now
+> scoped-only certificates and become unreachable until you re-enroll it. If that
+> happens, unset the flag (or re-enroll the host over its bootstrap credentials) to
+> recover. The jump host itself is unaffected — the session cert used to reach it is
+> separate and always retains the `fleet` principal.
+
 ## Security checklist (production)
 
 - [ ] Strong `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE` set.
@@ -225,4 +269,5 @@ and operational recommendations.
 - [ ] Least-privilege roles; `Admin.All` limited to break-glass accounts.
 - [ ] CA public key distributed; rotation and revocation procedures rehearsed.
 - [ ] Managed hosts reachable only via jump host + WireGuard.
+- [ ] All hosts re-enrolled, then `FLEET_HOST_SCOPED_ONLY=true` for host-scoped certs.
 - [ ] Database and recordings backed up and restore-tested.

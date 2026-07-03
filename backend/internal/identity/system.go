@@ -5,31 +5,41 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
+
+	princ "github.com/fleet-terminal/backend/internal/principals"
 )
 
-// systemHolder caches a service certificate used by background workers (the
-// monitor) that act without a user session. It is minted from the same CA with
-// a short principal set and refreshed before expiry. The private key lives only
-// in memory.
+// systemHolder caches a service certificate used by background workers (monitor,
+// scan, support, KRL distribution) that act without a user session. It is minted
+// from the same CA with a short principal set and refreshed before expiry. The
+// private key lives only in memory.
 type systemHolder struct {
-	mu        sync.Mutex
 	signer    ssh.Signer
 	expiresAt time.Time
 }
 
-var systemCache = &systemHolder{}
+// systemCache holds one holder per principal set (keyed by the joined principals)
+// so a host-scoped signer for host A is never confused with one for host B.
+var (
+	systemCacheMu sync.Mutex
+	systemCache   = map[string]*systemHolder{}
+)
 
 // SystemSigner returns a certificate-backed signer for the given principals,
-// minting (and caching) one as needed. ttl bounds the certificate lifetime.
+// minting (and caching, per principal set) one as needed. ttl bounds the
+// certificate lifetime.
 func (i *Issuer) SystemSigner(ctx context.Context, principals []string, ttl time.Duration) (ssh.Signer, error) {
-	systemCache.mu.Lock()
-	defer systemCache.mu.Unlock()
-	if systemCache.signer != nil && time.Until(systemCache.expiresAt) > 5*time.Minute {
-		return systemCache.signer, nil
+	key := strings.Join(principals, ",")
+	systemCacheMu.Lock()
+	defer systemCacheMu.Unlock()
+	if h := systemCache[key]; h != nil && h.signer != nil && time.Until(h.expiresAt) > 5*time.Minute {
+		return h.signer, nil
 	}
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -56,7 +66,18 @@ func (i *Issuer) SystemSigner(ctx context.Context, principals []string, ttl time
 	if err != nil {
 		return nil, err
 	}
-	systemCache.signer = certSigner
-	systemCache.expiresAt = time.Unix(int64(cert.ValidBefore), 0)
+	systemCache[key] = &systemHolder{signer: certSigner, expiresAt: time.Unix(int64(cert.ValidBefore), 0)}
 	return certSigner, nil
+}
+
+// SystemHostPrincipals returns the principal set a system worker should use to
+// authenticate to a specific host. In lockdown mode this is the host-scoped
+// principal alone (so the system certificate, like a user's, only works on that
+// host); otherwise it is the fleet-wide "fleet" principal (one cached cert reused
+// across the fleet, exactly as before host scoping).
+func (i *Issuer) SystemHostPrincipals(hostID uuid.UUID) []string {
+	if i.cfg.HostScopedOnly {
+		return []string{princ.Host(hostID)}
+	}
+	return []string{princ.Global}
 }

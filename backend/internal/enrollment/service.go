@@ -18,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/models"
+	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 
@@ -289,7 +290,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		if kerr != nil || len(caKeys) == 0 {
 			return fail("install_trust", orErr(kerr, "no active user CA"))
 		}
-		if out, err := priv(s.caTrustScript(loginUser, strings.Join(caKeys, "\n"))); err != nil || !strings.Contains(out, "CA_OK") {
+		if out, err := priv(s.caTrustScript(loginUser, strings.Join(caKeys, "\n"), host.ID)); err != nil || !strings.Contains(out, "CA_OK") {
 			return fail("install_trust", orErr(err, out))
 		}
 		step("install_trust", "ok", "CA trust + login user '"+loginUser+"' + sshd configured")
@@ -585,7 +586,20 @@ echo OK`,
 
 // caTrustScript installs the Fleet user CA, creates the login user with sudo and
 // the principal mapping, configures sshd to trust certificates, and reloads sshd.
-func (s *Service) caTrustScript(loginUser, caKeys string) string {
+//
+// The accepted principals are host-scoped: each account trusts "fleet-h-<hostID>"
+// (privileged) / "fleet-login-h-<hostID>" (login-only), which only this host's
+// certificates carry, so a certificate minted for another host is rejected here.
+// Unless lockdown (cfg.HostScopedOnly) is set, the fleet-wide "fleet"/"fleet-login"
+// principals are also trusted, keeping certs issued for not-yet-re-enrolled hosts
+// working during the migration.
+func (s *Service) caTrustScript(loginUser, caKeys string, hostID uuid.UUID) string {
+	sudoLine := princ.Host(hostID) + `\n`
+	loginLine := princ.HostLogin(hostID) + `\n`
+	if !s.cfg.HostScopedOnly {
+		sudoLine = princ.Global + `\n` + sudoLine
+		loginLine = princ.GlobalLogin + `\n` + loginLine
+	}
 	return fmt.Sprintf(`set -e
 LOGIN=%s
 NOSUDO="${LOGIN}-login"
@@ -601,10 +615,11 @@ cat > /etc/ssh/fleet_ca.pub <<'CAEOF'
 %s
 CAEOF
 chmod 644 /etc/ssh/fleet_ca.pub
-# Principal mapping: privileged cert principal "fleet" -> $LOGIN account;
-# login-only cert principal "fleet-login" -> $NOSUDO account.
-mkdir -p /etc/ssh/auth_principals && printf 'fleet\n' > /etc/ssh/auth_principals/"$LOGIN"
-printf 'fleet-login\n' > /etc/ssh/auth_principals/"$NOSUDO"
+# Principal mapping: privileged cert principals -> $LOGIN account;
+# login-only cert principals -> $NOSUDO account. Host-scoped ("fleet-h-<id>") so a
+# certificate minted for another host is rejected here.
+mkdir -p /etc/ssh/auth_principals && printf '%s' > /etc/ssh/auth_principals/"$LOGIN"
+printf '%s' > /etc/ssh/auth_principals/"$NOSUDO"
 # sshd: prefer a drop-in; also append directly if the main config has no Include.
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/00-fleet.conf <<'SSHEOF'
@@ -619,7 +634,7 @@ mkdir -p /run/sshd
 sshd -t
 ( systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null ) || true
 echo CA_OK`,
-		loginUser, caKeys)
+		loginUser, caKeys, sudoLine, loginLine)
 }
 
 // wgInstallScript installs WireGuard tooling via the host's package manager if

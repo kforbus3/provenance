@@ -106,7 +106,7 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gatewa
 // dial opens a privileged connection to the host, trying its candidate
 // addresses in turn (WireGuard overlay first, then management address/hostname).
 func (s *Service) dial(ctx context.Context, h *models.Host) (*sshgw.Conn, error) {
-	signer, err := s.issuer.SystemSigner(ctx, []string{"fleet"}, 24*time.Hour)
+	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("system signer: %w", err)
 	}

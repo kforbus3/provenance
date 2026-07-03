@@ -53,7 +53,15 @@ When a user logs in, a session hook fires the **Issuer**:
    `user_id`, `session_id`, `key_id`, `principals`, `public_key`, `issued_at`,
    `expires_at`, `audit_id`). The private key stays in the vault.
 
-The certificate is used when the gateway dials a host on the user's behalf.
+This session-level certificate authenticates only to the **jump host**; it keeps
+the fleet-wide `fleet` principal because the jump host is shared. When the gateway
+then dials a managed host, it mints a **separate per-host certificate** whose
+principal is **host-scoped** — `fleet-h-<hostID>` (or `fleet-login-h-<hostID>` for
+the login-only tier) — so it authenticates only to that one host and is rejected
+everywhere else. In the default (backwards-compatible) mode the per-host cert also
+carries `fleet` so it still works on hosts not yet re-enrolled with host scoping;
+setting `FLEET_HOST_SCOPED_ONLY=true` drops `fleet` and makes the cert strictly
+single-host. See [security-guide.md §13](./security-guide.md#13-migrating-to-host-scoped-principals).
 
 ## 3. Renewal
 

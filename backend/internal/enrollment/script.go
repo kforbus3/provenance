@@ -86,7 +86,7 @@ func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *m
 		Detail: map[string]any{"wgAddress": wgIP, "method": "pipe"},
 	})
 
-	return s.bootstrapScript(loginUser, strings.Join(caKeys, "\n"), wgIP, jumpPub, jumpEndpoint, krlB64), nil
+	return s.bootstrapScript(loginUser, strings.Join(caKeys, "\n"), wgIP, jumpPub, jumpEndpoint, krlB64, host.ID), nil
 }
 
 // FinishScriptEnroll completes the no-install flow after the operator has run
@@ -164,7 +164,7 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 // the over-SSH enrollment uses. Each phase runs in a subshell (so its `set -e`
 // is scoped) and is checked for its success marker; the host's WireGuard public
 // key is surfaced at the end for the operator to paste back.
-func (s *Service) bootstrapScript(loginUser, caKeys, wgIP, jumpPub, jumpEndpoint, krlB64 string) string {
+func (s *Service) bootstrapScript(loginUser, caKeys, wgIP, jumpPub, jumpEndpoint, krlB64 string, hostID uuid.UUID) string {
 	phase := func(num, label, body, marker, failMsg string) string {
 		check := ""
 		if marker != "" {
@@ -186,7 +186,7 @@ F=$(mktemp)
 	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (pipe through: ssh USER@HOST sudo bash)'; exit 1; fi` + "\n\n")
 
 	b.WriteString(phase("1/4", "installing SSH certificate trust",
-		s.caTrustScript(loginUser, caKeys), "CA_OK", "CA trust") + "\n")
+		s.caTrustScript(loginUser, caKeys, hostID), "CA_OK", "CA trust") + "\n")
 	b.WriteString(phase("2/4", "installing WireGuard tooling",
 		wgInstallScript, "WG_INSTALLED", "WireGuard install") + "\n")
 

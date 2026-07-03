@@ -248,10 +248,6 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	signer, err := s.Issuer.SystemSigner(ctx, []string{"fleet"}, 24*time.Hour)
-	if err != nil {
-		return 0, err
-	}
 	hosts, _ := s.Store.ListHosts(ctx, 1000, 0)
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
 	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/fleet_krl >/dev/null && sudo chmod 644 /etc/ssh/fleet_krl && echo OK"
@@ -259,6 +255,10 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 	for i := range hosts {
 		h := hosts[i]
 		if !h.Enrolled {
+			continue
+		}
+		signer, err := s.Issuer.SystemSigner(ctx, s.Issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
+		if err != nil {
 			continue
 		}
 		for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {

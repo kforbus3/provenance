@@ -15,6 +15,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
+	princ "github.com/fleet-terminal/backend/internal/principals"
 )
 
 const (
@@ -122,9 +123,21 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 		return
 	}
 
-	// Mint an ephemeral key + cert for this run (privileged `fleet` principal,
-	// exactly as scans/remediation use).
-	mat, err := s.issuer.SystemKeyMaterial(ctx, []string{"fleet"}, runCertTTL)
+	// Mint an ephemeral key + cert for this run, scoped to exactly the target
+	// hosts. The runner writes this private key to its own filesystem to drive
+	// ansible, so a crafted playbook (e.g. a local_action reading the key) could
+	// exfiltrate it; binding the cert to this run's target-host principals means a
+	// leaked key only reaches hosts the run was already authorized for — never the
+	// whole fleet. In lockdown mode the fleet-wide "fleet" principal is omitted;
+	// otherwise it is included so the run still works on hosts not yet re-enrolled.
+	runPrincipals := make([]string, 0, len(hosts)+1)
+	if !s.cfg.HostScopedOnly {
+		runPrincipals = append(runPrincipals, princ.Global)
+	}
+	for _, h := range hosts {
+		runPrincipals = append(runPrincipals, princ.Host(h.ID))
+	}
+	mat, err := s.issuer.SystemKeyMaterial(ctx, runPrincipals, runCertTTL)
 	if err != nil {
 		fail(fmt.Sprintf("could not issue run credential: %v", err))
 		return

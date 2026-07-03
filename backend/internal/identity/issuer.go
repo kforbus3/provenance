@@ -15,6 +15,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
+	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -54,8 +55,9 @@ func (i *Issuer) Issue(ctx context.Context, sessionID, userID uuid.UUID, usernam
 // certificate row for audit.
 func (i *Issuer) IssueForHost(ctx context.Context, sessionID, userID, hostID uuid.UUID, username, hostname string, principals []string) (*Credential, error) {
 	if len(principals) == 0 {
-		principals = dedupePrincipals([]string{"fleet", username})
+		principals = []string{princ.Global, username}
 	}
+	principals = i.scopeForHost(principals, hostID)
 	label := hostname
 	if label == "" {
 		label = hostID.String()[:8]
@@ -145,6 +147,35 @@ func (i *Issuer) EnsureHostCredential(ctx context.Context, sessionID, userID, ho
 		return 0, err
 	}
 	return cred.Serial, nil
+}
+
+// scopeForHost binds a certificate's principals to a single host: each fleet-wide
+// principal ("fleet"/"fleet-login") gains its host-scoped counterpart
+// ("fleet-h-<hostID>"/"fleet-login-h-<hostID>"). In lockdown mode
+// (cfg.HostScopedOnly) the fleet-wide principal is dropped entirely, so the
+// certificate authenticates ONLY to hostID and is rejected by every other host.
+// Otherwise both are kept, so the certificate still works on hosts that have not
+// yet been re-enrolled with the host-scoped principal. Non-fleet principals (e.g.
+// the informational username) pass through unchanged.
+func (i *Issuer) scopeForHost(in []string, hostID uuid.UUID) []string {
+	out := make([]string, 0, len(in)+2)
+	for _, p := range in {
+		switch p {
+		case princ.Global:
+			out = append(out, princ.Host(hostID))
+			if !i.cfg.HostScopedOnly {
+				out = append(out, p)
+			}
+		case princ.GlobalLogin:
+			out = append(out, princ.HostLogin(hostID))
+			if !i.cfg.HostScopedOnly {
+				out = append(out, p)
+			}
+		default:
+			out = append(out, p)
+		}
+	}
+	return dedupePrincipals(out)
 }
 
 // dedupePrincipals removes empty/duplicate principals, preserving order.

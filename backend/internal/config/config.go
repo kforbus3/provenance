@@ -76,6 +76,20 @@ type Config struct {
 	// verification.
 	SSHInsecureHostKeys bool
 
+	// HostScopedOnly locks certificate authorization down to host-scoped
+	// principals: every per-host certificate carries ONLY "fleet-h-<hostID>"
+	// (never the fleet-wide "fleet"), and enrollment writes only the host-scoped
+	// principal into each host's AuthorizedPrincipalsFile. A certificate minted
+	// for one host is then rejected by every other host, so it cannot be replayed
+	// against hosts the user was not granted.
+	//
+	// Off by default because it requires every host to be (re-)enrolled first:
+	// with it off, hosts trust BOTH "fleet" and their host-scoped principal and
+	// certs carry both, so enabling host scoping is fully backwards compatible.
+	// Turn it on only AFTER re-enrolling every host, or hosts still trusting only
+	// "fleet" will reject the now scoped-only certificates.
+	HostScopedOnly bool
+
 	// WireGuard overlay (used by host enrollment to provision tunnels)
 	WGInterface    string // e.g. "wg0"
 	WGSubnet       string // CIDR of the overlay, e.g. "10.100.0.0/24"
@@ -168,6 +182,7 @@ func Load() (*Config, error) {
 		JumpUser:            env("FLEET_JUMP_USER", "fleet"),
 		JumpKnownHostsFile:  env("FLEET_JUMP_KNOWN_HOSTS", ""),
 		SSHInsecureHostKeys: envBool("FLEET_SSH_INSECURE_HOST_KEYS", false),
+		HostScopedOnly:      envBool("FLEET_HOST_SCOPED_ONLY", false),
 		TrustedProxies:      trustedProxiesFromEnv(),
 		WGInterface:         env("FLEET_WG_INTERFACE", "wg0"),
 		WGSubnet:            env("FLEET_WG_SUBNET", "10.100.0.0/24"),
