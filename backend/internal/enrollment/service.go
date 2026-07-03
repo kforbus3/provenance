@@ -250,16 +250,18 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		}
 		step("connect_host", "ok", fmt.Sprintf("ssh agent auth as %s@%s (%s)", buser, mgmtAddr, via))
 	} else {
-		// Certificate auth has no SSH password, but sudo may still require one.
+		// Certificate auth has no SSH password, but sudo may still require one. Use
+		// a host-scoped system credential (not the session-level one, which carries
+		// only "fleet") so this works even after the host is locked down.
 		sudoPass = params.SudoPassword
 		if params.ViaJump {
-			conn, derr := s.gw.Dial(ctx, sessionID.String(), mgmtAddr, host.SSHPort, loginUser)
+			conn, derr := s.gw.DialSystemForHost(ctx, host.ID, mgmtAddr, host.SSHPort, loginUser)
 			if derr != nil {
 				return fail("connect_host", derr)
 			}
 			hostClient, hostClose = conn.Client, conn.Close
 		} else {
-			hostClient, err = s.gw.DialDirect(ctx, sessionID.String(), mgmtAddr, host.SSHPort, loginUser)
+			hostClient, err = s.gw.DialDirectSystemForHost(ctx, host.ID, mgmtAddr, host.SSHPort, loginUser)
 			if err != nil {
 				return fail("connect_host", err)
 			}

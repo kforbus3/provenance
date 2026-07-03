@@ -472,7 +472,7 @@ export function HostsPage() {
       />
       <EnrollDialog
         open={enrollOpen}
-        pending={enrollMut.isPending}
+        pending={enrollMut.isPending || finishMut.isPending}
         result={enrollResult}
         error={enrollError}
         onClose={() => setEnrollOpen(false)}

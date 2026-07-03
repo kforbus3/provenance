@@ -156,6 +156,22 @@ func (g *Gateway) DialSystemForHost(ctx context.Context, hostID uuid.UUID, host 
 	return g.DialWithSigner(ctx, signer, host, port, user)
 }
 
+// DialDirectSystemForHost opens a DIRECT (no jump) SSH connection to a host with a
+// short-lived system credential carrying that host's principal set. Enrollment's
+// "host already trusts the CA" path uses it to re-provision a host that is directly
+// reachable but locked down — the session-level credential carries only "fleet",
+// which a locked host no longer accepts.
+func (g *Gateway) DialDirectSystemForHost(ctx context.Context, hostID uuid.UUID, addr string, port int, user string) (*ssh.Client, error) {
+	if g.issuer == nil {
+		return nil, fmt.Errorf("gateway issuer unavailable")
+	}
+	signer, err := g.issuer.SystemSigner(ctx, g.issuer.SystemHostPrincipals(hostID), 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	return g.DialDirectKey(ctx, addr, port, user, signer)
+}
+
 // HostCredentialSerial returns the serial of the per-host certificate bound to a
 // session+host, for audit/verification.
 func (g *Gateway) HostCredentialSerial(sessionID, hostID uuid.UUID) (uint64, bool) {
