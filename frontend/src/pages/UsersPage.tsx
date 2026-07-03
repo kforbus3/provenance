@@ -16,10 +16,10 @@ import { Checkbox, FormGroup } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   assignUserRole, createUser, deleteUser, getGlobalRequireMFA, listRoles, listUsers,
-  removeUserRole, resetUserMFA, resetUserPassword, setGlobalRequireMFA, setUserDisabled,
-  setUserRequireMFA, terminateUserSessions, unlockUser, updateUser, userHosts,
-  userLoginHistory,
-  type AuthEvent, type CreateUserInput, type User, type UserHostsResponse,
+  removeUserRole, resetUserMFA, resetUserPassword, restoreUserHostAccess,
+  revokeUserHostAccess, setGlobalRequireMFA, setUserDisabled, setUserRequireMFA,
+  terminateUserSessions, unlockUser, updateUser, userHostAccess, userLoginHistory,
+  type AuthEvent, type CreateUserInput, type User,
 } from "../api/admin";
 
 const EMPTY_CREATE: CreateUserInput = {
@@ -40,8 +40,26 @@ export function UsersPage() {
   const [menuUser, setMenuUser] = useState<User | null>(null);
   const [snack, setSnack] = useState<string | null>(null);
   const [history, setHistory] = useState<{ user: User; events: AuthEvent[] } | null>(null);
-  const [hostsView, setHostsView] = useState<{ user: User; data: UserHostsResponse } | null>(null);
+  const [hostAccessUser, setHostAccessUser] = useState<User | null>(null);
   const [rolesUser, setRolesUser] = useState<User | null>(null);
+
+  // Per-user host access: the hosts a user can reach plus revoke/restore controls.
+  const { data: hostAccess = [], isLoading: hostAccessLoading } = useQuery({
+    queryKey: ["user-host-access", hostAccessUser?.id],
+    queryFn: () => userHostAccess(hostAccessUser!.id),
+    enabled: Boolean(hostAccessUser),
+  });
+  const hostAccessMut = useMutation({
+    mutationFn: ({ hostId, action }: { hostId: string; action: "revoke" | "restore" }) =>
+      action === "revoke"
+        ? revokeUserHostAccess(hostAccessUser!.id, hostId)
+        : restoreUserHostAccess(hostAccessUser!.id, hostId),
+    onSuccess: (_res, vars) => {
+      setSnack(vars.action === "revoke" ? "Access removed" : "Access restored");
+      qc.invalidateQueries({ queryKey: ["user-host-access", hostAccessUser?.id] });
+    },
+    onError: (_e, vars) => setSnack(vars.action === "revoke" ? "Failed to remove access" : "Failed to restore access"),
+  });
 
   const { data: allRoles = [] } = useQuery({ queryKey: ["roles"], queryFn: listRoles });
   const roleMut = useMutation({
@@ -139,11 +157,10 @@ export function UsersPage() {
                   )}
                 </TableCell>
                 <TableCell align="right">
-                  <Tooltip title="View accessible hosts">
-                    <IconButton size="small" onClick={async () => {
-                      try { setHostsView({ user: u, data: await userHosts(u.id) }); }
-                      catch { setSnack("Failed to load hosts"); }
-                    }}><DnsIcon fontSize="small" /></IconButton>
+                  <Tooltip title="Manage host access">
+                    <IconButton size="small" onClick={() => setHostAccessUser(u)}>
+                      <DnsIcon fontSize="small" />
+                    </IconButton>
                   </Tooltip>
                   <Tooltip title="Manage roles">
                     <IconButton size="small" onClick={() => setRolesUser(u)}><SecurityIcon fontSize="small" /></IconButton>
@@ -273,24 +290,44 @@ export function UsersPage() {
         <DialogActions><Button onClick={() => setHistory(null)}>Close</Button></DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(hostsView)} onClose={() => setHostsView(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Accessible hosts — {hostsView?.user.username}</DialogTitle>
+      <Dialog open={Boolean(hostAccessUser)} onClose={() => setHostAccessUser(null)} fullWidth maxWidth="md">
+        <DialogTitle>Host access — {hostAccessUser?.username}</DialogTitle>
         <DialogContent dividers>
-          {hostsView?.data.isSuperAdmin && (
-            <Alert severity="info" sx={{ mb: 2 }}>
-              Super admin — has access to all hosts.
-            </Alert>
-          )}
           <List dense>
-            {(hostsView?.data.hosts ?? []).map((h) => (
-              <ListItem key={h.id} disableGutters>
+            {hostAccess.map((h) => (
+              <ListItem
+                key={h.id}
+                disableGutters
+                secondaryAction={h.denied ? (
+                  <Button size="small" color="primary" disabled={hostAccessMut.isPending}
+                    onClick={() => hostAccessMut.mutate({ hostId: h.id, action: "restore" })}>
+                    Restore
+                  </Button>
+                ) : (
+                  <Button size="small" color="error" disabled={hostAccessMut.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Remove access to ${h.hostname} for ${hostAccessUser?.username}?`))
+                        hostAccessMut.mutate({ hostId: h.id, action: "revoke" });
+                    }}>
+                    Remove
+                  </Button>
+                )}
+              >
                 <ListItemText
-                  primary={h.hostname}
-                  secondary={[h.environment, h.address].filter(Boolean).join("  ·  ")}
+                  primary={
+                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                      <Typography variant="body2">{h.hostname}</Typography>
+                      {h.viaDirect && <Chip label="Direct" size="small" variant="outlined" />}
+                      {h.viaGroup && <Chip label="Group" size="small" variant="outlined" />}
+                      {h.viaTemp && <Chip label="Temporary" size="small" variant="outlined" />}
+                      {h.denied && <Chip label="Denied" size="small" color="warning" />}
+                    </Stack>
+                  }
+                  secondary={[h.environment, h.owner, h.address].filter(Boolean).join("  ·  ")}
                 />
               </ListItem>
             ))}
-            {hostsView && hostsView.data.hosts.length === 0 && (
+            {hostAccessUser && !hostAccessLoading && hostAccess.length === 0 && (
               <ListItem><ListItemText
                 primary="No accessible hosts"
                 secondary="Grant access via a group or directly from a host's Manage access dialog."
@@ -298,7 +335,7 @@ export function UsersPage() {
             )}
           </List>
         </DialogContent>
-        <DialogActions><Button onClick={() => setHostsView(null)}>Close</Button></DialogActions>
+        <DialogActions><Button onClick={() => setHostAccessUser(null)}>Close</Button></DialogActions>
       </Dialog>
 
       <Dialog open={Boolean(rolesUser)} onClose={() => setRolesUser(null)} fullWidth maxWidth="xs">

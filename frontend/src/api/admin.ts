@@ -134,15 +134,32 @@ export async function userLoginHistory(id: string): Promise<AuthEvent[]> {
   return data.events ?? [];
 }
 
-export interface UserHostsResponse {
-  hosts: { id: string; hostname: string; environment: string; address?: string }[];
-  isSuperAdmin: boolean;
+export interface UserHostAccess {
+  id: string;
+  hostname: string;
+  description: string;
+  environment: string;
+  owner: string;
+  address: string;
+  viaDirect: boolean;
+  viaGroup: boolean;
+  viaTemp: boolean;
+  denied: boolean;
 }
 
-// userHosts returns the hosts a user can currently reach (the at-a-glance view).
-export async function userHosts(id: string): Promise<UserHostsResponse> {
-  const { data } = await api.get<UserHostsResponse>(`/api/v1/users/${id}/hosts`);
-  return { hosts: data.hosts ?? [], isSuperAdmin: !!data.isSuperAdmin };
+// userHostAccess returns every host the user can reach, annotated with the
+// source(s) of access and whether an admin has revoked (denied) it.
+export async function userHostAccess(id: string): Promise<UserHostAccess[]> {
+  const { data } = await api.get<{ hosts: UserHostAccess[]; count: number }>(`/api/v1/users/${id}/host-access`);
+  return data.hosts ?? [];
+}
+
+export async function revokeUserHostAccess(userId: string, hostId: string): Promise<void> {
+  await api.post(`/api/v1/users/${userId}/host-access/${hostId}/revoke`);
+}
+
+export async function restoreUserHostAccess(userId: string, hostId: string): Promise<void> {
+  await api.post(`/api/v1/users/${userId}/host-access/${hostId}/restore`);
 }
 
 export async function listRoles(): Promise<Role[]> {
