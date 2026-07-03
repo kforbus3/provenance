@@ -331,6 +331,7 @@ func (s *Service) loadPrincipal(ctx context.Context, claims *Claims) (*Principal
 	return &Principal{
 		UserID: u.ID, SessionID: sess.ID, Username: u.Username,
 		IsSuperAdmin: u.IsSuperAdmin, Permissions: perms,
+		MustChangePw: u.MustChangePw,
 	}, nil
 }
 

@@ -452,10 +452,24 @@ func (s *Server) buildRouter() chi.Router {
 	// Versioned API surface. Module routers mount here.
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(rateLimitMW)
+		api.Use(bodyLimitMW)
 		s.registerRoutes(api)
 	})
 
 	return r
+}
+
+// bodyLimitMW caps request-body size to blunt memory exhaustion from an oversized
+// body, exempting the SFTP upload route (a genuine file transfer already bounded
+// by its own configurable MaxUploadBytes). WebSocket upgrades carry no request
+// body, so the wrap is a no-op for them.
+func bodyLimitMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && !strings.Contains(r.URL.Path, "/sftp/upload") {
+			r.Body = http.MaxBytesReader(w, r.Body, 8<<20) // 8 MiB is ample for JSON
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // registerRoutes is the single extension point where module handlers attach.

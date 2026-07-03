@@ -137,6 +137,9 @@ func (s *Store) ListHosts(ctx context.Context, limit, offset int) ([]models.Host
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := s.pool.Query(ctx, `SELECT `+hostCols+` FROM hosts ORDER BY hostname LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err

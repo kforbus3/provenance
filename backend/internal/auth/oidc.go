@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/secretbox"
+	"github.com/fleet-terminal/backend/internal/ssrf"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -87,6 +89,11 @@ func (h *Handler) oidcProvider(ctx context.Context, issuer string) (*gooidc.Prov
 	defer oidcProviderCache.mu.Unlock()
 	if p, ok := oidcProviderCache.m[issuer]; ok {
 		return p, nil
+	}
+	// The issuer is admin-configured; validate it before the library fetches its
+	// discovery document so it can't be pointed at loopback/metadata endpoints.
+	if err := ssrf.ValidateURL(issuer); err != nil {
+		return nil, fmt.Errorf("invalid OIDC issuer: %w", err)
 	}
 	p, err := gooidc.NewProvider(ctx, issuer)
 	if err != nil {

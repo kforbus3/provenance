@@ -75,6 +75,9 @@ func (s *Store) ListSSHSessions(ctx context.Context, f SSHSessionFilter) ([]mode
 	if f.Limit <= 0 || f.Limit > 1000 {
 		f.Limit = 100
 	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+sshSessionCols+`
 		FROM ssh_sessions
@@ -202,6 +205,9 @@ type SFTPTransferFilter struct {
 func (s *Store) ListSFTPTransfers(ctx context.Context, f SFTPTransferFilter) ([]SFTPTransfer, error) {
 	if f.Limit <= 0 || f.Limit > 1000 {
 		f.Limit = 100
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+sftpTransferCols+`

@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { Box, CircularProgress, Paper, Typography } from "@mui/material";
 import { Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "../store/auth";
+import { ChangePasswordGate } from "./ChangePasswordGate";
 
 interface ProtectedRouteProps {
   // Optional permission key required to view the route. Super Admins and the
@@ -39,6 +40,12 @@ export function ProtectedRoute({ permission, children }: ProtectedRouteProps) {
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // The backend blocks all non-auth endpoints for an account flagged to change
+  // its password; show the change screen in place of any protected route.
+  if (user.mustChangePassword) {
+    return <ChangePasswordGate />;
   }
 
   if (permission && !has(permission)) {

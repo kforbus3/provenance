@@ -25,6 +25,13 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 			unauthorized(w, "session invalid")
 			return
 		}
+		// An account flagged to change its password may only reach the auth
+		// endpoints (change-password, logout, profile, MFA) until it does so —
+		// server-side enforcement so the flag can't be bypassed by ignoring the UI.
+		if p.MustChangePw && !strings.Contains(r.URL.Path, "/api/v1/auth/") {
+			forbidden(w, "password change required")
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
 	})
 }

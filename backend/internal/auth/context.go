@@ -18,6 +18,9 @@ type Principal struct {
 	Username     string
 	IsSuperAdmin bool
 	Permissions  map[string]bool
+	// MustChangePw is set when the account is flagged to change its password
+	// before it may use the rest of the API (enforced in RequireAuth).
+	MustChangePw bool
 }
 
 // Has reports whether the principal holds a permission. Super admins and holders

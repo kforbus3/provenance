@@ -81,6 +81,9 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]models.AuditEve
 	if f.Limit <= 0 || f.Limit > 1000 {
 		f.Limit = 100
 	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT seq, id, actor_id, COALESCE(actor_name,''), action, target_kind, target_id,
 		       COALESCE(host(ip),''), detail, prev_hash, hash, created_at
