@@ -20,9 +20,11 @@ import (
 
 const (
 	defaultRunTimeout = 30 * time.Minute
-	// Principal + cert lifetime for a run. The cert only needs to outlive the
-	// run; the timeout bounds that.
-	runCertTTL = 2 * time.Hour
+	// Principal + cert lifetime for a run. The cert only needs to outlive the run
+	// (bounded by defaultRunTimeout), so keep the TTL tight — the run credential is
+	// written to the out-of-process runner and is revoked on completion, but a
+	// short TTL bounds the window if revocation hasn't yet reached a host.
+	runCertTTL = 45 * time.Minute
 )
 
 // liveRun holds the in-memory, incrementally-growing output of a run in flight
@@ -140,6 +142,16 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 		fail(fmt.Sprintf("could not issue run credential: %v", err))
 		return
 	}
+	// Revoke the run credential once the run finishes, so a key exfiltrated from
+	// the runner stops working promptly (the KRL converges to hosts via the
+	// periodic reconcile). Host scoping already bounds it to this run's targets.
+	defer func() {
+		rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer rcancel()
+		if err := s.store.RevokeCertificate(rctx, mat.Serial, "playbook_run_complete"); err != nil {
+			s.log.Warn("revoke run credential", "err", err, "serial", mat.Serial)
+		}
+	}()
 
 	rhosts := make([]runHost, 0, len(hosts))
 	for _, h := range hosts {

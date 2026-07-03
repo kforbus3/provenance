@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/fleet-terminal/backend/internal/app"
@@ -37,6 +38,22 @@ func NewHub() *Hub { return &Hub{clients: make(map[*client]struct{})} }
 
 // Broadcast sends an event to every connected client (best-effort, non-blocking).
 func (h *Hub) Broadcast(eventType string, data any) {
+	h.fanout(eventType, data, nil)
+}
+
+// BroadcastSession sends a session-activity event only to clients that may see
+// it: the session's own user, or a client holding Session.Replay (which can list
+// all sessions anyway). Everyone else is skipped, so one user's activity does not
+// leak to every connected dashboard.
+func (h *Hub) BroadcastSession(eventType string, userID uuid.UUID, data any) {
+	h.fanout(eventType, data, func(c *client) bool {
+		return c.allSessions || c.userID == userID
+	})
+}
+
+// fanout marshals once and delivers to every client for which allow (if non-nil)
+// returns true.
+func (h *Hub) fanout(eventType string, data any, allow func(*client) bool) {
 	payload, err := json.Marshal(Event{Type: eventType, Data: data})
 	if err != nil {
 		return
@@ -44,6 +61,9 @@ func (h *Hub) Broadcast(eventType string, data any) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for c := range h.clients {
+		if allow != nil && !allow(c) {
+			continue
+		}
 		select {
 		case c.send <- payload:
 		default:
@@ -70,6 +90,11 @@ func (h *Hub) remove(c *client) {
 type client struct {
 	conn *websocket.Conn
 	send chan []byte
+	// userID and allSessions decide which session-activity events this client may
+	// receive (see BroadcastSession). allSessions is true for Session.Replay
+	// holders (and super admins / Admin.All, which Has covers).
+	userID      uuid.UUID
+	allSessions bool
 }
 
 // Mount attaches the events WebSocket endpoint. Clients authenticate with a
@@ -77,7 +102,8 @@ type client struct {
 func Mount(r chi.Router, d *app.Deps, hub *Hub) {
 	r.Get("/events/ws", func(w http.ResponseWriter, req *http.Request) {
 		token := req.URL.Query().Get("token")
-		if _, err := d.Auth.AuthenticateToken(req.Context(), token); err != nil {
+		p, err := d.Auth.AuthenticateToken(req.Context(), token)
+		if err != nil || p == nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -85,7 +111,11 @@ func Mount(r chi.Router, d *app.Deps, hub *Hub) {
 		if err != nil {
 			return
 		}
-		c := &client{conn: conn, send: make(chan []byte, 32)}
+		c := &client{
+			conn: conn, send: make(chan []byte, 32),
+			userID:      p.UserID,
+			allSessions: p.Has("Session.Replay"),
+		}
 		hub.add(c)
 		go c.writePump()
 		c.readPump(hub)

@@ -42,10 +42,16 @@ type Deps struct {
 	DistributeKRL func(ctx context.Context) (int, error)
 }
 
-// Broadcaster pushes a typed real-time event to all connected clients. The
-// concrete implementation is internal/ws.Hub.
+// Broadcaster pushes a typed real-time event to connected clients. The concrete
+// implementation is internal/ws.Hub.
 type Broadcaster interface {
+	// Broadcast fans an event out to every connected client (e.g. host status).
 	Broadcast(eventType string, data any)
+	// BroadcastSession fans a session-activity event out only to clients that may
+	// see it: the session's own user, plus clients holding Session.Replay (who can
+	// already list all sessions). This keeps one user's activity from leaking to
+	// every other authenticated dashboard.
+	BroadcastSession(eventType string, userID uuid.UUID, data any)
 }
 
 // CAIssuer issues and manages ephemeral SSH user certificates. The concrete

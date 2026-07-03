@@ -197,7 +197,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	// Push a live event so dashboards show who is connected to which host in
 	// real time (matched by session.end below).
 	if h.d.Events != nil {
-		h.d.Events.Broadcast("session.start", map[string]any{
+		h.d.Events.BroadcastSession("session.start", p.UserID, map[string]any{
 			"sshSessionId": sshSessionID, "username": p.Username,
 			"hostId": host.ID, "hostname": host.Hostname, "startedAt": startUnix,
 		})
@@ -301,7 +301,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 		Detail: map[string]any{"bytesIn": bytesIn, "bytesOut": bytesOut, "sshSessionId": sshSessionID},
 	})
 	if h.d.Events != nil {
-		h.d.Events.Broadcast("session.end", map[string]any{
+		h.d.Events.BroadcastSession("session.end", p.UserID, map[string]any{
 			"sshSessionId": sshSessionID, "username": p.Username,
 			"hostId": host.ID, "hostname": host.Hostname,
 		})
