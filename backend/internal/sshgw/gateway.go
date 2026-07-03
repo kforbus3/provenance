@@ -140,6 +140,22 @@ func LoginTier(sudo bool, sshUser, username string) (loginUser string, principal
 	return sshUser + "-login", []string{"fleet-login", username}
 }
 
+// DialSystemForHost dials a host with a short-lived system credential carrying
+// that host's principal set (the same one background workers use, host-scoped when
+// locked down). Enrollment uses it to verify the certificate-login path end to end
+// against the host's actual accepted principals, rather than the session-level
+// credential, which does not carry the host-scoped principal a locked host requires.
+func (g *Gateway) DialSystemForHost(ctx context.Context, hostID uuid.UUID, host string, port int, user string) (*Conn, error) {
+	if g.issuer == nil {
+		return nil, fmt.Errorf("gateway issuer unavailable")
+	}
+	signer, err := g.issuer.SystemSigner(ctx, g.issuer.SystemHostPrincipals(hostID), 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	return g.DialWithSigner(ctx, signer, host, port, user)
+}
+
 // HostCredentialSerial returns the serial of the per-host certificate bound to a
 // session+host, for audit/verification.
 func (g *Gateway) HostCredentialSerial(sessionID, hostID uuid.UUID) (uint64, bool) {

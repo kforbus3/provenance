@@ -407,7 +407,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 
 	// 11) Validate end to end: connect through the jump host using a per-user
 	//     certificate and run a command, proving cert auth + the tunnel path.
-	if id, verr := s.validateCertLogin(ctx, sessionID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {
+	if id, verr := s.validateCertLogin(ctx, host.ID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {
 		step("verify_certificate_login", "ok", "cert login via jump host: "+oneLine(id))
 	} else {
 		// Non-fatal in the local userspace-WireGuard fabric where the overlay
@@ -463,14 +463,17 @@ func parseAfter(out, marker string) string {
 	return ""
 }
 
-// validateCertLogin connects to the host through the jump host using the
-// session's per-user certificate and runs `id`, proving the full path works.
-func (s *Service) validateCertLogin(ctx context.Context, sessionID uuid.UUID, wgIP, mgmtAddr string, port int, user string) (string, error) {
+// validateCertLogin connects to the host through the jump host using a system
+// certificate carrying the host's accepted principals (host-scoped when locked
+// down) and runs `id`, proving CA trust, the principal mapping, and the tunnel all
+// work. It uses a system credential rather than the session-level one because the
+// latter does not carry the host-scoped principal a locked-down host requires.
+func (s *Service) validateCertLogin(ctx context.Context, hostID uuid.UUID, wgIP, mgmtAddr string, port int, user string) (string, error) {
 	for _, addr := range []string{wgIP, mgmtAddr} {
 		if addr == "" {
 			continue
 		}
-		conn, err := s.gw.Dial(ctx, sessionID.String(), addr, port, user)
+		conn, err := s.gw.DialSystemForHost(ctx, hostID, addr, port, user)
 		if err != nil {
 			continue
 		}
