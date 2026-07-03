@@ -97,7 +97,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	// unwinds the SSH session and gateway connection via the read/write pumps.
 	// There is no race window where a revoke could miss this connection.
 	if h.d.Live != nil {
-		dereg := h.d.Live.Register(p.SessionID, func() {
+		dereg := h.d.Live.Register(p.SessionID, host.ID, func() {
 			_ = ws.WriteMessage(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: "session terminated by administrator"}))
 			_ = ws.Close()
 		})

@@ -82,7 +82,7 @@ func (h *handler) connect(w http.ResponseWriter, r *http.Request) (client *pkgsf
 	}
 	var dereg func()
 	if h.d.Live != nil {
-		dereg = h.d.Live.Register(p.SessionID, func() { conn.Close() })
+		dereg = h.d.Live.Register(p.SessionID, host.ID, func() { conn.Close() })
 	}
 	cleanup = func() {
 		if dereg != nil {

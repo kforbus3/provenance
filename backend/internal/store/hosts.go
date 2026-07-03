@@ -210,6 +210,8 @@ func (s *Store) ListAccessibleHosts(ctx context.Context, userID uuid.UUID, isSup
 			UNION
 			SELECT hg.host_id FROM temporary_permissions tp JOIN host_groups hg ON hg.group_id=tp.group_id
 			  WHERE tp.user_id=$1 AND tp.revoked_at IS NULL AND tp.expires_at>now()
+		) AND id NOT IN (
+			SELECT host_id FROM host_access_denials WHERE user_id=$1
 		) ORDER BY hostname`, userID)
 	if err != nil {
 		return nil, err

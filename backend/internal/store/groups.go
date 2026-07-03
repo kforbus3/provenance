@@ -229,6 +229,75 @@ func (s *Store) UserCanAccessHost(ctx context.Context, userID, hostID uuid.UUID)
 			JOIN host_groups hg ON hg.group_id = tp.group_id
 			WHERE tp.user_id = $1 AND hg.host_id = $2
 			  AND tp.revoked_at IS NULL AND tp.expires_at > now()
+		)
+		-- an explicit per-user denial overrides every source above
+		AND NOT EXISTS (
+			SELECT 1 FROM host_access_denials WHERE user_id = $1 AND host_id = $2
 		)`, userID, hostID).Scan(&ok)
 	return ok, err
+}
+
+// DenyHostAccess records a per-user denial for a host, overriding all access
+// sources. Idempotent.
+func (s *Store) DenyHostAccess(ctx context.Context, userID, hostID uuid.UUID, by *uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO host_access_denials (user_id, host_id, created_by) VALUES ($1,$2,$3)
+		 ON CONFLICT (user_id, host_id) DO NOTHING`, userID, hostID, by)
+	return err
+}
+
+// AllowHostAccess removes a per-user denial, restoring whatever access the user
+// would otherwise have.
+func (s *Store) AllowHostAccess(ctx context.Context, userID, hostID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM host_access_denials WHERE user_id=$1 AND host_id=$2`, userID, hostID)
+	return err
+}
+
+// UserHostAccess is one host a user can reach, with how (the source) and whether
+// an admin has explicitly denied it. Used by the Users-page access editor.
+type UserHostAccess struct {
+	models.Host
+	ViaDirect bool `json:"viaDirect"`
+	ViaGroup  bool `json:"viaGroup"`
+	ViaTemp   bool `json:"viaTemp"`
+	Denied    bool `json:"denied"`
+}
+
+// ListUserHostAccess returns every host the user has access to through any source
+// (ignoring denials for the listing), each annotated with its source(s) and
+// whether it is currently denied, so an admin can review and toggle per host.
+func (s *Store) ListUserHostAccess(ctx context.Context, userID uuid.UUID) ([]UserHostAccess, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT h.id, h.hostname, COALESCE(h.description,''), COALESCE(h.environment,''),
+		       COALESCE(h.owner,''), COALESCE(h.address,''),
+		       EXISTS (SELECT 1 FROM host_users hu WHERE hu.user_id=$1 AND hu.host_id=h.id) AS via_direct,
+		       EXISTS (SELECT 1 FROM user_groups ug JOIN host_groups hg ON hg.group_id=ug.group_id
+		               WHERE ug.user_id=$1 AND hg.host_id=h.id) AS via_group,
+		       EXISTS (SELECT 1 FROM temporary_permissions tp LEFT JOIN host_groups hg ON hg.group_id=tp.group_id
+		               WHERE tp.user_id=$1 AND (tp.host_id=h.id OR hg.host_id=h.id)
+		                 AND tp.revoked_at IS NULL AND tp.expires_at>now()) AS via_temp,
+		       EXISTS (SELECT 1 FROM host_access_denials d WHERE d.user_id=$1 AND d.host_id=h.id) AS denied
+		FROM hosts h
+		WHERE EXISTS (SELECT 1 FROM host_users hu WHERE hu.user_id=$1 AND hu.host_id=h.id)
+		   OR EXISTS (SELECT 1 FROM user_groups ug JOIN host_groups hg ON hg.group_id=ug.group_id
+		              WHERE ug.user_id=$1 AND hg.host_id=h.id)
+		   OR EXISTS (SELECT 1 FROM temporary_permissions tp LEFT JOIN host_groups hg ON hg.group_id=tp.group_id
+		              WHERE tp.user_id=$1 AND (tp.host_id=h.id OR hg.host_id=h.id)
+		                AND tp.revoked_at IS NULL AND tp.expires_at>now())
+		ORDER BY h.hostname`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserHostAccess{}
+	for rows.Next() {
+		var a UserHostAccess
+		if err := rows.Scan(&a.ID, &a.Hostname, &a.Description, &a.Environment, &a.Owner, &a.Address,
+			&a.ViaDirect, &a.ViaGroup, &a.ViaTemp, &a.Denied); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

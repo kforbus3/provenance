@@ -7,6 +7,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/google/uuid"
+
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/livesessions"
@@ -60,4 +62,7 @@ type Dialer interface {
 	// DialHost establishes an SSH client connection to host:port via the jump
 	// host using the session's ephemeral credentials referenced by handle.
 	DialHost(handle, host string, port int, user string) (any, error)
+	// HostCredentialSerial returns the serial of the per-host certificate bound
+	// to a (session, host) pair, so it can be revoked when access is removed.
+	HostCredentialSerial(sessionID, hostID uuid.UUID) (uint64, bool)
 }

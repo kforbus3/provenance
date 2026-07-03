@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -380,4 +381,90 @@ func (h *handler) removeUserGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "user.group_remove", "user", userID.String(), map[string]any{"groupId": groupID.String()})
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// hostAccess lists every host a user can reach, with the source of access and
+// whether it is currently denied, for the Users-page access editor.
+func (h *handler) hostAccess(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	rows, err := h.d.Store.ListUserHostAccess(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list host access")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": rows, "count": len(rows)})
+}
+
+// revokeHostAccess removes a user's access to a single host and cuts it off
+// immediately: it records a per-user denial (overriding group/direct/temp
+// access), revokes the per-host certificates on the user's live sessions, pushes
+// the updated KRL to hosts, and force-closes any live connection to that host.
+func (h *handler) revokeHostAccess(w http.ResponseWriter, r *http.Request) {
+	userID, err1 := uuid.Parse(chi.URLParam(r, "id"))
+	hostID, err2 := uuid.Parse(chi.URLParam(r, "hostId"))
+	if err1 != nil || err2 != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	actor := auth.MustPrincipal(r)
+	var by *uuid.UUID
+	if actor != nil {
+		by = &actor.UserID
+	}
+	if err := h.d.Store.DenyHostAccess(r.Context(), userID, hostID, by); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke access")
+		return
+	}
+	h.cutHostAccessNow(r.Context(), userID, hostID)
+	h.audit(r, "user.host_access_revoke", "user", userID.String(), map[string]any{"hostId": hostID.String()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// restoreHostAccess removes the denial, restoring whatever access the user would
+// otherwise have via group/direct/temporary grants.
+func (h *handler) restoreHostAccess(w http.ResponseWriter, r *http.Request) {
+	userID, err1 := uuid.Parse(chi.URLParam(r, "id"))
+	hostID, err2 := uuid.Parse(chi.URLParam(r, "hostId"))
+	if err1 != nil || err2 != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := h.d.Store.AllowHostAccess(r.Context(), userID, hostID); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not restore access")
+		return
+	}
+	h.audit(r, "user.host_access_restore", "user", userID.String(), map[string]any{"hostId": hostID.String()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+}
+
+// cutHostAccessNow makes an access revocation effective immediately: for each of
+// the user's live sessions it revokes the per-host certificate and force-closes
+// any connection to that host; if anything was revoked it pushes the KRL so hosts
+// reject the cert. Certs are not host-scoped, so revocation + KRL is what stops a
+// still-valid cert from being reused elsewhere.
+func (h *handler) cutHostAccessNow(ctx context.Context, userID, hostID uuid.UUID) {
+	sessions, err := h.d.Store.ListUserSessions(ctx, userID)
+	if err != nil {
+		return
+	}
+	revoked := false
+	for _, sess := range sessions {
+		if h.d.Gateway != nil {
+			if serial, ok := h.d.Gateway.HostCredentialSerial(sess.ID, hostID); ok {
+				if err := h.d.Store.RevokeCertificate(ctx, serial, "host access revoked"); err == nil {
+					revoked = true
+				}
+			}
+		}
+		if h.d.Live != nil {
+			h.d.Live.CloseSessionHost(sess.ID, hostID)
+		}
+	}
+	if revoked && h.d.DistributeKRL != nil {
+		_, _ = h.d.DistributeKRL(ctx)
+	}
 }
