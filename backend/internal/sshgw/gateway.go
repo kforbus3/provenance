@@ -15,6 +15,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/identity"
+	princ "github.com/fleet-terminal/backend/internal/principals"
 )
 
 // Gateway establishes SSH connections through the jump host.
@@ -131,13 +132,15 @@ func (g *Gateway) DialForHost(ctx context.Context, sessionID, userID, hostID uui
 // accounts per host: the privileged shared account (sshUser, NOPASSWD sudo,
 // principal "fleet") and a login-only account (sshUser+"-login", no sudo,
 // principal "fleet-login"). sudo callers get the former; everyone else the
-// latter. The username is added as an informational principal (it matches no
-// AuthorizedPrincipalsFile entry, so it grants no access on its own).
+// latter. The username is added as a namespaced, informational principal
+// (principals.User → "user:<name>"); it matches no AuthorizedPrincipalsFile entry
+// and cannot collide with a "fleet"/"fleet-h-<id>" principal, so it grants no
+// access on its own even if the username were chosen adversarially.
 func LoginTier(sudo bool, sshUser, username string) (loginUser string, principals []string) {
 	if sudo {
-		return sshUser, nil // nil -> issuer default principals {"fleet", username}
+		return sshUser, nil // nil -> issuer default principals {"fleet", "user:<name>"}
 	}
-	return sshUser + "-login", []string{"fleet-login", username}
+	return sshUser + "-login", []string{princ.GlobalLogin, princ.User(username)}
 }
 
 // DialSystemForHost dials a host with a short-lived system credential carrying

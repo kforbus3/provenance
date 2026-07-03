@@ -75,8 +75,9 @@ func (h *handler) setRolePermissions(w http.ResponseWriter, r *http.Request) {
 	if rq.Permissions == nil {
 		rq.Permissions = []string{}
 	}
-	if containsPerm(rq.Permissions, permAdminAll) && !actorSuper(r) {
-		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may grant the Admin.All permission")
+	// A non-super-admin may only put permissions into a role that they themselves
+	// hold (this also covers Admin.All, which Principal.Has requires explicitly).
+	if h.guardGrantable(w, r, rq.Permissions) {
 		return
 	}
 	if err := h.d.Store.SetRolePermissions(r.Context(), id, rq.Permissions); err != nil {

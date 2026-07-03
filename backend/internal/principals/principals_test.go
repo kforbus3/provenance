@@ -26,3 +26,15 @@ func TestHostScopedNamesAreStableAndDistinct(t *testing.T) {
 		t.Fatal("host-scoped principal collides with a fleet-wide principal")
 	}
 }
+
+// The namespaced username principal must never be able to equal a fleet or
+// host-scoped principal, even if the username is chosen adversarially.
+func TestUserPrincipalCannotCollide(t *testing.T) {
+	h := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	adversarial := []string{"fleet", GlobalLogin, Host(h), HostLogin(h), "fleet-h-" + h.String()}
+	for _, name := range adversarial {
+		if User(name) == Global || User(name) == GlobalLogin || User(name) == Host(h) || User(name) == HostLogin(h) {
+			t.Fatalf("User(%q) = %q collides with a fleet/host principal", name, User(name))
+		}
+	}
+}

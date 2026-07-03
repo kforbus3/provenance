@@ -86,6 +86,9 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	// Bound a single inbound frame so a client can't force an unbounded allocation.
+	// 1 MiB comfortably covers keystrokes, resize control frames, and large pastes.
+	conn.SetReadLimit(1 << 20)
 
 	h.run(ctx, conn, principal, host)
 }

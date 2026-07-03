@@ -22,7 +22,7 @@ type ollamaClient struct {
 func newOllama(url string) *ollamaClient {
 	return &ollamaClient{
 		url:  strings.TrimRight(url, "/"),
-		http: &http.Client{Timeout: 5 * time.Minute},
+		http: ssrf.SafeClient(5 * time.Minute),
 	}
 }
 

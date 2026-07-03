@@ -66,11 +66,6 @@ func Mount(r chi.Router, d *app.Deps) {
 
 type handler struct{ d *app.Deps }
 
-// permAdminAll is the wildcard permission that grants everything; only a super
-// admin may grant it or create/modify a super-admin, so an Administrator can't
-// escalate itself beyond its own privilege.
-const permAdminAll = "Admin.All"
-
 // actorSuper reports whether the caller is a super administrator.
 func actorSuper(r *http.Request) bool {
 	p := auth.MustPrincipal(r)
@@ -97,9 +92,41 @@ func validEmail(s string) bool {
 	return at > 0 && at < len(s)-1
 }
 
-func containsPerm(perms []string, key string) bool {
-	for _, p := range perms {
-		if p == key {
+// validUsername rejects control characters, whitespace, and shell/quote
+// metacharacters in a username. The username is namespaced before it becomes a
+// certificate principal (principals.User), so this is defense-in-depth: it keeps
+// usernames out of audit/log injection and off any future path that might treat
+// them literally. Kept permissive enough for real login names (letters, digits,
+// and .  _  -  @  +).
+func validUsername(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == '@' || r == '+':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// guardGrantable blocks a non-super-admin from granting a permission they do not
+// themselves hold — otherwise a holder of Role.Edit could escalate by writing any
+// permission into a role (and assigning it to themselves). Super admins pass, and
+// Admin.All is covered because Principal.Has requires it explicitly. Returns true
+// — and writes 403 — when the request must not proceed.
+func (h *handler) guardGrantable(w http.ResponseWriter, r *http.Request, perms []string) bool {
+	p := auth.MustPrincipal(r)
+	if p == nil {
+		httpx.WriteError(w, http.StatusForbidden, "authentication required")
+		return true
+	}
+	for _, perm := range perms {
+		if !p.Has(perm) {
+			httpx.WriteError(w, http.StatusForbidden, "you cannot grant a permission you do not hold: "+perm)
 			return true
 		}
 	}

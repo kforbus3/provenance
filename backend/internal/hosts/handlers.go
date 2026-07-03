@@ -149,6 +149,30 @@ func validHostname(s string) bool {
 	return true
 }
 
+// validSSHUser restricts the login account to a conservative POSIX username
+// pattern. It becomes the shell variable LOGIN=... in the root-run enrollment
+// script and the sudo/auth-principals account name, so it must not carry shell
+// metacharacters. Empty is allowed — enrollment defaults it to "fleet".
+func validSSHUser(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) > 32 {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r == '_':
+			// always allowed
+		case i > 0 && (r >= '0' && r <= '9' || r == '-'):
+			// allowed after the first character
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	var rq hostReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.Hostname == "" {
@@ -157,6 +181,10 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validHostname(rq.Hostname) {
 		httpx.WriteError(w, http.StatusBadRequest, "hostname contains invalid characters")
+		return
+	}
+	if !validSSHUser(rq.SSHUser) {
+		httpx.WriteError(w, http.StatusBadRequest, "sshUser must be a valid login name ([a-z_][a-z0-9_-]*)")
 		return
 	}
 	host, err := h.d.Store.CreateHost(r.Context(), rq.toInput())
@@ -181,6 +209,10 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validHostname(rq.Hostname) {
 		httpx.WriteError(w, http.StatusBadRequest, "hostname contains invalid characters")
+		return
+	}
+	if !validSSHUser(rq.SSHUser) {
+		httpx.WriteError(w, http.StatusBadRequest, "sshUser must be a valid login name ([a-z_][a-z0-9_-]*)")
 		return
 	}
 	host, err := h.d.Store.UpdateHost(r.Context(), id, rq.toInput())

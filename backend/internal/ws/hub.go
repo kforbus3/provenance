@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -96,8 +97,15 @@ func (c *client) readPump(h *Hub) {
 		h.remove(c)
 		_ = c.conn.Close()
 	}()
+	// This is a push-only feed; clients send nothing but pongs. Cap inbound frames
+	// so a client can't force a large allocation, and require periodic pongs so an
+	// idle/half-open connection is reaped instead of lingering.
+	c.conn.SetReadLimit(1024)
+	_ = c.conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	})
 	for {
-		// We don't expect inbound messages; reading detects disconnects.
 		if _, _, err := c.conn.ReadMessage(); err != nil {
 			return
 		}
@@ -105,9 +113,23 @@ func (c *client) readPump(h *Hub) {
 }
 
 func (c *client) writePump() {
-	for msg := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			return
+	ping := time.NewTicker(54 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-ping.C:
+			// Keeps the read deadline alive via the client's pong, and detects a
+			// dead peer promptly.
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }

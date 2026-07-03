@@ -158,7 +158,7 @@ func (s *Service) sendWebhook(ctx context.Context, cfg *Config, ev Event) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := ssrf.SafeClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

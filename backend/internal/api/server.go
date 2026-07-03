@@ -45,6 +45,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/notify"
+	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/scan"
@@ -124,7 +125,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// zeroize the key and revoke its certificates.
 	authSvc.SetSessionHooks(
 		func(ctx context.Context, userID, sessionID uuid.UUID, username string) {
-			principals := dedupe([]string{"fleet", username})
+			principals := dedupe([]string{princ.Global, princ.User(username)})
 			if _, err := issuer.Issue(ctx, sessionID, userID, username, principals); err != nil {
 				log.Warn("issue ephemeral identity", "err", err)
 			}
@@ -144,7 +145,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		if _, ok := vault.Get(sessionID); ok {
 			return
 		}
-		if _, err := issuer.Issue(ctx, sessionID, userID, username, dedupe([]string{"fleet", username})); err != nil {
+		if _, err := issuer.Issue(ctx, sessionID, userID, username, dedupe([]string{princ.Global, princ.User(username)})); err != nil {
 			log.Warn("re-issue ephemeral identity", "err", err)
 		}
 	})

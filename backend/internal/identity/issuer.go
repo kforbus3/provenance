@@ -42,7 +42,7 @@ func (i *Issuer) Vault() *Vault { return i.vault }
 // Vault. Per-host connection certificates are minted by IssueForHost.
 func (i *Issuer) Issue(ctx context.Context, sessionID, userID uuid.UUID, username string, principals []string) (*Credential, error) {
 	if len(principals) == 0 {
-		principals = []string{username}
+		principals = []string{princ.User(username)}
 	}
 	keyID := fmt.Sprintf("%s/%s", username, sessionID.String()[:8])
 	return i.issue(ctx, sessionID, sessionScope, userID, username, principals, keyID, "")
@@ -55,7 +55,7 @@ func (i *Issuer) Issue(ctx context.Context, sessionID, userID uuid.UUID, usernam
 // certificate row for audit.
 func (i *Issuer) IssueForHost(ctx context.Context, sessionID, userID, hostID uuid.UUID, username, hostname string, principals []string) (*Credential, error) {
 	if len(principals) == 0 {
-		principals = []string{princ.Global, username}
+		principals = []string{princ.Global, princ.User(username)}
 	}
 	principals = i.scopeForHost(principals, hostID)
 	label := hostname

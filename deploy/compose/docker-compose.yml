@@ -114,7 +114,12 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      # Bound to loopback: the frontend nginx reaches the backend over the internal
+      # `fleet` network (proxy_pass http://backend:8080), so the published port is
+      # only for local debugging. This keeps the unauthenticated /metrics, /health,
+      # and /ready endpoints off any public interface. Front the API through nginx
+      # (set FLEET_PUBLIC_URL to your domain) rather than exposing 8080 directly.
+      - "127.0.0.1:8080:8080"
     networks: [fleet]
 
   frontend:

@@ -12,9 +12,29 @@ package ssrf
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// SafeClient returns an http.Client that re-validates every redirect target with
+// ValidateURL, so an allowed initial URL cannot 30x-redirect to a disallowed
+// address (metadata/loopback/link-local). Redirect depth is capped. Callers must
+// still call ValidateURL on the initial URL before the request. (Note: this does
+// not close a DNS-rebinding TOCTOU between validation and dial — that would need a
+// validating DialContext — but it removes the redirect-follow bypass.)
+func SafeClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			return ValidateURL(req.URL.String())
+		},
+	}
+}
 
 // ValidateURL checks scheme (http/https) and that the host does not resolve to a
 // disallowed address.

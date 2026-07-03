@@ -348,6 +348,9 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
+	// Invalidate every other session for this user (a changed password should not
+	// leave a previously-stolen token valid), keeping the caller's current session.
+	h.svc.DestroyUserSessionsExcept(r.Context(), p.UserID, p.SessionID)
 	_, _ = h.svc.store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: "auth.password_change",
 	})

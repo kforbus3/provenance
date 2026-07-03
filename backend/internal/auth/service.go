@@ -245,12 +245,26 @@ func (s *Service) endSession(ctx context.Context, sessionID uuid.UUID) error {
 // session's private key and revoking its certificates. Call before disabling or
 // deleting an account so the user's credentials are immediately useless.
 func (s *Service) DestroyUserSessions(ctx context.Context, userID uuid.UUID) {
+	s.destroyUserSessions(ctx, userID, uuid.Nil)
+}
+
+// DestroyUserSessionsExcept ends all of a user's sessions except one (typically
+// the caller's own), used on a self-service password change so the user stays
+// logged in on the current device while every other session is invalidated.
+func (s *Service) DestroyUserSessionsExcept(ctx context.Context, userID, keep uuid.UUID) {
+	s.destroyUserSessions(ctx, userID, keep)
+}
+
+func (s *Service) destroyUserSessions(ctx context.Context, userID, keep uuid.UUID) {
 	sessions, err := s.store.ListUserSessions(ctx, userID)
 	if err != nil {
 		s.log.Warn("destroy user sessions: list", "err", err)
 		return
 	}
 	for _, sess := range sessions {
+		if keep != uuid.Nil && sess.ID == keep {
+			continue
+		}
 		_ = s.endSession(ctx, sess.ID)
 	}
 }

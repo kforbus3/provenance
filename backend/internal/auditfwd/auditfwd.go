@@ -53,7 +53,7 @@ func New(st *store.Store, log *slog.Logger) *Forwarder {
 	}
 	return &Forwarder{
 		store: st, log: log, hostname: host,
-		client:   &http.Client{Timeout: 5 * time.Second},
+		client:   ssrf.SafeClient(5 * time.Second),
 		cacheTTL: 30 * time.Second,
 	}
 }

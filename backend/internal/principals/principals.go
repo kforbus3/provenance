@@ -33,3 +33,10 @@ func Host(id uuid.UUID) string { return "fleet-h-" + id.String() }
 
 // HostLogin returns the login-only principal scoped to a single host.
 func HostLogin(id uuid.UUID) string { return "fleet-login-h-" + id.String() }
+
+// User returns the informational, namespaced principal for a Fleet username. It
+// is embedded in a certificate for provenance only and matches no host's
+// AuthorizedPrincipalsFile. The "user:" prefix ensures a username can never
+// collide with a "fleet"/"fleet-h-<id>" principal and thus can never be abused to
+// gain access — even if the username were chosen adversarially.
+func User(name string) string { return "user:" + name }

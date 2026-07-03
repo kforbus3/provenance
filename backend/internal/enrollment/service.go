@@ -620,7 +620,7 @@ func (s *Service) caTrustScript(loginUser, caKeys string, hostID uuid.UUID) stri
 		loginLine = princ.GlobalLogin + `\n` + loginLine
 	}
 	return fmt.Sprintf(`set -e
-LOGIN=%s
+LOGIN='%s'
 NOSUDO="${LOGIN}-login"
 # Two shared accounts that per-user certificates map to (unique cert per user):
 #   $LOGIN  -> privileged, NOPASSWD sudo  (Host.Sudo / super admin)

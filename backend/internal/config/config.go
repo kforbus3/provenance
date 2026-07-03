@@ -5,7 +5,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -257,20 +259,45 @@ func (c *Config) validate() error {
 	} else {
 		// Development-only fallbacks so the local stack boots without configured
 		// secrets. Never reached in production/staging (secrets required above).
+		// Token/CSRF secrets are generated fresh per boot rather than using shared
+		// hardcoded constants, so a dev instance that is accidentally exposed is
+		// never protected by a publicly-known key (tokens simply reset on restart).
+		var ephemeral []string
 		if len(c.JWTSecret) == 0 {
-			c.JWTSecret = []byte("dev-insecure-jwt-secret-change-me-0000000000")
+			c.JWTSecret = randomSecret(32)
+			ephemeral = append(ephemeral, "FLEET_JWT_SECRET (ephemeral)")
 		}
 		if len(c.CSRFSecret) == 0 {
-			c.CSRFSecret = []byte("dev-insecure-csrf-secret-change")
+			c.CSRFSecret = randomSecret(32)
+			ephemeral = append(ephemeral, "FLEET_CSRF_SECRET (ephemeral)")
 		}
 		if len(c.CAKeyPassphrase) == 0 {
+			// The CA key is encrypted at rest with this, so it must stay stable
+			// across restarts — a random value would make a persisted dev CA
+			// undecryptable. This is the one remaining fixed dev default.
 			c.CAKeyPassphrase = []byte("dev-insecure-ca-passphrase-change")
+			ephemeral = append(ephemeral, "FLEET_CA_PASSPHRASE (fixed insecure default)")
+		}
+		if len(ephemeral) > 0 {
+			slog.Warn("running in DEVELOPMENT mode with insecure secrets — set FLEET_ENV=production and provide real secrets for any non-local deployment",
+				"secrets", strings.Join(ephemeral, ", "))
 		}
 	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("FLEET_DATABASE_URL is required")
 	}
 	return nil
+}
+
+// randomSecret returns n cryptographically-random bytes, used only for ephemeral
+// development secrets. crypto/rand failure is a catastrophic platform fault, so it
+// panics rather than silently returning a weak key.
+func randomSecret(n int) []byte {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("config: cannot generate development secret: " + err.Error())
+	}
+	return b
 }
 
 // IsProduction reports whether the app runs in production mode.
