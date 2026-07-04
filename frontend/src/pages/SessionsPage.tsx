@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
-  Alert, Box, Button, Chip, Drawer, IconButton, Paper, Snackbar, Stack, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, Divider,
-  CircularProgress,
+  Alert, Box, Button, Checkbox, Chip, Drawer, FormControlLabel, IconButton, MenuItem, Paper,
+  Snackbar, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField,
+  Tooltip, Typography, Divider, CircularProgress,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -119,6 +119,24 @@ export function SessionsPage() {
   const [snack, setSnack] = useState<string | null>(null);
   const canManage = useAuthStore((s) => s.has("System.Configure"));
 
+  // Client-side filters over the loaded sessions (search matches user/host/IP).
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [recordingsOnly, setRecordingsOnly] = useState(false);
+
+  const statuses = Array.from(new Set(sessions.map((s) => s.status))).sort();
+  const q = search.trim().toLowerCase();
+  const filtered = sessions.filter((s) => {
+    if (recordingsOnly && !s.hasRecording) return false;
+    if (statusFilter && s.status !== statusFilter) return false;
+    if (q && !(
+      s.username.toLowerCase().includes(q) ||
+      s.hostname.toLowerCase().includes(q) ||
+      (s.clientIp ?? "").toLowerCase().includes(q)
+    )) return false;
+    return true;
+  });
+
   const exportRec = async (s: SSHSession) => {
     try {
       await downloadRecording(s);
@@ -171,6 +189,31 @@ export function SessionsPage() {
         </Typography>
       )}
 
+      <Stack
+        direction={{ xs: "column", sm: "row" }} spacing={2}
+        alignItems={{ sm: "center" }} sx={{ mb: 2 }}
+      >
+        <TextField
+          size="small" label="Search user, host, or IP" value={search}
+          onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 260 }}
+        />
+        <TextField
+          select size="small" label="Status" value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}
+        >
+          <MenuItem value="">All statuses</MenuItem>
+          {statuses.map((st) => <MenuItem key={st} value={st}>{st}</MenuItem>)}
+        </TextField>
+        <FormControlLabel
+          control={<Checkbox checked={recordingsOnly} onChange={(e) => setRecordingsOnly(e.target.checked)} />}
+          label="With recordings only"
+        />
+        <Box sx={{ flexGrow: 1 }} />
+        <Typography variant="body2" color="text.secondary">
+          {filtered.length} of {sessions.length}
+        </Typography>
+      </Stack>
+
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -185,7 +228,7 @@ export function SessionsPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {sessions.map((s) => (
+            {filtered.map((s) => (
               <TableRow
                 key={s.id} hover
                 sx={{ cursor: s.hasRecording ? "pointer" : "default" }}
@@ -227,9 +270,11 @@ export function SessionsPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {!isLoading && sessions.length === 0 && (
+            {!isLoading && filtered.length === 0 && (
               <TableRow><TableCell colSpan={7}>
-                <Typography color="text.secondary">No recorded sessions.</Typography>
+                <Typography color="text.secondary">
+                  {sessions.length === 0 ? "No recorded sessions." : "No sessions match the filters."}
+                </Typography>
               </TableCell></TableRow>
             )}
           </TableBody>
