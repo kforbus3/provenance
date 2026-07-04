@@ -174,6 +174,9 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	if n, err := s.Store.FailStalePlaybookRuns(ctx); err == nil && n > 0 {
 		s.Log.Info("failed stale playbook runs on startup", "count", n)
 	}
+	if n, err := s.Store.FailStaleEnrollmentJobs(ctx); err == nil && n > 0 {
+		s.Log.Info("failed stale enrollment jobs on startup", "count", n)
+	}
 	go s.renewalLoop(ctx)
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)

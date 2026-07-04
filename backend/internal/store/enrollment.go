@@ -43,6 +43,19 @@ func (s *Store) FinishEnrollmentJob(ctx context.Context, jobID uuid.UUID, status
 	return err
 }
 
+// FailStaleEnrollmentJobs marks any still-"running" jobs as failed on startup: an
+// enrollment runs inside a request goroutine that does not survive a restart, so a
+// job left "running" was interrupted and would otherwise appear stuck forever.
+func (s *Store) FailStaleEnrollmentJobs(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE enrollment_jobs SET status='failed', error='interrupted (server restarted)', finished_at=now()
+		 WHERE status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // GetEnrollmentJob loads a job by id.
 func (s *Store) GetEnrollmentJob(ctx context.Context, id uuid.UUID) (*models.EnrollmentJob, error) {
 	var j models.EnrollmentJob
