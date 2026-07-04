@@ -1,27 +1,47 @@
 import { useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
-  Alert, Box, Chip, Collapse, IconButton, List, ListItem, ListItemText, Paper,
+  Alert, Box, Button, Chip, Collapse, IconButton, List, ListItem, ListItemText, Paper,
   Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography,
 } from "@mui/material";
+import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { listEnrollmentJobs, type EnrollmentJob } from "../api/enrollmentApi";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { clearEnrollmentJobs, listEnrollmentJobs, type EnrollmentJob } from "../api/enrollmentApi";
 
 // Host enrollment history: every enrollment run with its per-step results, so
 // you can review successes and diagnose failures. New hosts are enrolled from
 // the Hosts page (the Enroll action on each host).
 export function EnrollmentPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data: jobs = [], isLoading } = useQuery({
     queryKey: ["enrollment-jobs"], queryFn: () => listEnrollmentJobs(), refetchInterval: 5000,
+  });
+  const finishedCount = jobs.filter((j) => j.status !== "running").length;
+  const clearMut = useMutation({
+    mutationFn: clearEnrollmentJobs,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["enrollment-jobs"] }),
   });
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>Host Enrollment</Typography>
+      <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1 }}>
+        <Typography variant="h5" sx={{ flexGrow: 1 }}>Host Enrollment</Typography>
+        <Button
+          size="small" color="inherit" startIcon={<DeleteSweepIcon />}
+          disabled={finishedCount === 0 || clearMut.isPending}
+          onClick={() => {
+            if (window.confirm(`Clear ${finishedCount} finished enrollment job(s)? Running jobs are kept.`)) {
+              clearMut.mutate();
+            }
+          }}
+        >
+          {clearMut.isPending ? "Clearing…" : "Clear finished"}
+        </Button>
+      </Stack>
       <Alert severity="info" sx={{ mb: 2 }}>
         To enroll a host, go to <b
           style={{ cursor: "pointer", textDecoration: "underline" }}

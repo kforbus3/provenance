@@ -43,6 +43,17 @@ func (s *Store) FinishEnrollmentJob(ctx context.Context, jobID uuid.UUID, status
 	return err
 }
 
+// DeleteFinishedEnrollmentJobs removes every job that is no longer running
+// (succeeded/failed/rolled_back), clearing the history on demand while leaving any
+// in-progress job in place. Returns the number deleted.
+func (s *Store) DeleteFinishedEnrollmentJobs(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM enrollment_jobs WHERE status <> 'running'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // FailStaleEnrollmentJobs marks any still-"running" jobs as failed on startup: an
 // enrollment runs inside a request goroutine that does not survive a restart, so a
 // job left "running" was interrupted and would otherwise appear stuck forever.

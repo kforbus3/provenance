@@ -28,6 +28,7 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Get("/hosts/{id}/enroll/script", h.enrollScript)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts/{id}/enroll/finish", h.enrollFinish)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Get("/enrollment/jobs", h.listJobs)
+		pr.With(d.Auth.RequirePermission("Host.Enroll")).Delete("/enrollment/jobs", h.clearJobs)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Get("/enrollment/jobs/{id}", h.getJob)
 	})
 }
@@ -145,6 +146,15 @@ func (h *handler) listJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+func (h *handler) clearJobs(w http.ResponseWriter, r *http.Request) {
+	n, err := h.d.Store.DeleteFinishedEnrollmentJobs(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not clear jobs")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": n})
 }
 
 func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
