@@ -145,6 +145,13 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		if _, ok := vault.Get(sessionID); ok {
 			return
 		}
+		// The vault was cleared (a restart): this session's previously-issued
+		// certificates are now keyless — their private keys lived only in RAM and
+		// were never persisted — so revoke them before minting a fresh one, rather
+		// than leaving them as un-usable but "valid"-looking rows.
+		if n, err := s.Store.RevokeSessionCertificates(ctx, sessionID, "reissued (vault cleared on restart)"); err == nil && n > 0 {
+			log.Info("revoked keyless session certificates after restart", "session", sessionID, "count", n)
+		}
 		if _, err := issuer.Issue(ctx, sessionID, userID, username, dedupe([]string{princ.Global, princ.User(username)})); err != nil {
 			log.Warn("re-issue ephemeral identity", "err", err)
 		}
