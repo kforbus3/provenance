@@ -50,10 +50,12 @@ WHERE r.name = 'Administrator' AND p.key <> 'Admin.All'
 ON CONFLICT DO NOTHING;
 
 -- Operator -> connect, sessions, files, view, request approval.
+-- Deliberately NOT granted Session.Replay: replay is an oversight capability
+-- (Auditor/Admin) — an operator should not watch other users' recorded sessions.
 INSERT INTO role_permissions(role_id, permission_key)
 SELECT r.id, p.key FROM roles r CROSS JOIN permissions p
 WHERE r.name = 'Operator'
-  AND p.key IN ('Host.View','Host.Connect','Session.Start','Session.Replay','File.Transfer','Approval.Request')
+  AND p.key IN ('Host.View','Host.Connect','Session.Start','File.Transfer','Approval.Request')
 ON CONFLICT DO NOTHING;
 
 -- Auditor -> view audit, replay sessions, view hosts.
