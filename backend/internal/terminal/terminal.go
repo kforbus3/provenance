@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -81,6 +82,13 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The client IP for the audit record: realIP middleware has already resolved
+	// r.RemoteAddr to the true client (trusted-proxy aware), so strip the port.
+	clientIP := r.RemoteAddr
+	if ip, _, splitErr := net.SplitHostPort(clientIP); splitErr == nil {
+		clientIP = ip
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -90,11 +98,11 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	// 1 MiB comfortably covers keystrokes, resize control frames, and large pastes.
 	conn.SetReadLimit(1 << 20)
 
-	h.run(ctx, conn, principal, host)
+	h.run(ctx, conn, principal, host, clientIP)
 }
 
 // run drives a single terminal session lifecycle.
-func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal, host *models.Host) {
+func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal, host *models.Host, clientIP string) {
 	// Register the live connection up front (before the SSH dial) so it can be
 	// force-closed the instant the session is revoked — closing the WebSocket
 	// unwinds the SSH session and gateway connection via the read/write pumps.
@@ -175,6 +183,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	rec, _ := h.d.Store.CreateSSHSession(ctx, store.SSHSessionInput{
 		SessionID: &p.SessionID, UserID: &p.UserID, HostID: &host.ID,
 		Username: p.Username, Hostname: host.Hostname, CertSerial: certSerial,
+		ClientIP: clientIP,
 	})
 	var sshSessionID uuid.UUID
 	if rec != nil {
