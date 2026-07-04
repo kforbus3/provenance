@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Autocomplete, Box, Button, Card, CardActions, CardContent, Chip, InputAdornment,
-  Stack, TextField, Typography,
+  MenuItem, Stack, TextField, Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -22,6 +22,7 @@ export function TerminalsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["hosts"], queryFn: listHosts });
   const [q, setQ] = useState("");
   const [groups, setGroups] = useState<string[]>([]);
+  const [status, setStatus] = useState("");
 
   // Group filter options come from the hosts themselves (the groups they belong
   // to), so it works without a groups API call and only lists relevant groups.
@@ -37,6 +38,7 @@ export function TerminalsPage() {
       if (needle && ![h.hostname, h.description, h.environment, ...(h.tags ?? [])]
         .join(" ").toLowerCase().includes(needle)) return false;
       if (groups.length && !(h.groups ?? []).some((g) => groups.includes(g))) return false;
+      if (status && (h.status?.status ?? "unknown") !== status) return false;
       return true;
     });
     // Online first, then by hostname.
@@ -44,7 +46,7 @@ export function TerminalsPage() {
       const rank = (h: Host) => (h.status?.status === "online" ? 0 : h.status?.status === "unknown" ? 1 : 2);
       return rank(a) - rank(b) || a.hostname.localeCompare(b.hostname);
     });
-  }, [data, q, groups]);
+  }, [data, q, groups, status]);
 
   const openTerminal = (id: string) => window.open(`/terminals/${id}`, "_blank", "noopener");
   const openFiles = (id: string) => window.open(`/files/${id}`, "_blank", "noopener");
@@ -66,6 +68,15 @@ export function TerminalsPage() {
           sx={{ flexGrow: 1, maxWidth: 480 }}
           InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
         />
+        <TextField
+          select size="small" label="Status" value={status}
+          onChange={(e) => setStatus(e.target.value)} sx={{ minWidth: 150 }}
+        >
+          <MenuItem value="">All statuses</MenuItem>
+          <MenuItem value="online">Online</MenuItem>
+          <MenuItem value="offline">Offline</MenuItem>
+          <MenuItem value="unknown">Unknown</MenuItem>
+        </TextField>
         {groupOptions.length > 0 && (
           <Autocomplete
             multiple size="small" options={groupOptions} value={groups}
