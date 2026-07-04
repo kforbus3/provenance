@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack,
-  Switch, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip,
-  Typography,
+  Switch, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, TextField,
+  Tooltip, Typography,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,6 +38,7 @@ export function SettingsPage() {
   const [editKey, setEditKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState(0);
 
   const openEdit = (key: string, value: unknown) => {
     setEditKey(key);
@@ -68,58 +69,96 @@ export function SettingsPage() {
     <Box>
       <Typography variant="h5" sx={{ mb: 2 }}>System Settings</Typography>
 
-      <TimezoneCard />
-      {/* These cards seed their form state from the loaded settings on first
-          mount, so they must not render until the query resolves — otherwise they
-          initialize blank and never re-sync when the data arrives. */}
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v as number)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
+      >
+        <Tab label="General" />
+        <Tab label="Authentication" />
+        <Tab label="Integrations" />
+        <Tab label="Infrastructure" />
+        <Tab label="Maintenance" />
+      </Tabs>
+
+      {/* Several cards seed their form state from the loaded settings on first
+          mount, so the panels must not render until the query resolves — otherwise
+          they initialize blank and never re-sync when the data arrives. */}
       {isLoading ? (
         <Box sx={{ display: "flex", justifyContent: "center", my: 4 }}><CircularProgress /></Box>
       ) : (
         <>
-          <BrandingCard current={settings["branding"]} />
-          <AssistantCard current={settings["assistant"]} />
-          <ScanCard current={settings["scan_policy"]} />
-          <WGSettingsCard current={settings["wireguard"]} />
-          <RetentionCard current={settings["recordings"]} />
+          {tab === 0 && (
+            <>
+              <TimezoneCard />
+              <BrandingCard current={settings["branding"]} />
+              <RetentionCard current={settings["recordings"]} />
+            </>
+          )}
+          {tab === 1 && (
+            <>
+              <SSOCard />
+              <LDAPCard />
+            </>
+          )}
+          {tab === 2 && (
+            <>
+              <AssistantCard current={settings["assistant"]} />
+              <NotificationsCard />
+              <AuditForwardingCard />
+            </>
+          )}
+          {tab === 3 && (
+            <>
+              <WGSettingsCard current={settings["wireguard"]} />
+              <ScanCard current={settings["scan_policy"]} />
+            </>
+          )}
+          {tab === 4 && (
+            <>
+              <BackupCard />
+              <Typography variant="h6" sx={{ mt: 1 }}>Advanced — raw settings</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Direct view of the underlying settings store. Prefer the forms above; edit the raw
+                JSON only if you know what you are doing.
+              </Typography>
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Key</TableCell>
+                      <TableCell>Value</TableCell>
+                      <TableCell align="right">Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {entries.map(([key, value]) => (
+                      <TableRow key={key} hover>
+                        <TableCell sx={{ fontFamily: "monospace" }}>{key}</TableCell>
+                        <TableCell sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+                          {JSON.stringify(value)}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Tooltip title="Edit">
+                            <IconButton size="small" onClick={() => openEdit(key, value)}><EditIcon fontSize="small" /></IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {entries.length === 0 && (
+                      <TableRow><TableCell colSpan={3}>
+                        <Typography color="text.secondary">No settings configured.</Typography>
+                      </TableCell></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </>
+          )}
         </>
       )}
-      <NotificationsCard />
-      <SSOCard />
-      <LDAPCard />
-      <AuditForwardingCard />
-      <BackupCard />
-
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Key</TableCell>
-              <TableCell>Value</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {entries.map(([key, value]) => (
-              <TableRow key={key} hover>
-                <TableCell sx={{ fontFamily: "monospace" }}>{key}</TableCell>
-                <TableCell sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-                  {JSON.stringify(value)}
-                </TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Edit">
-                    <IconButton size="small" onClick={() => openEdit(key, value)}><EditIcon fontSize="small" /></IconButton>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-            {!isLoading && entries.length === 0 && (
-              <TableRow><TableCell colSpan={3}>
-                <Typography color="text.secondary">No settings configured.</Typography>
-              </TableCell></TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
 
       <Dialog open={editKey !== null} onClose={() => setEditKey(null)} fullWidth maxWidth="sm">
         <DialogTitle>{editKey ? `Edit · ${editKey}` : "Edit"}</DialogTitle>
