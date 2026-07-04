@@ -198,7 +198,7 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
           <Stack direction="row" spacing={2}>
             <TextField
               label="Address" value={form.address} onChange={set("address")} fullWidth
-              helperText="Management address used to reach the host during enrollment"
+              helperText="Management address used to reach the host. Leave blank to auto-show the monitored primary IP."
             />
             <TextField
               label="WireGuard Address" value={form.wgAddress} onChange={set("wgAddress")} fullWidth
@@ -327,7 +327,22 @@ export function HostsPage() {
     { field: "description", headerName: "Description", minWidth: 180, flex: 1 },
     { field: "environment", headerName: "Environment", minWidth: 130 },
     { field: "owner", headerName: "Owner", minWidth: 130 },
-    { field: "address", headerName: "Address", minWidth: 140 },
+    {
+      field: "address", headerName: "Address", minWidth: 160,
+      // Fall back to the monitor-collected primary IP when no management address
+      // is set, so a host enrolled by hostname still shows an IP. It refreshes on
+      // each monitoring sweep, so it tracks DHCP changes; a user-set address wins.
+      renderCell: (params) => {
+        const explicit = params.row.address as string | undefined;
+        if (explicit) return explicit;
+        const auto = params.row.metrics?.primaryIp as string | undefined;
+        return auto ? (
+          <Tooltip title="Auto-detected from monitoring — the host's current primary IP (tracks DHCP)">
+            <span style={{ opacity: 0.75 }}>{auto} <em style={{ fontSize: 11 }}>(auto)</em></span>
+          </Tooltip>
+        ) : "";
+      },
+    },
     { field: "wgAddress", headerName: "WG Address", minWidth: 140 },
     {
       field: "sshVersion", headerName: "SSH Version", minWidth: 130,
