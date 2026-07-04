@@ -1,6 +1,7 @@
+import { useState } from "react";
 import {
-  Alert, Box, Button, Chip, Paper, Stack, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, Tooltip, Typography, IconButton,
+  Alert, Box, Button, Chip, MenuItem, Paper, Stack, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, IconButton,
 } from "@mui/material";
 import BlockIcon from "@mui/icons-material/Block";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
@@ -10,6 +11,12 @@ import {
 } from "../api/certificates";
 import { useAuthStore } from "../store/auth";
 import { formatDateTime } from "../lib/datetime";
+
+// A certificate's key id encodes its owner and (for per-host certs) its target:
+// "<user>/<session>/<serial>" or "<user>/host:<hostname>/<serial>". These derive
+// the user/host for filtering without needing a names lookup.
+const certUser = (keyId: string): string => keyId.split("/")[0] ?? "";
+const certHost = (keyId: string): string => /(?:^|\/)host:([^/]+)/.exec(keyId)?.[1] ?? "";
 
 // Certificate lifecycle: the internal SSH CA(s) and the ephemeral per-session
 // certificates it has issued, with rotate (CA) and revoke (cert) actions.
@@ -30,6 +37,15 @@ export function CertificatesPage() {
 
   const fmt = (s?: string) => formatDateTime(s);
   const now = Date.now();
+
+  const [userFilter, setUserFilter] = useState("");
+  const [hostFilter, setHostFilter] = useState("");
+  const users = Array.from(new Set(certs.map((c) => certUser(c.keyId)).filter(Boolean))).sort();
+  const hosts = Array.from(new Set(certs.map((c) => certHost(c.keyId)).filter(Boolean))).sort();
+  const filtered = certs.filter((c) =>
+    (!userFilter || certUser(c.keyId) === userFilter) &&
+    (!hostFilter || certHost(c.keyId) === hostFilter),
+  );
 
   return (
     <Box>
@@ -81,6 +97,24 @@ export function CertificatesPage() {
         Each browser login mints a unique, short-lived Ed25519 user certificate. Private keys
         live only in backend memory and are never stored.
       </Alert>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }} sx={{ mb: 2 }}>
+        <TextField
+          select size="small" label="User" value={userFilter}
+          onChange={(e) => setUserFilter(e.target.value)} sx={{ minWidth: 180 }}
+        >
+          <MenuItem value="">All users</MenuItem>
+          {users.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+        </TextField>
+        <TextField
+          select size="small" label="Host" value={hostFilter}
+          onChange={(e) => setHostFilter(e.target.value)} sx={{ minWidth: 180 }}
+        >
+          <MenuItem value="">All hosts</MenuItem>
+          {hosts.map((hn) => <MenuItem key={hn} value={hn}>{hn}</MenuItem>)}
+        </TextField>
+        <Box sx={{ flexGrow: 1 }} />
+        <Typography variant="body2" color="text.secondary">{filtered.length} of {certs.length}</Typography>
+      </Stack>
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -95,7 +129,7 @@ export function CertificatesPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {certs.map((c) => {
+            {filtered.map((c) => {
               const expired = new Date(c.expiresAt).getTime() < now;
               const state = c.revokedAt ? "revoked" : expired ? "expired" : "valid";
               return (
@@ -123,8 +157,10 @@ export function CertificatesPage() {
                 </TableRow>
               );
             })}
-            {certs.length === 0 && (
-              <TableRow><TableCell colSpan={canManage ? 7 : 6}>No certificates issued yet.</TableCell></TableRow>
+            {filtered.length === 0 && (
+              <TableRow><TableCell colSpan={canManage ? 7 : 6}>
+                {certs.length === 0 ? "No certificates issued yet." : "No certificates match the filters."}
+              </TableCell></TableRow>
             )}
           </TableBody>
         </Table>
