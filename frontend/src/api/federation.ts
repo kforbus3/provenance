@@ -53,6 +53,13 @@ export async function revokeSite(siteId: string): Promise<void> {
   await api.delete(`/api/v1/federation/sites/${siteId}`);
 }
 
+export async function rotateHubKey(): Promise<{ fingerprint: string; pushedToSites: number }> {
+  const { data } = await api.post<{ fingerprint: string; pushedToSites: number }>(
+    "/api/v1/federation/keys/rotate",
+  );
+  return data;
+}
+
 export async function listFederatedHosts(siteId?: string): Promise<FederatedHost[]> {
   const { data } = await api.get<{ hosts: FederatedHost[] }>("/api/v1/federation/cache/hosts", {
     params: siteId ? { site: siteId } : undefined,

@@ -1,6 +1,6 @@
 import {
   AppBar, Box, CssBaseline, Drawer, IconButton, List, ListItemButton,
-  ListItemIcon, ListItemText, Toolbar, Typography, Tooltip,
+  ListItemIcon, ListItemText, MenuItem, Select, Toolbar, Typography, Tooltip,
 } from "@mui/material";
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -31,7 +31,8 @@ import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
-import { getFederationMode } from "../api/federation";
+import { getFederationMode, listSites } from "../api/federation";
+import { useQueryClient } from "@tanstack/react-query";
 import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
@@ -75,6 +76,19 @@ export function AppLayout() {
   setDisplayTimezone(tz);
   // Federation role: hub-only navigation appears only on a hub instance.
   const { data: fedMode } = useQuery({ queryKey: ["fed-mode"], queryFn: getFederationMode, staleTime: 300_000 });
+  const isHub = fedMode === "hub";
+  const qc = useQueryClient();
+  const siteScope = useUIStore((s) => s.siteScope);
+  const setSiteScope = useUIStore((s) => s.setSiteScope);
+  const { data: fedSites = [] } = useQuery({
+    queryKey: ["fed-sites-nav"], queryFn: listSites, enabled: isHub, refetchInterval: 10000,
+  });
+  const changeScope = (id: string | null) => {
+    setSiteScope(id);
+    // Every cached query was fetched against the previous scope; drop them so
+    // pages refetch against the newly selected site (or the hub).
+    void qc.invalidateQueries();
+  };
   const mode = useUIStore((s) => s.mode);
   const toggleMode = useUIStore((s) => s.toggleMode);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -105,6 +119,27 @@ export function AppLayout() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 600 }}>
             {appName}
           </Typography>
+          {isHub && (
+            <Tooltip title="Manage a federated site — every page targets it until you switch back">
+              <Select
+                size="small" variant="standard" disableUnderline
+                value={siteScope ?? "hub"}
+                onChange={(e) => changeScope(e.target.value === "hub" ? null : String(e.target.value))}
+                sx={{
+                  mr: 2, minWidth: 150, color: "inherit",
+                  ".MuiSelect-icon": { color: "inherit" },
+                  ...(siteScope ? { bgcolor: "warning.dark", px: 1, borderRadius: 1 } : {}),
+                }}
+              >
+                <MenuItem value="hub">◎ Hub (local)</MenuItem>
+                {fedSites.filter((s) => s.status === "active").map((s) => (
+                  <MenuItem key={s.id} value={s.id}>
+                    {s.linkState === "up" ? "🟢" : "🔴"} {s.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </Tooltip>
+          )}
           <Tooltip title="Toggle theme">
             <IconButton color="inherit" onClick={toggleMode}>
               {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}

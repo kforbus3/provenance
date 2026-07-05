@@ -96,6 +96,7 @@ func MountHub(r chi.Router, d *app.Deps, s *Service) {
 			ar.With(d.Auth.RequirePermission("Federation.Manage")).Get("/sites", s.handleListSites)
 			ar.With(d.Auth.RequirePermission("Federation.Manage")).Post("/sites/tokens", s.handleCreateToken)
 			ar.With(d.Auth.RequirePermission("Federation.Manage")).Delete("/sites/{siteId}", s.handleRevokeSite)
+			ar.With(d.Auth.RequirePermission("Federation.Manage")).Post("/keys/rotate", s.handleRotateKey)
 			ar.With(d.Auth.RequirePermission("Host.View")).Get("/cache/hosts", s.handleCacheHosts)
 			// Generic management proxy (F4): forwards a request into the site's API.
 			ar.Handle("/sites/{siteId}/proxy/*", http.HandlerFunc(s.handleProxy))

@@ -71,6 +71,11 @@ export function App() {
             path="/files/:hostId"
             element={<ProtectedRoute permission="File.Transfer"><FilesPage /></ProtectedRoute>}
           />
+          {/* Federated file browser: a host on a remote site, proxied through the hub. */}
+          <Route
+            path="/sites/:siteId/files/:hostId"
+            element={<ProtectedRoute permission="File.Transfer"><FilesPage /></ProtectedRoute>}
+          />
 
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>

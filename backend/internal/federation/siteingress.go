@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -28,9 +30,32 @@ func (s *Service) serveHubStream(ctx context.Context, f *Frame, body *bufio.Read
 		s.serveHubHTTP(ctx, f, body, stream)
 	case "ws":
 		s.serveHubWS(ctx, f, body, stream)
+	case "hubkey":
+		s.applyHubKey(ctx, body)
 	default:
 		_, _ = io.Copy(io.Discard, body)
 	}
+}
+
+// applyHubKey updates the site's stored hub public key when the hub rotates and
+// pushes the new key over the link, so subsequent hub-signed tokens verify.
+func (s *Service) applyHubKey(ctx context.Context, body io.Reader) {
+	var msg struct {
+		PublicKey   string `json:"publicKey"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.NewDecoder(body).Decode(&msg); err != nil {
+		return
+	}
+	pub, err := base64.StdEncoding.DecodeString(msg.PublicKey)
+	if err != nil || len(pub) == 0 {
+		return
+	}
+	if err := s.deps.Store.UpdateFederationHubKey(ctx, pub, msg.Fingerprint); err != nil {
+		s.log.Warn("apply rotated hub key", "err", err)
+		return
+	}
+	s.log.Info("applied rotated hub key", "fingerprint", msg.Fingerprint)
 }
 
 // verifyAssertion authenticates a hub-proxied request: it checks managed mode, the

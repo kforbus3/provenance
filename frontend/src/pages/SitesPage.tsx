@@ -9,8 +9,9 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import KeyIcon from "@mui/icons-material/VpnKey";
 import {
-  createJoinToken, listFederatedHosts, listSites, revokeSite,
+  createJoinToken, listFederatedHosts, listSites, revokeSite, rotateHubKey,
   type FederationSite, type JoinTokenResult,
 } from "../api/federation";
 import { formatDateTime } from "../lib/datetime";
@@ -39,6 +40,10 @@ export function SitesPage() {
       void qc.invalidateQueries({ queryKey: ["fed-hosts"] });
     },
   });
+  const rotate = useMutation({
+    mutationFn: rotateHubKey,
+    onSuccess: (r) => alert(`Hub key rotated.\nNew fingerprint: ${r.fingerprint}\nPushed to ${r.pushedToSites} linked site(s).`),
+  });
 
   const hostName = (h: unknown): string => {
     const o = h as { hostname?: string } | null;
@@ -48,8 +53,15 @@ export function SitesPage() {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" sx={{ mb: 2 }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Federated Sites</Typography>
+        <Button startIcon={<KeyIcon />} variant="outlined" disabled={rotate.isPending}
+          onClick={() => {
+            if (confirm("Rotate the hub federation key? The new key is pushed to all linked sites immediately; offline sites re-learn it when they reconnect."))
+              rotate.mutate();
+          }}>
+          {rotate.isPending ? "Rotating…" : "Rotate hub key"}
+        </Button>
         <Button startIcon={<AddIcon />} variant="contained" onClick={() => setAdding(true)}>Add Site</Button>
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

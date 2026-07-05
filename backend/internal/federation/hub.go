@@ -150,6 +150,9 @@ func (s *Service) handleLink(w http.ResponseWriter, r *http.Request) {
 	s.registry.Put(sess)
 	_ = s.deps.Store.SetSiteStatus(r.Context(), siteID, "active")
 	_ = s.deps.Store.SetSiteLink(r.Context(), siteID, "up", 0, time.Now())
+	// Push the current hub key so a site that reconnected after a hub-key rotation
+	// re-learns it before any proxied request arrives.
+	go func() { _ = s.pushHubKey(sess) }()
 	s.log.Info("site linked", "site", siteID, "name", site.Name)
 
 	s.serveSite(r.Context(), sess) // blocks until the link drops
@@ -183,6 +186,72 @@ func (s *Service) handleSiteStream(ctx context.Context, siteID uuid.UUID, stream
 	case "ping":
 		_ = s.deps.Store.SetSiteLink(ctx, siteID, "up", 0, time.Now())
 	}
+}
+
+// handleRotateKey generates a new hub federation identity, retires the previous
+// one (kept for verification overlap), and pushes the new public key to every
+// currently-linked site so their verification stays current with no downtime.
+// Sites that are offline re-learn the key when they next link (pushHubKey runs on
+// every link).
+func (s *Service) handleRotateKey(w http.ResponseWriter, r *http.Request) {
+	p := auth.MustPrincipal(r)
+	id, err := keys.Generate()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "keygen failed")
+		return
+	}
+	sealed, err := keys.SealPrivate(s.deps.Cfg.CAKeyPassphrase, id.Private)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "seal failed")
+		return
+	}
+	rec, err := s.deps.Store.CreateHubKey(r.Context(), id.Public, sealed, id.Fingerprint)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "store key failed")
+		return
+	}
+	if err := s.deps.Store.RetireHubKeysExcept(r.Context(), rec.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "retire failed")
+		return
+	}
+	// Switch signing to the new key.
+	s.hubKeyID, s.hubPriv, s.hubPub, s.hubFinger = rec.ID.String(), id.Private, id.Public, id.Fingerprint
+	// Push to every live site so verification stays current.
+	pushed := 0
+	for _, siteID := range s.registry.SiteIDs() {
+		if sess, ok := s.registry.Get(siteID); ok {
+			if s.pushHubKey(sess) == nil {
+				pushed++
+			}
+		}
+	}
+	var actorID *uuid.UUID
+	if p != nil {
+		actorID = &p.UserID
+	}
+	s.audit(r.Context(), actorID, actorName(p), "federation.hub_key_rotated", "",
+		map[string]any{"fingerprint": id.Fingerprint, "pushedToSites": pushed})
+	writeJSON(w, http.StatusOK, map[string]any{"fingerprint": id.Fingerprint, "pushedToSites": pushed})
+}
+
+// pushHubKey sends the current hub public key + fingerprint to a linked site over
+// a control stream, so the site trusts tokens signed by the (possibly rotated)
+// active hub key.
+func (s *Service) pushHubKey(sess *fedlink.Session) error {
+	stream, err := sess.OpenStream()
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	if err := WriteFrame(stream, &Frame{Kind: "hubkey"}); err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]string{
+		"publicKey":   base64.StdEncoding.EncodeToString(s.hubPub),
+		"fingerprint": s.hubFinger,
+	})
+	_, err = stream.Write(body)
+	return err
 }
 
 // --- operator-facing management ---

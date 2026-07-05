@@ -166,6 +166,15 @@ func (s *Store) CreateHubKey(ctx context.Context, pub, privEnc []byte, fingerpri
 	return &k, err
 }
 
+// RetireHubKeysExcept marks every hub key except keepID inactive (retired). The
+// retired rows are kept so tokens they signed still verify during the overlap.
+func (s *Store) RetireHubKeysExcept(ctx context.Context, keepID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE federation_hub_keys SET active=false, retired_at=now()
+		 WHERE id <> $1 AND active`, keepID)
+	return err
+}
+
 func (s *Store) ActiveHubKey(ctx context.Context) (*FederationHubKey, error) {
 	var k FederationHubKey
 	err := s.pool.QueryRow(ctx,
@@ -210,6 +219,15 @@ func (s *Store) GetFederationHub(ctx context.Context) (*FederationHub, error) {
 
 func (s *Store) DeleteFederationHub(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM federation_hub WHERE id=1`)
+	return err
+}
+
+// UpdateFederationHubKey updates the site's stored hub public key + fingerprint,
+// applied when the hub rotates its identity and pushes the new key over the link.
+func (s *Store) UpdateFederationHubKey(ctx context.Context, pub []byte, fingerprint string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE federation_hub SET hub_public_key=$1, hub_fingerprint=$2, updated_at=now() WHERE id=1`,
+		pub, fingerprint)
 	return err
 }
 

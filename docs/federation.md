@@ -5,13 +5,12 @@ glass over many independent **site** instances, each a full Fleet stack on its
 own separated network. Operators log into the hub and manage every site from one
 place.
 
-> Status: delivered in phases (see the branch history). Implemented: F0 (mode
-> plumbing), F1 (join + persistent tunnel), F2 (cached host aggregation), F3
-> (live terminal proxy + streaming SFTP/HTTP), F4 (HTTP management proxy). The
-> Sites page exposes the registry, aggregated hosts, and a per-host "connect"
-> that opens a hub-proxied terminal. Remaining: wiring the site dimension into
-> the other management pages (they can already be driven via the F4 proxy) and
-> F5 hardening (hub/site key rotation).
+> Status: F0–F5 implemented. Standalone is unchanged. A hub can add/revoke
+> sites, rotate its federation key, watch live link state, and — via a global
+> **site selector** in the top bar — operate *every* management page against a
+> chosen site (host list, terminals, SFTP/file browser, scans, playbooks,
+> schedules, audit, etc.) transparently through the hub proxy. Remaining polish:
+> site-initiated key rotation and the WireGuard transport option.
 
 ## Model
 
@@ -87,3 +86,49 @@ management writes) go to the site on demand over the same channel.
   mode requires `FLEET_ENV=production` with real secrets).
 - Assertions are ≤60s, single-use (nonce), and request-bound, so a captured
   assertion can't be replayed against a different action, host, or body.
+
+## Using the single pane
+
+On a hub, the top bar shows a **site selector** (`◎ Hub (local)` plus each
+active site with a 🟢/🔴 link indicator). Pick a site and the entire UI operates
+against it — the host list, terminals, file browser, scans, playbooks,
+schedules, sessions, and audit all transparently route through the hub to that
+site (a request interceptor rewrites `/api/v1/*` to the site proxy). Switch back
+to **Hub (local)** to manage the hub itself. The Sites page always shows the
+registry and the aggregated cross-site host list regardless of the selector.
+
+## Testing two stacks locally
+
+Federation needs two instances. The quickest path is two copies of the app
+stack, one as the hub and one as the site, both in `production` mode (federation
+refuses dev defaults). Sketch:
+
+1. **Hub** — run the normal stack with:
+   ```
+   FLEET_ENV=production
+   FLEET_MODE=hub
+   FLEET_PUBLIC_URL=https://<hub-host>     # sites dial this
+   FLEET_JWT_SECRET=... FLEET_CSRF_SECRET=... FLEET_CA_PASSPHRASE=...
+   ```
+   Log in, go to **Sites → Add Site**, name it, copy the config blob.
+
+2. **Site** — run a second stack (separate DB/volumes) with the blob appended:
+   ```
+   FLEET_ENV=production
+   FLEET_MODE=site
+   FLEET_HUB_URL=wss://<hub-host>
+   FLEET_HUB_JOIN_TOKEN=<from the blob>
+   FLEET_HUB_KEY_FINGERPRINT=<from the blob>
+   FLEET_JWT_SECRET=... FLEET_CSRF_SECRET=... FLEET_CA_PASSPHRASE=...
+   ```
+   The site's own jump host + managed hosts are enrolled as usual (standalone
+   behavior is intact on a site).
+
+3. On the hub: the site flips to **active / 🟢 up** within seconds; its hosts
+   appear in the aggregated list. Select the site in the top bar and use Hosts /
+   Terminals / Files / Security exactly as you would locally — every action runs
+   at the site, audited there as `hub:<you>`. **Rotate hub key** on the Sites
+   page and confirm linked sites keep working (the new key is pushed live).
+
+The hub must be reachable from the site on 443 (outbound only); the site never
+needs an inbound hole.
