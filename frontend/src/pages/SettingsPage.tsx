@@ -379,13 +379,16 @@ function ScanCard({ current }: { current: unknown }) {
 
 function WGSettingsCard({ current }: { current: unknown }) {
   const qc = useQueryClient();
-  const cur = (current ?? {}) as { jumpHost?: string; jumpPort?: number };
+  const cur = (current ?? {}) as { jumpHost?: string; jumpPort?: number; requireOverlay?: boolean };
   const [jumpHost, setJumpHost] = useState(cur.jumpHost ?? "");
   const [jumpPort, setJumpPort] = useState(String(cur.jumpPort ?? 51820));
+  const [requireOverlay, setRequireOverlay] = useState(Boolean(cur.requireOverlay));
   const [saved, setSaved] = useState(false);
 
   const save = useMutation({
-    mutationFn: () => setSetting("wireguard", { jumpHost: jumpHost.trim(), jumpPort: Number(jumpPort) || 51820 }),
+    mutationFn: () => setSetting("wireguard", {
+      jumpHost: jumpHost.trim(), jumpPort: Number(jumpPort) || 51820, requireOverlay,
+    }),
     onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["settings"] }); void qc.invalidateQueries({ queryKey: ["next-wg"] }); },
   });
 
@@ -412,6 +415,22 @@ function WGSettingsCard({ current }: { current: unknown }) {
           {saved ? "Saved" : "Save"}
         </Button>
       </Stack>
+      <FormControlLabel
+        sx={{ mt: 1.5 }}
+        control={
+          <Switch
+            checked={requireOverlay}
+            onChange={(e) => { setRequireOverlay(e.target.checked); setSaved(false); }}
+          />
+        }
+        label="Strict overlay — require WireGuard for connections"
+      />
+      <Typography variant="body2" color="text.secondary" sx={{ ml: 0.5 }}>
+        When on, a host that has a WireGuard address is reachable only over the overlay. If its
+        tunnel is down, terminal and file-transfer connections are refused instead of quietly
+        falling back to the host's direct network address. Hosts with no WireGuard address are
+        unaffected.
+      </Typography>
     </Paper>
   );
 }

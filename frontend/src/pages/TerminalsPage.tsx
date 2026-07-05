@@ -8,6 +8,7 @@ import TerminalIcon from "@mui/icons-material/Terminal";
 import FolderIcon from "@mui/icons-material/Folder";
 import { useQuery } from "@tanstack/react-query";
 import { listHosts, type Host } from "../api/hosts";
+import { WgDownChip, wgDegraded } from "../components/WgStatus";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -108,7 +109,10 @@ export function TerminalsPage() {
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, wordBreak: "break-all" }}>
                     {h.hostname}
                   </Typography>
-                  <Chip size="small" label={status} color={STATUS_COLOR[status] ?? "default"} />
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    {wgDegraded(h) && <WgDownChip />}
+                    <Chip size="small" label={status} color={STATUS_COLOR[status] ?? "default"} />
+                  </Stack>
                 </Stack>
                 <Typography variant="body2" color="text.secondary" noWrap>
                   {h.description || h.environment || h.address || "—"}

@@ -98,8 +98,15 @@ func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*
 	// Same privilege tier as terminals: Host.Sudo (or super admin) lands in the
 	// sudo account, everyone else in the host's login-only account.
 	loginUser, principals := sshgw.LoginTier(p.IsSuperAdmin || p.Has("Host.Sudo"), host.SSHUser, p.Username)
+	// Strict overlay mode: when enabled and this host is on the WireGuard overlay,
+	// dial ONLY the overlay address so a transfer never silently bypasses the
+	// tunnel via the host's direct address.
+	candidates := dedupe([]string{host.WGAddress, host.Address, host.Hostname})
+	if host.WGAddress != "" && h.d.Store.RequireWireGuard(r.Context()) {
+		candidates = []string{host.WGAddress}
+	}
 	var lastErr error
-	for _, addr := range dedupe([]string{host.WGAddress, host.Address, host.Hostname}) {
+	for _, addr := range candidates {
 		// Use a certificate unique to this (user, host) pair.
 		conn, err := h.gw.DialForHost(r.Context(), p.SessionID, p.UserID, host.ID, p.Username, host.Hostname, addr, host.SSHPort, loginUser, principals)
 		if err == nil {

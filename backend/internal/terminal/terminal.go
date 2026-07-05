@@ -125,6 +125,13 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			candidates = append(candidates, a)
 		}
 	}
+	// Strict overlay mode: when enabled and this host is on the WireGuard overlay,
+	// dial ONLY the overlay address. If the tunnel is down the connection is
+	// refused rather than silently falling back to the host's direct address.
+	strictWG := h.d.Store.RequireWireGuard(ctx)
+	if strictWG && host.WGAddress != "" {
+		candidates = []string{host.WGAddress}
+	}
 
 	sendErr := func(msg string) {
 		_ = ws.WriteMessage(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: msg}))
@@ -146,6 +153,10 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	if err != nil || gwConn == nil {
 		if err == nil {
 			err = fmt.Errorf("no reachable address for host")
+		}
+		if strictWG && host.WGAddress != "" {
+			sendErr("WireGuard is down for this host and strict overlay mode is enabled, so the connection was refused rather than falling back to the direct network. Restore the host's WireGuard tunnel, or disable strict overlay mode in Settings.")
+			return
 		}
 		sendErr("connection failed: " + err.Error())
 		return

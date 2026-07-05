@@ -40,6 +40,7 @@ import { useAuthStore } from "../store/auth";
 import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
 } from "@mui/material";
+import { WgDownChip, wgDegraded } from "../components/WgStatus";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -343,17 +344,30 @@ export function HostsPage() {
         ) : "";
       },
     },
-    { field: "wgAddress", headerName: "WG Address", minWidth: 140 },
+    {
+      field: "wgAddress", headerName: "WG Address", minWidth: 160,
+      renderCell: (params) => (
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <span>{params.row.wgAddress || "—"}</span>
+          {wgDegraded(params.row) && <WgDownChip />}
+        </Stack>
+      ),
+    },
     {
       field: "sshVersion", headerName: "SSH Version", minWidth: 130,
       valueGetter: (_v, row) => row.inventory?.sshVersion ?? "",
     },
     {
-      field: "status", headerName: "Status", minWidth: 120, sortable: true,
+      field: "status", headerName: "Status", minWidth: 150, sortable: true,
       valueGetter: (_v, row) => row.status?.status ?? "unknown",
       renderCell: (params) => {
         const s = String(params.value ?? "unknown");
-        return <Chip size="small" label={s} color={STATUS_COLOR[s] ?? "default"} />;
+        return (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Chip size="small" label={s} color={STATUS_COLOR[s] ?? "default"} />
+            {wgDegraded(params.row) && <WgDownChip />}
+          </Stack>
+        );
       },
     },
     {
