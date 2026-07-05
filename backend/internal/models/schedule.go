@@ -33,8 +33,11 @@ type Schedule struct {
 	LastRunAt  *time.Time      `json:"lastRunAt,omitempty"`
 	LastStatus string          `json:"lastStatus,omitempty"`
 	NextRunAt  *time.Time      `json:"nextRunAt,omitempty"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	UpdatedAt  time.Time       `json:"updatedAt"`
+	// Running is computed (not stored): true while the scan/playbook records from
+	// the most recent fire are still pending or running.
+	Running   bool      `json:"running"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // ScanSchedulePayload is the Payload for a scan schedule.

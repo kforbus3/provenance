@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
   FormControlLabel, IconButton, MenuItem, Paper, Snackbar, Stack, Switch, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Tooltip,
   Typography,
@@ -34,7 +34,13 @@ function recurrenceText(r: Recurrence): string {
 // Recurring scans and playbook runs. Disabled by default; enable one to start it.
 export function SchedulesPage() {
   const qc = useQueryClient();
-  const { data: schedules = [], isLoading } = useQuery({ queryKey: ["schedules"], queryFn: listSchedules });
+  const { data: schedules = [], isLoading } = useQuery({
+    queryKey: ["schedules"],
+    queryFn: listSchedules,
+    // While any schedule's launched work is still running, refresh often enough
+    // that the in-progress indicator clears promptly when it finishes.
+    refetchInterval: (q) => (q.state.data?.some((s) => s.running) ? 4000 : false),
+  });
   const [editor, setEditor] = useState<Schedule | "new" | null>(null);
   const [toast, setToast] = useState<{ msg: string; severity: "success" | "warning" | "error" } | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["schedules"] });
@@ -104,7 +110,17 @@ export function SchedulesPage() {
                     : "—"}
                 </TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>
-                  {s.lastRunAt ? `${formatDateTime(s.lastRunAt)} (${s.lastStatus})` : "never"}
+                  {s.running ? (
+                    <Chip
+                      size="small" color="info" variant="outlined"
+                      icon={<CircularProgress size={12} thickness={6} color="inherit" />}
+                      label="Running…"
+                    />
+                  ) : s.lastRunAt ? (
+                    `${formatDateTime(s.lastRunAt)} (${s.lastStatus})`
+                  ) : (
+                    "never"
+                  )}
                 </TableCell>
                 <TableCell align="right">
                   <Tooltip title="Run now">

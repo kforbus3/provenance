@@ -23,6 +23,7 @@ export interface Schedule {
   lastRunAt?: string;
   lastStatus?: string;
   nextRunAt?: string;
+  running?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -53,25 +53,26 @@ func (e *Engine) tick(ctx context.Context) {
 		return
 	}
 	for _, sc := range due {
-		status := e.Fire(ctx, sc)
+		status, ids := e.Fire(ctx, sc)
 		next := e.store.ScheduleNextRun(ctx, sc.Recurrence)
-		if err := e.store.MarkScheduleFired(ctx, sc.ID, now, status, next); err != nil {
+		if err := e.store.MarkScheduleFired(ctx, sc.ID, now, status, next, ids); err != nil {
 			e.log.Warn("scheduler: mark fired", "schedule", sc.ID, "err", err)
 		}
 	}
 }
 
 // Fire launches a schedule's work immediately (also used by "run now"). It
-// returns a short status string recorded as last_status; the produced scan/run
-// carries the real outcome.
-func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) string {
+// returns a short status string recorded as last_status, plus the IDs of the
+// scan/playbook-run records it created so callers can track in-progress state;
+// the produced scan/run carries the real outcome.
+func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.UUID) {
 	hosts, err := e.resolveHosts(ctx, sc)
 	if err != nil {
 		e.log.Warn("scheduler: resolve hosts", "schedule", sc.ID, "err", err)
-		return "error: " + err.Error()
+		return "error: " + err.Error(), nil
 	}
 	if len(hosts) == 0 {
-		return "skipped: no hosts"
+		return "skipped: no hosts", nil
 	}
 	switch sc.Kind {
 	case "scan":
@@ -79,7 +80,7 @@ func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) string {
 	case "playbook":
 		return e.firePlaybook(ctx, sc, hosts)
 	default:
-		return "error: unknown kind"
+		return "error: unknown kind", nil
 	}
 }
 
@@ -105,32 +106,37 @@ func (e *Engine) resolveHosts(ctx context.Context, sc *models.Schedule) ([]*mode
 	return []*models.Host{h}, nil
 }
 
-func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) string {
+func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {
 	var p models.ScanSchedulePayload
 	_ = json.Unmarshal(sc.Payload, &p)
 	skip := p.SkipRules
 	if p.SkipExpensiveFsRules {
 		skip = append(append([]string{}, scan.ExpensiveFSRules...), skip...)
 	}
+	var ids []uuid.UUID
 	for _, h := range hosts {
 		rec, err := e.store.CreateHostScan(ctx, h.ID, nil, sc.Requester, p.Profile, true)
 		if err != nil {
 			e.log.Warn("scheduler: create scan", "host", h.Hostname, "err", err)
 			continue
 		}
+		ids = append(ids, rec.ID)
 		go e.scans.Run(rec.ID, h, p.Profile, skip)
 	}
-	return "started"
+	if len(ids) == 0 {
+		return "error: no scans created", nil
+	}
+	return "started", ids
 }
 
-func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []*models.Host) string {
+func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {
 	var p models.PlaybookSchedulePayload
 	if err := json.Unmarshal(sc.Payload, &p); err != nil {
-		return "error: bad payload"
+		return "error: bad payload", nil
 	}
 	pb, err := e.store.GetPlaybook(ctx, p.PlaybookID)
 	if err != nil {
-		return "error: playbook not found"
+		return "error: playbook not found", nil
 	}
 	targetName := sc.TargetName
 	var targetID *uuid.UUID
@@ -151,8 +157,8 @@ func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []
 		Scheduled:       true,
 	}, nil)
 	if err != nil {
-		return "error: create run"
+		return "error: create run", nil
 	}
 	go e.playbook.Run(rec.ID, pb.Content, hosts, p.CheckMode)
-	return "started"
+	return "started", []uuid.UUID{rec.ID}
 }

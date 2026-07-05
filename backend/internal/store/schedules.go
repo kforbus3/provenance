@@ -204,18 +204,37 @@ func (s *Store) GetSchedule(ctx context.Context, id uuid.UUID) (*models.Schedule
 }
 
 func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+scheduleCols+` FROM schedules ORDER BY name`)
+	// `running` is derived from the launched records: a scan schedule is running
+	// while any of its last_run_ids host_scans are pending/running; likewise a
+	// playbook schedule against its playbook_runs.
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+scheduleCols+`,
+			CASE
+				WHEN kind='scan' THEN EXISTS(
+					SELECT 1 FROM host_scans hs
+					WHERE hs.id = ANY(schedules.last_run_ids) AND hs.status IN ('pending','running'))
+				WHEN kind='playbook' THEN EXISTS(
+					SELECT 1 FROM playbook_runs pr
+					WHERE pr.id = ANY(schedules.last_run_ids) AND pr.status IN ('pending','running'))
+				ELSE false
+			END AS running
+		FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []*models.Schedule
 	for rows.Next() {
-		sc, err := scanSchedule(rows)
-		if err != nil {
+		var sc models.Schedule
+		var rec, payload []byte
+		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Kind, &sc.Enabled, &sc.TargetKind, &sc.TargetID,
+			&sc.TargetName, &rec, &payload, &sc.Requester, &sc.LastRunAt, &sc.LastStatus,
+			&sc.NextRunAt, &sc.CreatedAt, &sc.UpdatedAt, &sc.Running); err != nil {
 			return nil, err
 		}
-		out = append(out, sc)
+		_ = json.Unmarshal(rec, &sc.Recurrence)
+		sc.Payload = payload
+		out = append(out, &sc)
 	}
 	return out, rows.Err()
 }
@@ -251,24 +270,34 @@ func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]*models.Sche
 	return out, rows.Err()
 }
 
-// MarkScheduleFired records a fire and sets the next occurrence.
-func (s *Store) MarkScheduleFired(ctx context.Context, id uuid.UUID, firedAt time.Time, status string, next time.Time) error {
+// MarkScheduleFired records a fire and sets the next occurrence. runIDs are the
+// scan/playbook-run records this fire launched, used to compute in-progress state.
+func (s *Store) MarkScheduleFired(ctx context.Context, id uuid.UUID, firedAt time.Time, status string, next time.Time, runIDs []uuid.UUID) error {
 	var nextPtr *time.Time
 	if !next.IsZero() {
 		nextPtr = &next
 	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE schedules SET last_run_at=$2, last_status=$3, next_run_at=$4, updated_at=now()
-		 WHERE id=$1`, id, firedAt, status, nextPtr)
+		`UPDATE schedules SET last_run_at=$2, last_status=$3, next_run_at=$4, last_run_ids=$5, updated_at=now()
+		 WHERE id=$1`, id, firedAt, status, nextPtr, idsOrEmpty(runIDs))
 	return err
 }
 
 // MarkScheduleRun records a manual ("run now") execution: it stamps the last-run
-// time and status but leaves next_run_at untouched, so triggering a run by hand
-// does not disturb the recurring cadence.
-func (s *Store) MarkScheduleRun(ctx context.Context, id uuid.UUID, firedAt time.Time, status string) error {
+// time, status, and launched record IDs but leaves next_run_at untouched, so
+// triggering a run by hand does not disturb the recurring cadence.
+func (s *Store) MarkScheduleRun(ctx context.Context, id uuid.UUID, firedAt time.Time, status string, runIDs []uuid.UUID) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE schedules SET last_run_at=$2, last_status=$3, updated_at=now() WHERE id=$1`,
-		id, firedAt, status)
+		`UPDATE schedules SET last_run_at=$2, last_status=$3, last_run_ids=$4, updated_at=now() WHERE id=$1`,
+		id, firedAt, status, idsOrEmpty(runIDs))
 	return err
+}
+
+// idsOrEmpty normalizes a nil slice to a non-nil empty slice so the uuid[] column
+// receives '{}' rather than NULL.
+func idsOrEmpty(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }
