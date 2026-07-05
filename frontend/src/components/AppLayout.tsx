@@ -20,6 +20,7 @@ import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import WorkHistoryIcon from "@mui/icons-material/WorkHistory";
 import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
+import HubIcon from "@mui/icons-material/Hub";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -30,6 +31,7 @@ import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
+import { getFederationMode } from "../api/federation";
 import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
@@ -39,8 +41,11 @@ const DRAWER_WIDTH = 232;
 // `perm` (Dashboard, Approvals, Security) are available to every authenticated
 // user, matching their unguarded routes. The backend remains the sole
 // authorization authority — this filtering is cosmetic.
-const NAV = [
+// hubOnly items appear only when this instance runs as a federation hub, so a
+// standalone instance's navigation is unchanged.
+const NAV: { to: string; label: string; icon: JSX.Element; perm?: string; hubOnly?: boolean }[] = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
+  { to: "/sites", label: "Sites", icon: <HubIcon />, perm: "Federation.Manage", hubOnly: true },
   { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
   { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
   { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
@@ -68,6 +73,8 @@ export function AppLayout() {
   // so every timestamp formats in the configured zone. Re-applies if it changes.
   const { data: tz } = useQuery({ queryKey: ["timezone"], queryFn: getTimezone });
   setDisplayTimezone(tz);
+  // Federation role: hub-only navigation appears only on a hub instance.
+  const { data: fedMode } = useQuery({ queryKey: ["fed-mode"], queryFn: getFederationMode, staleTime: 300_000 });
   const mode = useUIStore((s) => s.mode);
   const toggleMode = useUIStore((s) => s.toggleMode);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -137,7 +144,7 @@ export function AppLayout() {
         <Toolbar variant="dense" />
         <Box sx={{ overflow: "auto" }}>
           <List dense>
-            {NAV.filter((item) => !item.perm || has(item.perm)).map((item) => {
+            {NAV.filter((item) => (!item.perm || has(item.perm)) && (!item.hubOnly || fedMode === "hub")).map((item) => {
               const selected =
                 item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
               return (

@@ -40,6 +40,14 @@ func withPrincipal(ctx context.Context, p *Principal) context.Context {
 	return context.WithValue(ctx, principalKey, p)
 }
 
+// WithPrincipal attaches a principal to a context. It is the exported form of
+// withPrincipal, used by the federation site-ingress to inject a hub-authorized
+// principal synthesized from a signed acting-user assertion before dispatching
+// into an unmodified module handler. Standalone code never calls this.
+func WithPrincipal(ctx context.Context, p *Principal) context.Context {
+	return withPrincipal(ctx, p)
+}
+
 // FromContext returns the request principal, if any.
 func FromContext(ctx context.Context) (*Principal, bool) {
 	p, ok := ctx.Value(principalKey).(*Principal)

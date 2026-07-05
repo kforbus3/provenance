@@ -36,6 +36,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/certificates"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/enrollment"
+	"github.com/fleet-terminal/backend/internal/federation"
 	"github.com/fleet-terminal/backend/internal/hosts"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/identity"
@@ -83,6 +84,12 @@ type Server struct {
 	scheduler   *scheduler.Engine
 	backups     *backup.Service
 	auditFwd    *auditfwd.Forwarder
+
+	// deps is the shared module container, built once and reused by registerRoutes
+	// and the federation service.
+	deps *app.Deps
+	// federation is nil in standalone mode; non-nil for hub/site.
+	federation *federation.Service
 
 	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
 	lastCANotify time.Time
@@ -157,7 +164,27 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		}
 	})
 
+	// Shared module container, built once and reused by registerRoutes and (in
+	// hub/site mode) the federation service.
+	s.deps = &app.Deps{Store: s.Store, Cfg: cfg, Log: log, Auth: s.Auth, CA: s.Issuer,
+		Gateway: s.Gateway, Live: s.Live, Events: s.Hub, Notify: s.Notify}
+	s.deps.DistributeKRL = s.distributeKRL
+
+	// Multi-site federation is mode-gated: standalone builds no service and mounts
+	// no routes, so its behavior is entirely unchanged.
+	if !cfg.IsStandalone() {
+		fed, err := federation.New(s.deps)
+		if err != nil {
+			log.Error("federation initialization failed; federation disabled", "err", err)
+		} else {
+			s.federation = fed
+		}
+	}
+
 	s.router = s.buildRouter()
+	if s.federation != nil {
+		s.federation.SetSiteHandler(s.router)
+	}
 	return s
 }
 
@@ -191,6 +218,10 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx)
+	// Multi-site federation background loops (site: maintain hub link; hub: prune).
+	if s.federation != nil {
+		s.federation.Start(ctx)
+	}
 	return nil
 }
 
@@ -489,8 +520,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
 	})
 
-	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub, Notify: s.Notify}
-	deps.DistributeKRL = s.distributeKRL
+	deps := s.deps
 
 	// M2 — first-run wizard + authentication.
 	bootstrap.NewHandler(s.Store, s.Cfg).Mount(r)
@@ -548,6 +578,13 @@ func (s *Server) registerRoutes(r chi.Router) {
 		pr.Use(s.Auth.RequireAuth)
 		pr.With(s.Auth.RequirePermission("System.Configure")).Get("/system/health", s.handleSystemHealth)
 	})
+
+	// Multi-site federation (mode-gated; standalone mounts nothing).
+	if s.Cfg.IsHub() {
+		federation.MountHub(r, s.deps, s.federation)
+	} else if s.Cfg.IsSite() {
+		federation.MountSite(r, s.deps, s.federation)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
