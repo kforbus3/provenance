@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody, TableCell,
+  FormControlLabel, IconButton, MenuItem, Paper, Snackbar, Stack, Switch, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Tooltip,
   Typography,
 } from "@mui/material";
@@ -36,6 +36,7 @@ export function SchedulesPage() {
   const qc = useQueryClient();
   const { data: schedules = [], isLoading } = useQuery({ queryKey: ["schedules"], queryFn: listSchedules });
   const [editor, setEditor] = useState<Schedule | "new" | null>(null);
+  const [toast, setToast] = useState<{ msg: string; severity: "success" | "warning" | "error" } | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["schedules"] });
 
   const enableMut = useMutation({
@@ -43,7 +44,21 @@ export function SchedulesPage() {
     onSuccess: invalidate,
   });
   const deleteMut = useMutation({ mutationFn: (id: string) => deleteSchedule(id), onSuccess: invalidate });
-  const runMut = useMutation({ mutationFn: (id: string) => runScheduleNow(id), onSuccess: invalidate });
+  const runMut = useMutation({
+    mutationFn: (id: string) => runScheduleNow(id),
+    onSuccess: (res) => {
+      invalidate();
+      // Fire returns a short status: "started" on success, otherwise a reason
+      // like "skipped: no hosts" or "error: …". Surface it so a no-op is visible.
+      const status = res?.status ?? "";
+      const ok = status === "started";
+      setToast({
+        msg: ok ? "Run started — see the Scans / Playbooks page for progress." : `Not run — ${status || "unknown result"}`,
+        severity: ok ? "success" : status.startsWith("error") ? "error" : "warning",
+      });
+    },
+    onError: (e) => setToast({ msg: (e as Error).message || "Run failed", severity: "error" }),
+  });
 
   return (
     <Box>
@@ -93,9 +108,12 @@ export function SchedulesPage() {
                 </TableCell>
                 <TableCell align="right">
                   <Tooltip title="Run now">
-                    <IconButton size="small" color="primary" onClick={() => runMut.mutate(s.id)}>
-                      <PlayArrowIcon fontSize="small" />
-                    </IconButton>
+                    <span>
+                      <IconButton size="small" color="primary" disabled={runMut.isPending}
+                        onClick={() => runMut.mutate(s.id)}>
+                        <PlayArrowIcon fontSize="small" />
+                      </IconButton>
+                    </span>
                   </Tooltip>
                   <Tooltip title="Edit">
                     <IconButton size="small" onClick={() => setEditor(s)}><EditIcon fontSize="small" /></IconButton>
@@ -127,6 +145,17 @@ export function SchedulesPage() {
           onSaved={() => { setEditor(null); invalidate(); }}
         />
       )}
+
+      <Snackbar
+        open={toast !== null} autoHideDuration={5000} onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        {toast ? (
+          <Alert severity={toast.severity} onClose={() => setToast(null)} variant="filled">
+            {toast.msg}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
     </Box>
   );
 }

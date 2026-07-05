@@ -262,3 +262,13 @@ func (s *Store) MarkScheduleFired(ctx context.Context, id uuid.UUID, firedAt tim
 		 WHERE id=$1`, id, firedAt, status, nextPtr)
 	return err
 }
+
+// MarkScheduleRun records a manual ("run now") execution: it stamps the last-run
+// time and status but leaves next_run_at untouched, so triggering a run by hand
+// does not disturb the recurring cadence.
+func (s *Store) MarkScheduleRun(ctx context.Context, id uuid.UUID, firedAt time.Time, status string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE schedules SET last_run_at=$2, last_status=$3, updated_at=now() WHERE id=$1`,
+		id, firedAt, status)
+	return err
+}

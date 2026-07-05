@@ -211,6 +211,11 @@ func (h *handler) runNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := h.eng.Fire(r.Context(), sc)
+	// Record the manual run so the Schedules table's "Last" column reflects it;
+	// next_run_at is left untouched so the recurring cadence is undisturbed.
+	if err := h.d.Store.MarkScheduleRun(r.Context(), id, time.Now(), status); err != nil {
+		h.d.Log.Warn("mark manual schedule run", "schedule", id, "err", err)
+	}
 	h.audit(r, "schedule.run", id.String(), map[string]any{"name": sc.Name, "status": status})
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"status": status})
 }
