@@ -589,6 +589,11 @@ echo KRL_OK`, b64)
 // jumpPeerScript renders the script that adds the host as a peer on the jump host.
 func (s *Service) jumpPeerScript(hostname, hostPub, hostEndpoint, wgIP string) string {
 	iface := s.cfg.WGInterface
+	// The runtime `wg set` carries the endpoint for immediate connectivity (the
+	// host is online during enrollment). The PERSISTED fragment deliberately omits
+	// the endpoint: on a jump-host rebuild the hub must not have to resolve member
+	// hostnames (a host may be offline, and DNS may be unavailable that early in
+	// boot). The hub relearns each peer's endpoint from its keepalive handshake.
 	return fmt.Sprintf(`set -e
 IF=%s
 wg set $IF peer '%s' endpoint '%s' allowed-ips %s/32 persistent-keepalive 25
@@ -596,11 +601,10 @@ mkdir -p /etc/wireguard/peers
 cat > /etc/wireguard/peers/%s.conf <<'EOF'
 [Peer]
 PublicKey = %s
-Endpoint = %s
 AllowedIPs = %s/32
 EOF
 echo OK`,
-		iface, hostPub, hostEndpoint, wgIP, sanitize(hostname), hostPub, hostEndpoint, wgIP)
+		iface, hostPub, hostEndpoint, wgIP, sanitize(hostname), hostPub, wgIP)
 }
 
 // caTrustScript installs the Fleet user CA, creates the login user with sudo and

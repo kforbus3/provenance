@@ -51,7 +51,20 @@ ip link set "$WG_IFACE" up
 if [ -d /etc/wireguard/peers ]; then
   for f in /etc/wireguard/peers/*.conf; do
     [ -f "$f" ] || continue
-    wg addconf "$WG_IFACE" "$f" 2>/dev/null && echo "[jumphost] restored peer from $(basename "$f")"
+    # Restore the peer WITHOUT its Endpoint: a hub must never depend on
+    # resolving member hostnames at rebuild time (a host may be legitimately
+    # offline, and DNS may not even be answering this early in boot — either
+    # silently drops the peer). Managed hosts initiate with persistent-keepalive,
+    # so the hub learns each peer's real endpoint from its incoming handshake
+    # (WireGuard roaming). We only need the public key + allowed IPs here.
+    tmp=$(mktemp)
+    grep -vi '^[[:space:]]*Endpoint' "$f" > "$tmp"
+    if wg addconf "$WG_IFACE" "$tmp" 2>/dev/null; then
+      echo "[jumphost] restored peer from $(basename "$f")"
+    else
+      echo "[jumphost] WARN could not restore peer from $(basename "$f")"
+    fi
+    rm -f "$tmp"
   done
 fi
 echo "[jumphost] wg0 up at ${WG_ADDR}; peers added on demand by enrollment"
