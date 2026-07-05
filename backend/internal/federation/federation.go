@@ -19,6 +19,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/federation/link"
+	"github.com/fleet-terminal/backend/internal/sshgw"
 )
 
 // Service holds federation state for whichever role this instance runs.
@@ -34,7 +35,16 @@ type Service struct {
 	registry   *link.Registry
 
 	// Site role
-	siteHandler http.Handler // the site's own router, for serving proxied requests
+	siteHandler http.Handler     // the site's own router, for serving proxied requests
+	gw          *sshgw.Gateway   // the site's SSH gateway, for the federated terminal relay
+}
+
+// SetGateway gives the site service its SSH gateway so a hub-proxied terminal can
+// drive the same relay the local browser terminal uses.
+func (s *Service) SetGateway(gw *sshgw.Gateway) {
+	if s != nil {
+		s.gw = gw
+	}
 }
 
 // New constructs the federation service for the configured mode, or nil for
@@ -77,15 +87,18 @@ func MountHub(r chi.Router, d *app.Deps, s *Service) {
 	// Operator-facing management + read-cache, under the normal auth stack.
 	r.Route("/api/v1/federation", func(pr chi.Router) {
 		pr.Get("/mode", s.handleMode)
+		// The terminal proxy is a WebSocket: browsers can't set an Authorization
+		// header on the upgrade, so it authenticates via a ?token= query param
+		// inline (like the local terminal endpoint), outside the RequireAuth group.
+		pr.Get("/sites/{siteId}/terminal/{hostId}", s.handleProxyTerminal)
 		pr.Group(func(ar chi.Router) {
 			ar.Use(d.Auth.RequireAuth)
 			ar.With(d.Auth.RequirePermission("Federation.Manage")).Get("/sites", s.handleListSites)
 			ar.With(d.Auth.RequirePermission("Federation.Manage")).Post("/sites/tokens", s.handleCreateToken)
 			ar.With(d.Auth.RequirePermission("Federation.Manage")).Delete("/sites/{siteId}", s.handleRevokeSite)
 			ar.With(d.Auth.RequirePermission("Host.View")).Get("/cache/hosts", s.handleCacheHosts)
-			// Live proxy (F3/F4): terminal, sftp, and generic management proxy.
+			// Generic management proxy (F4): forwards a request into the site's API.
 			ar.Handle("/sites/{siteId}/proxy/*", http.HandlerFunc(s.handleProxy))
-			ar.Get("/sites/{siteId}/terminal/{hostId}", s.handleProxyTerminal)
 		})
 	})
 }

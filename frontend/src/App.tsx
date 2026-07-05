@@ -62,6 +62,11 @@ export function App() {
             path="/terminals/:hostId"
             element={<ProtectedRoute permission="Host.Connect"><TerminalPage /></ProtectedRoute>}
           />
+          {/* Federated terminal: a host on a remote site, proxied through the hub. */}
+          <Route
+            path="/sites/:siteId/terminals/:hostId"
+            element={<ProtectedRoute permission="Host.Connect"><TerminalPage /></ProtectedRoute>}
+          />
           <Route
             path="/files/:hostId"
             element={<ProtectedRoute permission="File.Transfer"><FilesPage /></ProtectedRoute>}

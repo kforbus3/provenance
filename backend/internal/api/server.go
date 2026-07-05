@@ -177,6 +177,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		if err != nil {
 			log.Error("federation initialization failed; federation disabled", "err", err)
 		} else {
+			fed.SetGateway(s.Gateway)
 			s.federation = fed
 		}
 	}

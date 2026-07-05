@@ -7,6 +7,7 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createJoinToken, listFederatedHosts, listSites, revokeSite,
@@ -104,6 +105,7 @@ export function SitesPage() {
               <TableCell>Host</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Cached</TableCell>
+              <TableCell align="right">Connect</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -113,10 +115,18 @@ export function SitesPage() {
                 <TableCell>{hostName(h.host)}</TableCell>
                 <TableCell>{h.status || "—"}</TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>{formatDateTime(h.cachedAt)}</TableCell>
+                <TableCell align="right">
+                  <Tooltip title="Open terminal (proxied through the hub)">
+                    <IconButton size="small" color="primary"
+                      onClick={() => window.open(`/sites/${h.siteId}/terminals/${h.hostId}`, "_blank", "noopener")}>
+                      <TerminalIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </TableCell>
               </TableRow>
             ))}
             {hosts.length === 0 && (
-              <TableRow><TableCell colSpan={4} align="center" sx={{ color: "text.secondary", py: 3 }}>
+              <TableRow><TableCell colSpan={5} align="center" sx={{ color: "text.secondary", py: 3 }}>
                 No hosts cached yet. They appear once a site links and pushes its inventory.
               </TableCell></TableRow>
             )}

@@ -44,6 +44,25 @@ type handler struct {
 	gw *sshgw.Gateway
 }
 
+// WSTransport is the minimal message transport the terminal relay drives. A
+// browser *websocket.Conn satisfies it directly; the multi-site federation layer
+// provides an equivalent backed by a hub↔site tunnel stream, so the exact same
+// relay (recording, audit, session lifecycle) serves both a local browser and a
+// hub-proxied terminal without duplication.
+type WSTransport interface {
+	ReadMessage() (messageType int, p []byte, err error)
+	WriteMessage(messageType int, data []byte) error
+	Close() error
+}
+
+// ServeFederated runs the terminal relay for a hub-proxied session on the site.
+// The caller (federation site-ingress) has already verified the hub-signed
+// assertion and resolved the host + principal, so this bypasses the browser-auth
+// and per-host access checks in serve() — the hub is the authorization authority.
+func ServeFederated(d *app.Deps, gw *sshgw.Gateway, ctx context.Context, t WSTransport, p *auth.Principal, host *models.Host, clientIP string) {
+	(&handler{d: d, gw: gw}).run(ctx, t, p, host, clientIP)
+}
+
 type controlMsg struct {
 	Type string `json:"type"`
 	Cols int    `json:"cols"`
@@ -101,8 +120,9 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	h.run(ctx, conn, principal, host, clientIP)
 }
 
-// run drives a single terminal session lifecycle.
-func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal, host *models.Host, clientIP string) {
+// run drives a single terminal session lifecycle. ws is a browser WebSocket in
+// the local path, or a federation tunnel transport in the hub-proxied path.
+func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, host *models.Host, clientIP string) {
 	// Register the live connection up front (before the SSH dial) so it can be
 	// force-closed the instant the session is revoked — closing the WebSocket
 	// unwinds the SSH session and gateway connection via the read/write pumps.

@@ -5,11 +5,13 @@ glass over many independent **site** instances, each a full Fleet stack on its
 own separated network. Operators log into the hub and manage every site from one
 place.
 
-> Status: this is delivered in phases (see the branch history). F0–F2 (mode
-> plumbing, join + persistent tunnel, cached host aggregation) and the F4 HTTP
-> management proxy are implemented. F3 (live terminal / SFTP proxy) and the
-> per-page frontend site dimension are in progress; the hub proxy for those
-> returns `501` until then.
+> Status: delivered in phases (see the branch history). Implemented: F0 (mode
+> plumbing), F1 (join + persistent tunnel), F2 (cached host aggregation), F3
+> (live terminal proxy + streaming SFTP/HTTP), F4 (HTTP management proxy). The
+> Sites page exposes the registry, aggregated hosts, and a per-host "connect"
+> that opens a hub-proxied terminal. Remaining: wiring the site dimension into
+> the other management pages (they can already be driven via the F4 proxy) and
+> F5 hardening (hub/site key rotation).
 
 ## Model
 
