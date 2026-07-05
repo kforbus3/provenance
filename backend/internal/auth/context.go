@@ -9,7 +9,10 @@ import (
 
 type ctxKey int
 
-const principalKey ctxKey = iota
+const (
+	principalKey ctxKey = iota
+	fedPrincipalKey
+)
 
 // Principal is the authenticated identity attached to a request context.
 type Principal struct {
@@ -40,12 +43,20 @@ func withPrincipal(ctx context.Context, p *Principal) context.Context {
 	return context.WithValue(ctx, principalKey, p)
 }
 
-// WithPrincipal attaches a principal to a context. It is the exported form of
-// withPrincipal, used by the federation site-ingress to inject a hub-authorized
-// principal synthesized from a signed acting-user assertion before dispatching
-// into an unmodified module handler. Standalone code never calls this.
-func WithPrincipal(ctx context.Context, p *Principal) context.Context {
-	return withPrincipal(ctx, p)
+// WithFederatedPrincipal attaches a hub-authorized principal to a context under a
+// dedicated key. The federation site-ingress synthesizes this principal from a
+// verified, hub-signed acting-user assertion, then dispatches the request through
+// the site's own router; RequireAuth honors it in place of a bearer token (see
+// RequireAuth). A dedicated key ensures a normal request can never carry one, so
+// this can only ever be set by the federation layer over an authenticated link.
+func WithFederatedPrincipal(ctx context.Context, p *Principal) context.Context {
+	return context.WithValue(ctx, fedPrincipalKey, p)
+}
+
+// federatedPrincipal returns a federation-injected principal, if present.
+func federatedPrincipal(ctx context.Context) *Principal {
+	p, _ := ctx.Value(fedPrincipalKey).(*Principal)
+	return p
 }
 
 // FromContext returns the request principal, if any.
