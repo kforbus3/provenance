@@ -8,6 +8,7 @@ name: fleet-terminal
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: fleet
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
@@ -23,6 +24,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
@@ -39,6 +41,7 @@ services:
       dockerfile: Dockerfile
       args:
         VERSION: ${FLEET_VERSION:-dev}
+    restart: unless-stopped
     environment:
       FLEET_ENV: ${FLEET_ENV:-development}
       # Server timezone — schedules compute their next run in this zone. Set TZ
@@ -126,6 +129,7 @@ services:
     build:
       context: ../../frontend
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       VITE_API_BASE: ${FLEET_PUBLIC_URL:-http://localhost:8080}
     depends_on:
