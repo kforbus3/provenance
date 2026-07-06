@@ -509,7 +509,7 @@ func (s *Service) validateCertLogin(ctx context.Context, hostID uuid.UUID, wgIP,
 // generated on the host and never transmitted.
 func (s *Service) hostWGScript(wgIP, jumpPub, jumpEndpoint string) string {
 	iface := s.cfg.WGInterface
-	return fmt.Sprintf(`set -e
+	core := fmt.Sprintf(`set -e
 IF=%s; IP=%s; SUBNET=%s; JPUB='%s'; JEP=%s; PORT=%d
 mkdir -p /etc/wireguard; umask 077
 [ -f /etc/wireguard/$IF.key ] || wg genkey > /etc/wireguard/$IF.key
@@ -561,6 +561,77 @@ echo "WGSTATE=$WGSTATE"
 echo "WGADDR=$WGADDR"
 echo "HOSTPUB=$PUB"`,
 		iface, wgIP, s.cfg.WGSubnet, jumpPub, jumpEndpoint, s.cfg.WGPort)
+	return core + "\n" + s.wgPersistScript(iface)
+}
+
+// wgReresolveScript is installed on managed hosts and run by a timer. Because the
+// jump-host Endpoint is often a DNS name on a dynamic IP, and kernel WireGuard
+// resolves it only once at bring-up, a whole-node reboot can race DNS and strand
+// the tunnel. This (a) brings the tunnel up if it is down (DNS wasn't ready at
+// boot), and (b) refreshes the peer endpoint when the handshake goes stale.
+const wgReresolveScript = `#!/bin/sh
+IF="${1:-wgfleet}"
+CONF="/etc/wireguard/${IF}.conf"
+[ -f "$CONF" ] || exit 0
+
+if [ ! -e "/sys/class/net/${IF}" ]; then
+  systemctl start "wg-quick@${IF}" >/dev/null 2>&1 || \
+    WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go wg-quick up "$IF" >/dev/null 2>&1 || true
+  exit 0
+fi
+
+PUB=$(sed -n 's/^PublicKey *= *//p' "$CONF" | head -n1)
+EP=$(sed -n 's/^Endpoint *= *//p' "$CONF" | head -n1)
+[ -n "$PUB" ] && [ -n "$EP" ] || exit 0
+
+HS=$(wg show "$IF" latest-handshakes 2>/dev/null | awk -v p="$PUB" '$1==p{print $2}')
+NOW=$(date +%s)
+if [ -z "$HS" ] || [ "$HS" = "0" ] || [ $((NOW - HS)) -gt 150 ]; then
+  wg set "$IF" peer "$PUB" endpoint "$EP" >/dev/null 2>&1 || true
+fi
+`
+
+// wgPersistScript makes the host's WireGuard survive reboots on every host type:
+// it enables wg-quick@<iface> on boot (with a userspace drop-in so containers
+// without the kernel module also come up), and installs a timer that runs
+// wgReresolveScript to heal the DNS boot-race and endpoint IP changes. Best-effort
+// (set +e): a persistence hiccup never fails enrollment.
+func (s *Service) wgPersistScript(iface string) string {
+	b64 := base64.StdEncoding.EncodeToString([]byte(wgReresolveScript))
+	return fmt.Sprintf(`set +e
+if command -v systemctl >/dev/null 2>&1; then
+  mkdir -p /etc/systemd/system/wg-quick@%s.service.d
+  cat > /etc/systemd/system/wg-quick@%s.service.d/fleet.conf <<'DROPIN'
+[Service]
+Environment=WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go
+DROPIN
+  printf '%%s' '%s' | base64 -d > /usr/local/sbin/fleet-wg-reresolve
+  chmod 755 /usr/local/sbin/fleet-wg-reresolve
+  cat > /etc/systemd/system/fleet-wg-reresolve.service <<'UNIT'
+[Unit]
+Description=Fleet WireGuard boot-persistence and endpoint re-resolution
+After=network-online.target
+UNIT
+  cat >> /etc/systemd/system/fleet-wg-reresolve.service <<UNIT2
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fleet-wg-reresolve %s
+UNIT2
+  cat > /etc/systemd/system/fleet-wg-reresolve.timer <<'TIMER'
+[Unit]
+Description=Fleet WireGuard re-resolve timer
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=30
+[Install]
+WantedBy=timers.target
+TIMER
+  systemctl daemon-reload
+  systemctl enable wg-quick@%s >/dev/null 2>&1
+  systemctl enable --now fleet-wg-reresolve.timer >/dev/null 2>&1
+fi
+echo WG_PERSIST_OK`,
+		iface, iface, b64, iface, iface)
 }
 
 // krlInstallScript writes the KRL and enables the RevokedKeys directive, rolling
