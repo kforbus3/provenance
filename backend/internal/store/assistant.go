@@ -84,7 +84,10 @@ func buildHostQueryWhere(q HostQuery) (string, []any) {
 		add("h.enrolled = $%d", *q.Enrolled)
 	}
 	if q.WGDown != nil && *q.WGDown {
-		conds = append(conds, "COALESCE(s.wg_ok,false) = false")
+		// Only hosts that actually use the WireGuard overlay can have a "down"
+		// tunnel; a host with no wg_address (e.g. the jump host itself) is not a
+		// WireGuard member and must not be reported as down.
+		conds = append(conds, "h.wg_address IS NOT NULL AND COALESCE(s.wg_ok,false) = false")
 	}
 	// Authorization: non-super-admins only see hosts they can reach.
 	if !q.IsSuperAdmin {
@@ -148,7 +151,9 @@ func (s *Store) QueryHostsForAssistant(ctx context.Context, q HostQuery) ([]mode
 			COALESCE(i.kernel_version,''), COALESCE(i.architecture,''),
 			COALESCE(i.cpu_count,0), COALESCE(i.memory_mb,0), COALESCE(i.ssh_version,''),
 			s.uptime_seconds, m.min_disk_free_pct, m.mem_used_pct, m.load_per_core,
-			s.latency_ms, s.wg_ok, s.last_success_at, i.updates_available, i.security_updates,
+			s.latency_ms,
+			CASE WHEN h.wg_address IS NOT NULL THEN s.wg_ok END,
+			s.last_success_at, i.updates_available, i.security_updates,
 			h.owner, h.enrolled,
 			COALESCE(h.tags, '{}'),
 			COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM host_groups hg
