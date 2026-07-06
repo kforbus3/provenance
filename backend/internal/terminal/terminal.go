@@ -226,6 +226,36 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	var bytesIn, bytesOut int64
 	done := make(chan struct{})
 
+	// Keep the connection alive across idle periods and any intermediary reverse
+	// proxy: send a periodic ping and require a pong within the read deadline.
+	// Browsers answer pings automatically, so an idle terminal (no keystrokes, or a
+	// quiet long-running command) no longer trips a proxy's idle timeout — and a
+	// genuinely dead peer is detected within ~70s and cleaned up. Without this the
+	// terminal relies entirely on the proxy chain never idling out the socket.
+	const (
+		pongWait   = 70 * time.Second
+		pingPeriod = 54 * time.Second
+	)
+	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error {
+		return ws.SetReadDeadline(time.Now().Add(pongWait))
+	})
+	go func() {
+		t := time.NewTicker(pingPeriod)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				// WriteControl is safe to call concurrently with the output pumps.
+				if err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	// SSH stdout/stderr -> WebSocket (and recording).
 	pump := func(src interface{ Read([]byte) (int, error) }) {
 		buf := make([]byte, 4096)
