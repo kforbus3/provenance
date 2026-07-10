@@ -57,8 +57,8 @@ type Config struct {
 
 	// SSH Certificate Authority
 	CAKeyPassphrase []byte        // encrypts CA private key at rest
-	UserCertTTL     time.Duration // ephemeral user certificate lifetime (7d)
-	CertRenewBefore time.Duration // renew this long before expiry (~24h)
+	UserCertTTL     time.Duration // ephemeral user certificate lifetime (12h)
+	CertRenewBefore time.Duration // renew this long before expiry (~3h)
 	HostCertTTL     time.Duration
 
 	// Jump host (SSH gateway egress point)
@@ -179,8 +179,8 @@ func Load() (*Config, error) {
 		RateLimitBurst:      envInt("FLEET_RATE_LIMIT_BURST", 120),
 		AuthRateLimitPerMin: envInt("FLEET_AUTH_RATE_LIMIT_PER_MIN", 20),
 		AuthRateLimitBurst:  envInt("FLEET_AUTH_RATE_LIMIT_BURST", 10),
-		UserCertTTL:         envDuration("FLEET_USER_CERT_TTL", 7*24*time.Hour),
-		CertRenewBefore:     envDuration("FLEET_CERT_RENEW_BEFORE", 24*time.Hour),
+		UserCertTTL:         envDuration("FLEET_USER_CERT_TTL", 12*time.Hour),
+		CertRenewBefore:     envDuration("FLEET_CERT_RENEW_BEFORE", 3*time.Hour),
 		HostCertTTL:         envDuration("FLEET_HOST_CERT_TTL", 365*24*time.Hour),
 		JumpHost:            env("FLEET_JUMP_HOST", "jumphost:22"),
 		JumpUser:            env("FLEET_JUMP_USER", "fleet"),
@@ -285,6 +285,13 @@ func (c *Config) validate() error {
 	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("FLEET_DATABASE_URL is required")
+	}
+	// The renewal window must sit inside the cert lifetime; otherwise every
+	// EnsureHostCredential call sees a cert already "due for renewal" and re-mints
+	// on every connection.
+	if c.CertRenewBefore >= c.UserCertTTL {
+		return fmt.Errorf("FLEET_CERT_RENEW_BEFORE (%s) must be less than FLEET_USER_CERT_TTL (%s)",
+			c.CertRenewBefore, c.UserCertTTL)
 	}
 	return nil
 }
