@@ -283,6 +283,27 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	go pump(stdout)
 	go pump(stderr)
 
+	// Keystrokes are genuine user activity, but they arrive over this WebSocket
+	// rather than the HTTP API — and the idle reaper only tracks last_seen_at,
+	// which is bumped by HTTP requests / token refresh. Without touching it here,
+	// an actively-used shell whose browser tab is otherwise quiet (backgrounded,
+	// no token refresh) looks idle and gets reaped mid-session. Bump last_seen_at
+	// on inbound frames, throttled to one write per minute so a fast typist does
+	// not hammer Postgres. Baseline at now(): the WS-connect auth already touched.
+	const touchInterval = time.Minute
+	lastTouch := time.Now()
+	touchSession := func() {
+		if h.d.Store == nil {
+			return
+		}
+		now := time.Now()
+		if now.Sub(lastTouch) < touchInterval {
+			return
+		}
+		lastTouch = now
+		_ = h.d.Store.TouchSession(ctx, p.SessionID)
+	}
+
 	// WebSocket -> SSH stdin / control.
 	go func() {
 		for {
@@ -293,6 +314,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			switch mt {
 			case websocket.BinaryMessage:
 				bytesIn += int64(len(data))
+				touchSession()
 				if capture != nil {
 					capture.Input(data)
 				}
@@ -311,6 +333,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 					case "input":
 						b := []byte(cm.Data)
 						bytesIn += int64(len(b))
+						touchSession()
 						if capture != nil {
 							capture.Input(b)
 						}

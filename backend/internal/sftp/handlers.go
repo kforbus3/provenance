@@ -120,6 +120,44 @@ func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*
 	return nil, lastErr
 }
 
+// sessionToucher returns a throttled function that bumps the session's
+// last_seen_at (idle-clock), at most once per minute. A single transfer is ONE
+// HTTP request, so RequireAuth touches last_seen_at only at the start; a
+// multi-GB up/download that outlasts SessionIdleTTL would otherwise be reaped
+// mid-flight and its connection force-closed. Keep the session warm while data
+// is actually moving. Baseline at now(): RequireAuth just touched at the start.
+func (h *handler) sessionToucher(r *http.Request, sessionID uuid.UUID) func() {
+	const touchInterval = time.Minute
+	last := time.Now()
+	return func() {
+		if h.d.Store == nil {
+			return
+		}
+		now := time.Now()
+		if now.Sub(last) < touchInterval {
+			return
+		}
+		last = now
+		_ = h.d.Store.TouchSession(r.Context(), sessionID)
+	}
+}
+
+// touchReader bumps the session idle-clock as bytes flow through it. io.Copy
+// drives Read sequentially from the request goroutine, so the captured throttle
+// state needs no locking.
+type touchReader struct {
+	r     io.Reader
+	touch func()
+}
+
+func (t *touchReader) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		t.touch()
+	}
+	return n, err
+}
+
 type entry struct {
 	Name    string    `json:"name"`
 	Size    int64     `json:"size"`
@@ -190,7 +228,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Length")
 	}
-	n, _ := io.Copy(w, f)
+	n, _ := io.Copy(w, &touchReader{r: f, touch: h.sessionToucher(r, p.SessionID)})
 	h.finishTransfer(r, rec, n)
 	h.audit(r, p, "sftp.download", host.ID, remote, n)
 }
@@ -215,6 +253,7 @@ func (h *handler) downloadDir(w http.ResponseWriter, r *http.Request) {
 
 	tw := tar.NewWriter(w)
 	defer tw.Close()
+	touch := h.sessionToucher(r, p.SessionID)
 	var total int64
 	walker := client.Walk(root)
 	for walker.Step() {
@@ -238,7 +277,7 @@ func (h *handler) downloadDir(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		n, _ := io.Copy(tw, f)
+		n, _ := io.Copy(tw, &touchReader{r: f, touch: touch})
 		_ = f.Close()
 		total += n
 	}
@@ -292,7 +331,7 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	if limit := h.d.Cfg.MaxUploadBytes; limit > 0 {
 		body = http.MaxBytesReader(w, r.Body, limit)
 	}
-	n, cerr := io.Copy(dst, body)
+	n, cerr := io.Copy(dst, &touchReader{r: body, touch: h.sessionToucher(r, p.SessionID)})
 	if cerr != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(cerr, &mbe) {
