@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -256,6 +257,36 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 		}
 	}()
 
+	// Terminal traffic is genuine session activity, but it flows over this
+	// WebSocket rather than the HTTP API — and the idle reaper only tracks
+	// last_seen_at, which is bumped by HTTP requests / token refresh. Without
+	// touching it here, an actively-used shell whose browser tab is otherwise
+	// quiet (backgrounded, no token refresh) looks idle and gets reaped
+	// mid-session. Both keystrokes AND command output count, so a long-running
+	// command that is printing output keeps the session alive even with no
+	// keypresses; only a terminal silent in BOTH directions goes idle (the 12h
+	// absolute session cap still bounds an endlessly-chatty process). Throttled
+	// to one write per minute. The three callers (stdout pump, stderr pump,
+	// input loop) race, so claim each per-minute slot with an atomic CAS and let
+	// exactly one goroutine perform the DB write. Baseline at now(): the
+	// WS-connect auth already touched.
+	const touchInterval = time.Minute
+	lastTouchNano := time.Now().UnixNano()
+	touchSession := func() {
+		if h.d.Store == nil {
+			return
+		}
+		now := time.Now().UnixNano()
+		prev := atomic.LoadInt64(&lastTouchNano)
+		if now-prev < int64(touchInterval) {
+			return
+		}
+		if !atomic.CompareAndSwapInt64(&lastTouchNano, prev, now) {
+			return // another goroutine claimed this window
+		}
+		_ = h.d.Store.TouchSession(ctx, p.SessionID)
+	}
+
 	// SSH stdout/stderr -> WebSocket (and recording).
 	pump := func(src interface{ Read([]byte) (int, error) }) {
 		buf := make([]byte, 4096)
@@ -263,6 +294,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			n, err := src.Read(buf)
 			if n > 0 {
 				bytesOut += int64(n)
+				touchSession()
 				if capture != nil {
 					capture.Output(buf[:n])
 				}
@@ -282,27 +314,6 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	}
 	go pump(stdout)
 	go pump(stderr)
-
-	// Keystrokes are genuine user activity, but they arrive over this WebSocket
-	// rather than the HTTP API — and the idle reaper only tracks last_seen_at,
-	// which is bumped by HTTP requests / token refresh. Without touching it here,
-	// an actively-used shell whose browser tab is otherwise quiet (backgrounded,
-	// no token refresh) looks idle and gets reaped mid-session. Bump last_seen_at
-	// on inbound frames, throttled to one write per minute so a fast typist does
-	// not hammer Postgres. Baseline at now(): the WS-connect auth already touched.
-	const touchInterval = time.Minute
-	lastTouch := time.Now()
-	touchSession := func() {
-		if h.d.Store == nil {
-			return
-		}
-		now := time.Now()
-		if now.Sub(lastTouch) < touchInterval {
-			return
-		}
-		lastTouch = now
-		_ = h.d.Store.TouchSession(ctx, p.SessionID)
-	}
 
 	// WebSocket -> SSH stdin / control.
 	go func() {
