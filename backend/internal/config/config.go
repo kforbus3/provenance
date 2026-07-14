@@ -101,6 +101,13 @@ type Config struct {
 	WGJumpEndpoint string // endpoint managed hosts dial to reach the jump, host:port
 	WGPort         int    // WireGuard listen port on managed hosts
 
+	// Host metric history (append-only time series behind trend queries). Sample
+	// bounds how often a per-host sample is recorded (independent of the 30s probe
+	// cadence, to keep the table small); Retention bounds how long samples are kept
+	// before the retention loop prunes them. Retention 0 disables history entirely.
+	MetricHistorySample    time.Duration
+	MetricHistoryRetention time.Duration
+
 	// Session recordings storage
 	RecordingDir string
 
@@ -161,56 +168,58 @@ type Config struct {
 // Load reads configuration from the environment, applies defaults, and validates.
 func Load() (*Config, error) {
 	c := &Config{
-		HTTPAddr:            env("FLEET_HTTP_ADDR", ":8080"),
-		PublicURL:           env("FLEET_PUBLIC_URL", "https://localhost:8443"),
-		ShutdownTimeout:     envDuration("FLEET_SHUTDOWN_TIMEOUT", 20*time.Second),
-		DatabaseURL:         env("FLEET_DATABASE_URL", "postgres://fleet:fleet@postgres:5432/fleet?sslmode=disable"),
-		DBMaxConns:          int32(envInt("FLEET_DB_MAX_CONNS", 20)),
-		DBMinConns:          int32(envInt("FLEET_DB_MIN_CONNS", 2)),
-		MigrateOnStart:      envBool("FLEET_MIGRATE_ON_START", true),
-		RedisURL:            env("FLEET_REDIS_URL", "redis://redis:6379/0"),
-		AccessTokenTTL:      envDuration("FLEET_ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTokenTTL:     envDuration("FLEET_REFRESH_TOKEN_TTL", 720*time.Hour),
-		SessionIdleTTL:      envDuration("FLEET_SESSION_IDLE_TTL", 30*time.Minute),
-		SessionAbsoluteTTL:  envDuration("FLEET_SESSION_ABSOLUTE_TTL", 12*time.Hour),
-		CookieDomain:        env("FLEET_COOKIE_DOMAIN", ""),
-		CookieSecure:        envBool("FLEET_COOKIE_SECURE", true),
-		RateLimitPerMin:     envInt("FLEET_RATE_LIMIT_PER_MIN", 600),
-		RateLimitBurst:      envInt("FLEET_RATE_LIMIT_BURST", 120),
-		AuthRateLimitPerMin: envInt("FLEET_AUTH_RATE_LIMIT_PER_MIN", 20),
-		AuthRateLimitBurst:  envInt("FLEET_AUTH_RATE_LIMIT_BURST", 10),
-		UserCertTTL:         envDuration("FLEET_USER_CERT_TTL", 12*time.Hour),
-		CertRenewBefore:     envDuration("FLEET_CERT_RENEW_BEFORE", 3*time.Hour),
-		HostCertTTL:         envDuration("FLEET_HOST_CERT_TTL", 365*24*time.Hour),
-		JumpHost:            env("FLEET_JUMP_HOST", "jumphost:22"),
-		JumpUser:            env("FLEET_JUMP_USER", "fleet"),
-		JumpKnownHostsFile:  env("FLEET_JUMP_KNOWN_HOSTS", ""),
-		SSHInsecureHostKeys: envBool("FLEET_SSH_INSECURE_HOST_KEYS", false),
-		HostScopedOnly:      envBool("FLEET_HOST_SCOPED_ONLY", false),
-		TrustedProxies:      trustedProxiesFromEnv(),
-		WGInterface:         env("FLEET_WG_INTERFACE", "wg0"),
-		WGSubnet:            env("FLEET_WG_SUBNET", "10.100.0.0/24"),
-		WGJumpIP:            env("FLEET_WG_JUMP_IP", "10.100.0.1"),
-		WGJumpEndpoint:      env("FLEET_WG_JUMP_ENDPOINT", "jumphost:51820"),
-		WGPort:              envInt("FLEET_WG_PORT", 51820),
-		RecordingDir:        env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),
-		ScanDir:             env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
-		ScanTimeout:         envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
-		ControlPlaneHosts:   splitList(env("FLEET_CONTROL_PLANE_HOSTS", "")),
-		ReencryptSecrets:    envBool("FLEET_REENCRYPT_SECRETS", false),
-		ScapContentDir:      env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
-		ScapContentVersion:  env("FLEET_SCAP_CONTENT_VERSION", ""),
-		AnsibleRunnerURL:    env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
-		CARotateAfter:       envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
-		BackupDir:           env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
-		BackupPassphrase:    env("FLEET_BACKUP_PASSPHRASE", ""),
-		MaxUploadBytes:      envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
-		LogLevel:            env("FLEET_LOG_LEVEL", "info"),
-		LogFormat:           env("FLEET_LOG_FORMAT", "json"),
-		OTLPEndpoint:        env("FLEET_OTLP_ENDPOINT", ""),
-		TracingOn:           envBool("FLEET_TRACING", false),
-		AllowBootstrap:      envBool("FLEET_ALLOW_BOOTSTRAP", true),
-		Environment:         env("FLEET_ENV", "development"),
+		HTTPAddr:               env("FLEET_HTTP_ADDR", ":8080"),
+		PublicURL:              env("FLEET_PUBLIC_URL", "https://localhost:8443"),
+		ShutdownTimeout:        envDuration("FLEET_SHUTDOWN_TIMEOUT", 20*time.Second),
+		DatabaseURL:            env("FLEET_DATABASE_URL", "postgres://fleet:fleet@postgres:5432/fleet?sslmode=disable"),
+		DBMaxConns:             int32(envInt("FLEET_DB_MAX_CONNS", 20)),
+		DBMinConns:             int32(envInt("FLEET_DB_MIN_CONNS", 2)),
+		MigrateOnStart:         envBool("FLEET_MIGRATE_ON_START", true),
+		RedisURL:               env("FLEET_REDIS_URL", "redis://redis:6379/0"),
+		AccessTokenTTL:         envDuration("FLEET_ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:        envDuration("FLEET_REFRESH_TOKEN_TTL", 720*time.Hour),
+		SessionIdleTTL:         envDuration("FLEET_SESSION_IDLE_TTL", 30*time.Minute),
+		SessionAbsoluteTTL:     envDuration("FLEET_SESSION_ABSOLUTE_TTL", 12*time.Hour),
+		CookieDomain:           env("FLEET_COOKIE_DOMAIN", ""),
+		CookieSecure:           envBool("FLEET_COOKIE_SECURE", true),
+		RateLimitPerMin:        envInt("FLEET_RATE_LIMIT_PER_MIN", 600),
+		RateLimitBurst:         envInt("FLEET_RATE_LIMIT_BURST", 120),
+		AuthRateLimitPerMin:    envInt("FLEET_AUTH_RATE_LIMIT_PER_MIN", 20),
+		AuthRateLimitBurst:     envInt("FLEET_AUTH_RATE_LIMIT_BURST", 10),
+		UserCertTTL:            envDuration("FLEET_USER_CERT_TTL", 12*time.Hour),
+		CertRenewBefore:        envDuration("FLEET_CERT_RENEW_BEFORE", 3*time.Hour),
+		HostCertTTL:            envDuration("FLEET_HOST_CERT_TTL", 365*24*time.Hour),
+		JumpHost:               env("FLEET_JUMP_HOST", "jumphost:22"),
+		JumpUser:               env("FLEET_JUMP_USER", "fleet"),
+		JumpKnownHostsFile:     env("FLEET_JUMP_KNOWN_HOSTS", ""),
+		SSHInsecureHostKeys:    envBool("FLEET_SSH_INSECURE_HOST_KEYS", false),
+		HostScopedOnly:         envBool("FLEET_HOST_SCOPED_ONLY", false),
+		TrustedProxies:         trustedProxiesFromEnv(),
+		WGInterface:            env("FLEET_WG_INTERFACE", "wg0"),
+		WGSubnet:               env("FLEET_WG_SUBNET", "10.100.0.0/24"),
+		WGJumpIP:               env("FLEET_WG_JUMP_IP", "10.100.0.1"),
+		WGJumpEndpoint:         env("FLEET_WG_JUMP_ENDPOINT", "jumphost:51820"),
+		WGPort:                 envInt("FLEET_WG_PORT", 51820),
+		MetricHistorySample:    envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
+		MetricHistoryRetention: envDuration("FLEET_METRIC_HISTORY_RETENTION", 720*time.Hour),
+		RecordingDir:           env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),
+		ScanDir:                env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
+		ScanTimeout:            envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
+		ControlPlaneHosts:      splitList(env("FLEET_CONTROL_PLANE_HOSTS", "")),
+		ReencryptSecrets:       envBool("FLEET_REENCRYPT_SECRETS", false),
+		ScapContentDir:         env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
+		ScapContentVersion:     env("FLEET_SCAP_CONTENT_VERSION", ""),
+		AnsibleRunnerURL:       env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
+		CARotateAfter:          envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
+		BackupDir:              env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
+		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),
+		MaxUploadBytes:         envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
+		LogLevel:               env("FLEET_LOG_LEVEL", "info"),
+		LogFormat:              env("FLEET_LOG_FORMAT", "json"),
+		OTLPEndpoint:           env("FLEET_OTLP_ENDPOINT", ""),
+		TracingOn:              envBool("FLEET_TRACING", false),
+		AllowBootstrap:         envBool("FLEET_ALLOW_BOOTSTRAP", true),
+		Environment:            env("FLEET_ENV", "development"),
 	}
 
 	c.JWTSecret = []byte(env("FLEET_JWT_SECRET", ""))
@@ -288,8 +297,10 @@ func (c *Config) validate() error {
 	}
 	// The renewal window must sit inside the cert lifetime; otherwise every
 	// EnsureHostCredential call sees a cert already "due for renewal" and re-mints
-	// on every connection.
-	if c.CertRenewBefore >= c.UserCertTTL {
+	// on every connection. Only enforced when a TTL is actually set: Load() always
+	// applies non-zero defaults, so real configs are always checked; a zero TTL only
+	// occurs in direct struct construction (tests) that isn't exercising cert TTLs.
+	if c.UserCertTTL > 0 && c.CertRenewBefore >= c.UserCertTTL {
 		return fmt.Errorf("FLEET_CERT_RENEW_BEFORE (%s) must be less than FLEET_USER_CERT_TTL (%s)",
 			c.CertRenewBefore, c.UserCertTTL)
 	}

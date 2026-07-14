@@ -31,6 +31,12 @@ You also have:
   apt-upgrade playbook last run" or "what playbooks ran recently". When the user
   asks about the LAST scan or playbook run, read the most recent matching entry
   and report its time.
+- host_metric_history: a host's disk/memory/load usage over time, as time-ordered
+  buckets, for TREND questions like "what is the trend in disk usage for web-01 over
+  the past 48 hours" or "has memory been climbing on db-02". query_hosts and
+  host_detail give only the CURRENT value; use host_metric_history whenever the
+  question is about a trend, a change, or a time range. Compare the earliest and
+  latest buckets to state the direction and size of the change.
 
 All percentages are 0-100. After a tool returns, give a brief, factual answer that
 references the data the user will see. If the question is not about the fleet, say you
@@ -105,7 +111,26 @@ var tools = []toolDef{{
 			"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "max rows (default 50)"}},
 		},
 	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "host_metric_history",
+		Description: "Return a single host's resource-usage history over a time window, as time-ordered buckets, for TREND questions (e.g. 'disk usage trend on web-01 over the past 48 hours', 'has memory been climbing on db-02'). Each bucket has a timestamp (t), a sample count, and for that interval: average and minimum free-disk % (diskFreePctAvg / diskFreePctMin), average and peak memory-used % (memUsedPctAvg / memUsedPctMax), and average and peak load per core (loadPerCoreAvg / loadPerCoreMax). Compare the earliest and latest buckets to describe the trend. Requires the exact hostname; the window defaults to the last 48 hours and is capped to the server's retention.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname"},
+				"hours":    map[string]any{"type": "integer", "description": "how many hours back to look (default 48; capped to the server's retention window)"},
+			},
+			"required": []string{"hostname"},
+		},
+	},
 }}
+
+type metricHistoryArgs struct {
+	Hostname string `json:"hostname"`
+	Hours    int    `json:"hours"`
+}
 
 type recentScansArgs struct {
 	Hostname string `json:"hostname"`

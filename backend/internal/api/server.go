@@ -45,8 +45,8 @@ import (
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/notify"
-	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/playbook"
+	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/scheduler"
@@ -316,6 +316,16 @@ func (s *Server) retentionLoop(ctx context.Context) {
 			s.Log.Info("pruned recordings", "count", len(paths), "bytes", bytes, "retentionDays", days)
 		}
 		s.Jobs.Record("recording-retention", nil)
+
+		// Prune host metric history past its retention window (0 = keep forever /
+		// disabled — the monitor also stops writing when retention is 0).
+		if ret := s.Cfg.MetricHistoryRetention; ret > 0 {
+			if n, err := s.Store.PruneMetricHistoryBefore(ctx, time.Now().Add(-ret)); err != nil {
+				s.Log.Warn("prune metric history", "err", err)
+			} else if n > 0 {
+				s.Log.Info("pruned metric history", "rows", n, "retention", ret.String())
+			}
+		}
 	}
 	prune() // run once on startup
 	for {
@@ -521,7 +531,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
-	assistant.Mount(r, deps, assistant.New(s.Store, s.Log))
+	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.Cfg.MetricHistoryRetention))
 
 	playbook.Mount(r, deps, s.playbookSvc)
 

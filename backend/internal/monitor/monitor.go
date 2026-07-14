@@ -123,6 +123,13 @@ func (m *Monitor) sweep(ctx context.Context) {
 			if err := m.store.UpsertMetrics(ctx, h.ID, *metrics); err != nil {
 				m.log.Warn("monitor update metrics", "host", h.Hostname, "err", err)
 			}
+			// Append to the metric history time series (throttled to the configured
+			// sample cadence in the store). Skipped when history is disabled.
+			if m.cfg.MetricHistoryRetention > 0 {
+				if err := m.store.RecordMetricHistory(ctx, h.ID, *metrics, m.cfg.MetricHistorySample); err != nil {
+					m.log.Warn("monitor record metric history", "host", h.Hostname, "err", err)
+				}
+			}
 		}
 		m.hub.Broadcast("host.status", map[string]any{
 			"hostId": h.ID, "hostname": h.Hostname, "status": st.Status,

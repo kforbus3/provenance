@@ -25,13 +25,14 @@ const (
 
 // Service orchestrates assistant conversations.
 type Service struct {
-	store *store.Store
-	log   *slog.Logger
-	asks  sync.Map // id -> *AskResult (pointer replaced atomically on completion)
+	store           *store.Store
+	log             *slog.Logger
+	metricRetention time.Duration // caps the host_metric_history window (0 = history disabled)
+	asks            sync.Map      // id -> *AskResult (pointer replaced atomically on completion)
 }
 
-func New(st *store.Store, log *slog.Logger) *Service {
-	return &Service{store: st, log: log}
+func New(st *store.Store, log *slog.Logger, metricRetention time.Duration) *Service {
+	return &Service{store: st, log: log, metricRetention: metricRetention}
 }
 
 // Settings is the persisted assistant configuration.
@@ -208,6 +209,8 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 				result = s.runRecentScans(ctx, tc.Function.Arguments, who)
 			case "recent_playbook_runs":
 				result = s.runRecentPlaybookRuns(ctx, who)
+			case "host_metric_history":
+				result = s.runMetricHistory(ctx, tc.Function.Arguments, who)
 			default:
 				result = map[string]any{"error": "unknown tool"}
 			}
@@ -297,6 +300,62 @@ func (s *Service) runRecentPlaybookRuns(ctx context.Context, who Caller) any {
 		return map[string]any{"error": "could not list playbook runs"}
 	}
 	return map[string]any{"count": len(rows), "runs": rows}
+}
+
+// runMetricHistory returns a host's bucketed metric history for trend questions,
+// scoped to hosts the caller can access and clamped to the server's retention.
+func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who Caller) any {
+	if s.metricRetention <= 0 {
+		return map[string]any{"error": "metric history is not enabled on this server"}
+	}
+	var a metricHistoryArgs
+	_ = json.Unmarshal(raw, &a)
+	if a.Hostname == "" {
+		return map[string]any{"error": "hostname is required"}
+	}
+	host, err := s.store.HostByHostname(ctx, a.Hostname)
+	if err != nil {
+		return map[string]any{"error": "no host named " + a.Hostname}
+	}
+	if !who.IsSuperAdmin {
+		ok, aerr := s.store.UserCanAccessHost(ctx, who.UserID, host.ID)
+		if aerr != nil || !ok {
+			return map[string]any{"error": "you do not have access to that host"}
+		}
+	}
+	// Window: default 48h; clamp to [1h, retention] so we never claim data we pruned.
+	window := time.Duration(a.Hours) * time.Hour
+	if a.Hours <= 0 {
+		window = 48 * time.Hour
+	}
+	if window > s.metricRetention {
+		window = s.metricRetention
+	}
+	if window < time.Hour {
+		window = time.Hour
+	}
+	// Aim for <= ~72 buckets so the series stays compact enough to feed the model.
+	const targetBuckets = 72
+	bucket := window / targetBuckets
+	if bucket < time.Minute {
+		bucket = time.Minute
+	}
+	points, err := s.store.MetricHistory(ctx, host.ID, time.Now().Add(-window), bucket)
+	if err != nil {
+		s.log.Warn("assistant metric history", "err", err)
+		return map[string]any{"error": "could not load metric history"}
+	}
+	resp := map[string]any{
+		"hostname":      host.Hostname,
+		"windowHours":   int(window / time.Hour),
+		"bucketMinutes": int(bucket / time.Minute),
+		"count":         len(points),
+		"points":        points,
+	}
+	if len(points) == 0 {
+		resp["note"] = "no metric history recorded for this host in the requested window (it may have been enrolled recently, or history collection just started)"
+	}
+	return resp
 }
 
 // cleanup drops results older than the ask timeout to bound memory.
