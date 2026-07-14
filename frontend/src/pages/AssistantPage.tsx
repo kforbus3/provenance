@@ -2,13 +2,14 @@ import { useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Table, TableBody,
-  TableCell, TableHead, TableRow, TextField, Typography,
+  TableCell, TableHead, TableRow, TextField, Typography, useTheme,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import { useQuery } from "@tanstack/react-query";
 import {
   assistantStatus, askAssistant, askResult,
   type AskResult, type AssistantHost, type AssistantSession,
+  type MetricHistory, type MetricHistoryPoint,
 } from "../api/assistant";
 import type { Host } from "../api/hosts";
 
@@ -129,6 +130,7 @@ function TurnView({ turn }: { turn: Turn }) {
           {r.hosts && r.hosts.length > 0 && <HostResults hosts={r.hosts} />}
           {r.sessions && r.sessions.length > 0 && <SessionResults sessions={r.sessions} />}
           {r.host && <HostDetailPanel host={r.host} />}
+          {r.history && r.history.points.length > 0 && <MetricHistoryPanel history={r.history} />}
         </Box>
       )}
     </Box>
@@ -273,6 +275,120 @@ function Fact({ label, value }: { label: string; value?: string }) {
     <Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{label}</Typography>
       <Typography variant="body2">{value}</Typography>
+    </Box>
+  );
+}
+
+// One metric's trend: how to pull the average + worst-case extreme out of a bucket,
+// and how to read/colour the change.
+interface Series {
+  label: string;
+  color: string;
+  avgKey: keyof MetricHistoryPoint;
+  extremeKey: keyof MetricHistoryPoint;
+  extremeLabel: string; // "low" (disk free) or "peak" (mem/load)
+  worseWhenUp: boolean;  // direction of a "bad" change, for delta colouring
+  fmt: (v: number) => string;
+}
+
+// MetricHistoryPanel renders a small line chart per metric that has data, so a
+// trend answer ("disk usage over 48h") is backed by a visible graph. Dependency-free
+// inline SVG — no charting library.
+function MetricHistoryPanel({ history }: { history: MetricHistory }) {
+  const theme = useTheme();
+  const pct = (v: number) => `${v.toFixed(0)}%`;
+  const num = (v: number) => v.toFixed(2);
+  const series: Series[] = [
+    { label: "Disk free", color: theme.palette.primary.main, avgKey: "diskFreePctAvg", extremeKey: "diskFreePctMin", extremeLabel: "low", worseWhenUp: false, fmt: pct },
+    { label: "Memory used", color: theme.palette.warning.main, avgKey: "memUsedPctAvg", extremeKey: "memUsedPctMax", extremeLabel: "peak", worseWhenUp: true, fmt: pct },
+    { label: "Load per core", color: theme.palette.info.main, avgKey: "loadPerCoreAvg", extremeKey: "loadPerCoreMax", extremeLabel: "peak", worseWhenUp: true, fmt: num },
+  ];
+  const active = series.filter((s) => history.points.some((p) => p[s.avgKey] != null));
+  if (active.length === 0) return null;
+  const windowLabel = history.windowHours % 24 === 0
+    ? `${history.windowHours / 24}d`
+    : `${history.windowHours}h`;
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        {history.hostname} · last {windowLabel}
+        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+          ({history.bucketMinutes}-min buckets)
+        </Typography>
+      </Typography>
+      <Stack spacing={2}>
+        {active.map((s) => <TrendChart key={s.label} points={history.points} s={s} />)}
+      </Stack>
+    </Paper>
+  );
+}
+
+function TrendChart({ points, s }: { points: MetricHistoryPoint[]; s: Series }) {
+  const theme = useTheme();
+  const data = points
+    .map((p) => ({ t: new Date(p.t).getTime(), v: p[s.avgKey] as number | undefined, e: p[s.extremeKey] as number | undefined }))
+    .filter((d) => d.v != null && Number.isFinite(d.t)) as { t: number; v: number; e?: number }[];
+  if (data.length === 0) return null;
+
+  const first = data[0].v;
+  const last = data[data.length - 1].v;
+  const delta = last - first;
+  const extreme = data.reduce<number | undefined>((acc, d) => {
+    if (d.e == null) return acc;
+    if (acc == null) return d.e;
+    return s.worseWhenUp ? Math.max(acc, d.e) : Math.min(acc, d.e);
+  }, undefined);
+
+  const worse = s.worseWhenUp ? delta > 0 : delta < 0;
+  const deltaColor = Math.abs(delta) < 1e-9
+    ? theme.palette.text.secondary
+    : worse ? theme.palette.error.main : theme.palette.success.main;
+  const arrow = delta > 0 ? "▲" : delta < 0 ? "▼" : "→";
+
+  // Geometry. The viewBox stretches horizontally to fill width (preserveAspectRatio
+  // none); vertical scale is 1:1 (height matches viewBox height) and non-scaling
+  // strokes keep the line crisp regardless of the horizontal stretch.
+  const W = 600, H = 96, padX = 6, padY = 10;
+  const t0 = data[0].t, t1 = data[data.length - 1].t;
+  const tSpan = t1 - t0 || 1;
+  let lo = Math.min(...data.map((d) => d.v));
+  let hi = Math.max(...data.map((d) => d.v));
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; } // flat series: give it a visible band
+  const vSpan = hi - lo;
+  const px = (t: number) => padX + ((t - t0) / tSpan) * (W - 2 * padX);
+  const py = (v: number) => padY + (1 - (v - lo) / vSpan) * (H - 2 * padY);
+  const line = data.map((d) => `${px(d.t).toFixed(1)},${py(d.v).toFixed(1)}`).join(" ");
+  const area = `${padX},${H - padY} ${line} ${W - padX},${H - padY}`;
+  const lp = data[data.length - 1];
+
+  return (
+    <Box>
+      <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 0.5, flexWrap: "wrap" }}>
+        <Box sx={{ width: 10, height: 10, borderRadius: "2px", bgcolor: s.color, alignSelf: "center" }} />
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>{s.label}</Typography>
+        <Typography variant="body2" color="text.secondary">{s.fmt(first)} → {s.fmt(last)}</Typography>
+        <Typography variant="body2" sx={{ color: deltaColor, fontWeight: 600 }}>{arrow} {s.fmt(Math.abs(delta))}</Typography>
+        {extreme != null && (
+          <Typography variant="caption" color="text.secondary">{s.extremeLabel} {s.fmt(extreme)}</Typography>
+        )}
+      </Stack>
+      <Box sx={{ position: "relative" }}>
+        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+          style={{ display: "block" }}>
+          <polygon points={area} fill={s.color} opacity={0.1} />
+          <polyline points={line} fill="none" stroke={s.color} strokeWidth={2}
+            strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          <circle cx={px(lp.t)} cy={py(lp.v)} r={2.5} fill={s.color} vectorEffect="non-scaling-stroke" />
+        </svg>
+        <Typography variant="caption" color="text.secondary"
+          sx={{ position: "absolute", top: 0, left: 2, lineHeight: 1, pointerEvents: "none" }}>{s.fmt(hi)}</Typography>
+        <Typography variant="caption" color="text.secondary"
+          sx={{ position: "absolute", bottom: 0, left: 2, lineHeight: 1, pointerEvents: "none" }}>{s.fmt(lo)}</Typography>
+      </Box>
+      <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.25 }}>
+        <Typography variant="caption" color="text.secondary">{formatDateTime(new Date(t0).toISOString())}</Typography>
+        <Typography variant="caption" color="text.secondary">{formatDateTime(new Date(t1).toISOString())}</Typography>
+      </Stack>
     </Box>
   );
 }

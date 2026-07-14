@@ -89,6 +89,15 @@ type SessionRow struct {
 	StartedAt string `json:"startedAt"`
 }
 
+// MetricHistory is a host's bucketed metric time series, returned to the UI so it
+// can render a trend chart beneath the answer.
+type MetricHistory struct {
+	Hostname      string                     `json:"hostname"`
+	WindowHours   int                        `json:"windowHours"`
+	BucketMinutes int                        `json:"bucketMinutes"`
+	Points        []store.MetricHistoryPoint `json:"points"`
+}
+
 // AskResult is the (eventual) outcome of a question, with structured data the UI
 // renders beneath the answer (whichever tool the model used).
 type AskResult struct {
@@ -97,6 +106,7 @@ type AskResult struct {
 	Hosts    []models.AssistantHostRow `json:"hosts,omitempty"`
 	Sessions []SessionRow              `json:"sessions,omitempty"`
 	Host     *models.Host              `json:"host,omitempty"`
+	History  *MetricHistory            `json:"history,omitempty"`
 	Error    string                    `json:"error,omitempty"`
 	created  time.Time
 	owner    uuid.UUID // the user who asked; only they may read the result
@@ -107,6 +117,7 @@ type answerData struct {
 	hosts    []models.AssistantHostRow
 	sessions []SessionRow
 	host     *models.Host
+	history  *MetricHistory
 }
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
@@ -162,7 +173,8 @@ func (s *Service) run(id, question string, who Caller, cfg Settings) {
 	}
 	s.asks.Store(id, &AskResult{
 		Status: "done", Answer: answer,
-		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, created: time.Now(), owner: who.UserID,
+		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, History: data.history,
+		created: time.Now(), owner: who.UserID,
 	})
 }
 
@@ -210,7 +222,11 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 			case "recent_playbook_runs":
 				result = s.runRecentPlaybookRuns(ctx, who)
 			case "host_metric_history":
-				result = s.runMetricHistory(ctx, tc.Function.Arguments, who)
+				hist, payload := s.runMetricHistory(ctx, tc.Function.Arguments, who)
+				if hist != nil {
+					data.history = hist
+				}
+				result = payload
 			default:
 				result = map[string]any{"error": "unknown tool"}
 			}
@@ -303,24 +319,26 @@ func (s *Service) runRecentPlaybookRuns(ctx context.Context, who Caller) any {
 }
 
 // runMetricHistory returns a host's bucketed metric history for trend questions,
-// scoped to hosts the caller can access and clamped to the server's retention.
-func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who Caller) any {
+// scoped to hosts the caller can access and clamped to the server's retention. It
+// returns the structured series for the UI chart (nil when empty/denied) plus the
+// payload fed to the model.
+func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who Caller) (*MetricHistory, any) {
 	if s.metricRetention <= 0 {
-		return map[string]any{"error": "metric history is not enabled on this server"}
+		return nil, map[string]any{"error": "metric history is not enabled on this server"}
 	}
 	var a metricHistoryArgs
 	_ = json.Unmarshal(raw, &a)
 	if a.Hostname == "" {
-		return map[string]any{"error": "hostname is required"}
+		return nil, map[string]any{"error": "hostname is required"}
 	}
 	host, err := s.store.HostByHostname(ctx, a.Hostname)
 	if err != nil {
-		return map[string]any{"error": "no host named " + a.Hostname}
+		return nil, map[string]any{"error": "no host named " + a.Hostname}
 	}
 	if !who.IsSuperAdmin {
 		ok, aerr := s.store.UserCanAccessHost(ctx, who.UserID, host.ID)
 		if aerr != nil || !ok {
-			return map[string]any{"error": "you do not have access to that host"}
+			return nil, map[string]any{"error": "you do not have access to that host"}
 		}
 	}
 	// Window: default 48h; clamp to [1h, retention] so we never claim data we pruned.
@@ -343,19 +361,26 @@ func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who
 	points, err := s.store.MetricHistory(ctx, host.ID, time.Now().Add(-window), bucket)
 	if err != nil {
 		s.log.Warn("assistant metric history", "err", err)
-		return map[string]any{"error": "could not load metric history"}
+		return nil, map[string]any{"error": "could not load metric history"}
 	}
-	resp := map[string]any{
-		"hostname":      host.Hostname,
-		"windowHours":   int(window / time.Hour),
-		"bucketMinutes": int(bucket / time.Minute),
+	hist := &MetricHistory{
+		Hostname:      host.Hostname,
+		WindowHours:   int(window / time.Hour),
+		BucketMinutes: int(bucket / time.Minute),
+		Points:        points,
+	}
+	payload := map[string]any{
+		"hostname":      hist.Hostname,
+		"windowHours":   hist.WindowHours,
+		"bucketMinutes": hist.BucketMinutes,
 		"count":         len(points),
 		"points":        points,
 	}
 	if len(points) == 0 {
-		resp["note"] = "no metric history recorded for this host in the requested window (it may have been enrolled recently, or history collection just started)"
+		payload["note"] = "no metric history recorded for this host in the requested window (it may have been enrolled recently, or history collection just started)"
+		return nil, payload // nothing to chart
 	}
-	return resp
+	return hist, payload
 }
 
 // cleanup drops results older than the ask timeout to bound memory.

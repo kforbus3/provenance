@@ -28,12 +28,31 @@ export interface AssistantSession {
   startedAt: string;
 }
 
+export interface MetricHistoryPoint {
+  t: string; // bucket timestamp (ISO)
+  samples: number;
+  diskFreePctAvg?: number;
+  diskFreePctMin?: number;
+  memUsedPctAvg?: number;
+  memUsedPctMax?: number;
+  loadPerCoreAvg?: number;
+  loadPerCoreMax?: number;
+}
+
+export interface MetricHistory {
+  hostname: string;
+  windowHours: number;
+  bucketMinutes: number;
+  points: MetricHistoryPoint[];
+}
+
 export interface AskResult {
   status: string; // pending|done|error
   answer?: string;
   hosts?: AssistantHost[];
   sessions?: AssistantSession[];
   host?: Host;
+  history?: MetricHistory;
   error?: string;
 }
 
