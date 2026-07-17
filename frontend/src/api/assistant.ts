@@ -43,7 +43,20 @@ export interface MetricHistory {
   hostname: string;
   windowHours: number;
   bucketMinutes: number;
+  metrics?: string[]; // which series the question was about (disk/memory/load); absent = all
   points: MetricHistoryPoint[];
+}
+
+export interface AssistantTableColumn {
+  label: string;
+  kind?: string; // "" text | "time" RFC 3339 | "bytes"
+}
+
+// Generic tabular tool result (audit events, schedules, past sessions, transfers).
+export interface AssistantTable {
+  title: string;
+  columns: AssistantTableColumn[];
+  rows: string[][];
 }
 
 export interface AskResult {
@@ -53,6 +66,7 @@ export interface AskResult {
   sessions?: AssistantSession[];
   host?: Host;
   history?: MetricHistory;
+  table?: AssistantTable;
   error?: string;
 }
 

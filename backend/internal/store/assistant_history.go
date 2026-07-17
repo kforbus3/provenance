@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -52,6 +53,116 @@ func (s *Store) RecentScansForAssistant(ctx context.Context, userID uuid.UUID, i
 		var r models.AssistantScanRow
 		if err := rows.Scan(&r.Hostname, &r.Profile, &r.Status, &r.Score,
 			&r.PassCount, &r.FailCount, &r.Requester, &r.Scheduled, &r.FinishedAt, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentSSHSessionsForAssistant returns past + active SSH sessions (scoped to
+// hosts the user can reach), optionally filtered to one hostname/username and
+// bounded to sessions that started after `since`.
+func (s *Store) RecentSSHSessionsForAssistant(ctx context.Context, userID uuid.UUID, isSuperAdmin bool, hostname, username string, since time.Time, limit int) ([]models.AssistantSSHSessionRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	args := []any{since}
+	where := "WHERE ss.started_at >= $1"
+	if hostname != "" {
+		args = append(args, hostname)
+		where += fmt.Sprintf(" AND ss.hostname = $%d", len(args))
+	}
+	if username != "" {
+		args = append(args, username)
+		where += fmt.Sprintf(" AND ss.username ILIKE '%%'||$%d||'%%'", len(args))
+	}
+	where += accessibleHostsSubquery("ss.host_id", userID, isSuperAdmin, &args)
+	args = append(args, limit)
+	sql := `SELECT COALESCE(ss.username,''), COALESCE(ss.hostname,''), COALESCE(host(ss.client_ip),''),
+			ss.status, ss.started_at, ss.ended_at
+		FROM ssh_sessions ss ` + where +
+		` ORDER BY ss.started_at DESC LIMIT $` + fmt.Sprint(len(args))
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.AssistantSSHSessionRow{}
+	for rows.Next() {
+		var r models.AssistantSSHSessionRow
+		if err := rows.Scan(&r.Username, &r.Hostname, &r.ClientIP, &r.Status, &r.StartedAt, &r.EndedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentAuditForAssistant returns recent audit events, newest first. The audit
+// trail is not host-scoped; the caller gates access by the Audit.View
+// permission (mirroring the audit page). Detail JSON is truncated so one noisy
+// event cannot blow up the model context.
+func (s *Store) RecentAuditForAssistant(ctx context.Context, actionContains, actorContains string, since time.Time, limit int) ([]models.AssistantAuditRow, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT created_at, COALESCE(actor_name,''), action, target_kind, target_id,
+		       COALESCE(host(ip),''), left(detail::text, 300)
+		FROM audit_events
+		WHERE created_at >= $1
+		  AND ($2='' OR action ILIKE '%'||$2||'%')
+		  AND ($3='' OR actor_name ILIKE '%'||$3||'%')
+		ORDER BY seq DESC LIMIT $4`,
+		since, actionContains, actorContains, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.AssistantAuditRow{}
+	for rows.Next() {
+		var r models.AssistantAuditRow
+		if err := rows.Scan(&r.Time, &r.Actor, &r.Action, &r.TargetKind, &r.TargetID, &r.IP, &r.Detail); err != nil {
+			return nil, err
+		}
+		if r.Detail == "{}" {
+			r.Detail = ""
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentSFTPTransfersForAssistant returns recent file transfers (scoped to
+// hosts the user can reach), optionally filtered to one hostname.
+func (s *Store) RecentSFTPTransfersForAssistant(ctx context.Context, userID uuid.UUID, isSuperAdmin bool, hostname string, since time.Time, limit int) ([]models.AssistantTransferRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	args := []any{since}
+	where := "WHERE t.created_at >= $1"
+	if hostname != "" {
+		args = append(args, hostname)
+		where += fmt.Sprintf(" AND h.hostname = $%d", len(args))
+	}
+	where += accessibleHostsSubquery("t.host_id", userID, isSuperAdmin, &args)
+	args = append(args, limit)
+	sql := `SELECT COALESCE(u.username::text,''), COALESCE(h.hostname,''), t.direction,
+			t.remote_path, t.size_bytes, t.status, t.created_at
+		FROM sftp_transfers t
+		LEFT JOIN hosts h ON h.id = t.host_id
+		LEFT JOIN users u ON u.id = t.user_id ` + where +
+		` ORDER BY t.created_at DESC LIMIT $` + fmt.Sprint(len(args))
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.AssistantTransferRow{}
+	for rows.Next() {
+		var r models.AssistantTransferRow
+		if err := rows.Scan(&r.Username, &r.Hostname, &r.Direction, &r.Path, &r.SizeBytes, &r.Status, &r.Time); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

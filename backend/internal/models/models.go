@@ -295,13 +295,13 @@ type EnrollmentStep struct {
 
 // AuditEvent is one entry in the tamper-evident audit chain.
 type AuditEvent struct {
-	Seq        int64          `json:"seq"`
-	ID         uuid.UUID      `json:"id"`
-	ActorID    *uuid.UUID     `json:"actorId,omitempty"`
-	ActorName  string         `json:"actorName,omitempty"`
-	Action     string         `json:"action"`
-	TargetKind string         `json:"targetKind,omitempty"`
-	TargetID   string         `json:"targetId,omitempty"`
+	Seq        int64      `json:"seq"`
+	ID         uuid.UUID  `json:"id"`
+	ActorID    *uuid.UUID `json:"actorId,omitempty"`
+	ActorName  string     `json:"actorName,omitempty"`
+	Action     string     `json:"action"`
+	TargetKind string     `json:"targetKind,omitempty"`
+	TargetID   string     `json:"targetId,omitempty"`
 	// TargetName is a display-only, human-readable name for the target (e.g. the
 	// username or hostname behind TargetID). It is resolved at read time for the
 	// UI and never persisted or part of the hash chain.
@@ -412,6 +412,53 @@ type AssistantPlaybookRunRow struct {
 	Scheduled  bool       `json:"scheduled"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
+}
+
+// AssistantSSHSessionRow is a past (or still-active) SSH session surfaced to
+// the AI assistant's session_history tool.
+type AssistantSSHSessionRow struct {
+	Username  string     `json:"username,omitempty"`
+	Hostname  string     `json:"hostname,omitempty"`
+	ClientIP  string     `json:"clientIp,omitempty"`
+	Status    string     `json:"status"` // active|closed|error
+	StartedAt time.Time  `json:"startedAt"`
+	EndedAt   *time.Time `json:"endedAt,omitempty"`
+}
+
+// AssistantAuditRow is one audit event surfaced to the AI assistant.
+type AssistantAuditRow struct {
+	Time       time.Time `json:"time"`
+	Actor      string    `json:"actor,omitempty"`
+	Action     string    `json:"action"`
+	TargetKind string    `json:"targetKind,omitempty"`
+	TargetID   string    `json:"targetId,omitempty"`
+	IP         string    `json:"ip,omitempty"`
+	Detail     string    `json:"detail,omitempty"` // compact JSON, truncated
+}
+
+// AssistantScheduleRow is a recurring scan/playbook schedule surfaced to the
+// AI assistant.
+type AssistantScheduleRow struct {
+	Name       string     `json:"name"`
+	Kind       string     `json:"kind"` // scan | playbook
+	Enabled    bool       `json:"enabled"`
+	Target     string     `json:"target,omitempty"` // "host web-01" / "group dba"
+	Recurrence string     `json:"recurrence"`       // human summary
+	LastRunAt  *time.Time `json:"lastRunAt,omitempty"`
+	LastStatus string     `json:"lastStatus,omitempty"`
+	NextRunAt  *time.Time `json:"nextRunAt,omitempty"`
+	Running    bool       `json:"running"`
+}
+
+// AssistantTransferRow is one SFTP transfer surfaced to the AI assistant.
+type AssistantTransferRow struct {
+	Username  string    `json:"username,omitempty"`
+	Hostname  string    `json:"hostname,omitempty"`
+	Direction string    `json:"direction"` // upload | download
+	Path      string    `json:"path"`
+	SizeBytes int64     `json:"sizeBytes"`
+	Status    string    `json:"status"`
+	Time      time.Time `json:"time"`
 }
 
 // ScanFinding is one rule outcome from a scan (used to list failures the user

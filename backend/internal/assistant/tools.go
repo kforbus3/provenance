@@ -2,46 +2,66 @@ package assistant
 
 import "github.com/fleet-terminal/backend/internal/store"
 
-const systemPrompt = `You are Fleet Assistant, a read-only helper for a fleet of Linux hosts.
+const systemPrompt = `You are Fleet Assistant, the read-only assistant of an experienced Linux
+system administrator, answering questions about a fleet of managed hosts.
 
-Answer questions about the fleet ONLY by calling the query_hosts tool — never invent
-host names, counts, or metrics. query_hosts returns each host's kernel version, OS
-name + version, architecture, CPU count, total memory, uptime, primary IP, status,
-disk/memory/load metrics, and pending package-update counts (updatesAvailable +
-securityUpdates), so use it for ALL host questions (specs, inventory, and available
-updates too, not just metrics). Translate the request into filter fields, for example:
-- "hosts with less than 20% disk free" -> diskFreePctMax: 20
-- "offline debian boxes" -> status: "offline", osContains: "debian"
-- "prod hosts under heavy load" -> environment: "production", loadPerCoreMin: 1
-- "which hosts have updates available" -> updatesAvailableMin: 1, then read updatesAvailable
-- "hosts with security updates" -> securityUpdatesMin: 1, then read securityUpdates
-- "list the kernel versions of all hosts" -> call query_hosts with no filters, then
-  read the kernel field from each returned host
+Ground every answer in tool results — never invent host names, counts, times, or metrics.
+If no tool covers the question, or the question is not about the fleet, say so.
 
-You also have:
-- list_sessions: who is currently connected to which host (active SSH sessions).
-- host_detail: full detail for ONE host by exact hostname, including every mounted
-  filesystem's usage and all network interfaces. Use it for questions like "which
-  filesystem is full on web-01" or "what subnet is db-02 on".
-- recent_scans: recent OpenSCAP security scans (scheduled or manual), most recent
-  first, with host, profile, status, score, and when they ran. Use for "when was
-  the last security scan on web-01" or "which hosts were scanned recently".
-- recent_playbook_runs: recent Ansible playbook runs (scheduled or manual), with
-  playbook name, target, status, and when they ran. Use for "when did the
-  apt-upgrade playbook last run" or "what playbooks ran recently". When the user
-  asks about the LAST scan or playbook run, read the most recent matching entry
-  and report its time.
-- host_metric_history: a host's disk/memory/load usage over time, as time-ordered
-  buckets, for TREND questions like "what is the trend in disk usage for web-01 over
-  the past 48 hours" or "has memory been climbing on db-02". query_hosts and
-  host_detail give only the CURRENT value; use host_metric_history whenever the
-  question is about a trend, a change, or a time range. Compare the earliest and
-  latest buckets to state the direction and size of the change.
+CHOOSING TOOLS
+- query_hosts: the CURRENT state of many hosts — status, OS + kernel, arch, CPU/memory
+  specs, uptime, IP, disk-free %, memory-used %, load per core, WireGuard health,
+  pending updates (updatesAvailable + securityUpdates), groups, tags, owner. Use it for
+  ALL inventory/status/spec questions. Translate the request into filters, e.g.:
+  - "hosts with less than 20% disk free" -> diskFreePctMax: 20
+  - "offline debian boxes" -> status: "offline", osContains: "debian"
+  - "prod hosts under heavy load" -> environment: "production", loadPerCoreMin: 1
+  - "hosts with security updates" -> securityUpdatesMin: 1, then read securityUpdates
+  - "kernel versions of all hosts" -> no filters, then read each host's kernel field
+- host_detail: deep-dive on ONE host by exact hostname — every mounted filesystem's
+  usage and all network interfaces ("which filesystem is full on web-01",
+  "what subnet is db-02 on").
+- host_metric_history: ONE host's disk/memory/load OVER TIME, in time-ordered buckets.
+  Use it whenever the question involves a trend, a change, or a time range — query_hosts
+  and host_detail only know the current value. Set metrics to ONLY what the question
+  asks about: ["disk"] for a disk question, ["memory"], ["load"]; omit metrics only when
+  the question is about overall resource usage. Compare earliest and latest buckets to
+  state direction and size of the change.
+- list_sessions: SSH sessions active RIGHT NOW. session_history: PAST sessions — who
+  connected to which host and when, and whether the session ended in an error. Use
+  session_history for "who logged into web-01 yesterday" or "any failed sessions".
+- recent_scans / recent_playbook_runs: OpenSCAP scan and Ansible playbook history,
+  newest first, each entry flagged scheduled (automatic) vs manual. For "the last
+  scan/run", report the most recent matching entry and its time.
+- list_schedules: the recurring scan/playbook schedules — what runs automatically,
+  against what target, when it fires next, and how its last firing went.
+- audit_log: the platform audit trail (logins, session terminations, host/user/config
+  changes, permission changes...). Use for "what changed today", "who deleted host X",
+  "any failed logins". Filter with actionContains/actorContains when the question names
+  an action or a person.
+- recent_file_transfers: SFTP uploads/downloads — who moved which file to/from which
+  host, size, and status.
 
-All percentages are 0-100. After a tool returns, give a brief, factual answer that
-references the data the user will see. If the question is not about the fleet, say you
-can only answer questions about the fleet. Results are already limited to what the user
-is allowed to see.`
+WORKING METHOD
+- Use the smallest set of tools that answers the question, but DO combine tools when
+  needed, and call the same tool more than once when comparing (e.g. host_metric_history
+  per host to find which of a few hosts is filling up fastest).
+- Fleet health checks ("anything wrong?", "morning report"): query_hosts for offline
+  hosts, low disk, high memory/load, WireGuard down, pending security updates; add
+  recent_scans / recent_playbook_runs failures if relevant.
+- Capacity questions ("when will web-01 run out of disk?"): get the disk trend from
+  host_metric_history, extrapolate the recent rate of change linearly, and present the
+  result as a rough estimate, stating the rate you derived.
+- All percentages are 0-100. Timestamps are RFC 3339. If a tool returns an error or an
+  empty result, say what you could not see instead of guessing; a permission error means
+  this user is not allowed to see that data. Results are already limited to what the
+  user may see.
+
+ANSWER STYLE
+Lead with the direct answer, then the key numbers that support it (with units and the
+time range). Be concise and factual — the raw rows are shown to the user beneath your
+answer, so summarize and highlight what matters (worst host, biggest change, anomalies)
+rather than reciting every row.`
 
 // tools is the curated, read-only tool surface exposed to the model.
 var tools = []toolDef{{
@@ -121,15 +141,92 @@ var tools = []toolDef{{
 			"properties": map[string]any{
 				"hostname": map[string]any{"type": "string", "description": "exact hostname"},
 				"hours":    map[string]any{"type": "integer", "description": "how many hours back to look (default 48; capped to the server's retention window)"},
+				"metrics": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string", "enum": []string{"disk", "memory", "load"}},
+					"description": "which metrics the question asks about — pass ONLY those (e.g. [\"disk\"] for a disk-usage question); omit for overall resource usage",
+				},
 			},
 			"required": []string{"hostname"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "session_history",
+		Description: "List PAST and active SSH sessions, newest first: who connected to which host, from which client IP, when it started/ended, and its status (active, closed, or error). Use for questions about past logins/connections ('who connected to web-01 yesterday', 'any sessions that ended in an error'). For sessions active right now, prefer list_sessions.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname to filter to (optional)"},
+				"username": map[string]any{"type": "string", "description": "username substring to filter to (optional)"},
+				"hours":    map[string]any{"type": "integer", "description": "how many hours back to look (default 48, max 720)"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "audit_log",
+		Description: "List recent events from the platform audit trail, newest first: logins and failed logins, terminal/SFTP activity, session terminations, host/user/group/role/schedule changes, setting changes, and so on. Each event has a time, actor, action (dotted, e.g. 'auth.login', 'host.delete'), target, IP, and a short detail. Use for 'what changed today', 'who deleted host X', 'any failed logins this week'.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"actionContains": map[string]any{"type": "string", "description": "substring match on the action, e.g. 'login', 'delete', 'terminate' (optional)"},
+				"actorContains":  map[string]any{"type": "string", "description": "substring match on the acting user's name (optional)"},
+				"hours":          map[string]any{"type": "integer", "description": "how many hours back to look (default 24, max 720)"},
+				"limit":          map[string]any{"type": "integer", "description": "max rows (default 50)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "list_schedules",
+		Description: "List the recurring scan/playbook schedules: name, kind (scan or playbook), enabled, target (host or group), a human-readable recurrence ('every 30m', 'daily at 02:00'), last run time + status, next run time, and whether it is running right now. Use for 'what runs automatically', 'when is the next scan of web-01', 'did the nightly playbook succeed'. Takes no arguments.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "recent_file_transfers",
+		Description: "List recent SFTP file transfers, newest first: who uploaded/downloaded which file to/from which host, the size in bytes, status, and when. Use for 'what files were uploaded to web-01 this week' or 'who downloaded anything recently'.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname to filter to (optional)"},
+				"hours":    map[string]any{"type": "integer", "description": "how many hours back to look (default 168, max 720)"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
+			},
 		},
 	},
 }}
 
 type metricHistoryArgs struct {
+	Hostname string   `json:"hostname"`
+	Hours    int      `json:"hours"`
+	Metrics  []string `json:"metrics"`
+}
+
+type sessionHistoryArgs struct {
+	Hostname string `json:"hostname"`
+	Username string `json:"username"`
+	Hours    int    `json:"hours"`
+	Limit    int    `json:"limit"`
+}
+
+type auditLogArgs struct {
+	ActionContains string `json:"actionContains"`
+	ActorContains  string `json:"actorContains"`
+	Hours          int    `json:"hours"`
+	Limit          int    `json:"limit"`
+}
+
+type fileTransfersArgs struct {
 	Hostname string `json:"hostname"`
 	Hours    int    `json:"hours"`
+	Limit    int    `json:"limit"`
 }
 
 type recentScansArgs struct {

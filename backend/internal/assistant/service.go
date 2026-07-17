@@ -7,6 +7,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	maxToolIterations = 4
+	maxToolIterations = 8
 	askTimeout        = 5 * time.Minute
 )
 
@@ -90,12 +91,30 @@ type SessionRow struct {
 }
 
 // MetricHistory is a host's bucketed metric time series, returned to the UI so it
-// can render a trend chart beneath the answer.
+// can render a trend chart beneath the answer. Metrics narrows which series the
+// question was about (subset of disk/memory/load; empty = all).
 type MetricHistory struct {
 	Hostname      string                     `json:"hostname"`
 	WindowHours   int                        `json:"windowHours"`
 	BucketMinutes int                        `json:"bucketMinutes"`
+	Metrics       []string                   `json:"metrics,omitempty"`
 	Points        []store.MetricHistoryPoint `json:"points"`
+}
+
+// TableColumn is one column of a generic assistant result table. Kind tells the
+// UI how to format the raw string value ("" = text, "time" = RFC 3339 timestamp,
+// "bytes" = byte count).
+type TableColumn struct {
+	Label string `json:"label"`
+	Kind  string `json:"kind,omitempty"`
+}
+
+// AssistantTable is a generic tabular result (audit events, schedules, past
+// sessions, file transfers...) the UI renders beneath the answer.
+type AssistantTable struct {
+	Title   string        `json:"title"`
+	Columns []TableColumn `json:"columns"`
+	Rows    [][]string    `json:"rows"`
 }
 
 // AskResult is the (eventual) outcome of a question, with structured data the UI
@@ -107,6 +126,7 @@ type AskResult struct {
 	Sessions []SessionRow              `json:"sessions,omitempty"`
 	Host     *models.Host              `json:"host,omitempty"`
 	History  *MetricHistory            `json:"history,omitempty"`
+	Table    *AssistantTable           `json:"table,omitempty"`
 	Error    string                    `json:"error,omitempty"`
 	created  time.Time
 	owner    uuid.UUID // the user who asked; only they may read the result
@@ -118,16 +138,20 @@ type answerData struct {
 	sessions []SessionRow
 	host     *models.Host
 	history  *MetricHistory
+	table    *AssistantTable
 }
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
 type Caller struct {
-	UserID          uuid.UUID
-	IsSuperAdmin    bool
-	Username        string
-	CanViewSessions bool // Session.Replay — gates the list_sessions tool
-	CanViewScans    bool // Host.Scan — gates the recent_scans tool
-	CanViewRuns     bool // Playbook.Run — gates the recent_playbook_runs tool
+	UserID           uuid.UUID
+	IsSuperAdmin     bool
+	Username         string
+	CanViewSessions  bool // Session.Replay — gates list_sessions + session_history
+	CanViewScans     bool // Host.Scan — gates the recent_scans tool
+	CanViewRuns      bool // Playbook.Run — gates the recent_playbook_runs tool
+	CanViewAudit     bool // Audit.View — gates the audit_log tool
+	CanViewSchedules bool // Schedule.Manage — gates the list_schedules tool
+	CanViewTransfers bool // File.Transfer — gates the recent_file_transfers tool
 }
 
 // Ask starts answering a question in the background and returns a poll id. Async
@@ -174,6 +198,7 @@ func (s *Service) run(id, question string, who Caller, cfg Settings) {
 	s.asks.Store(id, &AskResult{
 		Status: "done", Answer: answer,
 		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, History: data.history,
+		Table:   data.table,
 		created: time.Now(), owner: who.UserID,
 	})
 }
@@ -225,6 +250,30 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 				hist, payload := s.runMetricHistory(ctx, tc.Function.Arguments, who)
 				if hist != nil {
 					data.history = hist
+				}
+				result = payload
+			case "session_history":
+				tbl, payload := s.runSessionHistory(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "audit_log":
+				tbl, payload := s.runAuditLog(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "list_schedules":
+				tbl, payload := s.runListSchedules(ctx, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "recent_file_transfers":
+				tbl, payload := s.runFileTransfers(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
 				}
 				result = payload
 			default:
@@ -363,10 +412,12 @@ func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who
 		s.log.Warn("assistant metric history", "err", err)
 		return nil, map[string]any{"error": "could not load metric history"}
 	}
+	metrics := normalizeMetrics(a.Metrics)
 	hist := &MetricHistory{
 		Hostname:      host.Hostname,
 		WindowHours:   int(window / time.Hour),
 		BucketMinutes: int(bucket / time.Minute),
+		Metrics:       metrics,
 		Points:        points,
 	}
 	payload := map[string]any{
@@ -374,13 +425,239 @@ func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who
 		"windowHours":   hist.WindowHours,
 		"bucketMinutes": hist.BucketMinutes,
 		"count":         len(points),
-		"points":        points,
+		"points":        filterPoints(points, metrics),
 	}
 	if len(points) == 0 {
 		payload["note"] = "no metric history recorded for this host in the requested window (it may have been enrolled recently, or history collection just started)"
 		return nil, payload // nothing to chart
 	}
 	return hist, payload
+}
+
+// normalizeMetrics validates the model's metric selection down to the known
+// series names; nil means "all metrics".
+func normalizeMetrics(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range in {
+		m = strings.ToLower(strings.TrimSpace(m))
+		switch m {
+		case "disk", "memory", "load":
+			if !seen[m] {
+				seen[m] = true
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+// filterPoints strips the series the question was not about from the payload
+// fed to the model, so the answer (and the model's attention) stays on what was
+// asked. The UI chart filters independently via MetricHistory.Metrics.
+func filterPoints(points []store.MetricHistoryPoint, metrics []string) any {
+	if len(metrics) == 0 {
+		return points
+	}
+	want := map[string]bool{}
+	for _, m := range metrics {
+		want[m] = true
+	}
+	out := make([]map[string]any, 0, len(points))
+	for _, p := range points {
+		row := map[string]any{"t": p.Time, "samples": p.Samples}
+		if want["disk"] {
+			putFloat(row, "diskFreePctAvg", p.DiskFreePctAvg)
+			putFloat(row, "diskFreePctMin", p.DiskFreePctMin)
+		}
+		if want["memory"] {
+			putFloat(row, "memUsedPctAvg", p.MemUsedPctAvg)
+			putFloat(row, "memUsedPctMax", p.MemUsedPctMax)
+		}
+		if want["load"] {
+			putFloat(row, "loadPerCoreAvg", p.LoadPerCoreAvg)
+			putFloat(row, "loadPerCoreMax", p.LoadPerCoreMax)
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func putFloat(row map[string]any, key string, v *float64) {
+	if v != nil {
+		row[key] = *v
+	}
+}
+
+// windowSince converts an "hours back" tool argument into a start time,
+// applying the tool's default and the shared 30-day cap.
+func windowSince(hours, def int) time.Time {
+	if hours <= 0 {
+		hours = def
+	}
+	if hours > 720 {
+		hours = 720
+	}
+	return time.Now().Add(-time.Duration(hours) * time.Hour)
+}
+
+func tableTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+func tableTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return tableTime(*t)
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+// runSessionHistory returns past + active SSH sessions (gated like the sessions
+// page) as a UI table plus the model payload.
+func (s *Service) runSessionHistory(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if !who.CanViewSessions && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view session history"}
+	}
+	var a sessionHistoryArgs
+	_ = json.Unmarshal(raw, &a)
+	rows, err := s.store.RecentSSHSessionsForAssistant(ctx, who.UserID, who.IsSuperAdmin,
+		a.Hostname, a.Username, windowSince(a.Hours, 48), a.Limit)
+	if err != nil {
+		s.log.Warn("assistant session_history", "err", err)
+		return nil, map[string]any{"error": "could not list session history"}
+	}
+	tbl := &AssistantTable{
+		Title: "SSH sessions",
+		Columns: []TableColumn{{Label: "User"}, {Label: "Host"}, {Label: "Client IP"},
+			{Label: "Status"}, {Label: "Started", Kind: "time"}, {Label: "Ended", Kind: "time"}},
+	}
+	for _, r := range rows {
+		tbl.Rows = append(tbl.Rows, []string{r.Username, r.Hostname, r.ClientIP,
+			r.Status, tableTime(r.StartedAt), tableTimePtr(r.EndedAt)})
+	}
+	if len(rows) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{"count": len(rows), "sessions": rows}
+}
+
+// runAuditLog returns recent audit events (gated by Audit.View) as a UI table
+// plus the model payload.
+func (s *Service) runAuditLog(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if !who.CanViewAudit && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view the audit log"}
+	}
+	var a auditLogArgs
+	_ = json.Unmarshal(raw, &a)
+	rows, err := s.store.RecentAuditForAssistant(ctx, a.ActionContains, a.ActorContains,
+		windowSince(a.Hours, 24), a.Limit)
+	if err != nil {
+		s.log.Warn("assistant audit_log", "err", err)
+		return nil, map[string]any{"error": "could not list audit events"}
+	}
+	tbl := &AssistantTable{
+		Title: "Audit events",
+		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "Actor"}, {Label: "Action"},
+			{Label: "Target"}, {Label: "IP"}, {Label: "Detail"}},
+	}
+	for _, r := range rows {
+		tbl.Rows = append(tbl.Rows, []string{tableTime(r.Time), r.Actor, r.Action,
+			r.TargetKind, r.IP, r.Detail})
+	}
+	if len(rows) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{"count": len(rows), "events": rows}
+}
+
+// runListSchedules returns the recurring scan/playbook schedules (gated by
+// Schedule.Manage) as a UI table plus the model payload.
+func (s *Service) runListSchedules(ctx context.Context, who Caller) (*AssistantTable, any) {
+	if !who.CanViewSchedules && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view schedules"}
+	}
+	scheds, err := s.store.ListSchedules(ctx)
+	if err != nil {
+		s.log.Warn("assistant list_schedules", "err", err)
+		return nil, map[string]any{"error": "could not list schedules"}
+	}
+	rows := make([]models.AssistantScheduleRow, 0, len(scheds))
+	for _, sc := range scheds {
+		target := sc.TargetKind
+		if sc.TargetName != "" {
+			target += " " + sc.TargetName
+		}
+		rows = append(rows, models.AssistantScheduleRow{
+			Name: sc.Name, Kind: sc.Kind, Enabled: sc.Enabled, Target: target,
+			Recurrence: recurrenceSummary(sc.Recurrence),
+			LastRunAt:  sc.LastRunAt, LastStatus: sc.LastStatus,
+			NextRunAt: sc.NextRunAt, Running: sc.Running,
+		})
+	}
+	tbl := &AssistantTable{
+		Title: "Schedules",
+		Columns: []TableColumn{{Label: "Name"}, {Label: "Kind"}, {Label: "Enabled"},
+			{Label: "Target"}, {Label: "Recurrence"}, {Label: "Last run", Kind: "time"},
+			{Label: "Last status"}, {Label: "Next run", Kind: "time"}},
+	}
+	for _, r := range rows {
+		tbl.Rows = append(tbl.Rows, []string{r.Name, r.Kind, yesNo(r.Enabled), r.Target,
+			r.Recurrence, tableTimePtr(r.LastRunAt), r.LastStatus, tableTimePtr(r.NextRunAt)})
+	}
+	if len(rows) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{"count": len(rows), "schedules": rows}
+}
+
+// recurrenceSummary renders a schedule's recurrence in words for the model/UI.
+func recurrenceSummary(r models.Recurrence) string {
+	switch r.Type {
+	case "interval":
+		if r.EveryMinutes > 0 && r.EveryMinutes%60 == 0 {
+			return fmt.Sprintf("every %dh", r.EveryMinutes/60)
+		}
+		return fmt.Sprintf("every %dm", r.EveryMinutes)
+	case "daily":
+		return "daily at " + r.TimeOfDay
+	case "weekly":
+		return "weekly on " + time.Weekday(r.Weekday).String() + " at " + r.TimeOfDay
+	}
+	return r.Type
+}
+
+// runFileTransfers returns recent SFTP transfers (gated like the transfers
+// panel, scoped to accessible hosts) as a UI table plus the model payload.
+func (s *Service) runFileTransfers(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if !who.CanViewTransfers && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view file transfers"}
+	}
+	var a fileTransfersArgs
+	_ = json.Unmarshal(raw, &a)
+	rows, err := s.store.RecentSFTPTransfersForAssistant(ctx, who.UserID, who.IsSuperAdmin,
+		a.Hostname, windowSince(a.Hours, 168), a.Limit)
+	if err != nil {
+		s.log.Warn("assistant recent_file_transfers", "err", err)
+		return nil, map[string]any{"error": "could not list file transfers"}
+	}
+	tbl := &AssistantTable{
+		Title: "File transfers",
+		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "User"}, {Label: "Host"},
+			{Label: "Direction"}, {Label: "Path"}, {Label: "Size", Kind: "bytes"}, {Label: "Status"}},
+	}
+	for _, r := range rows {
+		tbl.Rows = append(tbl.Rows, []string{tableTime(r.Time), r.Username, r.Hostname,
+			r.Direction, r.Path, fmt.Sprint(r.SizeBytes), r.Status})
+	}
+	if len(rows) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{"count": len(rows), "transfers": rows}
 }
 
 // cleanup drops results older than the ask timeout to bound memory.

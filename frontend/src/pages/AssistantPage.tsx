@@ -8,7 +8,7 @@ import SendIcon from "@mui/icons-material/Send";
 import { useQuery } from "@tanstack/react-query";
 import {
   assistantStatus, askAssistant, askResult,
-  type AskResult, type AssistantHost, type AssistantSession,
+  type AskResult, type AssistantHost, type AssistantSession, type AssistantTable,
   type MetricHistory, type MetricHistoryPoint,
 } from "../api/assistant";
 import type { Host } from "../api/hosts";
@@ -68,17 +68,18 @@ export function AssistantPage() {
         {turns.length === 0 && ready && (
           <Box sx={{ color: "text.secondary" }}>
             <Typography variant="body2" sx={{ mb: 1 }}>
-              Ask about your fleet in plain language. The assistant can answer using each host's
-              status, OS &amp; kernel version, CPU/memory specs, uptime, disk/memory/load, IP &amp;
-              VPN health, groups, tags, and owner. For example:
+              Ask about your fleet in plain language. The assistant can answer from each host's
+              inventory and live metrics, usage history, SSH session and file-transfer records,
+              scan/playbook history and schedules, and the audit trail. For example:
             </Typography>
             <Box component="ul" sx={{ m: 0, pl: 3 }}>
               <li>“Which hosts have less than 20% disk free?”</li>
-              <li>“List the kernel versions of all hosts.”</li>
-              <li>“What production hosts are under heavy load?”</li>
-              <li>“Which hosts have their WireGuard tunnel down?”</li>
-              <li>“Show offline Debian hosts in the dba group.”</li>
-              <li>“How much memory does each host have?”</li>
+              <li>“What is the disk usage trend on web-01 over the past week?”</li>
+              <li>“Who connected to db-02 yesterday?”</li>
+              <li>“Any failed scans or playbook runs recently?”</li>
+              <li>“What changed in the audit log today?”</li>
+              <li>“What runs on a schedule, and when does it fire next?”</li>
+              <li>“Which hosts have security updates pending?”</li>
             </Box>
           </Box>
         )}
@@ -131,6 +132,7 @@ function TurnView({ turn }: { turn: Turn }) {
           {r.sessions && r.sessions.length > 0 && <SessionResults sessions={r.sessions} />}
           {r.host && <HostDetailPanel host={r.host} />}
           {r.history && r.history.points.length > 0 && <MetricHistoryPanel history={r.history} />}
+          {r.table && r.table.rows.length > 0 && <TablePanel table={r.table} />}
         </Box>
       )}
     </Box>
@@ -202,6 +204,46 @@ function SessionResults({ sessions }: { sessions: AssistantSession[] }) {
               <TableCell>{s.hostname}</TableCell>
               <TableCell>{s.clientIp || "—"}</TableCell>
               <TableCell>{fmtTime(s.startedAt)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Paper>
+  );
+}
+
+// TablePanel renders a generic tabular tool result (audit events, schedules,
+// past sessions, file transfers). Column kinds tell it how to format values.
+function TablePanel({ table }: { table: AssistantTable }) {
+  const cell = (v: string, kind?: string): string => {
+    if (!v) return "—";
+    if (kind === "time") return fmtTime(v);
+    if (kind === "bytes") return fmtBytes(Number(v) || 0);
+    return v;
+  };
+  return (
+    <Paper variant="outlined" sx={{ overflowX: "auto" }}>
+      <Typography variant="subtitle2" sx={{ px: 1.5, pt: 1 }}>{table.title}</Typography>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            {table.columns.map((c) => (
+              <TableCell key={c.label} align={c.kind === "bytes" ? "right" : "left"}>{c.label}</TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {table.rows.map((row, i) => (
+            <TableRow key={i}>
+              {row.map((v, j) => {
+                const kind = table.columns[j]?.kind;
+                return (
+                  <TableCell key={j} align={kind === "bytes" ? "right" : "left"}
+                    sx={kind === "time" ? { whiteSpace: "nowrap" } : undefined}>
+                    {cell(v, kind)}
+                  </TableCell>
+                );
+              })}
             </TableRow>
           ))}
         </TableBody>
@@ -282,6 +324,7 @@ function Fact({ label, value }: { label: string; value?: string }) {
 // One metric's trend: how to pull the average + worst-case extreme out of a bucket,
 // and how to read/colour the change.
 interface Series {
+  key: string;          // metric name the backend uses in history.metrics
   label: string;
   color: string;
   avgKey: keyof MetricHistoryPoint;
@@ -299,11 +342,15 @@ function MetricHistoryPanel({ history }: { history: MetricHistory }) {
   const pct = (v: number) => `${v.toFixed(0)}%`;
   const num = (v: number) => v.toFixed(2);
   const series: Series[] = [
-    { label: "Disk free", color: theme.palette.primary.main, avgKey: "diskFreePctAvg", extremeKey: "diskFreePctMin", extremeLabel: "low", worseWhenUp: false, fmt: pct },
-    { label: "Memory used", color: theme.palette.warning.main, avgKey: "memUsedPctAvg", extremeKey: "memUsedPctMax", extremeLabel: "peak", worseWhenUp: true, fmt: pct },
-    { label: "Load per core", color: theme.palette.info.main, avgKey: "loadPerCoreAvg", extremeKey: "loadPerCoreMax", extremeLabel: "peak", worseWhenUp: true, fmt: num },
+    { key: "disk", label: "Disk free", color: theme.palette.primary.main, avgKey: "diskFreePctAvg", extremeKey: "diskFreePctMin", extremeLabel: "low", worseWhenUp: false, fmt: pct },
+    { key: "memory", label: "Memory used", color: theme.palette.warning.main, avgKey: "memUsedPctAvg", extremeKey: "memUsedPctMax", extremeLabel: "peak", worseWhenUp: true, fmt: pct },
+    { key: "load", label: "Load per core", color: theme.palette.info.main, avgKey: "loadPerCoreAvg", extremeKey: "loadPerCoreMax", extremeLabel: "peak", worseWhenUp: true, fmt: num },
   ];
-  const active = series.filter((s) => history.points.some((p) => p[s.avgKey] != null));
+  // Show only the series the question was about (backend sends the selection);
+  // no selection = all series with data.
+  const want = history.metrics?.length ? new Set(history.metrics) : null;
+  const active = series.filter((s) =>
+    (!want || want.has(s.key)) && history.points.some((p) => p[s.avgKey] != null));
   if (active.length === 0) return null;
   const windowLabel = history.windowHours % 24 === 0
     ? `${history.windowHours / 24}d`
