@@ -67,6 +67,28 @@ func NewRefreshToken() (token, hash string, err error) {
 	return token, hash, nil
 }
 
+// APITokenPrefix marks a service-account API token in the Authorization header,
+// so RequireAuth can route it to token auth instead of JWT parsing. JWTs are
+// base64 "eyJ..." and never collide with this.
+const APITokenPrefix = "flt_"
+
+// NewAPIToken returns a service-account API token: the full secret (shown once at
+// creation), its storage hash (only this is persisted), and a short non-secret
+// prefix for later display in the UI.
+func NewAPIToken() (token, hash, prefix string, err error) {
+	buf := make([]byte, 32)
+	if _, err = rand.Read(buf); err != nil {
+		return "", "", "", err
+	}
+	token = APITokenPrefix + base64.RawURLEncoding.EncodeToString(buf)
+	hash = HashToken(token)
+	prefix = token
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+	return token, hash, prefix, nil
+}
+
 // HashToken returns the hex SHA-256 of an opaque token.
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))

@@ -9,6 +9,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
 import DeleteIcon from "@mui/icons-material/Delete";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -118,6 +119,7 @@ export function SessionsPage() {
   const [pruneDays, setPruneDays] = useState("30");
   const [snack, setSnack] = useState<string | null>(null);
   const canManage = useAuthStore((s) => s.has("System.Configure"));
+  const canWatch = useAuthStore((s) => s.has("Session.Watch"));
 
   // Client-side filters over the loaded sessions (search matches user/host/IP).
   const [search, setSearch] = useState("");
@@ -241,6 +243,14 @@ export function SessionsPage() {
                 <TableCell>{s.bytesIn} / {s.bytesOut}</TableCell>
                 <TableCell>{s.clientIp}</TableCell>
                 <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                  {s.status === "active" && canWatch && (
+                    <Tooltip title="Watch live (read-only)">
+                      <IconButton size="small" color="primary"
+                        onClick={() => window.open(`/sessions/${s.id}/watch`, "_blank", "noopener")}>
+                        <VisibilityIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   {s.hasRecording ? (
                     <>
                       <Tooltip title="Watch (replay)">

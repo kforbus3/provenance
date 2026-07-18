@@ -22,6 +22,28 @@ func (s *Service) Save(ctx context.Context, in *Config) error {
 		in.Email.PasswordEnc = cur.Email.PasswordEnc
 	}
 	in.Email.Password = "" // never persist plaintext
+	// PagerDuty routing key + Opsgenie API key follow the same write-only,
+	// encrypted-at-rest treatment as the SMTP password.
+	if in.PagerDuty.RoutingKey != "" {
+		enc, err := secretbox.Seal(s.cfg.CAKeyPassphrase, []byte(in.PagerDuty.RoutingKey))
+		if err != nil {
+			return err
+		}
+		in.PagerDuty.RoutingKeyEnc = enc
+	} else {
+		in.PagerDuty.RoutingKeyEnc = cur.PagerDuty.RoutingKeyEnc
+	}
+	in.PagerDuty.RoutingKey = ""
+	if in.Opsgenie.APIKey != "" {
+		enc, err := secretbox.Seal(s.cfg.CAKeyPassphrase, []byte(in.Opsgenie.APIKey))
+		if err != nil {
+			return err
+		}
+		in.Opsgenie.APIKeyEnc = enc
+	} else {
+		in.Opsgenie.APIKeyEnc = cur.Opsgenie.APIKeyEnc
+	}
+	in.Opsgenie.APIKey = ""
 	if in.Events == nil {
 		in.Events = map[string]Route{}
 	}
@@ -32,7 +54,9 @@ func (s *Service) Save(ctx context.Context, in *Config) error {
 // flag indicating whether a password is set.
 type Redacted struct {
 	Config
-	PasswordSet bool `json:"passwordSet"`
+	PasswordSet     bool `json:"passwordSet"`
+	PagerDutyKeySet bool `json:"pagerdutyKeySet"`
+	OpsgenieKeySet  bool `json:"opsgenieKeySet"`
 }
 
 func (s *Service) Redacted(ctx context.Context) (*Redacted, error) {
@@ -40,9 +64,15 @@ func (s *Service) Redacted(ctx context.Context) (*Redacted, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Redacted{Config: *c, PasswordSet: c.Email.PasswordEnc != ""}
-	r.Email.Password = ""
-	r.Email.PasswordEnc = ""
+	r := &Redacted{
+		Config:          *c,
+		PasswordSet:     c.Email.PasswordEnc != "",
+		PagerDutyKeySet: c.PagerDuty.RoutingKeyEnc != "",
+		OpsgenieKeySet:  c.Opsgenie.APIKeyEnc != "",
+	}
+	r.Email.Password, r.Email.PasswordEnc = "", ""
+	r.PagerDuty.RoutingKey, r.PagerDuty.RoutingKeyEnc = "", ""
+	r.Opsgenie.APIKey, r.Opsgenie.APIKeyEnc = "", ""
 	return r, nil
 }
 
@@ -71,6 +101,16 @@ func (s *Service) SendTest(ctx context.Context, channel string) error {
 			return fmt.Errorf("webhook channel is disabled")
 		}
 		return s.sendWebhook(ctx, cfg, ev)
+	case "pagerduty":
+		if !cfg.PagerDuty.Enabled {
+			return fmt.Errorf("pagerduty channel is disabled")
+		}
+		return s.sendPagerDuty(ctx, cfg, ev)
+	case "opsgenie":
+		if !cfg.Opsgenie.Enabled {
+			return fmt.Errorf("opsgenie channel is disabled")
+		}
+		return s.sendOpsgenie(ctx, cfg, ev)
 	default:
 		return fmt.Errorf("unknown channel %q", channel)
 	}

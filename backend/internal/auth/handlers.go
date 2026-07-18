@@ -39,6 +39,8 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Get("/auth/mfa", h.mfaList)
 		pr.Post("/auth/mfa/totp/enroll", h.mfaEnroll)
 		pr.Post("/auth/mfa/totp/confirm", h.mfaConfirm)
+		pr.Get("/auth/mfa/recovery-codes", h.mfaRecoveryStatus)
+		pr.Post("/auth/mfa/recovery-codes", h.mfaRecoveryGenerate)
 		pr.Delete("/auth/mfa/{id}", h.mfaDelete)
 		// OIDC SSO admin config.
 		pr.With(h.svc.RequirePermission("System.Configure")).Get("/auth/oidc/config", h.oidcConfigGet)
@@ -241,7 +243,12 @@ func (h *Handler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secrets, err := h.svc.store.ConfirmedTOTPSecrets(r.Context(), userID)
-	if err != nil || !h.svc.VerifyUserTOTPNoReplay(r.Context(), userID, secrets, req.Code) {
+	ok := err == nil && h.svc.VerifyUserTOTPNoReplay(r.Context(), userID, secrets, req.Code)
+	if !ok {
+		// Fall back to a one-time recovery code (lost-authenticator path).
+		ok = h.svc.ConsumeRecoveryCode(r.Context(), userID, req.Code)
+	}
+	if !ok {
 		// Count MFA failures toward the same lockout policy as password failures.
 		h.svc.applyFailure(r.Context(), userID)
 		ip, ua := clientMeta(r)
@@ -253,6 +260,43 @@ func (h *Handler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	ip, ua := clientMeta(r)
 	h.completeLogin(w, r, u, ip, ua)
+}
+
+// mfaRecoveryStatus reports how many unused recovery codes the caller has.
+func (h *Handler) mfaRecoveryStatus(w http.ResponseWriter, r *http.Request) {
+	p := MustPrincipal(r)
+	n, err := h.svc.store.RemainingRecoveryCodes(r.Context(), p.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load recovery codes")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"remaining": n})
+}
+
+// mfaRecoveryGenerate issues a fresh set of one-time recovery codes (invalidating
+// any previous set), returned once. Only meaningful with a confirmed second
+// factor, so it is refused otherwise.
+func (h *Handler) mfaRecoveryGenerate(w http.ResponseWriter, r *http.Request) {
+	p := MustPrincipal(r)
+	has, err := h.svc.store.HasConfirmedMFA(r.Context(), p.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check MFA status")
+		return
+	}
+	if !has {
+		writeError(w, http.StatusBadRequest, "enroll a second factor before generating recovery codes")
+		return
+	}
+	codes, err := h.svc.GenerateRecoveryCodes(r.Context(), p.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not generate recovery codes")
+		return
+	}
+	ip, ua := clientMeta(r)
+	_ = h.svc.store.RecordAuthEvent(r.Context(), models.AuthEvent{
+		UserID: &p.UserID, Username: p.Username, Event: "mfa_recovery_generated", IP: ip, UserAgent: ua,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
 
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {

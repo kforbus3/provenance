@@ -55,6 +55,7 @@ func Mount(r chi.Router, d *app.Deps) {
 		// Groups
 		pr.With(d.Auth.RequirePermission("Group.Edit")).Get("/groups", h.listGroups)
 		pr.With(d.Auth.RequirePermission("Group.Create")).Post("/groups", h.createGroup)
+		pr.With(d.Auth.RequirePermission("Group.Edit")).Put("/groups/{id}", h.updateGroup)
 		pr.With(d.Auth.RequirePermission("Group.Delete")).Delete("/groups/{id}", h.deleteGroup)
 
 		// System settings

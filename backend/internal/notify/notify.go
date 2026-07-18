@@ -29,6 +29,7 @@ const (
 	EventPlaybookFailed   = "playbook.failed"
 	EventCAKeyAging       = "ca.aging"
 	EventFleetDigest      = "fleet.digest"
+	EventReportScheduled  = "report.scheduled"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -45,6 +46,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventPlaybookFailed, "Playbook run failed"},
 	{EventCAKeyAging, "CA key due for rotation"},
 	{EventFleetDigest, "Scheduled fleet-health digest"},
+	{EventReportScheduled, "Scheduled compliance report"},
 }
 
 const settingKey = "notifications"
@@ -72,6 +74,16 @@ type Event struct {
 	// is routed to email — the same gate as the admin distribution — so disabling
 	// the event's email route silences both.
 	Recipient string
+	// Attachments are files delivered with the event. They are attached to email
+	// (multipart/mixed); the webhook channel ignores them (it sends the Body only).
+	Attachments []Attachment
+}
+
+// Attachment is a file delivered alongside an email event.
+type Attachment struct {
+	Filename    string
+	ContentType string // e.g. "text/csv"; defaults to application/octet-stream
+	Data        []byte
 }
 
 // EmailConfig configures a generic SMTP relay (any provider).
@@ -94,7 +106,27 @@ type EmailConfig struct {
 type WebhookConfig struct {
 	Enabled bool   `json:"enabled"`
 	URL     string `json:"url"`
-	Format  string `json:"format"` // json | slack | discord
+	Format  string `json:"format"` // json | slack | discord | teams
+}
+
+// PagerDutyConfig pages via the Events API v2. It is severity-gated (not
+// per-event): every event at or above MinSeverity triggers an incident, which is
+// how on-call tooling is normally driven. The routing key is stored encrypted.
+type PagerDutyConfig struct {
+	Enabled       bool     `json:"enabled"`
+	RoutingKey    string   `json:"routingKey,omitempty"` // write-only input
+	RoutingKeyEnc string   `json:"routingKeyEnc,omitempty"`
+	MinSeverity   Severity `json:"minSeverity"` // info|warning|error (default warning)
+}
+
+// OpsgenieConfig raises alerts via the Opsgenie Alerts API, severity-gated like
+// PagerDuty. The API key is stored encrypted; Region selects the US or EU host.
+type OpsgenieConfig struct {
+	Enabled     bool     `json:"enabled"`
+	APIKey      string   `json:"apiKey,omitempty"` // write-only input
+	APIKeyEnc   string   `json:"apiKeyEnc,omitempty"`
+	Region      string   `json:"region"` // us | eu
+	MinSeverity Severity `json:"minSeverity"`
 }
 
 // Route says which channels an event type goes to.
@@ -107,8 +139,31 @@ type Route struct {
 type Config struct {
 	Email           EmailConfig      `json:"email"`
 	Webhook         WebhookConfig    `json:"webhook"`
+	PagerDuty       PagerDutyConfig  `json:"pagerduty"`
+	Opsgenie        OpsgenieConfig   `json:"opsgenie"`
 	Events          map[string]Route `json:"events"`
 	ThrottleMinutes int              `json:"throttleMinutes"`
+}
+
+// severityRank orders severities for the incident-channel minimum-severity gate.
+func severityRank(s Severity) int {
+	switch s {
+	case SeverityError:
+		return 2
+	case SeverityWarning:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// meetsMinSeverity reports whether ev is at least as severe as min (empty min
+// defaults to warning, so info-level events don't page by default).
+func meetsMinSeverity(ev, min Severity) bool {
+	if min == "" {
+		min = SeverityWarning
+	}
+	return severityRank(ev) >= severityRank(min)
 }
 
 // Service loads config from settings and dispatches events.
@@ -154,7 +209,11 @@ func (s *Service) Notify(ctx context.Context, ev Event) {
 	// A direct recipient is emailed only when this event is routed to email — same
 	// gate as the admin distribution, so disabling the event silences both.
 	directEmail := ev.Recipient != "" && route.Email && cfg.Email.Enabled
-	if !adminEmail && !adminWebhook && !directEmail {
+	// Incident channels are severity-gated rather than per-event: they fire on any
+	// event at or above their minimum severity.
+	pageDuty := cfg.PagerDuty.Enabled && meetsMinSeverity(ev.Severity, cfg.PagerDuty.MinSeverity)
+	pageOpsgenie := cfg.Opsgenie.Enabled && meetsMinSeverity(ev.Severity, cfg.Opsgenie.MinSeverity)
+	if !adminEmail && !adminWebhook && !directEmail && !pageDuty && !pageOpsgenie {
 		return
 	}
 	if !s.allow(ev, cfg) {
@@ -173,6 +232,16 @@ func (s *Service) Notify(ctx context.Context, ev Event) {
 	if adminWebhook {
 		if err := s.sendWebhook(ctx, cfg, ev); err != nil {
 			s.log.Warn("notify webhook failed", "event", ev.Type, "err", err)
+		}
+	}
+	if pageDuty {
+		if err := s.sendPagerDuty(ctx, cfg, ev); err != nil {
+			s.log.Warn("notify pagerduty failed", "event", ev.Type, "err", err)
+		}
+	}
+	if pageOpsgenie {
+		if err := s.sendOpsgenie(ctx, cfg, ev); err != nil {
+			s.log.Warn("notify opsgenie failed", "event", ev.Type, "err", err)
 		}
 	}
 }

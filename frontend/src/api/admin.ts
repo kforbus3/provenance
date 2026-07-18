@@ -35,11 +35,20 @@ export interface Permission {
   description: string;
 }
 
+export interface GroupRule {
+  environment?: string;
+  tagsAll?: string[];
+  tagsAny?: string[];
+  osContains?: string;
+  hostnameContains?: string;
+}
+
 export interface Group {
   id: string;
   name: string;
   description: string;
   createdAt: string;
+  rule?: GroupRule; // present = dynamic (rule-managed) membership
 }
 
 export interface CreateUserInput {
@@ -190,8 +199,15 @@ export async function listGroups(): Promise<Group[]> {
   return data.groups;
 }
 
-export async function createGroup(name: string, description: string): Promise<Group> {
-  const { data } = await api.post<Group>("/api/v1/groups", { name, description });
+export async function createGroup(name: string, description: string, rule?: GroupRule): Promise<Group> {
+  const { data } = await api.post<Group>("/api/v1/groups", { name, description, rule });
+  return data;
+}
+
+// updateGroupRule sets (or clears, with an empty rule) a group's dynamic
+// membership rule and returns the recomputed group.
+export async function updateGroupRule(id: string, rule: GroupRule | null): Promise<Group> {
+  const { data } = await api.put<Group>(`/api/v1/groups/${id}`, { rule });
   return data;
 }
 

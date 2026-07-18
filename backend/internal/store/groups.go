@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/google/uuid"
@@ -71,30 +72,44 @@ func (s *Store) AccessibleGroupIDs(ctx context.Context, userID uuid.UUID, isSupe
 // ListGroups returns all groups.
 func (s *Store) ListGroups(ctx context.Context) ([]models.Group, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, description, created_at FROM groups ORDER BY name`)
+		`SELECT id, name, description, created_at, rule FROM groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []models.Group
 	for rows.Next() {
-		var g models.Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt); err != nil {
+		g, err := scanGroup(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, g)
+		out = append(out, *g)
 	}
 	return out, rows.Err()
 }
 
 // GetGroup loads one group by id.
 func (s *Store) GetGroup(ctx context.Context, id uuid.UUID) (*models.Group, error) {
-	var g models.Group
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, name, description, created_at FROM groups WHERE id=$1`, id).
-		Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt)
+	g, err := scanGroup(s.pool.QueryRow(ctx,
+		`SELECT id, name, description, created_at, rule FROM groups WHERE id=$1`, id))
 	if err != nil {
 		return nil, mapNotFound(err)
+	}
+	return g, nil
+}
+
+// scanGroup scans a group row including its (nullable) JSONB rule.
+func scanGroup(row interface{ Scan(...any) error }) (*models.Group, error) {
+	var g models.Group
+	var raw []byte
+	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) > 0 {
+		var rule models.GroupRule
+		if err := json.Unmarshal(raw, &rule); err == nil && !rule.Empty() {
+			g.Rule = &rule
+		}
 	}
 	return &g, nil
 }

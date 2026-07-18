@@ -15,15 +15,27 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 			unauthorized(w, "missing access token")
 			return
 		}
-		claims, err := ParseAccessToken(s.cfg.JWTSecret, tok)
-		if err != nil {
-			unauthorized(w, "invalid access token")
-			return
-		}
-		p, err := s.loadPrincipal(r.Context(), claims)
-		if err != nil {
-			unauthorized(w, "session invalid")
-			return
+		var p *Principal
+		if strings.HasPrefix(tok, APITokenPrefix) {
+			// Service-account API token (for automation/CI): authenticate against
+			// the api_tokens table rather than parsing a JWT session.
+			var err error
+			p, err = s.authenticateAPIToken(r.Context(), tok)
+			if err != nil {
+				unauthorized(w, "invalid api token")
+				return
+			}
+		} else {
+			claims, err := ParseAccessToken(s.cfg.JWTSecret, tok)
+			if err != nil {
+				unauthorized(w, "invalid access token")
+				return
+			}
+			p, err = s.loadPrincipal(r.Context(), claims)
+			if err != nil {
+				unauthorized(w, "session invalid")
+				return
+			}
 		}
 		// An account flagged to change its password may only reach the auth
 		// endpoints (change-password, logout, profile, MFA) until it does so —

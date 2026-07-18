@@ -25,6 +25,9 @@ import {
   getDigest, saveDigest, previewDigest, sendDigest, type DigestPolicy,
 } from "../api/digest";
 import {
+  getReportSchedule, saveReportSchedule, sendReportScheduleNow, type ReportSchedule,
+} from "../api/reportSchedule";
+import {
   getOidcConfig, saveOidcConfig, getLdapConfig, saveLdapConfig,
   type OidcConfig, type LdapConfig,
 } from "../api/sso";
@@ -111,6 +114,7 @@ export function SettingsPage() {
               <AssistantCard current={settings["assistant"]} />
               <NotificationsCard />
               <DigestCard />
+              <ReportScheduleCard />
               <AuditForwardingCard />
             </>
           )}
@@ -965,6 +969,110 @@ function DigestCard() {
   );
 }
 
+const REPORT_KINDS = [
+  { key: "access", label: "Access report" },
+  { key: "audit", label: "Audit trail" },
+  { key: "certificates", label: "Certificate issuance" },
+  { key: "scans", label: "Scan posture" },
+];
+
+// ReportScheduleCard configures recurring delivery of compliance CSV reports. The
+// cadence lives here; delivery is via the notification channels above — route the
+// "Scheduled compliance report" event to email (reports attach as CSV files).
+function ReportScheduleCard() {
+  const qc = useQueryClient();
+  const { data: loaded } = useQuery({ queryKey: ["report-schedule"], queryFn: getReportSchedule });
+  const [p, setP] = useState<ReportSchedule | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [sentMsg, setSentMsg] = useState<string | null>(null);
+
+  useEffect(() => { if (loaded && !p) setP(loaded); }, [loaded, p]);
+
+  const save = useMutation({
+    mutationFn: () => saveReportSchedule(p as ReportSchedule),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["report-schedule"] }); },
+  });
+  const send = useMutation({
+    mutationFn: sendReportScheduleNow,
+    onSuccess: () => setSentMsg("Reports sent to the configured channels (if the event is routed to email)."),
+    onError: () => setSentMsg("Send failed."),
+  });
+
+  if (!p) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Scheduled compliance reports</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+
+  const set = (patch: Partial<ReportSchedule>) => { setP({ ...p, ...patch }); setSaved(false); setSentMsg(null); };
+  const toggleReport = (key: string, on: boolean) =>
+    set({ reports: on ? [...p.reports, key] : p.reports.filter((k) => k !== key) });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Scheduled compliance reports</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Deliver the selected evidence reports as CSV attachments on a schedule (for access reviews and
+        SOC 2 / ISO / PCI audits). Route the <b>Scheduled compliance report</b> event to email in
+        Notifications above for delivery.
+      </Typography>
+
+      <FormControlLabel
+        control={<Switch checked={p.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Send reports on a schedule"
+      />
+
+      <Box sx={{ my: 1 }}>
+        <Typography variant="body2" sx={{ mb: 0.5 }}>Reports to include</Typography>
+        <Stack direction="row" flexWrap="wrap">
+          {REPORT_KINDS.map((rk) => (
+            <FormControlLabel key={rk.key}
+              control={<Checkbox size="small" checked={p.reports.includes(rk.key)}
+                disabled={!p.enabled} onChange={(e) => toggleReport(rk.key, e.target.checked)} />}
+              label={rk.label} />
+          ))}
+        </Stack>
+      </Box>
+
+      <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
+        <TextField select size="small" label="Frequency" value={p.frequency} sx={{ minWidth: 130 }}
+          disabled={!p.enabled} onChange={(e) => set({ frequency: e.target.value as ReportSchedule["frequency"] })}>
+          <MenuItem value="weekly">Weekly</MenuItem>
+          <MenuItem value="monthly">Monthly</MenuItem>
+        </TextField>
+        {p.frequency === "weekly" ? (
+          <TextField select size="small" label="Day" value={p.weekday} sx={{ minWidth: 130 }}
+            disabled={!p.enabled} onChange={(e) => set({ weekday: Number(e.target.value) })}>
+            {WEEKDAYS.map((d, i) => <MenuItem key={d} value={i}>{d}</MenuItem>)}
+          </TextField>
+        ) : (
+          <TextField select size="small" label="Day of month" value={p.dayOfMonth} sx={{ minWidth: 130 }}
+            disabled={!p.enabled} onChange={(e) => set({ dayOfMonth: Number(e.target.value) })}>
+            {Array.from({ length: 28 }, (_, i) => <MenuItem key={i + 1} value={i + 1}>{i + 1}</MenuItem>)}
+          </TextField>
+        )}
+        <TextField select size="small" label="Hour" value={p.hour} sx={{ minWidth: 120 }}
+          disabled={!p.enabled} onChange={(e) => set({ hour: Number(e.target.value) })}>
+          {Array.from({ length: 24 }, (_, h) => <MenuItem key={h} value={h}>{String(h).padStart(2, "0")}:00</MenuItem>)}
+        </TextField>
+        <TextField type="number" size="small" label="Lookback (days)" value={p.lookbackDays}
+          disabled={!p.enabled} sx={{ width: 140 }}
+          onChange={(e) => set({ lookbackDays: Math.max(1, Number(e.target.value) || 1) })} />
+      </Stack>
+
+      <Stack direction="row" spacing={1} sx={{ mt: 2 }} alignItems="center" flexWrap="wrap">
+        <Button variant="contained" onClick={() => save.mutate()} disabled={save.isPending}>Save</Button>
+        <Button onClick={() => send.mutate()} disabled={send.isPending || p.reports.length === 0}>Send now</Button>
+        {saved && <Alert severity="success" sx={{ py: 0 }}>Saved.</Alert>}
+        {sentMsg && <Typography variant="body2" color="text.secondary">{sentMsg}</Typography>}
+      </Stack>
+    </Paper>
+  );
+}
+
 // NotificationsCard configures outbound alerts (email/webhook) and which events
 // go to which channel. Everything is off until enabled. The SMTP password is
 // write-only — the server stores it encrypted and never returns it.
@@ -988,9 +1096,20 @@ function NotificationsCard() {
           security: e.security || "starttls",
         },
         webhook: { enabled: w.enabled ?? false, url: w.url ?? "", format: w.format || "json" },
+        pagerduty: {
+          enabled: loaded.pagerduty?.enabled ?? false,
+          minSeverity: loaded.pagerduty?.minSeverity || "warning",
+        },
+        opsgenie: {
+          enabled: loaded.opsgenie?.enabled ?? false,
+          region: loaded.opsgenie?.region || "us",
+          minSeverity: loaded.opsgenie?.minSeverity || "warning",
+        },
         events: loaded.events ?? {},
         throttleMinutes: loaded.throttleMinutes || 5,
         passwordSet: loaded.passwordSet,
+        pagerdutyKeySet: loaded.pagerdutyKeySet,
+        opsgenieKeySet: loaded.opsgenieKeySet,
       });
     }
   }, [loaded, cfg]);
@@ -1000,7 +1119,7 @@ function NotificationsCard() {
     onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["notifications"] }); },
   });
   const test = useMutation({
-    mutationFn: (channel: "email" | "webhook") => testNotification(channel),
+    mutationFn: (channel: "email" | "webhook" | "pagerduty" | "opsgenie") => testNotification(channel),
     onSuccess: (r) => setTestMsg(r.ok ? "Test sent successfully." : `Test failed: ${r.error}`),
     onError: () => setTestMsg("Test failed."),
   });
@@ -1017,6 +1136,8 @@ function NotificationsCard() {
   const dirty = () => { setSaved(false); setTestMsg(null); };
   const setEmail = (patch: Partial<NotificationConfig["email"]>) => { setCfg({ ...cfg, email: { ...cfg.email, ...patch } }); dirty(); };
   const setWebhook = (patch: Partial<NotificationConfig["webhook"]>) => { setCfg({ ...cfg, webhook: { ...cfg.webhook, ...patch } }); dirty(); };
+  const setPager = (patch: Partial<NotificationConfig["pagerduty"]>) => { setCfg({ ...cfg, pagerduty: { ...cfg.pagerduty, ...patch } }); dirty(); };
+  const setOpsgenie = (patch: Partial<NotificationConfig["opsgenie"]>) => { setCfg({ ...cfg, opsgenie: { ...cfg.opsgenie, ...patch } }); dirty(); };
   const setRoute = (key: string, ch: "email" | "webhook", on: boolean) => {
     const row = cfg.events[key] ?? { email: false, webhook: false };
     setCfg({ ...cfg, events: { ...cfg.events, [key]: { ...row, [ch]: on } } });
@@ -1090,11 +1211,73 @@ function NotificationsCard() {
               <MenuItem value="json">Generic JSON</MenuItem>
               <MenuItem value="slack">Slack / Mattermost</MenuItem>
               <MenuItem value="discord">Discord</MenuItem>
+              <MenuItem value="teams">Microsoft Teams</MenuItem>
             </TextField>
           </Stack>
           <Box>
             <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("webhook")}>
               Send test webhook
+            </Button>
+          </Box>
+        </Stack>
+      )}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* PagerDuty — incident channel, severity-gated (not per-event). */}
+      <FormControlLabel
+        control={<Switch checked={cfg.pagerduty.enabled} onChange={(e) => setPager({ enabled: e.target.checked })} />}
+        label="PagerDuty"
+      />
+      {cfg.pagerduty.enabled && (
+        <Stack spacing={1.5} sx={{ ml: 4, mb: 1 }}>
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            <TextField label={cfg.pagerdutyKeySet ? "Routing key (set — leave blank to keep)" : "Integration/Routing key"}
+              size="small" type="password" value={cfg.pagerduty.routingKey ?? ""}
+              onChange={(e) => setPager({ routingKey: e.target.value })} sx={{ flexGrow: 1, minWidth: 240 }} />
+            <TextField label="Page on" size="small" select value={cfg.pagerduty.minSeverity} sx={{ width: 160 }}
+              onChange={(e) => setPager({ minSeverity: e.target.value })}>
+              <MenuItem value="error">Errors only</MenuItem>
+              <MenuItem value="warning">Warnings &amp; errors</MenuItem>
+              <MenuItem value="info">Everything</MenuItem>
+            </TextField>
+          </Stack>
+          <Box>
+            <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("pagerduty")}>
+              Send test page
+            </Button>
+          </Box>
+        </Stack>
+      )}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* Opsgenie — incident channel, severity-gated. */}
+      <FormControlLabel
+        control={<Switch checked={cfg.opsgenie.enabled} onChange={(e) => setOpsgenie({ enabled: e.target.checked })} />}
+        label="Opsgenie"
+      />
+      {cfg.opsgenie.enabled && (
+        <Stack spacing={1.5} sx={{ ml: 4, mb: 1 }}>
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            <TextField label={cfg.opsgenieKeySet ? "API key (set — leave blank to keep)" : "API key"}
+              size="small" type="password" value={cfg.opsgenie.apiKey ?? ""}
+              onChange={(e) => setOpsgenie({ apiKey: e.target.value })} sx={{ flexGrow: 1, minWidth: 220 }} />
+            <TextField label="Region" size="small" select value={cfg.opsgenie.region} sx={{ width: 110 }}
+              onChange={(e) => setOpsgenie({ region: e.target.value })}>
+              <MenuItem value="us">US</MenuItem>
+              <MenuItem value="eu">EU</MenuItem>
+            </TextField>
+            <TextField label="Alert on" size="small" select value={cfg.opsgenie.minSeverity} sx={{ width: 160 }}
+              onChange={(e) => setOpsgenie({ minSeverity: e.target.value })}>
+              <MenuItem value="error">Errors only</MenuItem>
+              <MenuItem value="warning">Warnings &amp; errors</MenuItem>
+              <MenuItem value="info">Everything</MenuItem>
+            </TextField>
+          </Stack>
+          <Box>
+            <Button size="small" variant="outlined" disabled={test.isPending} onClick={() => test.mutate("opsgenie")}>
+              Send test alert
             </Button>
           </Box>
         </Stack>

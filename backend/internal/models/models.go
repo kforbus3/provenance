@@ -32,6 +32,34 @@ type User struct {
 	Groups []string `json:"groups,omitempty"`
 }
 
+// ServiceAccount is a non-human identity that authenticates via API tokens. It is
+// a users row flagged is_service_account, carrying roles + group host-access like
+// any user but with no password and no interactive login.
+type ServiceAccount struct {
+	ID          uuid.UUID  `json:"id"`
+	Username    string     `json:"username"`
+	DisplayName string     `json:"displayName"`
+	IsDisabled  bool       `json:"isDisabled"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	Roles       []string   `json:"roles"`
+	Groups      []string   `json:"groups"`
+	TokenCount  int        `json:"tokenCount"`
+	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
+}
+
+// APIToken is a hashed bearer credential belonging to a service account. The
+// plaintext is returned only once, at creation, in the separate Secret field.
+type APIToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	Secret     string     `json:"secret,omitempty"` // full token, set only on creation
+}
+
 // Role is a named collection of permissions.
 type Role struct {
 	ID          uuid.UUID `json:"id"`
@@ -50,10 +78,29 @@ type Permission struct {
 
 // Group authorizes users to hosts via shared membership.
 type Group struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	Rule        *GroupRule `json:"rule,omitempty"` // non-nil = dynamic (rule-managed) membership
+}
+
+// GroupRule defines dynamic group membership over stable host attributes. Live
+// metrics are deliberately excluded — membership (and thus access) must not flap
+// with disk/load. A host matches when every non-empty condition holds.
+type GroupRule struct {
+	Environment      string   `json:"environment,omitempty"`
+	TagsAll          []string `json:"tagsAll,omitempty"` // host must carry ALL of these tags
+	TagsAny          []string `json:"tagsAny,omitempty"` // host must carry AT LEAST ONE
+	OSContains       string   `json:"osContains,omitempty"`
+	HostnameContains string   `json:"hostnameContains,omitempty"`
+}
+
+// Empty reports whether the rule has no conditions (matches nothing — a safe
+// default rather than "all hosts").
+func (r *GroupRule) Empty() bool {
+	return r == nil || (r.Environment == "" && len(r.TagsAll) == 0 && len(r.TagsAny) == 0 &&
+		r.OSContains == "" && r.HostnameContains == "")
 }
 
 // Host is a managed Linux system.

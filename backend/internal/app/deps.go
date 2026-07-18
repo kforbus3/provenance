@@ -23,6 +23,7 @@ type Deps struct {
 	Log   *slog.Logger
 	Auth  *auth.Service
 	Live  *livesessions.Registry
+	Watch *livesessions.Broker // fans out live terminal output to read-only watchers
 
 	// Notify delivers outbound alerts (email/webhook). Handlers call it on
 	// notable events (e.g. a new approval request).

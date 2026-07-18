@@ -44,6 +44,10 @@ type Service struct {
 	wa      *webauthn.WebAuthn
 	waErr   error
 	waStore waStore
+
+	// tokenTouch throttles api_tokens.last_used_at writes: tokenID -> last write
+	// (unix nanos), so a busy token isn't a DB write per request.
+	tokenTouch sync.Map
 }
 
 // SetSessionHooks registers identity lifecycle callbacks.
@@ -296,6 +300,45 @@ func (s *Service) ReapStaleSessions(ctx context.Context) int {
 }
 
 // loadPrincipal builds a Principal from a validated session, resolving permissions.
+// authenticateAPIToken resolves a service-account API token to a Principal. The
+// token authenticates AS the service account (its user id), so host access and
+// audit attribution flow through the existing user machinery. Tokens are never
+// implicitly super-admin — broad access must be granted via an assigned role.
+func (s *Service) authenticateAPIToken(ctx context.Context, tokenStr string) (*Principal, error) {
+	rec, err := s.store.GetAPITokenByHash(ctx, HashToken(tokenStr))
+	if err != nil {
+		return nil, ErrSessionInvalid
+	}
+	if rec.RevokedAt != nil || rec.Disabled ||
+		(rec.ExpiresAt != nil && !rec.ExpiresAt.After(time.Now())) {
+		return nil, ErrSessionInvalid
+	}
+	perms, err := s.store.UserPermissions(ctx, rec.ServiceAccountID)
+	if err != nil {
+		return nil, err
+	}
+	s.touchToken(ctx, rec.TokenID)
+	return &Principal{
+		UserID:       rec.ServiceAccountID,
+		SessionID:    uuid.Nil, // no browser session: token auth can't open terminals/SFTP (those need session SSH creds)
+		Username:     rec.Username,
+		IsSuperAdmin: false,
+		Permissions:  perms,
+	}, nil
+}
+
+// touchToken records a token's use at most once per minute to avoid a DB write
+// on every request.
+func (s *Service) touchToken(ctx context.Context, id uuid.UUID) {
+	const interval = int64(time.Minute)
+	now := time.Now().UnixNano()
+	if v, ok := s.tokenTouch.Load(id); ok && now-v.(int64) < interval {
+		return
+	}
+	s.tokenTouch.Store(id, now)
+	_ = s.store.TouchAPIToken(ctx, id)
+}
+
 func (s *Service) loadPrincipal(ctx context.Context, claims *Claims) (*Principal, error) {
 	sess, err := s.store.GetSession(ctx, claims.SessionID)
 	if err != nil || sess.RevokedAt != nil || sess.ExpiresAt.Before(time.Now()) {

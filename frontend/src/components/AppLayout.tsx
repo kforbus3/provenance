@@ -12,6 +12,8 @@ import GavelIcon from "@mui/icons-material/Gavel";
 import PeopleIcon from "@mui/icons-material/People";
 import SecurityIcon from "@mui/icons-material/Security";
 import GroupWorkIcon from "@mui/icons-material/GroupWork";
+import ApiIcon from "@mui/icons-material/Api";
+import AssessmentIcon from "@mui/icons-material/Assessment";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -49,9 +51,11 @@ const NAV = [
   { to: "/schedules", label: "Schedules", icon: <ScheduleIcon />, perm: "Schedule.Manage" },
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
   { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },
+  { to: "/reports", label: "Reports", icon: <AssessmentIcon />, perm: "Audit.View" },
   { to: "/users", label: "Users", icon: <PeopleIcon />, perm: "User.Edit" },
   { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
   { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },
+  { to: "/service-accounts", label: "Service Accounts", icon: <ApiIcon />, perm: "ServiceAccount.Manage" },
   { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
   { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },

@@ -245,6 +245,10 @@ func (h *handler) addGroup(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	if dyn, _ := h.d.Store.GroupIsDynamic(r.Context(), groupID); dyn {
+		httpx.WriteError(w, http.StatusConflict, "group membership is rule-managed; edit the group's rule instead")
+		return
+	}
 	if err := h.d.Store.AddHostToGroup(r.Context(), hostID, groupID); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not add to group")
 		return
@@ -258,6 +262,10 @@ func (h *handler) removeGroup(w http.ResponseWriter, r *http.Request) {
 	groupID, err2 := uuid.Parse(chi.URLParam(r, "groupId"))
 	if err1 != nil || err2 != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if dyn, _ := h.d.Store.GroupIsDynamic(r.Context(), groupID); dyn {
+		httpx.WriteError(w, http.StatusConflict, "group membership is rule-managed; edit the group's rule instead")
 		return
 	}
 	if err := h.d.Store.RemoveHostFromGroup(r.Context(), hostID, groupID); err != nil {

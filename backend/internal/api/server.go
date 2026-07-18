@@ -52,10 +52,14 @@ import (
 	"github.com/fleet-terminal/backend/internal/playbook"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
+	"github.com/fleet-terminal/backend/internal/reports"
+	"github.com/fleet-terminal/backend/internal/reportsched"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/scheduler"
+	"github.com/fleet-terminal/backend/internal/serviceaccounts"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
+	"github.com/fleet-terminal/backend/internal/shadow"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/support"
@@ -80,6 +84,7 @@ type Server struct {
 	Hub     *ws.Hub
 	Jobs    *jobs.Registry
 	Live    *livesessions.Registry
+	Watch   *livesessions.Broker
 	Notify  *notify.Service
 
 	scanSvc     *scan.Service
@@ -89,6 +94,7 @@ type Server struct {
 	auditFwd    *auditfwd.Forwarder
 	insights    *insights.Service
 	digest      *digest.Service
+	reportSched *reportsched.Service
 
 	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
 	lastCANotify time.Time
@@ -115,6 +121,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Hub:     ws.NewHub(),
 		Jobs:    jobs.NewRegistry(),
 		Live:    livesessions.New(),
+		Watch:   livesessions.NewBroker(),
 		Notify:  notify.New(st, cfg, log),
 	}
 
@@ -127,6 +134,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.auditFwd = auditfwd.New(st, log)
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
 	s.digest = digest.New(st, s.insights, s.Notify, log)
+	s.reportSched = reportsched.New(st, s.Notify, log)
 	st.SetAuditSink(s.auditFwd.Forward) // forward audit events to syslog/SIEM when enabled
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
@@ -196,6 +204,8 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
 	go s.digest.Run(ctx)
+	go s.reportSched.Run(ctx)
+	go s.dynamicGroupLoop(ctx)
 	go s.krlLoop(ctx)
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx)
@@ -423,6 +433,26 @@ func (s *Server) pruneAudit(ctx context.Context) {
 	s.Jobs.Record("audit-retention", nil)
 }
 
+// dynamicGroupLoop periodically recomputes rule-managed (dynamic) group
+// membership so host, tag, and inventory changes are reflected without per-change
+// hooks. Runs once shortly after startup, then on an interval.
+func (s *Server) dynamicGroupLoop(ctx context.Context) {
+	t := time.NewTimer(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := s.Store.ReconcileDynamicGroups(ctx); err != nil {
+				s.Log.Warn("reconcile dynamic groups", "err", err)
+			}
+			s.Jobs.Record("dynamic-groups", nil)
+			t.Reset(3 * time.Minute)
+		}
+	}
+}
+
 // reaperLoop periodically expires elapsed just-in-time access grants and ends
 // idle/expired sessions (force-closing their live terminal/SFTP connections).
 func (s *Server) reaperLoop(ctx context.Context) {
@@ -584,7 +614,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
 	})
 
-	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Events: s.Hub, Notify: s.Notify}
+	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Watch: s.Watch, Events: s.Hub, Notify: s.Notify}
 	deps.DistributeKRL = s.distributeKRL
 
 	// M2 — first-run wizard + authentication.
@@ -634,8 +664,12 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)
+	serviceaccounts.Mount(r, deps)
 	auditapi.Mount(r, deps)
+	reports.Mount(r, deps)
+	reportsched.Mount(r, s.Auth, s.reportSched)
 	sessionsapi.Mount(r, deps)
+	shadow.Mount(r, deps)
 	approvals.Mount(r, deps)
 	system.Mount(r, deps, s.Jobs)
 

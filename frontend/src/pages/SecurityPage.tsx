@@ -6,7 +6,9 @@ import {
 import DeleteIcon from "@mui/icons-material/Delete";
 import { QRCodeSVG } from "qrcode.react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { mfaConfirm, mfaDelete, mfaEnroll, mfaList } from "../api/auth";
+import {
+  mfaConfirm, mfaDelete, mfaEnroll, mfaList, recoveryStatus, generateRecoveryCodes,
+} from "../api/auth";
 import { registerPasskey, webauthnSupported } from "../api/webauthn";
 
 // Per-user security settings: enroll and manage TOTP two-factor authentication.
@@ -146,6 +148,74 @@ export function SecurityPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <RecoveryCodesCard hasMfa={confirmed.length > 0} />
     </Box>
+  );
+}
+
+// RecoveryCodesCard manages one-time backup codes usable in place of a second
+// factor when the authenticator is lost. Only useful once a second factor exists.
+function RecoveryCodesCard({ hasMfa }: { hasMfa: boolean }) {
+  const qc = useQueryClient();
+  const { data: status } = useQuery({
+    queryKey: ["recovery-codes"], queryFn: recoveryStatus, enabled: hasMfa,
+  });
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const gen = useMutation({
+    mutationFn: generateRecoveryCodes,
+    onSuccess: (c) => { setCodes(c); void qc.invalidateQueries({ queryKey: ["recovery-codes"] }); },
+  });
+
+  const download = () => {
+    if (!codes) return;
+    const blob = new Blob([codes.join("\n") + "\n"], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "fleet-recovery-codes.txt";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Card sx={{ mt: 3 }}>
+      <CardContent>
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Typography variant="h6">Recovery codes</Typography>
+          {hasMfa && (
+            <Chip size="small"
+              label={status ? `${status.remaining} remaining` : "…"}
+              color={status && status.remaining > 0 ? "success" : "warning"} />
+          )}
+        </Stack>
+        <Typography color="text.secondary" variant="body2" sx={{ mt: 1, mb: 2 }}>
+          One-time codes to sign in if you lose your authenticator or passkey. Each works once.
+          Keep them somewhere safe — generating a new set invalidates the old ones.
+        </Typography>
+
+        {!hasMfa && (
+          <Alert severity="info">Enroll a second factor above first — recovery codes back it up.</Alert>
+        )}
+
+        {hasMfa && codes && (
+          <Alert severity="success" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+              Save these now — they won't be shown again.
+            </Typography>
+            <Box sx={{ fontFamily: "monospace", columns: 2, mb: 1 }}>
+              {codes.map((c) => <div key={c}>{c}</div>)}
+            </Box>
+            <Button size="small" onClick={download}>Download .txt</Button>
+          </Alert>
+        )}
+
+        {hasMfa && (
+          <Button variant="contained" disabled={gen.isPending}
+            onClick={() => { if (!status?.remaining || window.confirm("Generate a new set? This invalidates your current recovery codes.")) gen.mutate(); }}>
+            {status && status.remaining > 0 ? "Regenerate recovery codes" : "Generate recovery codes"}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
   );
 }

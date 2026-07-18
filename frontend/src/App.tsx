@@ -29,6 +29,9 @@ const JobsPage = lazy(() => named(import("./pages/JobsPage"), "JobsPage"));
 const EnrollmentPage = lazy(() => named(import("./pages/EnrollmentPage"), "EnrollmentPage"));
 const CertificatesPage = lazy(() => named(import("./pages/CertificatesPage"), "CertificatesPage"));
 const AssistantPage = lazy(() => named(import("./pages/AssistantPage"), "AssistantPage"));
+const ServiceAccountsPage = lazy(() => named(import("./pages/ServiceAccountsPage"), "ServiceAccountsPage"));
+const ReportsPage = lazy(() => named(import("./pages/ReportsPage"), "ReportsPage"));
+const WatchSessionPage = lazy(() => named(import("./pages/WatchSessionPage"), "WatchSessionPage"));
 const PlaybooksPage = lazy(() => named(import("./pages/PlaybooksPage"), "PlaybooksPage"));
 const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "SchedulesPage"));
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
@@ -65,6 +68,10 @@ export function App() {
             path="/files/:hostId"
             element={<ProtectedRoute permission="File.Transfer"><FilesPage /></ProtectedRoute>}
           />
+          <Route
+            path="/sessions/:id/watch"
+            element={<ProtectedRoute permission="Session.Watch"><WatchSessionPage /></ProtectedRoute>}
+          />
 
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
@@ -77,9 +84,11 @@ export function App() {
               <Route path="schedules" element={<ProtectedRoute permission="Schedule.Manage"><SchedulesPage /></ProtectedRoute>} />
               <Route path="approvals" element={<ApprovalsPage />} />
               <Route path="audit" element={<ProtectedRoute permission="Audit.View"><AuditPage /></ProtectedRoute>} />
+              <Route path="reports" element={<ProtectedRoute permission="Audit.View"><ReportsPage /></ProtectedRoute>} />
               <Route path="users" element={<ProtectedRoute permission="User.Edit"><UsersPage /></ProtectedRoute>} />
               <Route path="roles" element={<ProtectedRoute permission="Role.Edit"><RolesPage /></ProtectedRoute>} />
               <Route path="groups" element={<ProtectedRoute permission="Group.Edit"><GroupsPage /></ProtectedRoute>} />
+              <Route path="service-accounts" element={<ProtectedRoute permission="ServiceAccount.Manage"><ServiceAccountsPage /></ProtectedRoute>} />
               <Route path="enrollment" element={<ProtectedRoute permission="Host.Enroll"><EnrollmentPage /></ProtectedRoute>} />
               <Route path="certificates" element={<ProtectedRoute permission="Certificate.Manage"><CertificatesPage /></ProtectedRoute>} />
               <Route path="security" element={<SecurityPage />} />

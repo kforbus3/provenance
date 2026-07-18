@@ -124,14 +124,22 @@ export function LoginPage() {
               )}
               {showCode ? (
                 <TextField
-                  label="Authenticator code"
+                  label={enrolling ? "Authenticator code" : "Authenticator or recovery code"}
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   autoFocus
                   fullWidth
                   required
-                  inputProps={{ inputMode: "numeric", pattern: "[0-9]*", maxLength: 6 }}
-                  helperText="Enter the 6-digit code from your authenticator app"
+                  inputProps={
+                    enrolling
+                      ? { inputMode: "numeric", pattern: "[0-9]*", maxLength: 6 }
+                      : { maxLength: 20, autoCapitalize: "characters" }
+                  }
+                  helperText={
+                    enrolling
+                      ? "Enter the 6-digit code from your authenticator app"
+                      : "6-digit code from your authenticator, or a one-time recovery code"
+                  }
                 />
               ) : (
                 <>

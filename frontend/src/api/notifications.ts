@@ -17,15 +17,32 @@ export interface EmailConfig {
 export interface WebhookConfig {
   enabled: boolean;
   url: string;
-  format: string; // json | slack | discord
+  format: string; // json | slack | discord | teams
+}
+
+export interface PagerDutyConfig {
+  enabled: boolean;
+  routingKey?: string; // only sent when changing it
+  minSeverity: string; // info | warning | error
+}
+
+export interface OpsgenieConfig {
+  enabled: boolean;
+  apiKey?: string; // only sent when changing it
+  region: string; // us | eu
+  minSeverity: string;
 }
 
 export interface NotificationConfig {
   email: EmailConfig;
   webhook: WebhookConfig;
+  pagerduty: PagerDutyConfig;
+  opsgenie: OpsgenieConfig;
   events: Record<string, { email: boolean; webhook: boolean }>;
   throttleMinutes: number;
   passwordSet?: boolean;
+  pagerdutyKeySet?: boolean;
+  opsgenieKeySet?: boolean;
 }
 
 export interface EventType {
@@ -43,7 +60,7 @@ export async function saveNotifications(cfg: NotificationConfig): Promise<Notifi
   return data;
 }
 
-export async function testNotification(channel: "email" | "webhook"): Promise<{ ok: boolean; error?: string }> {
+export async function testNotification(channel: "email" | "webhook" | "pagerduty" | "opsgenie"): Promise<{ ok: boolean; error?: string }> {
   const { data } = await api.post<{ ok: boolean; error?: string }>("/api/v1/notifications/test", { channel });
   return data;
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/recorder"
@@ -317,6 +318,14 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 				if capture != nil {
 					capture.Output(buf[:n])
 				}
+				// Fan out to any read-only watchers (four-eyes oversight). Copy the
+				// bytes: buf is reused on the next read. Skipped entirely when no one
+				// is watching anything (lock-free Active check).
+				if h.d.Watch != nil && sshSessionID != uuid.Nil && h.d.Watch.Active() {
+					data := make([]byte, n)
+					copy(data, buf[:n])
+					h.d.Watch.Publish(sshSessionID, livesessions.Frame{Kind: "o", Data: data})
+				}
 				if werr := safeWrite(websocket.BinaryMessage, buf[:n]); werr != nil {
 					break
 				}
@@ -329,6 +338,12 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	}
 	go pump(stdout)
 	go pump(stderr)
+
+	// Seed the broker with the starting size so a watcher that joins mid-session
+	// renders at the right dimensions before the next resize.
+	if h.d.Watch != nil && sshSessionID != uuid.Nil {
+		h.d.Watch.Publish(sshSessionID, livesessions.Frame{Kind: "r", Cols: cols, Rows: rows})
+	}
 
 	// WebSocket -> SSH stdin / control.
 	go func() {
@@ -355,6 +370,9 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 							if capture != nil {
 								capture.Resize(cm.Cols, cm.Rows)
 							}
+							if h.d.Watch != nil && sshSessionID != uuid.Nil {
+								h.d.Watch.Publish(sshSessionID, livesessions.Frame{Kind: "r", Cols: cm.Cols, Rows: cm.Rows})
+							}
 						}
 					case "input":
 						b := []byte(cm.Data)
@@ -373,6 +391,10 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 
 	<-done
 	_ = session.Close()
+	if h.d.Watch != nil && sshSessionID != uuid.Nil {
+		h.d.Watch.Publish(sshSessionID, livesessions.Frame{Kind: "end"})
+		h.d.Watch.Clear(sshSessionID)
+	}
 
 	// Finalize with a FRESH context: the request context (ctx) is cancelled once
 	// the WebSocket closes, which would otherwise abort these writes and leave the

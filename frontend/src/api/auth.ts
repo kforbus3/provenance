@@ -73,6 +73,17 @@ export async function mfaDelete(id: string): Promise<void> {
   await api.delete(`/api/v1/auth/mfa/${id}`);
 }
 
+// MFA recovery codes: one-time backup codes usable in place of TOTP/WebAuthn.
+export async function recoveryStatus(): Promise<{ remaining: number }> {
+  const { data } = await api.get<{ remaining: number }>("/api/v1/auth/mfa/recovery-codes");
+  return data;
+}
+
+export async function generateRecoveryCodes(): Promise<string[]> {
+  const { data } = await api.post<{ codes: string[] }>("/api/v1/auth/mfa/recovery-codes");
+  return data.codes ?? [];
+}
+
 // Forced-enrollment flow (when MFA is mandatory but the user has no factor).
 // Gated by the login setupToken rather than a session.
 export async function mfaSetupBegin(setupToken: string): Promise<{ secret: string; otpauthUrl: string }> {
