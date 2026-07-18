@@ -31,11 +31,16 @@ import (
 // collectScript tars a host's package databases (only the paths that exist, so it
 // works with any tar and on both dpkg and rpm systems) and base64-encodes them.
 // Requires sudo to read the rpm database; the scan connection is privileged.
+// The -h/--dereference flag follows symlinks so the archive holds only regular
+// files: /etc/os-release is commonly a symlink (→ /usr/lib/os-release), and
+// /var/lib/rpm is a symlink on some distros (openSUSE). The scanner sidecar
+// refuses archives containing links (a path-traversal guard), so dereferencing
+// here is required for those hosts to scan at all.
 const collectScript = `set -e
 FILES="etc/os-release"
 [ -f /var/lib/dpkg/status ] && FILES="$FILES var/lib/dpkg/status"
 [ -d /var/lib/rpm ] && FILES="$FILES var/lib/rpm"
-sudo tar czf - -C / $FILES 2>/dev/null | base64 | tr -d '\n'`
+sudo tar czhf - -C / $FILES 2>/dev/null | base64 | tr -d '\n'`
 
 const maxCollectBytes = 128 << 20 // base64 of a host's package DBs; rpm DB can be a few MB
 

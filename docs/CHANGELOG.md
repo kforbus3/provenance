@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.9.1 — Fixes: scans on symlinked hosts, session-expiry UX
+
+- **Vulnerability scans no longer fail on hosts that symlink `/etc/os-release`.** The
+  on-host collector now dereferences symlinks when building the package archive, so
+  hosts where `/etc/os-release` (or `/var/lib/rpm`) is a symlink — common on NAS /
+  appliance and openSUSE systems — scan correctly instead of failing with
+  "links not allowed in archive".
+- **Expired sessions now return you to the login screen.** When a background token
+  refresh fails (the session expired or was reaped by the idle / absolute timeout),
+  the UI clears the session and redirects to login instead of leaving you on a page
+  whose actions all fail with "missing access token". The backend already enforced the
+  expiry server-side; this closes the client-side display gap.
+- **The vulnerability-scan dialog now shows the scanner's actual error** instead of a
+  generic message.
+
+*Deploy:* rebuild the backend and frontend images.
+
 ## v0.9.0 — Access certification, automation SDK/CLI, and SAML + SCIM
 
 Three enterprise capabilities: certify access on a schedule, manage Fleet as code,

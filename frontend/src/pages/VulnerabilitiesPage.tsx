@@ -179,7 +179,10 @@ function ScanDialog({ onClose, onStarted }: { onClose: () => void; onStarted: ()
   const start = useMutation({
     mutationFn: () => triggerVulnScan(mode === "host" ? { hostId } : { groupId }),
     onSuccess: onStarted,
-    onError: () => setErr("Could not start the scan."),
+    onError: (e) => {
+      const detail = ((e as { response?: { data?: { error?: string } } })?.response?.data?.error || "").slice(0, 200);
+      setErr(detail ? `Could not start the scan: ${detail}` : "Could not start the scan.");
+    },
   });
 
   return (

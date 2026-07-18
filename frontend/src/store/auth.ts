@@ -131,4 +131,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 
 // Keep the store's token in sync with background token refreshes from the api
 // client (so ?token= consumers like the report viewer use the fresh token).
-setTokenChangeHandler((t) => useAuthStore.setState({ accessToken: t }));
+// A null token means the silent refresh failed — the session expired or was
+// reaped (idle/absolute timeout). Clear the user so ProtectedRoute redirects to
+// /login instead of stranding them on a page whose actions all 401.
+setTokenChangeHandler((t) =>
+  useAuthStore.setState(t ? { accessToken: t } : { accessToken: null, user: null }));
