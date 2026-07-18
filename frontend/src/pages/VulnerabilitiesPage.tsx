@@ -128,7 +128,13 @@ function DbStatusCard({ canConfig }: { canConfig: boolean }) {
   const update = useMutation({
     mutationFn: vulnDbUpdate,
     onSuccess: (o) => { setMsg("Database updated." + (o ? ` ${o.split("\n")[0]}` : "")); void refetch(); },
-    onError: () => setMsg("Update failed (backend needs internet, or import an archive instead)."),
+    onError: (e) => {
+      const detail = ((e as { response?: { data?: { error?: string } } })?.response?.data?.error || "").split("\n")[0].slice(0, 240);
+      // Surface the scanner's actual error (permissions, DNS, egress, etc.) rather
+      // than assuming a single cause. Offer the offline path as the fallback.
+      setMsg((detail ? `Online update failed: ${detail}` : "Online update failed.")
+        + " If the scanner cannot reach the internet, use \"Import DB\" with a Grype database archive instead.");
+    },
   });
   const importMut = useMutation({
     mutationFn: (f: File) => vulnDbImport(f),

@@ -78,6 +78,22 @@ export function HelpPage() {
     };
   }, []);
 
+  // Defense in depth: if the help bundle shipped empty (build-help could not read
+  // docs/), render a clear message instead of dereferencing an undefined doc,
+  // which would white-screen the page.
+  if (!doc) {
+    return (
+      <Box sx={{ p: 4, maxWidth: 640 }}>
+        <Typography variant="h5" gutterBottom>Help is unavailable</Typography>
+        <Typography color="text.secondary">
+          The in-app help content was not bundled with this build. The published documentation is
+          available in the project’s <code>docs/</code> directory. If you administer this deployment,
+          rebuild the frontend image so the help bundle is generated.
+        </Typography>
+      </Box>
+    );
+  }
+
   return (
     <Box sx={{ display: "flex", height: "calc(100vh - 112px)", gap: 2 }}>
       {/* Sidebar: search + guide list */}

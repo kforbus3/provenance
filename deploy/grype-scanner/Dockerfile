@@ -22,7 +22,15 @@ COPY app.py /app/app.py
 
 # Unprivileged; the scanner never needs root. The DB cache lives under its home so
 # a mounted volume persists the (large) vulnerability database across restarts.
-RUN useradd --create-home --uid 10001 scanner
+#
+# Create the DB cache directory owned by the scanner user BEFORE it becomes a
+# volume mount point. Docker seeds a fresh named volume from the image's content
+# and ownership at the mount path, so pre-creating it here makes new volumes
+# writable by uid 10001. Without this, Docker creates the empty volume as root and
+# grype (running as scanner) cannot mkdir its download dir — "permission denied".
+RUN useradd --create-home --uid 10001 scanner \
+    && mkdir -p /home/scanner/.cache/grype/db \
+    && chown -R scanner:scanner /home/scanner/.cache
 USER scanner
 # Don't auto-update mid-scan (updates are explicit, for air-gap support), and
 # don't reject a self-managed DB on age — operators control DB freshness and the

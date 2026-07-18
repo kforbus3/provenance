@@ -1,0 +1,7 @@
+# Build context is the repo root for the frontend image (see deploy/compose).
+# Keep the context lean and avoid copying a host node_modules over the image's
+# freshly-installed one.
+**/node_modules
+**/dist
+.git
+*.log

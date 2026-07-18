@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.8.2 — Fixes: in-app help and CVE database
+
+Two defect fixes for the in-app documentation and the vulnerability scanner.
+
+- **In-app Help no longer renders blank.** The searchable help bundle is generated
+  from the documentation at image-build time; the frontend image now builds with the
+  docs present in its context, so Help shows its guides instead of a blank page. The
+  build now fails fast if the help content is missing rather than shipping it empty,
+  and the Help page degrades to a clear message if a bundle is ever absent.
+- **CVE database update/import fixed.** The scanner could not create its database
+  directory when running as its unprivileged user, so both the online update and the
+  offline import failed with a permission error. The scanner image now creates that
+  directory with the correct ownership, and the update error in the UI now shows the
+  scanner's actual message instead of assuming a connectivity problem.
+
+*Deploy:* rebuild the frontend and scanner images. If the CVE database volume already
+exists from a prior deploy, correct its ownership once —
+`docker compose exec -u root grype-scanner chown -R 10001:10001 /home/scanner/.cache/grype`
+(or remove and recreate the `grype-db` volume) — then update the database from the
+Vulnerabilities page.
+
 ## v0.8.0 — Vulnerability scanning
 
 CVE vulnerability scanning of managed hosts, distinct from the OpenSCAP compliance

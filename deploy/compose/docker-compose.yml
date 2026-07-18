@@ -131,8 +131,10 @@ services:
 
   frontend:
     build:
-      context: ../../frontend
-      dockerfile: Dockerfile
+      # Context is the repo root (not frontend/) so the image build can reach
+      # docs/, which the in-app help bundle is generated from at build time.
+      context: ../..
+      dockerfile: frontend/Dockerfile
     restart: unless-stopped
     environment:
       VITE_API_BASE: ${FLEET_PUBLIC_URL:-http://localhost:8080}
