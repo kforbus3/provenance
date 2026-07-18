@@ -8,7 +8,7 @@ import {
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
-import { assistantModels } from "../api/assistant";
+import { assistantModels, getActionPolicy, saveActionPolicy } from "../api/assistant";
 import { downloadBackup } from "../api/system";
 import {
   getNotifications, listEventTypes, saveNotifications, testNotification,
@@ -115,6 +115,7 @@ export function SettingsPage() {
           {tab === 2 && (
             <>
               <AssistantCard current={settings["assistant"]} />
+              <ActionPolicyCard />
               <NotificationsCard />
               <DigestCard />
               <ReportScheduleCard />
@@ -348,6 +349,59 @@ function AssistantCard({ current }: { current: unknown }) {
           </Button>
         </Box>
       </Stack>
+    </Paper>
+  );
+}
+
+// ActionPolicyCard controls which actions the assistant may propose and whether
+// they require approval (System.Configure).
+function ActionPolicyCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["action-policy"], queryFn: getActionPolicy });
+  const [requireAll, setRequireAll] = useState<boolean | null>(null);
+  const [disabled, setDisabled] = useState<string[] | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const reqAll = requireAll ?? data?.policy.requireApprovalForAll ?? false;
+  const disabledKinds = disabled ?? data?.policy.disabledKinds ?? [];
+  const actions = data?.actions ?? [];
+
+  const save = useMutation({
+    mutationFn: () => saveActionPolicy({ requireApprovalForAll: reqAll, disabledKinds }),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["action-policy"] }); },
+  });
+  const toggleKind = (k: string) => {
+    setDisabled(disabledKinds.includes(k) ? disabledKinds.filter((x) => x !== k) : [...disabledKinds, k]);
+    setSaved(false);
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Assistant actions</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Control the actions the assistant may propose (for users with <code>Assistant.Act</code>).
+        Guarded actions always need a second person's approval; you can require approval for every
+        action, or disable specific ones entirely.
+      </Typography>
+      <FormControlLabel
+        control={<Switch checked={reqAll} onChange={(e) => { setRequireAll(e.target.checked); setSaved(false); }} />}
+        label="Require approval for ALL assistant actions (even safe ones)"
+      />
+      <Box sx={{ mt: 1 }}>
+        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Available actions</Typography>
+        {actions.length === 0 && <Typography variant="body2" color="text.secondary">Loading…</Typography>}
+        {actions.map((a) => (
+          <FormControlLabel key={a.kind} sx={{ display: "block" }}
+            control={<Checkbox size="small" checked={!disabledKinds.includes(a.kind)} onChange={() => toggleKind(a.kind)} />}
+            label={`${a.kind} — ${a.risk}, needs ${a.permission}`}
+          />
+        ))}
+      </Box>
+      <Box sx={{ mt: 1 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Box>
     </Paper>
   );
 }

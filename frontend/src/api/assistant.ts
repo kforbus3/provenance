@@ -75,8 +75,9 @@ export interface AssistantAction {
   preview: string;
   risk: string;   // safe | guarded | destructive
   permission: string;
-  status: string; // proposed | executed | failed | cancelled | expired
+  status: string; // proposed | pending_approval | executed | failed | cancelled | denied | expired
   outcome?: string;
+  requester?: string;
   createdAt: string;
   expiresAt: string;
 }
@@ -103,6 +104,58 @@ export async function executeAssistantAction(id: string): Promise<AssistantActio
 
 export async function cancelAssistantAction(id: string): Promise<void> {
   await api.post(`/api/v1/assistant/actions/${id}/cancel`);
+}
+
+// requestApprovalAssistantAction routes a guarded action to a second-person
+// approval instead of running it directly.
+export async function requestApprovalAssistantAction(id: string): Promise<AssistantAction> {
+  const { data } = await api.post<AssistantAction>(`/api/v1/assistant/actions/${id}/request-approval`);
+  return data;
+}
+
+// listAssistantActions returns the caller's recent assistant actions (history).
+export async function listAssistantActions(): Promise<AssistantAction[]> {
+  const { data } = await api.get<{ actions: AssistantAction[] }>("/api/v1/assistant/actions");
+  return data.actions ?? [];
+}
+
+// --- approver surface (requires Assistant.Approve) ---
+
+export async function listAssistantApprovals(): Promise<AssistantAction[]> {
+  const { data } = await api.get<{ actions: AssistantAction[] }>("/api/v1/assistant/actions/approvals");
+  return data.actions ?? [];
+}
+
+// --- action policy (requires System.Configure) ---
+
+export interface ActionPolicy {
+  requireApprovalForAll: boolean;
+  disabledKinds: string[];
+}
+
+export interface ActionInfo {
+  kind: string;
+  risk: string;
+  permission: string;
+}
+
+export async function getActionPolicy(): Promise<{ policy: ActionPolicy; actions: ActionInfo[] }> {
+  const { data } = await api.get<{ policy: ActionPolicy; actions: ActionInfo[] }>("/api/v1/assistant/actions/policy");
+  return { policy: data.policy ?? { requireApprovalForAll: false, disabledKinds: [] }, actions: data.actions ?? [] };
+}
+
+export async function saveActionPolicy(policy: ActionPolicy): Promise<void> {
+  await api.put("/api/v1/assistant/actions/policy", policy);
+}
+
+export async function approveAssistantAction(id: string): Promise<AssistantAction> {
+  const { data } = await api.post<AssistantAction>(`/api/v1/assistant/actions/${id}/approve`);
+  return data;
+}
+
+export async function denyAssistantAction(id: string, note = ""): Promise<AssistantAction> {
+  const { data } = await api.post<AssistantAction>(`/api/v1/assistant/actions/${id}/deny`, { note });
+  return data;
 }
 
 export async function assistantStatus(): Promise<AssistantStatus> {

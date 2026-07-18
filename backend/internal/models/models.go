@@ -21,11 +21,16 @@ type AssistantAction struct {
 	Preview    string          `json:"preview"`
 	Risk       string          `json:"risk"` // safe | guarded | destructive
 	Permission string          `json:"permission"`
-	Status     string          `json:"status"` // proposed | executed | failed | cancelled | expired
+	Status     string          `json:"status"` // proposed | pending_approval | executed | failed | cancelled | denied | expired
 	Outcome    string          `json:"outcome,omitempty"`
 	CreatedAt  time.Time       `json:"createdAt"`
 	ExpiresAt  time.Time       `json:"expiresAt"`
 	ExecutedAt *time.Time      `json:"executedAt,omitempty"`
+	// Approval decision (set for guarded actions that went through pending_approval).
+	Requester    string     `json:"requester,omitempty"` // proposer username, filled by joins where useful
+	DecidedBy    *uuid.UUID `json:"decidedBy,omitempty"`
+	DecidedAt    *time.Time `json:"decidedAt,omitempty"`
+	DecisionNote string     `json:"decisionNote,omitempty"`
 }
 
 // User is an application account.

@@ -220,6 +220,16 @@ You can only propose actions you already have permission for (e.g. scanning need
 you confirm. This keeps the assistant from ever doing anything you couldn't do
 yourself, or anything you didn't explicitly approve.
 
+**Guarded actions need a second person.** More consequential actions — for example
+*"disable user jsmith"* or *"delete host old-db-01"* — are **guarded**. Instead of a
+Confirm button they show **Request approval**: the action waits until someone with
+the `Assistant.Approve` permission (an administrator) approves it, and it can never
+be approved by the person who requested it (separation of duties). Approvers see a
+short **"Awaiting your approval"** list at the top of the Ask page with Approve /
+Deny for each. On approval, Fleet re-checks that the original requester still has the
+required permission and account before running it. Guarded actions, like all
+actions, are fully audited.
+
 ---
 
 ## 8. Check hosts for known vulnerabilities

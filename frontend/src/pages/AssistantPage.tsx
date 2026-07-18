@@ -8,9 +8,12 @@ import SendIcon from "@mui/icons-material/Send";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import BoltIcon from "@mui/icons-material/Bolt";
 import { Link as RouterLink } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuthStore } from "../store/auth";
 import {
   assistantStatus, askAssistant, askResult, executeAssistantAction, cancelAssistantAction,
+  requestApprovalAssistantAction, listAssistantApprovals, approveAssistantAction, denyAssistantAction,
+  listAssistantActions,
   type AskResult, type AssistantAction, type AssistantHost, type AssistantSession, type AssistantTable,
   type DocSource, type MetricHistory, type MetricHistoryPoint,
 } from "../api/assistant";
@@ -37,6 +40,7 @@ function loadStored(): { turns: Turn[]; conversationId?: string } {
 // real host rows returned by the backend (shown beneath each answer).
 export function AssistantPage() {
   const { data: status } = useQuery({ queryKey: ["assistant-status"], queryFn: assistantStatus });
+  const canApprove = useAuthStore((s) => s.has)("Assistant.Approve");
   const stored = useRef(loadStored());
   const [turns, setTurns] = useState<Turn[]>(stored.current.turns);
   const [input, setInput] = useState("");
@@ -98,6 +102,8 @@ export function AssistantPage() {
         )}
       </Stack>
 
+      {canApprove && <ApprovalsInbox />}
+
       {status && !ready && (
         <Alert severity="info" sx={{ mb: 2 }}>
           The assistant isn't ready yet. An administrator can enable it and point it at a local
@@ -151,6 +157,8 @@ export function AssistantPage() {
           Model: {status.model} · answers are generated from live Fleet data — verify before acting.
         </Typography>
       )}
+
+      <HistoryPanel />
     </Box>
   );
 }
@@ -192,9 +200,11 @@ function ActionCard({ action }: { action: AssistantAction }) {
   const [err, setErr] = useState<string | null>(null);
   const errMsg = (e: unknown) =>
     ((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Something went wrong.";
+  const guarded = state.risk !== "safe";
 
+  // For safe actions Confirm runs it; for guarded actions it requests approval.
   const confirm = useMutation({
-    mutationFn: () => executeAssistantAction(action.id),
+    mutationFn: () => (guarded ? requestApprovalAssistantAction(action.id) : executeAssistantAction(action.id)),
     onSuccess: (a) => { setErr(null); setState(a); },
     onError: (e) => setErr(errMsg(e)),
   });
@@ -206,32 +216,105 @@ function ActionCard({ action }: { action: AssistantAction }) {
 
   const pending = state.status === "proposed";
   const busy = confirm.isPending || dismiss.isPending;
-  const statusColor = state.status === "executed" ? "success" : state.status === "failed" ? "error" : "default";
+  const statusColor = state.status === "executed" ? "success"
+    : (state.status === "failed" || state.status === "denied") ? "error" : "default";
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5, my: 1, borderColor: pending ? "warning.main" : "divider" }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
         <BoltIcon fontSize="small" color={pending ? "warning" : "disabled"} />
         <Typography variant="subtitle2">Proposed action</Typography>
-        <Chip size="small" variant="outlined" label={state.risk} />
+        <Chip size="small" variant="outlined" label={state.risk} color={guarded ? "warning" : "default"} />
       </Stack>
       <Typography variant="body2" sx={{ mb: 1 }}>{state.preview}</Typography>
+      {guarded && pending && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+          This action needs a second person to approve it before it runs.
+        </Typography>
+      )}
       {err && <Alert severity="error" sx={{ mb: 1 }}>{err}</Alert>}
       {pending ? (
         <Stack direction="row" spacing={1}>
-          <Button size="small" variant="contained" disabled={busy} onClick={() => confirm.mutate()}>
-            {confirm.isPending ? "Running…" : "Confirm"}
+          <Button size="small" variant="contained" color={guarded ? "warning" : "primary"} disabled={busy} onClick={() => confirm.mutate()}>
+            {confirm.isPending ? "…" : guarded ? "Request approval" : "Confirm"}
           </Button>
           <Button size="small" color="inherit" disabled={busy} onClick={() => dismiss.mutate()}>Dismiss</Button>
         </Stack>
+      ) : state.status === "pending_approval" ? (
+        <Chip size="small" color="warning" variant="outlined" label="Awaiting approval" />
       ) : (
         <Chip size="small" color={statusColor}
           label={
             state.status === "executed" ? (state.outcome || "Done")
               : state.status === "failed" ? (state.outcome || "Failed")
-                : state.status === "cancelled" ? "Dismissed" : state.status
+                : state.status === "denied" ? "Denied"
+                  : state.status === "cancelled" ? "Dismissed" : state.status
           } />
       )}
+    </Paper>
+  );
+}
+
+// HistoryPanel is a collapsible list of the user's recent assistant actions.
+function HistoryPanel() {
+  const { data: actions = [] } = useQuery({ queryKey: ["assistant-actions-history"], queryFn: listAssistantActions });
+  const [open, setOpen] = useState(false);
+  if (actions.length === 0) return null;
+  const color = (s: string): "success" | "error" | "warning" | "default" =>
+    s === "executed" ? "success" : (s === "failed" || s === "denied") ? "error" : s === "pending_approval" ? "warning" : "default";
+  return (
+    <Box sx={{ mt: 3 }}>
+      <Button size="small" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide" : "Show"} recent actions ({actions.length})
+      </Button>
+      {open && (
+        <Paper variant="outlined" sx={{ mt: 1, p: 1 }}>
+          <Stack spacing={0.75}>
+            {actions.map((a) => (
+              <Box key={a.id} sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                <Chip size="small" color={color(a.status)} label={a.status.replace("_", " ")} />
+                <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 180 }}>{a.preview}</Typography>
+                {a.outcome && <Typography variant="caption" color="text.secondary">{a.outcome}</Typography>}
+              </Box>
+            ))}
+          </Stack>
+        </Paper>
+      )}
+    </Box>
+  );
+}
+
+// ApprovalsInbox shows guarded actions awaiting the current user's approval. Only
+// rendered for users with Assistant.Approve.
+function ApprovalsInbox() {
+  const qc = useQueryClient();
+  const { data: pending = [] } = useQuery({ queryKey: ["assistant-approvals"], queryFn: listAssistantApprovals });
+  const [err, setErr] = useState<string | null>(null);
+  const errMsg = (e: unknown) =>
+    ((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Something went wrong.";
+  const refresh = () => qc.invalidateQueries({ queryKey: ["assistant-approvals"] });
+  const approve = useMutation({ mutationFn: (id: string) => approveAssistantAction(id), onSuccess: refresh, onError: (e) => setErr(errMsg(e)) });
+  const deny = useMutation({ mutationFn: (id: string) => denyAssistantAction(id), onSuccess: refresh, onError: (e) => setErr(errMsg(e)) });
+
+  if (pending.length === 0) return null;
+  const busy = approve.isPending || deny.isPending;
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderColor: "warning.main" }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>Awaiting your approval ({pending.length})</Typography>
+      {err && <Alert severity="error" sx={{ mb: 1 }}>{err}</Alert>}
+      <Stack spacing={1}>
+        {pending.map((a) => (
+          <Box key={a.id} sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+            <Chip size="small" variant="outlined" color="warning" label={a.risk} />
+            <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 200 }}>
+              {a.preview}{a.requester ? ` — requested by ${a.requester}` : ""}
+            </Typography>
+            <Button size="small" color="success" disabled={busy}
+              onClick={() => { if (window.confirm(`Approve and run: ${a.preview}`)) approve.mutate(a.id); }}>Approve</Button>
+            <Button size="small" color="error" disabled={busy} onClick={() => deny.mutate(a.id)}>Deny</Button>
+          </Box>
+        ))}
+      </Stack>
     </Paper>
   );
 }

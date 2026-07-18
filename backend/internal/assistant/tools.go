@@ -92,6 +92,8 @@ rather than reciting every row.`
 var actionToolKinds = map[string]string{
 	"propose_vulnerability_scan": "scan.vulnerability",
 	"propose_host_tag":           "host.tag",
+	"propose_disable_user":       "user.disable",
+	"propose_delete_host":        "host.delete",
 }
 
 // actionTools are the write ("propose_") tools, offered only to callers with
@@ -122,6 +124,28 @@ var actionTools = []toolDef{{
 				"removeTags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "tags to remove"},
 			},
 			"required": []string{"hostname"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "propose_disable_user",
+		Description: "PROPOSE disabling a user account (blocks their sign-in and ends their sessions). This is a GUARDED action: it does NOT run on the user's confirm — a second person must APPROVE it. Use only when the user explicitly asks to disable/deactivate/offboard a named user. Administrators and the requester's own account cannot be disabled this way.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"username": map[string]any{"type": "string", "description": "exact username to disable"}},
+			"required":   []string{"username"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "propose_delete_host",
+		Description: "PROPOSE deleting a host from Fleet (removes its enrollment, access grants, and history). This is a GUARDED action: it does NOT run on the user's confirm — a second person must APPROVE it. Use only when the user explicitly asks to delete/remove/decommission a named host.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname to delete"}},
+			"required":   []string{"hostname"},
 		},
 	},
 }}

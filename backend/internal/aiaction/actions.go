@@ -188,6 +188,119 @@ func tagHostAction() ActionDef {
 	}
 }
 
+// ---- user.disable (destructive) --------------------------------------------
+
+type disableUserArgs struct {
+	Username string `json:"username"`
+}
+
+type disableUserResolved struct {
+	UserID   uuid.UUID `json:"userId"`
+	Username string    `json:"username"`
+}
+
+// disableUserAction proposes disabling a user account. Destructive → requires
+// approval. Administrators and the requester's own account are refused.
+func disableUserAction() ActionDef {
+	return ActionDef{
+		Kind: KindDisableUser, Permission: "User.Edit", Risk: RiskDestructive,
+		Prepare: func(ctx context.Context, r *Registry, actor Actor, raw json.RawMessage) (json.RawMessage, string, error) {
+			var a disableUserArgs
+			_ = json.Unmarshal(raw, &a)
+			if strings.TrimSpace(a.Username) == "" {
+				return nil, "", errors.New("a username is required")
+			}
+			u, err := r.store.GetUserByUsername(ctx, strings.TrimSpace(a.Username))
+			if err != nil {
+				return nil, "", fmt.Errorf("no user named %q", a.Username)
+			}
+			if u.IsSuperAdmin {
+				return nil, "", errors.New("administrators cannot be disabled via the assistant")
+			}
+			if u.ID == actor.UserID {
+				return nil, "", errors.New("you cannot disable your own account")
+			}
+			resolved, _ := json.Marshal(disableUserResolved{UserID: u.ID, Username: u.Username})
+			return resolved, fmt.Sprintf("Disable user %s — blocks sign-in and immediately ends their active sessions.", u.Username), nil
+		},
+		Execute: func(ctx context.Context, r *Registry, actor Actor, params json.RawMessage) (string, error) {
+			var p disableUserResolved
+			if err := json.Unmarshal(params, &p); err != nil {
+				return "", err
+			}
+			u, err := r.store.GetUserByID(ctx, p.UserID)
+			if err != nil {
+				return "", errors.New("user not found")
+			}
+			if u.IsSuperAdmin {
+				return "", errors.New("administrators cannot be disabled via the assistant")
+			}
+			if u.IsDisabled {
+				return fmt.Sprintf("User %s was already disabled.", u.Username), nil
+			}
+			if err := r.store.SetDisabled(ctx, u.ID, true); err != nil {
+				return "", errors.New("could not disable the user")
+			}
+			if r.destroyUserSessions != nil {
+				r.destroyUserSessions(ctx, u.ID)
+			}
+			return fmt.Sprintf("Disabled user %s and ended their sessions.", u.Username), nil
+		},
+	}
+}
+
+// ---- host.delete (destructive) ---------------------------------------------
+
+type deleteHostArgs struct {
+	Hostname string `json:"hostname"`
+}
+
+type deleteHostResolved struct {
+	HostID   uuid.UUID `json:"hostId"`
+	Hostname string    `json:"hostname"`
+}
+
+// deleteHostAction proposes removing a host from Fleet. Destructive → requires
+// approval.
+func deleteHostAction() ActionDef {
+	return ActionDef{
+		Kind: KindDeleteHost, Permission: "Host.Delete", Risk: RiskDestructive,
+		Prepare: func(ctx context.Context, r *Registry, actor Actor, raw json.RawMessage) (json.RawMessage, string, error) {
+			var a deleteHostArgs
+			_ = json.Unmarshal(raw, &a)
+			if strings.TrimSpace(a.Hostname) == "" {
+				return nil, "", errors.New("a hostname is required")
+			}
+			h, err := r.store.HostByHostname(ctx, strings.TrimSpace(a.Hostname))
+			if err != nil {
+				return nil, "", fmt.Errorf("no host named %q", a.Hostname)
+			}
+			if !actor.IsSuper {
+				if ok, _ := r.store.UserCanAccessHost(ctx, actor.UserID, h.ID); !ok {
+					return nil, "", errors.New("you don't have access to that host")
+				}
+			}
+			resolved, _ := json.Marshal(deleteHostResolved{HostID: h.ID, Hostname: h.Hostname})
+			return resolved, fmt.Sprintf("Delete host %s from Fleet — removes its enrollment, access grants, and history.", h.Hostname), nil
+		},
+		Execute: func(ctx context.Context, r *Registry, actor Actor, params json.RawMessage) (string, error) {
+			var p deleteHostResolved
+			if err := json.Unmarshal(params, &p); err != nil {
+				return "", err
+			}
+			if !actor.IsSuper {
+				if ok, _ := r.store.UserCanAccessHost(ctx, actor.UserID, p.HostID); !ok {
+					return "", errors.New("you no longer have access to that host")
+				}
+			}
+			if err := r.store.DeleteHost(ctx, p.HostID); err != nil {
+				return "", errors.New("could not delete the host")
+			}
+			return fmt.Sprintf("Deleted host %s from Fleet.", p.Hostname), nil
+		},
+	}
+}
+
 // ---- helpers ---------------------------------------------------------------
 
 func (r *Registry) groupByName(ctx context.Context, name string) (*models.Group, error) {

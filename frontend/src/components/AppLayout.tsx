@@ -1,5 +1,5 @@
 import {
-  AppBar, Box, CssBaseline, Drawer, IconButton, List, ListItemButton,
+  AppBar, Badge, Box, CssBaseline, Drawer, IconButton, List, ListItemButton,
   ListItemIcon, ListItemText, Toolbar, Typography, Tooltip,
 } from "@mui/material";
 import DnsIcon from "@mui/icons-material/Dns";
@@ -35,6 +35,7 @@ import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
+import { listAssistantApprovals } from "../api/assistant";
 import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
@@ -78,13 +79,21 @@ export function AppLayout() {
   // so every timestamp formats in the configured zone. Re-applies if it changes.
   const { data: tz } = useQuery({ queryKey: ["timezone"], queryFn: getTimezone });
   setDisplayTimezone(tz);
+  const has = useAuthStore((s) => s.has);
+  // Pending assistant-action approvals awaiting this user (approvers only), shown
+  // as a badge on the Ask nav item.
+  const { data: pendingApprovals = [] } = useQuery({
+    queryKey: ["assistant-approvals-nav"],
+    queryFn: listAssistantApprovals,
+    enabled: has("Assistant.Approve"),
+    refetchInterval: 60000,
+  });
   const mode = useUIStore((s) => s.mode);
   const toggleMode = useUIStore((s) => s.toggleMode);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const logout = useAuthStore((s) => s.logout);
   const username = useAuthStore((s) => s.user?.username);
-  const has = useAuthStore((s) => s.has);
   const navigate = useNavigate();
   const appName = useAppName();
   useDocumentTitle();
@@ -157,7 +166,11 @@ export function AppLayout() {
                   to={item.to}
                   selected={selected}
                 >
-                  <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
+                  <ListItemIcon sx={{ minWidth: 36 }}>
+                    {item.to === "/ask" && pendingApprovals.length > 0
+                      ? <Badge color="warning" badgeContent={pendingApprovals.length}>{item.icon}</Badge>
+                      : item.icon}
+                  </ListItemIcon>
                   <ListItemText primary={item.label} />
                 </ListItemButton>
               );

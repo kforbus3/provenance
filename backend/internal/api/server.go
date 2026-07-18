@@ -49,6 +49,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/metrics"
+	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
@@ -135,9 +136,20 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// scheduler, so construct them once here.
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
-	// Assistant action registry (propose→confirm→execute); wired with the runner
-	// hooks it needs so this package doesn't reach into the assistant.
-	s.actionReg = aiaction.New(st, log, s.vulnScan.Run)
+	// Assistant action registry (propose→confirm→execute, plus approval for guarded
+	// actions); wired with the runner hooks it needs so this package reaches into
+	// neither the vulnscan nor the auth service directly.
+	actionNotify := func(ctx context.Context, a *models.AssistantAction) {
+		if s.Notify == nil {
+			return
+		}
+		s.Notify.Notify(ctx, notify.Event{
+			Type: notify.EventApprovalPending, Severity: notify.SeverityInfo,
+			Title: "Assistant action awaiting approval",
+			Body:  a.Preview + " Review it in Approvals.",
+		})
+	}
+	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)

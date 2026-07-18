@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.11.0 — Assistant actions: guarded actions with approval + action policy
+
+Completes the actionable assistant: it can now propose consequential actions that
+require a second person to approve, and administrators can govern what it may do.
+
+- **Guarded actions require approval.** More consequential actions the assistant can
+  propose — **disable a user** and **delete a host** — never run on the requester's
+  confirm. They show **Request approval** and wait for a different administrator (with
+  the new `Assistant.Approve` permission) to approve or deny. Separation of duties is
+  enforced: the requester can never approve their own action. On approval, Fleet
+  **re-checks that the original requester still holds the required permission and an
+  active account** before running it — an approval is not a bypass. Approvers see an
+  "Awaiting your approval" inbox on the Ask page and a badge in the sidebar; every
+  decision is audited and notified.
+- **Action policy.** Under **Settings → Assistant actions**, administrators can
+  **require approval for every assistant action** (even the safe ones) or **disable
+  specific actions** entirely. Policy is applied when an action is proposed.
+- **Action history.** The Ask page now shows a collapsible history of your recent
+  assistant actions and their outcomes.
+
+*Deploy:* migration `0029` (approval columns + the `Assistant.Approve` permission,
+granted to Super Administrator and Administrator) applies automatically.
+
 ## v0.10.0 — Actionable AI assistant: docs answers + confirmed actions
 
 The "Ask Fleet" assistant gains two capabilities, built so it can never act without

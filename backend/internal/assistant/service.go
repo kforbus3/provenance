@@ -847,11 +847,17 @@ func (s *Service) proposeAction(ctx context.Context, who Caller, kind string, ra
 		}
 		return map[string]any{"error": err.Error()}, nil
 	}
+	requiresApproval := action.Risk != "safe"
+	note := "Prepared this action but did NOT run it — the user must confirm it first."
+	if requiresApproval {
+		note = "Prepared this GUARDED action but did NOT run it. It cannot run on the user's confirm alone — after the user requests approval, a second person must approve it."
+	}
 	return map[string]any{
-		"status":   "proposed",
-		"note":     "Prepared this action but did NOT run it — the user must confirm it first. Tell the user plainly what you are proposing; never claim it is already done.",
-		"preview":  action.Preview,
-		"actionId": action.ID.String(),
+		"status":           "proposed",
+		"note":             note + " Tell the user plainly what you are proposing; never claim it is already done.",
+		"preview":          action.Preview,
+		"requiresApproval": requiresApproval,
+		"actionId":         action.ID.String(),
 	}, action
 }
 
