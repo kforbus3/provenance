@@ -14,6 +14,7 @@ import (
 // sections). cpuCount (from inventory) is applied to load in Go.
 const metricsScript = `echo "::LOADAVG::"; cat /proc/loadavg 2>/dev/null
 echo "::MEM::"; awk '/^MemTotal:|^MemAvailable:/{print $1, $2}' /proc/meminfo 2>/dev/null
+awk '/^size /{print "ArcSize:", $3} /^c_min /{print "ArcCMin:", $3}' /proc/spl/kstat/zfs/arcstats 2>/dev/null
 echo "::DF::"; df -P -B1 -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null
 echo "::IP::"; ip -o -4 addr show scope global 2>/dev/null
 echo "::ROUTE::"; ip route show default 2>/dev/null
@@ -94,7 +95,8 @@ func parseLoadAvg(s string, cpuCount int, m *models.HostMetrics) {
 }
 
 func parseMem(s string, m *models.HostMetrics) {
-	var totalKB, availKB int64
+	// meminfo values are in kB; arcstats (ArcSize/ArcCMin) are in bytes.
+	var totalKB, availKB, arcSizeB, arcCMinB int64
 	for _, line := range strings.Split(s, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 {
@@ -109,14 +111,31 @@ func parseMem(s string, m *models.HostMetrics) {
 			totalKB = v
 		case "MemAvailable:":
 			availKB = v
+		case "ArcSize:":
+			arcSizeB = v
+		case "ArcCMin:":
+			arcCMinB = v
 		}
 	}
 	if totalKB <= 0 {
 		return
 	}
+	// On ZFS-on-Linux the ARC cache is counted as "used" and NOT reflected in
+	// MemAvailable, yet it is reclaimable under memory pressure down to c_min.
+	// Add the reclaimable ARC (size - c_min) back to available so a large cache
+	// on a ZFS host doesn't read as near-exhaustion. Cap at total.
+	if arcSizeB > arcCMinB && arcCMinB >= 0 {
+		availKB += (arcSizeB - arcCMinB) / 1024
+		if availKB > totalKB {
+			availKB = totalKB
+		}
+	}
 	m.MemTotalMB = totalKB / 1024
 	m.MemAvailableMB = availKB / 1024
 	used := float64(totalKB-availKB) / float64(totalKB) * 100
+	if used < 0 {
+		used = 0
+	}
 	m.MemUsedPct = &used
 }
 

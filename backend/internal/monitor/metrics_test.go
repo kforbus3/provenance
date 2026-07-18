@@ -1,6 +1,33 @@
 package monitor
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/fleet-terminal/backend/internal/models"
+)
+
+func TestParseMemZFSARCReclaimable(t *testing.T) {
+	// A ZFS host: meminfo reports only 4 GB available (ARC counts as "used"), but
+	// 7 GB of ARC is reclaimable (size 8 GB, c_min 1 GB). Used% should reflect that
+	// the memory is really mostly free, not 75% used.
+	var m models.HostMetrics
+	parseMem("MemTotal: 16000000\nMemAvailable: 4000000\nArcSize: 8192000000\nArcCMin: 1024000000", &m)
+	if m.MemUsedPct == nil {
+		t.Fatal("nil MemUsedPct")
+	}
+	// Without ARC accounting this is 75%; with it, ~31.25%.
+	if *m.MemUsedPct < 30 || *m.MemUsedPct > 33 {
+		t.Fatalf("memUsedPct = %.2f, want ~31.25 (reclaimable ARC not accounted)", *m.MemUsedPct)
+	}
+}
+
+func TestParseMemNonZFSUnchanged(t *testing.T) {
+	var m models.HostMetrics
+	parseMem("MemTotal: 16000000\nMemAvailable: 4000000", &m)
+	if m.MemUsedPct == nil || *m.MemUsedPct != 75 {
+		t.Fatalf("memUsedPct = %v, want 75 for a non-ZFS host", m.MemUsedPct)
+	}
+}
 
 const sampleMetricsOutput = `::LOADAVG::
 0.80 0.40 0.20 2/512 12345

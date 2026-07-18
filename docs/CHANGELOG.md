@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.12.1 — Fix: ZFS ARC memory accounting
+
+- **Memory usage on ZFS-on-Linux hosts is no longer overstated.** The ZFS ARC cache
+  is charged as "used" memory and excluded from the kernel's `MemAvailable`, even
+  though it is reclaimable under pressure. The metrics collector now reads
+  `/proc/spl/kstat/zfs/arcstats` and adds the reclaimable ARC (`size − c_min`) back
+  to available memory, so a host with a large cache no longer reads as near-
+  exhaustion (and the "high memory" insight clears accordingly). Non-ZFS hosts are
+  unaffected.
+
+*Deploy:* rebuild the backend; corrected values appear on the next monitor sweep.
+
 ## v0.12.0 — Terraform provider
 
 Manage Fleet as infrastructure-as-code.
