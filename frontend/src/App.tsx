@@ -33,6 +33,7 @@ const ServiceAccountsPage = lazy(() => named(import("./pages/ServiceAccountsPage
 const ReportsPage = lazy(() => named(import("./pages/ReportsPage"), "ReportsPage"));
 const WatchSessionPage = lazy(() => named(import("./pages/WatchSessionPage"), "WatchSessionPage"));
 const VulnerabilitiesPage = lazy(() => named(import("./pages/VulnerabilitiesPage"), "VulnerabilitiesPage"));
+const HelpPage = lazy(() => named(import("./pages/HelpPage"), "HelpPage"));
 const PlaybooksPage = lazy(() => named(import("./pages/PlaybooksPage"), "PlaybooksPage"));
 const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "SchedulesPage"));
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
@@ -97,6 +98,8 @@ export function App() {
               <Route path="jobs" element={<ProtectedRoute permission="System.Configure"><JobsPage /></ProtectedRoute>} />
               <Route path="health" element={<ProtectedRoute permission="System.Configure"><HealthPage /></ProtectedRoute>} />
               <Route path="settings" element={<ProtectedRoute permission="System.Configure"><SettingsPage /></ProtectedRoute>} />
+              <Route path="help" element={<HelpPage />} />
+              <Route path="help/:slug" element={<HelpPage />} />
             </Route>
           </Route>
 

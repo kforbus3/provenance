@@ -28,6 +28,13 @@ Operators ──HTTPS/WSS──> Reverse proxy ──> frontend (nginx) ──/a
   container (not published on the host) that validates/lints and runs Ansible
   playbooks so the lean Go backend never needs a Python toolchain. The backend
   reaches it at `FLEET_ANSIBLE_RUNNER_URL` (default `http://ansible-runner:8000`).
+- It also starts a **`grype-scanner` sidecar** (built from `deploy/grype-scanner`)
+  — another internal-only container that runs Anchore Grype for CVE vulnerability
+  scanning. The backend posts each host's package databases to it and reaches it at
+  `FLEET_GRYPE_SCANNER_URL` (default `http://grype-scanner:8000`). Building the
+  image needs **internet at build time** to install grype; the CVE database is
+  **not** baked in — it is loaded at runtime via **Update online** or **Import
+  offline** and persists in the `grype-db` volume.
 - **You provide:** a host for the app stack (Docker), a **jump host** reachable
   from your managed hosts on a UDP WireGuard port, and the managed hosts
   themselves. The bundled test fabric provides all of this locally for evaluation.
@@ -90,8 +97,12 @@ Key variables (full list in `.env.example`):
 | `FLEET_WG_JUMP_ENDPOINT` | Public `host:port` managed hosts dial to reach the jump |
 | `FLEET_ALLOW_BOOTSTRAP` | `false` after the first admin exists (also self-seals) |
 | `FLEET_BACKUP_DIR` | Where encrypted DB backups are written (default `/var/lib/fleet/backups`, the `backups` volume) |
-| `FLEET_BACKUP_PASSPHRASE` | Encrypts DB backups (`openssl` AES-256); falls back to `FLEET_CA_PASSPHRASE` if empty — keep it **off-host** |
+| `FLEET_BACKUP_PASSPHRASE` | Encrypts DB backups (`openssl` AES-256); falls back to `FLEET_CA_PASSPHRASE` if empty — in **production set a distinct value** (must differ from `FLEET_CA_PASSPHRASE`) and keep it **off-host** |
 | `FLEET_ANSIBLE_RUNNER_URL` | Base URL of the `ansible-runner` sidecar (default `http://ansible-runner:8000`) |
+| `FLEET_GRYPE_SCANNER_URL` | Base URL of the `grype-scanner` sidecar for CVE scans (default `http://grype-scanner:8000`) |
+| `FLEET_ACTIVITY_RETENTION` / `FLEET_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
+| `FLEET_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
+| `FLEET_METRIC_HISTORY_SAMPLE` / `FLEET_METRIC_HISTORY_RETENTION` | Host-metric time-series sample interval / retention (default `5m` / `720h`) |
 | `TZ` | *(optional)* server timezone for the backend; schedules compute next-run in this zone (default `UTC`) |
 
 > **Backups** are produced under **Settings → Backup & Restore** (encrypted,
@@ -147,6 +158,16 @@ Common to both layouts:
    WAF guidance is in [internet-exposure.md](./internet-exposure.md).
 4. **Bootstrap.** Browse to the URL, create the Super Administrator, then set
    `FLEET_ALLOW_BOOTSTRAP=false` and restart the backend.
+5. **Load the CVE database.** The `grype-scanner` sidecar starts with an **empty**
+   CVE DB. Before running vulnerability scans, load it once from **Vulnerabilities
+   → CVE database → Update online** (needs the backend/sidecar to reach the
+   internet) or **Import offline** a pre-downloaded Grype DB archive (air-gapped).
+   The DB persists in the `grype-db` volume.
+
+> **Building the `grype-scanner` image** (part of `make build` / `up-*`) fetches
+> grype and therefore needs **internet at build time**; the CVE DB itself is loaded
+> at runtime, not baked in. On restart, the backend reconciles any scans left
+> in-flight.
 
 ### 5a. Single server (co-located jump host)
 
@@ -250,9 +271,15 @@ principal `fleet`) and run WireGuard yourself.
 
 - Pull/rebuild images and `docker compose up -d`. **Database migrations apply
   automatically on backend start** (`FLEET_MIGRATE_ON_START=true`), in order, and
-  are logged (`migrations applied … versions=[…]`).
+  are logged (`migrations applied … versions=[…]`). Upgrading into this release
+  applies migrations **0017–0026** automatically (service accounts, session-watch,
+  recovery codes, dynamic-group rules, metric history, vulnerability scans, …).
 - Recordings and certificates survive restarts; ephemeral in-RAM keys are
   re-issued on the next authenticated request.
+- **After adding vulnerability scanning**, rebuild so the new `grype-scanner`
+  service is present, then **load the CVE database once** (Vulnerabilities → CVE
+  database → Update online or Import offline). It persists in the `grype-db` volume
+  across subsequent upgrades.
 
 ---
 

@@ -22,6 +22,7 @@ the first Super Administrator. See the [Administrator Guide](./admin-guide.md).
 
 | Doc | Audience | What it covers |
 |-----|----------|----------------|
+| [installation.md](./installation.md) | operators | Install and stand up Fleet Terminal from scratch: prerequisites, config, first boot |
 | [deployment.md](./deployment.md) | operators | Deploy the whole system: config, local + production stack |
 | [internet-exposure.md](./internet-exposure.md) | operators / security | Exposing the UI to the internet behind a reverse proxy + MFA |
 | [operations.md](./operations.md) | operators | Day-to-day flows: enroll, connect, transfer, approvals, MFA |
@@ -36,18 +37,28 @@ the first Super Administrator. See the [Administrator Guide](./admin-guide.md).
 | [certificate-lifecycle.md](./certificate-lifecycle.md) | operators | CA, issuance, renewal, revocation, rotation |
 | [disaster-recovery.md](./disaster-recovery.md) | operators | Backup, restore, recovery scenarios |
 | [break-glass.md](./break-glass.md) | operators / security | Emergency recovery runbook: encrypted backups + break-glass access |
+| [CHANGELOG.md](./CHANGELOG.md) | everyone | Release-by-release history of features and changes |
 
 ### Newer feature areas
 
 Beyond core SSH brokering, the platform now also covers: **Ansible playbook
 management** (author / lint / run via the `ansible-runner` sidecar) and
-**scheduling** of recurring scans and playbook runs (see
-[architecture.md](./architecture.md) for the runner data flow); **outbound
-notifications** (email + webhook); **encrypted database backups** with a
-**break-glass recovery** runbook (see [break-glass.md](./break-glass.md)); an
-**AI assistant** aware of inventory, metrics, security scans, playbook runs, and
-pending package updates; an **app-wide display timezone**; and **per-host pending
-package updates** surfaced in the inventory.
+**scheduling** of recurring scans, playbook runs, and vulnerability scans (see
+[architecture.md](./architecture.md) for the runner data flow); **CVE
+vulnerability scanning** (Anchore Grype in a `grype-scanner` sidecar, with a
+fleet roll-up and online/offline CVE-database management); **service accounts +
+API tokens** for automation over the REST API; **outbound notifications** (email
++ webhook + PagerDuty / Opsgenie / Microsoft Teams, severity-gated); **CSV
+compliance reports** (access / audit / certificate / scan / vulnerability) with
+optional **scheduled email delivery**; **live session shadowing** (read-only,
+audited four-eyes viewing of an active session); **dynamic host groups** whose
+membership follows a rule over host attributes; **encrypted database backups**
+with a **break-glass recovery** runbook (see [break-glass.md](./break-glass.md));
+a deepened **AI assistant** — multi-turn conversation memory, **fleet insights**
+("what's wrong with the fleet?" / disk-runway projections), and scheduled
+**health digests** — aware of inventory, metrics, security scans, playbook runs,
+and pending package updates; an **app-wide display timezone**; and **per-host
+pending package updates** surfaced in the inventory.
 
 ## Key make targets
 

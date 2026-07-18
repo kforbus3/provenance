@@ -10,6 +10,13 @@ the root.
 - **Authentication:** authenticated endpoints require a bearer access token:
   `Authorization: Bearer <accessToken>`. The token is obtained from
   `POST /api/v1/auth/login` and refreshed via `POST /api/v1/auth/refresh`.
+- **Service-account tokens:** a `flt_`-prefixed bearer
+  (`Authorization: Bearer flt_...`) authenticates the REST API as a service
+  account. `RequireAuth` routes any `flt_`-prefixed bearer to token auth (JWT
+  session tokens are unaffected); the token carries its service account's roles
+  and group access and is never implicitly super-admin. Tokens are for automation
+  over the REST API only — they cannot open the terminal/SFTP WebSocket, which
+  needs a session-bound SSH credential. See [Service accounts](#service-accounts).
 - **Authorization:** authorization is enforced server-side. Each route below
   lists its **Required permission**. The holder of `Admin.All` (Super
   Administrator) passes every permission check. Missing permission → `403`.
@@ -81,6 +88,8 @@ Returns `409` once any user exists, `400` on weak password.
 | GET | `/api/v1/auth/me` | authenticated |
 | POST | `/api/v1/auth/change-password` | authenticated |
 | GET/POST | `/api/v1/auth/mfa[/totp/...]` | authenticated |
+| GET | `/api/v1/auth/mfa/recovery-codes` | authenticated |
+| POST | `/api/v1/auth/mfa/recovery-codes` | authenticated |
 | GET | `/api/v1/auth/oidc/status` | none (login-page probe) |
 | GET | `/api/v1/auth/oidc/login` | none (redirects to the IdP) |
 | GET | `/api/v1/auth/oidc/callback` | none (completes the auth-code flow) |
@@ -126,6 +135,19 @@ cookies; returns a fresh `accessToken`, `accessExpiresAt`, and `csrfToken`.
 { "currentPassword": "…", "newPassword": "…" }
 ```
 → `{"status":"password_changed"}`
+
+### MFA recovery codes
+
+One-time backup codes that substitute for TOTP/WebAuthn at the MFA prompt when
+the authenticator is lost. Ten codes are generated at once, shown **once**, and
+stored only as SHA-256 hashes; generating a new set invalidates the old one.
+Generation is refused until a second factor (TOTP or passkey) is confirmed.
+
+**`GET /auth/mfa/recovery-codes`** → `{ "remaining": 7 }` — how many unused codes
+are left.
+
+**`POST /auth/mfa/recovery-codes`** → `{ "codes": ["xxxx-xxxx-xxxx", … ] }` —
+generates and returns a fresh set of 10 codes (the only time they are shown).
 
 ### OIDC single sign-on
 
@@ -263,9 +285,25 @@ no-install flow uses `GET …/enroll/script` (pipe through your own ssh) then
 |--------|------|---------------------|
 | GET | `/api/v1/groups` | `Group.Edit` |
 | POST | `/api/v1/groups` | `Group.Create` |
+| PUT | `/api/v1/groups/{id}` | `Group.Edit` |
 | DELETE | `/api/v1/groups/{id}` | `Group.Delete` |
 
-**`POST /groups`** → `{ "name": "web-team", "description": "Owns the web tier" }`
+**`POST /groups`** → `{ "name": "web-team", "description": "Owns the web tier" }`.
+Optionally accepts a `rule` to create a **dynamic group** (see below).
+
+**Dynamic host groups** — a group may carry a `rule` over stable host attributes;
+matching hosts join automatically (materialized into `host_groups`, recomputed on
+save and by a reconcile loop). Manual host add/remove is refused (`409`) on a
+rule-managed group; a rule-less group stays static/manual. An empty rule matches
+nothing. **`PUT /groups/{id}`** (`Group.Edit`) sets or clears the rule
+(clear-to-manual by omitting `rule`).
+```json
+{ "rule": { "environment": "production", "tagsAll": ["web"], "tagsAny": ["edge","cdn"],
+            "osContains": "ubuntu", "hostnameContains": "web-" } }
+```
+Rule fields: `environment` (exact), `tagsAll` (host has all), `tagsAny` (host has
+≥1), `osContains`, `hostnameContains`. Live metrics are deliberately excluded so
+membership never flaps.
 
 ### System settings
 
@@ -281,6 +319,58 @@ on first use: `notifications`, `backup_policy`, `timezone`, `scan_policy`,
 `oidc`, `ldap`, `audit_forward`. Several of these have dedicated endpoints (e.g.
 notifications, backups, timezone, OIDC/LDAP config, audit forwarding) but are
 also readable/writable through this generic settings interface.
+
+---
+
+## Service accounts
+
+Non-human identities for automation. A service account is a `users` row flagged
+`is_service_account` with **no password** (it cannot log in interactively or via
+SSO); it carries roles and group memberships exactly like a human user and
+survives employee turnover. It authenticates the REST API with an **API token**
+(`Authorization: Bearer flt_...`) — see [Conventions](#conventions).
+
+API tokens are `flt_<random>`, stored only as a SHA-256 hash (the plaintext is
+shown **once** at creation), optionally expiring (30/90/365 days or never),
+revocable, with a throttled `last_used_at`. A token is never implicitly
+super-admin and cannot open the terminal/SFTP WebSocket.
+
+All routes require **`ServiceAccount.Manage`** (seeded to Super Administrator +
+Administrator). A manager may only assign a service account roles whose
+permissions the manager themselves holds (super admins unrestricted).
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/service-accounts` | `ServiceAccount.Manage` |
+| POST | `/api/v1/service-accounts` | `ServiceAccount.Manage` |
+| PATCH | `/api/v1/service-accounts/{id}` | `ServiceAccount.Manage` |
+| DELETE | `/api/v1/service-accounts/{id}` | `ServiceAccount.Manage` |
+| GET | `/api/v1/service-accounts/{id}/tokens` | `ServiceAccount.Manage` |
+| POST | `/api/v1/service-accounts/{id}/tokens` | `ServiceAccount.Manage` |
+| DELETE | `/api/v1/service-accounts/{id}/tokens/{tokenId}` | `ServiceAccount.Manage` |
+
+**`GET /service-accounts`** → each account with its roles, groups, token count,
+and last-used timestamp.
+
+**`POST /service-accounts`**
+```json
+{ "username": "ci-deployer", "displayName": "CI Deployer",
+  "roleIds": ["…"], "groupIds": ["…"] }
+```
+
+**`PATCH /service-accounts/{id}`** → `{ "displayName"?, "disabled"?, "roleIds"?, "groupIds"? }`
+(enable/disable, rename, or replace role/group sets).
+
+**`POST /service-accounts/{id}/tokens`**
+```json
+{ "name": "gitlab-ci", "expiresInDays": 90 }
+```
+→ returns the plaintext `secret` **once**:
+```json
+{ "secret": "flt_…", "token": { "id": "…", "name": "gitlab-ci", "prefix": "flt_…", "expiresAt": "…" } }
+```
+
+**`DELETE /service-accounts/{id}/tokens/{tokenId}`** → revokes the token.
 
 ---
 
@@ -327,6 +417,40 @@ the posted config → `{ "ok": true }` or `{ "ok": false, "error": "…" }`.
 
 ---
 
+## Reports (CSV export)
+
+On-demand, org-wide CSV exports over a date range (auditor evidence) plus a
+scheduled-delivery configuration. All export routes require `Audit.View`.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/reports/access.csv` | `Audit.View` |
+| GET | `/api/v1/reports/audit.csv` | `Audit.View` |
+| GET | `/api/v1/reports/certificates.csv` | `Audit.View` |
+| GET | `/api/v1/reports/scans.csv` | `Audit.View` |
+| GET | `/api/v1/reports/vulnerabilities.csv` | `Audit.View` |
+| GET | `/api/v1/report-schedule` | `System.Configure` |
+| PUT | `/api/v1/report-schedule` | `System.Configure` |
+| POST | `/api/v1/report-schedule/send` | `System.Configure` |
+
+Each export streams `text/csv`. Query: `?from=YYYY-MM-DD&to=YYYY-MM-DD` (dates or
+RFC3339); default is the last 30 days and `to` is an exclusive end-of-day.
+
+- **`access.csv`** — SSH sessions: user, host, client IP, start/end, status, bytes.
+- **`audit.csv`** — audit events with full (untruncated) detail.
+- **`certificates.csv`** — SSH cert issuance: serial, kind, subject, principals, validity, revocation.
+- **`scans.csv`** — OpenSCAP scan posture over time.
+- **`vulnerabilities.csv`** — CVE findings: host, package, installed/fixed version, severity, CVSS.
+
+**Scheduled report delivery** — weekly or monthly, at a chosen day + hour, over a
+lookback window, delivered as **CSV email attachments** through the notification
+channels (via the `report.scheduled` event). **`GET`/`PUT /report-schedule`**
+read/write the schedule config; **`POST /report-schedule/send`** delivers
+immediately. (The webhook channel ignores attachments and sends the summary body
+only.)
+
+---
+
 ## Sessions (replay)
 
 Read-only access to recorded SSH sessions and their `asciicast-v2` recordings.
@@ -336,6 +460,7 @@ Read-only access to recorded SSH sessions and their `asciicast-v2` recordings.
 | GET | `/api/v1/sessions` | `Session.Replay` |
 | GET | `/api/v1/sessions/{id}` | `Session.Replay` |
 | GET | `/api/v1/sessions/{id}/recording` | `Session.Replay` |
+| GET (WS) | `/api/v1/sessions/{id}/watch?token=<accessToken>` | `Session.Watch` |
 
 **`GET /sessions?user=<uuid>&host=<uuid>&limit=&offset=`** →
 `{ "sessions": [ … ], "count": n }`
@@ -345,6 +470,17 @@ Read-only access to recorded SSH sessions and their `asciicast-v2` recordings.
 { "recording": { "format": "asciicast-v2", "durationMs": 84200, "sha256": "…" },
   "cast": "{\"version\":2,...}\n[0.1,\"o\",\"...\"]\n…" }
 ```
+
+### Live session shadowing (WebSocket)
+
+**`GET /sessions/{id}/watch?token=<accessToken>`** (`Session.Watch`) — a
+read-only, real-time view of an **active** terminal session for four-eyes
+oversight. `{id}` is the SSH-session id; the WebSocket authenticates via the
+`token` query param (a WebSocket cannot carry an `Authorization` header). The
+watcher receives the operator's exact output and terminal size but **sends no
+input** (one-way). Watching is itself audited (`session.watch`). This is distinct
+from recording/replay, which is after-the-fact. `Session.Watch` is seeded to
+Super Administrator, Administrator, and Auditor.
 
 ---
 
@@ -452,6 +588,36 @@ under `FLEET_SCAN_DIR`, and records a parsed summary:
 
 ---
 
+## Vulnerability scans (Grype)
+
+CVE scanning, distinct from OpenSCAP compliance: a host's installed packages are
+matched against a CVE database and reported with **CVSS scores**. The backend
+tars the host's package databases over SSH (through the jump host) and posts them
+to a **grype-scanner sidecar** (`FLEET_GRYPE_SCANNER_URL`, default
+`http://grype-scanner:8000`) — nothing is installed on managed hosts. Running and
+viewing scans require `Host.Scan`; CVE-database management requires
+`System.Configure`.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| POST | `/api/v1/vuln-scans` | `Host.Scan` |
+| GET | `/api/v1/vuln-scans?hostId=` | `Host.Scan` |
+| GET | `/api/v1/vuln-scans/latest` | `Host.Scan` |
+| GET | `/api/v1/vuln-scans/{id}` | `Host.Scan` |
+| GET | `/api/v1/vuln-scans/db` | `Host.Scan` |
+| POST | `/api/v1/vuln-scans/db/update` | `System.Configure` |
+| POST | `/api/v1/vuln-scans/db/import` | `System.Configure` |
+
+- **`POST /vuln-scans`** — `{ "hostId": "…" }` or `{ "groupId": "…" }` → `{ "scanIds": ["…"] }`; scan one host or a whole group (on demand, or via a `vulnscan` schedule).
+- **`GET /vuln-scans?hostId=`** — recent scans for a host.
+- **`GET /vuln-scans/latest`** — fleet roll-up: latest completed scan per host (max CVSS + critical/high/medium counts).
+- **`GET /vuln-scans/{id}`** — one scan plus its findings. Each finding: CVE id, package, installed vs. fixed version, severity, CVSS score, vector, data source, description.
+- **`GET /vuln-scans/db`** — CVE database status (build date).
+- **`POST /vuln-scans/db/update`** — online update (needs backend/sidecar internet).
+- **`POST /vuln-scans/db/import`** — upload a pre-downloaded Grype DB archive (air-gapped).
+
+---
+
 ## AI assistant (Ollama)
 
 Read-only natural-language queries over fleet data via a local Ollama instance.
@@ -462,8 +628,13 @@ results are scoped to what the caller can access and every question is audited.
 |--------|------|------|
 | GET | `/api/v1/assistant/status` | `Assistant.Use` — `{enabled, model, reachable, ready}` |
 | GET | `/api/v1/assistant/models?url=` | `System.Configure` — list Ollama models (for setup) |
-| POST | `/api/v1/assistant/ask` | `Assistant.Use` — `{question}` → `202 {id}` (async) |
+| POST | `/api/v1/assistant/ask` | `Assistant.Use` — `{question, conversationId?}` → `202 {id}` (async) |
 | GET | `/api/v1/assistant/ask/{id}` | `Assistant.Use` — poll → `{status, answer, hosts[]}` |
+| GET | `/api/v1/insights` | `Assistant.Use` — fleet insights scoped to accessible hosts |
+| GET | `/api/v1/digest` | `System.Configure` — scheduled health-digest config |
+| PUT | `/api/v1/digest` | `System.Configure` — save digest config |
+| GET | `/api/v1/digest/preview` | `System.Configure` — render the digest without sending |
+| POST | `/api/v1/digest/send` | `System.Configure` — deliver the digest now |
 
 The model is offered these tools (each scoped to the caller's access, several
 additionally gated by the caller's permissions):
@@ -480,9 +651,31 @@ additionally gated by the caller's permissions):
 - **`recent_scans`** — recent OpenSCAP scans, scheduled or manual (gated by `Host.Scan`).
 - **`recent_playbook_runs`** — recent Ansible playbook runs, scheduled or manual
   (gated by `Playbook.Run`).
+- **`fleet_insights`** — the explainable-issues engine (below): offline hosts,
+  low/critical disk, high memory/load, pending security updates, and disk-runway
+  projections. Additional tools: `host_metric_history`, `session_history`,
+  `audit_log`, `list_schedules`, `recent_file_transfers` — each RBAC-gated to the
+  caller.
 
 Configured via the `assistant` setting (`{enabled, ollamaUrl, model}`). Asks run
 in the background (local inference can exceed the request timeout); poll the `id`.
+
+**Multi-turn memory** — `POST /assistant/ask` accepts and returns a
+`conversationId`; history is bounded, owner-scoped, and TTL-pruned, so follow-up
+questions ("and db-02?") resolve against earlier context.
+
+**Fleet insights** — **`GET /insights`** returns explainable issues derived (no
+ML) from host status + metric history: offline hosts, low/critically-low disk,
+high memory/load, pending security updates, and a disk-runway projection
+(days-to-full with a confidence level from the trend fit). Results are scoped to
+the caller's accessible hosts; the same engine powers the Dashboard "Needs
+attention" card and the `fleet_insights` assistant tool.
+
+**Scheduled health digests** — a daily/weekly fleet-health digest built from the
+same insights and delivered via notify (the `fleet.digest` event).
+**`GET`/`PUT /digest`** read/write the digest config, **`GET /digest/preview`**
+renders it without sending, and **`POST /digest/send`** delivers it immediately
+(all `System.Configure`).
 
 ---
 
@@ -583,6 +776,14 @@ setting) and returns the redacted result. **`POST /notifications/test`**
 `{ "channel": "…" }` → sends a test message → `{ "ok": true }` or
 `{ "ok": false, "error": "…" }`. **`GET /notifications/events`** → the event-type
 catalogue (`{ "events": [ { "key", "label" } ] }`) for the UI matrix.
+
+Channels include Email, generic Webhook (Slack/Discord/generic JSON and a
+Microsoft **Teams** MessageCard format), and two **incident channels** —
+**PagerDuty** (Events API v2) and **Opsgenie** (Alerts API, US/EU region). Their
+keys are stored encrypted and write-only. Incident channels are severity-gated
+(fire at/above a configurable minimum severity) rather than per-event, keeping
+info-level events like digests and reports from paging. These are all configured
+through the `notifications` setting — there are no dedicated endpoints.
 
 ---
 

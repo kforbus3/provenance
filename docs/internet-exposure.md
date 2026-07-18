@@ -62,6 +62,8 @@ code is provided. Prefer **passkeys/WebAuthn** (phishing-resistant) where you ca
 TOTP is the universal fallback used for forced enrollment.
 
 For an internet deployment, enabling *Require MFA for all* is strongly recommended.
+Users can also generate one-time **recovery codes** (Settings → Security) to regain
+access if their authenticator is lost.
 
 ## Rate limiting (built in)
 
@@ -153,4 +155,3 @@ own ephemeral per-host certificate; the operator's bootstrap key is no longer us
 - [ ] NPM Access List / Cloudflare WAF in front (if feasible).
 - [ ] WebAuthn RPID/origins set to the public domain so passkeys work.
 - [ ] `FLEET_JUMP_KNOWN_HOSTS` set so the gateway pins the jump host key.
-```

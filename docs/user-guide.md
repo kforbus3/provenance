@@ -47,6 +47,24 @@ On the same **Security** page, the **Passkeys (WebAuthn)** card lets you
 phone passkey — as a phishing-resistant second factor. Once registered, you can
 use it to confirm your identity at sign-in instead of typing a code.
 
+#### Recovery codes (in case you lose your authenticator)
+
+Also on the **Security** page, once you've set up a second factor (an
+authenticator app or a passkey), you can **Generate recovery codes**. These are
+one-time backup codes — 10 of them, each looking like `xxxx-xxxx-xxxx`.
+
+- They're shown **only once**, right after you generate them. **Save them now** —
+  print them or store them in your password manager. Fleet Terminal keeps only a
+  scrambled copy and can never show them to you again.
+- If you ever lose your phone or security key, type **one recovery code** into the
+  normal 2FA prompt at sign-in (the same box where you'd enter a 6-digit code) —
+  dashes, spaces, and capitalization don't matter.
+- Each code works **once**, then it's used up. When you're running low, generate a
+  fresh set — doing so replaces any old codes.
+
+Recovery codes are your fastest way back in if your authenticator goes missing, so
+keep them somewhere safe but separate from your password.
+
 To **sign out**, use the button at the top-right of the page.
 
 ---
@@ -140,6 +158,12 @@ If you have replay permission, **Session Replay** lists recorded SSH sessions
 exactly what happened, with original timing. You can also **export** a session as
 a self-contained file to watch offline.
 
+> **Heads-up: your live sessions may be watched.** For oversight of privileged
+> access, an authorized reviewer can open a **read-only, real-time view** of a
+> session while it's still active — they see exactly what you see but can't type
+> or interfere. Watching is itself recorded in the audit log. This is normal
+> four-eyes supervision, not a sign anything is wrong.
+
 ---
 
 ## 7. Ask Fleet — the AI assistant
@@ -160,6 +184,17 @@ can ask about:
 - **Recent security scans and playbook runs**, including whether they were
   scheduled (e.g. *"when was the last scan on web-01"*, *"did any scheduled
   playbook runs fail"*).
+- **What needs attention across the fleet** — ask *"what's wrong with the
+  fleet?"* or a capacity question like *"which hosts are about to run out of
+  disk?"* and Ask draws on **fleet insights**: offline hosts, low or critically
+  low disk, high memory or load, pending security updates, and a **disk-runway
+  projection** (roughly how many days until a disk fills up).
+
+**It remembers the conversation.** Ask a question, then follow up naturally —
+*"and db-02?"* or *"what about last week?"* — and Fleet keeps the earlier context,
+so you don't have to repeat yourself. The thread stays put even if you refresh the
+page. When you want a clean slate on a new topic, click **New conversation** to
+start fresh.
 
 Answers are always scoped to what you're allowed to see, and every question is
 recorded for audit. Treat an answer as a helpful starting point — verify it
@@ -167,7 +202,44 @@ before you act on it.
 
 ---
 
-## 8. Tips & good habits
+## 8. Check hosts for known vulnerabilities
+
+If you have scan permission, the **Vulnerabilities** page shows where your hosts
+have publicly known security flaws (CVEs) in their installed packages. Nothing is
+installed on your servers to do this — the scan reads the package list over the
+existing secure channel.
+
+- **The fleet roll-up** at the top lists your hosts with, for each one, the
+  **highest CVSS score** found and a count of **critical / high / medium**
+  findings — a quick way to see which servers need attention first. (CVSS is a
+  0–10 severity score; higher is worse.)
+- **Drill into a host** to see its **findings table**: each row is one CVE, with
+  the affected **package**, the **version you have installed**, the **version that
+  fixes it** ("fixed-in" — update to at least this to close the hole), the
+  **severity**, and the **CVSS score**.
+- If a scan is running, you'll see **live progress**; results appear as they
+  complete.
+
+Use the fixed-in version to plan updates: patch the highest-severity, highest-CVSS
+findings first.
+
+---
+
+## 9. Download reports
+
+If you have audit-viewing permission, the **Reports** page lets you **download
+CSV reports** over a date range you choose — handy for compliance evidence or
+sharing with an auditor. Available reports include **access** (who connected to
+what, when), **audit** events, **certificate** issuance, **security-scan**
+posture, and **vulnerability** findings. Pick a from/to range and download; open
+the file in any spreadsheet tool.
+
+Your administrator can also have these delivered to you automatically on a weekly
+or monthly schedule.
+
+---
+
+## 10. Tips & good habits
 
 - **Show/hide the sidebar** with the menu (☰) button in the top bar — handy on
   wide tables like Hosts.
@@ -177,15 +249,17 @@ before you act on it.
   in a tamper-evident log.
 - **Least privilege.** Prefer Just-in-Time access for occasional needs over
   standing membership in broad groups.
-- **Protect your 2FA.** If you lose your authenticator, ask an administrator to
-  reset your factors.
+- **Protect your 2FA.** Generate **recovery codes** on the Security page and store
+  them safely — if you lose your authenticator, one of those codes gets you back
+  in without waiting on an admin. (If you're out of codes too, an administrator can
+  still reset your factors.)
 - **Times you see are in the app's configured zone.** All dates and times are
   shown in a time zone your administrator sets (**Settings → Time zone**), which
   may differ from your own browser's zone.
 
 ---
 
-## 9. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | What to do |
 |---|---|
@@ -194,4 +268,4 @@ before you act on it.
 | Signed out unexpectedly | Idle/absolute timeout; just sign in again. |
 | "Rate limit exceeded" | Too many rapid attempts from your network; wait a moment. |
 | Terminal won't open | Check the server's status on the Terminals page; if offline, contact an admin. |
-| Lost my 2FA device | Ask an administrator to reset your MFA. |
+| Lost my 2FA device | Enter one of your **recovery codes** at the 2FA prompt. Out of codes? Ask an administrator to reset your MFA. |

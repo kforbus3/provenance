@@ -22,24 +22,33 @@ backend/                Go service (chi, pgx)
     auditfwd/           forward audit events to syslog / HTTP (SIEM) via the store's audit sink
     sessionsapi/        recorded session replay
     approvals/          just-in-time access workflow
+    serviceaccounts/    non-human identities + API token auth (REST-only)
     certificates/       CA + certificate lifecycle
     terminal/           WebSocket SSH terminal
+    shadow/             live read-only session shadowing (Session.Watch)
     sftp/               audited SFTP file transfer
     scan/               OpenSCAP scans + remediation
+    vulnscan/           CVE vulnerability scans (via grype-scanner sidecar)
     playbook/           Ansible playbook author/lint/run (via runner sidecar)
     scheduler/          recurring scans & playbook runs
     notify/             outbound email + webhook notifications
+    reports/            compliance CSV exports (Audit.View)
+    reportsched/        scheduled report delivery (CSV email attachments)
+    insights/           explainable fleet-health issues + disk-runway projection
+    digest/             scheduled fleet-health digests (via notify)
     backup/             encrypted DB backups + retention
     system/             background-job status, operational settings
     monitor/            authenticated SSH health checks, pending updates
-    assistant/          AI assistant (inventory/metrics/scans/runs/updates)
+    assistant/          AI assistant (inventory/metrics/scans/runs/updates/insights)
     ca/ identity/ sshgw/ recorder/ ws/   SSH + WebSocket plumbing
+                        (incl. livesessions.Broker = session-shadow fan-out)
     store/              SQL data access (one file per aggregate)
     db/migrations/      SQL migrations (applied on start)
     config/ models/ metrics/ telemetry/
 frontend/               React + Vite SPA (nginx in prod)
-deploy/compose/         docker-compose.yml (local stack, incl. ansible-runner)
+deploy/compose/         docker-compose.yml (local stack, incl. sidecars)
 deploy/ansible-runner/  Python/Ansible sidecar (playbook lint + run)
+deploy/grype-scanner/   Anchore Grype sidecar (CVE scanning; grype-db volume)
 deploy/k8s/             Kubernetes manifests
 docs/                   this documentation
 Makefile                developer entrypoints
@@ -71,8 +80,9 @@ to lint and run playbooks — built from `deploy/ansible-runner`), and the local
 **test fabric** (jump host + managed hosts used for end-to-end SSH testing).
 Use `make up-app` to start only the application stack without the test fabric.
 
-Once the stack is healthy, open the frontend (default `http://localhost:8080`)
-and complete the **bootstrap** flow (see [Admin Guide](./admin-guide.md)).
+Once the stack is healthy, open the frontend (Vite dev server, default
+`http://localhost:5173`; the backend listens on `http://localhost:8080`) and
+complete the **bootstrap** flow (see [Admin Guide](./admin-guide.md)).
 
 ## Common Makefile targets
 
@@ -119,7 +129,7 @@ full list):
 |----------|---------|---------|
 | `FLEET_ENV` | `development` | `development` relaxes secret validation |
 | `FLEET_HTTP_ADDR` | `:8080` | listen address |
-| `FLEET_PUBLIC_URL` | `https://localhost:8443` | external base URL (cookies/CORS) |
+| `FLEET_PUBLIC_URL` | `https://localhost:8443` | external base URL (cookies/CORS). In dev you reach the Vite frontend at `http://localhost:5173`, which proxies to the backend. |
 | `FLEET_DATABASE_URL` | `postgres://fleet:fleet@postgres:5432/fleet?sslmode=disable` | DB DSN |
 | `FLEET_MIGRATE_ON_START` | `true` | run migrations at boot |
 | `FLEET_JWT_SECRET` | — | HMAC secret for access tokens (≥32 bytes in prod) |

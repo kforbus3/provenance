@@ -261,6 +261,74 @@ re-enrolled under lockdown.
 > re-enroll it (its bootstrap credentials, or the no-install script) to rewrite its
 > principal files.
 
+## 14. Service accounts & API tokens
+
+Automation (CI/CD, IaC, monitoring) needs a non-human identity. A **service
+account** is a `users` row flagged `is_service_account` with **no password** — it
+cannot log in interactively or via SSO. It carries roles and group memberships
+exactly like a human user, so it is subject to the same RBAC and host-access gates,
+and audit records its username as the actor. Requires `ServiceAccount.Manage`
+(seeded to Super Administrator + Administrator).
+
+**API tokens** are a new standing-credential class that authenticates a service
+account to the **REST API only**:
+
+- Format `flt_<random>`, sent as `Authorization: Bearer flt_...`. `RequireAuth`
+  routes any `flt_`-prefixed bearer to token auth; JWT session tokens are
+  unaffected.
+- **Hashed at rest.** Only a SHA-256 hash (`api_tokens.token_hash`) is stored; the
+  plaintext secret is shown **once** at creation and is unrecoverable thereafter.
+- **Optional expiry** (30/90/365 days or never) and **revocable** at any time
+  (`revoked_at`); `last_used_at` is tracked (throttled) so stale tokens are
+  identifiable.
+- **Never implicitly super-admin.** A token only carries the roles/groups assigned
+  to its service account. It **cannot open the terminal/SFTP WebSocket** — those
+  require a session-bound SSH credential — so a leaked token cannot itself reach a
+  managed host's shell.
+- **Privilege-escalation guard.** A manager may only assign a service account roles
+  whose permissions the manager themselves holds (super admins unrestricted), so
+  `ServiceAccount.Manage` cannot be used to mint an identity more powerful than its
+  creator.
+
+> **Recommendation:** scope service accounts tightly (only the roles/groups the
+> automation actually needs), prefer a bounded expiry over "never", and **rotate**
+> tokens periodically — create the replacement, cut over, then revoke the old one.
+> Treat the one-time secret like any other high-value credential (inject via a
+> secret manager, never commit it).
+
+## 15. MFA recovery codes
+
+One-time backup codes let a user complete MFA when their TOTP/WebAuthn factor is
+lost. They are a genuine second-factor bypass path, so they are handled like the
+factors themselves:
+
+- **Hashed storage.** 10 codes are generated at once, shown **once**, and stored
+  only as SHA-256 hashes (`mfa_recovery_codes`) — never decryptable.
+- **Single-use.** Each code is consumed on first successful use via the existing
+  MFA verify path; a used code cannot be replayed.
+- **Regeneration invalidates the old set.** Generating a new batch discards all
+  previously issued codes. Self-service generation is refused until a second factor
+  (TOTP or passkey) is already confirmed.
+- **Lockout still applies.** Recovery codes are entered at the normal MFA prompt,
+  so failed attempts feed the same `lockout_policy` as any other MFA failure — a
+  code cannot be brute-forced around the lockout.
+
+## 16. Live session shadowing
+
+Fleet supports **read-only, real-time viewing of an active terminal session** for
+four-eyes oversight of privileged access. It is an observation control, not a
+control channel:
+
+- **One-way / read-only.** The watcher sees the operator's exact output at the
+  operator's terminal dimensions but **sends no input** — shadowing can never
+  inject commands into the watched session.
+- **Watching is itself audited.** Every observation writes a `session.watch` event
+  (who watched which session, when). Silent oversight is therefore impossible; the
+  act of watching is on the tamper-evident record like any other privileged action,
+  which matters for consent and accountability.
+- Requires `Session.Watch` (seeded to Super Administrator, Administrator, Auditor).
+  It is distinct from — and complements — after-the-fact recording/replay.
+
 ## Security checklist (production)
 
 - [ ] Strong `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE` set.
@@ -270,6 +338,7 @@ re-enrolled under lockdown.
 - [ ] Per-IP rate limits set; app only reachable behind a reverse proxy.
 - [ ] Scheduled `audit/verify` with alerting; audit exports archived immutably.
 - [ ] Least-privilege roles; `Admin.All` limited to break-glass accounts.
+- [ ] Service-account API tokens scoped tightly, given a bounded expiry, and rotated.
 - [ ] CA public key distributed; rotation and revocation procedures rehearsed.
 - [ ] Managed hosts reachable only via jump host + WireGuard.
 - [ ] `FLEET_HOST_SCOPED_ONLY=true`, then re-enroll each managed host (not the jump host).

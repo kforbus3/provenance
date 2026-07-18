@@ -152,6 +152,30 @@ endpoints are under `/api/v1/users`, `/roles`, `/groups`.)
   forces TOTP enrollment at the user's next sign-in before a session is issued.
 - **View accessible hosts:** `GET /users/{id}/hosts` lists every host a user can
   currently reach (the at-a-glance access view).
+- **Service accounts (automation):** non-human identities that authenticate to the
+  REST API with tokens are managed separately — see §18.
+
+### MFA recovery codes
+
+Users generate **one-time backup codes** that stand in for their authenticator
+(TOTP or passkey) when it is lost. This is **self-service** under **Security**
+settings, so admins never hold the codes:
+
+- **10 codes** are issued at once and shown **once**; Fleet stores only their
+  SHA-256 hashes and can never redisplay them.
+- Format `xxxx-xxxx-xxxx`; a user types one at the **normal MFA prompt** — the same
+  field as a TOTP code (dashes, spacing, and case are normalized).
+- Generation is **refused until a second factor (TOTP or passkey) is confirmed**,
+  and generating a fresh set **invalidates the previous set**. Each code is
+  single-use; failed attempts feed the same lockout policy as TOTP.
+
+| Action | Endpoint (authenticated, self) |
+|--------|--------------------------------|
+| Remaining count | `GET /api/v1/auth/mfa/recovery-codes` → `{remaining}` |
+| Generate a new set | `POST /api/v1/auth/mfa/recovery-codes` → `{codes:[…]}` (once) |
+
+> A locked-out user with **no** authenticator and **no** remaining codes needs an
+> admin to reset their factors. Encourage users to store the codes offline.
 
 ## 5. Manage roles & groups
 
@@ -164,6 +188,35 @@ endpoints are under `/api/v1/users`, `/roles`, `/groups`.)
   group to **hosts** from a host's **Manage access** dialog (or
   `POST /hosts/{id}/groups/{groupId}`). So: put users in a group, add the group to
   hosts, and every member can reach every host in it.
+
+### Dynamic host groups
+
+A group can carry a **membership rule** over stable host attributes; every host that
+matches **joins automatically**, and — because group membership grants host access —
+its members immediately gain access to those hosts. Rule fields:
+
+| Field | Match |
+|-------|-------|
+| `environment` | exact match on the host's environment |
+| `tagsAll` | host carries **all** listed tags |
+| `tagsAny` | host carries **at least one** listed tag |
+| `osContains` | substring of the host's OS string |
+| `hostnameContains` | substring of the hostname |
+
+- Only **stable** attributes are used — live metrics are deliberately excluded so
+  membership never flaps. An **empty rule matches nothing** (never "all hosts").
+- Membership is **materialized** into `host_groups` (the access-check path is
+  unchanged) and **auto-reconciles**: recomputed on rule save and by a background
+  loop roughly every 3 minutes.
+- On a rule-managed (**Dynamic**) group, **manual add/remove is refused** (`409`) —
+  edit the rule instead. A rule-less group stays **static/manual** as before.
+- The **Groups** page shows a **Dynamic / Manual** badge plus a rule summary, with a
+  rule editor to create, edit, or **clear the rule back to manual**.
+
+| Action | Endpoint |
+|--------|----------|
+| Create a group with an optional rule | `POST /groups` (accepts `rule`) |
+| Set / clear a group's rule | `PUT /groups/{id}` (`Group.Edit`) |
 
 ## 6. Manage hosts & access
 
@@ -301,7 +354,7 @@ channels are **off until enabled**:
   `none`), username, password, from, and to addresses. The SMTP **password is
   encrypted at rest** and never returned by the API.
 - **Webhook** — posts JSON to a URL; **format** shapes the body for generic JSON,
-  Slack/Mattermost, or Discord.
+  Slack/Mattermost, Discord, or **Microsoft Teams** (a MessageCard payload).
 
 A per-event **routing matrix** decides which events go to which channel. Events:
 
@@ -310,10 +363,31 @@ A per-event **routing matrix** decides which events go to which channel. Events:
 - Access request pending approval
 - Security scan found failures
 - Playbook run failed
+- Vulnerability (CVE) findings (§21)
+- Scheduled compliance report ready (`report.scheduled`, §20)
+- Fleet-health digest (`fleet.digest`, §22)
 - CA key due for rotation (§13)
 
 A **throttle** (minutes) suppresses repeats of the same event (e.g. a flapping
 host). Each channel has a **Send test** button.
+
+### Incident channels (PagerDuty & Opsgenie)
+
+Two integrations **page on-call** instead of posting per event:
+
+- **PagerDuty** (Events API v2) — a **routing/integration key** (stored
+  **encrypted**, write-only).
+- **Opsgenie** (Alerts API) — an **API key** (encrypted, write-only) and a **US or
+  EU** region.
+
+Unlike the per-event routing matrix, these are **severity-gated**: each fires on
+**any** event at or above a configurable **minimum severity** — *errors only*,
+*warnings + errors*, or *everything* — which keeps info-level traffic (digests,
+scheduled reports) from paging. Severity maps: `error` → PagerDuty **critical** /
+Opsgenie **P1**, `warning` → **warning** / **P3**, `info` → **info** / **P5**.
+Configure enable, key, region, and minimum severity under **Settings →
+Notifications**; each has its own **Send test**. (No new endpoints — they are part
+of the `notifications` settings.)
 
 ## 11. Backup & restore
 
@@ -476,3 +550,174 @@ and the page rolls them up into an overall status. It covers:
   error.
 
 It is served by `GET /api/v1/system/health`.
+
+## 18. Service accounts & API tokens
+
+A **service account** is a non-human identity for automation (CI/CD, IaC,
+monitoring): a user record flagged `is_service_account` with **no password**, so it
+**cannot log in interactively or via SSO**. It carries **roles** (permissions) and
+**group memberships** (host access) exactly like a human user, survives employee
+turnover, and appears in the audit log under its own username as the actor.
+
+Manage them from the **Service Accounts** page (left nav, gated
+**`ServiceAccount.Manage`** — seeded to Super Administrator and Administrator).
+Create one with a name plus its **roles** and **groups**; enable/disable or delete
+it; and manage its tokens.
+
+> **Privilege-escalation guard:** a manager may only assign a service account roles
+> whose permissions the manager **themselves holds** (super admins are
+> unrestricted). You cannot mint an account more powerful than yourself.
+
+### API tokens
+
+A token authenticates a service account to the **REST API**:
+
+- Format `flt_<random>`, sent as `Authorization: Bearer flt_…`. `RequireAuth` routes
+  any `flt_`-prefixed bearer to token auth; JWT session tokens are unaffected.
+- Stored **only as a SHA-256 hash** — the plaintext **secret is shown once** at
+  creation (copy it then). Optional **expiry** (30 / 90 / 365 days or never),
+  **revocable**, with a throttled `last_used_at` (≤ 1/min).
+- A token is **never implicitly super-admin** — it carries exactly its account's
+  roles and groups.
+- **REST-only:** a token **cannot open the terminal / SFTP WebSocket** (those need a
+  session-bound SSH credential). Use it for API automation, not interactive
+  sessions.
+
+| Action | Endpoint (all `ServiceAccount.Manage`) |
+|--------|----------------------------------------|
+| List service accounts | `GET /service-accounts` (roles, groups, token count, last used) |
+| Create | `POST /service-accounts` `{username, displayName, roleIds[], groupIds[]}` |
+| Edit / enable / disable | `PATCH /service-accounts/{id}` `{displayName?, disabled?, roleIds?, groupIds?}` |
+| Delete | `DELETE /service-accounts/{id}` |
+| List tokens | `GET /service-accounts/{id}/tokens` |
+| Issue a token | `POST /service-accounts/{id}/tokens` `{name, expiresInDays}` → `secret` (once) |
+| Revoke a token | `DELETE /service-accounts/{id}/tokens/{tokenId}` |
+
+> Scope service accounts **least-privilege** — only the roles and groups the
+> automation needs. Revoke a token immediately if it may be exposed; revocation is
+> instant.
+
+## 19. Live session shadowing
+
+**Session shadowing** is read-only, real-time viewing of an **active** terminal
+session — four-eyes oversight of privileged access. The watcher sees the operator's
+exact output at the operator's terminal size but **sends no input** (strictly
+one-way). It is distinct from recording/replay, which is after-the-fact.
+
+- Permission: **`Session.Watch`** (seeded to Super Administrator, Administrator, and
+  Auditor).
+- From **Session Replay**, active sessions expose a **Watch live** action that opens
+  a full-screen, read-only xterm viewer rendered at the operator's dimensions.
+- Watching is **itself audited** (`session.watch` — who watched which session, and
+  when), so oversight is accountable.
+
+| Action | Endpoint |
+|--------|----------|
+| Watch a live session | `GET /sessions/{id}/watch` — WebSocket, auth via `?token=` (like the terminal WS); `{id}` is the SSH-session id |
+
+## 20. Compliance reports
+
+The **Reports** page (left nav, gated **`Audit.View`**) produces **on-demand CSV
+exports** over a `from`/`to` date range — org-wide auditor evidence:
+
+| Export | Contents |
+|--------|----------|
+| `GET /reports/access.csv` | SSH sessions — user, host, client IP, start/end, status, bytes |
+| `GET /reports/audit.csv` | audit events with full (untruncated) detail |
+| `GET /reports/certificates.csv` | SSH cert issuance — serial, kind, subject, principals, validity, revocation |
+| `GET /reports/scans.csv` | OpenSCAP scan posture over time |
+| `GET /reports/vulnerabilities.csv` | CVE findings — host, package, installed/fixed, severity, CVSS |
+
+Query with `?from=YYYY-MM-DD&to=YYYY-MM-DD` (or RFC3339); default is the last 30
+days, and `to` is an **exclusive** end-of-day. All are gated `Audit.View`.
+
+### Scheduled report delivery
+
+Fleet can deliver reports automatically — **weekly or monthly**, at a chosen day and
+hour, covering a lookback window — as **CSV email attachments** through the
+notification channels. Configure it on the **Scheduled compliance reports** settings
+card; delivery emits a `report.scheduled` event, so **route that event to Email**
+under Notifications (§10) to receive the attachments.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save the schedule | `GET/PUT /report-schedule` (`System.Configure`) |
+| Send one now | `POST /report-schedule/send` (`System.Configure`) |
+
+> Email attachments are multipart; the **webhook channel ignores attachments** and
+> sends only the summary body, so scheduled reports must go to **Email**.
+
+## 21. Vulnerability scanning (CVE)
+
+CVE scanning is **distinct from OpenSCAP compliance scans**: it matches a host's
+**installed packages** against a CVE database and reports findings with **CVSS
+scores**.
+
+**Architecture.** A **grype-scanner sidecar** (Anchore Grype + the CVE database, its
+own container — compose service `grype-scanner`, `FLEET_GRYPE_SCANNER_URL` default
+`http://grype-scanner:8000`) does the matching. The backend dials the host through
+the jump host, **tars its package databases** (`/etc/os-release` +
+`/var/lib/dpkg/status` or `/var/lib/rpm`) over SSH, and posts them to the sidecar —
+**nothing is installed on the managed hosts**. CVSS is enriched from Grype's related
+NVD records, so distro sources (Debian/Ubuntu) that carry severity but not scores
+still get a numeric CVSS.
+
+Each finding records the CVE id, package, installed vs. fixed version, severity,
+CVSS score and vector, data source, and description; each scan row records
+per-severity counts and the max CVSS.
+
+- Scan a **host** or a **whole group**, **on demand** or on a **schedule** (the
+  `vulnscan` schedule kind, alongside scan/playbook — §8). Findings are
+  **severity-gated notified** (§10) and audited; stale scans are reconciled on
+  restart.
+- The **Vulnerabilities** page (nav, gated **`Host.Scan`**) shows a **fleet roll-up**
+  — max CVSS plus critical/high/medium counts per host — with a drill-in findings
+  table and live progress. CSV export is on **Reports** (§20).
+
+| Action | Endpoint |
+|--------|----------|
+| Start a scan | `POST /vuln-scans` `{hostId}` or `{groupId}` → `{scanIds:[…]}` (`Host.Scan`) |
+| Recent scans for a host | `GET /vuln-scans?hostId=` |
+| Fleet roll-up | `GET /vuln-scans/latest` (latest completed per host) |
+| Scan + findings | `GET /vuln-scans/{id}` |
+
+### CVE database management
+
+The scanner needs a CVE database, managed on the Vulnerabilities page (gated
+**`System.Configure`**). The current **DB build date** is shown, and the DB persists
+in the **`grype-db`** volume; Grype's DB age-validation is disabled, so a
+self-managed DB of any age is usable.
+
+- **Update online** — pulls a fresh Grype DB (needs the backend/sidecar to have
+  **internet access**).
+- **Import offline** — upload a **pre-downloaded Grype DB archive** for
+  **air-gapped** deployments. Download the archive on a connected machine, then
+  import it here.
+
+| Action | Endpoint |
+|--------|----------|
+| DB status | `GET /vuln-scans/db` |
+| Online update | `POST /vuln-scans/db/update` (`System.Configure`) |
+| Offline import | `POST /vuln-scans/db/import` (`System.Configure`) — archive upload |
+
+## 22. Fleet insights & health digests
+
+The local-LLM **Ask AI** assistant (§9, `assistant` setting) is backed by two
+admin-facing features:
+
+- **Fleet insights** — an explainable engine (no ML) derives issues from host status
+  and metric history: offline hosts, low / critically-low disk, high memory/load,
+  pending security updates, and a **disk-runway projection** (days-to-full with a
+  confidence level from the trend fit). It surfaces as the Dashboard **"Needs
+  attention"** card and a `GET /insights` endpoint (scoped to the caller's
+  accessible hosts).
+- **Scheduled health digests** — a **daily or weekly** fleet-health digest built from
+  the same insights and delivered via notifications (a `fleet.digest` event — route
+  it to a channel under §10). Configure it on the **Fleet-health digest** settings
+  card.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save the digest schedule | `GET/PUT /digest` (`System.Configure`) |
+| Preview the current digest | `GET /digest/preview` (`System.Configure`) |
+| Send one now | `POST /digest/send` (`System.Configure`) |

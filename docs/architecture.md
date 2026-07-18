@@ -45,17 +45,20 @@ no local Go/Node/Postgres toolchain is required (see the [Developer Guide](./dev
    |   terminal (WS)        Audit)              Scheduler engine   |
    |   sftp   scan                              Notifier           |
    |   playbook  scheduler                      Backup             |
-   |   notify  backup                                              |
-   |   assistant  monitor                                          |
+   |   notify  backup                            Reports gen.      |
+   |   assistant  monitor                        Report scheduler  |
+   |   serviceaccounts (token auth)              Shadow broker     |
+   |   reports  vulnscan                         Insights engine   |
+   |   shadow  insights  digest                  Digest scheduler  |
    +--------------------------------------------------------------+
-                              |  HTTP (mint ephemeral cert)
-                              v
-                    +---------------------------+
-                    |  ansible-runner sidecar   |
-                    |  (Python/Ansible; lints & |
-                    |  runs playbooks, SSHes via |
-                    |  the Jump Host)           |
-                    +---------------------------+
+                    |  HTTP (mint cert)         |  HTTP (post pkg DBs)
+                    v                           v
+        +---------------------------+  +---------------------------+
+        |  ansible-runner sidecar   |  |  grype-scanner sidecar    |
+        |  (Python/Ansible; lints & |  |  (Anchore Grype + CVE DB; |
+        |  runs playbooks, SSHes via |  |  matches packages, scores |
+        |  the Jump Host)           |  |  CVSS; grype-db volume)   |
+        +---------------------------+  +---------------------------+
         |                         |                       |
         | SQL (parameterized)     | mint/sign cert        | SSH (ephemeral cert)
         v                         v                       v
@@ -137,6 +140,15 @@ ephemeral-identity issuance once identity is established:
   user to verify the password, mapping directory attributes/groups to a Fleet
   user. Uses `github.com/go-ldap/ldap/v3`.
 
+A third, **non-interactive** auth path serves automation. A **service account**
+(`serviceaccounts` module) is a passwordless `users` row that authenticates to the
+REST API with an **API token** (`flt_…`, stored only as a SHA-256 hash). On any
+request, `RequireAuth` routes a `flt_`-prefixed bearer to token auth instead of JWT
+verification, resolves the owning service account, and applies its roles/groups
+through the normal RBAC + host-access gates. A token grants **REST access only** —
+it never mints an ephemeral SSH identity, so it cannot open the terminal/SFTP
+WebSocket. See the [Security Guide](./security-guide.md#14-service-accounts--api-tokens).
+
 ### 3. Opening a terminal
 1. The SPA opens `WSS /api/v1/terminal/{hostId}?token=<access JWT>` (browsers
    cannot set `Authorization` on a WebSocket, so the short-lived token is passed
@@ -194,9 +206,53 @@ runner to `--syntax-check` / lint YAML, and orchestrates runs:
   CA, jump host, runner sidecar, backups, and background jobs into a single
   bounded report.
 
+### 7. Live session shadowing
+Read-only, real-time oversight of an **active** terminal session. The `shadow`
+module exposes `WSS /api/v1/sessions/{id}/watch` (authenticated via `?token=`, like
+the terminal WS); a watcher needs `Session.Watch`. Fan-out is handled by a
+**`livesessions.Broker`**: while at least one watcher is attached, the terminal
+relay publishes each output/resize frame to the broker, which mirrors it to every
+watcher at the operator's terminal dimensions. The channel is **one-way** (watchers
+send no input), and each watch is recorded as a `session.watch` audit event.
+
+### 8. Compliance reports and scheduled delivery
+The `reports` module generates on-demand CSV exports over a `from`/`to` range
+(access sessions, audit events, certificate issuance, OpenSCAP scans, CVE
+findings), all gated `Audit.View`, for auditor evidence. The **`reportsched`**
+scheduler renders the same reports weekly/monthly and delivers them as **CSV email
+attachments** through the `notify` layer (a `report.scheduled` event); the notify
+layer gained multipart/mixed attachment support, which the webhook channel ignores.
+
+### 9. Fleet insights and health digests
+The **`insights`** engine derives explainable, no-ML issues from host status +
+metric history — offline hosts, low/critical disk, high memory/load, pending
+security updates, and a disk-runway (days-to-full) projection with a confidence
+level. It backs a Dashboard "Needs attention" card, `GET /api/v1/insights` (scoped
+to accessible hosts), and a `fleet_insights` assistant tool. The **`digest`**
+scheduler builds a daily/weekly fleet-health digest from the same insights and
+delivers it via `notify` (a `fleet.digest` event).
+
+### 10. CVE vulnerability scanning
+The `vulnscan` module scans a host or group for known-vulnerable packages, on
+demand or on a `vulnscan` schedule, **without installing anything on the managed
+host**. The backend dials the host through the Jump Host, tars its package
+databases (`/etc/os-release` + dpkg/rpm state) over SSH, and POSTs them to the
+**`grype-scanner` sidecar** (`deploy/grype-scanner`, reachable at
+`FLEET_GRYPE_SCANNER_URL`, default `http://grype-scanner:8000`). The sidecar runs
+Anchore Grype against a locally persisted CVE database (`grype-db` volume, loaded
+via online Update or offline Import — never baked into the image) and returns
+findings; CVSS is enriched from related NVD records so distro advisories still get
+numeric scores. Scans and per-severity roll-ups are persisted (`vuln_scans`,
+`vuln_findings`), severity-gated notifications fire, and every scan is audited.
+
 All HTTP modules share the **`internal/httpx`** helpers
 (`WriteJSON` / `WriteError` / `Decode` / `ParseID` / `Audit`) for consistent
 responses, request decoding, ID parsing, and best-effort audit writes.
+
+> These subsystems are **additive**. The core architecture — ephemeral in-RAM SSH
+> certificates, the jump-host + WireGuard egress path, backend-authoritative RBAC,
+> and the hash-chained audit trail — is unchanged; the new modules build on top of
+> the same store, auth, audit, notify, and SSH plumbing.
 
 ---
 

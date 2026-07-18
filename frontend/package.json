@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build-help": "node scripts/build-help.mjs",
+    "predev": "node scripts/build-help.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/build-help.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -29,7 +32,9 @@
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
     "react-router-dom": "^6.27.0",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.1"
   },
   "devDependencies": {

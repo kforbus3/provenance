@@ -72,6 +72,21 @@ to `/terminals/<hostId>`. The browser opens a WebSocket to the backend — the o
 which dials the host through the jump host using a **certificate unique to that (user, host)
 pair**. The session is recorded (replay under **Session Replay**) and audited.
 
+## Watching a live session
+
+For four-eyes oversight of privileged access you can **shadow** an active session —
+read-only, in real time.
+
+1. Open **Session Replay** and find an **active** session.
+2. Click **Watch live** — a full-screen, read-only terminal opens and renders at the
+   operator's exact size, mirroring their output as it happens.
+3. Close the viewer to stop watching.
+
+You need the **`Session.Watch`** permission (Super Admin, Administrator, Auditor by
+default). Watching sends **no keystrokes** — it is strictly one-way — and is
+**itself audited** (`session.watch`), so oversight is accountable. This is live
+shadowing; recorded **replay** of finished sessions is on the same page.
+
 ## Transferring files (SFTP)
 
 Click the **folder** icon on a host row (or `/files/<hostId>`). Browse directories, download
@@ -113,6 +128,23 @@ via the **Details** (ⓘ) button on the **Hosts** page ("Updates available", sho
 The **Hosts** and **Terminals** pages have a **Filter by group** multi-select — pick one or more
 groups to narrow the list to their member hosts.
 
+## Dynamic groups
+
+Instead of adding hosts to a group by hand, give the group a **rule** and matching hosts join
+automatically (and their members' access follows):
+
+1. **Groups → New/Edit group → rule editor**. Set any of: **environment** (exact), **tags — all
+   of** / **tags — any of**, **OS contains**, **hostname contains**.
+2. Save. Matching hosts populate immediately, and membership **auto-reconciles** as hosts change
+   or new ones enroll (recomputed on save and every ~3 minutes).
+3. To go back to hand-picked membership, **clear the rule** — the group becomes **Manual** again.
+
+The Groups page badges each group **Dynamic** or **Manual** and summarizes the rule.
+
+> On a **Dynamic** group, **manual add/remove is disabled** — Fleet refuses it so membership
+> always reflects the rule. An **empty rule matches no hosts** (it is not "all hosts"). Live
+> metrics are intentionally not rule inputs, so membership won't flap.
+
 ## AI assistant (Ask Fleet)
 
 An optional, **local-only** assistant answers natural-language questions about the fleet —
@@ -136,6 +168,11 @@ commands or changes anything; treat answers as a starting point and verify befor
    6-digit code to confirm. Passkeys (WebAuthn) can be registered from the same page.
 2. Subsequent sign-ins prompt for the code after the password step.
 3. Remove a factor from the same page. (Admins can reset a locked-out user's factors.)
+
+**Recovery codes.** From the same **Security** page, once a second factor is confirmed, generate
+**10 one-time backup codes** for when your authenticator is lost. They are shown **once** — save
+them offline. Type one (format `xxxx-xxxx-xxxx`) at the normal MFA prompt in place of a code.
+Generating a new set invalidates the old one, and each code works once.
 
 **Requiring MFA.** MFA is optional by default. Admins can enforce it globally
 (**Users → Require MFA for all**) or per user (Users → Edit → *Require MFA*). When required and
@@ -174,6 +211,24 @@ as the user's own DN, provisioning the account (and applying group mappings by C
 as needed.
 
 See the Administrator Guide for full field details and endpoints.
+
+## Service accounts & API tokens (automation)
+
+For CI/CD, IaC, or monitoring that calls the **REST API**, use a **service account** — a
+non-human identity with **no password** (it can't log in interactively or via SSO) that carries
+roles and groups like a user and shows up in the audit log as the actor.
+
+1. **Service Accounts** page (needs `ServiceAccount.Manage`). **Create** an account with a name,
+   the **roles** it needs, and the **groups** for its host access — least-privilege. (You can
+   only grant roles whose permissions you hold yourself.)
+2. Open its **token manager** and **create a token**: name it, pick an **expiry** (30/90/365 days
+   or never), and **copy the secret now** — it is shown **once** and stored only as a hash.
+3. Use it as `Authorization: Bearer flt_…` against the API. **Revoke** a token any time from the
+   same panel (effective immediately); disable or delete the account to retire it.
+
+> A token is **REST-only** — it **cannot** open the terminal or SFTP WebSocket (those need an
+> interactive session). It is never implicitly super-admin; it has exactly the account's roles
+> and groups. Store secrets in your automation's secret manager, not in source.
 
 ## Security scans (OpenSCAP)
 
@@ -232,6 +287,43 @@ lists the failed rules so you can **select which to fix**:
 - Debian/Ubuntu have **no DISA STIG** profile; the closest hardening baseline is
   **ANSSI-BP-028 (High / Enforced)**.
 
+## Vulnerability scans (CVE)
+
+CVE scanning is separate from OpenSCAP compliance (above): it matches a host's
+**installed packages** against a CVE database and scores findings by **CVSS**.
+Nothing is installed on the host — the backend tars the package databases over SSH
+and a **grype-scanner sidecar** does the matching.
+
+1. Open the **Vulnerabilities** page (sidebar; needs `Host.Scan`).
+2. **Scan a host** or **a whole group** — on demand here, or on a recurring basis
+   with a `vulnscan` **schedule** (Schedules page). Progress streams live.
+3. Read the **fleet roll-up**: per host, the **max CVSS** and counts of
+   **critical / high / medium** findings. Sort to triage worst-first.
+4. **Drill in** to a host for the findings table — CVE id, package, **installed vs.
+   fixed** version, severity, CVSS score and vector, data source, and description.
+   The *fixed* column tells you which package upgrade closes the finding.
+5. Export evidence from **Reports → `vulnerabilities.csv`** (see Compliance reports).
+
+Findings are **severity-gated notified** (route them under Notifications) and
+audited. If a host shows no data, confirm the sidecar is up and the **CVE database
+is loaded** (below).
+
+## CVE database (online & offline)
+
+The scanner needs a CVE database, persisted in the `grype-db` volume. Manage it from
+the **Vulnerabilities** page (needs `System.Configure`); the current **build date**
+is shown.
+
+- **Online:** click **Update** to pull a fresh Grype DB — the backend/sidecar must
+  have **internet access**.
+- **Air-gapped:** on an internet-connected machine, download a **Grype DB archive**,
+  copy it in, then **Import** it here. Grype's DB age-validation is disabled, so a
+  self-managed DB of any age is accepted — but refresh it regularly so new CVEs are
+  caught.
+
+> Load or import the database **before** the first scan; a scan against an empty DB
+> returns no findings rather than an error.
+
 ## Ansible playbooks
 
 The **Playbooks** page (needs `Playbook.Edit`) is an authoring and run console for Ansible.
@@ -275,8 +367,8 @@ recomputes upcoming schedule runs.
 ## Notifications
 
 **Settings → Notifications** (admin) routes events to **Email** (generic SMTP) and/or a
-**Webhook** (raw **JSON**, **Slack**, or **Discord**). For each channel, choose which events go
-to it:
+**Webhook** (raw **JSON**, **Slack**, **Discord**, or **Microsoft Teams**). For each channel,
+choose which events go to it:
 
 - **Host went offline / recovered**
 - **Access request pending approval**
@@ -284,9 +376,20 @@ to it:
 - **Just-in-time access expired**
 - **Security scan found failures**
 - **Failed playbook run**
+- **Vulnerability (CVE) findings**
+- **Scheduled compliance report** (`report.scheduled`) — deliver to **Email** for the CSV
+- **Fleet-health digest** (`fleet.digest`)
 
 Set a **throttle** (minutes) to dedupe repeats, and use **Send test** to confirm delivery.
 Notifications are **off by default** — nothing is sent until you enable a channel.
+
+**Page on-call (PagerDuty / Opsgenie).** Two **incident channels** page instead of posting per
+event: **PagerDuty** (Events API v2 — a routing/integration key) and **Opsgenie** (Alerts API —
+an API key, US or EU region); keys are stored encrypted. Rather than the per-event matrix, each
+fires on **any** event at or above a **minimum severity** you set — *errors only*,
+*warnings + errors*, or *everything* — which keeps info-level traffic (digests, scheduled
+reports) from paging. Enable it, paste the key, pick the minimum severity (and region), and
+**Send test**.
 
 For the two lifecycle events — a request being **resolved** and a grant **expiring** —
 routing the event to **Email** also emails the affected **requester directly** at the address
@@ -298,6 +401,40 @@ There is also a **CA key due for rotation** event: the renewal loop checks the a
 SSH CA key's age hourly and, once it passes `FLEET_CA_ROTATE_AFTER` (default 365 days),
 raises this notification (throttled ~weekly). Rotate with `fleetctl rotate-ca` or from the
 **Certificates** page.
+
+## Compliance reports
+
+The **Reports** page (needs `Audit.View`) exports **CSV** evidence over a date range you pick
+(`from`/`to`; default last 30 days, `to` exclusive):
+
+- **Access** — SSH sessions (user, host, client IP, start/end, status, bytes)
+- **Audit** — audit events with full, untruncated detail
+- **Certificates** — SSH cert issuance and revocation
+- **Scans** — OpenSCAP posture over time
+- **Vulnerabilities** — CVE findings (host, package, installed/fixed, severity, CVSS)
+
+### Scheduling delivery
+
+To have reports arrive automatically:
+
+1. **Settings → Scheduled compliance reports**. Choose **weekly** or **monthly**, a **day** and
+   **hour**, and the lookback window; save.
+2. Under **Notifications**, route the **Scheduled compliance report** (`report.scheduled`) event
+   to **Email** — reports are delivered as **CSV email attachments**, and the webhook channel
+   drops attachments.
+3. Use **Send now** to test delivery without waiting for the schedule.
+
+## Fleet-health digest
+
+Get a recurring summary of what needs attention across the fleet — offline hosts, low disk (with
+a **days-to-full** projection), high memory/load, and pending security updates:
+
+1. **Settings → Fleet-health digest**. Choose **daily** or **weekly** and save.
+2. Route the **Fleet-health digest** (`fleet.digest`) event to a channel under **Notifications**.
+3. **Preview** shows the current digest; **Send now** delivers one immediately.
+
+The same signals power the Dashboard **"Needs attention"** card and the Ask AI assistant's
+"what's wrong with the fleet?" answers.
 
 ## Audit forwarding (SIEM)
 

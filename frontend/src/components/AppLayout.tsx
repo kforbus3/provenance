@@ -15,6 +15,7 @@ import GroupWorkIcon from "@mui/icons-material/GroupWork";
 import ApiIcon from "@mui/icons-material/Api";
 import AssessmentIcon from "@mui/icons-material/Assessment";
 import BugReportIcon from "@mui/icons-material/BugReport";
+import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -64,6 +65,7 @@ const NAV = [
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
   { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
+  { to: "/help", label: "Help", icon: <HelpOutlineIcon /> },
 ];
 
 // Application chrome: top bar + persistent navigation drawer. The routed page
