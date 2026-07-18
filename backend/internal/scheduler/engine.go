@@ -16,6 +16,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/vulnscan"
 )
 
 // scanFanoutLimit bounds how many host scans a scheduled fire runs at once. A
@@ -27,13 +28,14 @@ const scanFanoutLimit = 16
 type Engine struct {
 	store    *store.Store
 	scans    *scan.Service
+	vuln     *vulnscan.Service
 	playbook *playbook.Service
 	log      *slog.Logger
 	scanSem  chan struct{}
 }
 
-func New(st *store.Store, scans *scan.Service, pb *playbook.Service, log *slog.Logger) *Engine {
-	return &Engine{store: st, scans: scans, playbook: pb, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
+func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, pb *playbook.Service, log *slog.Logger) *Engine {
+	return &Engine{store: st, scans: scans, vuln: vuln, playbook: pb, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
 }
 
 // Run drives the scheduler loop until ctx is cancelled, checking once a minute.
@@ -83,11 +85,36 @@ func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.
 	switch sc.Kind {
 	case "scan":
 		return e.fireScan(ctx, sc, hosts)
+	case "vulnscan":
+		return e.fireVulnScan(ctx, sc, hosts)
 	case "playbook":
 		return e.firePlaybook(ctx, sc, hosts)
 	default:
 		return "error: unknown kind", nil
 	}
+}
+
+// fireVulnScan launches a vulnerability scan per target host, bounded by the same
+// fan-out cap as compliance scans.
+func (e *Engine) fireVulnScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {
+	var ids []uuid.UUID
+	for _, h := range hosts {
+		id, err := e.store.CreateVulnScan(ctx, h.ID, nil, sc.Requester, true)
+		if err != nil {
+			e.log.Warn("scheduler: create vuln scan", "host", h.Hostname, "err", err)
+			continue
+		}
+		ids = append(ids, id)
+		go func(scanID uuid.UUID, host *models.Host) {
+			e.scanSem <- struct{}{}
+			defer func() { <-e.scanSem }()
+			e.vuln.Run(scanID, host)
+		}(id, h)
+	}
+	if len(ids) == 0 {
+		return "error: no scans created", nil
+	}
+	return "started", ids
 }
 
 func (e *Engine) resolveHosts(ctx context.Context, sc *models.Schedule) ([]*models.Host, error) {

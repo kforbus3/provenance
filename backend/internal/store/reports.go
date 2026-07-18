@@ -126,6 +126,37 @@ func (s *Store) ExportCertificates(ctx context.Context, from, to time.Time) (*Re
 	return t, rows.Err()
 }
 
+// ExportVulnScanFindings returns the vulnerability report: every CVE finding from
+// vulnerability scans created in [from, to), one row per host+CVE+package, highest
+// CVSS first.
+func (s *Store) ExportVulnScanFindings(ctx context.Context, from, to time.Time) (*ReportTable, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT h.hostname, vs.created_at, f.cve, f.package, f.installed_version, f.fixed_version,
+		       f.severity, f.cvss_score
+		FROM vuln_findings f
+		JOIN vuln_scans vs ON vs.id = f.scan_id
+		JOIN hosts h ON h.id = vs.host_id
+		WHERE vs.created_at >= $1 AND vs.created_at < $2 AND vs.status='completed'
+		ORDER BY f.cvss_score DESC, h.hostname, f.cve`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	t := &ReportTable{Columns: []string{
+		"host", "scanned_at", "cve", "package", "installed_version", "fixed_version", "severity", "cvss"}}
+	for rows.Next() {
+		var host, cve, pkg, installed, fixed, severity string
+		var scanned time.Time
+		var cvss float64
+		if err := rows.Scan(&host, &scanned, &cve, &pkg, &installed, &fixed, &severity, &cvss); err != nil {
+			return nil, err
+		}
+		t.Rows = append(t.Rows, []string{host, rfc(scanned), cve, pkg, installed, fixed, severity,
+			fmt.Sprintf("%.1f", cvss)})
+	}
+	return t, rows.Err()
+}
+
 // ExportScans returns the security-posture report: scans created in [from, to)
 // with their profile, score, and pass/fail counts.
 func (s *Store) ExportScans(ctx context.Context, from, to time.Time) (*ReportTable, error) {

@@ -32,6 +32,7 @@ const AssistantPage = lazy(() => named(import("./pages/AssistantPage"), "Assista
 const ServiceAccountsPage = lazy(() => named(import("./pages/ServiceAccountsPage"), "ServiceAccountsPage"));
 const ReportsPage = lazy(() => named(import("./pages/ReportsPage"), "ReportsPage"));
 const WatchSessionPage = lazy(() => named(import("./pages/WatchSessionPage"), "WatchSessionPage"));
+const VulnerabilitiesPage = lazy(() => named(import("./pages/VulnerabilitiesPage"), "VulnerabilitiesPage"));
 const PlaybooksPage = lazy(() => named(import("./pages/PlaybooksPage"), "PlaybooksPage"));
 const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "SchedulesPage"));
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
@@ -92,6 +93,7 @@ export function App() {
               <Route path="enrollment" element={<ProtectedRoute permission="Host.Enroll"><EnrollmentPage /></ProtectedRoute>} />
               <Route path="certificates" element={<ProtectedRoute permission="Certificate.Manage"><CertificatesPage /></ProtectedRoute>} />
               <Route path="security" element={<SecurityPage />} />
+              <Route path="vulnerabilities" element={<ProtectedRoute permission="Host.Scan"><VulnerabilitiesPage /></ProtectedRoute>} />
               <Route path="jobs" element={<ProtectedRoute permission="System.Configure"><JobsPage /></ProtectedRoute>} />
               <Route path="health" element={<ProtectedRoute permission="System.Configure"><HealthPage /></ProtectedRoute>} />
               <Route path="settings" element={<ProtectedRoute permission="System.Configure"><SettingsPage /></ProtectedRoute>} />

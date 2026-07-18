@@ -404,6 +404,43 @@ type ScanProfile struct {
 	Title string `json:"title"`
 }
 
+// VulnScan is one vulnerability scan of a host (package CVE matching via Grype),
+// with a per-severity finding breakdown.
+type VulnScan struct {
+	ID         uuid.UUID  `json:"id"`
+	HostID     uuid.UUID  `json:"hostId"`
+	Hostname   string     `json:"hostname,omitempty"`
+	Requester  string     `json:"requester"`
+	Scheduled  bool       `json:"scheduled"`
+	Status     string     `json:"status"`
+	Error      string     `json:"error,omitempty"`
+	DBBuiltAt  *time.Time `json:"dbBuiltAt,omitempty"`
+	Total      int        `json:"total"`
+	Critical   int        `json:"critical"`
+	High       int        `json:"high"`
+	Medium     int        `json:"medium"`
+	Low        int        `json:"low"`
+	Negligible int        `json:"negligible"`
+	Unknown    int        `json:"unknown"`
+	MaxCVSS    float64    `json:"maxCvss"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}
+
+// VulnFinding is one CVE affecting one installed package.
+type VulnFinding struct {
+	CVE              string  `json:"cve"`
+	Package          string  `json:"package"`
+	InstalledVersion string  `json:"installedVersion"`
+	FixedVersion     string  `json:"fixedVersion,omitempty"`
+	Severity         string  `json:"severity"`
+	CVSSScore        float64 `json:"cvssScore"`
+	CVSSVector       string  `json:"cvssVector,omitempty"`
+	DataSource       string  `json:"dataSource,omitempty"`
+	Description      string  `json:"description,omitempty"`
+}
+
 // AssistantHostRow is a compact host record returned to the AI assistant's
 // query tool (one row per host, joined from status/metrics/inventory).
 type AssistantHostRow struct {

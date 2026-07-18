@@ -155,6 +155,7 @@ type Config struct {
 	// backend delegates playbook validation/lint (and, later, execution) to it.
 	// Empty disables the Ansible playbook feature's runner-backed operations.
 	AnsibleRunnerURL string
+	GrypeScannerURL  string // vulnerability-scanner sidecar
 
 	// CARotateAfter is how old the active SSH CA key may get before Fleet sends a
 	// rotation-reminder notification (the CA never auto-expires; rotation is
@@ -230,6 +231,7 @@ func Load() (*Config, error) {
 		ScapContentDir:         env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion:     env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:       env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
+		GrypeScannerURL:        env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
 		CARotateAfter:          envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
 		BackupDir:              env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
 		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),

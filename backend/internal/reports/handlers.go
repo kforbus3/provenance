@@ -35,6 +35,9 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.Get("/reports/scans.csv", h.csv("scans", func(ctx context.Context, from, to time.Time) (*store.ReportTable, error) {
 			return h.d.Store.ExportScans(ctx, from, to)
 		}))
+		pr.Get("/reports/vulnerabilities.csv", h.csv("vulnerabilities", func(ctx context.Context, from, to time.Time) (*store.ReportTable, error) {
+			return h.d.Store.ExportVulnScanFindings(ctx, from, to)
+		}))
 	})
 }
 

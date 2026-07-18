@@ -65,6 +65,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/support"
 	"github.com/fleet-terminal/backend/internal/system"
 	"github.com/fleet-terminal/backend/internal/terminal"
+	"github.com/fleet-terminal/backend/internal/vulnscan"
 	"github.com/fleet-terminal/backend/internal/ws"
 )
 
@@ -88,6 +89,7 @@ type Server struct {
 	Notify  *notify.Service
 
 	scanSvc     *scan.Service
+	vulnScan    *vulnscan.Service
 	playbookSvc *playbook.Service
 	scheduler   *scheduler.Engine
 	backups     *backup.Service
@@ -128,8 +130,9 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// Scan + playbook services are shared between their HTTP handlers and the
 	// scheduler, so construct them once here.
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
+	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
-	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
+	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.auditFwd = auditfwd.New(st, log)
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
@@ -190,6 +193,9 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	}
 	if n, err := s.Store.FailStaleScans(ctx); err == nil && n > 0 {
 		s.Log.Info("failed stale scans on startup", "count", n)
+	}
+	if n, err := s.Store.FailStaleVulnScans(ctx); err == nil && n > 0 {
+		s.Log.Info("failed stale vuln scans on startup", "count", n)
 	}
 	if n, err := s.Store.FailStaleRemediations(ctx); err == nil && n > 0 {
 		s.Log.Info("failed stale remediations on startup", "count", n)
@@ -641,6 +647,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, s.scanSvc)
+	vulnscan.Mount(r, deps, s.vulnScan)
 
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).
 	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))

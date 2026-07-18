@@ -11,6 +11,7 @@ const REPORTS: Array<{ kind: ReportKind; title: string; desc: string }> = [
   { kind: "audit", title: "Audit trail", desc: "All audit events: logins, session terminations, host/user/role/config changes, with full detail." },
   { kind: "certificates", title: "Certificate issuance", desc: "SSH certificates the CA issued — serial, principal, subject, validity window, and revocation." },
   { kind: "scans", title: "Scan posture", desc: "Security-scan results over time — profile, score, and pass/fail counts per host." },
+  { kind: "vulnerabilities", title: "Vulnerabilities", desc: "Every CVE finding from vulnerability scans — host, package, installed vs. fixed version, severity, and CVSS score." },
 ];
 
 function isoDaysAgo(days: number): string {

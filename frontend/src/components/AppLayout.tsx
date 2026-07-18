@@ -14,6 +14,7 @@ import SecurityIcon from "@mui/icons-material/Security";
 import GroupWorkIcon from "@mui/icons-material/GroupWork";
 import ApiIcon from "@mui/icons-material/Api";
 import AssessmentIcon from "@mui/icons-material/Assessment";
+import BugReportIcon from "@mui/icons-material/BugReport";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -59,6 +60,7 @@ const NAV = [
   { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
   { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },
+  { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
   { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
