@@ -85,11 +85,18 @@ func (m *Monitor) Run(ctx context.Context) {
 	}
 }
 
-// monitorConcurrency bounds how many hosts are probed at once. Each probe opens
-// fresh SSH hops with a handshake timeout, so a serial sweep stalls for minutes
-// behind a handful of unreachable hosts; a bounded pool keeps the sweep prompt
-// without stampeding the jump host.
-const monitorConcurrency = 32
+// monitorConcurrency returns how many hosts to probe at once. Each probe opens a
+// fresh SSH connection to the jump host, so this stays well under the jump host's
+// sshd MaxStartups pre-auth limit (OpenSSH default 10), leaving headroom for user
+// terminals and KRL pushes: too high and a rotating subset of probes is refused,
+// flapping hosts offline; a small pool still keeps a few unreachable hosts from
+// stalling the whole sweep.
+func (m *Monitor) monitorConcurrency() int {
+	if n := m.cfg.MonitorConcurrency; n >= 1 {
+		return n
+	}
+	return 6
+}
 
 // sweep probes every enrolled host once, in parallel with a bounded worker pool.
 func (m *Monitor) sweep(ctx context.Context) {
@@ -101,7 +108,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 		}
 		return
 	}
-	sem := make(chan struct{}, monitorConcurrency)
+	sem := make(chan struct{}, m.monitorConcurrency())
 	var wg sync.WaitGroup
 	for i := range hosts {
 		h := hosts[i]

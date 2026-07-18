@@ -108,6 +108,14 @@ type Config struct {
 	MetricHistorySample    time.Duration
 	MetricHistoryRetention time.Duration
 
+	// MonitorConcurrency bounds how many hosts the health-check sweep probes at
+	// once. Each probe opens a fresh SSH connection to the jump host, so this must
+	// stay under the jump host's sshd MaxStartups pre-auth limit (OpenSSH default
+	// 10) — leaving headroom for user terminals and KRL pushes — or a rotating
+	// subset of probes is refused and hosts flap offline. Raise it only after
+	// raising MaxStartups on the jump host.
+	MonitorConcurrency int
+
 	// Operational-history retention. ActivityRetention bounds how long SSH
 	// sessions, SFTP transfers, scans (+ their on-disk reports), playbook runs,
 	// and login-attempt records are kept; AuditRetention separately bounds the
@@ -211,6 +219,7 @@ func Load() (*Config, error) {
 		WGPort:                 envInt("FLEET_WG_PORT", 51820),
 		MetricHistorySample:    envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
 		MetricHistoryRetention: envDuration("FLEET_METRIC_HISTORY_RETENTION", 720*time.Hour),
+		MonitorConcurrency:     envInt("FLEET_MONITOR_CONCURRENCY", 6),
 		ActivityRetention:      envDuration("FLEET_ACTIVITY_RETENTION", 0),
 		AuditRetention:         envDuration("FLEET_AUDIT_RETENTION", 0),
 		RecordingDir:           env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),

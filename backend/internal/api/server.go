@@ -274,7 +274,10 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 	hosts, _ := s.Store.AllHosts(ctx)
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
 	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/fleet_krl >/dev/null && sudo chmod 644 /etc/ssh/fleet_krl && echo OK"
-	const krlConcurrency = 32
+	// Kept small: each push opens a fresh SSH connection to the jump host, so a
+	// large fan-out would trip its sshd MaxStartups limit (as the monitor sweep
+	// did) and drop pushes. Revocation is infrequent, so modest parallelism is fine.
+	const krlConcurrency = 8
 	sem := make(chan struct{}, krlConcurrency)
 	var wg sync.WaitGroup
 	var pushed int64
