@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.12.0 — Terraform provider
+
+Manage Fleet as infrastructure-as-code.
+
+- **`terraform-provider-fleet`** — a Terraform provider (built on the modern plugin
+  framework and the Go SDK) that manages **hosts**, **groups** (including dynamic
+  membership rules), **service accounts**, and their **API tokens** declaratively,
+  plus a `fleet_role` data source to resolve role names to IDs. It authenticates with
+  the same service-account token as the SDK and CLI; hosts and groups support full
+  CRUD and `terraform import`. See the provider's README and `examples/` for usage,
+  installation via dev overrides, and current limitations.
+- The Go SDK gains `GetGroup` and `GetServiceAccount` (read-by-id) helpers.
+
+*Note:* the provider builds from the repository (it references the in-repo SDK);
+publishing it to the Terraform Registry is a separate release step.
+
 ## v0.11.0 — Assistant actions: guarded actions with approval + action policy
 
 Completes the actionable assistant: it can now propose consequential actions that

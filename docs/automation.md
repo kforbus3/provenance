@@ -125,7 +125,28 @@ For any endpoint not wrapped by the SDK, call it directly per the
 
 ## 5. Terraform
 
-A Terraform provider is on the roadmap and will build on this same API and token
-model. Until then, the `fleet` CLI invoked from a `null_resource`/`local-exec`, or
-a thin wrapper over the Go SDK, covers infrastructure-as-code workflows for host
-and group management.
+A **Terraform provider** (`terraform-provider-fleet`, in the repository) manages
+Fleet as declarative infrastructure over the same API and token model. It exposes:
+
+- `fleet_host` — managed hosts (full CRUD + import)
+- `fleet_group` — groups, including dynamic membership rules
+- `fleet_service_account` and `fleet_service_account_token` — automation identities
+  and their API tokens
+- `fleet_role` (data source) — resolve a role name to its UUID
+
+```hcl
+provider "fleet" {
+  endpoint = "https://fleet.example.com" # or FLEET_URL
+  # token via FLEET_API_TOKEN
+}
+
+resource "fleet_host" "web" {
+  hostname    = "web-01"
+  environment = "production"
+  tags        = ["web", "prod"]
+}
+```
+
+Authenticate with a service-account token scoped to only the permissions your
+configuration needs. See the provider's README for building, installing (dev
+overrides), the full example, and current limitations.

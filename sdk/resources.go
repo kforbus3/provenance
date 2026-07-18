@@ -130,6 +130,22 @@ func (c *Client) ListGroups(ctx context.Context) ([]Group, error) {
 	return resp.Groups, nil
 }
 
+// GetGroup returns a single group by id. The API has no by-id group endpoint, so
+// this filters the list; a missing group yields a not-found APIError (use
+// IsNotFound). Handy for tooling (e.g. the Terraform provider) that reads by id.
+func (c *Client) GetGroup(ctx context.Context, id string) (Group, error) {
+	groups, err := c.ListGroups(ctx)
+	if err != nil {
+		return Group{}, err
+	}
+	for _, g := range groups {
+		if g.ID == id {
+			return g, nil
+		}
+	}
+	return Group{}, &APIError{StatusCode: http.StatusNotFound, Message: "group not found", Method: http.MethodGet, Path: "/groups/" + id}
+}
+
 // CreateGroup creates a group. Supply Rule for dynamic (rule-managed) membership
 // (requires Group.Create).
 func (c *Client) CreateGroup(ctx context.Context, in GroupInput) (Group, error) {
@@ -161,6 +177,21 @@ func (c *Client) ListServiceAccounts(ctx context.Context) ([]ServiceAccount, err
 		return nil, err
 	}
 	return resp.ServiceAccounts, nil
+}
+
+// GetServiceAccount returns a single service account by id (filters the list; a
+// missing account yields a not-found APIError). Useful for read-by-id tooling.
+func (c *Client) GetServiceAccount(ctx context.Context, id string) (ServiceAccount, error) {
+	sas, err := c.ListServiceAccounts(ctx)
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	for _, sa := range sas {
+		if sa.ID == id {
+			return sa, nil
+		}
+	}
+	return ServiceAccount{}, &APIError{StatusCode: http.StatusNotFound, Message: "service account not found", Method: http.MethodGet, Path: "/service-accounts/" + id}
 }
 
 // CreateServiceAccount creates a service account (requires ServiceAccount.Manage).
