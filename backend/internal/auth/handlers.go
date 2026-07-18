@@ -31,6 +31,12 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/auth/oidc/status", h.oidcStatus)
 	r.Get("/auth/oidc/login", h.oidcLogin)
 	r.Get("/auth/oidc/callback", h.oidcCallback)
+	// SAML SSO (public: SP-initiated redirect, IdP-initiated ACS POST, SP metadata,
+	// and the login-page status probe). The ACS handles both flows.
+	r.Get("/auth/saml/status", h.samlStatus)
+	r.Get("/auth/saml/login", h.samlLogin)
+	r.Post("/auth/saml/acs", h.samlACS)
+	r.Get("/auth/saml/metadata", h.samlMetadata)
 	r.Group(func(pr chi.Router) {
 		pr.Use(h.svc.RequireAuth)
 		pr.Post("/auth/logout", h.logout)
@@ -47,6 +53,8 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.With(h.svc.RequirePermission("System.Configure")).Put("/auth/oidc/config", h.oidcConfigPut)
 		pr.With(h.svc.RequirePermission("System.Configure")).Get("/auth/ldap/config", h.ldapConfigGet)
 		pr.With(h.svc.RequirePermission("System.Configure")).Put("/auth/ldap/config", h.ldapConfigPut)
+		pr.With(h.svc.RequirePermission("System.Configure")).Get("/auth/saml/config", h.samlConfigGet)
+		pr.With(h.svc.RequirePermission("System.Configure")).Put("/auth/saml/config", h.samlConfigPut)
 	})
 	h.mountWebAuthn(r)
 }

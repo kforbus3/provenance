@@ -34,6 +34,7 @@ const ReportsPage = lazy(() => named(import("./pages/ReportsPage"), "ReportsPage
 const WatchSessionPage = lazy(() => named(import("./pages/WatchSessionPage"), "WatchSessionPage"));
 const VulnerabilitiesPage = lazy(() => named(import("./pages/VulnerabilitiesPage"), "VulnerabilitiesPage"));
 const HelpPage = lazy(() => named(import("./pages/HelpPage"), "HelpPage"));
+const AccessReviewsPage = lazy(() => named(import("./pages/AccessReviewsPage"), "AccessReviewsPage"));
 const PlaybooksPage = lazy(() => named(import("./pages/PlaybooksPage"), "PlaybooksPage"));
 const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "SchedulesPage"));
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
@@ -87,6 +88,7 @@ export function App() {
               <Route path="approvals" element={<ApprovalsPage />} />
               <Route path="audit" element={<ProtectedRoute permission="Audit.View"><AuditPage /></ProtectedRoute>} />
               <Route path="reports" element={<ProtectedRoute permission="Audit.View"><ReportsPage /></ProtectedRoute>} />
+              <Route path="access-reviews" element={<ProtectedRoute permission="AccessReview.Manage"><AccessReviewsPage /></ProtectedRoute>} />
               <Route path="users" element={<ProtectedRoute permission="User.Edit"><UsersPage /></ProtectedRoute>} />
               <Route path="roles" element={<ProtectedRoute permission="Role.Edit"><RolesPage /></ProtectedRoute>} />
               <Route path="groups" element={<ProtectedRoute permission="Group.Edit"><GroupsPage /></ProtectedRoute>} />

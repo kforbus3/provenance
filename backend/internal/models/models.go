@@ -20,7 +20,7 @@ type User struct {
 	EmailVerified bool       `json:"emailVerified"`
 	MustChangePw  bool       `json:"mustChangePassword"`
 	RequireMFA    bool       `json:"requireMfa"`
-	AuthSource    string     `json:"authSource,omitempty"` // local | oidc | ldap
+	AuthSource    string     `json:"authSource,omitempty"` // local | oidc | ldap | saml
 	FailedLogins  int        `json:"-"`
 	LockedUntil   *time.Time `json:"lockedUntil,omitempty"`
 	LastLoginAt   *time.Time `json:"lastLoginAt,omitempty"`
@@ -402,6 +402,45 @@ type HostScan struct {
 type ScanProfile struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+}
+
+// ReviewScope selects which grants an access review snapshots.
+type ReviewScope struct {
+	Type    string      `json:"type"` // all | group | user
+	GroupID *uuid.UUID  `json:"groupId,omitempty"`
+	UserIDs []uuid.UUID `json:"userIds,omitempty"`
+}
+
+// AccessReview is an access-certification campaign: a point-in-time snapshot of
+// access grants to be kept or revoked by a reviewer.
+type AccessReview struct {
+	ID          uuid.UUID   `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Scope       ReviewScope `json:"scope"`
+	Status      string      `json:"status"`
+	CreatedBy   string      `json:"createdBy,omitempty"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	DueAt       *time.Time  `json:"dueAt,omitempty"`
+	CompletedAt *time.Time  `json:"completedAt,omitempty"`
+	Total       int         `json:"total"`
+	Pending     int         `json:"pending"`
+	Kept        int         `json:"kept"`
+	Revoked     int         `json:"revoked"`
+}
+
+// AccessReviewItem is one grant under review: a user's access to a group or host.
+type AccessReviewItem struct {
+	ID           uuid.UUID  `json:"id"`
+	SubjectUser  string     `json:"subjectUser"`
+	SubjectIsSvc bool       `json:"subjectIsServiceAccount"`
+	GrantKind    string     `json:"grantKind"`    // group_membership | direct_host
+	ResourceKind string     `json:"resourceKind"` // group | host
+	ResourceName string     `json:"resourceName"`
+	Decision     string     `json:"decision"` // pending | keep | revoke
+	Note         string     `json:"note,omitempty"`
+	DecidedBy    string     `json:"decidedBy,omitempty"`
+	DecidedAt    *time.Time `json:"decidedAt,omitempty"`
 }
 
 // VulnScan is one vulnerability scan of a host (package CVE matching via Grype),

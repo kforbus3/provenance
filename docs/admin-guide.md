@@ -454,10 +454,11 @@ For backups see §11; for restore, recovery, and break-glass procedures see
 ## 15. Single sign-on (SSO)
 
 Fleet Terminal can authenticate users against an external identity provider via
-**OIDC** or **LDAP / Active Directory**, in addition to local accounts. Every
-user now carries an **`auth_source`** (`local` | `oidc` | `ldap`); accounts
-backed by an external directory **cannot use a local password**. Both integrations
-are configured by `System.Configure` holders.
+**OIDC**, **SAML 2.0**, or **LDAP / Active Directory**, in addition to local
+accounts, and can accept **SCIM 2.0** provisioning. Every user carries an
+**`auth_source`** (`local` | `oidc` | `saml` | `ldap`); accounts backed by an
+external directory **cannot use a local password**. All integrations are
+configured by `System.Configure` holders.
 
 ### OIDC (Okta, Azure AD, Google Workspace, Keycloak, Authentik, …)
 
@@ -485,6 +486,73 @@ When OIDC is enabled the login page shows a **"Sign in with SSO"** button.
 | Read / save OIDC config | `GET/PUT /api/v1/auth/oidc/config` (`System.Configure`) |
 | Provider status (drives the button) | `GET /api/v1/auth/oidc/status` |
 | Begin login / callback | `GET /api/v1/auth/oidc/login`, `GET /api/v1/auth/oidc/callback` |
+
+### SAML 2.0 (Okta, Azure AD / Entra ID, OneLogin, ADFS, …)
+
+**Settings → Single sign-on (SAML)**. The card shows the three values your IdP
+needs to register Fleet as a Service Provider:
+
+- **ACS (Reply) URL** — `<PublicURL>/api/v1/auth/saml/acs`
+- **SP Entity ID / Audience** — defaults to `<PublicURL>/api/v1/auth/saml/metadata`
+- **SP metadata** — `<PublicURL>/api/v1/auth/saml/metadata` (importable by most IdPs)
+
+Then configure the IdP side in Fleet:
+
+- **IdP Entity ID (issuer)**, **IdP SSO URL** (HTTP-Redirect binding), and the
+  **IdP signing certificate** (PEM or base64 — public, used to verify assertion
+  signatures).
+- **Attribute mapping**: username (blank = use the assertion **NameID**), email,
+  display-name, and groups attributes.
+- **Default role**, the **auto-provision** toggle, **group → role mappings**, and
+  the login **button text**.
+
+Fleet validates the IdP-signed assertion's **signature, audience, and time
+bounds** before trusting it, then finds the user by **username, then email**;
+if not found and auto-provision is on, it creates the account
+(`auth_source = saml`) with the default role — **group → role mappings apply
+additively**. Both **SP-initiated** (the "Sign in with SAML" button) and
+**IdP-initiated** (an Okta/Azure app tile that POSTs to the ACS) flows work.
+Because the assertion is signed by the trusted IdP, its attributes are
+authoritative — no separate email-verification gate is needed. AuthnRequests are
+sent **unsigned** (baseline); the IdP must sign its assertions.
+
+> **Auto-provision off?** Users can still sign in via SAML, but only if the
+> account already exists (created by an admin or by **SCIM**, below). This is the
+> tighter posture: no account exists until the IdP explicitly provisions it.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save SAML config | `GET/PUT /api/v1/auth/saml/config` (`System.Configure`) |
+| Provider status (drives the button) | `GET /api/v1/auth/saml/status` |
+| Begin login / ACS / metadata | `GET /api/v1/auth/saml/login`, `POST /api/v1/auth/saml/acs`, `GET /api/v1/auth/saml/metadata` |
+
+### SCIM 2.0 provisioning (lifecycle automation)
+
+**Settings → Provisioning (SCIM 2.0)**. SCIM lets your IdP **create, update, and
+deprovision** Fleet accounts automatically — most importantly, it **disables an
+account the moment a user is removed in the IdP**, before they would ever attempt
+to sign in. It pairs with SAML: SCIM manages the account lifecycle, SAML
+authenticates the login.
+
+- **Issue token** generates a bearer token (prefix `scim_`) shown **exactly
+  once** — store it in your IdP's SCIM connector. Only its hash is kept.
+- Point the IdP's SCIM **base URL** at `<PublicURL>/api/v1/scim/v2`.
+- **Default role** for provisioned users and the **sign-in method**
+  (`auth_source`) new accounts receive — set this to **SAML** (default) when
+  pairing with SAML SSO, or OIDC/LDAP to match your login method.
+- **Revoke token** stops provisioning immediately.
+
+Supported: **Users** create / read / replace / **PATCH** (the `active=false`
+deprovision signal) / delete, and the `userName eq` filter; plus the
+ServiceProviderConfig / ResourceTypes / Schemas discovery endpoints. Disabling or
+deprovisioning a user **immediately ends their live sessions and destroys their
+SSH credentials**. All provisioning actions are **audited**.
+
+| Action | Endpoint |
+|--------|----------|
+| Read / save SCIM config | `GET/PUT /api/v1/scim/config` (`System.Configure`) |
+| Issue / revoke provisioning token | `POST/DELETE /api/v1/scim/token` (`System.Configure`) |
+| SCIM 2.0 protocol (Users, discovery) | `/api/v1/scim/v2/*` (SCIM bearer token) |
 
 ### LDAP / Active Directory
 

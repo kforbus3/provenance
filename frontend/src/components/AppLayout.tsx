@@ -16,6 +16,7 @@ import ApiIcon from "@mui/icons-material/Api";
 import AssessmentIcon from "@mui/icons-material/Assessment";
 import BugReportIcon from "@mui/icons-material/BugReport";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
+import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -54,6 +55,7 @@ const NAV = [
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
   { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },
   { to: "/reports", label: "Reports", icon: <AssessmentIcon />, perm: "Audit.View" },
+  { to: "/access-reviews", label: "Access Reviews", icon: <FactCheckIcon />, perm: "AccessReview.Manage" },
   { to: "/users", label: "Users", icon: <PeopleIcon />, perm: "User.Edit" },
   { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
   { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },

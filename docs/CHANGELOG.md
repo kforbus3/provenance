@@ -5,6 +5,41 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.9.0 — Access certification, automation SDK/CLI, and SAML + SCIM
+
+Three enterprise capabilities: certify access on a schedule, manage Fleet as code,
+and federate identity with SAML SSO and SCIM provisioning.
+
+- **Access certification (access reviews).** Create recertification campaigns that
+  snapshot the current access grants — each user's group memberships and direct host
+  grants — then **keep or revoke** each one and export the sign-off as CSV audit
+  evidence. Revoking removes the underlying grant. Scope a review to everyone, one
+  group, or specific users; a due date and progress are tracked. Gated by a new
+  `AccessReview.Manage` permission (granted to Super Administrator, Administrator,
+  and Auditor).
+- **Automation: Go SDK + `fleet` CLI.** A standalone, dependency-free Go module
+  (`github.com/kforbus3/Fleet-Terminal/sdk`) and a token-authenticated `fleet`
+  command-line tool for managing hosts, groups (incl. dynamic rules), users, roles,
+  service accounts and tokens, vulnerability scans, and CSV reports — for CI/CD,
+  scheduled jobs, and custom tooling. Authenticates with a service-account `flt_`
+  token; distinct from the on-host `fleetctl` recovery tool. See the new
+  **Automation** guide.
+- **SAML 2.0 single sign-on.** Authenticate users against a SAML identity provider
+  (Okta, Azure AD / Entra ID, OneLogin, ADFS…), in addition to OIDC and LDAP. Both
+  SP-initiated and IdP-initiated flows; IdP-signed assertions are validated
+  (signature, audience, time bounds) before trust. Just-in-time user provisioning is
+  gated by an auto-create toggle. The SP metadata, ACS, and entity-ID URLs are shown
+  in the config UI.
+- **SCIM 2.0 provisioning.** Let your identity provider create, update, and
+  **deprovision** Fleet accounts automatically — disabling an account (and tearing
+  down its live sessions and credentials) the moment a user is removed upstream.
+  Users create/read/replace/PATCH/delete plus discovery endpoints, authenticated by a
+  dedicated, revocable `scim_` bearer token. Pairs with SAML SSO.
+
+*Deploy:* migration `0027` (access reviews) applies automatically. No configuration
+change is required; SAML and SCIM are off until configured under Settings →
+single sign-on / provisioning.
+
 ## v0.8.2 — Fixes: in-app help and CVE database
 
 Two defect fixes for the in-app documentation and the vulnerability scanner.

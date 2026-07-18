@@ -29,7 +29,8 @@ import {
 } from "../api/reportSchedule";
 import {
   getOidcConfig, saveOidcConfig, getLdapConfig, saveLdapConfig,
-  type OidcConfig, type LdapConfig,
+  getSamlConfig, saveSamlConfig, getScimConfig, saveScimConfig, issueScimToken, revokeScimToken,
+  type OidcConfig, type LdapConfig, type SamlConfig,
 } from "../api/sso";
 import {
   browserTimezone, formatDateTime, setDisplayTimezone, supportedTimezones,
@@ -106,7 +107,9 @@ export function SettingsPage() {
           {tab === 1 && (
             <>
               <SSOCard />
+              <SAMLCard />
               <LDAPCard />
+              <SCIMCard />
             </>
           )}
           {tab === 2 && (
@@ -564,6 +567,178 @@ function SSOCard() {
           {saved ? "Saved" : "Save"}
         </Button>
       </Box>
+    </Paper>
+  );
+}
+
+// SAMLCard configures SAML 2.0 single sign-on (SP side). The admin registers the
+// IdP's entity ID, SSO URL, and signing certificate; Fleet exposes the ACS,
+// entity ID, and metadata URL the IdP needs in return.
+function SAMLCard() {
+  const { data: loaded } = useQuery({ queryKey: ["saml-config"], queryFn: getSamlConfig });
+  const [cfg, setCfg] = useState<SamlConfig | null>(null);
+  const [groupMap, setGroupMap] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (loaded && !cfg) {
+      setCfg({ ...loaded.config });
+      setGroupMap(Object.entries(loaded.config.groupRoleMap ?? {}).map(([g, r]) => `${g}=${r}`).join("\n"));
+    }
+  }, [loaded, cfg]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const groupRoleMap: Record<string, string> = {};
+      for (const line of groupMap.split("\n")) {
+        const [g, r] = line.split("=");
+        if (g?.trim() && r?.trim()) groupRoleMap[g.trim()] = r.trim();
+      }
+      return saveSamlConfig({ ...(cfg as SamlConfig), groupRoleMap });
+    },
+    onSuccess: () => setSaved(true),
+  });
+
+  if (!cfg) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Single sign-on (SAML)</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+  const set = (patch: Partial<SamlConfig>) => { setCfg({ ...cfg, ...patch }); setSaved(false); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Single sign-on (SAML)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Let users sign in via a SAML 2.0 identity provider (Okta, Azure AD, OneLogin, ADFS…).
+        Register these values in your IdP:
+      </Typography>
+      <Stack spacing={0.5} sx={{ mb: 1.5, fontSize: "0.85rem" }}>
+        <Box>ACS (Reply) URL: <code>{loaded?.acsUrl}</code></Box>
+        <Box>SP Entity ID / Audience: <code>{loaded?.spEntityId}</code></Box>
+        <Box>SP metadata: <code>{loaded?.metadataUrl}</code></Box>
+      </Stack>
+      <FormControlLabel
+        control={<Switch checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Enable SAML sign-on"
+      />
+      {cfg.enabled && (
+        <Stack spacing={1.5} sx={{ mt: 1 }}>
+          <TextField label="IdP Entity ID (issuer)" size="small" value={cfg.idpEntityId}
+            onChange={(e) => set({ idpEntityId: e.target.value })} placeholder="https://idp.example.com/saml/metadata" />
+          <TextField label="IdP SSO URL (redirect binding)" size="small" value={cfg.idpSsoUrl}
+            onChange={(e) => set({ idpSsoUrl: e.target.value })} placeholder="https://idp.example.com/sso/saml" />
+          <TextField label="IdP signing certificate (PEM or base64)" size="small" multiline minRows={3}
+            value={cfg.idpCertificate} onChange={(e) => set({ idpCertificate: e.target.value })}
+            placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"} />
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Button text" size="small" value={cfg.buttonText ?? ""}
+              onChange={(e) => set({ buttonText: e.target.value })} sx={{ flexGrow: 1 }} placeholder="Sign in with SAML" />
+            <TextField label="Default role (new users)" size="small" value={cfg.defaultRole ?? ""}
+              onChange={(e) => set({ defaultRole: e.target.value })} sx={{ flexGrow: 1 }} placeholder="Read-Only" />
+          </Stack>
+          <Stack direction="row" spacing={1.5}>
+            <TextField label="Username attribute" size="small" value={cfg.usernameAttr ?? ""}
+              onChange={(e) => set({ usernameAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="(NameID if blank)" />
+            <TextField label="Email attribute" size="small" value={cfg.emailAttr ?? ""}
+              onChange={(e) => set({ emailAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="email" />
+            <TextField label="Groups attribute" size="small" value={cfg.groupsAttr ?? ""}
+              onChange={(e) => set({ groupsAttr: e.target.value })} sx={{ flexGrow: 1 }} placeholder="groups" />
+          </Stack>
+          <FormControlLabel
+            control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
+            label="Auto-provision new users on first sign-in (off = require SCIM/admin to create the account first)"
+          />
+          <TextField label="Group → role mappings (one per line: idpGroup=FleetRole)" size="small" multiline minRows={2}
+            value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
+            placeholder={"fleet-admins=Administrator\nops=Operator"} />
+        </Stack>
+      )}
+      <Box sx={{ mt: 1.5 }}>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Box>
+    </Paper>
+  );
+}
+
+// SCIMCard manages SCIM 2.0 provisioning: issue/revoke the bearer token an IdP
+// uses to create, update, and deprovision Fleet accounts automatically.
+function SCIMCard() {
+  const qc = useQueryClient();
+  const { data: cfg } = useQuery({ queryKey: ["scim-config"], queryFn: getScimConfig });
+  const [defaultRole, setDefaultRole] = useState<string | null>(null);
+  const [authSource, setAuthSource] = useState<string | null>(null);
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const role = defaultRole ?? cfg?.defaultRole ?? "Read-Only";
+  const src = authSource ?? cfg?.authSource ?? "saml";
+
+  const save = useMutation({
+    mutationFn: () => saveScimConfig({ enabled: cfg?.enabled ?? false, defaultRole: role, authSource: src }),
+    onSuccess: () => { setSaved(true); qc.invalidateQueries({ queryKey: ["scim-config"] }); },
+  });
+  const issue = useMutation({
+    mutationFn: issueScimToken,
+    onSuccess: (d) => { setNewToken(d.token); qc.invalidateQueries({ queryKey: ["scim-config"] }); },
+  });
+  const revoke = useMutation({
+    mutationFn: revokeScimToken,
+    onSuccess: () => { setNewToken(null); qc.invalidateQueries({ queryKey: ["scim-config"] }); },
+  });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Provisioning (SCIM 2.0)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Let your identity provider create, update, and — importantly — deprovision Fleet accounts
+        automatically. Pairs with SAML SSO: SCIM manages the account lifecycle, SAML authenticates the
+        login. Point your IdP's SCIM connector at the base URL below with the bearer token.
+      </Typography>
+      <Box sx={{ mb: 1.5, fontSize: "0.85rem" }}>
+        SCIM base URL: <code>{cfg?.baseUrl}</code>
+      </Box>
+
+      <Stack direction="row" spacing={1.5} sx={{ mb: 1.5 }}>
+        <TextField label="Default role (provisioned users)" size="small" value={role}
+          onChange={(e) => { setDefaultRole(e.target.value); setSaved(false); }} sx={{ flexGrow: 1 }} placeholder="Read-Only" />
+        <TextField select label="Sign-in method" size="small" value={src}
+          onChange={(e) => { setAuthSource(e.target.value); setSaved(false); }} sx={{ width: 180 }}
+          helperText="AuthSource for new users">
+          <MenuItem value="saml">SAML</MenuItem>
+          <MenuItem value="oidc">OIDC</MenuItem>
+          <MenuItem value="ldap">LDAP</MenuItem>
+        </TextField>
+        <Button variant="outlined" disabled={save.isPending} onClick={() => save.mutate()} sx={{ height: 40 }}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+
+      {newToken && (
+        <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNewToken(null)}>
+          Token issued — copy it now, it will not be shown again:
+          <Box component="code" sx={{ display: "block", mt: 0.5, wordBreak: "break-all", fontSize: "0.8rem" }}>{newToken}</Box>
+        </Alert>
+      )}
+
+      <Stack direction="row" spacing={1.5} alignItems="center">
+        <Button variant="contained" disabled={issue.isPending} onClick={() => issue.mutate()}>
+          {cfg?.tokenSet ? "Reissue token" : "Issue token"}
+        </Button>
+        {cfg?.tokenSet && (
+          <Button color="error" disabled={revoke.isPending} onClick={() => { if (window.confirm("Revoke the SCIM token? Provisioning will stop until a new token is issued.")) revoke.mutate(); }}>
+            Revoke token
+          </Button>
+        )}
+        <Typography variant="body2" color="text.secondary">
+          {cfg?.tokenSet ? (cfg.enabled ? "Provisioning active." : "Token set (disabled).") : "No token issued."}
+        </Typography>
+      </Stack>
     </Paper>
   );
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/fleet-terminal/backend/internal/accessreview"
 	"github.com/fleet-terminal/backend/internal/admin"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/approvals"
@@ -56,6 +57,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/reportsched"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/scheduler"
+	"github.com/fleet-terminal/backend/internal/scim"
 	"github.com/fleet-terminal/backend/internal/serviceaccounts"
 	"github.com/fleet-terminal/backend/internal/sessionsapi"
 	fleetsftp "github.com/fleet-terminal/backend/internal/sftp"
@@ -672,6 +674,8 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)
 	serviceaccounts.Mount(r, deps)
+	accessreview.Mount(r, deps)
+	scim.Mount(r, deps)
 	auditapi.Mount(r, deps)
 	reports.Mount(r, deps)
 	reportsched.Mount(r, s.Auth, s.reportSched)

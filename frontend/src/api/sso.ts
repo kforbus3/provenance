@@ -69,3 +69,81 @@ export async function getLdapConfig(): Promise<{ config: LdapConfig; secretSet: 
 export async function saveLdapConfig(cfg: LdapConfig): Promise<void> {
   await api.put("/api/v1/auth/ldap/config", cfg);
 }
+
+// --- SAML 2.0 single sign-on ---
+
+export interface SamlConfig {
+  enabled: boolean;
+  idpEntityId: string;
+  idpSsoUrl: string;
+  idpCertificate: string; // public signing cert (PEM or base64 DER)
+  spEntityId?: string;
+  usernameAttr?: string;
+  emailAttr?: string;
+  displayNameAttr?: string;
+  groupsAttr?: string;
+  defaultRole?: string;
+  autoProvision: boolean;
+  groupRoleMap?: Record<string, string>;
+  buttonText?: string;
+}
+
+export interface SamlConfigResponse {
+  config: SamlConfig;
+  acsUrl: string;
+  spEntityId: string;
+  metadataUrl: string;
+}
+
+export async function getSamlConfig(): Promise<SamlConfigResponse> {
+  const { data } = await api.get<SamlConfigResponse>("/api/v1/auth/saml/config");
+  return data;
+}
+
+export async function saveSamlConfig(cfg: SamlConfig): Promise<void> {
+  await api.put("/api/v1/auth/saml/config", cfg);
+}
+
+export interface SamlStatus {
+  enabled: boolean;
+  buttonText: string;
+}
+
+export async function getSamlStatus(): Promise<SamlStatus> {
+  const { data } = await api.get<SamlStatus>("/api/v1/auth/saml/status");
+  return data;
+}
+
+// Full-page redirect into the SP-initiated SAML login flow.
+export function samlLoginUrl(): string {
+  return "/api/v1/auth/saml/login";
+}
+
+// --- SCIM 2.0 provisioning ---
+
+export interface ScimConfig {
+  enabled: boolean;
+  tokenSet: boolean;
+  defaultRole: string;
+  authSource: string; // saml | oidc | ldap
+  baseUrl: string;
+}
+
+export async function getScimConfig(): Promise<ScimConfig> {
+  const { data } = await api.get<ScimConfig>("/api/v1/scim/config");
+  return data;
+}
+
+export async function saveScimConfig(cfg: { enabled: boolean; defaultRole: string; authSource: string }): Promise<void> {
+  await api.put("/api/v1/scim/config", cfg);
+}
+
+// Issues a new provisioning token; the plaintext is returned exactly once.
+export async function issueScimToken(): Promise<{ token: string; baseUrl: string }> {
+  const { data } = await api.post<{ token: string; baseUrl: string }>("/api/v1/scim/token");
+  return data;
+}
+
+export async function revokeScimToken(): Promise<void> {
+  await api.delete("/api/v1/scim/token");
+}

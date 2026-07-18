@@ -23,10 +23,11 @@ const DOCS = [
   { file: "host-enrollment-guide.md", title: "Host Enrollment", category: "Administration", order: 5 },
   { file: "certificate-lifecycle.md", title: "Certificate Lifecycle", category: "Administration", order: 6 },
   { file: "api.md", title: "API Reference", category: "Reference", order: 7 },
-  { file: "security-guide.md", title: "Security", category: "Reference", order: 8 },
-  { file: "deployment.md", title: "Deployment", category: "Reference", order: 9 },
-  { file: "internet-exposure.md", title: "Internet Exposure", category: "Reference", order: 10 },
-  { file: "CHANGELOG.md", title: "Changelog", category: "Reference", order: 11 },
+  { file: "automation.md", title: "Automation (SDK & CLI)", category: "Reference", order: 8 },
+  { file: "security-guide.md", title: "Security", category: "Reference", order: 9 },
+  { file: "deployment.md", title: "Deployment", category: "Reference", order: 10 },
+  { file: "internet-exposure.md", title: "Internet Exposure", category: "Reference", order: 11 },
+  { file: "CHANGELOG.md", title: "Changelog", category: "Reference", order: 12 },
 ];
 
 // Must match the frontend heading-id function (src/help/HelpPage renderer) exactly,
