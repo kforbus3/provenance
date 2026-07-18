@@ -18,16 +18,22 @@ import (
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
+// scanFanoutLimit bounds how many host scans a scheduled fire runs at once. A
+// schedule targeting a large group would otherwise launch one SSH scan per host
+// simultaneously through the single jump host, a resource storm on both ends.
+const scanFanoutLimit = 16
+
 // Engine ticks on an interval and fires due schedules.
 type Engine struct {
 	store    *store.Store
 	scans    *scan.Service
 	playbook *playbook.Service
 	log      *slog.Logger
+	scanSem  chan struct{}
 }
 
 func New(st *store.Store, scans *scan.Service, pb *playbook.Service, log *slog.Logger) *Engine {
-	return &Engine{store: st, scans: scans, playbook: pb, log: log}
+	return &Engine{store: st, scans: scans, playbook: pb, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
 }
 
 // Run drives the scheduler loop until ctx is cancelled, checking once a minute.
@@ -47,9 +53,9 @@ func (e *Engine) Run(ctx context.Context) {
 
 func (e *Engine) tick(ctx context.Context) {
 	now := time.Now()
-	due, err := e.store.DueSchedules(ctx, now)
+	due, err := e.store.ClaimDueSchedules(ctx, now)
 	if err != nil {
-		e.log.Warn("scheduler: list due", "err", err)
+		e.log.Warn("scheduler: claim due", "err", err)
 		return
 	}
 	for _, sc := range due {
@@ -121,7 +127,13 @@ func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*mod
 			continue
 		}
 		ids = append(ids, rec.ID)
-		go e.scans.Run(rec.ID, h, p.Profile, skip)
+		// Launch immediately but gate concurrency on scanSem: extra hosts queue
+		// rather than all dialing the jump host at once. Fire still returns promptly.
+		go func(scanID uuid.UUID, host *models.Host) {
+			e.scanSem <- struct{}{}
+			defer func() { <-e.scanSem }()
+			e.scans.Run(scanID, host, p.Profile, skip)
+		}(rec.ID, h)
 	}
 	if len(ids) == 0 {
 		return "error: no scans created", nil

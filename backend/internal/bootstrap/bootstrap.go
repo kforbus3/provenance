@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -90,10 +91,15 @@ func (h *Handler) init(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
-	u, err := h.store.CreateUser(r.Context(), store.CreateUserParams{
+	u, err := h.store.CreateInitialSuperAdmin(r.Context(), store.CreateUserParams{
 		Username: req.Username, Email: req.Email, DisplayName: req.DisplayName,
-		PasswordHash: hash, IsSuperAdmin: true,
+		PasswordHash: hash,
 	})
+	if errors.Is(err, store.ErrUsersExist) {
+		// Another concurrent bootstrap won the race and created the first admin.
+		httpx.WriteError(w, http.StatusConflict, "bootstrap is no longer available")
+		return
+	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create administrator")
 		return

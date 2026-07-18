@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -84,9 +85,15 @@ func (m *Monitor) Run(ctx context.Context) {
 	}
 }
 
-// sweep probes every enrolled host once.
+// monitorConcurrency bounds how many hosts are probed at once. Each probe opens
+// fresh SSH hops with a handshake timeout, so a serial sweep stalls for minutes
+// behind a handful of unreachable hosts; a bounded pool keeps the sweep prompt
+// without stampeding the jump host.
+const monitorConcurrency = 32
+
+// sweep probes every enrolled host once, in parallel with a bounded worker pool.
 func (m *Monitor) sweep(ctx context.Context) {
-	hosts, err := m.store.ListHosts(ctx, 1000, 0)
+	hosts, err := m.store.AllHosts(ctx)
 	if err != nil {
 		m.log.Warn("monitor list hosts", "err", err)
 		if m.jobs != nil {
@@ -94,53 +101,69 @@ func (m *Monitor) sweep(ctx context.Context) {
 		}
 		return
 	}
+	sem := make(chan struct{}, monitorConcurrency)
+	var wg sync.WaitGroup
 	for i := range hosts {
 		h := hosts[i]
 		if !h.Enrolled {
 			continue
 		}
-		signer, err := m.issuer.SystemSigner(ctx, m.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
-		if err != nil {
-			m.log.Warn("monitor system signer", "host", h.Hostname, "err", err)
-			continue
-		}
-		prev := ""
-		if h.Status != nil {
-			prev = h.Status.Status
-		}
-		st, inv, metrics := m.probe(ctx, signer, &h)
-		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
-			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
-			continue
-		}
-		m.notifyTransition(ctx, h, prev, st.Status)
-		if inv != nil {
-			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
-				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
-			}
-		}
-		if metrics != nil {
-			if err := m.store.UpsertMetrics(ctx, h.ID, *metrics); err != nil {
-				m.log.Warn("monitor update metrics", "host", h.Hostname, "err", err)
-			}
-			// Append to the metric history time series (throttled to the configured
-			// sample cadence in the store). Skipped when history is disabled.
-			if m.cfg.MetricHistoryRetention > 0 {
-				if err := m.store.RecordMetricHistory(ctx, h.ID, *metrics, m.cfg.MetricHistorySample); err != nil {
-					m.log.Warn("monitor record metric history", "host", h.Hostname, "err", err)
-				}
-			}
-		}
-		m.hub.Broadcast("host.status", map[string]any{
-			"hostId": h.ID, "hostname": h.Hostname, "status": st.Status,
-			"latencyMs": st.LatencyMS, "sshOk": st.SSHOK, "wgOk": st.WGOK,
-			"uptimeSeconds": st.UptimeSeconds, "checkedAt": time.Now(),
-		})
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			m.probeHost(ctx, h)
+		}()
 	}
+	wg.Wait()
 	m.refreshGauges(ctx)
 	if m.jobs != nil {
 		m.jobs.Record("host-monitor", nil)
 	}
+}
+
+// probeHost checks one host and persists its status/inventory/metrics. Safe to
+// run concurrently across hosts: every write targets that host's own rows and
+// pgxpool, the hub, and the notifier are all concurrency-safe.
+func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
+	signer, err := m.issuer.SystemSigner(ctx, m.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
+	if err != nil {
+		m.log.Warn("monitor system signer", "host", h.Hostname, "err", err)
+		return
+	}
+	prev := ""
+	if h.Status != nil {
+		prev = h.Status.Status
+	}
+	st, inv, metrics := m.probe(ctx, signer, &h)
+	if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
+		m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
+		return
+	}
+	m.notifyTransition(ctx, h, prev, st.Status)
+	if inv != nil {
+		if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
+			m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
+		}
+	}
+	if metrics != nil {
+		if err := m.store.UpsertMetrics(ctx, h.ID, *metrics); err != nil {
+			m.log.Warn("monitor update metrics", "host", h.Hostname, "err", err)
+		}
+		// Append to the metric history time series (throttled to the configured
+		// sample cadence in the store). Skipped when history is disabled.
+		if m.cfg.MetricHistoryRetention > 0 {
+			if err := m.store.RecordMetricHistory(ctx, h.ID, *metrics, m.cfg.MetricHistorySample); err != nil {
+				m.log.Warn("monitor record metric history", "host", h.Hostname, "err", err)
+			}
+		}
+	}
+	m.hub.Broadcast("host.status", map[string]any{
+		"hostId": h.ID, "hostname": h.Hostname, "status": st.Status,
+		"latencyMs": st.LatencyMS, "sshOk": st.SSHOK, "wgOk": st.WGOK,
+		"uptimeSeconds": st.UptimeSeconds, "checkedAt": time.Now(),
+	})
 }
 
 // probe runs a lightweight authenticated SSH command through the jump host and

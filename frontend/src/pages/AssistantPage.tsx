@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Table, TableBody,
@@ -20,14 +20,44 @@ interface Turn {
   result?: AskResult;
 }
 
+// Persist the visible conversation per browser tab so a refresh doesn't wipe it.
+const STORE_KEY = "ask-fleet-session";
+function loadStored(): { turns: Turn[]; conversationId?: string } {
+  try {
+    const raw = sessionStorage.getItem(STORE_KEY);
+    if (raw) return JSON.parse(raw) as { turns: Turn[]; conversationId?: string };
+  } catch { /* ignore corrupt/oversized storage */ }
+  return { turns: [] };
+}
+
 // Ask Fleet: read-only natural-language queries over fleet data, grounded in the
 // real host rows returned by the backend (shown beneath each answer).
 export function AssistantPage() {
   const { data: status } = useQuery({ queryKey: ["assistant-status"], queryFn: assistantStatus });
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const stored = useRef(loadStored());
+  const [turns, setTurns] = useState<Turn[]>(stored.current.turns);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const convoRef = useRef<string | undefined>(stored.current.conversationId);
+  const mounted = useRef(true);
   const ready = status?.ready;
+
+  // Stop the in-flight poll loop when the page unmounts.
+  useEffect(() => () => { mounted.current = false; }, []);
+
+  // Persist the conversation (turns + thread id) on every change.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(STORE_KEY, JSON.stringify({ turns, conversationId: convoRef.current }));
+    } catch { /* storage full or unavailable — non-fatal */ }
+  }, [turns]);
+
+  function newConversation() {
+    if (busy) return;
+    convoRef.current = undefined;
+    setTurns([]);
+    try { sessionStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
+  }
 
   async function submit() {
     const q = input.trim();
@@ -37,9 +67,11 @@ export function AssistantPage() {
     const idx = turns.length;
     setTurns((t) => [...t, { q }]);
     try {
-      const id = await askAssistant(q);
+      const { id, conversationId } = await askAssistant(q, convoRef.current);
+      convoRef.current = conversationId; // continue this thread on the next question
       for (let i = 0; i < 160; i++) {
         await sleep(1500);
+        if (!mounted.current) return; // page left — stop polling
         const r = await askResult(id);
         if (r.status !== "pending") {
           setTurns((t) => t.map((x, j) => (j === idx ? { ...x, result: r } : x)));
@@ -47,15 +79,21 @@ export function AssistantPage() {
         }
       }
     } catch {
+      if (!mounted.current) return;
       setTurns((t) => t.map((x, j) => (j === idx ? { ...x, result: { status: "error", error: "Request failed." } } : x)));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
   return (
     <Box sx={{ maxWidth: 1000 }}>
-      <Typography variant="h5" sx={{ mb: 2 }}>Ask Fleet</Typography>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+        <Typography variant="h5">Ask Fleet</Typography>
+        {turns.length > 0 && (
+          <Button size="small" onClick={newConversation} disabled={busy}>New conversation</Button>
+        )}
+      </Stack>
 
       {status && !ready && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -70,7 +108,9 @@ export function AssistantPage() {
             <Typography variant="body2" sx={{ mb: 1 }}>
               Ask about your fleet in plain language. The assistant can answer from each host's
               inventory and live metrics, usage history, SSH session and file-transfer records,
-              scan/playbook history and schedules, and the audit trail. For example:
+              scan/playbook history and schedules, and the audit trail. It remembers earlier
+              questions in the same conversation, so you can ask follow-ups like “and db-02?”.
+              For example:
             </Typography>
             <Box component="ul" sx={{ m: 0, pl: 3 }}>
               <li>“Which hosts have less than 20% disk free?”</li>

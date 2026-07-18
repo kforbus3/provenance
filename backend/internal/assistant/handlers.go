@@ -47,7 +47,8 @@ func (h *handler) models(w http.ResponseWriter, r *http.Request) {
 }
 
 type askReq struct {
-	Question string `json:"question"`
+	Question       string `json:"question"`
+	ConversationID string `json:"conversationId"`
 }
 
 func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +63,7 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		rq.Question = rq.Question[:2000]
 	}
 	p := auth.MustPrincipal(r)
-	id, ok := h.svc.Ask(r.Context(), rq.Question, Caller{
+	id, convoID, ok := h.svc.Ask(r.Context(), rq.Question, rq.ConversationID, Caller{
 		UserID: p.UserID, IsSuperAdmin: p.IsSuperAdmin, Username: p.Username,
 		CanViewSessions:  p.Has("Session.Replay"),
 		CanViewScans:     p.Has("Host.Scan"),
@@ -76,7 +77,7 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, "assistant.query", map[string]any{"question": rq.Question})
-	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"id": id})
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"id": id, "conversationId": convoID})
 }
 
 func (h *handler) result(w http.ResponseWriter, r *http.Request) {

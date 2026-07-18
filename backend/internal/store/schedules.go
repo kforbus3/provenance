@@ -88,6 +88,13 @@ func (s *Store) RecomputeEnabledNextRuns(ctx context.Context) error {
 func NextRun(r models.Recurrence, from time.Time) time.Time {
 	switch r.Type {
 	case "interval":
+		// Interval fires are anchored to the actual fire time (`from` = now when
+		// called after a fire), not to the ideal slot. Two consequences, both
+		// intentional: each fire drifts later by the tick latency (sub-minute), and
+		// occurrences missed during downtime are not replayed — the schedule simply
+		// resumes one interval from when it next runs, rather than stampeding
+		// catch-up runs. Use a daily/cron recurrence when an exact wall-clock cadence
+		// matters.
 		mins := r.EveryMinutes
 		if mins < 1 {
 			mins = 60
@@ -250,11 +257,27 @@ func (s *Store) DeleteSchedule(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// DueSchedules returns enabled schedules whose next_run_at has passed.
-func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]*models.Schedule, error) {
+// scheduleClaimLease is how far ClaimDueSchedules provisionally pushes a claimed
+// schedule's next_run_at. MarkScheduleFired overwrites it with the real next run
+// right after; the lease only matters if the process dies mid-fire, in which case
+// the schedule simply re-fires after the lease rather than being lost or double-run.
+const scheduleClaimLease = time.Hour
+
+// ClaimDueSchedules atomically claims enabled schedules whose next_run_at has
+// passed: in a single statement it locks the due rows (FOR UPDATE SKIP LOCKED)
+// and provisionally advances their next_run_at out of the due window, returning
+// the claimed rows. A second backend ticking concurrently therefore cannot select
+// and fire the same schedule. The caller fires each claimed schedule and then
+// calls MarkScheduleFired to set the true next occurrence.
+func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time) ([]*models.Schedule, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+scheduleCols+` FROM schedules
-		 WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= $1`, now)
+		`UPDATE schedules SET next_run_at=$2, updated_at=now()
+		 WHERE id IN (
+		     SELECT id FROM schedules
+		     WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= $1
+		     FOR UPDATE SKIP LOCKED
+		 )
+		 RETURNING `+scheduleCols, now, now.Add(scheduleClaimLease))
 	if err != nil {
 		return nil, err
 	}

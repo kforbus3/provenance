@@ -67,8 +67,26 @@ func (f *Forwarder) LoadConfig(ctx context.Context) Config {
 	return c
 }
 
+// validateTarget rejects SSRF destinations (metadata, loopback, and other
+// disallowed ranges per the ssrf policy) for a forwarding config. Shared by the
+// save path, the live send path, and the test button so the guard can't be
+// bypassed by persisting a config that never went through SendTest.
+func validateTarget(cfg Config) error {
+	if strings.ToLower(cfg.Type) == "http" {
+		return ssrf.ValidateURL(cfg.Address)
+	}
+	return ssrf.ValidateHostPort(cfg.Address)
+}
+
 // SaveConfig persists the config and refreshes the cache.
 func (f *Forwarder) SaveConfig(ctx context.Context, c Config) error {
+	// Validate the destination before it is persisted and starts receiving every
+	// audit event; an empty address on a disabled config is allowed (clearing it).
+	if c.Enabled && strings.TrimSpace(c.Address) != "" {
+		if err := validateTarget(c); err != nil {
+			return err
+		}
+	}
 	if err := f.store.SetSetting(ctx, settingKey, c); err != nil {
 		return err
 	}
@@ -107,11 +125,7 @@ func (f *Forwarder) Forward(e models.AuditEvent) {
 func (f *Forwarder) SendTest(cfg Config) error {
 	// The test address comes straight from the request body; refuse SSRF targets
 	// (metadata/loopback) before connecting.
-	if strings.ToLower(cfg.Type) == "http" {
-		if err := ssrf.ValidateURL(cfg.Address); err != nil {
-			return err
-		}
-	} else if err := ssrf.ValidateHostPort(cfg.Address); err != nil {
+	if err := validateTarget(cfg); err != nil {
 		return err
 	}
 	return f.send(cfg, models.AuditEvent{
@@ -121,6 +135,12 @@ func (f *Forwarder) SendTest(cfg Config) error {
 }
 
 func (f *Forwarder) send(cfg Config, e models.AuditEvent) error {
+	// Defense in depth: validate the destination on the live path too. SafeClient
+	// only re-checks redirects, not the initial target, and a config persisted
+	// before this guard (or by any other path) must still be refused here.
+	if err := validateTarget(cfg); err != nil {
+		return err
+	}
 	payload, _ := json.Marshal(e)
 	switch strings.ToLower(cfg.Type) {
 	case "http":

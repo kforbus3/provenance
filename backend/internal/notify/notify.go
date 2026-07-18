@@ -28,6 +28,7 @@ const (
 	EventScanFindings     = "scan.findings"
 	EventPlaybookFailed   = "playbook.failed"
 	EventCAKeyAging       = "ca.aging"
+	EventFleetDigest      = "fleet.digest"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -43,6 +44,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventScanFindings, "Security scan found failures"},
 	{EventPlaybookFailed, "Playbook run failed"},
 	{EventCAKeyAging, "CA key due for rotation"},
+	{EventFleetDigest, "Scheduled fleet-health digest"},
 }
 
 const settingKey = "notifications"

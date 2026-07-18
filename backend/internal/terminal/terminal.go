@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -104,13 +105,25 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 
 // run drives a single terminal session lifecycle.
 func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal, host *models.Host, clientIP string) {
+	// gorilla/websocket permits only one data writer at a time. The output pumps,
+	// the setup-error path, and the admin-terminate callback (which fires from an
+	// unrelated goroutine) all write frames, so every write goes through this
+	// mutex to avoid interleaved frames or a write-side panic. (Close and
+	// WriteControl are separately concurrency-safe and don't need it.)
+	var writeMu sync.Mutex
+	safeWrite := func(mt int, b []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return ws.WriteMessage(mt, b)
+	}
+
 	// Register the live connection up front (before the SSH dial) so it can be
 	// force-closed the instant the session is revoked — closing the WebSocket
 	// unwinds the SSH session and gateway connection via the read/write pumps.
 	// There is no race window where a revoke could miss this connection.
 	if h.d.Live != nil {
 		dereg := h.d.Live.Register(p.SessionID, host.ID, func() {
-			_ = ws.WriteMessage(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: "session terminated by administrator"}))
+			_ = safeWrite(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: "session terminated by administrator"}))
 			_ = ws.Close()
 		})
 		defer dereg()
@@ -135,7 +148,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	}
 
 	sendErr := func(msg string) {
-		_ = ws.WriteMessage(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: msg}))
+		_ = safeWrite(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: msg}))
 	}
 
 	// Privilege tier: Host.Sudo (or super admin) lands in the privileged sudo
@@ -226,6 +239,12 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 
 	var bytesIn, bytesOut int64
 	done := make(chan struct{})
+	// The stdout pump, stderr pump, and input reader all end by signalling done.
+	// A plain check-then-close races (two goroutines EOF at once → double close →
+	// panic that the HTTP recoverer can't catch, killing the process), so gate it
+	// through a single sync.Once.
+	var closeOnce sync.Once
+	closeDone := func() { closeOnce.Do(func() { close(done) }) }
 
 	// Keep the connection alive across idle periods and any intermediary reverse
 	// proxy: send a periodic ping and require a pong within the read deadline.
@@ -293,12 +312,12 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 		for {
 			n, err := src.Read(buf)
 			if n > 0 {
-				bytesOut += int64(n)
+				atomic.AddInt64(&bytesOut, int64(n))
 				touchSession()
 				if capture != nil {
 					capture.Output(buf[:n])
 				}
-				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+				if werr := safeWrite(websocket.BinaryMessage, buf[:n]); werr != nil {
 					break
 				}
 			}
@@ -306,11 +325,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 				break
 			}
 		}
-		select {
-		case <-done:
-		default:
-			close(done)
-		}
+		closeDone()
 	}
 	go pump(stdout)
 	go pump(stderr)
@@ -324,7 +339,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			}
 			switch mt {
 			case websocket.BinaryMessage:
-				bytesIn += int64(len(data))
+				atomic.AddInt64(&bytesIn, int64(len(data)))
 				touchSession()
 				if capture != nil {
 					capture.Input(data)
@@ -343,7 +358,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 						}
 					case "input":
 						b := []byte(cm.Data)
-						bytesIn += int64(len(b))
+						atomic.AddInt64(&bytesIn, int64(len(b)))
 						touchSession()
 						if capture != nil {
 							capture.Input(b)
@@ -353,11 +368,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 				}
 			}
 		}
-		select {
-		case <-done:
-		default:
-			close(done)
-		}
+		closeDone()
 	}()
 
 	<-done
@@ -376,13 +387,16 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			h.d.Log.Warn("save recording", "session", sshSessionID, "err", err)
 		}
 	}
+	// A pump goroutine may still be draining after done closed; read the counters
+	// atomically to match the atomic writes above.
+	inTotal, outTotal := atomic.LoadInt64(&bytesIn), atomic.LoadInt64(&bytesOut)
 	if sshSessionID != uuid.Nil {
-		_ = h.d.Store.EndSSHSession(fin, sshSessionID, exitCode, bytesIn, bytesOut)
+		_ = h.d.Store.EndSSHSession(fin, sshSessionID, exitCode, inTotal, outTotal)
 	}
 	_, _ = h.d.Store.AppendAudit(fin, models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: "session.end",
 		TargetKind: "host", TargetID: host.ID.String(),
-		Detail: map[string]any{"bytesIn": bytesIn, "bytesOut": bytesOut, "sshSessionId": sshSessionID},
+		Detail: map[string]any{"bytesIn": inTotal, "bytesOut": outTotal, "sshSessionId": sshSessionID},
 	})
 	if h.d.Events != nil {
 		h.d.Events.BroadcastSession("session.end", p.UserID, map[string]any{

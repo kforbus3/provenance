@@ -30,15 +30,33 @@ const (
 // liveRun holds the in-memory, incrementally-growing output of a run in flight
 // so the status endpoint can stream it to the browser by polling. On completion
 // the output is persisted and the entry removed.
+// maxPlaybookOutput bounds how much run output is buffered in memory and later
+// persisted to the playbook_runs.output row. A chatty or malicious playbook could
+// otherwise stream unbounded data and bloat both. Past the cap, output is dropped
+// after a one-time truncation notice.
+const maxPlaybookOutput = 4 << 20 // 4 MiB
+
 type liveRun struct {
-	mu  sync.Mutex
-	buf strings.Builder
+	mu        sync.Mutex
+	buf       strings.Builder
+	truncated bool
 }
 
 func (l *liveRun) append(s string) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.truncated {
+		return
+	}
+	if l.buf.Len()+len(s) > maxPlaybookOutput {
+		if room := maxPlaybookOutput - l.buf.Len(); room > 0 {
+			l.buf.WriteString(s[:room])
+		}
+		l.buf.WriteString("\n[output truncated: exceeded 4 MiB]\n")
+		l.truncated = true
+		return
+	}
 	l.buf.WriteString(s)
-	l.mu.Unlock()
 }
 
 func (l *liveRun) snapshot() string {
@@ -200,7 +218,11 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 	// final {"done":true,"rc":N}.
 	var exitCode *int
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// Allow a single NDJSON frame up to the whole output budget: a long ansible
+	// line (e.g. a big diff) must not trip bufio.ErrTooLong and abort the loop
+	// before the terminal {"done"} frame, which would mislabel the run as never
+	// having completed.
+	scanner.Buffer(make([]byte, 0, 64*1024), maxPlaybookOutput)
 	for scanner.Scan() {
 		var ev struct {
 			Line  string `json:"line"`

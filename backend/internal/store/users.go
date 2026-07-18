@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,32 +29,75 @@ type CreateUserParams struct {
 	AuthSource   string // local (default) | oidc | ldap
 }
 
-// CreateUser inserts a user and its credential row atomically and returns it.
-func (s *Store) CreateUser(ctx context.Context, p CreateUserParams) (*models.User, error) {
+// ErrUsersExist is returned by CreateInitialSuperAdmin when a user already exists,
+// so the bootstrap flow can no longer create the first administrator.
+var ErrUsersExist = errors.New("users already exist")
+
+// insertUser inserts a user and its credential row within tx.
+func insertUser(ctx context.Context, tx pgx.Tx, p CreateUserParams) (*models.User, error) {
 	if p.AuthSource == "" {
 		p.AuthSource = "local"
 	}
 	var u models.User
+	row := tx.QueryRow(ctx, `
+		INSERT INTO users (username, email, display_name, is_super_admin, must_change_pw, auth_source)
+		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
+		RETURNING id, username, COALESCE(email,''), display_name, is_super_admin,
+		          is_disabled, email_verified, must_change_pw, created_at, updated_at`,
+		p.Username, p.Email, p.DisplayName, p.IsSuperAdmin, p.MustChangePw, p.AuthSource)
+	if err := row.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.IsSuperAdmin,
+		&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_credentials (user_id, password_hash) VALUES ($1, $2)`,
+		u.ID, p.PasswordHash); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// CreateUser inserts a user and its credential row atomically and returns it.
+func (s *Store) CreateUser(ctx context.Context, p CreateUserParams) (*models.User, error) {
+	var u *models.User
 	err := s.tx(ctx, func(tx pgx.Tx) error {
-		row := tx.QueryRow(ctx, `
-			INSERT INTO users (username, email, display_name, is_super_admin, must_change_pw, auth_source)
-			VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
-			RETURNING id, username, COALESCE(email,''), display_name, is_super_admin,
-			          is_disabled, email_verified, must_change_pw, created_at, updated_at`,
-			p.Username, p.Email, p.DisplayName, p.IsSuperAdmin, p.MustChangePw, p.AuthSource)
-		if err := row.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.IsSuperAdmin,
-			&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.CreatedAt, &u.UpdatedAt); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `
-			INSERT INTO user_credentials (user_id, password_hash) VALUES ($1, $2)`,
-			u.ID, p.PasswordHash)
-		return err
+		var e error
+		u, e = insertUser(ctx, tx, p)
+		return e
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &u, nil
+	return u, nil
+}
+
+// CreateInitialSuperAdmin creates the first (bootstrap) super admin, but only if
+// no user exists yet. An advisory lock serializes concurrent bootstrap attempts so
+// the count check and insert are atomic across connections — two racing
+// POST /bootstrap/init requests cannot both create an administrator. Returns
+// ErrUsersExist if any user already exists.
+func (s *Store) CreateInitialSuperAdmin(ctx context.Context, p CreateUserParams) (*models.User, error) {
+	p.IsSuperAdmin = true
+	var u *models.User
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('fleet_bootstrap'))`); err != nil {
+			return err
+		}
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrUsersExist
+		}
+		var e error
+		u, e = insertUser(ctx, tx, p)
+		return e
+	})
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
 }
 
 const userCols = `id, username, COALESCE(email,''), display_name, is_super_admin,

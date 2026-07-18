@@ -41,17 +41,22 @@ CHOOSING TOOLS
   an action or a person.
 - recent_file_transfers: SFTP uploads/downloads — who moved which file to/from which
   host, size, and status.
+- fleet_insights: the already-computed list of what needs attention across the fleet —
+  offline hosts, low/critically-low disk, disk-runway projections (days-to-full with a
+  confidence label), high memory/load, pending security updates. This is the fastest,
+  most reliable answer to open-ended health and capacity questions.
 
 WORKING METHOD
 - Use the smallest set of tools that answers the question, but DO combine tools when
   needed, and call the same tool more than once when comparing (e.g. host_metric_history
   per host to find which of a few hosts is filling up fastest).
-- Fleet health checks ("anything wrong?", "morning report"): query_hosts for offline
-  hosts, low disk, high memory/load, WireGuard down, pending security updates; add
-  recent_scans / recent_playbook_runs failures if relevant.
-- Capacity questions ("when will web-01 run out of disk?"): get the disk trend from
-  host_metric_history, extrapolate the recent rate of change linearly, and present the
-  result as a rough estimate, stating the rate you derived.
+- Fleet health checks ("anything wrong?", "morning report"): start with fleet_insights;
+  it already aggregates offline hosts, low disk, capacity runway, high memory/load, and
+  pending updates. Add recent_scans / recent_playbook_runs failures if relevant.
+- Capacity questions ("when will web-01 run out of disk?"): prefer fleet_insights, which
+  carries the runway estimate and its confidence. Only fall back to host_metric_history
+  (extrapolating the recent rate linearly, stated as a rough estimate) if the host isn't
+  in the insights list.
 - All percentages are 0-100. Timestamps are RFC 3339. If a tool returns an error or an
   empty result, say what you could not see instead of guessing; a permission error means
   this user is not allowed to see that data. Results are already limited to what the
@@ -200,6 +205,13 @@ var tools = []toolDef{{
 				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
 			},
 		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "fleet_insights",
+		Description: "Return the current computed fleet-health issues across the hosts the user can access: offline hosts, low/critically-low disk, disk-runway projections (how many days until a filesystem fills, with a confidence label), high memory, high CPU load, and pending security updates. Each item has a severity (critical/warning), category, hostname, title, and a plain-English detail. Use this as the FIRST tool for open-ended health questions like 'what's wrong with the fleet', 'anything I should worry about this morning', 'which hosts are running out of disk', or 'when will web-01 run out of space' — it already contains the capacity-runway estimate, so prefer it over recomputing from raw history. Takes no arguments.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 }}
 

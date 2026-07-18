@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +57,36 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger) *Service {
 	return &Service{store: st, cfg: cfg, log: log}
 }
 
+// pgEnv converts a postgres connection URL into libpq environment variables, so
+// pg_dump receives credentials via the environment rather than argv — where the
+// password would otherwise be visible to any local user via ps / /proc.
+func pgEnv(dbURL string) ([]string, error) {
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database url: %w", err)
+	}
+	env := []string{}
+	if h := u.Hostname(); h != "" {
+		env = append(env, "PGHOST="+h)
+	}
+	if p := u.Port(); p != "" {
+		env = append(env, "PGPORT="+p)
+	}
+	if user := u.User.Username(); user != "" {
+		env = append(env, "PGUSER="+user)
+	}
+	if pass, ok := u.User.Password(); ok {
+		env = append(env, "PGPASSWORD="+pass)
+	}
+	if db := strings.TrimPrefix(u.Path, "/"); db != "" {
+		env = append(env, "PGDATABASE="+db)
+	}
+	if sslmode := u.Query().Get("sslmode"); sslmode != "" {
+		env = append(env, "PGSSLMODE="+sslmode)
+	}
+	return env, nil
+}
+
 func (s *Service) passphrase() string {
 	if s.cfg.BackupPassphrase != "" {
 		return s.cfg.BackupPassphrase
@@ -99,6 +130,13 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	if pass == "" {
 		return nil, fmt.Errorf("no backup passphrase configured")
 	}
+	// The backup contains every at-rest secret (CA key, credentials, MFA, OIDC/
+	// LDAP/SMTP config). In production it must be encrypted with a passphrase
+	// distinct from the CA passphrase, so one leaked secret can't both decrypt the
+	// backup and unlock the CA key it carries.
+	if s.cfg.IsProduction() && (s.cfg.BackupPassphrase == "" || s.cfg.BackupPassphrase == string(s.cfg.CAKeyPassphrase)) {
+		return nil, fmt.Errorf("set a distinct FLEET_BACKUP_PASSPHRASE (must differ from the CA passphrase) to create backups in production")
+	}
 	if err := os.MkdirAll(s.cfg.BackupDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create backup dir: %w", err)
 	}
@@ -110,7 +148,12 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
-	dump := exec.CommandContext(cctx, "pg_dump", "--no-owner", "--clean", "--if-exists", s.cfg.DatabaseURL)
+	dumpEnv, derr := pgEnv(s.cfg.DatabaseURL)
+	if derr != nil {
+		return nil, derr
+	}
+	dump := exec.CommandContext(cctx, "pg_dump", "--no-owner", "--clean", "--if-exists")
+	dump.Env = append(os.Environ(), dumpEnv...)
 	enc := exec.CommandContext(cctx, "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-pass", "env:FLEET_BK_PASS")
 	enc.Env = append(os.Environ(), "FLEET_BK_PASS="+pass)
 

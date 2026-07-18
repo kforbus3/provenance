@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,10 +37,12 @@ import (
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/certificates"
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/digest"
 	"github.com/fleet-terminal/backend/internal/enrollment"
 	"github.com/fleet-terminal/backend/internal/hosts"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/identity"
+	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/livesessions"
@@ -83,6 +87,8 @@ type Server struct {
 	scheduler   *scheduler.Engine
 	backups     *backup.Service
 	auditFwd    *auditfwd.Forwarder
+	insights    *insights.Service
+	digest      *digest.Service
 
 	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
 	lastCANotify time.Time
@@ -119,6 +125,8 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.scheduler = scheduler.New(st, s.scanSvc, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.auditFwd = auditfwd.New(st, log)
+	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
+	s.digest = digest.New(st, s.insights, s.Notify, log)
 	st.SetAuditSink(s.auditFwd.Forward) // forward audit events to syslog/SIEM when enabled
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
@@ -187,6 +195,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.renewalLoop(ctx)
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
+	go s.digest.Run(ctx)
 	go s.krlLoop(ctx)
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx)
@@ -259,35 +268,48 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	hosts, _ := s.Store.ListHosts(ctx, 1000, 0)
+	// Reach every enrolled host, not just the first page — a revoked cert must be
+	// rejected fleet-wide. Push in parallel with a bounded pool so revocation
+	// propagates promptly even on a large fleet without stampeding the jump host.
+	hosts, _ := s.Store.AllHosts(ctx)
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
 	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/fleet_krl >/dev/null && sudo chmod 644 /etc/ssh/fleet_krl && echo OK"
-	pushed := 0
+	const krlConcurrency = 32
+	sem := make(chan struct{}, krlConcurrency)
+	var wg sync.WaitGroup
+	var pushed int64
 	for i := range hosts {
 		h := hosts[i]
 		if !h.Enrolled {
 			continue
 		}
-		signer, err := s.Issuer.SystemSigner(ctx, s.Issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
-		if err != nil {
-			continue
-		}
-		for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
-			conn, derr := s.Gateway.DialWithSigner(ctx, signer, addr, h.SSHPort, h.SSHUser)
-			if derr != nil {
-				continue
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			signer, err := s.Issuer.SystemSigner(ctx, s.Issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
+			if err != nil {
+				return
 			}
-			if sess, e := conn.Client.NewSession(); e == nil {
-				_, _ = sess.CombinedOutput(cmd)
-				sess.Close()
-				pushed++
+			for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
+				conn, derr := s.Gateway.DialWithSigner(ctx, signer, addr, h.SSHPort, h.SSHUser)
+				if derr != nil {
+					continue
+				}
+				if sess, e := conn.Client.NewSession(); e == nil {
+					_, _ = sess.CombinedOutput(cmd)
+					sess.Close()
+					atomic.AddInt64(&pushed, 1)
+				}
+				conn.Close()
+				break
 			}
-			conn.Close()
-			break
-		}
+		}()
 	}
+	wg.Wait()
 	s.Log.Info("distributed KRL", "hosts", pushed, "revokedSerials", len(serials))
-	return pushed, nil
+	return int(pushed), nil
 }
 
 // retentionLoop prunes session recordings older than the configured retention
@@ -326,6 +348,9 @@ func (s *Server) retentionLoop(ctx context.Context) {
 				s.Log.Info("pruned metric history", "rows", n, "retention", ret.String())
 			}
 		}
+
+		s.pruneActivity(ctx)
+		s.pruneAudit(ctx)
 	}
 	prune() // run once on startup
 	for {
@@ -336,6 +361,63 @@ func (s *Server) retentionLoop(ctx context.Context) {
 			prune()
 		}
 	}
+}
+
+// pruneActivity trims operational history (SSH sessions, SFTP transfers, scans +
+// their on-disk reports, playbook runs, login attempts) past ActivityRetention.
+// 0 = keep forever. Errors are logged, not fatal — a failed prune must never take
+// down the server.
+func (s *Server) pruneActivity(ctx context.Context) {
+	ret := s.Cfg.ActivityRetention
+	if ret <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-ret)
+
+	if paths, err := s.Store.PruneScansBefore(ctx, cutoff); err != nil {
+		s.Log.Warn("prune scans", "err", err)
+	} else {
+		for _, p := range paths {
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(s.Cfg.ScanDir, p)
+			}
+			_ = os.Remove(p)
+		}
+		if len(paths) > 0 {
+			s.Log.Info("pruned scan reports", "files", len(paths), "retention", ret.String())
+		}
+	}
+
+	prune := func(name string, fn func(context.Context, time.Time) (int64, error)) {
+		if n, err := fn(ctx, cutoff); err != nil {
+			s.Log.Warn("prune "+name, "err", err)
+		} else if n > 0 {
+			s.Log.Info("pruned "+name, "rows", n, "retention", ret.String())
+		}
+	}
+	// SSH sessions before recordings-dependent rows are gone is handled inside the
+	// store method (it skips sessions that still have a recording).
+	prune("ssh sessions", s.Store.PruneSSHSessionsBefore)
+	prune("sftp transfers", s.Store.PruneSFTPTransfersBefore)
+	prune("playbook runs", s.Store.PrunePlaybookRunsBefore)
+	prune("auth events", s.Store.PruneAuthEventsBefore)
+	s.Jobs.Record("activity-retention", nil)
+}
+
+// pruneAudit trims the audit chain past AuditRetention. Kept separate from
+// activity retention and defaulting to keep-forever, because pruning the chain
+// shortens the window a genesis-to-now verification can cover.
+func (s *Server) pruneAudit(ctx context.Context) {
+	ret := s.Cfg.AuditRetention
+	if ret <= 0 {
+		return
+	}
+	if n, err := s.Store.PruneAuditEventsBefore(ctx, time.Now().Add(-ret)); err != nil {
+		s.Log.Warn("prune audit events", "err", err)
+	} else if n > 0 {
+		s.Log.Info("pruned audit events", "rows", n, "retention", ret.String())
+	}
+	s.Jobs.Record("audit-retention", nil)
 }
 
 // reaperLoop periodically expires elapsed just-in-time access grants and ends
@@ -531,7 +613,11 @@ func (s *Server) registerRoutes(r chi.Router) {
 	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))
 
 	// AI assistant (read-only NL queries over fleet data via local Ollama).
-	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.Cfg.MetricHistoryRetention))
+	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.insights, s.Cfg.MetricHistoryRetention))
+
+	insights.Mount(r, deps, s.insights)
+
+	digest.Mount(r, s.Auth, s.digest)
 
 	playbook.Mount(r, deps, s.playbookSvc)
 

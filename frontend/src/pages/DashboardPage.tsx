@@ -16,11 +16,15 @@ import { listHosts, type Host } from "../api/hosts";
 import { listSessions } from "../api/sessions";
 import { listApprovals, listMyApprovals } from "../api/approvals";
 import { listAudit } from "../api/audit";
+import { listInsights } from "../api/insights";
 import { useFleetEvents } from "../api/events";
 import { useAuthStore } from "../store/auth";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success", offline: "error", unknown: "warning",
+};
+const SEVERITY_COLOR: Record<string, "error" | "warning" | "info" | "default"> = {
+  critical: "error", warning: "warning", info: "info",
 };
 const rank = (h: Host) => (h.status?.status === "online" ? 0 : h.status?.status === "unknown" ? 1 : 2);
 const ago = (iso?: string) => {
@@ -66,13 +70,20 @@ export function DashboardPage() {
     enabled: has("Audit.View"), retry: false, refetchInterval: 30000,
   });
 
+  const { data: insights = [] } = useQuery({
+    queryKey: ["dash-insights"], queryFn: listInsights,
+    enabled: has("Host.View"), retry: false, refetchInterval: 60000,
+  });
+
   useFleetEvents((e) => {
-    if (e.type === "host.status") void qc.invalidateQueries({ queryKey: ["hosts"] });
+    if (e.type === "host.status") {
+      void qc.invalidateQueries({ queryKey: ["hosts"] });
+      void qc.invalidateQueries({ queryKey: ["dash-insights"] });
+    }
     if (e.type?.startsWith("session")) void qc.invalidateQueries({ queryKey: ["sessions"] });
   });
 
   const online = hosts.filter((h) => h.status?.status === "online").length;
-  const offlineHosts = hosts.filter((h) => h.status?.status === "offline");
   const quick = [...hosts].sort((a, b) => rank(a) - rank(b) || a.hostname.localeCompare(b.hostname)).slice(0, 6);
 
   const openTerminal = (id: string) => window.open(`/terminals/${id}`, "_blank", "noopener");
@@ -208,19 +219,23 @@ export function DashboardPage() {
               </Card>
             )}
 
-            {offlineHosts.length > 0 && (
+            {has("Host.View") && insights.length > 0 && (
               <Card variant="outlined">
                 <CardContent sx={{ pb: 1 }}>
                   <Stack direction="row" alignItems="center" spacing={1}>
-                    <WarningAmberIcon color="warning" />
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Needs attention</Typography>
+                    <WarningAmberIcon color={insights.some((i) => i.severity === "critical") ? "error" : "warning"} />
+                    <Typography variant="subtitle1" sx={{ flexGrow: 1, fontWeight: 600 }}>Needs attention</Typography>
+                    <Button size="small" onClick={() => navigate("/hosts")}>Hosts</Button>
                   </Stack>
                 </CardContent>
                 <List dense>
-                  {offlineHosts.slice(0, 6).map((h) => (
-                    <ListItem key={h.id}>
-                      <Chip size="small" sx={{ mr: 1 }} label="offline" color="error" />
-                      <ListItemText primary={h.hostname} secondary={h.status?.lastError || "unreachable"} />
+                  {insights.slice(0, 8).map((i, idx) => (
+                    <ListItem key={`${i.hostId}-${i.category}-${idx}`}>
+                      <Chip
+                        size="small" sx={{ mr: 1 }} label={i.severity}
+                        color={SEVERITY_COLOR[i.severity] ?? "default"}
+                      />
+                      <ListItemText primary={`${i.hostname} — ${i.title}`} secondary={i.detail} />
                     </ListItem>
                   ))}
                 </List>

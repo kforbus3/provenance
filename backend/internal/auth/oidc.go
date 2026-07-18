@@ -300,6 +300,18 @@ func claimString(claims map[string]any, key string) string {
 	return ""
 }
 
+// claimBool reads a boolean claim, tolerating IdPs that encode it as the string
+// "true"/"false" rather than a JSON bool.
+func claimBool(claims map[string]any, key string) bool {
+	switch v := claims[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	return false
+}
+
 // provisionOIDCUser finds (by username then email) or provisions an external
 // account from the verified claims, and syncs group→role mappings additively.
 func (h *Handler) provisionOIDCUser(ctx context.Context, c oidcConfig, claims map[string]any) (*models.User, error) {
@@ -313,9 +325,22 @@ func (h *Handler) provisionOIDCUser(ctx context.Context, c oidcConfig, claims ma
 	}
 	display := claimString(claims, "name")
 
+	// Only ever resolve to an account this OIDC provider owns. Binding an IdP
+	// identity onto a local (or LDAP) account would let an attacker who controls
+	// their own username/email claims in the IdP take over that account —
+	// including the bootstrap super-admin. A matched account with a different
+	// AuthSource is a hard error, not a silent takeover.
 	user, err := h.svc.store.GetUserByUsername(ctx, username)
-	if err != nil && email != "" {
+	if err == nil && user.AuthSource != "oidc" {
+		return nil, errors.New("account_conflict")
+	}
+	// Fall back to email only when the IdP asserts the address is verified: an
+	// unverified (spoofable) email claim must not bind to an existing account.
+	if err != nil && email != "" && claimBool(claims, "email_verified") {
 		user, err = h.svc.store.GetUserByEmail(ctx, email)
+		if err == nil && user.AuthSource != "oidc" {
+			return nil, errors.New("account_conflict")
+		}
 	}
 	if err != nil {
 		if !c.AutoProvision {

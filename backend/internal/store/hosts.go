@@ -162,6 +162,24 @@ func (s *Store) ListHosts(ctx context.Context, limit, offset int) ([]models.Host
 	return hosts, nil
 }
 
+// AllHosts returns every host, paging internally so callers that must reach the
+// whole fleet (the monitor sweep and KRL distribution) are not silently capped
+// at the ListHosts per-call limit. Full host detail is attached, as in ListHosts.
+func (s *Store) AllHosts(ctx context.Context) ([]models.Host, error) {
+	const page = 500
+	var out []models.Host
+	for offset := 0; ; offset += page {
+		batch, err := s.ListHosts(ctx, page, offset)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < page {
+			return out, nil
+		}
+	}
+}
+
 // SearchHosts returns hosts whose hostname matches q (case-insensitive
 // substring), ordered by hostname and capped at limit. Only identity fields
 // (id, hostname, environment) are populated — enough for name pickers — so it
@@ -224,7 +242,7 @@ func (s *Store) AccessibleHostIDs(ctx context.Context, userID uuid.UUID, isSuper
 // all hosts for super admins.
 func (s *Store) ListAccessibleHosts(ctx context.Context, userID uuid.UUID, isSuperAdmin bool) ([]models.Host, error) {
 	if isSuperAdmin {
-		return s.ListHosts(ctx, 1000, 0)
+		return s.AllHosts(ctx)
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+hostCols+` FROM hosts WHERE id IN (

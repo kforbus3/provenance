@@ -429,30 +429,59 @@ sudo rm -f "$R-results.xml" "$R-report.html" 2>/dev/null`
 
 // --- helpers ---
 
+// maxScanOutput bounds how much oscap output is read into memory. A legitimate
+// HTML report + results XML is large but well under this; the cap stops a
+// misbehaving or hostile host from returning gigabytes and OOMing the backend.
+const maxScanOutput = 64 << 20 // 64 MiB
+
+// limitedBuffer accumulates output up to limit bytes, then discards the rest and
+// records that truncation happened. It always reports a full write so the SSH
+// session doesn't error mid-stream.
+type limitedBuffer struct {
+	limit     int
+	buf       []byte
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - len(b.buf); room > 0 {
+		if len(p) > room {
+			b.buf = append(b.buf, p[:room]...)
+			b.truncated = true
+		} else {
+			b.buf = append(b.buf, p...)
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
 // runScript runs a /bin/sh script over the connection, respecting ctx by killing
-// the session if it is cancelled (e.g. scan timeout).
+// the session if it is cancelled (e.g. scan timeout). Output is capped at
+// maxScanOutput; exceeding it fails the scan rather than returning untrustworthy
+// partial output.
 func runScript(ctx context.Context, conn *sshgw.Conn, script string) (string, error) {
 	sess, err := conn.Client.NewSession()
 	if err != nil {
 		return "", err
 	}
 	defer sess.Close()
-	type result struct {
-		out []byte
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		out, rerr := sess.CombinedOutput(script)
-		done <- result{out, rerr}
-	}()
+	out := &limitedBuffer{limit: maxScanOutput}
+	sess.Stdout = out
+	sess.Stderr = out
+	done := make(chan error, 1)
+	go func() { done <- sess.Run(script) }()
 	select {
 	case <-ctx.Done():
 		_ = sess.Signal(ssh.SIGKILL)
 		_ = sess.Close()
 		return "", ctx.Err()
-	case r := <-done:
-		return string(r.out), r.err
+	case rerr := <-done:
+		if out.truncated {
+			return "", fmt.Errorf("scan output exceeded %d bytes", maxScanOutput)
+		}
+		return string(out.buf), rerr
 	}
 }
 

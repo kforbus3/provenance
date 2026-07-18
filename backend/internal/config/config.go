@@ -108,6 +108,15 @@ type Config struct {
 	MetricHistorySample    time.Duration
 	MetricHistoryRetention time.Duration
 
+	// Operational-history retention. ActivityRetention bounds how long SSH
+	// sessions, SFTP transfers, scans (+ their on-disk reports), playbook runs,
+	// and login-attempt records are kept; AuditRetention separately bounds the
+	// tamper-evident audit chain (pruning it truncates the verifiable window, so
+	// it is kept distinct and conservative). Both 0 = keep forever (the default),
+	// so no deployment loses history unless an operator opts in.
+	ActivityRetention time.Duration
+	AuditRetention    time.Duration
+
 	// Session recordings storage
 	RecordingDir string
 
@@ -202,6 +211,8 @@ func Load() (*Config, error) {
 		WGPort:                 envInt("FLEET_WG_PORT", 51820),
 		MetricHistorySample:    envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
 		MetricHistoryRetention: envDuration("FLEET_METRIC_HISTORY_RETENTION", 720*time.Hour),
+		ActivityRetention:      envDuration("FLEET_ACTIVITY_RETENTION", 0),
+		AuditRetention:         envDuration("FLEET_AUDIT_RETENTION", 0),
 		RecordingDir:           env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),
 		ScanDir:                env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
 		ScanTimeout:            envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),

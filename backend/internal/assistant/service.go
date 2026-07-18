@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -22,18 +23,35 @@ import (
 const (
 	maxToolIterations = 8
 	askTimeout        = 5 * time.Minute
+	// maxConversationTurns bounds how many prior user/assistant exchanges are
+	// carried as context into a follow-up question, so "what about db-02?" works
+	// without letting history grow unbounded and bloat the local model's context.
+	maxConversationTurns = 6
+	conversationTTL      = 30 * time.Minute
 )
 
 // Service orchestrates assistant conversations.
 type Service struct {
 	store           *store.Store
 	log             *slog.Logger
-	metricRetention time.Duration // caps the host_metric_history window (0 = history disabled)
-	asks            sync.Map      // id -> *AskResult (pointer replaced atomically on completion)
+	insights        *insights.Service // grounds the fleet_insights tool (what's-wrong / capacity)
+	metricRetention time.Duration     // caps the host_metric_history window (0 = history disabled)
+	asks            sync.Map          // id -> *AskResult (pointer replaced atomically on completion)
+	convos          sync.Map          // conversationID -> *conversation (multi-turn memory)
 }
 
-func New(st *store.Store, log *slog.Logger, metricRetention time.Duration) *Service {
-	return &Service{store: st, log: log, metricRetention: metricRetention}
+// conversation is the trimmed running memory for one Ask thread: alternating
+// user/assistant messages (no system prompt, no per-turn tool traffic), so a
+// follow-up question can reference earlier ones. Scoped to its owner.
+type conversation struct {
+	mu      sync.Mutex
+	owner   uuid.UUID
+	history []chatMessage
+	updated time.Time
+}
+
+func New(st *store.Store, log *slog.Logger, ins *insights.Service, metricRetention time.Duration) *Service {
+	return &Service{store: st, log: log, insights: ins, metricRetention: metricRetention}
 }
 
 // Settings is the persisted assistant configuration.
@@ -154,17 +172,23 @@ type Caller struct {
 	CanViewTransfers bool // File.Transfer — gates the recent_file_transfers tool
 }
 
-// Ask starts answering a question in the background and returns a poll id. Async
-// because local LLM inference can exceed the HTTP request timeout.
-func (s *Service) Ask(ctx context.Context, question string, who Caller) (string, bool) {
+// Ask starts answering a question in the background and returns a poll id plus
+// the conversation id to carry into follow-up questions (a new one is minted when
+// conversationID is empty). Async because local LLM inference can exceed the HTTP
+// request timeout.
+func (s *Service) Ask(ctx context.Context, question, conversationID string, who Caller) (askID, convoID string, ok bool) {
 	cfg := s.settings(ctx)
 	if !cfg.Enabled || cfg.OllamaURL == "" || cfg.Model == "" {
-		return "", false
+		return "", "", false
 	}
-	id := uuid.NewString()
-	s.asks.Store(id, &AskResult{Status: "pending", created: time.Now(), owner: who.UserID})
-	go s.run(id, question, who, cfg)
-	return id, true
+	convoID = conversationID
+	if convoID == "" {
+		convoID = uuid.NewString()
+	}
+	askID = uuid.NewString()
+	s.asks.Store(askID, &AskResult{Status: "pending", created: time.Now(), owner: who.UserID})
+	go s.run(askID, convoID, question, who, cfg)
+	return askID, convoID, true
 }
 
 // Result returns and (when finished) removes a pending result, but only for the
@@ -184,12 +208,12 @@ func (s *Service) Result(id string, caller uuid.UUID) (*AskResult, bool) {
 	return r, true
 }
 
-func (s *Service) run(id, question string, who Caller, cfg Settings) {
+func (s *Service) run(id, convoID, question string, who Caller, cfg Settings) {
 	ctx, cancel := context.WithTimeout(context.Background(), askTimeout)
 	defer cancel()
 	s.cleanup()
 
-	answer, data, err := s.converse(ctx, cfg, question, who)
+	answer, data, err := s.converse(ctx, cfg, convoID, question, who)
 	if err != nil {
 		s.log.Warn("assistant ask failed", "user", who.Username, "err", err)
 		s.asks.Store(id, &AskResult{Status: "error", Error: friendlyErr(err), created: time.Now(), owner: who.UserID})
@@ -205,12 +229,13 @@ func (s *Service) run(id, question string, who Caller, cfg Settings) {
 
 // converse runs the tool-calling loop: the model picks query_hosts + filters, we
 // run the RBAC-scoped query, feed results back, and the model narrates.
-func (s *Service) converse(ctx context.Context, cfg Settings, question string, who Caller) (string, answerData, error) {
+func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question string, who Caller) (string, answerData, error) {
 	client := newOllama(cfg.OllamaURL)
-	messages := []chatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: question},
-	}
+	prior := s.priorMessages(convoID, who.UserID)
+	messages := make([]chatMessage, 0, len(prior)+2)
+	messages = append(messages, chatMessage{Role: "system", Content: systemPrompt})
+	messages = append(messages, prior...)
+	messages = append(messages, chatMessage{Role: "user", Content: question})
 	var data answerData
 
 	for i := 0; i < maxToolIterations; i++ {
@@ -220,7 +245,9 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 		}
 		msg := resp.Message
 		if len(msg.ToolCalls) == 0 {
-			return strings.TrimSpace(msg.Content), data, nil
+			final := strings.TrimSpace(msg.Content)
+			s.remember(convoID, who.UserID, question, final)
+			return final, data, nil
 		}
 		messages = append(messages, msg)
 		for _, tc := range msg.ToolCalls {
@@ -276,6 +303,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 					data.table = tbl
 				}
 				result = payload
+			case "fleet_insights":
+				tbl, payload := s.runFleetInsights(ctx, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			default:
 				result = map[string]any{"error": "unknown tool"}
 			}
@@ -284,7 +317,48 @@ func (s *Service) converse(ctx context.Context, cfg Settings, question string, w
 		}
 	}
 	// Ran out of iterations; summarize from what we have.
-	return "I couldn't fully resolve that. Here is the data I found.", data, nil
+	final := "I couldn't fully resolve that. Here is the data I found."
+	s.remember(convoID, who.UserID, question, final)
+	return final, data, nil
+}
+
+// priorMessages returns the carried conversation history for convoID, but only if
+// it belongs to this user (a client-supplied id for someone else's conversation
+// is ignored, never leaked). Empty for a new or foreign conversation.
+func (s *Service) priorMessages(convoID string, owner uuid.UUID) []chatMessage {
+	v, ok := s.convos.Load(convoID)
+	if !ok {
+		return nil
+	}
+	c := v.(*conversation)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.owner != owner {
+		return nil
+	}
+	return append([]chatMessage(nil), c.history...)
+}
+
+// remember appends this exchange to the conversation memory, creating it on first
+// use and trimming to the most recent maxConversationTurns exchanges.
+func (s *Service) remember(convoID string, owner uuid.UUID, question, answer string) {
+	if convoID == "" || answer == "" {
+		return
+	}
+	v, _ := s.convos.LoadOrStore(convoID, &conversation{owner: owner})
+	c := v.(*conversation)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.owner != owner {
+		return // id collision across users: never merge histories
+	}
+	c.history = append(c.history,
+		chatMessage{Role: "user", Content: question},
+		chatMessage{Role: "assistant", Content: answer})
+	if max := maxConversationTurns * 2; len(c.history) > max {
+		c.history = append([]chatMessage(nil), c.history[len(c.history)-max:]...)
+	}
+	c.updated = time.Now()
 }
 
 func (s *Service) runQueryHosts(ctx context.Context, raw json.RawMessage, who Caller) []models.AssistantHostRow {
@@ -660,12 +734,50 @@ func (s *Service) runFileTransfers(ctx context.Context, raw json.RawMessage, who
 	return tbl, map[string]any{"count": len(rows), "transfers": rows}
 }
 
+// runFleetInsights returns the computed fleet-health issues for the caller's
+// accessible hosts (offline, low/filling disk with runway, high load/memory,
+// pending updates), grounding open-ended "what's wrong / when will X fill up"
+// answers in the same deterministic engine the dashboard uses.
+func (s *Service) runFleetInsights(ctx context.Context, who Caller) (*AssistantTable, any) {
+	if s.insights == nil {
+		return nil, map[string]any{"error": "insights are not available"}
+	}
+	items, err := s.insights.Compute(ctx, who.UserID, who.IsSuperAdmin)
+	if err != nil {
+		s.log.Warn("assistant fleet_insights", "err", err)
+		return nil, map[string]any{"error": "could not compute insights"}
+	}
+	if len(items) == 0 {
+		return nil, map[string]any{"count": 0, "insights": []any{}, "note": "no issues detected across the accessible fleet"}
+	}
+	tbl := &AssistantTable{
+		Title:   "Fleet insights",
+		Columns: []TableColumn{{Label: "Severity"}, {Label: "Host"}, {Label: "Issue"}, {Label: "Detail"}},
+	}
+	for _, it := range items {
+		tbl.Rows = append(tbl.Rows, []string{it.Severity, it.Hostname, it.Title, it.Detail})
+	}
+	return tbl, map[string]any{"count": len(items), "insights": items}
+}
+
 // cleanup drops results older than the ask timeout to bound memory.
 func (s *Service) cleanup() {
 	cutoff := time.Now().Add(-askTimeout)
 	s.asks.Range(func(k, v any) bool {
 		if r, ok := v.(*AskResult); ok && r.created.Before(cutoff) {
 			s.asks.Delete(k)
+		}
+		return true
+	})
+	convoCutoff := time.Now().Add(-conversationTTL)
+	s.convos.Range(func(k, v any) bool {
+		if c, ok := v.(*conversation); ok {
+			c.mu.Lock()
+			stale := c.updated.Before(convoCutoff)
+			c.mu.Unlock()
+			if stale {
+				s.convos.Delete(k)
+			}
 		}
 		return true
 	})

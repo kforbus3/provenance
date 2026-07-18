@@ -83,9 +83,20 @@ export async function assistantModels(url?: string): Promise<string[]> {
   return data.models ?? [];
 }
 
-export async function askAssistant(question: string): Promise<string> {
-  const { data } = await api.post<{ id: string }>("/api/v1/assistant/ask", { question });
-  return data.id;
+export interface AskHandle {
+  id: string;
+  conversationId: string;
+}
+
+// askAssistant starts a question. Pass the conversationId returned by a previous
+// call to continue that thread (follow-up questions see the earlier exchanges);
+// omit it to start a fresh conversation.
+export async function askAssistant(question: string, conversationId?: string): Promise<AskHandle> {
+  const { data } = await api.post<{ id: string; conversationId: string }>(
+    "/api/v1/assistant/ask",
+    { question, conversationId },
+  );
+  return { id: data.id, conversationId: data.conversationId };
 }
 
 export async function askResult(id: string): Promise<AskResult> {

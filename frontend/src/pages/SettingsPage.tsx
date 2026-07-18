@@ -22,6 +22,9 @@ import {
   getAuditForwarding, saveAuditForwarding, testAuditForwarding, type AuditForwardConfig,
 } from "../api/auditForwarding";
 import {
+  getDigest, saveDigest, previewDigest, sendDigest, type DigestPolicy,
+} from "../api/digest";
+import {
   getOidcConfig, saveOidcConfig, getLdapConfig, saveLdapConfig,
   type OidcConfig, type LdapConfig,
 } from "../api/sso";
@@ -107,6 +110,7 @@ export function SettingsPage() {
             <>
               <AssistantCard current={settings["assistant"]} />
               <NotificationsCard />
+              <DigestCard />
               <AuditForwardingCard />
             </>
           )}
@@ -851,6 +855,112 @@ function BackupCard() {
         </Box>
         See the break-glass / disaster-recovery guide for the full procedure.
       </Alert>
+    </Paper>
+  );
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// DigestCard configures the recurring fleet-health digest. The cadence lives here;
+// delivery is via the notification channels above — route the "Scheduled
+// fleet-health digest" event to email/webhook there for it to actually send.
+function DigestCard() {
+  const qc = useQueryClient();
+  const { data: loaded } = useQuery({ queryKey: ["digest"], queryFn: getDigest });
+  const [p, setP] = useState<DigestPolicy | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [sentMsg, setSentMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loaded && !p) setP(loaded);
+  }, [loaded, p]);
+
+  const save = useMutation({
+    mutationFn: () => saveDigest(p as DigestPolicy),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["digest"] }); },
+  });
+  const doPreview = useMutation({
+    mutationFn: previewDigest,
+    onSuccess: (r) => setPreview(r.body),
+  });
+  const doSend = useMutation({
+    mutationFn: sendDigest,
+    onSuccess: () => setSentMsg("Digest sent to the configured channels (if the event is routed)."),
+    onError: () => setSentMsg("Send failed."),
+  });
+
+  if (!p) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6">Fleet-health digest</Typography>
+        <Typography variant="body2" color="text.secondary">Loading…</Typography>
+      </Paper>
+    );
+  }
+
+  const set = (patch: Partial<DigestPolicy>) => { setP({ ...p, ...patch }); setSaved(false); setSentMsg(null); };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Fleet-health digest</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        A recurring summary of what needs attention across the fleet — offline hosts, low disk,
+        capacity runway, high load, pending security updates. It is delivered through the channels
+        above: route the <b>Scheduled fleet-health digest</b> event to email or webhook in
+        Notifications for it to send.
+      </Typography>
+
+      <FormControlLabel
+        control={<Switch checked={p.enabled} onChange={(e) => set({ enabled: e.target.checked })} />}
+        label="Send a scheduled digest"
+      />
+
+      <Stack direction="row" spacing={2} sx={{ mt: 1, flexWrap: "wrap" }}>
+        <TextField
+          select size="small" label="Frequency" value={p.frequency} sx={{ minWidth: 140 }}
+          disabled={!p.enabled} onChange={(e) => set({ frequency: e.target.value as DigestPolicy["frequency"] })}
+        >
+          <MenuItem value="daily">Daily</MenuItem>
+          <MenuItem value="weekly">Weekly</MenuItem>
+        </TextField>
+        {p.frequency === "weekly" && (
+          <TextField
+            select size="small" label="Day" value={p.weekday} sx={{ minWidth: 140 }}
+            disabled={!p.enabled} onChange={(e) => set({ weekday: Number(e.target.value) })}
+          >
+            {WEEKDAYS.map((d, i) => <MenuItem key={d} value={i}>{d}</MenuItem>)}
+          </TextField>
+        )}
+        <TextField
+          select size="small" label="Hour (server time)" value={p.hour} sx={{ minWidth: 160 }}
+          disabled={!p.enabled} onChange={(e) => set({ hour: Number(e.target.value) })}
+        >
+          {Array.from({ length: 24 }, (_, h) => (
+            <MenuItem key={h} value={h}>{String(h).padStart(2, "0")}:00</MenuItem>
+          ))}
+        </TextField>
+      </Stack>
+
+      <Stack direction="row" spacing={1} sx={{ mt: 2 }} alignItems="center" flexWrap="wrap">
+        <Button variant="contained" onClick={() => save.mutate()} disabled={save.isPending}>Save</Button>
+        <Button onClick={() => doPreview.mutate()} disabled={doPreview.isPending}>Preview</Button>
+        <Button onClick={() => doSend.mutate()} disabled={doSend.isPending}>Send now</Button>
+        {saved && <Alert severity="success" sx={{ py: 0 }}>Saved.</Alert>}
+        {sentMsg && <Typography variant="body2" color="text.secondary">{sentMsg}</Typography>}
+      </Stack>
+
+      {preview != null && (
+        <Box
+          component="pre"
+          sx={{
+            mt: 2, p: 1.5, bgcolor: "action.hover", borderRadius: 1, whiteSpace: "pre-wrap",
+            fontFamily: "monospace", fontSize: 13, overflowX: "auto",
+          }}
+        >
+          {preview || "No issues detected — all monitored hosts look healthy."}
+        </Box>
+      )}
     </Paper>
   );
 }
