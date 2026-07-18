@@ -69,6 +69,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/support"
 	"github.com/fleet-terminal/backend/internal/system"
 	"github.com/fleet-terminal/backend/internal/terminal"
+	"github.com/fleet-terminal/backend/internal/vault"
 	"github.com/fleet-terminal/backend/internal/vulnscan"
 	"github.com/fleet-terminal/backend/internal/ws"
 )
@@ -698,6 +699,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	serviceaccounts.Mount(r, deps)
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
+	vault.Mount(r, deps)
 	auditapi.Mount(r, deps)
 	reports.Mount(r, deps)
 	reportsched.Mount(r, s.Auth, s.reportSched)

@@ -33,6 +33,36 @@ type AssistantAction struct {
 	DecisionNote string     `json:"decisionNote,omitempty"`
 }
 
+// VaultSecret is a stored credential's metadata. The secret material itself lives
+// only in vault_secret_versions, encrypted; it is never carried on this struct.
+type VaultSecret struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Folder      string    `json:"folder"`
+	Type        string    `json:"type"` // password | ssh_key | api_key | generic
+	Username    string    `json:"username"`
+	Target      string    `json:"target"`
+	Description string    `json:"description"`
+	Version     int       `json:"version"`
+	CreatedBy   string    `json:"createdBy,omitempty"` // resolved username
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	// Access is the requesting caller's effective access (view|use|manage), set on
+	// list/get for the UI. Empty means access is via the Credential.Manage role.
+	Access string `json:"access,omitempty"`
+}
+
+// VaultGrant delegates access to one secret to a user or group.
+type VaultGrant struct {
+	ID          uuid.UUID `json:"id"`
+	SecretID    uuid.UUID `json:"secretId"`
+	SubjectKind string    `json:"subjectKind"` // user | group
+	SubjectID   uuid.UUID `json:"subjectId"`
+	SubjectName string    `json:"subjectName,omitempty"` // resolved for the UI
+	Access      string    `json:"access"`                // view | use | manage
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
 // User is an application account.
 type User struct {
 	ID            uuid.UUID  `json:"id"`

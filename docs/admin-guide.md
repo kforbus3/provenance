@@ -666,6 +666,30 @@ A token authenticates a service account to the **REST API**:
 > automation needs. Revoke a token immediately if it may be exposed; revocation is
 > instant.
 
+## 18b. Credential vault
+
+The **Credentials** page (a `Credential.View` or `Credential.Manage` holder sees it)
+stores static credentials — **passwords, SSH keys, API keys** — for systems that
+can't use Fleet's ephemeral certificates (network gear, appliances, databases,
+legacy hosts). Secret material is **encrypted at rest** with secretbox under a
+dedicated **`FLEET_VAULT_PASSPHRASE`** (required in production, must differ from the
+CA passphrase — see the Deployment guide).
+
+- **Store** a credential with a name, folder, type, username, and target; the secret
+  value is sealed server-side and never stored in plaintext.
+- **Reveal** returns the plaintext — gated by `Credential.View` (or `Credential.Manage`)
+  plus access to that secret, and **always written to the audit log**.
+- **Grants** delegate access to a specific credential to a user or group at
+  **view** (reveal), **use** (inject — see below), or **manage** level, without
+  giving them the vault-wide `Credential.Manage` permission. Administrators hold
+  `Credential.Manage` (all credentials); Operators get view/use/rotate; **Auditors
+  are deliberately excluded from reveal**.
+- **Versioning:** editing a credential's value stores a new version (rotation
+  history) while keeping the metadata.
+
+> Injecting a vaulted credential into an SSH session — so a user connects **without
+> ever seeing the password** — is the next phase of this feature.
+
 ## 19. Live session shadowing
 
 **Session shadowing** is read-only, real-time viewing of an **active** terminal

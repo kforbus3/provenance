@@ -19,6 +19,7 @@ import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
+import KeyIcon from "@mui/icons-material/Key";
 import SettingsIcon from "@mui/icons-material/Settings";
 import ShieldIcon from "@mui/icons-material/Shield";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
@@ -61,6 +62,7 @@ const NAV = [
   { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
   { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },
   { to: "/service-accounts", label: "Service Accounts", icon: <ApiIcon />, perm: "ServiceAccount.Manage" },
+  { to: "/vault", label: "Credentials", icon: <KeyIcon />, perm: "Credential.View" },
   { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
   { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },

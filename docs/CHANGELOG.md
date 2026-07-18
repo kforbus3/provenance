@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.13.0 — Credential vault
+
+Fleet is now a secrets manager, not just an SSH-certificate broker.
+
+- **Credential vault.** A new **Credentials** page stores static credentials —
+  **passwords, SSH keys, API keys** — for systems that can't use Fleet's ephemeral
+  certificates (network gear, appliances, databases, legacy hosts). Secret material
+  is **encrypted at rest** with secretbox under a dedicated **`FLEET_VAULT_PASSPHRASE`**
+  (required in production and enforced to differ from the CA passphrase; falls back
+  to it in development).
+- **Audited reveal.** Revealing a credential's plaintext requires the `Credential.View`
+  permission (or `Credential.Manage`) plus access to that specific secret, and is
+  **always written to the audit log**. Secret material never appears in logs.
+- **Per-secret grants.** Delegate access to a credential to a user or group at
+  **view / use / manage** level without granting vault-wide management. Administrators
+  hold `Credential.Manage`; Operators get view/use/rotate; **Auditors are excluded
+  from reveal**.
+- **Versioning.** Editing a credential's value stores a new version, keeping rotation
+  history.
+
+*Deploy:* migration `0030` (vault tables + `Credential.*` permissions) applies
+automatically. To use the vault in production, set `FLEET_VAULT_PASSPHRASE` to a
+strong value distinct from `FLEET_CA_PASSPHRASE`.
+
 ## v0.12.1 — Fix: ZFS ARC memory accounting
 
 - **Memory usage on ZFS-on-Linux hosts is no longer overstated.** The ZFS ARC cache

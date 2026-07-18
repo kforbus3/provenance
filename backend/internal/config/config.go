@@ -168,6 +168,11 @@ type Config struct {
 	BackupDir        string
 	BackupPassphrase string
 
+	// VaultPassphrase encrypts stored credentials (the secrets vault) at rest with
+	// secretbox. Must be set and distinct from the CA passphrase in production;
+	// falls back to the CA passphrase in development. Resolve it via VaultKey().
+	VaultPassphrase string
+
 	// SFTP upload size cap in bytes (0 = unlimited).
 	MaxUploadBytes int64
 
@@ -235,6 +240,7 @@ func Load() (*Config, error) {
 		CARotateAfter:          envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
 		BackupDir:              env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
 		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),
+		VaultPassphrase:        env("FLEET_VAULT_PASSPHRASE", ""),
 		MaxUploadBytes:         envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
 		LogLevel:               env("FLEET_LOG_LEVEL", "info"),
 		LogFormat:              env("FLEET_LOG_FORMAT", "json"),
@@ -342,6 +348,24 @@ func randomSecret(n int) []byte {
 
 // IsProduction reports whether the app runs in production mode.
 func (c *Config) IsProduction() bool { return c.Environment == "production" }
+
+// VaultKey returns the secrets-vault encryption passphrase. In production it must
+// be set and distinct from the CA passphrase (a single leaked key must not unlock
+// both the CA and the credential vault); in development it falls back to the CA
+// passphrase so the local stack works without extra configuration. Callers seal/
+// open vault secrets with the returned key and surface the error to the operator.
+func (c *Config) VaultKey() ([]byte, error) {
+	if c.VaultPassphrase != "" {
+		if c.IsProduction() && c.VaultPassphrase == string(c.CAKeyPassphrase) {
+			return nil, fmt.Errorf("FLEET_VAULT_PASSPHRASE must differ from FLEET_CA_PASSPHRASE")
+		}
+		return []byte(c.VaultPassphrase), nil
+	}
+	if c.IsProduction() {
+		return nil, fmt.Errorf("FLEET_VAULT_PASSPHRASE is required in production to use the credential vault")
+	}
+	return c.CAKeyPassphrase, nil
+}
 
 // hostOnly extracts the bare host from a URL (no scheme, no port), used as the
 // default WebAuthn relying-party id.

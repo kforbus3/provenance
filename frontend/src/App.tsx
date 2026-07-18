@@ -38,6 +38,7 @@ const AccessReviewsPage = lazy(() => named(import("./pages/AccessReviewsPage"), 
 const PlaybooksPage = lazy(() => named(import("./pages/PlaybooksPage"), "PlaybooksPage"));
 const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "SchedulesPage"));
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
+const VaultPage = lazy(() => named(import("./pages/VaultPage"), "VaultPage"));
 
 function PageFallback() {
   return (
@@ -93,6 +94,7 @@ export function App() {
               <Route path="roles" element={<ProtectedRoute permission="Role.Edit"><RolesPage /></ProtectedRoute>} />
               <Route path="groups" element={<ProtectedRoute permission="Group.Edit"><GroupsPage /></ProtectedRoute>} />
               <Route path="service-accounts" element={<ProtectedRoute permission="ServiceAccount.Manage"><ServiceAccountsPage /></ProtectedRoute>} />
+              <Route path="vault" element={<ProtectedRoute permission="Credential.View"><VaultPage /></ProtectedRoute>} />
               <Route path="enrollment" element={<ProtectedRoute permission="Host.Enroll"><EnrollmentPage /></ProtectedRoute>} />
               <Route path="certificates" element={<ProtectedRoute permission="Certificate.Manage"><CertificatesPage /></ProtectedRoute>} />
               <Route path="security" element={<SecurityPage />} />
