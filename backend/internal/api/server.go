@@ -27,6 +27,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/accessreview"
 	"github.com/fleet-terminal/backend/internal/admin"
+	"github.com/fleet-terminal/backend/internal/aiaction"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/approvals"
 	"github.com/fleet-terminal/backend/internal/assistant"
@@ -92,6 +93,7 @@ type Server struct {
 
 	scanSvc     *scan.Service
 	vulnScan    *vulnscan.Service
+	actionReg   *aiaction.Registry
 	playbookSvc *playbook.Service
 	scheduler   *scheduler.Engine
 	backups     *backup.Service
@@ -133,6 +135,9 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// scheduler, so construct them once here.
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
+	// Assistant action registry (propose→confirm→execute); wired with the runner
+	// hooks it needs so this package doesn't reach into the assistant.
+	s.actionReg = aiaction.New(st, log, s.vulnScan.Run)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)
@@ -476,6 +481,9 @@ func (s *Server) reaperLoop(ctx context.Context) {
 			s.Jobs.Record("approval-expiry", nil)
 			s.Auth.ReapStaleSessions(ctx)
 			s.Jobs.Record("session-reaper", nil)
+			if _, err := s.actionReg.Expire(ctx); err == nil {
+				s.Jobs.Record("assistant-action-expiry", nil)
+			}
 		}
 	}
 }
@@ -654,8 +662,10 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).
 	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))
 
-	// AI assistant (read-only NL queries over fleet data via local Ollama).
-	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.insights, s.Cfg.MetricHistoryRetention))
+	// AI assistant: read-only NL queries over fleet data (local Ollama) plus guarded
+	// actions the user must confirm. The confirm/execute surface is mounted separately.
+	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.insights, s.Cfg.MetricHistoryRetention, s.actionReg))
+	aiaction.Mount(r, deps, s.actionReg)
 
 	insights.Mount(r, deps, s.insights)
 

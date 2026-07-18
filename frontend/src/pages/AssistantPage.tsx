@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
-  Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Table, TableBody,
+  Alert, Box, Button, Chip, CircularProgress, Link, Paper, Stack, Table, TableBody,
   TableCell, TableHead, TableRow, TextField, Typography, useTheme,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
-import { useQuery } from "@tanstack/react-query";
+import MenuBookIcon from "@mui/icons-material/MenuBook";
+import BoltIcon from "@mui/icons-material/Bolt";
+import { Link as RouterLink } from "react-router-dom";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  assistantStatus, askAssistant, askResult,
-  type AskResult, type AssistantHost, type AssistantSession, type AssistantTable,
-  type MetricHistory, type MetricHistoryPoint,
+  assistantStatus, askAssistant, askResult, executeAssistantAction, cancelAssistantAction,
+  type AskResult, type AssistantAction, type AssistantHost, type AssistantSession, type AssistantTable,
+  type DocSource, type MetricHistory, type MetricHistoryPoint,
 } from "../api/assistant";
 import type { Host } from "../api/hosts";
 
@@ -168,13 +171,89 @@ function TurnView({ turn }: { turn: Turn }) {
       {r?.status === "done" && (
         <Box sx={{ pl: 1 }}>
           {r.answer && <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", mb: 1 }}>{r.answer}</Typography>}
+          {r.actions && r.actions.map((a) => <ActionCard key={a.id} action={a} />)}
           {r.hosts && r.hosts.length > 0 && <HostResults hosts={r.hosts} />}
           {r.sessions && r.sessions.length > 0 && <SessionResults sessions={r.sessions} />}
           {r.host && <HostDetailPanel host={r.host} />}
           {r.history && r.history.points.length > 0 && <MetricHistoryPanel history={r.history} />}
           {r.table && r.table.rows.length > 0 && <TablePanel table={r.table} />}
+          {r.sources && r.sources.length > 0 && <SourcesPanel sources={r.sources} />}
         </Box>
       )}
+    </Box>
+  );
+}
+
+// ActionCard renders a single proposed action with Confirm / Dismiss. The
+// assistant only PROPOSES; the action runs solely when the user confirms here,
+// and the backend re-authorizes at execution.
+function ActionCard({ action }: { action: AssistantAction }) {
+  const [state, setState] = useState<AssistantAction>(action);
+  const [err, setErr] = useState<string | null>(null);
+  const errMsg = (e: unknown) =>
+    ((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Something went wrong.";
+
+  const confirm = useMutation({
+    mutationFn: () => executeAssistantAction(action.id),
+    onSuccess: (a) => { setErr(null); setState(a); },
+    onError: (e) => setErr(errMsg(e)),
+  });
+  const dismiss = useMutation({
+    mutationFn: () => cancelAssistantAction(action.id),
+    onSuccess: () => { setErr(null); setState({ ...state, status: "cancelled" }); },
+    onError: (e) => setErr(errMsg(e)),
+  });
+
+  const pending = state.status === "proposed";
+  const busy = confirm.isPending || dismiss.isPending;
+  const statusColor = state.status === "executed" ? "success" : state.status === "failed" ? "error" : "default";
+
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5, my: 1, borderColor: pending ? "warning.main" : "divider" }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+        <BoltIcon fontSize="small" color={pending ? "warning" : "disabled"} />
+        <Typography variant="subtitle2">Proposed action</Typography>
+        <Chip size="small" variant="outlined" label={state.risk} />
+      </Stack>
+      <Typography variant="body2" sx={{ mb: 1 }}>{state.preview}</Typography>
+      {err && <Alert severity="error" sx={{ mb: 1 }}>{err}</Alert>}
+      {pending ? (
+        <Stack direction="row" spacing={1}>
+          <Button size="small" variant="contained" disabled={busy} onClick={() => confirm.mutate()}>
+            {confirm.isPending ? "Running…" : "Confirm"}
+          </Button>
+          <Button size="small" color="inherit" disabled={busy} onClick={() => dismiss.mutate()}>Dismiss</Button>
+        </Stack>
+      ) : (
+        <Chip size="small" color={statusColor}
+          label={
+            state.status === "executed" ? (state.outcome || "Done")
+              : state.status === "failed" ? (state.outcome || "Failed")
+                : state.status === "cancelled" ? "Dismissed" : state.status
+          } />
+      )}
+    </Paper>
+  );
+}
+
+// SourcesPanel lists the documentation sections the assistant cited, each linking
+// into the in-app help at the exact heading.
+function SourcesPanel({ sources }: { sources: DocSource[] }) {
+  return (
+    <Box sx={{ mt: 1.5 }}>
+      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 0.5 }}>
+        <MenuBookIcon fontSize="small" sx={{ opacity: 0.6 }} />
+        <Typography variant="caption" color="text.secondary">Sources</Typography>
+      </Stack>
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        {sources.map((s, i) => (
+          <Link key={`${s.slug}-${s.anchor}-${i}`} component={RouterLink}
+            to={`/help/${s.slug}${s.anchor ? `#${s.anchor}` : ""}`} underline="hover">
+            <Chip size="small" variant="outlined" clickable
+              label={`${s.docTitle}${s.heading && s.heading !== s.docTitle ? ` → ${s.heading}` : ""}`} />
+          </Link>
+        ))}
+      </Stack>
     </Box>
   );
 }

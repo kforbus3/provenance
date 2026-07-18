@@ -7,6 +7,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fleet-terminal/backend/internal/aiaction"
 	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -34,10 +36,11 @@ const (
 type Service struct {
 	store           *store.Store
 	log             *slog.Logger
-	insights        *insights.Service // grounds the fleet_insights tool (what's-wrong / capacity)
-	metricRetention time.Duration     // caps the host_metric_history window (0 = history disabled)
-	asks            sync.Map          // id -> *AskResult (pointer replaced atomically on completion)
-	convos          sync.Map          // conversationID -> *conversation (multi-turn memory)
+	insights        *insights.Service  // grounds the fleet_insights tool (what's-wrong / capacity)
+	metricRetention time.Duration      // caps the host_metric_history window (0 = history disabled)
+	actions         *aiaction.Registry // proposes guarded actions (propose_* tools); nil disables them
+	asks            sync.Map           // id -> *AskResult (pointer replaced atomically on completion)
+	convos          sync.Map           // conversationID -> *conversation (multi-turn memory)
 }
 
 // conversation is the trimmed running memory for one Ask thread: alternating
@@ -50,8 +53,8 @@ type conversation struct {
 	updated time.Time
 }
 
-func New(st *store.Store, log *slog.Logger, ins *insights.Service, metricRetention time.Duration) *Service {
-	return &Service{store: st, log: log, insights: ins, metricRetention: metricRetention}
+func New(st *store.Store, log *slog.Logger, ins *insights.Service, metricRetention time.Duration, actions *aiaction.Registry) *Service {
+	return &Service{store: st, log: log, insights: ins, metricRetention: metricRetention, actions: actions}
 }
 
 // Settings is the persisted assistant configuration.
@@ -145,6 +148,8 @@ type AskResult struct {
 	Host     *models.Host              `json:"host,omitempty"`
 	History  *MetricHistory            `json:"history,omitempty"`
 	Table    *AssistantTable           `json:"table,omitempty"`
+	Sources  []DocSource               `json:"sources,omitempty"`
+	Actions  []models.AssistantAction  `json:"actions,omitempty"`
 	Error    string                    `json:"error,omitempty"`
 	created  time.Time
 	owner    uuid.UUID // the user who asked; only they may read the result
@@ -152,11 +157,13 @@ type AskResult struct {
 
 // answerData bundles structured tool output collected during a conversation.
 type answerData struct {
-	hosts    []models.AssistantHostRow
-	sessions []SessionRow
-	host     *models.Host
-	history  *MetricHistory
-	table    *AssistantTable
+	hosts           []models.AssistantHostRow
+	sessions        []SessionRow
+	host            *models.Host
+	history         *MetricHistory
+	table           *AssistantTable
+	docSources      []DocSource
+	proposedActions []models.AssistantAction
 }
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
@@ -170,6 +177,18 @@ type Caller struct {
 	CanViewAudit     bool // Audit.View — gates the audit_log tool
 	CanViewSchedules bool // Schedule.Manage — gates the list_schedules tool
 	CanViewTransfers bool // File.Transfer — gates the recent_file_transfers tool
+	CanAct           bool // Assistant.Act — gates the propose_* action tools
+	// Perms is a snapshot of the caller's permission set, used to authorize a
+	// proposed action at propose time (execution re-checks the live principal).
+	Perms map[string]bool
+}
+
+// Can reports whether the caller holds a permission, mirroring auth.Principal.Has.
+func (c Caller) Can(perm string) bool {
+	if c.IsSuperAdmin || c.Perms["Admin.All"] {
+		return true
+	}
+	return c.Perms[perm]
 }
 
 // Ask starts answering a question in the background and returns a poll id plus
@@ -222,7 +241,7 @@ func (s *Service) run(id, convoID, question string, who Caller, cfg Settings) {
 	s.asks.Store(id, &AskResult{
 		Status: "done", Answer: answer,
 		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, History: data.history,
-		Table:   data.table,
+		Table: data.table, Sources: data.docSources, Actions: data.proposedActions,
 		created: time.Now(), owner: who.UserID,
 	})
 }
@@ -238,8 +257,15 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	messages = append(messages, chatMessage{Role: "user", Content: question})
 	var data answerData
 
+	// Offer the action (propose_*) tools only to callers permitted to act and only
+	// when the registry is wired; everyone else sees the read-only tool surface.
+	toolset := tools
+	if who.CanAct && s.actions != nil {
+		toolset = append(append(make([]toolDef, 0, len(tools)+len(actionTools)), tools...), actionTools...)
+	}
+
 	for i := 0; i < maxToolIterations; i++ {
-		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: tools})
+		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset})
 		if err != nil {
 			return "", data, err
 		}
@@ -309,8 +335,22 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					data.table = tbl
 				}
 				result = payload
+			case "search_docs":
+				payload, sources := s.runSearchDocs(tc.Function.Arguments)
+				if len(sources) > 0 {
+					data.docSources = mergeSources(data.docSources, sources)
+				}
+				result = payload
 			default:
-				result = map[string]any{"error": "unknown tool"}
+				if kind, ok := actionToolKinds[tc.Function.Name]; ok {
+					payload, action := s.proposeAction(ctx, who, kind, tc.Function.Arguments)
+					if action != nil {
+						data.proposedActions = append(data.proposedActions, *action)
+					}
+					result = payload
+				} else {
+					result = map[string]any{"error": "unknown tool"}
+				}
 			}
 			payload, _ := json.Marshal(result)
 			messages = append(messages, chatMessage{Role: "tool", Content: string(payload)})
@@ -758,6 +798,77 @@ func (s *Service) runFleetInsights(ctx context.Context, who Caller) (*AssistantT
 		tbl.Rows = append(tbl.Rows, []string{it.Severity, it.Hostname, it.Title, it.Detail})
 	}
 	return tbl, map[string]any{"count": len(items), "insights": items}
+}
+
+type searchDocsArgs struct {
+	Query string `json:"query"`
+}
+
+// runSearchDocs retrieves the documentation sections most relevant to the query
+// (BM25 over the embedded curated docs) and returns them to the model, plus the
+// citations for the UI. Read-only; available to anyone with Assistant.Use.
+func (s *Service) runSearchDocs(raw json.RawMessage) (any, []DocSource) {
+	var a searchDocsArgs
+	_ = json.Unmarshal(raw, &a)
+	if strings.TrimSpace(a.Query) == "" {
+		return map[string]any{"error": "query is required"}, nil
+	}
+	secs := searchDocs(a.Query, 4)
+	if len(secs) == 0 {
+		return map[string]any{"results": []any{}, "note": "no matching documentation section found"}, nil
+	}
+	results := make([]map[string]any, 0, len(secs))
+	sources := make([]DocSource, 0, len(secs))
+	for _, sec := range secs {
+		results = append(results, map[string]any{
+			"doc":     sec.DocTitle,
+			"heading": sec.Heading,
+			"content": clipText(sec.Text, 900),
+		})
+		sources = append(sources, DocSource{DocTitle: sec.DocTitle, Heading: sec.Heading, Slug: sec.DocSlug, Anchor: sec.Anchor})
+	}
+	return map[string]any{"results": results}, sources
+}
+
+// proposeAction stages a guarded action from a propose_* tool call. It never
+// executes anything — it validates + authorizes + persists a pending proposal the
+// user must confirm. Returns the tool result for the model and the proposal (if
+// any) to surface in the UI.
+func (s *Service) proposeAction(ctx context.Context, who Caller, kind string, raw json.RawMessage) (any, *models.AssistantAction) {
+	if s.actions == nil {
+		return map[string]any{"error": "actions are not enabled"}, nil
+	}
+	actor := aiaction.Actor{UserID: who.UserID, Username: who.Username, IsSuper: who.IsSuperAdmin, Can: who.Can}
+	action, err := s.actions.Propose(ctx, actor, kind, raw)
+	if err != nil {
+		var pe *aiaction.PermError
+		if errors.As(err, &pe) {
+			return map[string]any{"error": "the user lacks permission for this action (" + pe.Permission + ")"}, nil
+		}
+		return map[string]any{"error": err.Error()}, nil
+	}
+	return map[string]any{
+		"status":   "proposed",
+		"note":     "Prepared this action but did NOT run it — the user must confirm it first. Tell the user plainly what you are proposing; never claim it is already done.",
+		"preview":  action.Preview,
+		"actionId": action.ID.String(),
+	}, action
+}
+
+// mergeSources appends new citations, de-duplicating by slug+anchor so repeated
+// search_docs calls in one turn don't list the same section twice.
+func mergeSources(existing, add []DocSource) []DocSource {
+	seen := make(map[string]bool, len(existing))
+	for _, s := range existing {
+		seen[s.Slug+"#"+s.Anchor] = true
+	}
+	for _, s := range add {
+		if key := s.Slug + "#" + s.Anchor; !seen[key] {
+			seen[key] = true
+			existing = append(existing, s)
+		}
+	}
+	return existing
 }
 
 // cleanup drops results older than the ask timeout to bound memory.

@@ -59,6 +59,28 @@ export interface AssistantTable {
   rows: string[][];
 }
 
+// DocSource is a documentation citation the assistant used to ground an answer,
+// linking back into the in-app help at the exact section.
+export interface DocSource {
+  docTitle: string;
+  heading: string;
+  slug: string;
+  anchor: string;
+}
+
+// AssistantAction is one proposed action in the propose→confirm→execute flow.
+export interface AssistantAction {
+  id: string;
+  kind: string;
+  preview: string;
+  risk: string;   // safe | guarded | destructive
+  permission: string;
+  status: string; // proposed | executed | failed | cancelled | expired
+  outcome?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface AskResult {
   status: string; // pending|done|error
   answer?: string;
@@ -67,7 +89,20 @@ export interface AskResult {
   host?: Host;
   history?: MetricHistory;
   table?: AssistantTable;
+  sources?: DocSource[];
+  actions?: AssistantAction[];
   error?: string;
+}
+
+// executeAssistantAction confirms and runs a proposed action; the returned record
+// carries the terminal status (executed/failed) and outcome.
+export async function executeAssistantAction(id: string): Promise<AssistantAction> {
+  const { data } = await api.post<AssistantAction>(`/api/v1/assistant/actions/${id}/execute`);
+  return data;
+}
+
+export async function cancelAssistantAction(id: string): Promise<void> {
+  await api.post(`/api/v1/assistant/actions/${id}/cancel`);
 }
 
 export async function assistantStatus(): Promise<AssistantStatus> {

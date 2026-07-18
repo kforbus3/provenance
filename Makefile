@@ -177,3 +177,8 @@ load: ## Run the k6 load smoke test against the running stack (override USER/PAS
 	  -e USER=$${FLEET_LOAD_USER:-admin} \
 	  -e PASS=$${FLEET_LOAD_PASS:-Sup3r-Secret-Pass!} \
 	  grafana/k6 run /load/k6-smoke.js
+
+.PHONY: assistant-docs
+assistant-docs: ## Regenerate the assistant's embedded documentation index from docs/
+	docker run --rm -v $(PWD):/repo -w /repo/backend/internal/assistant golang:1.23-alpine \
+	  go run gendocs.go -docs /repo/docs -out docs_generated.go

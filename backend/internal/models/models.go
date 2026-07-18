@@ -4,10 +4,29 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// AssistantAction is one proposal in the assistant's propose→confirm→execute
+// lifecycle. The assistant stages it; the user confirms; execution re-authorizes
+// against the live principal. Also serves as the history of assistant actions.
+type AssistantAction struct {
+	ID         uuid.UUID       `json:"id"`
+	UserID     uuid.UUID       `json:"userId"`
+	Kind       string          `json:"kind"`
+	Params     json.RawMessage `json:"params"`
+	Preview    string          `json:"preview"`
+	Risk       string          `json:"risk"` // safe | guarded | destructive
+	Permission string          `json:"permission"`
+	Status     string          `json:"status"` // proposed | executed | failed | cancelled | expired
+	Outcome    string          `json:"outcome,omitempty"`
+	CreatedAt  time.Time       `json:"createdAt"`
+	ExpiresAt  time.Time       `json:"expiresAt"`
+	ExecutedAt *time.Time      `json:"executedAt,omitempty"`
+}
 
 // User is an application account.
 type User struct {

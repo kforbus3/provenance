@@ -5,6 +5,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.10.0 — Actionable AI assistant: docs answers + confirmed actions
+
+The "Ask Fleet" assistant gains two capabilities, built so it can never act without
+explicit human confirmation.
+
+- **Answers grounded in the documentation.** Ask how-to and conceptual questions —
+  *"how do I configure SAML?"*, *"how do access reviews work?"* — and the assistant
+  searches the product documentation and answers with clickable **Sources** that link
+  into the in-app help. Retrieval is a lightweight, dependency-free keyword (BM25)
+  index over the docs embedded in the backend; no external service or model is added.
+- **Proposed actions you confirm.** With the new `Assistant.Act` permission, the
+  assistant can *propose* a small set of safe actions — currently **run a vulnerability
+  scan** on a host or group, and **add/remove tags** on a host. The assistant never
+  runs anything itself: it stages a proposal, you see exactly what will happen, and it
+  executes only when you click **Confirm**. Execution **re-checks your permission and
+  host access at that moment**, so the assistant can never do anything you couldn't do
+  yourself or didn't approve. Every action is audited, and the proposal history is
+  retained.
+
+Security model: the model proposes, a human authorizes, and the backend executes and
+re-verifies. Untrusted text (host data, documentation) is treated as information to
+report, never as instructions to act on. Actions are gated behind `Assistant.Act`
+(granted to Super Administrator, Administrator, and Operator) on top of the per-action
+permission.
+
+*Deploy:* migration `0028` (assistant action proposals + the `Assistant.Act`
+permission) applies automatically. No configuration change is required beyond enabling
+the assistant under Settings → AI assistant as before.
+
 ## v0.9.1 — Fixes: scans on symlinked hosts, session-expiry UX
 
 - **Vulnerability scans no longer fail on hosts that symlink `/etc/os-release`.** The

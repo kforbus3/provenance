@@ -172,8 +172,9 @@ If you have the `Assistant.Use` permission, an **Ask** item appears in the
 sidebar. It lets you ask questions about your fleet in plain language and get a
 written answer back.
 
-**Ask** is **read-only** — it answers questions, it never changes anything. You
-can ask about:
+**Ask** answers questions from read-only data, and — only when you explicitly ask
+and then confirm — can propose a small set of actions (see "Letting Ask take
+action" below). You can ask about:
 
 - **Hosts and their specs/status** — OS and kernel, CPU and memory, uptime, disk,
   memory, and load (e.g. *"which hosts have less than 20% disk free"*).
@@ -189,6 +190,9 @@ can ask about:
   disk?"* and Ask draws on **fleet insights**: offline hosts, low or critically
   low disk, high memory or load, pending security updates, and a **disk-runway
   projection** (roughly how many days until a disk fills up).
+- **How the product works** — ask *"how do I configure SAML?"* or *"how do access
+  reviews work?"* and Ask searches the product documentation and answers with
+  **Sources** you can click straight into the in-app help.
 
 **It remembers the conversation.** Ask a question, then follow up naturally —
 *"and db-02?"* or *"what about last week?"* — and Fleet keeps the earlier context,
@@ -199,6 +203,22 @@ start fresh.
 Answers are always scoped to what you're allowed to see, and every question is
 recorded for audit. Treat an answer as a helpful starting point — verify it
 before you act on it.
+
+### Letting Ask take action
+
+If you have the `Assistant.Act` permission, you can ask Ask to *do* a few safe
+things — for example *"scan web-01 for vulnerabilities"* or *"tag db-02 as
+legacy"*. Ask never acts on its own:
+
+1. It **proposes** the action as a card showing exactly what will happen.
+2. **Nothing runs until you click Confirm** (or **Dismiss** to cancel).
+3. When you confirm, Fleet re-checks your permission and runs it, then shows the
+   result. Every action is recorded in the audit log.
+
+You can only propose actions you already have permission for (e.g. scanning needs
+`Host.Scan`, tagging needs `Host.Edit`), and the check is re-applied at the moment
+you confirm. This keeps the assistant from ever doing anything you couldn't do
+yourself, or anything you didn't explicitly approve.
 
 ---
 

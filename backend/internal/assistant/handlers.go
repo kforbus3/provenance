@@ -71,6 +71,8 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		CanViewAudit:     p.Has("Audit.View"),
 		CanViewSchedules: p.Has("Schedule.Manage"),
 		CanViewTransfers: p.Has("File.Transfer"),
+		CanAct:           p.Has("Assistant.Act"),
+		Perms:            p.Permissions,
 	})
 	if !ok {
 		httpx.WriteError(w, http.StatusServiceUnavailable, "assistant is not enabled")
