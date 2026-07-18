@@ -8,6 +8,14 @@ COMPOSE        := docker compose --env-file .env -f deploy/compose/docker-compos
 COMPOSE_FABRIC := $(COMPOSE) -f deploy/compose/docker-compose.testfabric.yml
 COMPOSE_SINGLE := $(COMPOSE) -f deploy/compose/docker-compose.jumphost.yml
 
+# Version stamped into the binary (compose passes it as the VERSION build arg).
+# Derived from the nearest git tag so a tagged deploy shows e.g. "v0.6.1" instead
+# of "dev"; falls back to a short SHA, then "dev" outside a git checkout. Override
+# by setting FLEET_VERSION in the environment. Exported so the compose subprocess
+# sees it during --build.
+FLEET_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+export FLEET_VERSION
+
 # State that the database backup does NOT capture: the jump host's WireGuard
 # keypair/peers + SSH host key, and on-disk session recordings & scan reports.
 # PROJECT matches `name:` in docker-compose.yml (the Docker volume-name prefix).
