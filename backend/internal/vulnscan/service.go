@@ -189,18 +189,57 @@ func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.
 		return nil, err
 	}
 
+	// Look up the missing KBs in the MSRC mapping (if loaded) for authoritative CVE
+	// IDs, severity, and CVSS. Falls back to WUA metadata / a KB-only finding when a
+	// KB isn't in the mapping (e.g. MSRC data not imported yet).
+	kbSet := map[string]bool{}
+	for _, u := range updates {
+		for _, kb := range splitKBNumbers(u.KB) {
+			kbSet[kb] = true
+		}
+	}
+	kbs := make([]string, 0, len(kbSet))
+	for kb := range kbSet {
+		kbs = append(kbs, kb)
+	}
+	msrcMap, err := s.store.MSRCByKBs(ctx, kbs)
+	if err != nil {
+		s.log.Warn("vuln scan: msrc lookup", "host", h.Hostname, "err", err)
+		msrcMap = map[string][]models.MSRCEntry{}
+	}
+
 	var findings []models.VulnFinding
 	seen := map[string]bool{}
 	for _, u := range updates {
-		// Only vulnerability-relevant updates: security category, an MSRC severity,
-		// or a CVE list. Skip ordinary feature/driver updates.
-		if !u.Security && u.Severity == "" && len(u.CVEs) == 0 {
+		entries := msrcEntriesFor(u, msrcMap)
+		// Only vulnerability-relevant updates: an MSRC mapping, security category, an
+		// MSRC severity, or a CVE list. Skip ordinary feature/driver updates.
+		if len(entries) == 0 && !u.Security && u.Severity == "" && len(u.CVEs) == 0 {
 			continue
 		}
-		sev := mapMsrcSeverity(u.Severity)
+
+		// Preferred path: MSRC gives real CVE + severity + CVSS per KB.
+		if len(entries) > 0 {
+			for _, e := range entries {
+				k := e.CVE + "|" + u.KB
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+				findings = append(findings, models.VulnFinding{
+					CVE: e.CVE, Package: u.KB, InstalledVersion: "not installed", FixedVersion: u.KB,
+					Severity: mapMsrcSeverity(e.Severity), CVSSScore: e.CVSS, CVSSVector: e.Vector,
+					DataSource:  "https://msrc.microsoft.com/update-guide/vulnerability/" + e.CVE,
+					Description: e.Title,
+				})
+			}
+			continue
+		}
+
+		// Fallback: WUA metadata (often sparse) or a KB-only finding.
 		base := models.VulnFinding{
 			Package: u.KB, InstalledVersion: "not installed", FixedVersion: u.KB,
-			Severity: sev, Description: u.Title,
+			Severity: mapMsrcSeverity(u.Severity), Description: u.Title,
 		}
 		if len(u.CVEs) == 0 {
 			id := u.KB
@@ -213,7 +252,7 @@ func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.
 			seen[id] = true
 			f := base
 			f.CVE = id
-			f.DataSource = kbURL(u.KB) // link the KB to its support page (CVE column links dataSource)
+			f.DataSource = kbURL(u.KB)
 			findings = append(findings, f)
 			continue
 		}
@@ -230,6 +269,34 @@ func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.
 		}
 	}
 	return findings, nil
+}
+
+// splitKBNumbers turns a WUA KB field ("KB5099536" or "KB5099536;KB123") into its
+// bare digit KB numbers, matching how MSRC keys its remediations.
+func splitKBNumbers(kb string) []string {
+	var out []string
+	for _, part := range strings.Split(kb, ";") {
+		p := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(part)), "KB")
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// msrcEntriesFor collects the distinct MSRC CVE entries for an update's KB(s).
+func msrcEntriesFor(u winrm.UpdateInfo, m map[string][]models.MSRCEntry) []models.MSRCEntry {
+	var out []models.MSRCEntry
+	seen := map[string]bool{}
+	for _, kb := range splitKBNumbers(u.KB) {
+		for _, e := range m[kb] {
+			if !seen[e.CVE] {
+				seen[e.CVE] = true
+				out = append(out, e)
+			}
+		}
+	}
+	return out
 }
 
 // kbURL builds the Microsoft support URL for a KB (the first, if several), so the

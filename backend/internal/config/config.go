@@ -156,6 +156,8 @@ type Config struct {
 	// Empty disables the Ansible playbook feature's runner-backed operations.
 	AnsibleRunnerURL string
 	GrypeScannerURL  string // vulnerability-scanner sidecar
+	MSRCAPIURL       string // Microsoft Security Update Guide API (Windows CVE mapping)
+	MSRCMonths       int    // how many recent MSRC releases an online update fetches
 
 	// CARotateAfter is how old the active SSH CA key may get before Fleet sends a
 	// rotation-reminder notification (the CA never auto-expires; rotation is
@@ -253,6 +255,8 @@ func Load() (*Config, error) {
 		ScapContentVersion:     env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:       env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
 		GrypeScannerURL:        env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
+		MSRCAPIURL:             env("FLEET_MSRC_API_URL", "https://api.msrc.microsoft.com"),
+		MSRCMonths:             envInt("FLEET_MSRC_MONTHS", 12),
 		CARotateAfter:          envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
 		BackupDir:              env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
 		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),

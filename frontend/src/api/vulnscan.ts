@@ -80,3 +80,29 @@ export async function vulnDbImport(file: File): Promise<string> {
   });
   return data.output ?? "";
 }
+
+// --- MSRC (Windows CVE mapping) ---
+
+export interface MsrcStatus {
+  count: number;
+  releases: number;
+  latestRelease?: string;
+  importedAt?: string;
+}
+
+export async function msrcStatus(): Promise<MsrcStatus> {
+  const { data } = await api.get<MsrcStatus>("/api/v1/vuln-scans/msrc");
+  return data;
+}
+
+export async function msrcUpdate(): Promise<number> {
+  const { data } = await api.post<{ entries: number }>("/api/v1/vuln-scans/msrc/update");
+  return data.entries ?? 0;
+}
+
+export async function msrcImport(file: File): Promise<number> {
+  const { data } = await api.post<{ entries: number }>("/api/v1/vuln-scans/msrc/import", file, {
+    headers: { "Content-Type": "application/octet-stream" },
+  });
+  return data.entries ?? 0;
+}

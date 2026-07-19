@@ -52,6 +52,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/monitor"
+	"github.com/fleet-terminal/backend/internal/msrc"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	princ "github.com/fleet-terminal/backend/internal/principals"
@@ -100,6 +101,7 @@ type Server struct {
 
 	scanSvc      *scan.Service
 	vulnScan     *vulnscan.Service
+	msrcSvc      *msrc.Service
 	actionReg    *aiaction.Registry
 	playbookSvc  *playbook.Service
 	winscriptSvc *winscript.Service
@@ -160,6 +162,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// scheduler, so construct them once here.
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
+	s.msrcSvc = msrc.New(st, cfg.MSRCAPIURL, cfg.MSRCMonths, log)
 	// Assistant action registry (propose→confirm→execute, plus approval for guarded
 	// actions); wired with the runner hooks it needs so this package reaches into
 	// neither the vulnscan nor the auth service directly.
@@ -774,7 +777,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, s.scanSvc)
-	vulnscan.Mount(r, deps, s.vulnScan)
+	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
 
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).
 	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))

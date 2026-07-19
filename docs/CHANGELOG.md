@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.22.0 — Windows CVE data from MSRC (real CVE/severity/CVSS)
+
+Windows vulnerability scans now report **real CVE IDs, MSRC severity, and CVSS
+scores** — not just "N missing security updates." The Windows Update Agent reports
+which KBs a host is missing, but not (reliably) the CVEs/severity they remediate;
+that authoritative data lives in Microsoft's **Security Update Guide** (CVRF), keyed
+by KB. Fleet now caches that KB→CVE mapping and enriches each finding with it.
+
+- **New `msrc` package** parses CVRF documents; migration `0041` adds
+  `msrc_updates` (KB→CVE, severity, CVSS, vector, title, release).
+- **Two ways to load the data**, mirroring the grype DB, under **Vulnerabilities →
+  Windows CVE data (MSRC)**:
+  - **Update online** — fetches the last `FLEET_MSRC_MONTHS` releases (default 12)
+    from `api.msrc.microsoft.com` (only when you click it; no automatic egress).
+  - **Import offline** — for air-gapped deployments: upload a **zip of CVRF JSON**,
+    a JSON array of documents, or a single CVRF JSON document.
+- The Windows scan looks up each missing KB in the mapping and emits **one finding
+  per remediated CVE** with real severity/CVSS (linked to its MSRC page). When a KB
+  isn't in the mapping yet, it falls back to the prior KB-level finding, so scans
+  still work before the data is loaded.
+
 ## v0.21.3 — Clear recent scan failures from the Vulnerabilities page
 
 The "Recent failures" banner now has a **Clear** button that removes failed scan

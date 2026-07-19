@@ -13,7 +13,7 @@ import { listHosts } from "../api/hosts";
 import { listGroups } from "../api/admin";
 import {
   triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan, clearFailedVulnScans,
-  vulnDbStatus, vulnDbUpdate, vulnDbImport, type VulnFinding,
+  vulnDbStatus, vulnDbUpdate, vulnDbImport, msrcStatus, msrcUpdate, msrcImport, type VulnFinding,
 } from "../api/vulnscan";
 
 const SEV_COLOR: Record<string, "error" | "warning" | "info" | "default"> = {
@@ -69,6 +69,7 @@ export function VulnerabilitiesPage() {
       </Stack>
 
       <DbStatusCard canConfig={canConfig} />
+      <MsrcCard canConfig={canConfig} />
 
       {running.length > 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -171,6 +172,58 @@ function DbStatusCard({ canConfig }: { canConfig: boolean }) {
               {importMut.isPending ? "Importing…" : "Import offline"}
             </Button>
             <input ref={fileRef} type="file" hidden accept=".tar.gz,.tar,application/gzip"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) importMut.mutate(f); e.target.value = ""; }} />
+          </>
+        )}
+      </Stack>
+      {msg && <Alert severity="info" sx={{ mt: 1, py: 0 }} onClose={() => setMsg(null)}>{msg}</Alert>}
+    </Paper>
+  );
+}
+
+// MsrcCard manages the Windows CVE mapping (Microsoft Security Update Guide): its
+// load status, an online update, and an offline import (zip of CVRF JSON, a JSON
+// array of docs, or a single CVRF JSON). Without it loaded, Windows scans still run
+// but findings lack CVE IDs / severity / CVSS.
+function MsrcCard({ canConfig }: { canConfig: boolean }) {
+  const { data: status, refetch } = useQuery({ queryKey: ["msrc"], queryFn: msrcStatus, retry: false });
+  const [msg, setMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const update = useMutation({
+    mutationFn: msrcUpdate,
+    onSuccess: (n) => { setMsg(`Updated online — ${n} CVE mappings loaded.`); void refetch(); },
+    onError: (e) => {
+      const detail = ((e as { response?: { data?: { error?: string } } })?.response?.data?.error || "").slice(0, 240);
+      setMsg((detail ? `Online update failed: ${detail}` : "Online update failed.")
+        + " If the backend cannot reach api.msrc.microsoft.com, use \"Import offline\" with a CVRF bundle instead.");
+    },
+  });
+  const importMut = useMutation({
+    mutationFn: (f: File) => msrcImport(f),
+    onSuccess: (n) => { setMsg(`Imported — ${n} CVE mappings loaded.`); void refetch(); },
+    onError: () => setMsg("Import failed — expected a zip of CVRF JSON, a JSON array, or a single CVRF JSON document."),
+  });
+
+  const summary = status && status.count > 0
+    ? `${status.count.toLocaleString()} CVE mappings · ${status.releases} releases${status.latestRelease ? " · latest " + status.latestRelease : ""}`
+    : "not loaded — Windows findings will lack CVE/severity until you update or import";
+
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+      <Stack direction="row" alignItems="center" spacing={2} flexWrap="wrap">
+        <Typography variant="subtitle2">Windows CVE data (MSRC)</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", flexGrow: 1, whiteSpace: "pre-wrap" }}>
+          {summary}
+        </Typography>
+        {canConfig && (
+          <>
+            <Button size="small" variant="outlined" disabled={update.isPending} onClick={() => update.mutate()}>
+              {update.isPending ? "Updating…" : "Update online"}
+            </Button>
+            <Button size="small" disabled={importMut.isPending} onClick={() => fileRef.current?.click()}>
+              {importMut.isPending ? "Importing…" : "Import offline"}
+            </Button>
+            <input ref={fileRef} type="file" hidden accept=".zip,.json,application/zip,application/json"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) importMut.mutate(f); e.target.value = ""; }} />
           </>
         )}

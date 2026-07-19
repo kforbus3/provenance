@@ -594,6 +594,19 @@ type VulnScan struct {
 }
 
 // VulnFinding is one CVE affecting one installed package.
+// MSRCEntry is one KB→CVE mapping from Microsoft's Security Update Guide (CVRF):
+// installing KB remediates CVE, which carries this severity/CVSS. Used to enrich
+// Windows vulnerability findings.
+type MSRCEntry struct {
+	KB       string  `json:"kb"`
+	CVE      string  `json:"cve"`
+	Severity string  `json:"severity"`
+	CVSS     float64 `json:"cvss"`
+	Vector   string  `json:"vector,omitempty"`
+	Title    string  `json:"title,omitempty"`
+	Release  string  `json:"release,omitempty"`
+}
+
 type VulnFinding struct {
 	CVE              string  `json:"cve"`
 	Package          string  `json:"package"`

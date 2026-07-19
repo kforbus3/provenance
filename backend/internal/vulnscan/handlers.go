@@ -1,8 +1,11 @@
 package vulnscan
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -11,12 +14,14 @@ import (
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/msrc"
 )
 
 // Mount attaches vulnerability-scan routes. Running/viewing scans requires
-// Host.Scan; managing the vulnerability database requires System.Configure.
-func Mount(r chi.Router, d *app.Deps, svc *Service) {
-	h := &handler{d: d, svc: svc}
+// Host.Scan; managing the vulnerability database (grype) and the MSRC mapping
+// requires System.Configure.
+func Mount(r chi.Router, d *app.Deps, svc *Service, msrcSvc *msrc.Service) {
+	h := &handler{d: d, svc: svc, msrc: msrcSvc}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Post("/vuln-scans", h.trigger)
@@ -24,15 +29,57 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Delete("/vuln-scans/failed", h.clearFailed)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/latest", h.latest)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/db", h.dbStatus)
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/msrc", h.msrcStatus)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/db/update", h.dbUpdate)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/db/import", h.dbImport)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/msrc/update", h.msrcUpdate)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/msrc/import", h.msrcImport)
 	})
 }
 
 type handler struct {
-	d   *app.Deps
-	svc *Service
+	d    *app.Deps
+	svc  *Service
+	msrc *msrc.Service
+}
+
+// msrcStatus reports how much MSRC KB→CVE data is loaded.
+func (h *handler) msrcStatus(w http.ResponseWriter, r *http.Request) {
+	st, err := h.d.Store.MSRCStatus(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read MSRC status")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, st)
+}
+
+// msrcUpdate fetches recent MSRC releases online and stores the mapping.
+func (h *handler) msrcUpdate(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	n, err := h.msrc.UpdateOnline(ctx)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadGateway, "MSRC update failed: "+err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": n})
+}
+
+// msrcImport loads MSRC data from an uploaded offline bundle (zip of CVRF JSON, a
+// JSON array of documents, or a single CVRF JSON document).
+func (h *handler) msrcImport(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 256<<20))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "could not read body")
+		return
+	}
+	n, err := h.msrc.Import(r.Context(), body)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "MSRC import failed: "+err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": n})
 }
 
 type triggerReq struct {
