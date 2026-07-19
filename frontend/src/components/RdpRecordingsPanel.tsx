@@ -103,15 +103,18 @@ function RdpPlayer({ id }: { id: string }) {
   return (
     <Box>
       {error && <Typography color="error" sx={{ mb: 1 }}>{error}</Typography>}
-      <Box
-        ref={containerRef}
-        sx={{
-          bgcolor: "black", minHeight: 240, borderRadius: 1, overflow: "auto",
-          display: "flex", justifyContent: "center", alignItems: "center",
-          "& canvas": { display: "block" },
-        }}
-      >
-        {loading && !error && <CircularProgress sx={{ color: "grey.500" }} />}
+      <Box sx={{ position: "relative", bgcolor: "black", minHeight: 240, borderRadius: 1, overflow: "auto" }}>
+        {/* Guacamole appends its canvas here; this node has NO React children so
+            React never reconciles against the manually-inserted canvas. */}
+        <Box
+          ref={containerRef}
+          sx={{ display: "flex", justifyContent: "center", "& canvas": { display: "block" } }}
+        />
+        {loading && !error && (
+          <Box sx={{ position: "absolute", inset: 0, display: "flex", justifyContent: "center", alignItems: "center" }}>
+            <CircularProgress sx={{ color: "grey.500" }} />
+          </Box>
+        )}
       </Box>
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1 }}>
         <IconButton onClick={toggle} disabled={!!error} color="primary">

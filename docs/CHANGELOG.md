@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.2 — Fix white screen when opening an RDP recording
+
+Opening an RDP recording in Session Replay crashed the page to a white screen
+(`Node.removeChild: The node to be removed is not a child of this node`). The player's
+canvas container also held a React-managed loading spinner, so React reconciled
+against the manually-inserted Guacamole canvas and threw. The canvas now lives in its
+own React-inert node with the spinner as an absolutely-positioned sibling (matching the
+live desktop viewer). Frontend-only.
+
 ## v0.17.1 — Fix RDP recording playback
 
 RDP session recordings failed to play back ("Could not download the recording",
