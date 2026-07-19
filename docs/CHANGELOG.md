@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.21.1 — Clarify: strict overlay mode covers Windows RDP
+
+The **Strict overlay — require WireGuard** setting already forces enrolled hosts
+with a WireGuard address to be reachable *only* over the overlay for **RDP**
+(Windows desktop) sessions, not just SSH terminal and file transfer — the RDP
+connection path has honored it since v0.19.2. The setting's help text only
+mentioned terminal and file transfer, so this updates the copy to state that RDP
+is covered too. No behavior change: turning it on means a Windows host whose
+tunnel is down has its RDP session refused rather than quietly falling back to the
+host's direct address.
+
 ## v0.21.0 — Vulnerability scanning for Windows hosts
 
 Vulnerability scans now work on Windows (RDP) hosts, alongside the existing

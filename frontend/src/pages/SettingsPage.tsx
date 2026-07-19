@@ -527,10 +527,10 @@ function WGSettingsCard({ current }: { current: unknown }) {
         label="Strict overlay — require WireGuard for connections"
       />
       <Typography variant="body2" color="text.secondary" sx={{ ml: 0.5 }}>
-        When on, a host that has a WireGuard address is reachable only over the overlay. If its
-        tunnel is down, terminal and file-transfer connections are refused instead of quietly
-        falling back to the host's direct network address. Hosts with no WireGuard address are
-        unaffected.
+        When on, an enrolled host that has a WireGuard address is reachable only over the overlay.
+        If its tunnel is down, connections are refused instead of quietly falling back to the host's
+        direct network address — this covers terminal and file transfer (Linux/SSH) as well as
+        desktop (Windows/RDP) sessions. Hosts with no WireGuard address are unaffected.
       </Typography>
     </Paper>
   );
