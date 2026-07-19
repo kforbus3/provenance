@@ -6,6 +6,7 @@ import {
 import SearchIcon from "@mui/icons-material/Search";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import FolderIcon from "@mui/icons-material/Folder";
+import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import { useQuery } from "@tanstack/react-query";
 import { listHosts, type Host } from "../api/hosts";
 import { WgDownChip, wgDegraded } from "../components/WgStatus";
@@ -51,6 +52,7 @@ export function TerminalsPage() {
 
   const openTerminal = (id: string) => window.open(`/terminals/${id}`, "_blank", "noopener");
   const openFiles = (id: string) => window.open(`/files/${id}`, "_blank", "noopener");
+  const openDesktop = (id: string) => window.open(`/desktop/${id}`, "_blank", "noopener");
 
   return (
     <Box>
@@ -124,15 +126,26 @@ export function TerminalsPage() {
                 )}
               </CardContent>
               <CardActions>
-                <Button
-                  size="small" variant="contained" startIcon={<TerminalIcon />}
-                  onClick={() => openTerminal(h.id)}
-                >
-                  Terminal
-                </Button>
-                <Button size="small" startIcon={<FolderIcon />} onClick={() => openFiles(h.id)}>
-                  Files
-                </Button>
+                {h.protocol === "rdp" ? (
+                  <Button
+                    size="small" variant="contained" startIcon={<DesktopWindowsIcon />}
+                    onClick={() => openDesktop(h.id)}
+                  >
+                    Desktop
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      size="small" variant="contained" startIcon={<TerminalIcon />}
+                      onClick={() => openTerminal(h.id)}
+                    >
+                      Terminal
+                    </Button>
+                    <Button size="small" startIcon={<FolderIcon />} onClick={() => openFiles(h.id)}>
+                      Files
+                    </Button>
+                  </>
+                )}
               </CardActions>
             </Card>
           );

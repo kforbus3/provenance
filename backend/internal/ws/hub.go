@@ -27,18 +27,29 @@ type Event struct {
 	Data any    `json:"data"`
 }
 
-// Hub fans out events to all connected clients.
+// Hub fans out events to all connected clients on THIS instance. In a multi-instance
+// (HA) deployment a Backplane bridges instances so an event raised on any instance
+// reaches clients connected to every instance.
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*client]struct{}
+	bp      *Backplane // optional cross-instance bridge; nil = local-only
 }
 
 // NewHub constructs an empty Hub.
 func NewHub() *Hub { return &Hub{clients: make(map[*client]struct{})} }
 
-// Broadcast sends an event to every connected client (best-effort, non-blocking).
+// SetBackplane attaches a cross-instance bridge so broadcasts also reach clients on
+// other instances. Set once at startup before serving.
+func (h *Hub) SetBackplane(bp *Backplane) { h.bp = bp }
+
+// Broadcast sends an event to every connected client (best-effort, non-blocking),
+// and — if a backplane is attached — to clients on other instances.
 func (h *Hub) Broadcast(eventType string, data any) {
 	h.fanout(eventType, data, nil)
+	if h.bp != nil {
+		h.bp.publish(envelope{Type: eventType, Data: toRaw(data)})
+	}
 }
 
 // BroadcastSession sends a session-activity event only to clients that may see
@@ -46,9 +57,24 @@ func (h *Hub) Broadcast(eventType string, data any) {
 // all sessions anyway). Everyone else is skipped, so one user's activity does not
 // leak to every connected dashboard.
 func (h *Hub) BroadcastSession(eventType string, userID uuid.UUID, data any) {
-	h.fanout(eventType, data, func(c *client) bool {
-		return c.allSessions || c.userID == userID
-	})
+	h.fanout(eventType, data, sessionAllow(userID))
+	if h.bp != nil {
+		h.bp.publish(envelope{Type: eventType, Data: toRaw(data), UserID: userID.String(), Session: true})
+	}
+}
+
+// PublishTerminate asks every instance to force-close any live connections it holds
+// for the given session (its PTY/SFTP lives only in the owning instance's RAM). Used
+// when an admin terminates sessions that may be running on another instance.
+func (h *Hub) PublishTerminate(sessionID uuid.UUID) {
+	if h.bp != nil {
+		h.bp.publish(envelope{Control: controlTerminate, Target: sessionID.String()})
+	}
+}
+
+// sessionAllow is the visibility filter for session-activity events.
+func sessionAllow(userID uuid.UUID) func(*client) bool {
+	return func(c *client) bool { return c.allSessions || c.userID == userID }
 }
 
 // fanout marshals once and delivers to every client for which allow (if non-nil)

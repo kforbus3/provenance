@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -195,10 +196,10 @@ func scanPlaybookRun(row interface{ Scan(...any) error }) (*models.PlaybookRun, 
 func (s *Store) CreatePlaybookRun(ctx context.Context, in models.PlaybookRun, requestedBy *uuid.UUID) (*models.PlaybookRun, error) {
 	row := s.pool.QueryRow(ctx,
 		`INSERT INTO playbook_runs(playbook_id, playbook_version, requested_by, requester,
-			target_kind, target_id, target_name, host_count, check_mode, scheduled, status)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING `+playbookRunCols,
+			target_kind, target_id, target_name, host_count, check_mode, scheduled, status, instance_id)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11) RETURNING `+playbookRunCols,
 		in.PlaybookID, in.PlaybookVersion, requestedBy, in.Requester, in.TargetKind,
-		in.TargetID, in.TargetName, in.HostCount, in.CheckMode, in.Scheduled)
+		in.TargetID, in.TargetName, in.HostCount, in.CheckMode, in.Scheduled, s.ownerArg())
 	return scanPlaybookRun(row)
 }
 
@@ -256,10 +257,10 @@ func (s *Store) ListPlaybookRuns(ctx context.Context, playbookID uuid.UUID, limi
 
 // FailStalePlaybookRuns marks any pending/running runs as failed on startup,
 // since their in-memory goroutines did not survive the restart.
-func (s *Store) FailStalePlaybookRuns(ctx context.Context) (int64, error) {
+func (s *Store) FailStalePlaybookRuns(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE playbook_runs SET status='failed', error='interrupted (server restarted)', finished_at=now()
-		 WHERE status IN ('pending','running')`)
+		`UPDATE playbook_runs SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("playbook_runs"), lease.String())
 	if err != nil {
 		return 0, err
 	}

@@ -40,10 +40,10 @@ type RDPRecordingInput struct {
 // CreateRDPRecording inserts an "active" RDP recording row at session start.
 func (s *Store) CreateRDPRecording(ctx context.Context, in RDPRecordingInput) (*models.RDPRecording, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO rdp_recordings (id, host_id, user_id, hostname, fleet_user, rdp_user, path, client_ip)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		INSERT INTO rdp_recordings (id, host_id, user_id, hostname, fleet_user, rdp_user, path, client_ip, instance_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		RETURNING `+rdpRecordingCols,
-		in.ID, in.HostID, in.UserID, in.Hostname, in.FleetUser, in.RDPUser, in.Path, in.ClientIP)
+		in.ID, in.HostID, in.UserID, in.Hostname, in.FleetUser, in.RDPUser, in.Path, in.ClientIP, s.ownerArg())
 	return scanRDPRecording(row)
 }
 
@@ -121,9 +121,10 @@ func (s *Store) PruneRDPRecordingsBefore(ctx context.Context, before time.Time) 
 // on startup: no RDP session survives a backend restart, so any still marked active
 // are stale. (In a future multi-instance HA setup this must be scoped per instance so
 // it never finalizes another node's live recording.)
-func (s *Store) CloseStaleRDPRecordings(ctx context.Context) (int64, error) {
+func (s *Store) CloseStaleRDPRecordings(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE rdp_recordings SET status='ended', ended_at=COALESCE(ended_at, now()) WHERE status='active'`)
+		`UPDATE rdp_recordings SET status='ended', ended_at=COALESCE(ended_at, now())
+		 WHERE status='active' AND `+deadOwnerPredicate("rdp_recordings"), lease.String())
 	if err != nil {
 		return 0, err
 	}

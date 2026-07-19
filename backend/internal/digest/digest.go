@@ -82,7 +82,10 @@ func normalize(p Policy) Policy {
 
 // Run drives the digest loop until ctx is cancelled, checking every 15 minutes
 // whether the configured send time has arrived (and hasn't already fired today).
-func (s *Service) Run(ctx context.Context) {
+// Run drives the digest loop. leader gates the singleton send so that in a
+// multi-instance (HA) deployment only the leader delivers the digest; pass nil (or a
+// predicate that returns true) for a single-instance deployment.
+func (s *Service) Run(ctx context.Context, leader func() bool) {
 	t := time.NewTicker(15 * time.Minute)
 	defer t.Stop()
 	for {
@@ -90,6 +93,9 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if leader != nil && !leader() {
+				continue
+			}
 			s.tick(ctx)
 		}
 	}

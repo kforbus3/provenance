@@ -24,9 +24,18 @@ func Connect(ctx context.Context, url string, maxConns, minConns int32) (*pgxpoo
 	}
 	cfg.MaxConnLifetime = time.Hour
 	cfg.HealthCheckPeriod = 30 * time.Second
+	// Recycle idle connections so that after a Postgres failover (pooler/Patroni
+	// promoting a new primary) the pool doesn't keep handing out connections pinned
+	// to the old, now-unreachable primary. Combined with MaxConnLifetime this bounds
+	// how long a stale connection can linger.
+	cfg.MaxConnIdleTime = 5 * time.Minute
 
+	// Retry with exponential backoff (capped): tolerates Postgres still starting in a
+	// fresh stack, and a brief unavailability window during a primary failover.
 	var pool *pgxpool.Pool
 	var lastErr error
+	backoff := 500 * time.Millisecond
+	const maxBackoff = 5 * time.Second
 	for attempt := 0; attempt < 30; attempt++ {
 		pool, lastErr = pgxpool.NewWithConfig(ctx, cfg)
 		if lastErr == nil {
@@ -41,7 +50,10 @@ func Connect(ctx context.Context, url string, maxConns, minConns int32) (*pgxpoo
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 	return nil, fmt.Errorf("database not reachable after retries: %w", lastErr)

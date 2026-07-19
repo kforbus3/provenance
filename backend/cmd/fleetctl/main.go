@@ -38,6 +38,7 @@ Usage:
   fleetctl enable-user <username>                        Re-enable and unlock a disabled account
   fleetctl rotate-ca                                     Generate a new active user CA
   fleetctl list-users                                    List accounts
+  fleetctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)
@@ -147,6 +148,21 @@ func run(cmd string, args []string) error {
 			}
 			fmt.Printf("%-24s %s%s\n", u.Username, u.ID, flags)
 		}
+
+	case "wg-peers":
+		// Emit the overlay peer list from Postgres as WireGuard [Peer] stanzas, so a
+		// STANDBY jump host can rebuild the hub on failover (HA). Endpoint-free: peers
+		// roam and dial in, so the hub never needs their Endpoint. Apply on the
+		// standby with `wg addconf <iface> <(fleetctl wg-peers)` after restoring the
+		// replicated hub private key. See docs/high-availability.md.
+		peers, err := st.ListWGPeers(ctx)
+		if err != nil {
+			return err
+		}
+		for _, p := range peers {
+			fmt.Printf("# %s\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n\n", p.Hostname, p.PublicKey, p.Address)
+		}
+		fmt.Fprintf(os.Stderr, "emitted %d overlay peer(s)\n", len(peers))
 
 	default:
 		usage()

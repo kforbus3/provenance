@@ -70,7 +70,12 @@ func (m *Monitor) notifyTransition(ctx context.Context, h models.Host, prev, now
 }
 
 // Run drives the monitoring loop until ctx is cancelled.
-func (m *Monitor) Run(ctx context.Context) {
+// Run drives the host-monitor sweep loop. leader gates the sweep so that in a
+// multi-instance (HA) deployment only the leader probes hosts and writes status
+// (avoiding N× SSH probes and status races); pass nil for a single-instance
+// deployment. Status changes still reach every instance's clients via the event
+// backplane.
+func (m *Monitor) Run(ctx context.Context, leader func() bool) {
 	// Initial probe shortly after startup, then on the interval.
 	t := time.NewTimer(5 * time.Second)
 	defer t.Stop()
@@ -79,8 +84,11 @@ func (m *Monitor) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			m.sweep(ctx)
 			t.Reset(m.interval)
+			if leader != nil && !leader() {
+				continue
+			}
+			m.sweep(ctx)
 		}
 	}
 }
@@ -112,7 +120,10 @@ func (m *Monitor) sweep(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range hosts {
 		h := hosts[i]
-		if !h.Enrolled {
+		// SSH hosts are probed once enrolled; RDP hosts are never "enrolled" (Windows
+		// can't run the enrollment script) but are still reachable through the jump
+		// host, so probe them via a TCP check on the RDP port.
+		if !h.Enrolled && h.Protocol != "rdp" {
 			continue
 		}
 		wg.Add(1)
@@ -143,6 +154,20 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 	if h.Status != nil {
 		prev = h.Status.Status
 	}
+
+	// RDP hosts have no SSH: probe TCP reachability of the RDP port instead, and skip
+	// the SSH-only inventory/metrics collection.
+	if h.Protocol == "rdp" {
+		st := m.probeRDP(ctx, signer, &h)
+		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
+			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
+			return
+		}
+		m.notifyTransition(ctx, h, prev, st.Status)
+		m.broadcastStatus(h, st)
+		return
+	}
+
 	st, inv, metrics := m.probe(ctx, signer, &h)
 	if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 		m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
@@ -166,11 +191,44 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 			}
 		}
 	}
+	m.broadcastStatus(h, st)
+}
+
+// broadcastStatus pushes a host's freshly-probed status to connected dashboards.
+func (m *Monitor) broadcastStatus(h models.Host, st models.HostStatus) {
 	m.hub.Broadcast("host.status", map[string]any{
 		"hostId": h.ID, "hostname": h.Hostname, "status": st.Status,
 		"latencyMs": st.LatencyMS, "sshOk": st.SSHOK, "wgOk": st.WGOK,
 		"uptimeSeconds": st.UptimeSeconds, "checkedAt": time.Now(),
 	})
+}
+
+// probeRDP health-checks an RDP host by testing TCP reachability to its RDP port
+// through the jump host. Windows hosts expose no SSH, so the standard authenticated
+// probe (and its inventory/metrics) does not apply — this only reports online/offline
+// plus connect latency.
+func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Host) models.HostStatus {
+	now := time.Now()
+	st := models.HostStatus{Status: "unknown", CheckedAt: &now}
+	port := h.RDPPort
+	if port <= 0 {
+		port = 3389
+	}
+	var dialErr error
+	for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
+		start := time.Now()
+		if dialErr = m.gw.ProbeTCPViaJump(ctx, signer, addr, port); dialErr == nil {
+			lat := int(time.Since(start).Milliseconds())
+			st.LatencyMS = &lat
+			st.Status = "online"
+			st.LastSuccessAt = &now
+			return st
+		}
+	}
+	st.Status = "offline"
+	st.LastError = trunc(errStr(dialErr), 240)
+	st.LastFailureAt = &now
+	return st
 }
 
 // probe runs a lightweight authenticated SSH command through the jump host and

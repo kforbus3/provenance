@@ -113,10 +113,10 @@ func (s *Store) InsertCertificate(ctx context.Context, p InsertCertificateParams
 	serial = int64(p.Serial)
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO ssh_certificates
-			(serial, kind, ca_key_id, user_id, session_id, host_id, key_id, principals, public_key, audit_id, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(serial, kind, ca_key_id, user_id, session_id, host_id, key_id, principals, public_key, audit_id, expires_at, instance_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING serial, id, kind, key_id, principals, public_key, audit_id, issued_at, expires_at`,
-		serial, p.Kind, p.CAKeyID, p.UserID, p.SessionID, p.HostID, p.KeyID, p.Principals, p.PublicKey, p.AuditID, p.ExpiresAt).
+		serial, p.Kind, p.CAKeyID, p.UserID, p.SessionID, p.HostID, p.KeyID, p.Principals, p.PublicKey, p.AuditID, p.ExpiresAt, s.ownerArg()).
 		Scan(&expSerial, &c.ID, &c.Kind, &c.KeyID, &c.Principals, &c.PublicKey, &c.AuditID, &c.IssuedAt, &c.ExpiresAt)
 	if err != nil {
 		return nil, err
@@ -205,6 +205,49 @@ func (s *Store) RevokeSessionCertificates(ctx context.Context, sessionID uuid.UU
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO cert_revocations (serial, reason) VALUES ($1,$2) ON CONFLICT (serial) DO NOTHING`,
 				serial, reason); err != nil {
+				return err
+			}
+		}
+		count = int64(len(serials))
+		return nil
+	})
+	return count, err
+}
+
+// RevokeDeadInstanceCertificates revokes still-valid ephemeral certificates whose
+// issuing instance is no longer alive (heartbeat older than lease). Those certs are
+// keyless — their private key died with the instance's RAM — so revoking them is safe
+// hygiene and never touches a live instance's own cert for the same session. Only
+// rows with a known (non-NULL) dead issuer are revoked; legacy NULL-issuer certs are
+// left alone. Returns the number revoked so the caller can refresh the KRL.
+func (s *Store) RevokeDeadInstanceCertificates(ctx context.Context, lease time.Duration) (int64, error) {
+	var count int64
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			UPDATE ssh_certificates SET revoked_at=now(), revoke_reason='issuing instance died'
+			WHERE revoked_at IS NULL AND expires_at > now() AND instance_id IS NOT NULL
+			  AND NOT EXISTS (
+			    SELECT 1 FROM cluster_instances ci
+			    WHERE ci.id = ssh_certificates.instance_id
+			      AND ci.last_heartbeat > now() - $1::interval)
+			RETURNING serial`, lease.String())
+		if err != nil {
+			return err
+		}
+		var serials []int64
+		for rows.Next() {
+			var serial int64
+			if err := rows.Scan(&serial); err != nil {
+				rows.Close()
+				return err
+			}
+			serials = append(serials, serial)
+		}
+		rows.Close()
+		for _, serial := range serials {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO cert_revocations (serial, reason) VALUES ($1,'issuing instance died') ON CONFLICT (serial) DO NOTHING`,
+				serial); err != nil {
 				return err
 			}
 		}

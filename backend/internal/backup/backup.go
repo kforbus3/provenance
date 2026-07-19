@@ -252,7 +252,9 @@ func (s *Service) applyRetention(ctx context.Context) {
 
 // Run drives the scheduled-backup loop until ctx is cancelled, checking hourly
 // whether a backup is due (enabled + older than IntervalHours since the latest).
-func (s *Service) Run(ctx context.Context) {
+// Run drives the scheduled-backup loop. leader gates the singleton backup so only the
+// leader runs it in a multi-instance (HA) deployment; pass nil for single-instance.
+func (s *Service) Run(ctx context.Context, leader func() bool) {
 	t := time.NewTimer(2 * time.Minute)
 	defer t.Stop()
 	for {
@@ -260,8 +262,11 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.maybeBackup(ctx)
 			t.Reset(time.Hour)
+			if leader != nil && !leader() {
+				continue
+			}
+			s.maybeBackup(ctx)
 		}
 	}
 }

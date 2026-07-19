@@ -75,12 +75,14 @@ func (s *Store) RecordingSessionIDs(ctx context.Context) (map[uuid.UUID]bool, er
 	return out, rows.Err()
 }
 
-// CloseStaleSessions marks any lingering "active" SSH sessions as closed. Run on
-// startup: no terminal session survives a backend restart, so any still marked
-// active are stale (e.g. left over from an abrupt disconnect).
-func (s *Store) CloseStaleSessions(ctx context.Context) (int64, error) {
+// CloseStaleSessions marks "active" SSH sessions as closed when their owning
+// instance is no longer alive (heartbeat older than lease, or unknown/legacy owner).
+// A live PTY exists only in its owning instance's RAM, so once that instance dies the
+// row is stale — but sessions owned by a still-live peer are deliberately spared.
+func (s *Store) CloseStaleSessions(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE ssh_sessions SET status='closed', ended_at=COALESCE(ended_at, now()) WHERE status='active'`)
+		`UPDATE ssh_sessions SET status='closed', ended_at=COALESCE(ended_at, now())
+		 WHERE status='active' AND `+deadOwnerPredicate("ssh_sessions"), lease.String())
 	if err != nil {
 		return 0, err
 	}

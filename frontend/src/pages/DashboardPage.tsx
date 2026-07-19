@@ -5,6 +5,7 @@ import {
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import FolderIcon from "@mui/icons-material/Folder";
+import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import HistoryIcon from "@mui/icons-material/History";
 import HowToRegIcon from "@mui/icons-material/HowToReg";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
@@ -151,8 +152,14 @@ export function DashboardPage() {
                     key={h.id}
                     secondaryAction={
                       <Stack direction="row" spacing={0.5}>
-                        <Button size="small" variant="contained" startIcon={<TerminalIcon />} onClick={() => openTerminal(h.id)}>Terminal</Button>
-                        <Button size="small" startIcon={<FolderIcon />} onClick={() => window.open(`/files/${h.id}`, "_blank", "noopener")}>Files</Button>
+                        {h.protocol === "rdp" ? (
+                          <Button size="small" variant="contained" startIcon={<DesktopWindowsIcon />} onClick={() => window.open(`/desktop/${h.id}`, "_blank", "noopener")}>Desktop</Button>
+                        ) : (
+                          <>
+                            <Button size="small" variant="contained" startIcon={<TerminalIcon />} onClick={() => openTerminal(h.id)}>Terminal</Button>
+                            <Button size="small" startIcon={<FolderIcon />} onClick={() => window.open(`/files/${h.id}`, "_blank", "noopener")}>Files</Button>
+                          </>
+                        )}
                       </Stack>
                     }
                   >

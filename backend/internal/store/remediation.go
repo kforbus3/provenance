@@ -2,10 +2,10 @@ package store
 
 import (
 	"context"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/google/uuid"
 )
 
 const remediationCols = `id, scan_id, host_id, requester, rule_ids, status, exit_code,
@@ -23,9 +23,9 @@ func scanRemediation(row interface{ Scan(...any) error }) (*models.HostRemediati
 // CreateRemediation inserts a pending remediation run.
 func (s *Store) CreateRemediation(ctx context.Context, scanID, hostID uuid.UUID, requestedBy *uuid.UUID, requester string, ruleIDs []string) (*models.HostRemediation, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO host_remediations(scan_id, host_id, requested_by, requester, rule_ids, status)
-		 VALUES($1,$2,$3,$4,$5,'running') RETURNING `+remediationCols,
-		scanID, hostID, requestedBy, requester, ruleIDs)
+		`INSERT INTO host_remediations(scan_id, host_id, requested_by, requester, rule_ids, status, instance_id)
+		 VALUES($1,$2,$3,$4,$5,'running',$6) RETURNING `+remediationCols,
+		scanID, hostID, requestedBy, requester, ruleIDs, s.ownerArg())
 	r, err := scanRemediation(row)
 	if err != nil {
 		return nil, err
@@ -57,10 +57,10 @@ func (s *Store) FailRemediation(ctx context.Context, id uuid.UUID, msg string) e
 
 // FailStaleRemediations marks remediations still pending/running as failed
 // (their in-memory worker did not survive a restart).
-func (s *Store) FailStaleRemediations(ctx context.Context) (int64, error) {
+func (s *Store) FailStaleRemediations(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE host_remediations SET status='failed', error='interrupted (server restarted)', finished_at=now()
-		 WHERE status IN ('pending','running')`)
+		`UPDATE host_remediations SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("host_remediations"), lease.String())
 	if err != nil {
 		return 0, err
 	}

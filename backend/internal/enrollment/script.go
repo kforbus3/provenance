@@ -143,6 +143,11 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	}
 	step("configure_jump_peer", "ok", fmt.Sprintf("peer %s allowed-ips %s/32", short(hostPub), wgIP))
 
+	// Persist the overlay public key so a standby jump host can rebuild peers on
+	// failover (best-effort).
+	if perr := s.store.SetHostWGPublicKey(ctx, host.ID, hostPub); perr != nil {
+		s.log.Warn("persist host wg public key", "host", host.Hostname, "err", perr)
+	}
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
 
 	if id, verr := s.validateCertLogin(ctx, host.ID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {

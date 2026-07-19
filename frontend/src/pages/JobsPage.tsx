@@ -3,8 +3,13 @@ import {
   TableRow, Typography, Tooltip,
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
-import { getJobs, type EnrollmentJob, type RemediationJob, type SchedulerStatus } from "../api/system";
+import { getJobs, type ClusterInstance, type EnrollmentJob, type RemediationJob, type SchedulerStatus } from "../api/system";
 import { formatDateTime, formatTime } from "../lib/datetime";
+
+// heartbeatFresh reports whether an instance's heartbeat is within the ~30s lease.
+function heartbeatFresh(iso: string): boolean {
+  return Date.now() - new Date(iso).getTime() < 45_000;
+}
 
 // Background jobs: scheduler heartbeats (cert renewal, approval expiry, host
 // monitoring) and recent host-enrollment jobs. Auto-refreshes.
@@ -14,6 +19,46 @@ export function JobsPage() {
   return (
     <Box>
       <Typography variant="h5" gutterBottom>Background Jobs</Typography>
+
+      {data?.cluster && data.cluster.length > 0 && (
+        <>
+          <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
+            Cluster {data.cluster.length > 1 ? `(${data.cluster.length} instances)` : ""}
+          </Typography>
+          <TableContainer component={Paper} variant="outlined" sx={{ mb: 4 }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Role</TableCell>
+                  <TableCell>Hostname</TableCell>
+                  <TableCell>Version</TableCell>
+                  <TableCell>Liveness</TableCell>
+                  <TableCell>Started</TableCell>
+                  <TableCell>Last heartbeat</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {data.cluster.map((c: ClusterInstance) => (
+                  <TableRow key={c.id} hover>
+                    <TableCell>
+                      <Chip size="small" label={c.isLeader ? "leader" : "follower"}
+                        color={c.isLeader ? "primary" : "default"} />
+                    </TableCell>
+                    <TableCell>{c.hostname || c.id.slice(0, 8)}</TableCell>
+                    <TableCell sx={{ color: "text.secondary" }}>{c.version}</TableCell>
+                    <TableCell>
+                      <Chip size="small" label={heartbeatFresh(c.lastHeartbeat) ? "alive" : "stale"}
+                        color={heartbeatFresh(c.lastHeartbeat) ? "success" : "warning"} />
+                    </TableCell>
+                    <TableCell sx={{ color: "text.secondary" }}>{formatDateTime(c.startedAt)}</TableCell>
+                    <TableCell sx={{ color: "text.secondary" }}>{formatTime(c.lastHeartbeat)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </>
+      )}
 
       <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Schedulers</Typography>
       <TableContainer component={Paper} variant="outlined" sx={{ mb: 4 }}>

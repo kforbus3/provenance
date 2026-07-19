@@ -48,10 +48,17 @@ func (h *handler) jobs(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not list remediation jobs")
 		return
 	}
+	// Cluster roster (High Availability): the registered backend instances and which
+	// one currently holds leadership. A single-instance deployment shows one row.
+	cluster, err := h.d.Store.ListClusterInstances(r.Context())
+	if err != nil {
+		cluster = nil // non-fatal — omit the roster rather than failing System Health
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"schedulers":      h.reg.Snapshot(),
 		"enrollmentJobs":  enrollJobs,
 		"remediationJobs": remJobs,
+		"cluster":         cluster,
 	})
 }
 

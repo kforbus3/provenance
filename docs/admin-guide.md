@@ -910,3 +910,17 @@ admin-facing features:
 | Read / save the digest schedule | `GET/PUT /digest` (`System.Configure`) |
 | Preview the current digest | `GET /digest/preview` (`System.Configure`) |
 | Send one now | `POST /digest/send` (`System.Configure`) |
+
+## 23. High Availability (multi-instance)
+
+Fleet Terminal can run as multiple backend instances behind a load balancer for
+redundancy and rolling upgrades. It is **safe by default** — a single-instance
+deployment needs no configuration and is simply always the leader. The control plane
+(auth, inventory, management APIs, and starting new sessions) survives instance loss;
+in-flight interactive sessions on a failed instance drop and reconnect.
+
+Cluster membership is visible on **Background Jobs → Cluster** (instances, which one
+is the leader, liveness). For the model, deployment topology, shared-storage
+requirements, Postgres-HA and load-balancer notes, jump-host/WireGuard failover
+(`fleetctl wg-peers`), and the rolling-upgrade procedure, see the dedicated
+**[High Availability guide](high-availability.md)**.

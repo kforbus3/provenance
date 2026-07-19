@@ -39,10 +39,10 @@ type SSHSessionInput struct {
 // CreateSSHSession opens an active SSH session record.
 func (s *Store) CreateSSHSession(ctx context.Context, in SSHSessionInput) (*models.SSHSession, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO ssh_sessions (session_id, user_id, host_id, username, hostname, cert_serial, client_ip)
-		VALUES ($1,$2,$3,NULLIF($4,'')::citext,$5,$6,NULLIF($7,'')::inet)
+		INSERT INTO ssh_sessions (session_id, user_id, host_id, username, hostname, cert_serial, client_ip, instance_id)
+		VALUES ($1,$2,$3,NULLIF($4,'')::citext,$5,$6,NULLIF($7,'')::inet,$8)
 		RETURNING `+sshSessionCols,
-		in.SessionID, in.UserID, in.HostID, in.Username, in.Hostname, in.CertSerial, in.ClientIP)
+		in.SessionID, in.UserID, in.HostID, in.Username, in.Hostname, in.CertSerial, in.ClientIP, s.ownerArg())
 	return scanSSHSession(row)
 }
 

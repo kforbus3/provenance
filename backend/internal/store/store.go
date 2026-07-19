@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -18,12 +19,27 @@ var ErrNotFound = errors.New("not found")
 
 // Store wraps a pgx pool and exposes repository methods.
 type Store struct {
-	pool      *pgxpool.Pool
-	auditSink func(models.AuditEvent) // optional: forward each appended audit event
+	pool       *pgxpool.Pool
+	auditSink  func(models.AuditEvent) // optional: forward each appended audit event
+	instanceID uuid.UUID               // this backend's cluster identity (HA ownership tag)
 }
 
 // New constructs a Store.
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+// SetInstanceID records this backend's cluster identity so long-running rows it
+// creates are tagged with their owning instance (for ownership-scoped reconciliation).
+// Set once at startup before serving.
+func (s *Store) SetInstanceID(id uuid.UUID) { s.instanceID = id }
+
+// ownerArg returns the instance id to stamp on a new owned row, or nil when unset
+// (single-instance/tests) so the column is left NULL.
+func (s *Store) ownerArg() any {
+	if s.instanceID == uuid.Nil {
+		return nil
+	}
+	return s.instanceID
+}
 
 // SetAuditSink registers a callback invoked (asynchronously) for every audit
 // event written via AppendAudit — used to forward events to syslog/SIEM. Set

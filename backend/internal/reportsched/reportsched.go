@@ -105,7 +105,9 @@ func normalize(p Policy) Policy {
 }
 
 // Run drives the schedule, checking every 15 minutes whether a delivery is due.
-func (s *Service) Run(ctx context.Context) {
+// Run drives the scheduled-report loop. leader gates the singleton delivery so only
+// the leader sends in a multi-instance (HA) deployment; pass nil for single-instance.
+func (s *Service) Run(ctx context.Context, leader func() bool) {
 	t := time.NewTicker(15 * time.Minute)
 	defer t.Stop()
 	for {
@@ -113,6 +115,9 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if leader != nil && !leader() {
+				continue
+			}
 			s.tick(ctx)
 		}
 	}

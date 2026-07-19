@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,10 +17,10 @@ func (s *Store) CreateEnrollmentJob(ctx context.Context, hostID uuid.UUID, targe
 	var j models.EnrollmentJob
 	var steps []byte
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO enrollment_jobs (host_id, target, os_hint, status, created_by, started_at)
-		VALUES ($1,$2,$3,'running',$4, now())
+		INSERT INTO enrollment_jobs (host_id, target, os_hint, status, created_by, started_at, instance_id)
+		VALUES ($1,$2,$3,'running',$4, now(),$5)
 		RETURNING id, host_id, target, os_hint, status, steps, error, created_by, created_at, started_at, finished_at`,
-		hostID, target, osHint, createdBy).
+		hostID, target, osHint, createdBy, s.ownerArg()).
 		Scan(&j.ID, &j.HostID, &j.Target, &j.OSHint, &j.Status, &steps, &j.Error, &j.CreatedBy, &j.CreatedAt, &j.StartedAt, &j.FinishedAt)
 	if err != nil {
 		return nil, err
@@ -57,10 +58,10 @@ func (s *Store) DeleteFinishedEnrollmentJobs(ctx context.Context) (int64, error)
 // FailStaleEnrollmentJobs marks any still-"running" jobs as failed on startup: an
 // enrollment runs inside a request goroutine that does not survive a restart, so a
 // job left "running" was interrupted and would otherwise appear stuck forever.
-func (s *Store) FailStaleEnrollmentJobs(ctx context.Context) (int64, error) {
+func (s *Store) FailStaleEnrollmentJobs(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE enrollment_jobs SET status='failed', error='interrupted (server restarted)', finished_at=now()
-		 WHERE status='running'`)
+		`UPDATE enrollment_jobs SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
+		 WHERE status='running' AND `+deadOwnerPredicate("enrollment_jobs"), lease.String())
 	if err != nil {
 		return 0, err
 	}
@@ -132,6 +133,46 @@ func (s *Store) SetHostWGAddress(ctx context.Context, hostID uuid.UUID, wgAddr s
 	_, err := s.pool.Exec(ctx,
 		`UPDATE hosts SET wg_address=NULLIF($2,'')::inet, updated_at=now() WHERE id=$1`, hostID, wgAddr)
 	return err
+}
+
+// SetHostWGPublicKey records a host's WireGuard public key so a standby jump host can
+// rebuild the overlay peer list from Postgres on failover.
+func (s *Store) SetHostWGPublicKey(ctx context.Context, hostID uuid.UUID, pubKey string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET wg_public_key=$2, updated_at=now() WHERE id=$1`, hostID, pubKey)
+	return err
+}
+
+// WGPeer is one managed host's overlay identity: its WireGuard public key and its
+// /32 overlay address (allowed IP on the hub).
+type WGPeer struct {
+	Hostname  string
+	PublicKey string
+	Address   string
+}
+
+// ListWGPeers returns the overlay peers (hosts with both a WireGuard address and a
+// stored public key), so the jump-host hub configuration can be rebuilt from the
+// database — used for standby-jump-host failover.
+func (s *Store) ListWGPeers(ctx context.Context) ([]WGPeer, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT hostname, wg_public_key, host(wg_address)
+		FROM hosts
+		WHERE wg_address IS NOT NULL AND wg_public_key <> ''
+		ORDER BY hostname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WGPeer
+	for rows.Next() {
+		var p WGPeer
+		if err := rows.Scan(&p.Hostname, &p.PublicKey, &p.Address); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // WGAddressInUse reports whether wgAddr is already assigned to a host other than

@@ -549,12 +549,17 @@ export function HostsPage() {
               <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Security scan (OpenSCAP)">
-            <IconButton size="small" onClick={() => setScanTarget(params.row)}>
-              <HealthAndSafetyIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <SupportBundleButton host={params.row} />
+          {/* Scan (OpenSCAP) and support bundle run over SSH — not applicable to RDP hosts. */}
+          {params.row.protocol !== "rdp" && (
+            <>
+              <Tooltip title="Security scan (OpenSCAP)">
+                <IconButton size="small" onClick={() => setScanTarget(params.row)}>
+                  <HealthAndSafetyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <SupportBundleButton host={params.row} />
+            </>
+          )}
           {params.row.protocol === "rdp" ? (
             <Tooltip title="Open Windows desktop (RDP) in a new tab">
               <IconButton
@@ -589,18 +594,21 @@ export function HostsPage() {
               <LockPersonIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title={params.row.enrolled ? "Re-enroll (provision WireGuard)" : "Enroll (provision WireGuard)"}>
-            <span>
-              <IconButton
-                size="small"
-                color={params.row.enrolled ? "success" : "primary"}
-                disabled={enrollMut.isPending}
-                onClick={() => setEnrollTarget(params.row)}
-              >
-                <CableIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+          {/* Enrollment provisions WireGuard + CA trust via a Linux shell script — N/A for RDP. */}
+          {params.row.protocol !== "rdp" && (
+            <Tooltip title={params.row.enrolled ? "Re-enroll (provision WireGuard)" : "Enroll (provision WireGuard)"}>
+              <span>
+                <IconButton
+                  size="small"
+                  color={params.row.enrolled ? "success" : "primary"}
+                  disabled={enrollMut.isPending}
+                  onClick={() => setEnrollTarget(params.row)}
+                >
+                  <CableIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
           <Tooltip title="Delete host">
             <IconButton
               size="small" color="error"

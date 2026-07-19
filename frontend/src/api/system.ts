@@ -39,10 +39,20 @@ export interface RemediationJob {
   createdAt: string;
 }
 
+export interface ClusterInstance {
+  id: string;
+  hostname: string;
+  version: string;
+  isLeader: boolean;
+  startedAt: string;
+  lastHeartbeat: string;
+}
+
 export interface JobsResponse {
   schedulers: SchedulerStatus[];
   enrollmentJobs: EnrollmentJob[];
   remediationJobs: RemediationJob[];
+  cluster?: ClusterInstance[] | null;
 }
 
 export async function getJobs(): Promise<JobsResponse> {

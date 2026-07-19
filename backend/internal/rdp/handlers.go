@@ -72,9 +72,20 @@ func (h *handler) recordingDir() string {
 	return filepath.Join(h.d.Cfg.RecordingDir, "rdp")
 }
 
-// connect authenticates the request, resolves the target + credential, sets up the
-// tunnel, and returns a Guacamole tunnel to guacd. Any error aborts the upgrade.
+// connect wraps the session setup so any failure is logged (the guac WebSocket
+// server otherwise swallows the error, surfacing only as an instant "session ended"
+// in the browser with nothing in the backend log to explain it).
 func (h *handler) connect(r *http.Request) (guac.Tunnel, error) {
+	tunnel, err := h.connectSession(r)
+	if err != nil {
+		h.d.Log.Warn("rdp: session setup failed", "host", chi.URLParam(r, "hostId"), "err", err)
+	}
+	return tunnel, err
+}
+
+// connectSession authenticates the request, resolves the target + credential, sets up
+// the tunnel, and returns a Guacamole tunnel to guacd. Any error aborts the upgrade.
+func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	ctx := r.Context()
 	p, err := h.d.Auth.AuthenticateToken(ctx, r.URL.Query().Get("token"))
 	if err != nil {

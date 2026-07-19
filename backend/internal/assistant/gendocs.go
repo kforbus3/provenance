@@ -32,6 +32,7 @@ var curated = []struct{ File, Title string }{
 	{"security-guide.md", "Security"},
 	{"deployment.md", "Deployment"},
 	{"internet-exposure.md", "Internet Exposure"},
+	{"high-availability.md", "High Availability"},
 }
 
 func main() {

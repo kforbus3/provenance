@@ -5,6 +5,54 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.0 — High Availability (multi-instance)
+
+Fleet Terminal can now run as **multiple backend instances** behind a load balancer,
+for redundancy and rolling upgrades. HA is **safe by default** — a single-instance
+deployment is unchanged (it is simply always the leader). See the new
+[High Availability guide](high-availability.md).
+
+- **Leader election & instance identity.** Each backend registers a heartbeat and
+  contends for leadership via a Postgres session-scoped advisory lock (auto-releases
+  on failure → no split brain). Cluster-wide singleton jobs (host monitor, KRL
+  distribution, retention, digests, reports, backups, dynamic groups) run only on the
+  leader; per-instance work still runs everywhere.
+- **Ownership-scoped reconciliation.** Long-running rows (sessions, scans,
+  playbook/vuln/remediation/enrollment runs) are tagged with their owning instance.
+  On boot and periodically, only work abandoned by a **dead** instance is failed —
+  never a live peer's. Fixes the pre-HA "kill everything on restart" behaviour.
+- **Cross-instance real-time.** A Postgres LISTEN/NOTIFY backplane bridges the
+  WebSocket hub so dashboard events reach clients on every instance, and an admin can
+  terminate a session whose live terminal runs on another instance.
+- **Issue-own-cert model.** A request landing on an instance that doesn't hold the
+  session's key mints its own short-lived cert and **never revokes a peer's** — so any
+  request can be served by any instance (no sticky sessions required). A dead
+  instance's now-keyless certs are revoked by a leader sweep.
+- **Postgres-failover-ready pool** (idle-conn recycling + exponential-backoff
+  reconnect) and a **standby jump-host path**: each host's WireGuard public key is now
+  persisted, and `fleetctl wg-peers` emits the overlay peer list so a standby jump
+  host can rebuild the hub from the database on failover.
+- **Cluster roster** on the Background Jobs page (instances, leader, liveness).
+
+*Deploy:* no configuration is required for single-instance. Migrations `0036`–`0039`
+apply automatically. For a multi-instance deployment (shared Postgres + shared storage
+for recordings, a VIP for the jump host), follow `docs/high-availability.md`.
+
+**Also in this release — RDP refinements.**
+
+- **Windows hosts show real status.** RDP hosts are now health-checked with a TCP probe
+  to the RDP port through the jump host (they have no SSH for the standard probe), so
+  they report online/offline instead of always "unknown".
+- **Protocol-aware actions.** RDP hosts only show actions that work on them — a
+  **Desktop** button in place of Terminal/SFTP across the Hosts, Terminals, and
+  Dashboard views, and the SSH-only actions (OpenSCAP scan, support bundle, WireGuard
+  enrollment) are hidden for RDP hosts.
+- **RDP connection failures are logged.** The broker now logs the reason a desktop
+  session fails to start (credential, reachability, guacd, handshake) instead of only
+  closing the browser tab.
+- **guacd runs with a writable `HOME`** (also shipped as v0.16.2) so FreeRDP's TLS/NLA
+  setup works.
+
 ## v0.16.0 — RDP recording, clipboard/display controls & file transfer
 
 Rounds out Windows/RDP (v0.15.0 shipped live desktops) with recording/replay,

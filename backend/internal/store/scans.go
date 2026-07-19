@@ -2,10 +2,10 @@ package store
 
 import (
 	"context"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/google/uuid"
 )
 
 const scanCols = `id, host_id, requested_by, requester, profile, profile_title, benchmark,
@@ -27,9 +27,9 @@ func scanScan(row interface{ Scan(...any) error }) (*models.HostScan, error) {
 // kicked off by the scheduler (vs a manual one).
 func (s *Store) CreateHostScan(ctx context.Context, hostID uuid.UUID, requestedBy *uuid.UUID, requester, profile string, scheduled bool) (*models.HostScan, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO host_scans(host_id, requested_by, requester, profile, scheduled, status)
-		 VALUES($1,$2,$3,$4,$5,'pending') RETURNING `+scanCols,
-		hostID, requestedBy, requester, profile, scheduled)
+		`INSERT INTO host_scans(host_id, requested_by, requester, profile, scheduled, status, instance_id)
+		 VALUES($1,$2,$3,$4,$5,'pending',$6) RETURNING `+scanCols,
+		hostID, requestedBy, requester, profile, scheduled, s.ownerArg())
 	return scanScan(row)
 }
 
@@ -68,10 +68,10 @@ func (s *Store) CompleteHostScan(ctx context.Context, id uuid.UUID, sum ScanSumm
 
 // FailStaleScans marks scans still pending/running as failed. A scan's worker
 // runs in memory, so any such row at startup was orphaned by a restart.
-func (s *Store) FailStaleScans(ctx context.Context) (int64, error) {
+func (s *Store) FailStaleScans(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE host_scans SET status='failed', error='interrupted (server restarted)', finished_at=now()
-		 WHERE status IN ('pending','running')`)
+		`UPDATE host_scans SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("host_scans"), lease.String())
 	if err != nil {
 		return 0, err
 	}

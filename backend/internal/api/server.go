@@ -38,6 +38,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/bootstrap"
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/certificates"
+	"github.com/fleet-terminal/backend/internal/cluster"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/digest"
 	"github.com/fleet-terminal/backend/internal/enrollment"
@@ -83,16 +84,18 @@ type Server struct {
 	Log     *slog.Logger
 	Version string
 
-	Store   *store.Store
-	Auth    *auth.Service
-	CA      *ca.CA
-	Issuer  *identity.Issuer
-	Gateway *sshgw.Gateway
-	Hub     *ws.Hub
-	Jobs    *jobs.Registry
-	Live    *livesessions.Registry
-	Watch   *livesessions.Broker
-	Notify  *notify.Service
+	Store     *store.Store
+	Auth      *auth.Service
+	CA        *ca.CA
+	Issuer    *identity.Issuer
+	Gateway   *sshgw.Gateway
+	Hub       *ws.Hub
+	Jobs      *jobs.Registry
+	Live      *livesessions.Registry
+	Watch     *livesessions.Broker
+	Notify    *notify.Service
+	Cluster   *cluster.Coordinator // HA: identity, heartbeat lease, leader election
+	backplane *ws.Backplane        // HA: cross-instance event/control bridge
 
 	scanSvc     *scan.Service
 	vulnScan    *vulnscan.Service
@@ -133,6 +136,23 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Watch:   livesessions.NewBroker(),
 		Notify:  notify.New(st, cfg, log),
 	}
+	hostname, _ := os.Hostname()
+	s.Cluster = cluster.New(st, hostname, version, log)
+	st.SetInstanceID(s.Cluster.ID()) // tag long-running rows this instance owns
+
+	// Cross-instance event/control bridge (Postgres LISTEN/NOTIFY). Harmless in a
+	// single-instance deployment (it only ever skips its own messages).
+	s.backplane = ws.NewBackplane(db, s.Cluster.ID().String(), s.Hub, log)
+	s.backplane.SetControlHandler(func(action, target string) {
+		if action == "terminate" {
+			if sid, err := uuid.Parse(target); err == nil {
+				if n := s.Live.Close(sid); n > 0 {
+					log.Info("closed live connections (remote terminate)", "session", sid, "count", n)
+				}
+			}
+		}
+	})
+	s.Hub.SetBackplane(s.backplane)
 
 	// Scan + playbook services are shared between their HTTP handlers and the
 	// scheduler, so construct them once here.
@@ -177,23 +197,27 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 			if n := s.Live.Close(sessionID); n > 0 {
 				log.Info("closed live connections", "session", sessionID, "count", n)
 			}
+			// In HA the PTY may live on another instance; ask peers to close it too.
+			s.Hub.PublishTerminate(sessionID)
 		},
 	)
-	// Re-issue an ephemeral identity for a valid session if the in-RAM vault was
-	// cleared (e.g. by a backend restart), so SSH/SFTP survive restarts.
+	// Mint a per-instance ephemeral identity for a valid session when this instance's
+	// in-RAM vault lacks its key — either after a restart, or (in HA) because the
+	// session was established on a different instance and this request landed here.
+	//
+	// ISSUE-OWN-CERT MODEL (HA-safe): each instance mints and holds its OWN keypair
+	// for the session and never revokes another instance's still-valid cert. Multiple
+	// concurrently-valid certs per session (one per serving instance) are expected and
+	// harmless — each private key lives only in its own instance's RAM. Revocation
+	// happens only on session end (which revokes all of the session's certs) or when
+	// an instance dies (a leader sweep revokes that dead instance's now-keyless certs).
+	// Crucially we do NOT revoke here: doing so would kill a live peer's session.
 	authSvc.SetEnsureCredential(func(ctx context.Context, userID, sessionID uuid.UUID, username string) {
 		if _, ok := vault.Get(sessionID); ok {
 			return
 		}
-		// The vault was cleared (a restart): this session's previously-issued
-		// certificates are now keyless — their private keys lived only in RAM and
-		// were never persisted — so revoke them before minting a fresh one, rather
-		// than leaving them as un-usable but "valid"-looking rows.
-		if n, err := s.Store.RevokeSessionCertificates(ctx, sessionID, "reissued (vault cleared on restart)"); err == nil && n > 0 {
-			log.Info("revoked keyless session certificates after restart", "session", sessionID, "count", n)
-		}
 		if _, err := issuer.Issue(ctx, sessionID, userID, username, dedupe([]string{princ.Global, princ.User(username)})); err != nil {
-			log.Warn("re-issue ephemeral identity", "err", err)
+			log.Warn("issue ephemeral identity for session", "err", err)
 		}
 	})
 
@@ -207,40 +231,73 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	if err := s.CA.EnsureUserCA(ctx); err != nil {
 		return err
 	}
-	// Reconcile: no SSH session or in-memory worker survives a restart; close any
-	// stale "active"/"running" rows so they don't appear stuck forever.
-	if n, err := s.Store.CloseStaleSessions(ctx); err == nil && n > 0 {
-		s.Log.Info("closed stale ssh sessions on startup", "count", n)
-	}
-	if n, err := s.Store.CloseStaleRDPRecordings(ctx); err == nil && n > 0 {
-		s.Log.Info("closed stale rdp recordings on startup", "count", n)
-	}
-	if n, err := s.Store.FailStaleScans(ctx); err == nil && n > 0 {
-		s.Log.Info("failed stale scans on startup", "count", n)
-	}
-	if n, err := s.Store.FailStaleVulnScans(ctx); err == nil && n > 0 {
-		s.Log.Info("failed stale vuln scans on startup", "count", n)
-	}
-	if n, err := s.Store.FailStaleRemediations(ctx); err == nil && n > 0 {
-		s.Log.Info("failed stale remediations on startup", "count", n)
-	}
-	if n, err := s.Store.FailStalePlaybookRuns(ctx); err == nil && n > 0 {
-		s.Log.Info("failed stale playbook runs on startup", "count", n)
-	}
-	if n, err := s.Store.FailStaleEnrollmentJobs(ctx); err == nil && n > 0 {
-		s.Log.Info("failed stale enrollment jobs on startup", "count", n)
-	}
+	// Start cluster membership first so leadership is established before the
+	// singleton loops below decide whether to run, and so reconciliation can see the
+	// live-instance set.
+	go s.Cluster.Run(ctx)
+	go s.backplane.Run(ctx)
+
+	s.reconcileOrphanedWork(ctx)
+
 	go s.renewalLoop(ctx)
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
-	go s.digest.Run(ctx)
-	go s.reportSched.Run(ctx)
+	go s.digest.Run(ctx, s.isLeader)
+	go s.reportSched.Run(ctx, s.isLeader)
 	go s.dynamicGroupLoop(ctx)
 	go s.krlLoop(ctx)
 	go s.scheduler.Run(ctx)
-	go s.backups.Run(ctx)
-	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx)
+	go s.backups.Run(ctx, s.isLeader)
+	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx, s.isLeader)
 	return nil
+}
+
+// isLeader reports whether this instance should run singleton (cluster-wide) work.
+// Nil-safe so unit tests without a coordinator still behave as a single leader.
+func (s *Server) isLeader() bool {
+	return s.Cluster == nil || s.Cluster.IsLeader()
+}
+
+// reconcileOrphanedWork fails long-running rows (sessions, scans, runs) left behind
+// by instances that are no longer alive. In a single-instance deployment this is
+// every stale row (as before a restart); in HA it deliberately spares work owned by
+// still-live peers. See the ownership-scoped store methods (P2).
+func (s *Server) reconcileOrphanedWork(ctx context.Context) {
+	// Reconcile: no SSH session or in-memory worker survives the death of its owning
+	// instance; close any stale "active"/"running" rows owned by dead instances so
+	// they don't appear stuck forever (while sparing live peers' work).
+	lease := cluster.Lease
+	if n, err := s.Store.CloseStaleSessions(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("closed orphaned ssh sessions", "count", n)
+	}
+	if n, err := s.Store.CloseStaleRDPRecordings(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("closed orphaned rdp recordings", "count", n)
+	}
+	if n, err := s.Store.FailStaleScans(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("failed orphaned scans", "count", n)
+	}
+	if n, err := s.Store.FailStaleVulnScans(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("failed orphaned vuln scans", "count", n)
+	}
+	if n, err := s.Store.FailStaleRemediations(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("failed orphaned remediations", "count", n)
+	}
+	if n, err := s.Store.FailStalePlaybookRuns(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("failed orphaned playbook runs", "count", n)
+	}
+	if n, err := s.Store.FailStaleEnrollmentJobs(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("failed orphaned enrollment jobs", "count", n)
+	}
+	// Revoke certificates issued by instances that have died (keyless now). Leader
+	// only, since it mutates the shared KRL and pushes it to hosts.
+	if s.isLeader() {
+		if n, err := s.Store.RevokeDeadInstanceCertificates(ctx, lease); err == nil && n > 0 {
+			s.Log.Info("revoked certificates of dead instances", "count", n)
+			if _, derr := s.distributeKRL(ctx); derr != nil {
+				s.Log.Warn("distribute KRL after dead-instance revoke", "err", derr)
+			}
+		}
+	}
 }
 
 // krlLoop rebuilds the certificate revocation list and pushes it to enrolled
@@ -257,6 +314,9 @@ func (s *Server) krlLoop(ctx context.Context) {
 	// per host, so this reconciliation is what makes revocation eventually reliable.
 	const reconcileEvery = 6
 	tick := func() {
+		if !s.isLeader() {
+			return // singleton: only the leader pushes the KRL on the periodic loop
+		}
 		if !krl.Available() {
 			return
 		}
@@ -361,6 +421,9 @@ func (s *Server) retentionLoop(ctx context.Context) {
 	t := time.NewTicker(6 * time.Hour)
 	defer t.Stop()
 	prune := func() {
+		if !s.isLeader() {
+			return // singleton: only the leader prunes shared recordings/metadata
+		}
 		days := s.Store.RecordingRetentionDays(ctx)
 		if days <= 0 {
 			s.Jobs.Record("recording-retention", nil)
@@ -488,11 +551,14 @@ func (s *Server) dynamicGroupLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			t.Reset(3 * time.Minute)
+			if !s.isLeader() {
+				continue // singleton work: only the leader reconciles dynamic groups
+			}
 			if err := s.Store.ReconcileDynamicGroups(ctx); err != nil {
 				s.Log.Warn("reconcile dynamic groups", "err", err)
 			}
 			s.Jobs.Record("dynamic-groups", nil)
-			t.Reset(3 * time.Minute)
 		}
 	}
 }
@@ -508,6 +574,13 @@ func (s *Server) reaperLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if !s.isLeader() {
+				continue // singleton work: only the leader expires grants/sessions
+			}
+			// Reconcile work orphaned by instances that have since died (their lease
+			// expired) — the boot pass only catches instances already dead at startup.
+			s.reconcileOrphanedWork(ctx)
+			s.Jobs.Record("orphan-reconcile", nil)
 			approvals.Reaper(ctx, deps)
 			s.Jobs.Record("approval-expiry", nil)
 			s.Auth.ReapStaleSessions(ctx)
@@ -530,9 +603,13 @@ func (s *Server) renewalLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Per-instance: each instance renews the sessions whose keys live in its
+			// own RAM vault, so this must run on every instance, not just the leader.
 			s.Issuer.RenewExpiring(ctx)
 			s.Jobs.Record("certificate-renewal", nil)
-			s.checkCAAge(ctx)
+			if s.isLeader() {
+				s.checkCAAge(ctx) // singleton notification
+			}
 		}
 	}
 }

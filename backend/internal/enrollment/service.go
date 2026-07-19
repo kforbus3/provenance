@@ -380,6 +380,11 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 			return fail("configure_jump_peer", orErr(jerr, jout))
 		}
 		step("configure_jump_peer", "ok", fmt.Sprintf("peer %s allowed-ips %s/32", short(hostPub), wgIP))
+		// Persist the host's overlay public key so a standby jump host can rebuild the
+		// peer list from Postgres on failover (best-effort; not fatal to enrollment).
+		if perr := s.store.SetHostWGPublicKey(ctx, host.ID, hostPub); perr != nil {
+			s.log.Warn("persist host wg public key", "host", host.Hostname, "err", perr)
+		}
 	} else {
 		step("configure_host_wireguard", "skipped",
 			"host is directly reachable from the jump host — reached at its management address, no overlay")

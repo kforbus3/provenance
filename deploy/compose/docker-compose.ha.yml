@@ -1,0 +1,97 @@
+# Fleet Terminal — 2-instance High Availability TEST stack.
+#
+# Runs two backend instances against one Postgres, behind a round-robin nginx load
+# balancer, so you can exercise leader election, ownership reconciliation, the event
+# backplane, and failover (see docs/high-availability.md §8).
+#
+# It is an isolated Compose project (its own name/volumes/network), so it does NOT
+# touch a `make up-single` / `up-app` stack running alongside it.
+#
+# Run (from the repo root):
+#   docker compose --env-file .env -f deploy/compose/docker-compose.ha.yml -p fleet-ha up -d --build
+#   docker compose -p fleet-ha logs -f backend1 backend2 | grep -i cluster   # watch leadership
+# Reach the API through the LB at http://localhost:8080  (backends also on :8091/:8092).
+# Tear down:
+#   docker compose -p fleet-ha down -v
+
+name: fleet-ha
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
+      POSTGRES_DB: fleet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [fleet]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [fleet]
+
+  # Both backends inherit the full environment/build of the base `backend` service
+  # (same secrets from --env-file .env), and only override ports + dependencies. They
+  # share the recordings/rdp-drive volumes (same project) as HA requires.
+  backend1:
+    extends:
+      file: docker-compose.yml
+      service: backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports: !override
+      - "127.0.0.1:8091:8080"
+    networks: [fleet]
+
+  backend2:
+    extends:
+      file: docker-compose.yml
+      service: backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports: !override
+      - "127.0.0.1:8092:8080"
+    networks: [fleet]
+
+  lb:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./ha-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      # 8088 (not 8080) to avoid clashing with a co-running up-single/up-app stack.
+      - "127.0.0.1:8088:80"
+    depends_on: [backend1, backend2]
+    networks: [fleet]
+
+volumes:
+  pgdata:
+  recordings:
+  scans:
+  scap-content:
+  backups:
+  rdp-drive:
+
+networks:
+  fleet:
+    driver: bridge

@@ -21,9 +21,9 @@ type VulnSummary struct {
 func (s *Store) CreateVulnScan(ctx context.Context, hostID uuid.UUID, requestedBy *uuid.UUID, requester string, scheduled bool) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO vuln_scans (host_id, requested_by, requester, scheduled, status)
-		 VALUES ($1,$2,$3,$4,'pending') RETURNING id`,
-		hostID, requestedBy, requester, scheduled).Scan(&id)
+		`INSERT INTO vuln_scans (host_id, requested_by, requester, scheduled, status, instance_id)
+		 VALUES ($1,$2,$3,$4,'pending',$5) RETURNING id`,
+		hostID, requestedBy, requester, scheduled, s.ownerArg()).Scan(&id)
 	return id, err
 }
 
@@ -164,10 +164,10 @@ func (s *Store) LatestVulnScans(ctx context.Context) ([]models.VulnScan, error) 
 }
 
 // FailStaleVulnScans fails any scan left running across a restart.
-func (s *Store) FailStaleVulnScans(ctx context.Context) (int64, error) {
+func (s *Store) FailStaleVulnScans(ctx context.Context, lease time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE vuln_scans SET status='failed', error='interrupted by restart', finished_at=now()
-		 WHERE status IN ('pending','running')`)
+		`UPDATE vuln_scans SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("vuln_scans"), lease.String())
 	if err != nil {
 		return 0, err
 	}
