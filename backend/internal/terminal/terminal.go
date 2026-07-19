@@ -176,6 +176,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 
 	var gwConn *sshgw.Conn
 	var err error
+	var connectedAddr string
 	for _, addr := range candidates {
 		if injection != nil {
 			gwConn, err = h.gw.DialAuthViaJump(ctx, p.SessionID.String(), addr, host.SSHPort, injection.LoginUser, injection.Auth)
@@ -184,6 +185,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			gwConn, err = h.gw.DialForHost(ctx, p.SessionID, p.UserID, host.ID, p.Username, host.Hostname, addr, host.SSHPort, loginUser, principals)
 		}
 		if err == nil {
+			connectedAddr = addr
 			break
 		}
 	}
@@ -258,7 +260,14 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: "session.start",
 		TargetKind: "host", TargetID: host.ID.String(),
-		Detail: map[string]any{"hostname": host.Hostname, "sshSessionId": sshSessionID},
+		Detail: map[string]any{
+			"hostname": host.Hostname, "sshSessionId": sshSessionID,
+			// Connection provenance for audit: the exact address the session used and
+			// whether it is the host's WireGuard overlay address (tamper-evident proof
+			// the session rode the overlay).
+			"targetAddress": connectedAddr,
+			"overlay":       host.WGAddress != "" && connectedAddr == host.WGAddress,
+		},
 	})
 	// Push a live event so dashboards show who is connected to which host in
 	// real time (matched by session.end below).

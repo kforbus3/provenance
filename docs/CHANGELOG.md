@@ -5,6 +5,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.21.2 — Prove a session rode the WireGuard overlay (audit + indicator)
+
+Two ways to confirm/prove a connection went over WireGuard, rather than inferring
+it from latency:
+
+- **Audit provenance (proof).** Session-start audit events now record the exact
+  address the session was brokered to and whether it is the host's overlay
+  address: `session.start` (SSH) and `session.rdp_start` (RDP) carry
+  `targetAddress` and `overlay: true|false`. Because the audit log is hash-chained
+  and tamper-evident, this is defensible evidence — combined with the (also
+  audited) strict-overlay policy being enabled — that a given session used the
+  WireGuard overlay. Filter the Audit page by the session action to produce it.
+- **At-a-glance indicator.** A green **WireGuard** chip now appears on the Hosts
+  and Terminals pages for any host reachable over a healthy overlay (the
+  affirmative counterpart to the existing "WG down" chip), so a healthy overlay is
+  visible instead of showing nothing. Note: the per-host **latency** figures are
+  not comparable across protocols — SSH latency is a full handshake, RDP latency
+  is a bare TCP connect — so a lower RDP number is expected and says nothing about
+  whether WireGuard is in use.
+
 ## v0.21.1 — Clarify: strict overlay mode covers Windows RDP
 
 The **Strict overlay — require WireGuard** setting already forces enrolled hosts

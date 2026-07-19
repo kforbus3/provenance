@@ -9,7 +9,7 @@ import FolderIcon from "@mui/icons-material/Folder";
 import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import { useQuery } from "@tanstack/react-query";
 import { listHosts, type Host } from "../api/hosts";
-import { WgDownChip, wgDegraded } from "../components/WgStatus";
+import { WgDownChip, WgOnChip, wgDegraded, wgHealthy } from "../components/WgStatus";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -113,6 +113,7 @@ export function TerminalsPage() {
                   </Typography>
                   <Stack direction="row" spacing={0.5} alignItems="center">
                     {wgDegraded(h) && <WgDownChip />}
+                    {wgHealthy(h) && <WgOnChip />}
                     <Chip size="small" label={status} color={STATUS_COLOR[status] ?? "default"} />
                   </Stack>
                 </Stack>

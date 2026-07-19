@@ -135,9 +135,11 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	}
 	var rawConn net.Conn
 	var jumpClient *ssh.Client
+	var connectedAddr string
 	for _, addr := range cands {
 		rawConn, jumpClient, err = h.gw.DialRawViaJump(ctx, p.SessionID.String(), addr, host.RDPPort)
 		if err == nil {
+			connectedAddr = addr
 			break
 		}
 	}
@@ -211,6 +213,11 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 			"clipboardCopy":  host.RDPOptions.ClipboardCopy,
 			"clipboardPaste": host.RDPOptions.ClipboardPaste,
 			"driveEnabled":   host.RDPOptions.EnableDrive,
+			// Connection provenance: the exact address the session was brokered to,
+			// and whether that is the host's WireGuard overlay address. This is the
+			// tamper-evident (hash-chained) record that the session rode the overlay.
+			"targetAddress": connectedAddr,
+			"overlay":       host.WGAddress != "" && connectedAddr == host.WGAddress,
 		},
 	})
 	return tunnel, nil

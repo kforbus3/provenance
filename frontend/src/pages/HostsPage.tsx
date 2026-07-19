@@ -44,7 +44,7 @@ import { useAuthStore } from "../store/auth";
 import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
 } from "@mui/material";
-import { WgDownChip, wgDegraded } from "../components/WgStatus";
+import { WgDownChip, WgOnChip, wgDegraded, wgHealthy } from "../components/WgStatus";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -483,6 +483,7 @@ export function HostsPage() {
         <Stack direction="row" spacing={0.5} alignItems="center">
           <span>{params.row.wgAddress || "—"}</span>
           {wgDegraded(params.row) && <WgDownChip />}
+          {wgHealthy(params.row) && <WgOnChip />}
         </Stack>
       ),
     },
