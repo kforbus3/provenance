@@ -31,14 +31,6 @@ export async function downloadRdpRecordingBlob(id: string): Promise<Blob> {
   return res.data as Blob;
 }
 
-// downloadRdpPlayerHTML fetches a fully self-contained HTML player (the Guacamole
-// client + the recording embedded) that plays the session offline — double-click to
-// watch, no server required.
-export async function downloadRdpPlayerHTML(id: string): Promise<Blob> {
-  const res = await api.get(`/api/v1/rdp/recordings/${id}/player`, { responseType: "blob" });
-  return res.data as Blob;
-}
-
 export async function deleteRdpRecording(id: string): Promise<void> {
   await api.delete(`/api/v1/rdp/recordings/${id}`);
 }

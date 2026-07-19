@@ -33,7 +33,6 @@ func MountAPI(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/rdp/recordings/stats", h.stats)
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/rdp/recordings/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/rdp/recordings/{id}/download", h.download)
-		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/rdp/recordings/{id}/player", h.player)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Delete("/rdp/recordings/{id}", h.remove)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/rdp/recordings/prune", h.prune)
 	})
@@ -105,30 +104,6 @@ func (h *apiHandler) stream(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.Copy(w, f)
-}
-
-// player returns a fully self-contained HTML document that plays the recording
-// offline (the Guacamole client + the recording are both embedded). The client
-// downloads it to watch later, no server required — parity with SSH replay export.
-func (h *apiHandler) player(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid recording id")
-		return
-	}
-	rec, err := h.d.Store.GetRDPRecording(r.Context(), id)
-	if err != nil {
-		httpx.WriteError(w, http.StatusNotFound, "recording not found")
-		return
-	}
-	data, err := os.ReadFile(h.resolvePath(rec.Path))
-	if err != nil {
-		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
-		return
-	}
-	title := rec.RDPUser + "@" + rec.Hostname + " · " + rec.StartedAt.Format("2006-01-02 15:04:05")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, renderRDPPlayerHTML(title, data))
 }
 
 // download streams the raw Guacamole recording as a file attachment (for saving a

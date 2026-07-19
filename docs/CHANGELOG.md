@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.8 — Revert RDP download to raw recording (.guac)
+
+The self-contained offline RDP HTML player is dropped: guacamole-common-js 1.5.0's
+recording playback leaves the desktop black offline (an async image-load race in the
+library's render loop that can't be fixed cleanly from outside). The RDP download is
+again the **raw `.guac` recording**; in-app replay (Session Replay → Desktop) remains
+the supported way to watch. Removes the vendored player and its endpoint.
+
 ## v0.17.7 — Downloaded RDP player: patch the Guacamole Blob bug
 
 The downloaded player threw `cannot read property "size" of undefined` — a bug in
