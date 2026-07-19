@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.24.2 — `make redeploy-single`: update app code without dropping the overlay
+
+Root-caused the recurring "hosts offline for minutes after a deploy" on a single
+instance: `make up-single` runs `compose up -d --build`, which **recreates the
+jump-host container** — tearing down the WireGuard overlay so every managed host
+has to re-handshake before the monitor can reach it (leader election was already
+proven instant; this was the actual cause).
+
+New **`make redeploy-single`** updates only the app services
+(`backend frontend grype-scanner`) in place, leaving the jump host and overlay
+**running** — so a code deploy no longer disrupts host connectivity (just the
+few-second backend restart). Use `up-single` for the initial bring-up or jump-host
+changes; use `redeploy-single` for routine code updates.
+
 ## v0.24.1 — Monitor sweeps promptly on becoming leader (offline-after-restart)
 
 Compounding the leader-handoff delay: while an instance wasn't leader yet, the

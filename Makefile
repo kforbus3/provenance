@@ -43,10 +43,17 @@ up-app: env ## Start only the application stack (no test fabric)
 	$(COMPOSE) up -d --build
 
 .PHONY: up-single
-up-single: env ## Single-server production: app stack + co-located jump host (VPN server)
+up-single: env ## Single-server production: (re)build & start the WHOLE stack incl. the jump host
 	$(COMPOSE_SINGLE) up -d --build
 	@echo "Single-server stack up. Set FLEET_WG_JUMP_ENDPOINT to the host's address:port"
 	@echo "(public IP/DNS, or LAN IP if managed hosts are internal) and open that UDP port."
+	@echo "NOTE: this recreated the jump host, so the WireGuard overlay re-establishes and"
+	@echo "hosts may show offline for a minute or two. For code-only updates use 'make redeploy-single'."
+
+.PHONY: redeploy-single
+redeploy-single: env ## Update app code (backend/frontend/scanner) in place, leaving the jump host + WireGuard overlay UP (no host-offline blip)
+	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner
+	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
 
 .PHONY: ps-single
 ps-single: ## Single-server: show running services
