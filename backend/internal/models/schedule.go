@@ -52,3 +52,8 @@ type PlaybookSchedulePayload struct {
 	PlaybookID uuid.UUID `json:"playbookId"`
 	CheckMode  bool      `json:"checkMode"`
 }
+
+// ScriptSchedulePayload is the Payload for a PowerShell script schedule.
+type ScriptSchedulePayload struct {
+	ScriptID uuid.UUID `json:"scriptId"`
+}

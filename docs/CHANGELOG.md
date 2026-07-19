@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.20.2 — Scheduled PowerShell script runs
+
+PowerShell scripts can now be run on a recurring schedule, just like Ansible
+playbooks and scans. The **Schedules** page gains a "PowerShell script (Windows)"
+kind: pick a script and a target host or group, set the recurrence, and the
+scheduler fires it via the same runner (bounded fan-out, output cap, run history).
+
+Because a scheduled run is unattended (no interactive credential check-out), it
+uses only **open-policy** credentials — the same rule the monitor follows. A
+scheduled run against a host whose credential is check-out-gated is reported as a
+credential failure for that host rather than silently using a gated secret.
+Non-Windows hosts in a targeted group are skipped.
+
 ## v0.20.1 — Unified Automation page (Ansible playbooks + PowerShell scripts)
 
 The **Playbooks** nav item is now **Automation**, a single page with two tabs:

@@ -17,6 +17,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/vulnscan"
+	"github.com/fleet-terminal/backend/internal/winscript"
 )
 
 // scanFanoutLimit bounds how many host scans a scheduled fire runs at once. A
@@ -26,16 +27,17 @@ const scanFanoutLimit = 16
 
 // Engine ticks on an interval and fires due schedules.
 type Engine struct {
-	store    *store.Store
-	scans    *scan.Service
-	vuln     *vulnscan.Service
-	playbook *playbook.Service
-	log      *slog.Logger
-	scanSem  chan struct{}
+	store     *store.Store
+	scans     *scan.Service
+	vuln      *vulnscan.Service
+	playbook  *playbook.Service
+	winscript *winscript.Service
+	log       *slog.Logger
+	scanSem   chan struct{}
 }
 
-func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, pb *playbook.Service, log *slog.Logger) *Engine {
-	return &Engine{store: st, scans: scans, vuln: vuln, playbook: pb, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
+func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, pb *playbook.Service, ws *winscript.Service, log *slog.Logger) *Engine {
+	return &Engine{store: st, scans: scans, vuln: vuln, playbook: pb, winscript: ws, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
 }
 
 // Run drives the scheduler loop until ctx is cancelled, checking once a minute.
@@ -89,6 +91,8 @@ func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.
 		return e.fireVulnScan(ctx, sc, hosts)
 	case "playbook":
 		return e.firePlaybook(ctx, sc, hosts)
+	case "script":
+		return e.fireScript(ctx, sc, hosts)
 	default:
 		return "error: unknown kind", nil
 	}
@@ -199,5 +203,49 @@ func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []
 		return "error: create run", nil
 	}
 	go e.playbook.Run(rec.ID, pb.Content, hosts, p.CheckMode)
+	return "started", []uuid.UUID{rec.ID}
+}
+
+// fireScript runs a PowerShell script on the schedule's Windows hosts. Non-Windows
+// hosts in the target are skipped (PowerShell doesn't apply). Scheduled runs are
+// unattended, so winscript.Run uses only open-policy credentials (nil userID).
+func (e *Engine) fireScript(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {
+	var p models.ScriptSchedulePayload
+	if err := json.Unmarshal(sc.Payload, &p); err != nil {
+		return "error: bad payload", nil
+	}
+	script, err := e.store.GetWinScript(ctx, p.ScriptID)
+	if err != nil {
+		return "error: script not found", nil
+	}
+	winHosts := make([]*models.Host, 0, len(hosts))
+	for _, h := range hosts {
+		if h.Protocol == "rdp" {
+			winHosts = append(winHosts, h)
+		}
+	}
+	if len(winHosts) == 0 {
+		return "skipped: no Windows hosts", nil
+	}
+	var targetID *uuid.UUID
+	if sc.TargetKind == "group" {
+		targetID = sc.TargetID
+	} else if len(winHosts) == 1 {
+		targetID = &winHosts[0].ID
+	}
+	rec, err := e.store.CreateWinScriptRun(ctx, models.WinScriptRun{
+		ScriptID:      script.ID,
+		ScriptVersion: script.Version,
+		Requester:     sc.Requester,
+		TargetKind:    sc.TargetKind,
+		TargetID:      targetID,
+		TargetName:    sc.TargetName,
+		HostCount:     len(winHosts),
+		Scheduled:     true,
+	}, nil)
+	if err != nil {
+		return "error: create run", nil
+	}
+	go e.winscript.Run(rec.ID, script.Content, winHosts, nil)
 	return "started", []uuid.UUID{rec.ID}
 }

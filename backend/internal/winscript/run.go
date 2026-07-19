@@ -82,7 +82,9 @@ func firstWinAddr(h *models.Host) string {
 //
 // userID is the requester: their identity gates each host's vaulted credential, so a
 // check-out/approval-gated credential is only used while they hold an active check-out.
-func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, userID uuid.UUID) {
+// A nil userID means a scheduled/unattended run, which — having no interactive
+// check-out — uses only open-policy credentials (like the monitor's fact collection).
+func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, userID *uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRunTimeout)
 	defer cancel()
 
@@ -162,8 +164,9 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, use
 
 // runOne executes the script on a single host and returns its captured output, exit
 // code, and whether it failed. It opens exactly one jump-host connection and reuses it
-// for the WinRM tunnel (same per-host cost as a monitor probe).
-func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h *models.Host, userID uuid.UUID) (string, int, bool) {
+// for the WinRM tunnel (same per-host cost as a monitor probe). A nil userID uses the
+// open-policy credential path (scheduled/unattended runs).
+func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h *models.Host, userID *uuid.UUID) (string, int, bool) {
 	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), runCertTTL)
 	if err != nil {
 		return "could not issue jump credential: " + err.Error(), -1, true
@@ -174,7 +177,13 @@ func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h
 	}
 	defer jump.Close()
 
-	user, pass, err := credinject.PasswordFor(ctx, s.store, vaultKey, h, userID)
+	var user, pass string
+	if userID == nil {
+		// Scheduled/unattended: only open-policy credentials, no interactive check-out.
+		user, pass, err = credinject.PasswordForSystem(ctx, s.store, vaultKey, h)
+	} else {
+		user, pass, err = credinject.PasswordFor(ctx, s.store, vaultKey, h, *userID)
+	}
 	if err != nil {
 		return "credential unavailable: " + err.Error(), -1, true
 	}

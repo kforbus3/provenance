@@ -63,8 +63,8 @@ func (h *handler) toModel(r *http.Request, rq *scheduleReq) (*models.Schedule, s
 	if rq.Name == "" {
 		return nil, "name is required", false
 	}
-	if rq.Kind != "scan" && rq.Kind != "playbook" {
-		return nil, "kind must be scan or playbook", false
+	if rq.Kind != "scan" && rq.Kind != "playbook" && rq.Kind != "script" {
+		return nil, "kind must be scan, playbook, or script", false
 	}
 	if rq.TargetKind == "" {
 		rq.TargetKind = "host"

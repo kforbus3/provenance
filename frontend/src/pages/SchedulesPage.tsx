@@ -17,6 +17,7 @@ import {
 import { listHosts, type Host } from "../api/hosts";
 import { listGroups, type Group } from "../api/admin";
 import { listPlaybooks, type Playbook } from "../api/playbooks";
+import { listScripts, type Script } from "../api/scripts";
 import { listScanProfiles } from "../api/scans";
 import { formatDateTime } from "../lib/datetime";
 
@@ -75,8 +76,9 @@ export function SchedulesPage() {
         </Button>
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Run scans or playbooks on a recurring basis. New schedules are disabled until you turn them
-        on. Times use the app's configured timezone (set it in Settings → Time zone).
+        Run scans, Ansible playbooks, or PowerShell scripts on a recurring basis. New schedules are
+        disabled until you turn them on. Times use the app's configured timezone (set it in Settings
+        → Time zone).
       </Typography>
 
       <TableContainer component={Paper} variant="outlined">
@@ -181,10 +183,11 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
   const { data: hostData } = useQuery({ queryKey: ["hosts"], queryFn: listHosts });
   const { data: groups = [] } = useQuery({ queryKey: ["groups"], queryFn: listGroups });
   const { data: playbooks = [] } = useQuery({ queryKey: ["playbooks"], queryFn: listPlaybooks });
+  const { data: scripts = [] } = useQuery({ queryKey: ["scripts"], queryFn: listScripts });
   const hosts = hostData?.hosts ?? [];
 
   const [name, setName] = useState(schedule?.name ?? "");
-  const [kind, setKind] = useState<"scan" | "playbook">(schedule?.kind ?? "scan");
+  const [kind, setKind] = useState<"scan" | "playbook" | "script">(schedule?.kind ?? "scan");
   const [targetKind, setTargetKind] = useState<"host" | "group">(schedule?.targetKind ?? "host");
   const [host, setHost] = useState<Host | null>(null);
   const [group, setGroup] = useState<Group | null>(null);
@@ -202,8 +205,9 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
   const [skipFs, setSkipFs] = useState(Boolean(initPayload.skipExpensiveFsRules));
   const [playbook, setPlaybook] = useState<Playbook | null>(null);
   const [checkMode, setCheckMode] = useState(initPayload.checkMode !== false);
+  const [script, setScript] = useState<Script | null>(null);
 
-  // hydrate target/playbook selections once data arrives
+  // hydrate target/playbook/script selections once data arrives
   useEffect(() => {
     if (schedule?.targetId && targetKind === "host" && !host) {
       const h = hosts.find((x) => x.id === schedule.targetId);
@@ -217,7 +221,11 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
       const p = playbooks.find((x) => x.id === initPayload.playbookId);
       if (p) setPlaybook(p);
     }
-  }, [hosts, groups, playbooks]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (kind === "script" && !script && initPayload.scriptId) {
+      const s = scripts.find((x) => x.id === initPayload.scriptId);
+      if (s) setScript(s);
+    }
+  }, [hosts, groups, playbooks, scripts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // For a scan schedule, discover available profiles from the target host (or a
   // member of the target group) so the user can pick from a dropdown.
@@ -239,10 +247,13 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
   const payload = () =>
     kind === "scan"
       ? { profile: profile.trim(), skipExpensiveFsRules: skipFs, skipRules: [] }
-      : { playbookId: playbook?.id ?? "", checkMode };
+      : kind === "script"
+        ? { scriptId: script?.id ?? "" }
+        : { playbookId: playbook?.id ?? "", checkMode };
 
   const targetId = targetKind === "host" ? host?.id : group?.id;
-  const playbookOk = kind !== "playbook" || !!playbook;
+  const payloadOk =
+    (kind !== "playbook" || !!playbook) && (kind !== "script" || !!script);
 
   const save = useMutation({
     mutationFn: () => {
@@ -262,9 +273,10 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField label="Name" size="small" value={name} onChange={(e) => setName(e.target.value)} autoFocus fullWidth />
 
-          <TextField label="What to run" size="small" select value={kind} onChange={(e) => setKind(e.target.value as "scan" | "playbook")}>
+          <TextField label="What to run" size="small" select value={kind} onChange={(e) => setKind(e.target.value as "scan" | "playbook" | "script")}>
             <MenuItem value="scan">Security scan</MenuItem>
-            <MenuItem value="playbook">Ansible playbook</MenuItem>
+            <MenuItem value="playbook">Ansible playbook (Linux)</MenuItem>
+            <MenuItem value="script">PowerShell script (Windows)</MenuItem>
           </TextField>
 
           {kind === "scan" ? (
@@ -291,7 +303,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
               <FormControlLabel control={<Switch checked={skipFs} onChange={(e) => setSkipFs(e.target.checked)} />}
                 label="Skip slow FS rules" />
             </Stack>
-          ) : (
+          ) : kind === "playbook" ? (
             <Stack direction="row" spacing={2} alignItems="center">
               <Autocomplete sx={{ flexGrow: 1 }} options={playbooks} value={playbook}
                 onChange={(_, v) => setPlaybook(v)} getOptionLabel={(p) => p.name}
@@ -300,6 +312,12 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
               <FormControlLabel control={<Switch checked={checkMode} onChange={(e) => setCheckMode(e.target.checked)} />}
                 label="Dry run" />
             </Stack>
+          ) : (
+            <Autocomplete options={scripts} value={script}
+              onChange={(_, v) => setScript(v)} getOptionLabel={(s) => s.name}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              renderInput={(params) => <TextField {...params} label="PowerShell script" size="small"
+                helperText="Runs on the target's Windows hosts as their open-policy credential" />} />
           )}
 
           <Box>
@@ -358,7 +376,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={!name.trim() || !targetId || !playbookOk || save.isPending}
+        <Button variant="contained" disabled={!name.trim() || !targetId || !payloadOk || save.isPending}
           onClick={() => save.mutate()}>
           {isNew ? "Create" : "Save"}
         </Button>

@@ -12,7 +12,7 @@ export interface Recurrence {
 export interface Schedule {
   id: string;
   name: string;
-  kind: "scan" | "playbook";
+  kind: "scan" | "playbook" | "script";
   enabled: boolean;
   targetKind: "host" | "group";
   targetId?: string;
@@ -30,7 +30,7 @@ export interface Schedule {
 
 export interface ScheduleInput {
   name: string;
-  kind: "scan" | "playbook";
+  kind: "scan" | "playbook" | "script";
   enabled: boolean;
   targetKind: "host" | "group";
   targetId: string;
