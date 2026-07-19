@@ -5,32 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v0.15.0 — Windows desktops (RDP)
+## v0.16.0 — RDP recording, clipboard/display controls & file transfer
 
-Fleet brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
-terminals and SFTP — no local RDP client, no direct route to the host. Delivered as
-one release covering live desktops, session recording, clipboard/display controls, and
-file transfer.
-
-**Live RDP in the browser.** Set a host's **Protocol** to **RDP** and pick its port
-(default `3389`); the host shows a **desktop** action that opens the live Windows
-desktop in a new tab, gated by `Host.Connect` and the usual per-host access checks.
-Mouse/keyboard are wired through and the desktop resizes to follow the browser window.
-- **Brokered through the jump host.** The backend tunnels the target's RDP port over
-  the **same jump-host / WireGuard path as SSH** and hands the bundled **guacd** sidecar
-  an ephemeral local proxy — so guacd only ever connects back to the backend and needs
-  no route to managed hosts.
-- **Credential injected, never seen.** RDP authenticates with a **vaulted password
-  credential** injected into guacd **in memory** — the operator never sees it and it
-  never reaches the browser. Attaching it enforces the same `Host.Edit` +
-  credential-access (and check-out policy) rules as SSH injection.
+Rounds out Windows/RDP (v0.15.0 shipped live desktops) with recording/replay,
+per-host display & security controls, gated clipboard, and drive-redirection file
+transfer.
 
 **Session recording & replay.** Every RDP session is recorded (guacd streams a
 Guacamole recording to a shared volume; the backend stores metadata and serves it
 back). A new **Desktop (RDP)** tab under **Session Replay** replays them with a
 built-in player (play/pause + seek), gated by `Session.Replay`; delete/prune needs
-`System.Configure` and shares the SSH recording retention window. Sessions audit
-`session.rdp_start` and `session.rdp_end` (with duration).
+`System.Configure` and shares the SSH recording retention window. Sessions now audit
+`session.rdp_end` (with duration) alongside `session.rdp_start`.
 
 **Clipboard & display/security controls.** Per-host RDP options passed to guacd:
 security mode (Any / NLA / TLS / RDP / Hyper-V), color depth, resolution/DPI, AD
@@ -38,7 +24,7 @@ domain, and audio + wallpaper/theming toggles — for compatibility with locked-
 NLA-only Windows hosts. **Clipboard** copy (desktop → browser) and paste (browser →
 desktop) are independent and **off by default** (a data-transfer surface); guacd
 enforces each gate and enabled directions are audited. (Clipboard needs an HTTPS
-origin.)
+origin.) The live desktop also resizes to follow the browser window.
 
 **Drive redirection (file transfer).** Enabling **Enable drive** mounts a **Fleet**
 drive in the session and adds a **Files** button to the viewer — browse, download, and
@@ -49,12 +35,36 @@ backend removes when the session ends (scratch space, not durable storage).
 *Multi-monitor is not supported* — Guacamole's web client cannot drive multiple RDP
 displays.
 
-*Deploy:* pull the updated `deploy/compose/docker-compose.yml` — it adds the **guacd**
-sidecar (running as the backend's `fleet` user, uid 100 / gid 101) plus the shared
-`recordings` and `rdp-drive` volumes. Optional `FLEET_GUACD_ADDR`,
-`FLEET_RDP_PROXY_HOST`, and `FLEET_RDP_DRIVE_DIR` default to the compose values.
-Migrations `0033`–`0035` (host `protocol`/`rdp_port`, the `rdp_recordings` table, and a
-JSONB `rdp_options` column) apply automatically.
+*Deploy:* pull the updated `deploy/compose/docker-compose.yml` — the **guacd** sidecar
+now runs as the backend's `fleet` user (uid 100 / gid 101) and mounts the shared
+`recordings` and `rdp-drive` volumes. Optional `FLEET_RDP_DRIVE_DIR` defaults to
+`/var/lib/fleet/rdp-drive`. Migrations `0034` (the `rdp_recordings` table) and `0035`
+(a JSONB `rdp_options` column on hosts) apply automatically.
+
+## v0.15.0 — Windows desktops (RDP)
+
+Fleet brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
+terminals and SFTP — no local RDP client, no direct route to the host.
+
+- **Live RDP in the browser.** Set a host's **Protocol** to **RDP** and pick its port
+  (default `3389`); the host then shows a **desktop** action that opens the live
+  Windows desktop in a new tab, gated by `Host.Connect` and the usual per-host access
+  checks. Mouse and keyboard are wired through; each connect is audited
+  (`session.rdp_start`).
+- **Brokered through the jump host.** The backend tunnels the target's RDP port over
+  the **same jump-host / WireGuard path as SSH** and hands the bundled **guacd**
+  sidecar an ephemeral local proxy — so guacd only ever connects back to the backend
+  and needs no route to managed hosts.
+- **Credential injected, never seen.** RDP authenticates with a **vaulted password
+  credential** injected into guacd **in memory** — the operator never sees it and it
+  never reaches the browser. Attaching it enforces the same `Host.Edit` +
+  credential-access (and check-out policy) rules as SSH injection.
+
+*Deploy:* add the `guacd` service (bundled in `deploy/compose/docker-compose.yml`) to
+your stack. Optional `FLEET_GUACD_ADDR` / `FLEET_RDP_PROXY_HOST` default to the
+compose service names. Migration `0033` (host `protocol` + `rdp_port`) applies
+automatically. Clipboard, drive redirection, multi-monitor, and RDP session recording
+are not in this release.
 
 ## v0.14.0 — Credential vault: injection, check-out, rotation
 
