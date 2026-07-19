@@ -194,14 +194,24 @@ Endpoint = __ENDPOINT__
 AllowedIPs = __SUBNET__
 PersistentKeepalive = 25
 "@
-$confPath = Join-Path $env:TEMP "fleet.conf"
+# WireGuard for Windows' tunnel service reads this config file from its path on EVERY
+# start (it is not copied into a store), so it must live at a PERSISTENT location — a
+# %TEMP% file that gets cleaned up leaves the service unable to load its config after a
+# reboot (it crash-loops with "Unable to load configuration from path"). Store it under
+# ProgramData and lock the ACL to SYSTEM + Administrators, since it holds the private key.
+$confDir = Join-Path $env:ProgramData "Fleet"
+New-Item -ItemType Directory -Path $confDir -Force | Out-Null
+$confPath = Join-Path $confDir "fleet.conf"
 Set-Content -Path $confPath -Value $conf -Encoding ascii
+# S-1-5-18 = SYSTEM (the tunnel service account), S-1-5-32-544 = Administrators. SIDs are
+# locale-independent (the account names differ on non-English Windows).
+icacls $confPath /inheritance:r /grant:r "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
 
-# 4. Install + start the tunnel as a service (auto-connects on boot).
+# 4. Install + start the tunnel as a service (auto-connects on boot). Do NOT delete the
+# config: the service reloads it from this path on every start, including after a reboot.
 try { & $wgquick /uninstalltunnelservice fleet 2>$null | Out-Null } catch {}
 & $wgquick /installtunnelservice $confPath
 Start-Sleep -Seconds 2
-Remove-Item $confPath -Force -ErrorAction SilentlyContinue
 
 # 5. Enable Remote Desktop and open the RDP port in Windows Firewall so Fleet can
 #    broker sessions over the overlay (traffic arrives on the WireGuard interface from

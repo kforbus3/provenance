@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.8 — Windows enrollment: persist the WireGuard config (survive reboots)
+
+Fixed a Windows tunnel that worked until the first reboot and then crash-looped.
+The enrollment script wrote the WireGuard config to `%TEMP%\fleet.conf`, installed
+the tunnel service from it, and then **deleted** the temp file. WireGuard for
+Windows' tunnel service reads its config from that path on every start (it does
+not copy it into a store), so after a reboot the service could not load its
+config — logging `Unable to load configuration from path: …\Temp\…\fleet.conf`
+and shutting down repeatedly — and nothing listened on the WireGuard port until
+someone reactivated it by hand. No amount of service auto-start/recovery can help
+a service whose config file is gone.
+
+The config is now written to a persistent, ACL-locked path
+(`%ProgramData%\Fleet\fleet.conf`, restricted to SYSTEM + Administrators since it
+holds the private key) and is no longer deleted, so the tunnel reconnects on its
+own after a reboot with nobody logged in. Existing Windows hosts must **re-enroll**
+to pick up the persistent config (the old temp config is gone).
+
 ## v0.19.7 — RDP monitoring: one jump connection per probe (scale parity)
 
 A Windows/RDP probe opened the jump-host SSH connection twice per sweep — once
