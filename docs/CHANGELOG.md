@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.20.0 — PowerShell script runner for Windows hosts (backend/API)
+
+Run operator-authored **PowerShell scripts on Windows hosts**, the Windows
+counterpart to the Ansible playbook runner. Author/version scripts, then run them
+on one or many Windows hosts or a group, with streamed per-host output and run
+history — all over the existing WinRM path (no new transport, no sidecar; Python
+isn't involved). This release lands the backend + API; the unified Automation UI
+(Ansible + PowerShell in one place) follows next. Usable now via the API/SDK/CLI.
+
+- **New tables/permissions** (migration `0040`): `winscripts`, `winscript_versions`,
+  `winscript_runs`; `Script.Edit` (author/edit) and `Script.Run` (execute), both
+  Administrator-only by default, mirroring `Playbook.Edit`/`Playbook.Run`.
+- **Execution** runs over WinRM through the jump host, authenticated with each
+  host's **vaulted credential honoring its check-out policy** — a check-out/approval
+  -gated credential is only used while the requester holds an active check-out.
+- **Scalable + safe by construction:** multi-host runs use a **bounded worker
+  pool** (one jump connection per host, same cap as the monitor), output is
+  **size-capped** (4 MiB, truncation-marked), the script runs on **exactly one**
+  WinRM port (TCP pre-probe — never double-executed on port fallback), and each run
+  has a bounded timeout. HA-aware: interrupted runs owned by a dead instance are
+  reconciled to `failed` on startup.
+- API: `GET/POST /scripts`, `GET/PUT/DELETE /scripts/{id}`, `.../versions`,
+  `POST /scripts/{id}/run`, `.../runs`, `GET /script-runs/{runId}` (live output).
+
 ## v0.19.9 — Windows pending-updates (surfaced in Ask, dashboard, host details)
 
 The WinRM fact collection now also counts **pending Windows updates** and the

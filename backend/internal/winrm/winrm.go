@@ -117,6 +117,55 @@ func Collect(ctx context.Context, dial DialFunc, host, user, pass string, ports 
 	return nil, lastErr
 }
 
+// RunScript executes a PowerShell script on a Windows host over WinRM and returns its
+// stdout, stderr, and exit code. Unlike Collect (idempotent facts), this may run
+// arbitrary/mutating code, so it must execute at most once: it first probes the ports
+// (5986 HTTPS, then 5985 HTTP) for the first reachable one and runs the script ONLY on
+// that port — never falling back after a connection is established, which could double
+// -execute the script. The script is passed via -EncodedCommand so no quoting is needed
+// and multi-line scripts work unchanged. Server TLS is not verified (self-signed WinRM
+// certs); the connection is already inside the jump-host tunnel.
+func RunScript(ctx context.Context, dial DialFunc, host, user, pass string, ports []int, script string, timeout time.Duration) (stdout, stderr string, code int, err error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	// Find the first reachable WinRM port without running anything, so a port
+	// fallback can never re-run the script.
+	port := 0
+	var probeErr error
+	for _, p := range ports {
+		conn, e := dial("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
+		if e == nil {
+			_ = conn.Close()
+			port = p
+			break
+		}
+		probeErr = e
+	}
+	if port == 0 {
+		if probeErr == nil {
+			probeErr = fmt.Errorf("no winrm ports configured")
+		}
+		return "", "", -1, fmt.Errorf("no reachable WinRM port: %w", probeErr)
+	}
+
+	ep := &winrm.Endpoint{Host: host, Port: port, HTTPS: port == 5986, Insecure: true, Timeout: timeout}
+	params := winrm.NewParameters(fmt.Sprintf("PT%dS", int(timeout.Seconds())), "en-US", 153600)
+	params.TransportDecorator = func() winrm.Transporter {
+		return winrm.NewClientNTLMWithDial(func(network, addr string) (net.Conn, error) { return dial(network, addr) })
+	}
+	c, err := winrm.NewClientWithParameters(ep, user, pass, params)
+	if err != nil {
+		return "", "", -1, err
+	}
+	cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(script)
+	stdout, stderr, code, err = c.RunWithContextWithString(ctx, cmd, "")
+	if err != nil {
+		return stdout, stderr, -1, err
+	}
+	return stdout, stderr, code, nil
+}
+
 func parseFacts(out string) *Facts {
 	f := &Facts{}
 	var ver, build string

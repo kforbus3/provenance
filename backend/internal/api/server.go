@@ -73,6 +73,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/terminal"
 	"github.com/fleet-terminal/backend/internal/vault"
 	"github.com/fleet-terminal/backend/internal/vulnscan"
+	"github.com/fleet-terminal/backend/internal/winscript"
 	"github.com/fleet-terminal/backend/internal/ws"
 )
 
@@ -97,16 +98,17 @@ type Server struct {
 	Cluster   *cluster.Coordinator // HA: identity, heartbeat lease, leader election
 	backplane *ws.Backplane        // HA: cross-instance event/control bridge
 
-	scanSvc     *scan.Service
-	vulnScan    *vulnscan.Service
-	actionReg   *aiaction.Registry
-	playbookSvc *playbook.Service
-	scheduler   *scheduler.Engine
-	backups     *backup.Service
-	auditFwd    *auditfwd.Forwarder
-	insights    *insights.Service
-	digest      *digest.Service
-	reportSched *reportsched.Service
+	scanSvc      *scan.Service
+	vulnScan     *vulnscan.Service
+	actionReg    *aiaction.Registry
+	playbookSvc  *playbook.Service
+	winscriptSvc *winscript.Service
+	scheduler    *scheduler.Engine
+	backups      *backup.Service
+	auditFwd     *auditfwd.Forwarder
+	insights     *insights.Service
+	digest       *digest.Service
+	reportSched  *reportsched.Service
 
 	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
 	lastCANotify time.Time
@@ -173,6 +175,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	}
 	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
+	s.winscriptSvc = winscript.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.playbookSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.auditFwd = auditfwd.New(st, log)
@@ -284,6 +287,9 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	}
 	if n, err := s.Store.FailStalePlaybookRuns(ctx, lease); err == nil && n > 0 {
 		s.Log.Info("failed orphaned playbook runs", "count", n)
+	}
+	if n, err := s.Store.FailStaleWinScriptRuns(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("failed orphaned script runs", "count", n)
 	}
 	if n, err := s.Store.FailStaleEnrollmentJobs(ctx, lease); err == nil && n > 0 {
 		s.Log.Info("failed orphaned enrollment jobs", "count", n)
@@ -783,6 +789,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	digest.Mount(r, s.Auth, s.digest)
 
 	playbook.Mount(r, deps, s.playbookSvc)
+	winscript.Mount(r, deps, s.winscriptSvc)
 
 	notify.Mount(r, s.Auth, s.Notify)
 

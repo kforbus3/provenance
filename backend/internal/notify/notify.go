@@ -27,6 +27,7 @@ const (
 	EventAccessExpired    = "access.expired"
 	EventScanFindings     = "scan.findings"
 	EventPlaybookFailed   = "playbook.failed"
+	EventScriptFailed     = "script.failed"
 	EventCAKeyAging       = "ca.aging"
 	EventFleetDigest      = "fleet.digest"
 	EventReportScheduled  = "report.scheduled"
@@ -44,6 +45,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventAccessExpired, "Just-in-time access expired"},
 	{EventScanFindings, "Security scan found failures"},
 	{EventPlaybookFailed, "Playbook run failed"},
+	{EventScriptFailed, "PowerShell script run failed"},
 	{EventCAKeyAging, "CA key due for rotation"},
 	{EventFleetDigest, "Scheduled fleet-health digest"},
 	{EventReportScheduled, "Scheduled compliance report"},
