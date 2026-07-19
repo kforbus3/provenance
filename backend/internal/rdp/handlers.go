@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/wwt/guac"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
@@ -123,11 +124,23 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 
 	// Tunnel to the host's RDP port through the jump host, and expose it to guacd
 	// via an ephemeral local listener (guacd reaches this backend, not the target).
-	addr := firstAddr(host)
-	if addr == "" {
+	// Only reach for the WireGuard overlay address once the host is actually
+	// enrolled (tunnel up); before that the overlay isn't routing and the direct
+	// management address is what works. Try candidates in order so a not-yet-live
+	// overlay falls back to the direct address (unless strict WireGuard is on).
+	strictWG := h.d.Store.RequireWireGuard(ctx)
+	cands := rdpCandidates(host, strictWG)
+	if len(cands) == 0 {
 		return nil, fmt.Errorf("host has no address")
 	}
-	rawConn, jumpClient, err := h.gw.DialRawViaJump(ctx, p.SessionID.String(), addr, host.RDPPort)
+	var rawConn net.Conn
+	var jumpClient *ssh.Client
+	for _, addr := range cands {
+		rawConn, jumpClient, err = h.gw.DialRawViaJump(ctx, p.SessionID.String(), addr, host.RDPPort)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("could not reach the host over RDP: %w", err)
 	}
@@ -326,13 +339,41 @@ func (h *handler) onDisconnect(connID string, _ *http.Request, _ guac.Tunnel) {
 	})
 }
 
-func firstAddr(h *models.Host) string {
-	for _, a := range []string{h.WGAddress, h.Address, h.Hostname} {
-		if a != "" {
-			return a
+// rdpCandidates returns the addresses to try, in order, when tunnelling to a
+// host's RDP port. The WireGuard overlay address is preferred only once the host
+// is enrolled (its tunnel is up); until then, or as a fallback, the direct
+// management address / hostname is used. Under strict WireGuard the overlay is
+// the only permitted path for an enrolled host.
+func rdpCandidates(h *models.Host, strictWG bool) []string {
+	var c []string
+	if h.Enrolled && h.WGAddress != "" {
+		c = append(c, h.WGAddress)
+		if strictWG {
+			return c
 		}
 	}
-	return ""
+	for _, a := range []string{h.Address, h.Hostname} {
+		if a != "" {
+			c = append(c, a)
+		}
+	}
+	return dedupe(c)
+}
+
+func dedupe(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := in[:0]
+	for _, v := range in {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func clientIP(r *http.Request) string {

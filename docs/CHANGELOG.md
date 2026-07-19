@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.2 — RDP: don't route over the overlay until the host is enrolled
+
+Clicking **Enroll** on an RDP host allocates and saves the host's WireGuard
+overlay address immediately (the enrollment script needs it baked in). But the
+RDP connection path preferred that overlay address the moment it was set — and
+committed to it with no fallback — so a host mid-enrollment (tunnel not yet up)
+became unreachable over RDP even though its direct address still worked.
+
+RDP addressing is now enrolled-aware: the overlay address is used only once the
+host is actually enrolled (tunnel established), and connections fall back to the
+direct management address otherwise (unless strict WireGuard mode is enabled).
+
 ## v0.19.1 — Fix Windows enroll hang + finish-dialog crash
 
 Finishing a Windows overlay enrollment could hang for minutes and then white-screen.
