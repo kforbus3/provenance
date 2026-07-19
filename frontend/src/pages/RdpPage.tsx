@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Box, CircularProgress, Typography } from "@mui/material";
+import { Box, CircularProgress, Fab, Tooltip, Typography } from "@mui/material";
+import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import Guacamole from "guacamole-common-js";
 import { getAccessToken } from "../api/client";
+import { RdpFilesDrawer } from "../components/RdpFilesDrawer";
 
 // RdpPage renders a live RDP (Windows) desktop in a Guacamole canvas, brokered by
 // the backend + guacd. Opened in its own tab (like the terminal). The credential
@@ -12,6 +14,8 @@ export function RdpPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [error, setError] = useState<string | null>(null);
+  const [fs, setFs] = useState<Guacamole.Object | null>(null);
+  const [filesOpen, setFilesOpen] = useState(false);
 
   useEffect(() => {
     if (!hostId || !containerRef.current) return;
@@ -44,8 +48,46 @@ export function RdpPage() {
       setStatus("disconnected");
     };
 
+    // Drive redirection: guacd advertises a filesystem when the host enables the
+    // drive. Capture it so the Files drawer can browse/transfer.
+    client.onfilesystem = (object: Guacamole.Object) => setFs(object);
+
+    // Clipboard: remote → local. Fires only if the host allows copy (guacd gates it
+    // with disable-copy). Text is written to the browser clipboard best-effort.
+    client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
+      if (!mimetype.startsWith("text/")) return;
+      const reader = new Guacamole.StringReader(stream);
+      let text = "";
+      reader.ontext = (t: string) => { text += t; };
+      reader.onend = () => { void navigator.clipboard?.writeText(text).catch(() => {}); };
+    };
+
     const query = new URLSearchParams({ token, width: String(width), height: String(height) }).toString();
     client.connect(query);
+
+    // Clipboard: local → remote. When the tab regains focus, push the browser
+    // clipboard to the remote so Ctrl+V inside the desktop pastes it. Only takes
+    // effect if the host allows paste (guacd gates it with disable-paste).
+    const pushLocalClipboard = () => {
+      navigator.clipboard?.readText().then((text) => {
+        if (!text) return;
+        const stream = client.createClipboardStream("text/plain");
+        const writer = new Guacamole.StringWriter(stream);
+        writer.sendText(text);
+        writer.sendEnd();
+      }).catch(() => {});
+    };
+    window.addEventListener("focus", pushLocalClipboard);
+
+    // Dynamic resize: keep the remote desktop sized to the browser window.
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const onResize = () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        client.sendSize(Math.floor(window.innerWidth), Math.floor(window.innerHeight));
+      }, 300);
+    };
+    window.addEventListener("resize", onResize);
 
     // Mouse and keyboard wiring.
     const mouse = new Guacamole.Mouse(display);
@@ -61,6 +103,10 @@ export function RdpPage() {
       keyboard.onkeydown = null;
       keyboard.onkeyup = null;
       mouse.offEach(mouseTypes, onMouse);
+      window.removeEventListener("focus", pushLocalClipboard);
+      window.removeEventListener("resize", onResize);
+      clearTimeout(resizeTimer);
+      setFs(null);
       try { client.disconnect(); } catch { /* already gone */ }
     };
   }, [hostId]);
@@ -76,6 +122,15 @@ export function RdpPage() {
           {status === "disconnected" && !error && <Typography>Desktop session ended. You can close this tab.</Typography>}
         </Box>
       )}
+      {fs && status === "connected" && (
+        <Tooltip title="Files (drive)">
+          <Fab size="small" color="default" onClick={() => setFilesOpen(true)}
+            sx={{ position: "absolute", bottom: 16, right: 16, opacity: 0.85 }}>
+            <FolderOpenIcon />
+          </Fab>
+        </Tooltip>
+      )}
+      {fs && <RdpFilesDrawer fs={fs} open={filesOpen} onClose={() => setFilesOpen(false)} />}
     </Box>
   );
 }

@@ -2,14 +2,23 @@
 // sidecar. The browser speaks the Guacamole protocol over a WebSocket; the backend
 // authenticates the user, resolves the host's vaulted credential (the operator
 // never sees it), tunnels guacd → jump host → target:3389, and proxies the stream.
+//
+// Sessions are recorded: guacd writes a Guacamole-protocol recording to a shared
+// volume, and the backend stores metadata (rdp_recordings) so the session can be
+// replayed later via Guacamole.SessionRecording. See handlers_api.go for replay.
 package rdp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,21 +26,50 @@ import (
 	"github.com/wwt/guac"
 
 	"github.com/fleet-terminal/backend/internal/app"
+	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/sshgw"
+	"github.com/fleet-terminal/backend/internal/store"
 )
 
 type handler struct {
 	d  *app.Deps
 	gw *sshgw.Gateway
+
+	mu     sync.Mutex
+	active map[string]*activeSession // keyed by guacd connection id
+}
+
+// activeSession is the in-flight state for one live RDP session, finalized when the
+// WebSocket disconnects: the recording (if any) is closed out and the per-session
+// redirected-drive directory (if any) is removed.
+type activeSession struct {
+	recID     uuid.UUID // uuid.Nil when the session is not being recorded
+	recPath   string
+	driveDir  string // per-session redirected-drive dir to clean up, or ""
+	start     time.Time
+	actorID   uuid.UUID
+	actorName string
+	hostID    uuid.UUID
+	hostname  string
+	rdpUser   string
 }
 
 // Mount attaches the RDP WebSocket endpoint. Like the terminal, it authenticates
 // via a query-param token (browsers can't set headers on a WebSocket upgrade).
 func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
-	h := &handler{d: d, gw: gw}
-	r.Handle("/rdp/{hostId}", guac.NewWebsocketServer(h.connect))
+	h := &handler{d: d, gw: gw, active: map[string]*activeSession{}}
+	ws := guac.NewWebsocketServer(h.connect)
+	ws.OnDisconnect = h.onDisconnect
+	r.Handle("/rdp/{hostId}", ws)
+}
+
+// recordingDir is where guacd writes RDP recordings — a subdir of the shared
+// recordings volume. guacd and the backend mount that volume at the same path, so
+// this string is valid on both sides.
+func (h *handler) recordingDir() string {
+	return filepath.Join(h.d.Cfg.RecordingDir, "rdp")
 }
 
 // connect authenticates the request, resolves the target + credential, sets up the
@@ -105,6 +143,18 @@ func (h *handler) connect(r *http.Request) (guac.Tunnel, error) {
 	}
 	cfg.OptimalScreenWidth = queryInt(r, "width", 1280)
 	cfg.OptimalScreenHeight = queryInt(r, "height", 800)
+	applyRDPOptions(cfg, host.RDPOptions)
+
+	sess := &activeSession{
+		start: time.Now(), actorID: p.UserID, actorName: p.Username,
+		hostID: host.ID, hostname: host.Hostname, rdpUser: username,
+	}
+	// Record the session: guacd streams a Guacamole recording to the shared volume.
+	// If we can't register the recording, the session still proceeds unrecorded.
+	h.startRecording(ctx, r, p, host, username, cfg, sess)
+	// Drive redirection: guacd exposes a per-session directory as a drive in the
+	// desktop; the browser transfers files through it. Isolated per session.
+	sess.driveDir = setupDrive(h.d.Cfg.RDPDriveDir, host.RDPOptions, cfg)
 
 	guacdConn, err := net.DialTimeout("tcp", h.d.Cfg.GuacdAddr, 10*time.Second)
 	if err != nil {
@@ -122,12 +172,147 @@ func (h *handler) connect(r *http.Request) (guac.Tunnel, error) {
 		return nil, fmt.Errorf("desktop session setup failed: %w", err)
 	}
 
+	tunnel := guac.NewSimpleTunnel(stream)
+	h.mu.Lock()
+	h.active[tunnel.ConnectionID()] = sess
+	h.mu.Unlock()
+
 	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: "session.rdp_start",
 		TargetKind: "host", TargetID: host.ID.String(),
-		Detail: map[string]any{"hostname": host.Hostname, "rdpUser": username},
+		Detail: map[string]any{
+			"hostname":       host.Hostname,
+			"rdpUser":        username,
+			"security":       cfg.Parameters["security"],
+			"clipboardCopy":  host.RDPOptions.ClipboardCopy,
+			"clipboardPaste": host.RDPOptions.ClipboardPaste,
+			"driveEnabled":   host.RDPOptions.EnableDrive,
+		},
 	})
-	return guac.NewSimpleTunnel(stream), nil
+	return tunnel, nil
+}
+
+// setupDrive configures guacd's redirected-drive parameters when the host enables
+// it, using a fresh per-session subdirectory (so sessions never share files), and
+// returns that directory for cleanup on disconnect (or "" if the drive is off).
+func setupDrive(baseDir string, o models.RDPOptions, cfg *guac.Config) string {
+	if !o.EnableDrive {
+		return ""
+	}
+	dir := filepath.Join(baseDir, uuid.New().String())
+	cfg.Parameters["enable-drive"] = "true"
+	cfg.Parameters["drive-name"] = "Fleet"
+	cfg.Parameters["drive-path"] = dir
+	cfg.Parameters["create-drive-path"] = "true"
+	// Gate each transfer direction (default off = both disabled).
+	cfg.Parameters["disable-upload"] = boolStr(!o.DriveUpload)
+	cfg.Parameters["disable-download"] = boolStr(!o.DriveDownload)
+	return dir
+}
+
+// applyRDPOptions maps a host's RDPOptions onto guacd connection parameters. Unset
+// fields are left at guacd's defaults. Clipboard is disabled per direction unless the
+// host explicitly opted in (disable-copy / disable-paste are guacd's gates).
+func applyRDPOptions(cfg *guac.Config, o models.RDPOptions) {
+	switch o.Security {
+	case "nla", "tls", "rdp", "vmconnect", "any":
+		cfg.Parameters["security"] = o.Security
+	}
+	if o.ColorDepth == 8 || o.ColorDepth == 16 || o.ColorDepth == 24 || o.ColorDepth == 32 {
+		cfg.Parameters["color-depth"] = strconv.Itoa(o.ColorDepth)
+	}
+	if o.Width > 0 {
+		cfg.OptimalScreenWidth = o.Width
+	}
+	if o.Height > 0 {
+		cfg.OptimalScreenHeight = o.Height
+	}
+	if o.DPI > 0 {
+		cfg.OptimalResolution = o.DPI
+	}
+	if o.DisableAudio {
+		cfg.Parameters["disable-audio"] = "true"
+	}
+	if o.EnableTheming {
+		cfg.Parameters["enable-wallpaper"] = "true"
+		cfg.Parameters["enable-theming"] = "true"
+		cfg.Parameters["enable-font-smoothing"] = "true"
+	}
+	if o.Domain != "" {
+		cfg.Parameters["domain"] = o.Domain
+	}
+	// Clipboard: gate each direction. Default (no opt-in) disables both.
+	cfg.Parameters["disable-copy"] = boolStr(!o.ClipboardCopy)
+	cfg.Parameters["disable-paste"] = boolStr(!o.ClipboardPaste)
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// startRecording creates the recording row and wires guacd's recording parameters,
+// filling the session's recording fields. If the row can't be created, the session
+// proceeds unrecorded (recID stays uuid.Nil).
+func (h *handler) startRecording(ctx context.Context, r *http.Request, p *auth.Principal, host *models.Host, rdpUser string, cfg *guac.Config, sess *activeSession) {
+	id := uuid.New()
+	dir := h.recordingDir()
+	path := filepath.Join(dir, id.String())
+	hostID := host.ID
+	_, err := h.d.Store.CreateRDPRecording(ctx, store.RDPRecordingInput{
+		ID: id, HostID: &hostID, UserID: &p.UserID, Hostname: host.Hostname,
+		FleetUser: p.Username, RDPUser: rdpUser, Path: path, ClientIP: clientIP(r),
+	})
+	if err != nil {
+		h.d.Log.Warn("rdp: could not create recording row", "err", err)
+		return
+	}
+	cfg.Parameters["recording-path"] = dir
+	cfg.Parameters["recording-name"] = id.String()
+	cfg.Parameters["create-recording-path"] = "true"
+	sess.recID = id
+	sess.recPath = path
+}
+
+// onDisconnect finalizes a session when the WebSocket closes: it closes out the
+// recording (if any), removes the per-session redirected-drive directory (if any),
+// and audits the session end.
+func (h *handler) onDisconnect(connID string, _ *http.Request, _ guac.Tunnel) {
+	h.mu.Lock()
+	sess := h.active[connID]
+	delete(h.active, connID)
+	h.mu.Unlock()
+	if sess == nil {
+		return
+	}
+
+	// The request context is already cancelled (WS closed); use a fresh one.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	duration := time.Since(sess.start).Milliseconds()
+	if sess.recID != uuid.Nil {
+		var size int64
+		if fi, err := os.Stat(sess.recPath); err == nil {
+			size = fi.Size()
+		}
+		if err := h.d.Store.FinishRDPRecording(ctx, sess.recID, size, duration); err != nil {
+			h.d.Log.Warn("rdp: could not finalize recording", "err", err, "id", sess.recID)
+		}
+	}
+	if sess.driveDir != "" {
+		if err := os.RemoveAll(sess.driveDir); err != nil {
+			h.d.Log.Warn("rdp: could not remove drive dir", "err", err, "dir", sess.driveDir)
+		}
+	}
+	actorID := sess.actorID
+	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
+		ActorID: &actorID, ActorName: sess.actorName, Action: "session.rdp_end",
+		TargetKind: "host", TargetID: sess.hostID.String(),
+		Detail: map[string]any{"hostname": sess.hostname, "rdpUser": sess.rdpUser, "durationMs": duration},
+	})
 }
 
 func firstAddr(h *models.Host) string {
@@ -137,6 +322,14 @@ func firstAddr(h *models.Host) string {
 		}
 	}
 	return ""
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
 }
 
 func queryInt(r *http.Request, key string, def int) int {

@@ -736,7 +736,9 @@ proxy. guacd therefore only ever connects back to the backend — it needs **no 
 managed hosts**, and RDP traffic still rides the WireGuard overlay / jump hop. Two
 settings wire the pair (defaults match the bundled compose file):
 `FLEET_GUACD_ADDR` (where the backend reaches guacd, default `guacd:4822`) and
-`FLEET_RDP_PROXY_HOST` (how guacd reaches the backend, default `backend`).
+`FLEET_RDP_PROXY_HOST` (how guacd reaches the backend, default `backend`). In the
+bundled compose file guacd also mounts the shared `recordings` volume and runs as the
+backend's `fleet` user so recordings it writes are readable by the backend (see below).
 
 **Configure an RDP host.** On the host form set **Protocol** to **RDP (Windows
 desktop)** and the **RDP Port** (default `3389`). RDP has no Fleet-certificate mode:
@@ -746,10 +748,43 @@ never sees it and it never reaches the browser. Attaching the credential enforce
 same `Host.Edit` + credential-access checks as SSH injection, and if the credential
 has a check-out policy the operator must hold an active check-out to connect.
 
+**Display & security options.** The host form exposes per-host RDP settings passed to
+guacd: **security mode** (Any / NLA / TLS / RDP / Hyper-V — match the host, e.g. NLA
+for locked-down Windows), **color depth**, fixed **resolution/DPI** (leave `0` to fit
+the browser window), an AD **domain**, and toggles for **audio** and
+**wallpaper/theming**. The live viewer also resizes the remote desktop to follow the
+browser window.
+
+**Clipboard (opt-in, per direction).** Copy/paste between the browser and the desktop
+is **off by default** — it is a data-transfer surface. Enable it per host and per
+direction: **Allow copy** (desktop → browser) and **Allow paste** (browser → desktop).
+guacd enforces each gate; the enabled directions are recorded in the session-start
+audit event. (Browser clipboard access requires an HTTPS origin.)
+
+**Drive redirection / file transfer (opt-in).** Enabling **Enable drive** on the host
+mounts a **Fleet** drive inside the RDP session and adds a **Files** button to the
+desktop viewer for browsing, downloading, and uploading files — each direction gated
+by **Allow upload** (browser → desktop) and **Allow download** (desktop → browser),
+both off by default. Each session gets its **own isolated exchange directory** on the
+shared `rdp-drive` volume (`FLEET_RDP_DRIVE_DIR`, default `/var/lib/fleet/rdp-drive`);
+the backend **removes it when the session ends**, so transferred files are scratch
+space, not durable storage. guacd runs as the backend's `fleet` user so the backend
+can clean up. `driveEnabled` is recorded in the session-start audit. *Multi-monitor
+is not supported* — Guacamole's web client cannot drive multiple RDP displays.
+
 **Connect.** An RDP host shows a **desktop** action (instead of terminal/SFTP) that
 opens the live desktop in a new tab, gated by `Host.Connect` and the usual per-host
-access checks. Each connection is audited (`session.rdp_start`). Clipboard, drive
-redirection, multi-monitor, and session recording for RDP are not in this release.
+access checks. Each connection is audited (`session.rdp_start`, and `session.rdp_end`
+with its duration on close).
+
+**Recording & replay.** RDP sessions are recorded automatically. guacd writes a
+Guacamole recording to the shared `recordings` volume (under
+`<FLEET_RECORDING_DIR>/rdp`); the backend stores the metadata and serves the stream
+back for replay. Watch recordings under **Session Replay → Desktop (RDP)** — a
+built-in player with play/pause and a seek bar, gated by `Session.Replay`. Deleting or
+pruning RDP recordings needs `System.Configure`; they share the same retention window
+as SSH recordings (Settings → retention, or the retention job). Clipboard, drive
+redirection, and multi-monitor for RDP are not in this release.
 
 ## 19. Live session shadowing
 

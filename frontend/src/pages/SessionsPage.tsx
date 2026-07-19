@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Checkbox, Chip, Drawer, FormControlLabel, IconButton, MenuItem, Paper,
-  Snackbar, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField,
-  Tooltip, Typography, Divider, CircularProgress,
+  Snackbar, Stack, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs,
+  TextField, Tooltip, Typography, Divider, CircularProgress,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -18,6 +18,7 @@ import {
   recordingStats, type SSHSession,
 } from "../api/sessions";
 import { useAuthStore } from "../store/auth";
+import { RdpRecordingsPanel } from "../components/RdpRecordingsPanel";
 
 // One parsed asciicast v2 output frame: absolute time offset (seconds) + bytes.
 interface CastFrame {
@@ -116,6 +117,7 @@ export function SessionsPage() {
   const { data: sessions = [], isLoading } = useQuery({ queryKey: ["sessions"], queryFn: listSessions });
   const { data: stats } = useQuery({ queryKey: ["recording-stats"], queryFn: recordingStats });
   const [active, setActive] = useState<SSHSession | null>(null);
+  const [tab, setTab] = useState(0);
   const [pruneDays, setPruneDays] = useState("30");
   const [snack, setSnack] = useState<string | null>(null);
   const canManage = useAuthStore((s) => s.has("System.Configure"));
@@ -160,8 +162,18 @@ export function SessionsPage() {
 
   return (
     <Box>
+      <Typography variant="h5" sx={{ mb: 2 }}>Session Replay</Typography>
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+        <Tab label="Terminal (SSH)" />
+        <Tab label="Desktop (RDP)" />
+      </Tabs>
+
+      {tab === 1 && <RdpRecordingsPanel />}
+
+      {tab === 0 && (
+      <Box>
       <Stack direction="row" alignItems="center" sx={{ mb: 2 }} spacing={2}>
-        <Typography variant="h5" sx={{ flexGrow: 1 }}>Session Replay</Typography>
+        <Box sx={{ flexGrow: 1 }} />
         {stats && (
           <Typography variant="body2" color="text.secondary">
             {stats.count} recordings · {formatBytes(stats.bytes)}
@@ -321,6 +333,8 @@ export function SessionsPage() {
           </Box>
         )}
       </Drawer>
+      </Box>
+      )}
 
       <Snackbar
         open={Boolean(snack)} autoHideDuration={4000} onClose={() => setSnack(null)}

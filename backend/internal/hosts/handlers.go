@@ -116,19 +116,20 @@ func (h *handler) statusStats(w http.ResponseWriter, r *http.Request) {
 }
 
 type hostReq struct {
-	Hostname     string     `json:"hostname"`
-	Description  string     `json:"description"`
-	Environment  string     `json:"environment"`
-	Owner        string     `json:"owner"`
-	Address      string     `json:"address"`
-	WGAddress    string     `json:"wgAddress"`
-	SSHPort      int        `json:"sshPort"`
-	SSHUser      string     `json:"sshUser"`
-	Tags         []string   `json:"tags"`
-	AuthMethod   string     `json:"authMethod"`
-	CredentialID *uuid.UUID `json:"credentialId"`
-	Protocol     string     `json:"protocol"`
-	RDPPort      int        `json:"rdpPort"`
+	Hostname     string            `json:"hostname"`
+	Description  string            `json:"description"`
+	Environment  string            `json:"environment"`
+	Owner        string            `json:"owner"`
+	Address      string            `json:"address"`
+	WGAddress    string            `json:"wgAddress"`
+	SSHPort      int               `json:"sshPort"`
+	SSHUser      string            `json:"sshUser"`
+	Tags         []string          `json:"tags"`
+	AuthMethod   string            `json:"authMethod"`
+	CredentialID *uuid.UUID        `json:"credentialId"`
+	Protocol     string            `json:"protocol"`
+	RDPPort      int               `json:"rdpPort"`
+	RDPOptions   models.RDPOptions `json:"rdpOptions"`
 }
 
 func (rq hostReq) toInput() store.HostInput {
@@ -137,7 +138,7 @@ func (rq hostReq) toInput() store.HostInput {
 		Owner: rq.Owner, Address: rq.Address, WGAddress: rq.WGAddress,
 		SSHPort: rq.SSHPort, SSHUser: rq.SSHUser, Tags: rq.Tags,
 		AuthMethod: rq.AuthMethod, CredentialID: rq.CredentialID,
-		Protocol: rq.Protocol, RDPPort: rq.RDPPort,
+		Protocol: rq.Protocol, RDPPort: rq.RDPPort, RDPOptions: rq.RDPOptions,
 	}
 }
 

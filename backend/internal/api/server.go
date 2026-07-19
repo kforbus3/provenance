@@ -212,6 +212,9 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	if n, err := s.Store.CloseStaleSessions(ctx); err == nil && n > 0 {
 		s.Log.Info("closed stale ssh sessions on startup", "count", n)
 	}
+	if n, err := s.Store.CloseStaleRDPRecordings(ctx); err == nil && n > 0 {
+		s.Log.Info("closed stale rdp recordings on startup", "count", n)
+	}
 	if n, err := s.Store.FailStaleScans(ctx); err == nil && n > 0 {
 		s.Log.Info("failed stale scans on startup", "count", n)
 	}
@@ -376,6 +379,20 @@ func (s *Server) retentionLoop(ctx context.Context) {
 		}
 		if len(paths) > 0 {
 			s.Log.Info("pruned recordings", "count", len(paths), "bytes", bytes, "retentionDays", days)
+		}
+		// RDP recordings share the same retention window as SSH recordings.
+		if rpaths, rbytes, rerr := s.Store.PruneRDPRecordingsBefore(ctx, time.Now().AddDate(0, 0, -days)); rerr == nil {
+			for _, p := range rpaths {
+				if !filepath.IsAbs(p) {
+					p = filepath.Join(s.Cfg.RecordingDir, p)
+				}
+				_ = os.Remove(p)
+			}
+			if len(rpaths) > 0 {
+				s.Log.Info("pruned rdp recordings", "count", len(rpaths), "bytes", rbytes, "retentionDays", days)
+			}
+		} else {
+			s.Log.Warn("prune rdp recordings", "err", rerr)
 		}
 		s.Jobs.Record("recording-retention", nil)
 
@@ -705,6 +722,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	scim.Mount(r, deps)
 	vault.Mount(r, deps, s.Gateway)
 	rdp.Mount(r, deps, s.Gateway)
+	rdp.MountAPI(r, deps)
 	auditapi.Mount(r, deps)
 	reports.Mount(r, deps)
 	reportsched.Mount(r, s.Auth, s.reportSched)

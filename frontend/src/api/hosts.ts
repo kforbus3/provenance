@@ -77,6 +77,7 @@ export interface Host {
   credentialId?: string | null;
   protocol: string; // ssh | rdp
   rdpPort: number;
+  rdpOptions?: RDPOptions;
   enrolled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -106,6 +107,25 @@ export interface HostInput {
   credentialId?: string | null;
   protocol?: string;
   rdpPort?: number;
+  rdpOptions?: RDPOptions;
+}
+
+// RDPOptions are per-host display/security and clipboard settings for RDP hosts.
+// Zero/empty values mean "use guacd defaults". Clipboard is off unless opted in.
+export interface RDPOptions {
+  security?: string; // any | nla | tls | rdp | vmconnect
+  colorDepth?: number; // 0 | 8 | 16 | 24 | 32
+  width?: number; // 0 = fit to the browser window
+  height?: number;
+  dpi?: number; // 0 = default (96)
+  disableAudio?: boolean;
+  enableTheming?: boolean; // wallpaper + theming + font smoothing
+  domain?: string;
+  clipboardCopy?: boolean; // allow remote -> local
+  clipboardPaste?: boolean; // allow local -> remote
+  enableDrive?: boolean; // expose a virtual drive for file transfer
+  driveUpload?: boolean; // allow browser -> drive
+  driveDownload?: boolean; // allow drive -> browser
 }
 
 export async function listHosts(): Promise<HostListResponse> {

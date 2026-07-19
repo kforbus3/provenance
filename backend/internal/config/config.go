@@ -179,6 +179,10 @@ type Config struct {
 	// network, e.g. the compose service name).
 	GuacdAddr    string
 	RDPProxyHost string
+	// RDPDriveDir is the base directory (on the shared rdp-drive volume) where guacd
+	// stores per-session redirected-drive files for RDP file transfer. The backend
+	// removes a session's subdir when it ends.
+	RDPDriveDir string
 
 	// SFTP upload size cap in bytes (0 = unlimited).
 	MaxUploadBytes int64
@@ -250,6 +254,7 @@ func Load() (*Config, error) {
 		VaultPassphrase:        env("FLEET_VAULT_PASSPHRASE", ""),
 		GuacdAddr:              env("FLEET_GUACD_ADDR", "guacd:4822"),
 		RDPProxyHost:           env("FLEET_RDP_PROXY_HOST", "backend"),
+		RDPDriveDir:            env("FLEET_RDP_DRIVE_DIR", "/var/lib/fleet/rdp-drive"),
 		MaxUploadBytes:         envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
 		LogLevel:               env("FLEET_LOG_LEVEL", "info"),
 		LogFormat:              env("FLEET_LOG_FORMAT", "json"),

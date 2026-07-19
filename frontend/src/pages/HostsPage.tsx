@@ -56,7 +56,7 @@ const EMPTY_FORM: HostInput = {
   hostname: "", description: "", environment: "", owner: "",
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
   authMethod: "fleet_cert", credentialId: null,
-  protocol: "ssh", rdpPort: 3389,
+  protocol: "ssh", rdpPort: 3389, rdpOptions: {},
 };
 
 const fmtDate = (value?: string): string => formatDateTime(value);
@@ -141,7 +141,7 @@ const hostToForm = (h: Host): HostInput => ({
   owner: h.owner ?? "", address: h.address ?? "", wgAddress: h.wgAddress ?? "",
   sshPort: h.sshPort || 22, sshUser: h.sshUser ?? "", tags: h.tags ?? [],
   authMethod: h.authMethod ?? "fleet_cert", credentialId: h.credentialId ?? null,
-  protocol: h.protocol ?? "ssh", rdpPort: h.rdpPort || 3389,
+  protocol: h.protocol ?? "ssh", rdpPort: h.rdpPort || 3389, rdpOptions: h.rdpOptions ?? {},
 });
 
 // NewHostDialog collects the create/edit payload; tags are entered as a
@@ -274,6 +274,88 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
                 </MenuItem>
               ))}
             </TextField>
+          )}
+          {form.protocol === "rdp" && (
+            <>
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Desktop display & security</Typography></Divider>
+              <Stack direction="row" spacing={2}>
+                <TextField select label="Security mode" fullWidth
+                  value={form.rdpOptions?.security ?? "any"}
+                  helperText="Match the host's RDP setting; NLA for locked-down Windows"
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, security: e.target.value } }))}>
+                  <MenuItem value="any">Any (negotiate)</MenuItem>
+                  <MenuItem value="nla">NLA</MenuItem>
+                  <MenuItem value="tls">TLS</MenuItem>
+                  <MenuItem value="rdp">RDP (legacy)</MenuItem>
+                  <MenuItem value="vmconnect">Hyper-V (vmconnect)</MenuItem>
+                </TextField>
+                <TextField select label="Color depth" sx={{ width: 160 }}
+                  value={form.rdpOptions?.colorDepth ?? 0}
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, colorDepth: Number(e.target.value) } }))}>
+                  <MenuItem value={0}>Default</MenuItem>
+                  <MenuItem value={8}>8-bit</MenuItem>
+                  <MenuItem value={16}>16-bit</MenuItem>
+                  <MenuItem value={24}>24-bit</MenuItem>
+                  <MenuItem value={32}>32-bit</MenuItem>
+                </TextField>
+              </Stack>
+              <Stack direction="row" spacing={2}>
+                <TextField label="Width" type="number" sx={{ width: 120 }}
+                  value={form.rdpOptions?.width ?? 0}
+                  helperText="0 = fit window"
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, width: Number(e.target.value) } }))} />
+                <TextField label="Height" type="number" sx={{ width: 120 }}
+                  value={form.rdpOptions?.height ?? 0}
+                  helperText="0 = fit window"
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, height: Number(e.target.value) } }))} />
+                <TextField label="DPI" type="number" sx={{ width: 120 }}
+                  value={form.rdpOptions?.dpi ?? 0}
+                  helperText="0 = 96"
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, dpi: Number(e.target.value) } }))} />
+                <TextField label="Domain" fullWidth
+                  value={form.rdpOptions?.domain ?? ""}
+                  placeholder="AD domain (optional)"
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, domain: e.target.value } }))} />
+              </Stack>
+              <Stack direction="row" spacing={2}>
+                <FormControlLabel
+                  control={<Checkbox checked={form.rdpOptions?.disableAudio ?? false}
+                    onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, disableAudio: e.target.checked } }))} />}
+                  label="Disable audio" />
+                <FormControlLabel
+                  control={<Checkbox checked={form.rdpOptions?.enableTheming ?? false}
+                    onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, enableTheming: e.target.checked } }))} />}
+                  label="Wallpaper & theming" />
+              </Stack>
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Clipboard (data transfer — off by default)</Typography></Divider>
+              <Stack direction="row" spacing={2}>
+                <FormControlLabel
+                  control={<Checkbox checked={form.rdpOptions?.clipboardCopy ?? false}
+                    onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, clipboardCopy: e.target.checked } }))} />}
+                  label="Allow copy (desktop → browser)" />
+                <FormControlLabel
+                  control={<Checkbox checked={form.rdpOptions?.clipboardPaste ?? false}
+                    onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, clipboardPaste: e.target.checked } }))} />}
+                  label="Allow paste (browser → desktop)" />
+              </Stack>
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Drive redirection / file transfer (off by default)</Typography></Divider>
+              <FormControlLabel
+                control={<Checkbox checked={form.rdpOptions?.enableDrive ?? false}
+                  onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, enableDrive: e.target.checked } }))} />}
+                label="Enable drive (mounts a Fleet drive in the desktop)" />
+              {form.rdpOptions?.enableDrive && (
+                <Stack direction="row" spacing={2} sx={{ pl: 4 }}>
+                  <FormControlLabel
+                    control={<Checkbox checked={form.rdpOptions?.driveUpload ?? false}
+                      onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, driveUpload: e.target.checked } }))} />}
+                    label="Allow upload (browser → desktop)" />
+                  <FormControlLabel
+                    control={<Checkbox checked={form.rdpOptions?.driveDownload ?? false}
+                      onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, driveDownload: e.target.checked } }))} />}
+                    label="Allow download (desktop → browser)" />
+                </Stack>
+              )}
+            </>
           )}
         </Stack>
       </DialogContent>

@@ -195,15 +195,40 @@ type Host struct {
 	CredentialID *uuid.UUID `json:"credentialId,omitempty"`
 	// Protocol is how Fleet reaches the host: ssh (default; terminal/SFTP) or rdp
 	// (Windows desktop brokered through guacd, on RDPPort).
-	Protocol  string    `json:"protocol"`
-	RDPPort   int       `json:"rdpPort"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Protocol   string     `json:"protocol"`
+	RDPPort    int        `json:"rdpPort"`
+	RDPOptions RDPOptions `json:"rdpOptions"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 
 	Groups    []string       `json:"groups,omitempty"`
 	Inventory *HostInventory `json:"inventory,omitempty"`
 	Status    *HostStatus    `json:"status,omitempty"`
 	Metrics   *HostMetrics   `json:"metrics,omitempty"`
+}
+
+// RDPOptions are per-host display/security and clipboard settings applied when
+// brokering an RDP session to guacd. Zero values mean "guacd default", preserving
+// the original behaviour. Clipboard copy/paste are off unless explicitly enabled —
+// they are data-exfiltration surfaces, so a host owner opts in per direction.
+type RDPOptions struct {
+	Security      string `json:"security,omitempty"`      // any (default) | nla | tls | rdp | vmconnect
+	ColorDepth    int    `json:"colorDepth,omitempty"`    // 0 (default) | 8 | 16 | 24 | 32
+	Width         int    `json:"width,omitempty"`         // 0 = use the browser's size
+	Height        int    `json:"height,omitempty"`        // 0 = use the browser's size
+	DPI           int    `json:"dpi,omitempty"`           // 0 = guacd default (96)
+	DisableAudio  bool   `json:"disableAudio,omitempty"`  // mute the remote audio channel
+	EnableTheming bool   `json:"enableTheming,omitempty"` // wallpaper + theming + font smoothing
+	Domain        string `json:"domain,omitempty"`        // Windows/AD domain to authenticate against
+
+	ClipboardCopy  bool `json:"clipboardCopy,omitempty"`  // allow remote -> local clipboard
+	ClipboardPaste bool `json:"clipboardPaste,omitempty"` // allow local -> remote clipboard
+
+	// Drive redirection (file transfer) exposes a virtual drive in the RDP session.
+	// Off unless EnableDrive; each transfer direction is separately gated.
+	EnableDrive   bool `json:"enableDrive,omitempty"`
+	DriveUpload   bool `json:"driveUpload,omitempty"`   // allow browser -> drive
+	DriveDownload bool `json:"driveDownload,omitempty"` // allow drive -> browser
 }
 
 // DiskFS is one mounted filesystem's usage.
@@ -352,6 +377,26 @@ type Recording struct {
 	DurationMS   int64     `json:"durationMs"`
 	SHA256       string    `json:"sha256"`
 	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// RDPRecording is replay metadata for an RDP (Windows desktop) session. The
+// recording itself is a Guacamole-protocol stream written by guacd to a shared
+// volume; Path (hidden from JSON) points at that file.
+type RDPRecording struct {
+	ID         uuid.UUID  `json:"id"`
+	HostID     *uuid.UUID `json:"hostId,omitempty"`
+	UserID     *uuid.UUID `json:"userId,omitempty"`
+	Hostname   string     `json:"hostname"`
+	FleetUser  string     `json:"fleetUser"`
+	RDPUser    string     `json:"rdpUser"`
+	Format     string     `json:"format"`
+	Path       string     `json:"-"`
+	SizeBytes  int64      `json:"sizeBytes"`
+	DurationMS int64      `json:"durationMs"`
+	Status     string     `json:"status"`
+	ClientIP   string     `json:"clientIp"`
+	StartedAt  time.Time  `json:"startedAt"`
+	EndedAt    *time.Time `json:"endedAt,omitempty"`
 }
 
 // ApprovalRequest is a just-in-time access request.

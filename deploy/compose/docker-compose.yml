@@ -115,6 +115,7 @@ services:
       - scans:/var/lib/fleet/scans
       - scap-content:/var/lib/fleet/scap-content
       - backups:/var/lib/fleet/backups
+      - rdp-drive:/var/lib/fleet/rdp-drive
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,9 +172,20 @@ services:
   # backend. Internal only, reachable at guacd:4822. The backend tunnels the
   # target's RDP port to guacd through the jump host, so guacd only ever connects
   # back to the backend — it needs no direct route to managed hosts.
+  #
+  # guacd writes RDP session recordings into the shared `recordings` volume (under
+  # /var/lib/fleet/recordings/rdp), which the backend serves back for replay, and
+  # per-session redirected-drive files into the `rdp-drive` volume (for RDP file
+  # transfer, cleaned up by the backend when the session ends). It runs as the
+  # backend's `fleet` user (uid 100 / gid 101 from the backend image) so the backend
+  # can read/remove the files guacd creates on those shared volumes.
   guacd:
     image: guacamole/guacd:1.5.5
+    user: "100:101"
     restart: unless-stopped
+    volumes:
+      - recordings:/var/lib/fleet/recordings
+      - rdp-drive:/var/lib/fleet/rdp-drive
     networks: [fleet]
 
 volumes:
@@ -184,6 +196,7 @@ volumes:
   scap-content:
   backups:
   grype-db:
+  rdp-drive:
 
 networks:
   fleet:
