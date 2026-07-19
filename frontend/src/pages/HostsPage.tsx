@@ -1106,6 +1106,9 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
   const inv = h?.inventory;
   const st = h?.status;
   const met = h?.metrics;
+  // RDP (Windows) hosts have no SSH/kernel/apt-updates and aren't on the WireGuard
+  // overlay; their facts come from WinRM. Hide the fields that don't apply.
+  const isRDP = h?.protocol === "rdp";
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{h?.hostname ?? "Host"} · details</DialogTitle>
@@ -1114,14 +1117,16 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
         <DetailRows rows={[
           ["Operating system", inv?.osName],
           ["OS version", inv?.osVersion],
-          ["Kernel", inv?.kernelVersion],
+          ...(isRDP ? [] : [["Kernel", inv?.kernelVersion] as [string, string | undefined]]),
           ["Architecture", inv?.architecture],
           ["CPUs", inv?.cpuCount ? String(inv.cpuCount) : ""],
           ["Memory", fmtMem(inv?.memoryMb)],
-          ["SSH", inv?.sshVersion],
-          ["Updates available", inv?.updatesAvailable != null
-            ? `${inv.updatesAvailable}${inv.securityUpdates ? ` (${inv.securityUpdates} security)` : ""}`
-            : ""],
+          ...(isRDP ? [] : [
+            ["SSH", inv?.sshVersion] as [string, string | undefined],
+            ["Updates available", inv?.updatesAvailable != null
+              ? `${inv.updatesAvailable}${inv.securityUpdates ? ` (${inv.securityUpdates} security)` : ""}`
+              : ""] as [string, string | undefined],
+          ]),
           ["Facts collected", inv?.collectedAt ? fmtDate(inv.collectedAt) : ""],
         ]} />
         <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>Status</Typography>
@@ -1129,7 +1134,7 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
           ["State", st?.status],
           ["Uptime", fmtUptime(st?.uptimeSeconds)],
           ["Latency", st?.latencyMs != null ? `${st.latencyMs} ms` : ""],
-          ["WireGuard", st ? (st.wgOk ? "healthy" : "—") : ""],
+          ...(isRDP ? [] : [["WireGuard", st ? (st.wgOk ? "healthy" : "—") : ""] as [string, string | undefined]]),
           ["Last checked", st?.checkedAt ? fmtDate(st.checkedAt) : ""],
         ]} />
         {met && (

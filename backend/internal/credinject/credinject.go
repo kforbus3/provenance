@@ -78,6 +78,33 @@ func For(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Hos
 	return inj, nil
 }
 
+// PasswordForSystem resolves a host's attached vault credential to a raw username and
+// password for a SYSTEM operation (the background monitor collecting Windows facts over
+// WinRM — no user context). It only returns credentials whose access policy is "open":
+// a check-out-gated secret is never used by the unattended monitor, so fact collection
+// is simply skipped for such hosts.
+func PasswordForSystem(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Host) (username, password string, err error) {
+	if host.CredentialID == nil {
+		return "", "", errors.New("no credential is attached to this host")
+	}
+	secret, err := st.GetVaultSecret(ctx, *host.CredentialID)
+	if err != nil {
+		return "", "", errors.New("the attached credential no longer exists")
+	}
+	if secret.AccessPolicy != "open" {
+		return "", "", errors.New("credential requires check-out; fact collection skipped")
+	}
+	sealed, err := st.GetVaultSecretSealed(ctx, *host.CredentialID)
+	if err != nil {
+		return "", "", errors.New("could not load the attached credential")
+	}
+	plaintext, err := secretbox.Open(vaultKey, sealed)
+	if err != nil {
+		return "", "", errors.New("could not decrypt the attached credential")
+	}
+	return secret.Username, string(plaintext), nil
+}
+
 func zero(b []byte) {
 	for i := range b {
 		b[i] = 0

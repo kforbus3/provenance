@@ -183,6 +183,11 @@ type Config struct {
 	// stores per-session redirected-drive files for RDP file transfer. The backend
 	// removes a session's subdir when it ends.
 	RDPDriveDir string
+	// RDPCollectFacts enables best-effort Windows fact collection over WinRM for RDP
+	// hosts (OS/CPU/memory/uptime), using the host's open-policy vault credential
+	// through the jump host. RDPWinRMPorts is tried in order (HTTPS 5986, then 5985).
+	RDPCollectFacts bool
+	RDPWinRMPorts   []int
 
 	// SFTP upload size cap in bytes (0 = unlimited).
 	MaxUploadBytes int64
@@ -255,6 +260,8 @@ func Load() (*Config, error) {
 		GuacdAddr:              env("FLEET_GUACD_ADDR", "guacd:4822"),
 		RDPProxyHost:           env("FLEET_RDP_PROXY_HOST", "backend"),
 		RDPDriveDir:            env("FLEET_RDP_DRIVE_DIR", "/var/lib/fleet/rdp-drive"),
+		RDPCollectFacts:        envBool("FLEET_RDP_COLLECT_FACTS", true),
+		RDPWinRMPorts:          parseIntList(env("FLEET_RDP_WINRM_PORTS", "5986,5985")),
 		MaxUploadBytes:         envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
 		LogLevel:               env("FLEET_LOG_LEVEL", "info"),
 		LogFormat:              env("FLEET_LOG_FORMAT", "json"),
@@ -421,6 +428,17 @@ func splitList(s string) []string {
 	for _, p := range strings.Split(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// parseIntList parses a comma-separated list of ints, skipping unparseable entries.
+func parseIntList(s string) []int {
+	var out []int
+	for _, p := range splitList(s) {
+		if n, err := strconv.Atoi(p); err == nil {
+			out = append(out, n)
 		}
 	}
 	return out

@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.18.0 — Windows host facts over WinRM
+
+RDP (Windows) hosts previously showed no inventory (OS/CPU/memory/uptime were blank)
+because fact collection runs over SSH, which Windows lacks. The monitor now collects
+those facts over **WinRM (PowerShell remoting)**: it authenticates with the host's
+attached **open-policy** vault credential and tunnels to WinRM through the jump host
+(trying HTTPS `5986` then HTTP `5985`, NTLM), best-effort and refreshed like other
+inventory. Requires WinRM enabled on the host. Toggle with `FLEET_RDP_COLLECT_FACTS`
+(default on); ports via `FLEET_RDP_WINRM_PORTS`. The host-details dialog now hides
+fields that don't apply to Windows (kernel, SSH version, WireGuard, apt/dnf updates).
+
 ## v0.17.8 — Revert RDP download to raw recording (.guac)
 
 The self-contained offline RDP HTML player is dropped: guacamole-common-js 1.5.0's

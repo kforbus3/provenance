@@ -786,6 +786,15 @@ pruning RDP recordings needs `System.Configure`; they share the same retention w
 as SSH recordings (Settings → retention, or the retention job). Clipboard, drive
 redirection, and multi-monitor for RDP are not in this release.
 
+**Host facts (WinRM).** Windows hosts have no SSH, so their OS/CPU/memory/uptime are
+collected over **WinRM (PowerShell remoting)** instead — the monitor authenticates with
+the host's attached **open-policy** vault credential and tunnels to WinRM through the
+jump host (best-effort, refreshed like other inventory). Requires WinRM enabled on the
+host (`Enable-PSRemoting`, firewall open to the jump host) and reachability on
+`FLEET_RDP_WINRM_PORTS` (default `5986` then `5985`). Toggle with
+`FLEET_RDP_COLLECT_FACTS` (default on). SSH-only fields (kernel, SSH version, WireGuard,
+apt/dnf updates) are hidden for RDP hosts.
+
 ## 19. Live session shadowing
 
 **Session shadowing** is read-only, real-time viewing of an **active** terminal

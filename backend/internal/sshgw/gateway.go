@@ -440,6 +440,26 @@ func (g *Gateway) DialWithSigner(ctx context.Context, signer ssh.Signer, host st
 	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
 }
 
+// DialJumpWithSigner opens an SSH connection to the jump host authenticated with the
+// given (system) signer and returns the client. The caller uses client.DialContext to
+// tunnel arbitrary TCP through the jump host (e.g. WinRM to a Windows host) and must
+// Close the client when done.
+func (g *Gateway) DialJumpWithSigner(ctx context.Context, signer ssh.Signer) (*ssh.Client, error) {
+	if signer == nil {
+		return nil, fmt.Errorf("nil signer")
+	}
+	client, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+		User:            g.cfg.JumpUser,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: g.hostKeyCallback(),
+		Timeout:         10 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dial jump host: %w", err)
+	}
+	return client, nil
+}
+
 // ProbeTCPViaJump tests raw TCP reachability to host:port through the jump host,
 // authenticating the jump hop with the given (system) signer. It opens and
 // immediately closes the tunnel — used to health-check non-SSH services such as RDP,

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/metrics"
@@ -22,6 +24,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/winrm"
 	"github.com/fleet-terminal/backend/internal/ws"
 )
 
@@ -155,15 +158,30 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		prev = h.Status.Status
 	}
 
-	// RDP hosts have no SSH: probe TCP reachability of the RDP port instead, and skip
-	// the SSH-only inventory/metrics collection.
+	// RDP hosts have no SSH: probe TCP reachability of the RDP port, and (best-effort)
+	// collect Windows facts over WinRM instead of the SSH inventory path.
 	if h.Protocol == "rdp" {
 		st := m.probeRDP(ctx, signer, &h)
+		var inv *models.HostInventory
+		if m.cfg.RDPCollectFacts && st.Status == "online" && inventoryStale(h.Inventory) {
+			if f := m.collectWindowsFacts(ctx, signer, &h); f != nil {
+				inv = f.inv
+				if f.uptime > 0 {
+					up := f.uptime
+					st.UptimeSeconds = &up
+				}
+			}
+		}
 		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 			return
 		}
 		m.notifyTransition(ctx, h, prev, st.Status)
+		if inv != nil {
+			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
+				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
+			}
+		}
 		m.broadcastStatus(h, st)
 		return
 	}
@@ -229,6 +247,51 @@ func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Hos
 	st.LastError = trunc(errStr(dialErr), 240)
 	st.LastFailureAt = &now
 	return st
+}
+
+type winFacts struct {
+	inv    *models.HostInventory
+	uptime int64
+}
+
+// collectWindowsFacts gathers OS/CPU/memory/uptime from a Windows RDP host over WinRM,
+// authenticated with the host's open-policy vault credential and tunneled through the
+// jump host. Best-effort: any failure (no credential, WinRM unreachable, auth) returns
+// nil and is logged at debug — the host's status is unaffected.
+func (m *Monitor) collectWindowsFacts(ctx context.Context, signer ssh.Signer, h *models.Host) *winFacts {
+	key, err := m.cfg.VaultKey()
+	if err != nil {
+		return nil
+	}
+	user, pass, err := credinject.PasswordForSystem(ctx, m.store, key, h)
+	if err != nil {
+		m.log.Debug("rdp facts: no usable credential", "host", h.Hostname, "err", err)
+		return nil
+	}
+	cands := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
+	if len(cands) == 0 {
+		return nil
+	}
+	jump, err := m.gw.DialJumpWithSigner(ctx, signer)
+	if err != nil {
+		m.log.Debug("rdp facts: dial jump host", "host", h.Hostname, "err", err)
+		return nil
+	}
+	defer jump.Close()
+	dial := func(_ /*network*/, addr string) (net.Conn, error) { return jump.DialContext(ctx, "tcp", addr) }
+	f, err := winrm.Collect(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts)
+	if err != nil {
+		m.log.Debug("rdp facts: winrm collect", "host", h.Hostname, "err", err)
+		return nil
+	}
+	now := time.Now()
+	return &winFacts{
+		inv: &models.HostInventory{
+			OSName: f.OS, OSVersion: f.OSVersion, Architecture: f.Architecture,
+			CPUCount: f.CPUCount, MemoryMB: f.MemoryMB, CollectedAt: &now,
+		},
+		uptime: f.UptimeSeconds,
+	}
 }
 
 // probe runs a lightweight authenticated SSH command through the jump host and
