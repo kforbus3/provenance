@@ -21,6 +21,7 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.Use(d.Auth.RequireAuth)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Post("/vuln-scans", h.trigger)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans", h.list)
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Delete("/vuln-scans/failed", h.clearFailed)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/latest", h.latest)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/db", h.dbStatus)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/{id}", h.get)
@@ -96,6 +97,17 @@ func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "vuln_scan.start", map[string]any{"hosts": len(ids)})
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"scanIds": ids})
+}
+
+// clearFailed removes failed scan records (error-only rows with no findings),
+// clearing the "recent failures" surface.
+func (h *handler) clearFailed(w http.ResponseWriter, r *http.Request) {
+	n, err := h.d.Store.DeleteFailedVulnScans(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not clear failed scans")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": n})
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {

@@ -49,6 +49,11 @@ export async function listVulnScans(hostId?: string): Promise<VulnScan[]> {
   return data.scans ?? [];
 }
 
+export async function clearFailedVulnScans(): Promise<number> {
+  const { data } = await api.delete<{ deleted: number }>("/api/v1/vuln-scans/failed");
+  return data.deleted ?? 0;
+}
+
 export async function latestVulnScans(): Promise<VulnScan[]> {
   const { data } = await api.get<{ scans: VulnScan[] }>("/api/v1/vuln-scans/latest");
   return data.scans ?? [];

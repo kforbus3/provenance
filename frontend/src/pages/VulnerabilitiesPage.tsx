@@ -12,7 +12,7 @@ import { useAuthStore } from "../store/auth";
 import { listHosts } from "../api/hosts";
 import { listGroups } from "../api/admin";
 import {
-  triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan,
+  triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan, clearFailedVulnScans,
   vulnDbStatus, vulnDbUpdate, vulnDbImport, type VulnFinding,
 } from "../api/vulnscan";
 
@@ -49,6 +49,10 @@ export function VulnerabilitiesPage() {
     void qc.invalidateQueries({ queryKey: ["vuln-latest"] });
     void qc.invalidateQueries({ queryKey: ["vuln-recent"] });
   };
+  const clearFailed = useMutation({
+    mutationFn: clearFailedVulnScans,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["vuln-recent"] }),
+  });
 
   return (
     <Box sx={{ maxWidth: 1150 }}>
@@ -72,7 +76,15 @@ export function VulnerabilitiesPage() {
         </Alert>
       )}
       {failed.length > 0 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" disabled={clearFailed.isPending} onClick={() => clearFailed.mutate()}>
+              Clear
+            </Button>
+          }
+        >
           Recent failures: {failed.map((f) => `${f.hostname} (${f.error || "error"})`).join("; ")}
         </Alert>
       )}

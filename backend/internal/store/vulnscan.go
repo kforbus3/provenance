@@ -78,6 +78,16 @@ func scanVulnScan(row interface{ Scan(...any) error }) (*models.VulnScan, error)
 	return &v, nil
 }
 
+// DeleteFailedVulnScans removes all failed scan records (error rows carry no
+// findings), used to clear the "recent failures" surface. Returns the count removed.
+func (s *Store) DeleteFailedVulnScans(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM vuln_scans WHERE status='failed'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListVulnScans returns recent scans, optionally for one host, newest first.
 func (s *Store) ListVulnScans(ctx context.Context, hostID *uuid.UUID, limit int) ([]models.VulnScan, error) {
 	if limit <= 0 || limit > 200 {

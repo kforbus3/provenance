@@ -5,6 +5,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.21.3 — Clear recent scan failures from the Vulnerabilities page
+
+The "Recent failures" banner now has a **Clear** button that removes failed scan
+records (error-only rows with no findings) — `DELETE /vuln-scans/failed`, gated by
+`Host.Scan`. Useful for dismissing stale failures, e.g. a Windows host that failed
+via the old SSH path before Windows scanning existed (v0.21.0).
+
 ## v0.21.2 — Prove a session rode the WireGuard overlay (audit + indicator)
 
 Two ways to confirm/prove a connection went over WireGuard, rather than inferring
