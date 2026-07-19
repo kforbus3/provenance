@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.6 — Windows onboarding: turnkey enrollment, richer facts, docs
+
+Windows/RDP hosts now onboard with no hand-run configuration and report the same
+resource details as Linux hosts.
+
+- **Enrollment script now configures the host end-to-end.** In addition to the
+  WireGuard tunnel it enables **Remote Desktop** (opens TCP 3389) and stands up a
+  **WinRM HTTPS listener** on 5986 with a self-signed cert and firewall rule, so
+  fact collection works over TLS with no manual `Enable-PSRemoting` and no
+  `AllowUnencrypted`. Each step is best-effort and prints a summary of what it
+  configured. The one manual action remains pasting the printed public key back
+  into Fleet.
+- **Richer Windows facts.** Fact collection over WinRM now also gathers **disk
+  usage per drive, free/used memory, network interfaces, and the default
+  gateway**, populated into the same `HostMetrics` the UI already renders — so the
+  host details show disk, memory, and primary IP for Windows just like Linux
+  (load average stays blank; it's a Unix concept). Metrics refresh every monitor
+  sweep.
+- **Documented.** The host-enrollment guide has a new **Windows (RDP) hosts**
+  section covering the PowerShell the operator runs, the ports involved
+  (51820/UDP, 3389, 5986) and who opens them, LAN-vs-remote endpoints, and the
+  manual WinRM steps if a stripped host skips the automatic setup.
+
 ## v0.19.5 — RDP status: report overlay health (wg_ok)
 
 The RDP/Windows status probe reported online/offline and latency but never set

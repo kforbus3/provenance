@@ -203,9 +203,41 @@ try { & $wgquick /uninstalltunnelservice fleet 2>$null | Out-Null } catch {}
 Start-Sleep -Seconds 2
 Remove-Item $confPath -Force -ErrorAction SilentlyContinue
 
-# 5. Print the public key to paste back into Fleet.
+# 5. Enable Remote Desktop and open the RDP port in Windows Firewall so Fleet can
+#    broker sessions over the overlay (traffic arrives on the WireGuard interface from
+#    the jump host). Best-effort; enrollment still succeeds if a step fails.
+try {
+  Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -ErrorAction SilentlyContinue
+  Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+  Write-Host "Remote Desktop enabled and firewall opened (TCP 3389)."
+} catch {
+  Write-Host "WARN: could not enable Remote Desktop: $($_.Exception.Message)"
+}
+
+# 6. Enable WinRM over HTTPS so Fleet can collect host facts (OS, CPU, memory, uptime)
+#    securely. TLS on the 5986 listener means no plaintext and no AllowUnencrypted; the
+#    traffic also stays inside the WireGuard tunnel. Best-effort: enrollment still
+#    succeeds if this fails (facts just won't populate until WinRM is configured).
+try {
+  Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
+  Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue | Where-Object { $_.Keys -contains "Transport=HTTPS" } | ForEach-Object { Remove-Item -Path ("WSMan:\localhost\Listener\" + $_.Name) -Recurse -Force -ErrorAction SilentlyContinue }
+  $winrmCert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation "Cert:\LocalMachine\My" -NotAfter (Get-Date).AddYears(10)
+  New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbPrint $winrmCert.Thumbprint -Force | Out-Null
+  New-NetFirewallRule -DisplayName "Fleet WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+  Write-Host "WinRM HTTPS (5986) configured for Fleet fact collection."
+} catch {
+  Write-Host "WARN: could not configure WinRM HTTPS listener: $($_.Exception.Message)"
+}
+
+# 7. Print the public key to paste back into Fleet.
 Write-Host ""
 Write-Host "================ Fleet enrollment ================"
+Write-Host "Configured on this host:"
+Write-Host "  - WireGuard tunnel 'fleet' (UDP __LISTENPORT__, managed by WireGuard)"
+Write-Host "  - Remote Desktop + firewall (TCP 3389)"
+Write-Host "  - WinRM HTTPS listener + firewall (TCP 5986)"
+Write-Host "All Fleet traffic reaches this host over the WireGuard interface."
+Write-Host ""
 Write-Host "Paste this WireGuard PUBLIC KEY back into Fleet:"
 Write-Host $pub
 Write-Host "=================================================="

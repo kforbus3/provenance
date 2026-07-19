@@ -163,9 +163,13 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 	if h.Protocol == "rdp" {
 		st := m.probeRDP(ctx, signer, &h)
 		var inv *models.HostInventory
-		if m.cfg.RDPCollectFacts && st.Status == "online" && inventoryStale(h.Inventory) {
+		var metrics *models.HostMetrics
+		// Collect over WinRM every sweep while online: inventory changes rarely but
+		// resource metrics (disk, memory, network) are live, and it's a single call.
+		if m.cfg.RDPCollectFacts && st.Status == "online" {
 			if f := m.collectWindowsFacts(ctx, signer, &h); f != nil {
 				inv = f.inv
+				metrics = f.metrics
 				if f.uptime > 0 {
 					up := f.uptime
 					st.UptimeSeconds = &up
@@ -180,6 +184,16 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		if inv != nil {
 			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
+			}
+		}
+		if metrics != nil {
+			if err := m.store.UpsertMetrics(ctx, h.ID, *metrics); err != nil {
+				m.log.Warn("monitor update metrics", "host", h.Hostname, "err", err)
+			}
+			if m.cfg.MetricHistoryRetention > 0 {
+				if err := m.store.RecordMetricHistory(ctx, h.ID, *metrics, m.cfg.MetricHistorySample); err != nil {
+					m.log.Warn("monitor record metric history", "host", h.Hostname, "err", err)
+				}
 			}
 		}
 		m.broadcastStatus(h, st)
@@ -252,8 +266,9 @@ func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Hos
 }
 
 type winFacts struct {
-	inv    *models.HostInventory
-	uptime int64
+	inv     *models.HostInventory
+	metrics *models.HostMetrics
+	uptime  int64
 }
 
 // collectWindowsFacts gathers OS/CPU/memory/uptime from a Windows RDP host over WinRM,
@@ -287,13 +302,66 @@ func (m *Monitor) collectWindowsFacts(ctx context.Context, signer ssh.Signer, h 
 		return nil
 	}
 	now := time.Now()
-	return &winFacts{
-		inv: &models.HostInventory{
-			OSName: f.OS, OSVersion: f.OSVersion, Architecture: f.Architecture,
-			CPUCount: f.CPUCount, MemoryMB: f.MemoryMB, CollectedAt: &now,
-		},
-		uptime: f.UptimeSeconds,
+	inv := &models.HostInventory{
+		OSName: f.OS, OSVersion: f.OSVersion, Architecture: f.Architecture,
+		CPUCount: f.CPUCount, MemoryMB: f.MemoryMB, CollectedAt: &now,
 	}
+
+	// Resource metrics — same HostMetrics shape as the Linux path so the UI renders
+	// them identically. Load average is a Unix concept and is left nil for Windows.
+	var disks []models.DiskFS
+	var minFreePct *float64
+	for _, d := range f.Disks {
+		used := d.SizeBytes - d.FreeBytes
+		usePct := float64(used) / float64(d.SizeBytes) * 100
+		disks = append(disks, models.DiskFS{
+			Mount: d.Mount, SizeBytes: d.SizeBytes, UsedBytes: used,
+			AvailBytes: d.FreeBytes, UsePct: usePct,
+		})
+		if freePct := 100 - usePct; minFreePct == nil || freePct < *minFreePct {
+			fp := freePct
+			minFreePct = &fp
+		}
+	}
+	var net *models.HostNetwork
+	if len(f.Interfaces) > 0 || f.Gateway != "" {
+		net = &models.HostNetwork{DefaultGateway: f.Gateway}
+		for _, ni := range f.Interfaces {
+			net.Interfaces = append(net.Interfaces, models.NetInterface{Name: ni.Name, Addrs: ni.Addrs})
+		}
+	}
+	primaryIP := windowsPrimaryIP(f.Interfaces, h.WGAddress)
+	metrics := &models.HostMetrics{
+		Disk: disks, MinDiskFreePct: minFreePct,
+		MemTotalMB: f.MemoryMB, MemAvailableMB: f.MemFreeMB,
+		Network: net, PrimaryIP: primaryIP, CollectedAt: &now,
+	}
+	if f.MemoryMB > 0 {
+		usedPct := float64(f.MemoryMB-f.MemFreeMB) / float64(f.MemoryMB) * 100
+		metrics.MemUsedPct = &usedPct
+	}
+	if net != nil {
+		net.PrimaryIP = primaryIP
+	}
+
+	return &winFacts{inv: inv, metrics: metrics, uptime: f.UptimeSeconds}
+}
+
+// windowsPrimaryIP picks the host's main IPv4 from its interfaces: the first address
+// that isn't loopback, link-local, or the WireGuard overlay address.
+func windowsPrimaryIP(ifaces []winrm.Iface, wgAddr string) string {
+	for _, ni := range ifaces {
+		for _, a := range ni.Addrs {
+			if !strings.Contains(a, ".") { // skip IPv6
+				continue
+			}
+			if a == wgAddr || strings.HasPrefix(a, "127.") || strings.HasPrefix(a, "169.254.") {
+				continue
+			}
+			return a
+		}
+	}
+	return ""
 }
 
 // probe runs a lightweight authenticated SSH command through the jump host and

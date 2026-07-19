@@ -129,6 +129,76 @@ A successful connection means:
 - SSH reachable through the jump host (`host_status.ssh_ok`),
 - the host accepted a Fleet-issued user certificate.
 
+## Windows (RDP) hosts
+
+Windows hosts are enrolled onto the same WireGuard overlay as Linux hosts, but
+they run no SSH — Fleet brokers **RDP** for sessions and uses **WinRM** to collect
+facts. Enrollment is driven from the host's **Enroll** action, which produces a
+**PowerShell** script you run **once, in an elevated (Administrator) PowerShell**
+on the Windows host. That script is the only thing you run by hand; it configures
+everything below automatically.
+
+### What the enrollment script does
+
+1. Installs **WireGuard for Windows** (via `winget`) if it isn't already present.
+2. Generates a WireGuard keypair and writes a tunnel config with a fixed
+   `ListenPort` (the configured `FLEET_WG_PORT`, default **51820**), so the jump
+   host can reach the host inbound over the overlay exactly as it does a Linux
+   host. Installs it as a persistent tunnel service (auto-connects on boot).
+3. **Enables Remote Desktop** and opens its Windows Firewall group (TCP **3389**).
+4. **Enables WinRM over HTTPS**: runs `Enable-PSRemoting`, creates a self-signed
+   certificate, binds an HTTPS listener on TCP **5986**, and opens a firewall rule
+   for it. Fact collection uses this (TLS), so no `AllowUnencrypted` is required.
+5. Prints the host's WireGuard **public key** — paste it back into Fleet's
+   **Finish enrollment** step to add the host as a peer on the jump host.
+
+If step 1, 3, or 4 fails (e.g. `winget` unavailable on a stripped Server Core
+install), the script prints a `WARN` and continues — the tunnel still comes up;
+you can configure the missing piece by hand (see below).
+
+### Ports and firewall
+
+All of this traffic reaches the host **over the WireGuard interface** from the
+jump host — nothing needs to be exposed to the LAN or internet directly.
+
+| Port | Proto | Purpose | Opened by |
+|---|---|---|---|
+| 51820 (`FLEET_WG_PORT`) | UDP | WireGuard overlay | WireGuard for Windows |
+| 3389 | TCP | RDP session | script (`Remote Desktop` firewall group) |
+| 5986 | TCP | WinRM HTTPS (host facts) | script (`Fleet WinRM HTTPS` rule) |
+
+If the Windows Firewall is on and you enroll manually, allow inbound **3389** and
+**5986** (and, on a strict host, inbound UDP **51820**). Note that a freshly added
+WireGuard adapter often lands in the **Public** firewall profile, while the RDP and
+WinRM rules the script adds use `-Profile Any` so they still apply.
+
+### The WireGuard endpoint (LAN vs. remote)
+
+The endpoint baked into the host's tunnel config is your jump host's public
+WireGuard endpoint by default. A host that shares the jump host's **LAN** still
+works with the public endpoint — the jump reaches it *inbound* over the LAN (the
+fixed `ListenPort` above), so the host never has to dial its own public address
+(which a LAN host can't hairpin to). A **remote** host dials the public endpoint
+outbound; ensure UDP `FLEET_WG_PORT` is forwarded to the jump host, exactly as a
+remote Linux host requires.
+
+### Manual WinRM setup (only if the script's step 4 was skipped)
+
+Run in an elevated PowerShell on the host:
+
+```powershell
+Enable-PSRemoting -Force -SkipNetworkProfileCheck
+$c = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
+New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbPrint $c.Thumbprint -Force
+New-NetFirewallRule -DisplayName "Fleet WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -Profile Any
+```
+
+Fact collection authenticates over WinRM with the host's **vaulted credential**,
+which must be a local administrator and have its access policy set to **open**
+(the monitor never uses check-out-gated credentials). On a workgroup machine,
+store the username as `Administrator` (the built-in account is exempt from the
+remote UAC token filtering that restricts other local admins).
+
 ## Host key fingerprints
 
 On first contact the host's SSH host key fingerprint is recorded in
