@@ -587,6 +587,7 @@ type VulnScan struct {
 	Low        int        `json:"low"`
 	Negligible int        `json:"negligible"`
 	Unknown    int        `json:"unknown"`
+	Fixable    int        `json:"fixable"`
 	MaxCVSS    float64    `json:"maxCvss"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`

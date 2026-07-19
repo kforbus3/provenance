@@ -443,6 +443,9 @@ func summarize(findings []models.VulnFinding) (store.VulnSummary, []models.VulnF
 		if f.CVSSScore > sum.MaxCVSS {
 			sum.MaxCVSS = f.CVSSScore
 		}
+		if strings.TrimSpace(f.FixedVersion) != "" {
+			sum.Fixable++
+		}
 		switch strings.ToLower(f.Severity) {
 		case "critical":
 			sum.Critical++

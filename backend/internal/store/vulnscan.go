@@ -14,6 +14,7 @@ import (
 // VulnSummary is the per-severity finding breakdown recorded on a scan.
 type VulnSummary struct {
 	Total, Critical, High, Medium, Low, Negligible, Unknown int
+	Fixable                                                 int // findings with an available fix version
 	MaxCVSS                                                 float64
 }
 
@@ -46,9 +47,9 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 	return s.tx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			UPDATE vuln_scans SET status='completed', finished_at=now(), db_built_at=$2,
-			  total=$3, critical=$4, high=$5, medium=$6, low=$7, negligible=$8, unknown=$9, max_cvss=$10
+			  total=$3, critical=$4, high=$5, medium=$6, low=$7, negligible=$8, unknown=$9, max_cvss=$10, fixable=$11
 			WHERE id=$1`,
-			id, dbBuilt, sum.Total, sum.Critical, sum.High, sum.Medium, sum.Low, sum.Negligible, sum.Unknown, sum.MaxCVSS); err != nil {
+			id, dbBuilt, sum.Total, sum.Critical, sum.High, sum.Medium, sum.Low, sum.Negligible, sum.Unknown, sum.MaxCVSS, sum.Fixable); err != nil {
 			return err
 		}
 		for _, f := range findings {
@@ -66,13 +67,13 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 
 const vulnScanCols = `vs.id, vs.host_id, COALESCE(h.hostname,''), vs.requester, vs.scheduled, vs.status,
 	vs.error, vs.db_built_at, vs.total, vs.critical, vs.high, vs.medium, vs.low, vs.negligible, vs.unknown,
-	vs.max_cvss, vs.started_at, vs.finished_at, vs.created_at`
+	vs.fixable, vs.max_cvss, vs.started_at, vs.finished_at, vs.created_at`
 
 func scanVulnScan(row interface{ Scan(...any) error }) (*models.VulnScan, error) {
 	var v models.VulnScan
 	if err := row.Scan(&v.ID, &v.HostID, &v.Hostname, &v.Requester, &v.Scheduled, &v.Status,
 		&v.Error, &v.DBBuiltAt, &v.Total, &v.Critical, &v.High, &v.Medium, &v.Low, &v.Negligible, &v.Unknown,
-		&v.MaxCVSS, &v.StartedAt, &v.FinishedAt, &v.CreatedAt); err != nil {
+		&v.Fixable, &v.MaxCVSS, &v.StartedAt, &v.FinishedAt, &v.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &v, nil

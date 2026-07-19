@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, MenuItem, Paper, Stack, Table, TableBody,
-  TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
+  DialogContent, DialogTitle, Divider, FormControlLabel, MenuItem, Paper, Stack, Switch, Table,
+  TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup,
+  Tooltip, Typography,
 } from "@mui/material";
 import SecurityIcon from "@mui/icons-material/Security";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -100,6 +101,11 @@ export function VulnerabilitiesPage() {
               <TableCell align="right">Critical</TableCell>
               <TableCell align="right">High</TableCell>
               <TableCell align="right">Medium</TableCell>
+              <TableCell align="right">
+                <Tooltip title="Findings with an available fix — the actionable subset you can patch now">
+                  <span>Fixable</span>
+                </Tooltip>
+              </TableCell>
               <TableCell align="right">Total</TableCell>
               <TableCell>Scanned</TableCell>
             </TableRow>
@@ -114,12 +120,13 @@ export function VulnerabilitiesPage() {
                 <TableCell align="right">{s.critical > 0 ? <Chip size="small" color="error" label={s.critical} /> : "—"}</TableCell>
                 <TableCell align="right">{s.high > 0 ? <Chip size="small" color="error" variant="outlined" label={s.high} /> : "—"}</TableCell>
                 <TableCell align="right">{s.medium > 0 ? <Chip size="small" color="warning" label={s.medium} /> : "—"}</TableCell>
+                <TableCell align="right">{s.fixable > 0 ? <Chip size="small" color="info" variant="outlined" label={s.fixable} /> : "—"}</TableCell>
                 <TableCell align="right">{s.total}</TableCell>
                 <TableCell>{formatDateTime(s.createdAt)}</TableCell>
               </TableRow>
             ))}
             {rollup.length === 0 && (
-              <TableRow><TableCell colSpan={7}>
+              <TableRow><TableCell colSpan={8}>
                 <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
                   No completed scans yet. Update the CVE database, then scan a host.
                 </Typography>
@@ -292,10 +299,22 @@ function ScanDialog({ onClose, onStarted }: { onClose: () => void; onStarted: ()
   );
 }
 
+const SEV_OPTIONS = ["Critical", "High", "Medium", "Low", "Negligible", "Unknown"];
+// Hide the noisiest, least-actionable buckets by default; they're one click away.
+const SEV_DEFAULT = ["Critical", "High", "Medium", "Low"];
+
 function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => void }) {
   const { data, isLoading } = useQuery({ queryKey: ["vuln-scan", scanId], queryFn: () => getVulnScan(scanId) });
   const scan = data?.scan;
   const findings = data?.findings ?? [];
+
+  const [fixableOnly, setFixableOnly] = useState(false);
+  const [sevs, setSevs] = useState<string[]>(SEV_DEFAULT);
+  const sevSet = new Set(sevs.map((s) => s.toLowerCase()));
+  const shown = findings.filter(
+    (f) => sevSet.has((f.severity || "unknown").toLowerCase()) && (!fixableOnly || !!f.fixedVersion),
+  );
+
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="lg">
       <DialogTitle>
@@ -307,8 +326,26 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
           <Typography variant="caption" color="text.secondary">
             Scanned {formatDateTime(scan.createdAt)}
             {scan.dbBuiltAt ? ` · CVE DB built ${formatDateTime(scan.dbBuiltAt)}` : ""}
+            {" · "}{scan.fixable} of {scan.total} have an available fix
           </Typography>
         )}
+        <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" sx={{ mt: 1 }}>
+          <FormControlLabel
+            control={<Switch size="small" checked={fixableOnly} onChange={(e) => setFixableOnly(e.target.checked)} />}
+            label="Fixable only"
+          />
+          <ToggleButtonGroup
+            size="small" value={sevs} onChange={(_, v) => setSevs(v as string[])}
+            aria-label="severity filter"
+          >
+            {SEV_OPTIONS.map((s) => (
+              <ToggleButton key={s} value={s} sx={{ textTransform: "none", py: 0.2 }}>{s}</ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+          <Typography variant="caption" color="text.secondary">
+            showing {shown.length} of {findings.length}
+          </Typography>
+        </Stack>
         <Divider sx={{ my: 1 }} />
         <Paper variant="outlined" sx={{ overflowX: "auto" }}>
           <Table size="small" stickyHeader>
@@ -323,7 +360,7 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
               </TableRow>
             </TableHead>
             <TableBody>
-              {findings.map((f: VulnFinding, i) => (
+              {shown.map((f: VulnFinding, i) => (
                 <TableRow key={`${f.cve}-${f.package}-${i}`}>
                   <TableCell><Chip size="small" color={SEV_COLOR[f.severity] ?? "default"} label={f.severity} /></TableCell>
                   <TableCell align="right">{f.cvssScore > 0 ? f.cvssScore.toFixed(1) : "—"}</TableCell>
@@ -337,9 +374,11 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                   <TableCell>{f.fixedVersion ? <code>{f.fixedVersion}</code> : <Typography variant="caption" color="text.secondary">no fix</Typography>}</TableCell>
                 </TableRow>
               ))}
-              {!isLoading && findings.length === 0 && (
+              {!isLoading && shown.length === 0 && (
                 <TableRow><TableCell colSpan={6}>
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>No vulnerabilities found. 🎉</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
+                    {findings.length === 0 ? "No vulnerabilities found. 🎉" : "No findings match the current filters."}
+                  </Typography>
                 </TableCell></TableRow>
               )}
             </TableBody>

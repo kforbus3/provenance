@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.22.1 — Vulnerabilities: fixable subset + severity filtering
+
+Both scanners already report only what's actually on each host (grype reads the
+real installed-package DB; the Windows scan uses WUA applicability), but grype's
+model surfaces a long tail of low-severity and unfixable ("no fix available")
+CVEs. This adds a way to focus on what's **actionable**:
+
+- **Fixable count in the roll-up.** Each host row now shows a **Fixable** column —
+  the subset of findings that have an available fix version — next to the total
+  (e.g. "380 fixable / 2690 total"). Computed at scan time and stored (migration
+  `0042` adds `vuln_scans.fixable`); existing scans show 0 until re-scanned.
+- **Filters in the findings view.** A **Fixable only** toggle (findings with a fix
+  version) and per-severity toggles, with Negligible/Unknown hidden by default and
+  a "showing X of Y" count. This makes the Linux view directly comparable to the
+  Windows "missing patches" view — present *and* fixable.
+
+No scanning changes; both filters work on existing scan data.
+
 ## v0.22.0 — Windows CVE data from MSRC (real CVE/severity/CVSS)
 
 Windows vulnerability scans now report **real CVE IDs, MSRC severity, and CVSS

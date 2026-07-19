@@ -19,6 +19,7 @@ export interface VulnScan {
   low: number;
   negligible: number;
   unknown: number;
+  fixable: number;
   maxCvss: number;
   startedAt?: string;
   finishedAt?: string;
