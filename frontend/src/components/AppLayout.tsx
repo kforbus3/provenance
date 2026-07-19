@@ -52,7 +52,7 @@ const NAV = [
   { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
   { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
   { to: "/sessions", label: "Session Replay", icon: <HistoryIcon />, perm: "Session.Replay" },
-  { to: "/playbooks", label: "Playbooks", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
+  { to: "/automation", label: "Automation", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
   { to: "/schedules", label: "Schedules", icon: <ScheduleIcon />, perm: "Schedule.Manage" },
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
   { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },

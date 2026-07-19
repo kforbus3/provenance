@@ -36,7 +36,7 @@ const WatchSessionPage = lazy(() => named(import("./pages/WatchSessionPage"), "W
 const VulnerabilitiesPage = lazy(() => named(import("./pages/VulnerabilitiesPage"), "VulnerabilitiesPage"));
 const HelpPage = lazy(() => named(import("./pages/HelpPage"), "HelpPage"));
 const AccessReviewsPage = lazy(() => named(import("./pages/AccessReviewsPage"), "AccessReviewsPage"));
-const PlaybooksPage = lazy(() => named(import("./pages/PlaybooksPage"), "PlaybooksPage"));
+const AutomationPage = lazy(() => named(import("./pages/AutomationPage"), "AutomationPage"));
 const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "SchedulesPage"));
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
 const VaultPage = lazy(() => named(import("./pages/VaultPage"), "VaultPage"));
@@ -89,7 +89,8 @@ export function App() {
               <Route path="terminals" element={<ProtectedRoute permission="Host.Connect"><TerminalsPage /></ProtectedRoute>} />
               <Route path="hosts" element={<ProtectedRoute permission="Host.View"><HostsPage /></ProtectedRoute>} />
               <Route path="sessions" element={<ProtectedRoute permission="Session.Replay"><SessionsPage /></ProtectedRoute>} />
-              <Route path="playbooks" element={<ProtectedRoute permission="Playbook.Edit"><PlaybooksPage /></ProtectedRoute>} />
+              <Route path="automation" element={<ProtectedRoute permission="Playbook.Edit"><AutomationPage /></ProtectedRoute>} />
+              <Route path="playbooks" element={<Navigate to="/automation" replace />} />
               <Route path="schedules" element={<ProtectedRoute permission="Schedule.Manage"><SchedulesPage /></ProtectedRoute>} />
               <Route path="approvals" element={<ApprovalsPage />} />
               <Route path="audit" element={<ProtectedRoute permission="Audit.View"><AuditPage /></ProtectedRoute>} />

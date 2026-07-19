@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.20.1 — Unified Automation page (Ansible playbooks + PowerShell scripts)
+
+The **Playbooks** nav item is now **Automation**, a single page with two tabs:
+**Ansible Playbooks** (Linux) and **PowerShell Scripts** (Windows). The Scripts
+tab is the UI for the v0.20.0 runner — author/version PowerShell scripts, run them
+on one or many Windows hosts or a group (the host picker lists only Windows hosts),
+and watch per-host output stream into a live console, with run history and a
+drill-down into any past run's captured output.
+
+Each tab appears only if you can author that kind (`Playbook.Edit` /
+`Script.Edit`); the old `/playbooks` URL redirects to `/automation`. The Linux
+playbook experience is unchanged.
+
 ## v0.20.0 — PowerShell script runner for Windows hosts (backend/API)
 
 Run operator-authored **PowerShell scripts on Windows hosts**, the Windows
