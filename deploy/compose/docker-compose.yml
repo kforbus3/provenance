@@ -42,6 +42,12 @@ services:
       args:
         VERSION: ${FLEET_VERSION:-dev}
     restart: unless-stopped
+    # Give the backend time to shut down gracefully on a deploy/restart so it
+    # releases its Postgres leader advisory lock (and drains connections) before
+    # SIGKILL — otherwise a stranded lock delays the next instance becoming leader
+    # (the monitor only sweeps as leader). The incoming instance also reclaims a
+    # stranded lock, but a clean handoff is instant.
+    stop_grace_period: 30s
     environment:
       FLEET_ENV: ${FLEET_ENV:-development}
       # Server timezone — schedules compute their next run in this zone. Set TZ

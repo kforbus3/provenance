@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.23.3 — Faster leader takeover after a restart (reclaim stranded lock)
+
+A restart could leave hosts **offline for minutes**: the new backend couldn't
+acquire the Postgres leader advisory lock until Postgres reaped the *old* instance's
+dropped connection, and the monitor only sweeps as leader. The v0.20.3 graceful
+release fixed the clean case, but an unclean stop (SIGKILL, crash, or a pre-fix
+outgoing version) still stranded the lock — which is exactly what a single-instance
+`make up-single` hit.
+
+Now the **incoming** instance self-heals: if the leader lock is held but no other
+instance has a live leader heartbeat, it terminates the stale holder's connection and
+takes over — bounding the offline window to the lease (~30s) instead of however long
+Postgres takes to notice the dead socket. Also set `stop_grace_period: 30s` on the
+backend so the clean, instant handoff has time to complete before SIGKILL.
+
 ## v0.23.2 — Host details: "Refresh facts" (don't wait for the hourly check)
 
 Pending-updates counts (and the Windows software inventory) are collected on an

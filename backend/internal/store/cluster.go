@@ -95,6 +95,38 @@ func deadOwnerPredicate(table string) string {
 		"AND ci.last_heartbeat > now() - $1::interval))"
 }
 
+// HasLiveLeader reports whether some OTHER instance is currently a leader with a
+// fresh heartbeat (within the lease). Used to decide whether a held leader advisory
+// lock is legitimately owned by a live peer, or stranded by a dead predecessor.
+func (s *Store) HasLiveLeader(ctx context.Context, excludeID uuid.UUID, lease time.Duration) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM cluster_instances
+		  WHERE id <> $1 AND is_leader AND last_heartbeat > now() - $2::interval)`,
+		excludeID, lease.String()).Scan(&exists)
+	return exists, err
+}
+
+// ReclaimAdvisoryLock terminates the Postgres backend(s) holding the given
+// session-scoped advisory lock (single-bigint form), other than the caller's own
+// connection, and returns how many were terminated. Used to reclaim a leader lock
+// stranded by a dead instance whose connection Postgres hasn't yet reaped — so a
+// restart doesn't wait minutes for the dropped socket to be noticed. Safe only when
+// no live leader exists (checked by the caller).
+func (s *Store) ReclaimAdvisoryLock(ctx context.Context, key int64) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		SELECT pg_terminate_backend(l.pid)
+		FROM pg_locks l
+		WHERE l.locktype = 'advisory' AND l.objsubid = 1
+		  AND l.classid = (($1::bigint >> 32) & 4294967295)::oid
+		  AND l.objid   = ($1::bigint & 4294967295)::oid
+		  AND l.pid <> pg_backend_pid()`, key)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // PruneDeadInstances removes instance rows whose heartbeat is older than the grace
 // window. Run by the leader after reconciliation has claimed their orphaned work.
 func (s *Store) PruneDeadInstances(ctx context.Context, olderThan time.Duration) (int64, error) {

@@ -142,7 +142,32 @@ func (c *Coordinator) evaluateLeadership(ctx context.Context) {
 		return
 	}
 	if !got {
-		conn.Release() // another instance is the leader
+		conn.Release()
+		// The lock is held. If no OTHER instance is a live leader, it's stranded by a
+		// dead predecessor whose Postgres connection hasn't been reaped yet — common on
+		// a single-instance restart, where the new backend would otherwise wait minutes
+		// for the dropped socket to be noticed (no leader => the monitor doesn't sweep,
+		// so hosts show offline). Terminate the stale holder and retry once, bounding
+		// the takeover to the lease instead.
+		if live, lerr := c.store.HasLiveLeader(ctx, c.id, Lease); lerr == nil && !live {
+			if n, terr := c.store.ReclaimAdvisoryLock(ctx, leaderLockKey); terr == nil && n > 0 {
+				c.log.Warn("cluster: reclaimed a stranded leader lock", "terminated", n, "instance", c.id)
+				retryConn, rerr := c.pool.Acquire(ctx)
+				if rerr != nil {
+					return
+				}
+				var got2 bool
+				if qerr := retryConn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, leaderLockKey).Scan(&got2); qerr != nil || !got2 {
+					retryConn.Release()
+					return
+				}
+				c.lockConn = retryConn
+				if !c.leader {
+					c.leader = true
+					c.log.Info("cluster: acquired leadership (after reclaim)", "instance", c.id)
+				}
+			}
+		}
 		return
 	}
 	// We are the new leader; hold the connection to hold the lock.
