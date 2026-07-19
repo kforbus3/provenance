@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
   Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, Stack, TextField, Tooltip, Typography,
+  IconButton, Menu, Stack, TextField, Tooltip, Typography,
 } from "@mui/material";
 import {
   DataGrid, GridToolbarContainer, GridToolbarQuickFilter,
@@ -27,7 +27,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
   getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
-  removeHostGroup, removeHostUser, updateHost,
+  removeHostGroup, removeHostUser, updateHost, setHostMaintenance, clearHostMaintenance, maintenanceActive,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
 import {
@@ -500,6 +500,11 @@ export function HostsPage() {
           <Stack direction="row" spacing={0.5} alignItems="center">
             <Chip size="small" label={s} color={STATUS_COLOR[s] ?? "default"} />
             {wgDegraded(params.row) && <WgDownChip />}
+            {maintenanceActive(params.row) && (
+              <Tooltip title="In maintenance — alerts silenced">
+                <Chip size="small" label="maint" color="warning" variant="outlined" />
+              </Tooltip>
+            )}
           </Stack>
         );
       },
@@ -1119,9 +1124,27 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
     enabled: Boolean(host) && isRDP,
   });
   const refresh = useMutation({ mutationFn: () => refreshHostFacts(host!.id) });
+  const qc = useQueryClient();
+  const [maintAnchor, setMaintAnchor] = useState<null | HTMLElement>(null);
+  const setMaint = useMutation({
+    mutationFn: (minutes: number) => setHostMaintenance(host!.id, minutes),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["host", host?.id] }); qc.invalidateQueries({ queryKey: ["hosts"] }); },
+  });
+  const clearMaint = useMutation({
+    mutationFn: () => clearHostMaintenance(host!.id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["host", host?.id] }); qc.invalidateQueries({ queryKey: ["hosts"] }); },
+  });
+  const inMaint = h ? maintenanceActive(h) : false;
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>{h?.hostname ?? "Host"} · details</DialogTitle>
+      <DialogTitle>
+        {h?.hostname ?? "Host"} · details
+        {inMaint && (
+          <Tooltip title={`Alerts silenced until ${fmtDate(h!.maintenanceUntil!)}`}>
+            <Chip size="small" color="warning" label="In maintenance" sx={{ ml: 1 }} />
+          </Tooltip>
+        )}
+      </DialogTitle>
       <DialogContent dividers>
         <Typography variant="overline" color="text.secondary">System</Typography>
         <DetailRows rows={[
@@ -1202,6 +1225,27 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
             {refresh.isSuccess ? "Refresh queued" : refresh.isPending ? "Queuing…" : "Refresh facts"}
           </Button>
         </Tooltip>
+        {inMaint ? (
+          <Button color="warning" onClick={() => clearMaint.mutate()} disabled={clearMaint.isPending}>
+            End maintenance
+          </Button>
+        ) : (
+          <Tooltip title="Silence offline / updates-pending / scan-failure alerts for this host while you patch or reboot it">
+            <Button onClick={(e) => setMaintAnchor(e.currentTarget)} disabled={setMaint.isPending}>
+              Silence alerts
+            </Button>
+          </Tooltip>
+        )}
+        <Menu anchorEl={maintAnchor} open={Boolean(maintAnchor)} onClose={() => setMaintAnchor(null)}>
+          {[["1 hour", 60], ["4 hours", 240], ["8 hours", 480], ["24 hours", 1440]].map(([label, mins]) => (
+            <MenuItem
+              key={label as string}
+              onClick={() => { setMaint.mutate(mins as number); setMaintAnchor(null); }}
+            >
+              {label}
+            </MenuItem>
+          ))}
+        </Menu>
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>

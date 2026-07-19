@@ -76,6 +76,10 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 
 	for i := range hosts {
 		h := hosts[i]
+		// Hosts in a maintenance window are intentionally silenced (patching/reboot).
+		if h.InMaintenance() {
+			continue
+		}
 		// Offline hosts: one clear card; skip stale metric checks on them.
 		if h.Status != nil && h.Status.Status == "offline" {
 			detail := "Fleet can no longer reach this host over SSH."

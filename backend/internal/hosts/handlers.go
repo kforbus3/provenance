@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -28,6 +29,8 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}/software", h.software)
 		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/{id}/refresh", h.refreshFacts)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/{id}/maintenance", h.setMaintenance)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Delete("/hosts/{id}/maintenance", h.clearMaintenance)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/wg/next", h.nextWG)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts", h.create)
@@ -88,6 +91,48 @@ func (h *handler) refreshFacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"queued": true})
+}
+
+// setMaintenance puts a host into a maintenance window (default 60 min) so its
+// offline/recovered alerts and dashboard attention items are suppressed.
+func (h *handler) setMaintenance(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	var rq struct {
+		Minutes int `json:"minutes"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&rq)
+	if rq.Minutes <= 0 {
+		rq.Minutes = 60
+	}
+	if rq.Minutes > 60*24*30 { // cap at 30 days
+		rq.Minutes = 60 * 24 * 30
+	}
+	until := time.Now().Add(time.Duration(rq.Minutes) * time.Minute)
+	if err := h.d.Store.SetHostMaintenance(r.Context(), id, &until); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not set maintenance")
+		return
+	}
+	h.audit(r, "host.maintenance_set", id.String(), map[string]any{"minutes": rq.Minutes, "until": until})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"maintenanceUntil": until})
+}
+
+// clearMaintenance ends a host's maintenance window immediately.
+func (h *handler) clearMaintenance(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	if err := h.d.Store.SetHostMaintenance(r.Context(), id, nil); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not clear maintenance")
+		return
+	}
+	h.audit(r, "host.maintenance_clear", id.String(), nil)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"cleared": true})
 }
 
 // software returns a Windows host's installed-software inventory.

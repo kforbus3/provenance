@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,7 +14,7 @@ import (
 const hostCols = `id, hostname, description, environment, owner,
 	COALESCE(address,''), COALESCE(host(wg_address),''), ssh_port, ssh_user,
 	tags, enrolled, auth_method, credential_id, protocol, rdp_port,
-	COALESCE(rdp_options, '{}'::jsonb), created_at, updated_at`
+	COALESCE(rdp_options, '{}'::jsonb), created_at, updated_at, maintenance_until`
 
 func scanHost(row pgx.Row) (*models.Host, error) {
 	var h models.Host
@@ -21,7 +22,7 @@ func scanHost(row pgx.Row) (*models.Host, error) {
 	err := row.Scan(&h.ID, &h.Hostname, &h.Description, &h.Environment, &h.Owner,
 		&h.Address, &h.WGAddress, &h.SSHPort, &h.SSHUser, &h.Tags, &h.Enrolled,
 		&h.AuthMethod, &h.CredentialID, &h.Protocol, &h.RDPPort, &rdpOpts,
-		&h.CreatedAt, &h.UpdatedAt)
+		&h.CreatedAt, &h.UpdatedAt, &h.MaintenanceUntil)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -364,7 +365,12 @@ func (s *Store) CountHostsByStatus(ctx context.Context) (map[string]int, error) 
 	return out, rows.Err()
 }
 
-// UpsertInventory updates collected facts for a host.
+// SetHostMaintenance sets (or clears, with nil) a host's maintenance window.
+func (s *Store) SetHostMaintenance(ctx context.Context, hostID uuid.UUID, until *time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE hosts SET maintenance_until=$2, updated_at=now() WHERE id=$1`, hostID, until)
+	return err
+}
+
 // MarkHostFactsStale clears the update-check timestamp so the monitor re-collects a
 // host's pending-updates (and, on Windows, software inventory) on its next sweep,
 // rather than waiting for the hourly cadence. Used by the "refresh" action after an
@@ -374,6 +380,7 @@ func (s *Store) MarkHostFactsStale(ctx context.Context, hostID uuid.UUID) error 
 	return err
 }
 
+// UpsertInventory updates collected facts for a host.
 func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv models.HostInventory) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,

@@ -200,11 +200,20 @@ type Host struct {
 	RDPOptions RDPOptions `json:"rdpOptions"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
+	// MaintenanceUntil, when set to a future time, marks the host "in maintenance":
+	// offline/recovered alerts and dashboard attention items are suppressed.
+	MaintenanceUntil *time.Time `json:"maintenanceUntil,omitempty"`
 
 	Groups    []string       `json:"groups,omitempty"`
 	Inventory *HostInventory `json:"inventory,omitempty"`
 	Status    *HostStatus    `json:"status,omitempty"`
 	Metrics   *HostMetrics   `json:"metrics,omitempty"`
+}
+
+// InMaintenance reports whether the host is currently within a maintenance window,
+// during which offline/recovered alerts and dashboard attention items are suppressed.
+func (h *Host) InMaintenance() bool {
+	return h.MaintenanceUntil != nil && h.MaintenanceUntil.After(time.Now())
 }
 
 // RDPOptions are per-host display/security and clipboard settings applied when

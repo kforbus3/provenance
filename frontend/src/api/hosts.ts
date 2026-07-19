@@ -81,6 +81,7 @@ export interface Host {
   enrolled: boolean;
   createdAt: string;
   updatedAt: string;
+  maintenanceUntil?: string;
   groups?: string[];
   inventory?: HostInventory;
   status?: HostStatus;
@@ -181,6 +182,20 @@ export async function listHostSoftware(id: string): Promise<WindowsSoftware[]> {
 
 export async function refreshHostFacts(id: string): Promise<void> {
   await api.post(`/api/v1/hosts/${id}/refresh`);
+}
+
+export async function setHostMaintenance(id: string, minutes: number): Promise<{ maintenanceUntil: string }> {
+  const { data } = await api.post<{ maintenanceUntil: string }>(`/api/v1/hosts/${id}/maintenance`, { minutes });
+  return data;
+}
+
+export async function clearHostMaintenance(id: string): Promise<void> {
+  await api.delete(`/api/v1/hosts/${id}/maintenance`);
+}
+
+// maintenanceActive reports whether a host is currently in a maintenance window.
+export function maintenanceActive(h: { maintenanceUntil?: string }): boolean {
+  return !!h.maintenanceUntil && new Date(h.maintenanceUntil).getTime() > Date.now();
 }
 
 export async function getHostStatusStats(): Promise<HostStatusStats> {

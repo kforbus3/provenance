@@ -54,6 +54,11 @@ func (m *Monitor) notifyTransition(ctx context.Context, h models.Host, prev, now
 	if m.nfy == nil || prev == "" || prev == now {
 		return
 	}
+	// Suppress offline/recovered alerts while the host is in a maintenance window
+	// (e.g. an operator patching or rebooting it).
+	if h.InMaintenance() {
+		return
+	}
 	switch {
 	case prev == "online" && now == "offline":
 		m.nfy.Notify(ctx, notify.Event{
