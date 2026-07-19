@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.7 — RDP monitoring: one jump connection per probe (scale parity)
+
+A Windows/RDP probe opened the jump-host SSH connection twice per sweep — once
+for the RDP reachability check and once for WinRM fact collection — while an SSH
+host opens it once. Since the monitor's worker-pool size is tuned against the
+jump host's `sshd MaxStartups`, that doubled the per-host connection cost and
+halved effective headroom for RDP hosts at scale.
+
+The RDP branch now opens a single jump connection per probe and reuses it for
+both the TCP check and WinRM, so RDP hosts cost the same as SSH hosts and scale
+identically under the shared bounded worker pool (the sweep already pages all
+hosts via `AllHosts` with no fixed cap). Removed the now-unused
+`ProbeTCPViaJump` gateway helper.
+
 ## v0.19.6 — Windows onboarding: turnkey enrollment, richer facts, docs
 
 Windows/RDP hosts now onboard with no hand-run configuration and report the same

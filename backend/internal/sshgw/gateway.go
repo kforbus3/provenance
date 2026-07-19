@@ -460,34 +460,6 @@ func (g *Gateway) DialJumpWithSigner(ctx context.Context, signer ssh.Signer) (*s
 	return client, nil
 }
 
-// ProbeTCPViaJump tests raw TCP reachability to host:port through the jump host,
-// authenticating the jump hop with the given (system) signer. It opens and
-// immediately closes the tunnel — used to health-check non-SSH services such as RDP,
-// where the standard authenticated SSH probe cannot apply. Returns nil if the
-// connection was established.
-func (g *Gateway) ProbeTCPViaJump(ctx context.Context, signer ssh.Signer, host string, port int) error {
-	if signer == nil {
-		return fmt.Errorf("nil signer")
-	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
-		User:            g.cfg.JumpUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: g.hostKeyCallback(),
-		Timeout:         10 * time.Second,
-	})
-	if err != nil {
-		return fmt.Errorf("dial jump host: %w", err)
-	}
-	defer jumpClient.Close()
-	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	tunnel, err := jumpClient.DialContext(ctx, "tcp", target)
-	if err != nil {
-		return fmt.Errorf("tcp connect to %s via jump: %w", target, err)
-	}
-	_ = tunnel.Close()
-	return nil
-}
-
 // DialDirect opens an SSH connection straight to addr:port using the session's
 // ephemeral certificate, bypassing the jump host. Enrollment uses this to reach
 // the jump host itself and a host that is not yet on the WireGuard overlay.

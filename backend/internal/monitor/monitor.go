@@ -159,22 +159,33 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 	}
 
 	// RDP hosts have no SSH: probe TCP reachability of the RDP port, and (best-effort)
-	// collect Windows facts over WinRM instead of the SSH inventory path.
+	// collect Windows facts over WinRM instead of the SSH inventory path. Both use a
+	// single jump-host connection per probe — same jump-connection cost as an SSH host,
+	// so RDP hosts scale under the shared worker pool identically.
 	if h.Protocol == "rdp" {
-		st := m.probeRDP(ctx, signer, &h)
+		var st models.HostStatus
 		var inv *models.HostInventory
 		var metrics *models.HostMetrics
-		// Collect over WinRM every sweep while online: inventory changes rarely but
-		// resource metrics (disk, memory, network) are live, and it's a single call.
-		if m.cfg.RDPCollectFacts && st.Status == "online" {
-			if f := m.collectWindowsFacts(ctx, signer, &h); f != nil {
-				inv = f.inv
-				metrics = f.metrics
-				if f.uptime > 0 {
-					up := f.uptime
-					st.UptimeSeconds = &up
+		jump, jerr := m.gw.DialJumpWithSigner(ctx, signer)
+		if jerr != nil {
+			now := time.Now()
+			st = models.HostStatus{Status: "offline", CheckedAt: &now, LastError: trunc(errStr(jerr), 240), LastFailureAt: &now}
+		} else {
+			st = m.probeRDPOver(ctx, jump, &h)
+			// Collect over WinRM every sweep while online: inventory changes rarely but
+			// resource metrics (disk, memory, network) are live, and it's a single call
+			// reusing the jump connection we already opened.
+			if m.cfg.RDPCollectFacts && st.Status == "online" {
+				if f := m.collectWindowsFactsOver(ctx, jump, &h); f != nil {
+					inv = f.inv
+					metrics = f.metrics
+					if f.uptime > 0 {
+						up := f.uptime
+						st.UptimeSeconds = &up
+					}
 				}
 			}
+			jump.Close()
 		}
 		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
@@ -235,11 +246,11 @@ func (m *Monitor) broadcastStatus(h models.Host, st models.HostStatus) {
 	})
 }
 
-// probeRDP health-checks an RDP host by testing TCP reachability to its RDP port
-// through the jump host. Windows hosts expose no SSH, so the standard authenticated
-// probe (and its inventory/metrics) does not apply — this only reports online/offline
-// plus connect latency.
-func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Host) models.HostStatus {
+// probeRDPOver health-checks an RDP host by testing TCP reachability to its RDP port
+// over an already-open jump-host connection. Windows hosts expose no SSH, so the
+// standard authenticated probe (and its inventory/metrics) does not apply — this only
+// reports online/offline plus connect latency.
+func (m *Monitor) probeRDPOver(ctx context.Context, jump *ssh.Client, h *models.Host) models.HostStatus {
 	now := time.Now()
 	st := models.HostStatus{Status: "unknown", CheckedAt: &now}
 	port := h.RDPPort
@@ -249,7 +260,9 @@ func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Hos
 	var dialErr error
 	for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
 		start := time.Now()
-		if dialErr = m.gw.ProbeTCPViaJump(ctx, signer, addr, port); dialErr == nil {
+		conn, err := jump.DialContext(ctx, "tcp", net.JoinHostPort(addr, strconv.Itoa(port)))
+		if err == nil {
+			_ = conn.Close()
 			lat := int(time.Since(start).Milliseconds())
 			st.LatencyMS = &lat
 			st.Status = "online"
@@ -258,6 +271,7 @@ func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Hos
 			st.WGOK = addr == h.WGAddress && h.WGAddress != ""
 			return st
 		}
+		dialErr = err
 	}
 	st.Status = "offline"
 	st.LastError = trunc(errStr(dialErr), 240)
@@ -271,11 +285,12 @@ type winFacts struct {
 	uptime  int64
 }
 
-// collectWindowsFacts gathers OS/CPU/memory/uptime from a Windows RDP host over WinRM,
-// authenticated with the host's open-policy vault credential and tunneled through the
-// jump host. Best-effort: any failure (no credential, WinRM unreachable, auth) returns
-// nil and is logged at debug — the host's status is unaffected.
-func (m *Monitor) collectWindowsFacts(ctx context.Context, signer ssh.Signer, h *models.Host) *winFacts {
+// collectWindowsFactsOver gathers OS/CPU/memory/disk/network facts from a Windows RDP
+// host over WinRM, authenticated with the host's open-policy vault credential and
+// tunneled through the supplied (already-open) jump-host connection. Best-effort: any
+// failure (no credential, WinRM unreachable, auth) returns nil and is logged at debug —
+// the host's status is unaffected.
+func (m *Monitor) collectWindowsFactsOver(ctx context.Context, jump *ssh.Client, h *models.Host) *winFacts {
 	key, err := m.cfg.VaultKey()
 	if err != nil {
 		return nil
@@ -289,12 +304,6 @@ func (m *Monitor) collectWindowsFacts(ctx context.Context, signer ssh.Signer, h 
 	if len(cands) == 0 {
 		return nil
 	}
-	jump, err := m.gw.DialJumpWithSigner(ctx, signer)
-	if err != nil {
-		m.log.Debug("rdp facts: dial jump host", "host", h.Hostname, "err", err)
-		return nil
-	}
-	defer jump.Close()
 	dial := func(_ /*network*/, addr string) (net.Conn, error) { return jump.DialContext(ctx, "tcp", addr) }
 	f, err := winrm.Collect(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts)
 	if err != nil {
