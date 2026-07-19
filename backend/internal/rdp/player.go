@@ -67,11 +67,11 @@ try{
   const src=new TextDecoder().decode(b(GUAC));
   const Guacamole=(await import(URL.createObjectURL(new Blob([src],{type:"text/javascript"})))).default;
   // Serve the embedded recording as a blob: URL (a real, chunk-streamed resource,
-  // like the in-app /stream endpoint) rather than a data: URL, which some browsers
-  // deliver as one giant chunk / mishandle under file://.
-  const recUrl=URL.createObjectURL(new Blob([b(REC)],{type:"text/plain"}));
-  const tunnel=new Guacamole.StaticHTTPTunnel(recUrl);
-  const rec=new Guacamole.SessionRecording(tunnel);
+  // Feed the recording directly as a Blob (SessionRecording parses it in-place and
+  // renders frames from it) rather than through a streaming tunnel — the tunnel path
+  // reconstructs the instruction stream, which dropped large desktop-image draws
+  // offline while the small cursor draws survived.
+  const rec=new Guacamole.SessionRecording(new Blob([b(REC)],{type:"text/plain"}));
   $("screen").appendChild(rec.getDisplay().getElement());
   const play=$("play"),seek=$("seek"),cur=$("cur"),dur=$("dur");
   let duration=0;
@@ -84,7 +84,6 @@ try{
   rec.onseek=p=>{cur.textContent=fmt(p);seek.value=Math.min(p,duration);};
   play.onclick=()=>rec.isPlaying()?rec.pause():rec.play();
   seek.oninput=()=>{cur.textContent=fmt(+seek.value);rec.seek(+seek.value);};
-  rec.connect();
 }catch(e){$("err").textContent="Failed to initialize the player: "+e;}
 </script>
 </body>

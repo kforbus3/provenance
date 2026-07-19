@@ -5,6 +5,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.6 — Downloaded RDP player: play from a Blob
+
+Second attempt at the downloaded-player black screen: the recording is now fed to
+`Guacamole.SessionRecording` directly as a `Blob` (parsed and rendered in place) rather
+than through a streaming tunnel, whose reconstruct-then-render path dropped large
+desktop-image draws offline while the small cursor draws survived. Backend-only.
+
 ## v0.17.5 — Fix black screen in the downloaded RDP player
 
 The downloaded self-contained RDP player showed only a moving cursor on a black screen
