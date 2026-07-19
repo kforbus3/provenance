@@ -100,9 +100,19 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	if e := httpSrv.Shutdown(shutdownCtx); e != nil {
-		log.Error("graceful shutdown failed", "err", e)
-		return e
+	srvErr := httpSrv.Shutdown(shutdownCtx)
+
+	// Step down from cluster leadership BEFORE the deferred pool.Close(): releasing
+	// the Postgres advisory lock while the pool is still open lets a standby instance
+	// take over on its next tick, instead of the lock lingering until Postgres reaps
+	// this (now-dead) connection — which otherwise leaves the fleet unmonitored for
+	// minutes after a deploy/restart. Idempotent with the coordinator's own ctx-cancel
+	// path.
+	srv.Cluster.Stop()
+
+	if srvErr != nil {
+		log.Error("graceful shutdown failed", "err", srvErr)
+		return srvErr
 	}
 	log.Info("shutdown complete")
 	return nil

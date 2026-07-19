@@ -88,7 +88,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.shutdown()
+			c.Stop()
 			return
 		case <-t.C:
 			c.tick(ctx)
@@ -153,9 +153,14 @@ func (c *Coordinator) evaluateLeadership(ctx context.Context) {
 	}
 }
 
-// shutdown releases leadership and removes this instance from the registry so
-// failover happens immediately on a clean stop.
-func (c *Coordinator) shutdown() {
+// Stop releases leadership and removes this instance from the registry so failover
+// happens immediately on a clean stop. It is idempotent and safe to call more than
+// once (from the Run loop on ctx cancel AND synchronously from main during shutdown),
+// which matters because it MUST run while the DB pool is still open — a caller in the
+// shutdown path should invoke it before closing the pool so the advisory unlock and
+// unregister actually reach Postgres. Once the lock is released a standby takes over on
+// its next tick, rather than waiting for Postgres to reap this instance's connection.
+func (c *Coordinator) Stop() {
 	c.mu.Lock()
 	if c.lockConn != nil {
 		// Best-effort explicit unlock, then release the connection (which also frees

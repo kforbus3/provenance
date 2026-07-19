@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.20.3 — Fix: release cluster leadership before the DB pool closes on shutdown
+
+A backend restart/deploy could leave the fleet showing all hosts **offline** for
+minutes (and interrupt in-flight singleton work) until leadership was re-acquired.
+The cluster coordinator releases its Postgres leader advisory lock on shutdown, but
+that step-down ran asynchronously in its goroutine while `main` independently
+drained HTTP and then closed the DB pool. When the pool closed first, the
+`pg_advisory_unlock` never reached Postgres, so the lock lingered until Postgres
+reaped the dead connection — and a standby (or the restarted instance itself)
+couldn't become leader until then, so the monitor didn't sweep.
+
+The step-down is now invoked **synchronously in `main` before the pool closes**
+(the coordinator's `Stop()` is exported and idempotent), so leadership frees
+immediately on a clean stop and the restarted/standby instance takes over on its
+next tick — no multi-minute unmonitored window after a deploy. Latent since the
+HA work (v0.17.0).
+
 ## v0.20.2 — Scheduled PowerShell script runs
 
 PowerShell scripts can now be run on a recurring schedule, just like Ansible
