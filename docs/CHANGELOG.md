@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.0 — Windows WireGuard enrollment (remote reach)
+
+Windows/RDP hosts can now join the WireGuard overlay, so they're reachable from
+**anywhere** with internet — the same dial-out model as Linux, previously Linux-only.
+On an RDP host, **Enroll** offers a **PowerShell** script: run it elevated on the host
+and it installs WireGuard, brings up a persistent dial-out tunnel to the jump host (no
+inbound firewall rules), and prints its public key; paste that back and Fleet adds it as
+an overlay peer. The RDP session and WinRM fact collection then ride the tunnel.
+Enrollment is protocol-aware (bash for SSH hosts, PowerShell for Windows) and, for
+Windows, verifies RDP reachability over the new tunnel instead of SSH-cert login.
+(WireGuard on Windows is for non-FIPS deployments.)
+
 ## v0.18.0 — Windows host facts over WinRM
 
 RDP (Windows) hosts previously showed no inventory (OS/CPU/memory/uptime were blank)

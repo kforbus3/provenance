@@ -795,6 +795,17 @@ host (`Enable-PSRemoting`, firewall open to the jump host) and reachability on
 `FLEET_RDP_COLLECT_FACTS` (default on). SSH-only fields (kernel, SSH version, WireGuard,
 apt/dnf updates) are hidden for RDP hosts.
 
+**Remote Windows hosts (overlay enrollment).** By default a Windows host is only
+reachable if the jump host can already route to it (same LAN). To reach a Windows host
+**anywhere** — like Linux hosts — enroll it onto the WireGuard overlay: on the host row
+click **Enroll**, set the jump host's WireGuard endpoint, and **download the PowerShell
+script**. Run it once in an **elevated PowerShell** on the Windows host; it installs
+WireGuard, brings up a dial-out tunnel to the jump host (auto-reconnecting service, no
+inbound firewall rules), and prints a public key. Paste that key back and **Finish** —
+Fleet adds it as an overlay peer. From then on the host's RDP session and WinRM fact
+collection ride the tunnel, reachable from anywhere with internet. (WireGuard on Windows
+is for non-FIPS deployments; FIPS environments use OpenVPN — see the FIPS plan.)
+
 ## 19. Live session shadowing
 
 **Session shadowing** is read-only, real-time viewing of an **active** terminal

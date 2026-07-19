@@ -100,7 +100,14 @@ func (h *handler) enrollScript(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
-	script, err := h.svc.EnrollScript(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"))
+	// RDP (Windows) hosts get a PowerShell WireGuard-enrollment script; SSH hosts get
+	// the bash bootstrap script.
+	var script string
+	if host.Protocol == "rdp" {
+		script, err = h.svc.EnrollScriptWindows(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"))
+	} else {
+		script, err = h.svc.EnrollScript(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"))
+	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadGateway, err.Error())
 		return

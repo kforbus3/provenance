@@ -594,21 +594,24 @@ export function HostsPage() {
               <LockPersonIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          {/* Enrollment provisions WireGuard + CA trust via a Linux shell script — N/A for RDP. */}
-          {params.row.protocol !== "rdp" && (
-            <Tooltip title={params.row.enrolled ? "Re-enroll (provision WireGuard)" : "Enroll (provision WireGuard)"}>
-              <span>
-                <IconButton
-                  size="small"
-                  color={params.row.enrolled ? "success" : "primary"}
-                  disabled={enrollMut.isPending}
-                  onClick={() => setEnrollTarget(params.row)}
-                >
-                  <CableIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
+          {/* SSH hosts enroll via a bash script; RDP (Windows) hosts via a PowerShell
+              WireGuard script — both join the host to the overlay for remote reach. */}
+          <Tooltip title={params.row.enrolled
+            ? "Re-enroll (provision WireGuard)"
+            : params.row.protocol === "rdp"
+              ? "Enroll on the overlay (Windows / WireGuard)"
+              : "Enroll (provision WireGuard)"}>
+            <span>
+              <IconButton
+                size="small"
+                color={params.row.enrolled ? "success" : "primary"}
+                disabled={enrollMut.isPending}
+                onClick={() => setEnrollTarget(params.row)}
+              >
+                <CableIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
           <Tooltip title="Delete host">
             <IconButton
               size="small" color="error"
@@ -1342,6 +1345,67 @@ function EnrollCredsDialog({
   useEffect(() => {
     if (nextWG?.jumpEndpoint && wgEndpoint === "") setWgEndpoint(nextWG.jumpEndpoint);
   }, [nextWG?.jumpEndpoint, wgEndpoint]);
+
+  // Download the enrollment script (bash for SSH hosts, PowerShell for Windows).
+  const downloadScript = async (ext: string) => {
+    const res = await fetch(scriptUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const text = await res.text();
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fleet-enroll-${host?.hostname ?? "host"}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // Windows/RDP hosts join the overlay via a PowerShell WireGuard script (dial-out),
+  // then the operator pastes the reported public key back — no SSH/CA trust.
+  if (host?.protocol === "rdp") {
+    return (
+      <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
+        <DialogTitle>Enroll {host.hostname} (Windows / WireGuard)</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 2 }}>
+            Joins this Windows host to the WireGuard overlay by dialing out to the jump host,
+            so its RDP session and fact collection are reachable from anywhere — no inbound
+            firewall rules. Run the script once, elevated, on the host.
+          </Typography>
+          <Stack spacing={2}>
+            <TextField
+              label="Jump host WireGuard endpoint" value={wgEndpoint}
+              onChange={(e) => setWgEndpoint(e.target.value)}
+              helperText="host:port the Windows client dials (publicly reachable)"
+            />
+            <Box>
+              <Button variant="outlined" onClick={() => void downloadScript("ps1")}>
+                Download PowerShell script (.ps1)
+              </Button>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+                On {host.hostname}: open an <b>elevated PowerShell</b> and run the downloaded
+                <code> fleet-enroll-{host.hostname}.ps1</code> (you may need
+                <code> Set-ExecutionPolicy -Scope Process Bypass</code> first). It installs
+                WireGuard, brings up the tunnel, and prints a public key.
+              </Typography>
+            </Box>
+            <TextField
+              label="WireGuard public key (from the script output)" value={hostPubKey}
+              onChange={(e) => setHostPubKey(e.target.value)} fullWidth
+              helperText="Paste the key the script printed, then finish."
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose}>Close</Button>
+          <Button variant="contained" disabled={hostPubKey.trim() === ""}
+            onClick={() => onPipeFinish(hostPubKey.trim())}>
+            Finish enrollment
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">

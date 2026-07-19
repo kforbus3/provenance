@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +91,120 @@ func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *m
 	return s.bootstrapScript(loginUser, strings.Join(caKeys, "\n"), wgIP, jumpPub, jumpEndpoint, krlB64, host.ID), nil
 }
 
+// EnrollScriptWindows generates a PowerShell script that joins a Windows host to the
+// WireGuard overlay by dialing OUT to the jump host, so a remote Windows/RDP host is
+// reachable through the jump host from anywhere — the same overlay model as Linux, but
+// with no SSH/CA trust (Windows is reached over RDP/WinRM, not SSH). The operator runs
+// it elevated on the host and pastes the reported public key back into Fleet
+// (FinishScriptEnroll).
+func (s *Service) EnrollScriptWindows(ctx context.Context, sessionID uuid.UUID, host *models.Host, actor *uuid.UUID, wgEndpointOverride string) (string, error) {
+	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
+	jumpClient, err := s.gw.DialDirect(ctx, sessionID.String(), jumpAddr, jumpPort, s.cfg.JumpUser)
+	if err != nil {
+		return "", fmt.Errorf("connect jump host: %w", err)
+	}
+	defer jumpClient.Close()
+	jumpPub, err := run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
+	if err != nil || strings.TrimSpace(jumpPub) == "" {
+		return "", orErr(err, "jump host has no WireGuard public key")
+	}
+	jumpPub = strings.TrimSpace(jumpPub)
+
+	// Assign + persist the overlay address so this and the finish step agree.
+	wgIP := strings.TrimSpace(host.WGAddress)
+	if wgIP != "" {
+		if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
+			return "", fmt.Errorf("WireGuard address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet)
+		}
+		if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
+			return "", fmt.Errorf("WireGuard address %s is already assigned to another host", wgIP)
+		}
+	} else {
+		wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
+		if err != nil {
+			return "", err
+		}
+	}
+	_ = s.store.SetHostWGAddress(ctx, host.ID, wgIP)
+
+	jumpEndpoint := strings.TrimSpace(wgEndpointOverride)
+	if jumpEndpoint == "" {
+		jumpEndpoint = s.store.WireGuardEndpoint(ctx)
+	}
+	if jumpEndpoint == "" {
+		jumpEndpoint = s.cfg.WGJumpEndpoint
+	}
+
+	_, _ = s.store.AppendAudit(ctx, models.AuditEvent{
+		ActorID: actor, Action: "host.enroll_script", TargetKind: "host", TargetID: host.ID.String(),
+		Detail: map[string]any{"wgAddress": wgIP, "method": "windows"},
+	})
+
+	return windowsWGScript(wgIP, jumpPub, jumpEndpoint, s.cfg.WGSubnet), nil
+}
+
+// windowsWGScript builds the PowerShell that installs WireGuard for Windows, generates
+// a keypair, writes a dial-out tunnel config, installs it as a persistent tunnel
+// service, and prints the public key for the operator to hand back to Fleet.
+func windowsWGScript(wgIP, jumpPub, jumpEndpoint, subnet string) string {
+	return strings.NewReplacer(
+		"__WGIP__", wgIP,
+		"__JUMPPUB__", jumpPub,
+		"__ENDPOINT__", jumpEndpoint,
+		"__SUBNET__", subnet,
+	).Replace(windowsWGTemplate)
+}
+
+const windowsWGTemplate = `#Requires -RunAsAdministrator
+# Fleet Terminal — Windows WireGuard enrollment. Run in an elevated PowerShell.
+$ErrorActionPreference = "Stop"
+$wgDir = "$env:ProgramFiles\WireGuard"
+
+# 1. Install WireGuard for Windows if it isn't already present.
+if (-not (Test-Path "$wgDir\wireguard.exe")) {
+  Write-Host "Installing WireGuard for Windows..."
+  try {
+    winget install --id WireGuard.WireGuard -e --silent --accept-source-agreements --accept-package-agreements | Out-Null
+  } catch {
+    throw "WireGuard is not installed and automatic install failed. Install it from https://www.wireguard.com/install/ and re-run this script."
+  }
+}
+$wg      = "$wgDir\wg.exe"
+$wgquick = "$wgDir\wireguard.exe"
+
+# 2. Generate a fresh WireGuard keypair.
+$priv = (& $wg genkey).Trim()
+$pub  = ($priv | & $wg pubkey).Trim()
+
+# 3. Write a dial-out tunnel config (the host reaches the jump host; no inbound needed).
+$conf = @"
+[Interface]
+PrivateKey = $priv
+Address = __WGIP__/32
+
+[Peer]
+PublicKey = __JUMPPUB__
+Endpoint = __ENDPOINT__
+AllowedIPs = __SUBNET__
+PersistentKeepalive = 25
+"@
+$confPath = Join-Path $env:TEMP "fleet.conf"
+Set-Content -Path $confPath -Value $conf -Encoding ascii
+
+# 4. Install + start the tunnel as a service (auto-connects on boot).
+try { & $wgquick /uninstalltunnelservice fleet 2>$null | Out-Null } catch {}
+& $wgquick /installtunnelservice $confPath
+Start-Sleep -Seconds 2
+Remove-Item $confPath -Force -ErrorAction SilentlyContinue
+
+# 5. Print the public key to paste back into Fleet.
+Write-Host ""
+Write-Host "================ Fleet enrollment ================"
+Write-Host "Paste this WireGuard PUBLIC KEY back into Fleet:"
+Write-Host $pub
+Write-Host "=================================================="
+`
+
 // FinishScriptEnroll completes the no-install flow after the operator has run
 // the bootstrap script: it adds the host (identified by the public key the
 // operator pasted) as a peer on the jump host and verifies certificate login.
@@ -150,7 +266,20 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	}
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
 
-	if id, verr := s.validateCertLogin(ctx, host.ID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {
+	if host.Protocol == "rdp" {
+		// Windows hosts have no SSH cert login; verify the RDP port is reachable over
+		// the freshly-established overlay tunnel instead.
+		port := host.RDPPort
+		if port <= 0 {
+			port = 3389
+		}
+		if conn, verr := jumpClient.DialContext(ctx, "tcp", net.JoinHostPort(wgIP, strconv.Itoa(port))); verr == nil {
+			_ = conn.Close()
+			step("verify_rdp_overlay", "ok", fmt.Sprintf("rdp reachable at %s:%d over the overlay", wgIP, port))
+		} else {
+			step("verify_rdp_overlay", "skipped", verr.Error())
+		}
+	} else if id, verr := s.validateCertLogin(ctx, host.ID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {
 		step("verify_certificate_login", "ok", "cert login via jump host: "+oneLine(id))
 	} else {
 		step("verify_certificate_login", "skipped", verr.Error())
