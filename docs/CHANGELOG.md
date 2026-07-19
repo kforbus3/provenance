@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.9 — Windows pending-updates (surfaced in Ask, dashboard, host details)
+
+The WinRM fact collection now also counts **pending Windows updates** and the
+security subset, via the Windows Update Agent COM API with an OFFLINE search
+(local cache only — no round-trip to Microsoft, the scalable equivalent of
+reading cached apt/dnf metadata). The counts land in the same
+`updates_available` / `security_updates` inventory fields the Linux path fills,
+so the **assistant** (`query_hosts` with `securityUpdatesMin`, `fleet_issues`),
+the dashboard issues, and host details report Windows update posture with no
+further changes — ask "which Windows hosts have security updates" and it works.
+
+The search is throttled to the hourly inventory cadence (heavier than the live
+per-sweep metrics), and the counts are preserved between checks — so it adds no
+per-sweep cost and doesn't affect monitoring scalability.
+
 ## v0.19.8 — Windows enrollment: persist the WireGuard config (survive reboots)
 
 Fixed a Windows tunnel that worked until the first reboot and then crash-looped.

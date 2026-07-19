@@ -305,7 +305,10 @@ func (m *Monitor) collectWindowsFactsOver(ctx context.Context, jump *ssh.Client,
 		return nil
 	}
 	dial := func(_ /*network*/, addr string) (net.Conn, error) { return jump.DialContext(ctx, "tcp", addr) }
-	f, err := winrm.Collect(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts)
+	// The pending-updates search (Windows Update Agent) is heavier than the WMI
+	// facts, so run it only when the last check is stale (hourly) rather than every
+	// sweep — the counts are preserved by UpsertInventory's COALESCE in between.
+	f, err := winrm.Collect(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts, updatesStale(h.Inventory))
 	if err != nil {
 		m.log.Debug("rdp facts: winrm collect", "host", h.Hostname, "err", err)
 		return nil
@@ -314,6 +317,14 @@ func (m *Monitor) collectWindowsFactsOver(ctx context.Context, jump *ssh.Client,
 	inv := &models.HostInventory{
 		OSName: f.OS, OSVersion: f.OSVersion, Architecture: f.Architecture,
 		CPUCount: f.CPUCount, MemoryMB: f.MemoryMB, CollectedAt: &now,
+	}
+	// Pending Windows Update counts (nil unless the search ran this call) — same
+	// inventory fields the Linux apt/dnf path fills, so the assistant and dashboard
+	// surface Windows update posture with no further changes.
+	if f.UpdatesAvailable != nil {
+		inv.UpdatesAvailable = f.UpdatesAvailable
+		inv.SecurityUpdates = f.SecurityUpdates
+		inv.UpdatesCheckedAt = &now
 	}
 
 	// Resource metrics — same HostMetrics shape as the Linux path so the UI renders
@@ -449,6 +460,12 @@ const inventoryTTL = time.Hour
 
 func inventoryStale(inv *models.HostInventory) bool {
 	return inv == nil || inv.CollectedAt == nil || time.Since(*inv.CollectedAt) > inventoryTTL
+}
+
+// updatesStale bounds how often the pending-updates search runs (heavier than the
+// rest of fact collection), independent of the live per-sweep metrics.
+func updatesStale(inv *models.HostInventory) bool {
+	return inv == nil || inv.UpdatesCheckedAt == nil || time.Since(*inv.UpdatesCheckedAt) > inventoryTTL
 }
 
 // collectInventory gathers host facts over an open connection: kernel, arch,

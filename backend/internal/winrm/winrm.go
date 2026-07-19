@@ -30,6 +30,11 @@ type Facts struct {
 	Disks         []Disk
 	Interfaces    []Iface
 	Gateway       string
+
+	// Pending Windows Update counts. nil when the search wasn't run this call
+	// (it's throttled) or the WUA query failed — distinct from a real zero.
+	UpdatesAvailable *int
+	SecurityUpdates  *int
 }
 
 // Disk is one fixed logical drive's capacity/free space (bytes).
@@ -61,13 +66,28 @@ const factsScript = `$o=Get-CimInstance Win32_OperatingSystem;$s=Get-CimInstance
 	`foreach($d in Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3"){Write-Output "DISK=$($d.DeviceID)|$($d.Size)|$($d.FreeSpace)"};` +
 	`foreach($n in Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=true"){Write-Output "NIC=$($n.Description)|$($n.IPAddress -join ',')";if($n.DefaultIPGateway){Write-Output "GW=$($n.DefaultIPGateway -join ',')"}}`
 
+// updatesScript is appended to factsScript when the pending-updates search is due.
+// It queries the Windows Update Agent OFFLINE (against the local cache, no round-trip
+// to Microsoft — the cheap, scalable equivalent of reading cached apt/dnf metadata) and
+// counts pending updates plus the security subset (matched by the locale-independent
+// Security Updates category GUID). Wrapped in try/catch so a WUA failure never breaks
+// the rest of the fact collection.
+const updatesScript = `;try{$us=New-Object -ComObject Microsoft.Update.Session;$se=$us.CreateUpdateSearcher();$se.Online=$false;` +
+	`$rs=$se.Search("IsInstalled=0 and IsHidden=0");$sg='0FA1201D-4330-4FA8-8AE9-B877473B6441';$sc=0;` +
+	`foreach($u in $rs.Updates){foreach($c in $u.Categories){if($c.CategoryID -eq $sg){$sc++;break}}};` +
+	`Write-Output "UPDATES=$($rs.Updates.Count)";Write-Output "SECUPDATES=$sc"}catch{}`
+
 // Collect runs the facts query over WinRM, trying each port in order (5986 HTTPS
 // first, then 5985 HTTP), authenticating with NTLM over the given dialer (through the
 // jump host). Returns the first success. Server TLS is not verified (WinRM listeners
 // use self-signed certs by default) — the connection is already inside the jump-host
 // tunnel.
-func Collect(ctx context.Context, dial DialFunc, host, user, pass string, ports []int) (*Facts, error) {
-	cmd := "powershell.exe -NonInteractive -NoProfile -EncodedCommand " + encodePS(factsScript)
+func Collect(ctx context.Context, dial DialFunc, host, user, pass string, ports []int, includeUpdates bool) (*Facts, error) {
+	script := factsScript
+	if includeUpdates {
+		script += updatesScript
+	}
+	cmd := "powershell.exe -NonInteractive -NoProfile -EncodedCommand " + encodePS(script)
 	var lastErr error
 	for _, port := range ports {
 		ep := &winrm.Endpoint{Host: host, Port: port, HTTPS: port == 5986, Insecure: true, Timeout: 20 * time.Second}
@@ -147,6 +167,14 @@ func parseFacts(out string) *Facts {
 		case "GW":
 			if f.Gateway == "" {
 				f.Gateway = strings.TrimSpace(strings.Split(v, ",")[0])
+			}
+		case "UPDATES":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.UpdatesAvailable = &n
+			}
+		case "SECUPDATES":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.SecurityUpdates = &n
 			}
 		}
 	}
