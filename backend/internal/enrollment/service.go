@@ -670,17 +670,9 @@ func (s *Service) jumpPeerScript(hostname, hostPub, hostEndpoint, wgIP string) s
 	// the endpoint: on a jump-host rebuild the hub must not have to resolve member
 	// hostnames (a host may be offline, and DNS may be unavailable that early in
 	// boot). The hub relearns each peer's endpoint from its keepalive handshake.
-	//
-	// An empty hostEndpoint adds the peer roaming (no endpoint clause): dial-out
-	// clients such as Windows don't listen on a fixed port, so the jump host must
-	// learn the endpoint from the client's keepalive rather than dial it directly.
-	endpointClause := ""
-	if hostEndpoint != "" {
-		endpointClause = fmt.Sprintf("endpoint '%s' ", hostEndpoint)
-	}
 	return fmt.Sprintf(`set -e
 IF=%s
-wg set $IF peer '%s' %sallowed-ips %s/32 persistent-keepalive 25
+wg set $IF peer '%s' endpoint '%s' allowed-ips %s/32 persistent-keepalive 25
 mkdir -p /etc/wireguard/peers
 cat > /etc/wireguard/peers/%s.conf <<'EOF'
 [Peer]
@@ -688,7 +680,7 @@ PublicKey = %s
 AllowedIPs = %s/32
 EOF
 echo OK`,
-		iface, hostPub, endpointClause, wgIP, sanitize(hostname), hostPub, wgIP)
+		iface, hostPub, hostEndpoint, wgIP, sanitize(hostname), hostPub, wgIP)
 }
 
 // caTrustScript installs the Fleet user CA, creates the login user with sudo and

@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.4 — Windows enrollment: fixed ListenPort so the jump can reach the host
+
+Supersedes the v0.19.3 approach. A Windows host now enrolls with a fixed
+WireGuard `ListenPort` (the configured `FLEET_WG_PORT`, default 51820), exactly
+like a Linux host, and the jump keeps a static endpoint to dial it. This is what
+lets a host that shares the jump's LAN come up: the jump reaches the host
+directly on the LAN, so the tunnel establishes even though the host's own
+configured `Endpoint` is the *public* address (a LAN host can't hairpin to its
+own public IP). Remote hosts are unaffected — their outbound keepalive to the
+public endpoint establishes the tunnel and WireGuard relearns the real endpoint.
+
+Previously the Windows tunnel used a random source port and didn't listen on the
+WireGuard port, so the jump couldn't reach it and the tunnel only came up if the
+host could dial the public endpoint itself — which fails for a LAN host. The
+v0.19.3 roaming change is reverted in favour of this (it had removed the jump's
+ability to initiate, which is precisely what makes LAN hosts work).
+
 ## v0.19.3 — Windows enrollment: add the jump peer roaming (no static endpoint)
 
 A Windows host enrolls a dial-out WireGuard client that uses a random source

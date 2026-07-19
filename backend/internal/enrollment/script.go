@@ -140,18 +140,19 @@ func (s *Service) EnrollScriptWindows(ctx context.Context, sessionID uuid.UUID, 
 		Detail: map[string]any{"wgAddress": wgIP, "method": "windows"},
 	})
 
-	return windowsWGScript(wgIP, jumpPub, jumpEndpoint, s.cfg.WGSubnet), nil
+	return windowsWGScript(wgIP, jumpPub, jumpEndpoint, s.cfg.WGSubnet, s.cfg.WGPort), nil
 }
 
 // windowsWGScript builds the PowerShell that installs WireGuard for Windows, generates
 // a keypair, writes a dial-out tunnel config, installs it as a persistent tunnel
 // service, and prints the public key for the operator to hand back to Fleet.
-func windowsWGScript(wgIP, jumpPub, jumpEndpoint, subnet string) string {
+func windowsWGScript(wgIP, jumpPub, jumpEndpoint, subnet string, listenPort int) string {
 	return strings.NewReplacer(
 		"__WGIP__", wgIP,
 		"__JUMPPUB__", jumpPub,
 		"__ENDPOINT__", jumpEndpoint,
 		"__SUBNET__", subnet,
+		"__LISTENPORT__", strconv.Itoa(listenPort),
 	).Replace(windowsWGTemplate)
 }
 
@@ -176,11 +177,16 @@ $wgquick = "$wgDir\wireguard.exe"
 $priv = (& $wg genkey).Trim()
 $pub  = ($priv | & $wg pubkey).Trim()
 
-# 3. Write a dial-out tunnel config (the host reaches the jump host; no inbound needed).
+# 3. Write the tunnel config. A fixed ListenPort lets the jump host reach this
+#    host directly (e.g. on a shared LAN) exactly as it does a Linux host, so the
+#    tunnel comes up even when the configured Endpoint isn't reachable from here
+#    (a LAN host can't hairpin to its own public address). When the host is remote,
+#    the outbound keepalive to Endpoint still establishes the tunnel.
 $conf = @"
 [Interface]
 PrivateKey = $priv
 Address = __WGIP__/32
+ListenPort = __LISTENPORT__
 
 [Peer]
 PublicKey = __JUMPPUB__
@@ -249,14 +255,14 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	defer jumpClient.Close()
 	step("connect_jump_host", "ok", "jump host reachable")
 
-	// A Windows/RDP host enrolls a dial-out WireGuard client that uses a random
-	// source port (it does not listen on WGPort), so the jump host can't reach it
-	// at mgmtAddr:WGPort. Add the peer roaming (no endpoint) and let the jump learn
-	// the endpoint from the client's keepalive handshake.
+	// The jump keeps a static endpoint (mgmtAddr:WGPort) so it can dial the host
+	// directly — for a host that shares the jump's LAN this brings the tunnel up
+	// even when the host's own configured Endpoint isn't reachable from where the
+	// host sits (a LAN host can't hairpin to its own public address). Windows hosts
+	// enroll with a matching fixed ListenPort so this works for them exactly as it
+	// does for Linux; when the host is remote, its outbound keepalive establishes
+	// the tunnel and WireGuard relearns the real endpoint from that handshake.
 	hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
-	if host.Protocol == "rdp" {
-		hostEndpoint = ""
-	}
 	if verr := validatePeerInputs(hostPub, hostEndpoint, wgIP); verr != nil {
 		return fail("configure_jump_peer", verr)
 	}
