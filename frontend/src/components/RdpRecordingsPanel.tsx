@@ -6,13 +6,15 @@ import {
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import Guacamole from "guacamole-common-js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
 import {
-  deleteRdpRecording, listRdpRecordings, rdpRecordingStats, type RDPRecording,
+  deleteRdpRecording, downloadRdpRecordingBlob, listRdpRecordings, rdpRecordingStats,
+  type RDPRecording,
 } from "../api/rdpRecordings";
 import { getAccessToken } from "../api/client";
 import { useAuthStore } from "../store/auth";
@@ -145,6 +147,24 @@ export function RdpRecordingsPanel() {
   };
   const delMut = useMutation({ mutationFn: deleteRdpRecording, onSuccess: invalidate });
 
+  // Download the raw Guacamole recording (.guac) for archival / external playback.
+  const download = async (r: RDPRecording) => {
+    const blob = await downloadRdpRecordingBlob(r.id);
+    const d = new Date(r.startedAt);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    const safe = (s: string) => (s || "x").replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const name = `rdp-${safe(r.rdpUser)}-${safe(r.hostname)}-${ts}.guac`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const q = search.trim().toLowerCase();
   const filtered = recordings.filter((r) =>
     !q ||
@@ -204,6 +224,11 @@ export function RdpRecordingsPanel() {
                         <Tooltip title="Watch (replay)">
                           <IconButton size="small" onClick={() => setActive(r)}>
                             <PlayArrowIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Download recording (.guac)">
+                          <IconButton size="small" onClick={() => void download(r)}>
+                            <DownloadIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                         {canManage && (

@@ -5,6 +5,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.3 — Download button for RDP recordings
+
+Session Replay → Desktop (RDP) recordings now have a **download** action, saving the
+raw Guacamole recording (`.guac`) for archival or external playback. (SSH recordings
+download as a self-contained HTML player; a self-contained RDP player would require
+bundling the Guacamole client and is not included.) Frontend-only.
+
 ## v0.17.2 — Fix white screen when opening an RDP recording
 
 Opening an RDP recording in Session Replay crashed the page to a white screen
