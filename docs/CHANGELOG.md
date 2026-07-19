@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.3 — Windows enrollment: add the jump peer roaming (no static endpoint)
+
+A Windows host enrolls a dial-out WireGuard client that uses a random source
+port and never listens on the WireGuard port, so the jump host cannot reach it
+at `mgmtAddr:WGPort`. Enrollment previously pinned the jump-side peer to that
+(unreachable) static endpoint — correct for a Linux host that listens on the
+port, wrong for a dial-out Windows client, and meaningless when the Windows host
+is remote behind NAT. The jump peer is now added **roaming** for RDP hosts: the
+hub learns the endpoint from the client's keepalive handshake, exactly as it
+already does on a jump-host rebuild.
+
+Note: the Windows tunnel dials the jump host at the endpoint baked into its
+config (your stored WireGuard endpoint). For a host on the jump's LAN, set the
+enrollment endpoint to the jump's LAN address; for a remote host, use the public
+endpoint with UDP/WireGuard forwarded to the jump — same as remote Linux hosts.
+
 ## v0.19.2 — RDP: don't route over the overlay until the host is enrolled
 
 Clicking **Enroll** on an RDP host allocates and saves the host's WireGuard

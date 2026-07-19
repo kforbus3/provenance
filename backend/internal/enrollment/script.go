@@ -249,7 +249,14 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	defer jumpClient.Close()
 	step("connect_jump_host", "ok", "jump host reachable")
 
+	// A Windows/RDP host enrolls a dial-out WireGuard client that uses a random
+	// source port (it does not listen on WGPort), so the jump host can't reach it
+	// at mgmtAddr:WGPort. Add the peer roaming (no endpoint) and let the jump learn
+	// the endpoint from the client's keepalive handshake.
 	hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
+	if host.Protocol == "rdp" {
+		hostEndpoint = ""
+	}
 	if verr := validatePeerInputs(hostPub, hostEndpoint, wgIP); verr != nil {
 		return fail("configure_jump_peer", verr)
 	}

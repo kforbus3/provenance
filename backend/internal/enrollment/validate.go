@@ -30,6 +30,12 @@ func validatePeerInputs(hostPub, hostEndpoint, wgIP string) error {
 	if net.ParseIP(wgIP) == nil {
 		return fmt.Errorf("invalid overlay IP address %q", wgIP)
 	}
+	// An empty endpoint means the peer is added roaming: the jump host learns the
+	// endpoint from the peer's keepalive handshake (used for dial-out clients such
+	// as Windows, which don't listen on a fixed WireGuard port).
+	if hostEndpoint == "" {
+		return nil
+	}
 	host, port, err := net.SplitHostPort(hostEndpoint)
 	if err != nil {
 		return fmt.Errorf("invalid host endpoint %q", hostEndpoint)
