@@ -184,6 +184,11 @@ services:
   guacd:
     image: guacamole/guacd:1.5.5
     user: "100:101"
+    # Running as an arbitrary uid leaves HOME as "/" (not writable), which breaks
+    # FreeRDP's TLS/NLA setup ("home directory is not writable" → security negotiation
+    # failures). Point HOME at a writable dir so FreeRDP can store its config/certs.
+    environment:
+      HOME: /tmp
     restart: unless-stopped
     volumes:
       - recordings:/var/lib/fleet/recordings
