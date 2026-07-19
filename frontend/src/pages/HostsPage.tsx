@@ -27,6 +27,9 @@ import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
   getHost, getHostAccess, listHosts, nextWGAddress, removeHostGroup, removeHostUser,
   updateHost,
+} from "../api/hosts";
+import { listVaultSecrets } from "../api/vault";
+import {
   type EnrollmentResult, type EnrollParams, type Host, type HostInput,
 } from "../api/hosts";
 import { listGroups, listUsers } from "../api/admin";
@@ -51,6 +54,7 @@ const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> 
 const EMPTY_FORM: HostInput = {
   hostname: "", description: "", environment: "", owner: "",
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
+  authMethod: "fleet_cert", credentialId: null,
 };
 
 const fmtDate = (value?: string): string => formatDateTime(value);
@@ -134,6 +138,7 @@ const hostToForm = (h: Host): HostInput => ({
   hostname: h.hostname, description: h.description ?? "", environment: h.environment ?? "",
   owner: h.owner ?? "", address: h.address ?? "", wgAddress: h.wgAddress ?? "",
   sshPort: h.sshPort || 22, sshUser: h.sshUser ?? "", tags: h.tags ?? [],
+  authMethod: h.authMethod ?? "fleet_cert", credentialId: h.credentialId ?? null,
 });
 
 // NewHostDialog collects the create/edit payload; tags are entered as a
@@ -151,6 +156,7 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
   const isEdit = Boolean(editHost);
   const [form, setForm] = useState<HostInput>(EMPTY_FORM);
   const [tags, setTags] = useState("");
+  const { data: vaultSecrets = [] } = useQuery({ queryKey: ["vault-secrets"], queryFn: listVaultSecrets, enabled: open });
 
   // Prefill from the host when editing; reset to blank when creating.
   useEffect(() => {
@@ -224,6 +230,25 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
             label="Tags" helperText="Comma-separated" value={tags}
             onChange={(e) => setTags(e.target.value)} fullWidth
           />
+          <TextField select label="Authentication" value={form.authMethod ?? "fleet_cert"} fullWidth
+            helperText="How Fleet authenticates to this host"
+            onChange={(e) => setForm((f) => ({ ...f, authMethod: e.target.value, credentialId: e.target.value === "fleet_cert" ? null : f.credentialId }))}>
+            <MenuItem value="fleet_cert">Fleet certificate (default)</MenuItem>
+            <MenuItem value="vault_password">Vault credential — password</MenuItem>
+            <MenuItem value="vault_ssh_key">Vault credential — SSH key</MenuItem>
+          </TextField>
+          {form.authMethod && form.authMethod !== "fleet_cert" && (
+            <TextField select label="Credential" value={form.credentialId ?? ""} fullWidth
+              helperText="Injected at connect time — the operator never sees it"
+              onChange={(e) => setForm((f) => ({ ...f, credentialId: e.target.value }))}>
+              {vaultSecrets.length === 0 && <MenuItem value="" disabled>No accessible credentials — add one in Credentials</MenuItem>}
+              {vaultSecrets.map((s) => (
+                <MenuItem key={s.id} value={s.id}>
+                  {(s.folder ? `${s.folder} / ` : "") + s.name}{s.username ? ` (${s.username})` : ""}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions>

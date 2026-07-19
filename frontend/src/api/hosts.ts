@@ -73,6 +73,8 @@ export interface Host {
   sshPort: number;
   sshUser: string;
   tags: string[];
+  authMethod: string; // fleet_cert | vault_password | vault_ssh_key
+  credentialId?: string | null;
   enrolled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -98,6 +100,8 @@ export interface HostInput {
   sshPort: number;
   sshUser: string;
   tags: string[];
+  authMethod?: string;
+  credentialId?: string | null;
 }
 
 export async function listHosts(): Promise<HostListResponse> {

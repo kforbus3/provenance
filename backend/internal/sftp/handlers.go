@@ -21,6 +21,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/sshgw"
@@ -105,10 +106,29 @@ func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*
 	if host.WGAddress != "" && h.d.Store.RequireWireGuard(r.Context()) {
 		candidates = []string{host.WGAddress}
 	}
+	// Vaulted credential injection (mirrors the terminal path): resolve the host's
+	// vault credential to an SSH auth method; the plaintext never leaves the dial.
+	var injection *credinject.Injection
+	if host.AuthMethod != "" && host.AuthMethod != "fleet_cert" {
+		key, err := h.d.Cfg.VaultKey()
+		if err != nil {
+			return nil, err
+		}
+		if injection, err = credinject.For(r.Context(), h.d.Store, key, host, p.UserID); err != nil {
+			return nil, err
+		}
+	}
+
 	var lastErr error
 	for _, addr := range candidates {
-		// Use a certificate unique to this (user, host) pair.
-		conn, err := h.gw.DialForHost(r.Context(), p.SessionID, p.UserID, host.ID, p.Username, host.Hostname, addr, host.SSHPort, loginUser, principals)
+		var conn *sshgw.Conn
+		var err error
+		if injection != nil {
+			conn, err = h.gw.DialAuthViaJump(r.Context(), p.SessionID.String(), addr, host.SSHPort, injection.LoginUser, injection.Auth)
+		} else {
+			// Use a certificate unique to this (user, host) pair.
+			conn, err = h.gw.DialForHost(r.Context(), p.SessionID, p.UserID, host.ID, p.Username, host.Hostname, addr, host.SSHPort, loginUser, principals)
+		}
 		if err == nil {
 			return conn, nil
 		}

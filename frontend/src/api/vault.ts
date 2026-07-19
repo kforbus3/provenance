@@ -13,11 +13,24 @@ export interface VaultSecret {
   username: string;
   target: string;
   description: string;
+  accessPolicy: string; // open | checkout | approval
   version: number;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
   access?: string; // caller's effective access: view | use | manage
+}
+
+export interface VaultCheckout {
+  id: string;
+  secretId: string;
+  secretName?: string;
+  userId: string;
+  username?: string;
+  reason?: string;
+  status: string; // pending | active | denied | expired | checked_in
+  requestedAt: string;
+  expiresAt: string;
 }
 
 export interface VaultGrant {
@@ -37,6 +50,7 @@ export interface VaultSecretInput {
   username: string;
   target: string;
   description: string;
+  accessPolicy: string; // open | checkout | approval
   secret?: string; // plaintext; on update, empty leaves the value unchanged
 }
 
@@ -76,4 +90,51 @@ export async function createVaultGrant(id: string, input: { subjectKind: string;
 
 export async function deleteVaultGrant(id: string, grantId: string): Promise<void> {
   await api.delete(`/api/v1/vault/secrets/${id}/grants/${grantId}`);
+}
+
+// --- check-out / approval ---
+
+export async function requestCheckout(id: string, input: { reason: string; minutes: number }): Promise<VaultCheckout> {
+  const { data } = await api.post<VaultCheckout>(`/api/v1/vault/secrets/${id}/checkout`, input);
+  return data;
+}
+
+export async function listMyCheckouts(): Promise<VaultCheckout[]> {
+  const { data } = await api.get<{ checkouts: VaultCheckout[] }>("/api/v1/vault/checkouts");
+  return data.checkouts ?? [];
+}
+
+export async function checkinCheckout(coid: string): Promise<void> {
+  await api.post(`/api/v1/vault/checkouts/${coid}/checkin`);
+}
+
+export async function listCheckoutApprovals(): Promise<VaultCheckout[]> {
+  const { data } = await api.get<{ checkouts: VaultCheckout[] }>("/api/v1/vault/checkouts/approvals");
+  return data.checkouts ?? [];
+}
+
+export async function approveCheckout(coid: string): Promise<VaultCheckout> {
+  const { data } = await api.post<VaultCheckout>(`/api/v1/vault/checkouts/${coid}/approve`);
+  return data;
+}
+
+export async function denyCheckout(coid: string): Promise<VaultCheckout> {
+  const { data } = await api.post<VaultCheckout>(`/api/v1/vault/checkouts/${coid}/deny`);
+  return data;
+}
+
+// --- rotation ---
+
+export interface RotateResult {
+  rotated: boolean;
+  host: string;
+  verified: boolean;
+  warning?: string;
+}
+
+// rotateVaultSecret rotates a password credential on the host that uses it. The
+// backend generates a new secret, changes it on the host, and stores it.
+export async function rotateVaultSecret(id: string): Promise<RotateResult> {
+  const { data } = await api.post<RotateResult>(`/api/v1/vault/secrets/${id}/rotate`);
+  return data;
 }

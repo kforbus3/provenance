@@ -10,12 +10,16 @@ import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import GroupIcon from "@mui/icons-material/Group";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import LockClockIcon from "@mui/icons-material/LockClock";
+import AutorenewIcon from "@mui/icons-material/Autorenew";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import { listUsers, listGroups } from "../api/admin";
 import {
   listVaultSecrets, createVaultSecret, updateVaultSecret, deleteVaultSecret, revealVaultSecret,
   listVaultGrants, createVaultGrant, deleteVaultGrant,
+  requestCheckout, listMyCheckouts, listCheckoutApprovals, approveCheckout, denyCheckout,
+  rotateVaultSecret,
   type VaultSecret, type VaultSecretInput,
 } from "../api/vault";
 
@@ -32,14 +36,28 @@ export function VaultPage() {
   const qc = useQueryClient();
   const has = useAuthStore((s) => s.has);
   const canManage = has("Credential.Manage");
+  const canApprove = has("Credential.Approve");
+  const canRotate = has("Credential.Rotate");
+  const [rotateMsg, setRotateMsg] = useState<string | null>(null);
   const { data: secrets = [], isLoading } = useQuery({ queryKey: ["vault-secrets"], queryFn: listVaultSecrets });
+  const { data: myCheckouts = [] } = useQuery({ queryKey: ["vault-my-checkouts"], queryFn: listMyCheckouts });
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<VaultSecret | null>(null);
   const [revealing, setRevealing] = useState<VaultSecret | null>(null);
   const [granting, setGranting] = useState<VaultSecret | null>(null);
+  const [checkingOut, setCheckingOut] = useState<VaultSecret | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["vault-secrets"] });
 
+  // Secrets the caller currently holds an active check-out for.
+  const activeCheckouts = new Set(myCheckouts.filter((c) => c.status === "active").map((c) => c.secretId));
+  const canReveal = (s: VaultSecret) => s.accessPolicy === "open" || activeCheckouts.has(s.id);
+
   const del = useMutation({ mutationFn: (id: string) => deleteVaultSecret(id), onSuccess: invalidate });
+  const rotate = useMutation({
+    mutationFn: (id: string) => rotateVaultSecret(id),
+    onSuccess: (res) => { setRotateMsg(res.warning ? `Rotated on ${res.host} (${res.warning})` : `Rotated on ${res.host}.`); invalidate(); },
+    onError: (e) => setRotateMsg(((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Rotation failed."),
+  });
 
   return (
     <Box sx={{ maxWidth: 1150 }}>
@@ -52,6 +70,13 @@ export function VaultPage() {
         </Box>
         {canManage && <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreating(true)}>New credential</Button>}
       </Stack>
+
+      {canApprove && <CheckoutApprovalsInbox />}
+      {rotateMsg && (
+        <Alert severity={rotateMsg.startsWith("Rotated") ? "success" : "error"} sx={{ mb: 2 }} onClose={() => setRotateMsg(null)}>
+          {rotateMsg}
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ overflowX: "auto", mt: 1 }}>
         <Table size="small">
@@ -70,13 +95,26 @@ export function VaultPage() {
             {secrets.map((s) => (
               <TableRow key={s.id} hover>
                 <TableCell>{s.folder || "—"}</TableCell>
-                <TableCell>{s.name}</TableCell>
+                <TableCell>
+                  {s.name}
+                  {s.accessPolicy !== "open" && (
+                    <Chip size="small" variant="outlined" color="warning" sx={{ ml: 0.5 }}
+                      label={s.accessPolicy === "approval" ? "approval" : "checkout"} />
+                  )}
+                </TableCell>
                 <TableCell><Chip size="small" variant="outlined" label={TYPES.find((t) => t.value === s.type)?.label ?? s.type} /></TableCell>
                 <TableCell>{s.username || "—"}</TableCell>
                 <TableCell>{s.target || "—"}</TableCell>
                 <TableCell>{s.version}</TableCell>
                 <TableCell align="right">
-                  <Tooltip title="Reveal (audited)"><IconButton size="small" onClick={() => setRevealing(s)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
+                  {canReveal(s)
+                    ? <Tooltip title="Reveal (audited)"><IconButton size="small" onClick={() => setRevealing(s)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
+                    : <Tooltip title="Check out to access"><IconButton size="small" color="warning" onClick={() => setCheckingOut(s)}><LockClockIcon fontSize="small" /></IconButton></Tooltip>}
+                  {canRotate && s.type === "password" && (
+                    <Tooltip title="Rotate on host"><span><IconButton size="small" disabled={rotate.isPending}
+                      onClick={() => { if (window.confirm(`Rotate the password for "${s.name}" on its host now? A new value is set on the host and stored.`)) rotate.mutate(s.id); }}>
+                      <AutorenewIcon fontSize="small" /></IconButton></span></Tooltip>
+                  )}
                   {canManage && <>
                     <Tooltip title="Edit"><IconButton size="small" onClick={() => setEditing(s)}><EditIcon fontSize="small" /></IconButton></Tooltip>
                     <Tooltip title="Grants"><IconButton size="small" onClick={() => setGranting(s)}><GroupIcon fontSize="small" /></IconButton></Tooltip>
@@ -102,7 +140,74 @@ export function VaultPage() {
       {editing && <SecretDialog secret={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); invalidate(); }} />}
       {revealing && <RevealDialog secret={revealing} onClose={() => setRevealing(null)} />}
       {granting && <GrantsDialog secret={granting} onClose={() => setGranting(null)} />}
+      {checkingOut && <CheckoutDialog secret={checkingOut}
+        onClose={() => setCheckingOut(null)}
+        onDone={() => { setCheckingOut(null); qc.invalidateQueries({ queryKey: ["vault-my-checkouts"] }); }} />}
     </Box>
+  );
+}
+
+// CheckoutDialog requests a time-boxed check-out (self-service or pending approval).
+function CheckoutDialog({ secret, onClose, onDone }: { secret: VaultSecret; onClose: () => void; onDone: () => void }) {
+  const [reason, setReason] = useState("");
+  const [minutes, setMinutes] = useState(60);
+  const [msg, setMsg] = useState<string | null>(null);
+  const req = useMutation({
+    mutationFn: () => requestCheckout(secret.id, { reason, minutes }),
+    onSuccess: (c) => { if (c.status === "pending") setMsg("Check-out requested — awaiting approval."); else onDone(); },
+    onError: (e) => setMsg(((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Could not check out."),
+  });
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>Check out {secret.name}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {secret.accessPolicy === "approval"
+            ? "This credential requires a second person's approval before you can access it."
+            : "Check out this credential for time-boxed access."}
+        </Typography>
+        {msg && <Alert severity={msg.includes("awaiting") ? "info" : "error"} sx={{ mb: 2 }}>{msg}</Alert>}
+        <Stack spacing={2}>
+          <TextField label="Reason" size="small" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+          <TextField label="Minutes" size="small" type="number" value={minutes} sx={{ width: 140 }}
+            onChange={(e) => setMinutes(Math.max(1, Math.min(480, Number(e.target.value) || 60)))} />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+        <Button variant="contained" disabled={req.isPending} onClick={() => req.mutate()}>
+          {secret.accessPolicy === "approval" ? "Request" : "Check out"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// CheckoutApprovalsInbox lists check-out requests awaiting the current user's
+// approval. Only rendered for Credential.Approve holders.
+function CheckoutApprovalsInbox() {
+  const qc = useQueryClient();
+  const { data: pending = [] } = useQuery({ queryKey: ["vault-checkout-approvals"], queryFn: listCheckoutApprovals });
+  const refresh = () => qc.invalidateQueries({ queryKey: ["vault-checkout-approvals"] });
+  const approve = useMutation({ mutationFn: (id: string) => approveCheckout(id), onSuccess: refresh });
+  const deny = useMutation({ mutationFn: (id: string) => denyCheckout(id), onSuccess: refresh });
+  if (pending.length === 0) return null;
+  const busy = approve.isPending || deny.isPending;
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderColor: "warning.main" }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>Check-outs awaiting your approval ({pending.length})</Typography>
+      <Stack spacing={1}>
+        {pending.map((c) => (
+          <Box key={c.id} sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+            <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 200 }}>
+              <b>{c.username}</b> → {c.secretName}{c.reason ? ` — ${c.reason}` : ""}
+            </Typography>
+            <Button size="small" color="success" disabled={busy} onClick={() => approve.mutate(c.id)}>Approve</Button>
+            <Button size="small" color="error" disabled={busy} onClick={() => deny.mutate(c.id)}>Deny</Button>
+          </Box>
+        ))}
+      </Stack>
+    </Paper>
   );
 }
 
@@ -110,7 +215,8 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
   const editing = !!secret;
   const [form, setForm] = useState<VaultSecretInput>({
     name: secret?.name ?? "", folder: secret?.folder ?? "", type: secret?.type ?? "password",
-    username: secret?.username ?? "", target: secret?.target ?? "", description: secret?.description ?? "", secret: "",
+    username: secret?.username ?? "", target: secret?.target ?? "", description: secret?.description ?? "",
+    accessPolicy: secret?.accessPolicy ?? "open", secret: "",
   });
   const [err, setErr] = useState<string | null>(null);
   const set = (patch: Partial<VaultSecretInput>) => setForm((f) => ({ ...f, ...patch }));
@@ -142,6 +248,12 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
           <TextField label={editing ? "New secret value (leave blank to keep current)" : "Secret value"} size="small" multiline minRows={form.type === "ssh_key" ? 4 : 1}
             value={form.secret} onChange={(e) => set({ secret: e.target.value })} type={form.type === "ssh_key" ? "text" : "password"} autoComplete="new-password" />
           <TextField label="Description" size="small" value={form.description} onChange={(e) => set({ description: e.target.value })} />
+          <TextField select label="Access policy" size="small" value={form.accessPolicy} onChange={(e) => set({ accessPolicy: e.target.value })}
+            helperText="Whether this credential requires a check-out (and approval) before it can be revealed or injected">
+            <MenuItem value="open">Open — reveal/use directly per grants</MenuItem>
+            <MenuItem value="checkout">Check-out required — time-boxed, self-service</MenuItem>
+            <MenuItem value="approval">Approval required — a second person approves each check-out</MenuItem>
+          </TextField>
         </Stack>
       </DialogContent>
       <DialogActions>

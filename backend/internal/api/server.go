@@ -497,6 +497,9 @@ func (s *Server) reaperLoop(ctx context.Context) {
 			if _, err := s.actionReg.Expire(ctx); err == nil {
 				s.Jobs.Record("assistant-action-expiry", nil)
 			}
+			if _, err := s.Store.ExpireVaultCheckouts(ctx); err == nil {
+				s.Jobs.Record("vault-checkout-expiry", nil)
+			}
 		}
 	}
 }
@@ -699,7 +702,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	serviceaccounts.Mount(r, deps)
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
-	vault.Mount(r, deps)
+	vault.Mount(r, deps, s.Gateway)
 	auditapi.Mount(r, deps)
 	reports.Mount(r, deps)
 	reportsched.Mount(r, s.Auth, s.reportSched)

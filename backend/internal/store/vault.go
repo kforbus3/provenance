@@ -10,22 +10,32 @@ import (
 
 // VaultSecretInput is the metadata for creating a credential.
 type VaultSecretInput struct {
-	Name        string
-	Folder      string
-	Type        string
-	Username    string
-	Target      string
-	Description string
-	CreatedBy   uuid.UUID
+	Name         string
+	Folder       string
+	Type         string
+	Username     string
+	Target       string
+	Description  string
+	AccessPolicy string
+	CreatedBy    uuid.UUID
 }
 
-const vaultSecretCols = `s.id, s.name, s.folder, s.type, s.username, s.target, s.description, s.version,
+func (in VaultSecretInput) accessPolicy() string {
+	switch in.AccessPolicy {
+	case "checkout", "approval":
+		return in.AccessPolicy
+	default:
+		return "open"
+	}
+}
+
+const vaultSecretCols = `s.id, s.name, s.folder, s.type, s.username, s.target, s.description, s.access_policy, s.version,
 	COALESCE(u.username,''), s.created_at, s.updated_at`
 
 func scanVaultSecret(row interface{ Scan(...any) error }) (*models.VaultSecret, error) {
 	var v models.VaultSecret
 	if err := row.Scan(&v.ID, &v.Name, &v.Folder, &v.Type, &v.Username, &v.Target, &v.Description,
-		&v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		&v.AccessPolicy, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -41,9 +51,9 @@ func (s *Store) CreateVaultSecret(ctx context.Context, in VaultSecretInput, seal
 
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO vault_secrets (name, folder, type, username, target, description, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-		in.Name, in.Folder, in.Type, in.Username, in.Target, in.Description, in.CreatedBy).Scan(&id); err != nil {
+		INSERT INTO vault_secrets (name, folder, type, username, target, description, access_policy, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+		in.Name, in.Folder, in.Type, in.Username, in.Target, in.Description, in.accessPolicy(), in.CreatedBy).Scan(&id); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -139,7 +149,7 @@ func (s *Store) ListAccessibleVaultSecrets(ctx context.Context, userID uuid.UUID
 		var v models.VaultSecret
 		var access string
 		if err := rows.Scan(&v.ID, &v.Name, &v.Folder, &v.Type, &v.Username, &v.Target, &v.Description,
-			&v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt, &access); err != nil {
+			&v.AccessPolicy, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt, &access); err != nil {
 			return nil, err
 		}
 		if i, ok := byID[v.ID]; ok {
@@ -158,8 +168,8 @@ func (s *Store) ListAccessibleVaultSecrets(ctx context.Context, userID uuid.UUID
 // UpdateVaultSecretMeta updates a credential's metadata (not its secret material).
 func (s *Store) UpdateVaultSecretMeta(ctx context.Context, id uuid.UUID, in VaultSecretInput) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE vault_secrets SET name=$2, folder=$3, type=$4, username=$5, target=$6, description=$7, updated_at=now()
-		WHERE id=$1`, id, in.Name, in.Folder, in.Type, in.Username, in.Target, in.Description)
+		UPDATE vault_secrets SET name=$2, folder=$3, type=$4, username=$5, target=$6, description=$7, access_policy=$8, updated_at=now()
+		WHERE id=$1`, id, in.Name, in.Folder, in.Type, in.Username, in.Target, in.Description, in.accessPolicy())
 	return err
 }
 
@@ -254,4 +264,23 @@ func (s *Store) CreateVaultGrant(ctx context.Context, secretID uuid.UUID, kind s
 func (s *Store) DeleteVaultGrant(ctx context.Context, secretID, grantID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM vault_grants WHERE id=$1 AND secret_id=$2`, grantID, secretID)
 	return err
+}
+
+// HostsUsingCredential returns the hosts that authenticate with a given vault
+// credential (used to know where to rotate it).
+func (s *Store) HostsUsingCredential(ctx context.Context, credentialID uuid.UUID) ([]models.Host, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+hostCols+` FROM hosts WHERE credential_id=$1 ORDER BY hostname`, credentialID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Host
+	for rows.Next() {
+		h, err := scanHost(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *h)
+	}
+	return out, rows.Err()
 }

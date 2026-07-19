@@ -11,13 +11,13 @@ import (
 
 const hostCols = `id, hostname, description, environment, owner,
 	COALESCE(address,''), COALESCE(host(wg_address),''), ssh_port, ssh_user,
-	tags, enrolled, created_at, updated_at`
+	tags, enrolled, auth_method, credential_id, created_at, updated_at`
 
 func scanHost(row pgx.Row) (*models.Host, error) {
 	var h models.Host
 	err := row.Scan(&h.ID, &h.Hostname, &h.Description, &h.Environment, &h.Owner,
 		&h.Address, &h.WGAddress, &h.SSHPort, &h.SSHUser, &h.Tags, &h.Enrolled,
-		&h.CreatedAt, &h.UpdatedAt)
+		&h.AuthMethod, &h.CredentialID, &h.CreatedAt, &h.UpdatedAt)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -26,15 +26,26 @@ func scanHost(row pgx.Row) (*models.Host, error) {
 
 // HostInput carries create/update fields for a host.
 type HostInput struct {
-	Hostname    string
-	Description string
-	Environment string
-	Owner       string
-	Address     string
-	WGAddress   string
-	SSHPort     int
-	SSHUser     string
-	Tags        []string
+	Hostname     string
+	Description  string
+	Environment  string
+	Owner        string
+	Address      string
+	WGAddress    string
+	SSHPort      int
+	SSHUser      string
+	Tags         []string
+	AuthMethod   string     // fleet_cert (default) | vault_password | vault_ssh_key
+	CredentialID *uuid.UUID // vault secret when AuthMethod is vaulted
+}
+
+func (in HostInput) authMethod() string {
+	switch in.AuthMethod {
+	case "vault_password", "vault_ssh_key":
+		return in.AuthMethod
+	default:
+		return "fleet_cert"
+	}
 }
 
 // CreateHost inserts a host plus empty inventory/status rows.
@@ -51,11 +62,11 @@ func (s *Store) CreateHost(ctx context.Context, in HostInput) (*models.Host, err
 	var h *models.Host
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO hosts (hostname, description, environment, owner, address, wg_address, ssh_port, ssh_user, tags)
-			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::inet,$7,$8,$9)
+			INSERT INTO hosts (hostname, description, environment, owner, address, wg_address, ssh_port, ssh_user, tags, auth_method, credential_id)
+			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::inet,$7,$8,$9,$10,$11)
 			RETURNING `+hostCols,
 			in.Hostname, in.Description, in.Environment, in.Owner, in.Address, in.WGAddress,
-			in.SSHPort, in.SSHUser, in.Tags)
+			in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID)
 		var err error
 		h, err = scanHost(row)
 		if err != nil {
@@ -286,10 +297,10 @@ func (s *Store) UpdateHost(ctx context.Context, id uuid.UUID, in HostInput) (*mo
 	row := s.pool.QueryRow(ctx, `
 		UPDATE hosts SET hostname=$2, description=$3, environment=$4, owner=$5,
 			address=NULLIF($6,''), wg_address=NULLIF($7,'')::inet, ssh_port=$8, ssh_user=$9,
-			tags=$10, updated_at=now()
+			tags=$10, auth_method=$11, credential_id=$12, updated_at=now()
 		WHERE id=$1 RETURNING `+hostCols,
 		id, in.Hostname, in.Description, in.Environment, in.Owner, in.Address, in.WGAddress,
-		in.SSHPort, in.SSHUser, in.Tags)
+		in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID)
 	return scanHost(row)
 }
 

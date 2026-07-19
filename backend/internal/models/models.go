@@ -36,20 +36,38 @@ type AssistantAction struct {
 // VaultSecret is a stored credential's metadata. The secret material itself lives
 // only in vault_secret_versions, encrypted; it is never carried on this struct.
 type VaultSecret struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Folder      string    `json:"folder"`
-	Type        string    `json:"type"` // password | ssh_key | api_key | generic
-	Username    string    `json:"username"`
-	Target      string    `json:"target"`
-	Description string    `json:"description"`
-	Version     int       `json:"version"`
-	CreatedBy   string    `json:"createdBy,omitempty"` // resolved username
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	Folder       string    `json:"folder"`
+	Type         string    `json:"type"` // password | ssh_key | api_key | generic
+	Username     string    `json:"username"`
+	Target       string    `json:"target"`
+	Description  string    `json:"description"`
+	AccessPolicy string    `json:"accessPolicy"` // open | checkout | approval
+	Version      int       `json:"version"`
+	CreatedBy    string    `json:"createdBy,omitempty"` // resolved username
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 	// Access is the requesting caller's effective access (view|use|manage), set on
 	// list/get for the UI. Empty means access is via the Credential.Manage role.
 	Access string `json:"access,omitempty"`
+}
+
+// VaultCheckout is a time-boxed check-out of a credential (optionally approved by a
+// second person) that grants the requester reveal/inject access while active.
+type VaultCheckout struct {
+	ID          uuid.UUID  `json:"id"`
+	SecretID    uuid.UUID  `json:"secretId"`
+	SecretName  string     `json:"secretName,omitempty"` // resolved
+	UserID      uuid.UUID  `json:"userId"`
+	Username    string     `json:"username,omitempty"` // resolved requester
+	Reason      string     `json:"reason,omitempty"`
+	Status      string     `json:"status"` // pending | active | denied | expired | checked_in
+	RequestedAt time.Time  `json:"requestedAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	DecidedBy   *uuid.UUID `json:"decidedBy,omitempty"`
+	DecidedAt   *time.Time `json:"decidedAt,omitempty"`
+	CheckedInAt *time.Time `json:"checkedInAt,omitempty"`
 }
 
 // VaultGrant delegates access to one secret to a user or group.
@@ -170,8 +188,13 @@ type Host struct {
 	SSHUser     string    `json:"sshUser"`
 	Tags        []string  `json:"tags"`
 	Enrolled    bool      `json:"enrolled"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	// AuthMethod is how the host authenticates: fleet_cert (default, ephemeral
+	// certificates) | vault_password | vault_ssh_key (a vaulted credential injected
+	// at connect time). CredentialID references the vault secret when vaulted.
+	AuthMethod   string     `json:"authMethod"`
+	CredentialID *uuid.UUID `json:"credentialId,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 
 	Groups    []string       `json:"groups,omitempty"`
 	Inventory *HostInventory `json:"inventory,omitempty"`

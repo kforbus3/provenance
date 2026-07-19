@@ -20,6 +20,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
@@ -156,11 +157,32 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	// account; everyone else in the host's login-only account.
 	loginUser, principals := sshgw.LoginTier(p.IsSuperAdmin || p.Has("Host.Sudo"), host.SSHUser, p.Username)
 
+	// If the host authenticates with a vaulted credential (not Fleet certs), resolve
+	// it — the plaintext is used only inside the gateway dial, never exposed here or
+	// to the operator.
+	var injection *credinject.Injection
+	if host.AuthMethod != "" && host.AuthMethod != "fleet_cert" {
+		key, kerr := h.d.Cfg.VaultKey()
+		if kerr != nil {
+			sendErr(kerr.Error())
+			return
+		}
+		var ierr error
+		if injection, ierr = credinject.For(ctx, h.d.Store, key, host, p.UserID); ierr != nil {
+			sendErr("credential injection failed: " + ierr.Error())
+			return
+		}
+	}
+
 	var gwConn *sshgw.Conn
 	var err error
 	for _, addr := range candidates {
-		// Use a certificate unique to this (user, host) pair.
-		gwConn, err = h.gw.DialForHost(ctx, p.SessionID, p.UserID, host.ID, p.Username, host.Hostname, addr, host.SSHPort, loginUser, principals)
+		if injection != nil {
+			gwConn, err = h.gw.DialAuthViaJump(ctx, p.SessionID.String(), addr, host.SSHPort, injection.LoginUser, injection.Auth)
+		} else {
+			// Use a certificate unique to this (user, host) pair.
+			gwConn, err = h.gw.DialForHost(ctx, p.SessionID, p.UserID, host.ID, p.Username, host.Hostname, addr, host.SSHPort, loginUser, principals)
+		}
 		if err == nil {
 			break
 		}
@@ -203,8 +225,17 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	// Persist the SSH session record + start recording. Record the certificate
 	// serial used, so the session is auditable back to a specific issued cert.
 	var certSerial *uint64
-	if serial, ok := h.gw.HostCredentialSerial(p.SessionID, host.ID); ok {
-		certSerial = &serial
+	if injection == nil {
+		if serial, ok := h.gw.HostCredentialSerial(p.SessionID, host.ID); ok {
+			certSerial = &serial
+		}
+	} else {
+		// Record that this session authenticated with an injected vault credential.
+		_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
+			ActorID: &p.UserID, ActorName: p.Username, Action: "session.credential_injected",
+			TargetKind: "host", TargetID: host.ID.String(),
+			Detail: map[string]any{"hostname": host.Hostname, "credentialId": injection.SecretID.String()},
+		})
 	}
 	rec, _ := h.d.Store.CreateSSHSession(ctx, store.SSHSessionInput{
 		SessionID: &p.SessionID, UserID: &p.UserID, HostID: &host.ID,

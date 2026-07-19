@@ -116,15 +116,17 @@ func (h *handler) statusStats(w http.ResponseWriter, r *http.Request) {
 }
 
 type hostReq struct {
-	Hostname    string   `json:"hostname"`
-	Description string   `json:"description"`
-	Environment string   `json:"environment"`
-	Owner       string   `json:"owner"`
-	Address     string   `json:"address"`
-	WGAddress   string   `json:"wgAddress"`
-	SSHPort     int      `json:"sshPort"`
-	SSHUser     string   `json:"sshUser"`
-	Tags        []string `json:"tags"`
+	Hostname     string     `json:"hostname"`
+	Description  string     `json:"description"`
+	Environment  string     `json:"environment"`
+	Owner        string     `json:"owner"`
+	Address      string     `json:"address"`
+	WGAddress    string     `json:"wgAddress"`
+	SSHPort      int        `json:"sshPort"`
+	SSHUser      string     `json:"sshUser"`
+	Tags         []string   `json:"tags"`
+	AuthMethod   string     `json:"authMethod"`
+	CredentialID *uuid.UUID `json:"credentialId"`
 }
 
 func (rq hostReq) toInput() store.HostInput {
@@ -132,7 +134,30 @@ func (rq hostReq) toInput() store.HostInput {
 		Hostname: rq.Hostname, Description: rq.Description, Environment: rq.Environment,
 		Owner: rq.Owner, Address: rq.Address, WGAddress: rq.WGAddress,
 		SSHPort: rq.SSHPort, SSHUser: rq.SSHUser, Tags: rq.Tags,
+		AuthMethod: rq.AuthMethod, CredentialID: rq.CredentialID,
 	}
+}
+
+// validateVaultAuth enforces that attaching a vault credential to a host requires
+// a credential to be selected and the actor to have access to it (Credential.Manage
+// or a manage/use grant) — so a host editor cannot bind an arbitrary secret they
+// couldn't otherwise use. Returns a client-facing error message, or "" if ok.
+func (h *handler) validateVaultAuth(r *http.Request, rq hostReq) string {
+	if rq.AuthMethod != "vault_password" && rq.AuthMethod != "vault_ssh_key" {
+		return "" // fleet_cert (or default) needs no credential
+	}
+	if rq.CredentialID == nil {
+		return "select a credential for vault authentication"
+	}
+	p := auth.MustPrincipal(r)
+	if p.Has("Credential.Manage") {
+		return ""
+	}
+	acc, err := h.d.Store.UserSecretAccess(r.Context(), p.UserID, *rq.CredentialID)
+	if err != nil || (acc != "use" && acc != "manage") {
+		return "you do not have access to that credential"
+	}
+	return ""
 }
 
 // validHostname rejects control characters (CR/LF etc.), which have no place in a
@@ -187,6 +212,10 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "sshUser must be a valid login name ([a-z_][a-z0-9_-]*)")
 		return
 	}
+	if msg := h.validateVaultAuth(r, rq); msg != "" {
+		httpx.WriteError(w, http.StatusBadRequest, msg)
+		return
+	}
 	host, err := h.d.Store.CreateHost(r.Context(), rq.toInput())
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create host")
@@ -213,6 +242,10 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validSSHUser(rq.SSHUser) {
 		httpx.WriteError(w, http.StatusBadRequest, "sshUser must be a valid login name ([a-z_][a-z0-9_-]*)")
+		return
+	}
+	if msg := h.validateVaultAuth(r, rq); msg != "" {
+		httpx.WriteError(w, http.StatusBadRequest, msg)
 		return
 	}
 	host, err := h.d.Store.UpdateHost(r.Context(), id, rq.toInput())

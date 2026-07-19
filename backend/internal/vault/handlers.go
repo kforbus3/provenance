@@ -18,14 +18,18 @@ import (
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/secretbox"
+	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
-type handler struct{ d *app.Deps }
+type handler struct {
+	d  *app.Deps
+	gw *sshgw.Gateway
+}
 
 // Mount registers the credential-vault routes.
-func Mount(r chi.Router, d *app.Deps) {
-	h := &handler{d: d}
+func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
+	h := &handler{d: d, gw: gw}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
 		// Read + reveal: any authenticated user; the handler scopes to what they may
@@ -41,6 +45,10 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Get("/vault/secrets/{id}/grants", h.listGrants)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Post("/vault/secrets/{id}/grants", h.createGrant)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Delete("/vault/secrets/{id}/grants/{grantId}", h.deleteGrant)
+		pr.With(d.Auth.RequirePermission("Credential.Rotate")).Post("/vault/secrets/{id}/rotate", h.rotate)
+
+		// Check-out / approval workflow.
+		h.mountCheckout(pr, d.Auth.RequirePermission("Credential.Approve"))
 	})
 }
 
@@ -135,6 +143,15 @@ func (h *handler) reveal(w http.ResponseWriter, r *http.Request) {
 	if !p.Has("Credential.Manage") && !p.Has("Credential.View") {
 		httpx.WriteError(w, http.StatusForbidden, "you do not have permission to reveal credentials")
 		return
+	}
+	// A credential with a check-out policy may only be revealed while the caller
+	// holds an active check-out (approved, if the policy requires it).
+	if pol, _ := h.d.Store.GetVaultSecret(r.Context(), id); pol != nil && pol.AccessPolicy != "open" {
+		active, _ := h.d.Store.HasActiveCheckout(r.Context(), id, p.UserID)
+		if !active {
+			httpx.WriteError(w, http.StatusForbidden, "check out this credential before revealing it")
+			return
+		}
 	}
 	key, ok := h.vaultKey(w)
 	if !ok {

@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.14.0 — Credential vault: injection, check-out, rotation
+
+The credential vault becomes a full PAM workflow: connect through credentials
+without seeing them, gate high-value ones behind approved check-out, and rotate
+them.
+
+- **Credential injection (connect without seeing the secret).** On a host's edit
+  form, set **Authentication** to a vault credential (password or SSH key). When
+  anyone opens a terminal or SFTP to that host, Fleet decrypts the credential **in
+  memory** and authenticates the connection with it — the operator never sees the
+  secret, and it never reaches the browser. Use it for appliances, network gear, and
+  legacy systems that can't accept Fleet's ephemeral certificates. Attaching a
+  credential requires `Host.Edit` plus access to it; injected sessions are audited.
+- **Check-out & approval.** Each credential has an **access policy**: *open* (reveal/
+  inject per grants), *check-out required* (time-boxed, self-service), or *approval
+  required* (a `Credential.Approve` holder — not the requester — approves each
+  check-out; the classic four-eyes control). Reveal **and** injection are blocked
+  until an active check-out is held; approvers get an inbox on the Credentials page.
+- **Rotation.** For a password credential attached to a host, **Rotate**
+  (`Credential.Rotate`) changes it automatically over SSH, verifies the new login,
+  and stores it — reverting if the host change fails so the vault stays consistent.
+  Requires passwordless `sudo chpasswd` on the host; validate against a test host
+  before production use.
+
+*Deploy:* migrations `0031` (host auth method) and `0032` (check-out + the
+`Credential.Approve` permission) apply automatically.
+
 ## v0.13.0 — Credential vault
 
 Fleet is now a secrets manager, not just an SSH-certificate broker.

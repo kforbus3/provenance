@@ -687,8 +687,42 @@ CA passphrase — see the Deployment guide).
 - **Versioning:** editing a credential's value stores a new version (rotation
   history) while keeping the metadata.
 
-> Injecting a vaulted credential into an SSH session — so a user connects **without
-> ever seeing the password** — is the next phase of this feature.
+**Rotation.** Editing a credential's value always stores a new **version** (history).
+For a **password** credential attached to a host, the **Rotate** action (needs
+`Credential.Rotate`) rotates it automatically: Fleet connects to the host with the
+current password, sets a new random one via `chpasswd`, verifies the new login, and
+stores it — the operator never sees either value. The vault is kept consistent with
+the host: if the host change fails, the stored value is reverted. This requires the
+login account to have **passwordless `sudo chpasswd`** on the host, and it runs
+on-demand (a user's live session authenticates the path). Validate it against a test
+host before relying on it in production. (Automated password change over SSH is
+inherently environment-specific; SSH-key and scheduled rotation are future work.)
+
+**Check-out & approval.** Each credential has an **access policy**:
+
+- **Open** (default): reveal / inject directly per grants.
+- **Check-out required:** the credential can't be revealed or injected until the
+  caller **checks it out** for a time-boxed window (self-service; tracked and audited).
+- **Approval required:** checking out first needs a **`Credential.Approve` holder**
+  (not the requester) to approve — the classic four-eyes control for high-value
+  credentials. Approvers see a "Check-outs awaiting your approval" inbox on the
+  Credentials page.
+
+While a check-out is active the credential works normally (reveal on the page, or
+injection when connecting to a host that uses it); once it expires or is checked in,
+access ends and a fresh check-out (or approval) is required. Every request, approval,
+denial, and check-in is audited.
+
+**Credential injection (connect without seeing the secret).** On a host's edit form,
+set **Authentication** to **Vault credential — password** or **— SSH key** and pick a
+credential. When anyone connects (terminal or SFTP) to that host, Fleet resolves the
+credential, decrypts it **in memory**, and authenticates the SSH connection with it —
+the operator **never sees the secret**, and it never reaches the browser. Sessions
+opened this way are audited (`session.credential_injected`). Attaching a credential to
+a host requires `Host.Edit` plus access to that credential (`Credential.Manage`, or a
+`use`/`manage` grant), so a host editor can't bind a secret they couldn't use. Hosts
+default to Fleet certificate authentication; use vaulted auth for appliances, network
+gear, and legacy systems that can't accept Fleet's ephemeral certificates.
 
 ## 19. Live session shadowing
 
