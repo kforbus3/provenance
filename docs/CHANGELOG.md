@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.1 — Fix Windows enroll hang + finish-dialog crash
+
+Finishing a Windows overlay enrollment could hang for minutes and then white-screen.
+Two fixes: the RDP-over-overlay reachability check now has an 8-second timeout (it was
+unbounded, so a still-settling tunnel or a host firewall blocking 3389 stalled the
+finish), and the enrollment-result dialog no longer crashes if the response has no
+step list (defensive rendering).
+
 ## v0.19.0 — Windows WireGuard enrollment (remote reach)
 
 Windows/RDP hosts can now join the WireGuard overlay, so they're reachable from

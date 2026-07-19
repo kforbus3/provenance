@@ -1611,7 +1611,8 @@ function EnrollDialog({ open, pending, result, error, onClose }: EnrollDialogPro
     s === "ok" ? "success.main" : s === "failed" ? "error.main" : s === "warning" ? "warning.main" : "text.secondary";
   const stepIcon = (s: string) =>
     s === "ok" ? "✓" : s === "failed" ? "✗" : s === "warning" ? "⚠" : "•";
-  const hasWarning = result?.job.steps.some((s) => s.status === "warning");
+  const steps = result?.job?.steps ?? [];
+  const hasWarning = steps.some((s) => s.status === "warning");
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>Host enrollment</DialogTitle>
@@ -1630,7 +1631,7 @@ function EnrollDialog({ open, pending, result, error, onClose }: EnrollDialogPro
               {hasWarning && " Connectivity warning — see steps below."}
             </Alert>
             <List dense>
-              {result.job.steps.map((st, i) => (
+              {steps.map((st, i) => (
                 <ListItem key={i} disableGutters>
                   <ListItemText
                     primary={

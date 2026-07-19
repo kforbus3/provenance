@@ -273,7 +273,13 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 		if port <= 0 {
 			port = 3389
 		}
-		if conn, verr := jumpClient.DialContext(ctx, "tcp", net.JoinHostPort(wgIP, strconv.Itoa(port))); verr == nil {
+		// Bound the check: the tunnel may still be settling (or the host firewall may
+		// block 3389 over the WG interface), and DialContext through the jump host would
+		// otherwise hang for minutes. A skip here doesn't fail enrollment.
+		dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		conn, verr := jumpClient.DialContext(dctx, "tcp", net.JoinHostPort(wgIP, strconv.Itoa(port)))
+		cancel()
+		if verr == nil {
 			_ = conn.Close()
 			step("verify_rdp_overlay", "ok", fmt.Sprintf("rdp reachable at %s:%d over the overlay", wgIP, port))
 		} else {
