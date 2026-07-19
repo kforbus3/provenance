@@ -179,7 +179,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.winscriptSvc = winscript.New(st, cfg, log, gateway, issuer, s.Notify)
-	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.playbookSvc, s.winscriptSvc, log)
+	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.auditFwd = auditfwd.New(st, log)
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)

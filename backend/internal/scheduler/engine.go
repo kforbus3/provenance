@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/msrc"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	"github.com/fleet-terminal/backend/internal/scan"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -30,14 +31,15 @@ type Engine struct {
 	store     *store.Store
 	scans     *scan.Service
 	vuln      *vulnscan.Service
+	msrc      *msrc.Service
 	playbook  *playbook.Service
 	winscript *winscript.Service
 	log       *slog.Logger
 	scanSem   chan struct{}
 }
 
-func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, pb *playbook.Service, ws *winscript.Service, log *slog.Logger) *Engine {
-	return &Engine{store: st, scans: scans, vuln: vuln, playbook: pb, winscript: ws, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
+func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, ms *msrc.Service, pb *playbook.Service, ws *winscript.Service, log *slog.Logger) *Engine {
+	return &Engine{store: st, scans: scans, vuln: vuln, msrc: ms, playbook: pb, winscript: ws, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
 }
 
 // Run drives the scheduler loop until ctx is cancelled, checking once a minute.
@@ -76,6 +78,10 @@ func (e *Engine) tick(ctx context.Context) {
 // scan/playbook-run records it created so callers can track in-progress state;
 // the produced scan/run carries the real outcome.
 func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.UUID) {
+	// vulndb refreshes the CVE databases (grype + MSRC); it has no host target.
+	if sc.Kind == "vulndb" {
+		return e.fireVulnDB(), nil
+	}
 	hosts, err := e.resolveHosts(ctx, sc)
 	if err != nil {
 		e.log.Warn("scheduler: resolve hosts", "schedule", sc.ID, "err", err)
@@ -96,6 +102,29 @@ func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.
 	default:
 		return "error: unknown kind", nil
 	}
+}
+
+// fireVulnDB refreshes the CVE databases online: the grype vulnerability DB and the
+// MSRC (Windows) mapping. Runs in the background (a DB download can take minutes) so
+// it doesn't block the scheduler tick; the outcome is logged.
+func (e *Engine) fireVulnDB() string {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+		if _, err := e.vuln.DBUpdate(ctx); err != nil {
+			e.log.Warn("scheduled vulndb: grype update", "err", err)
+		} else {
+			e.log.Info("scheduled vulndb: grype DB updated")
+		}
+		if e.msrc != nil {
+			if n, err := e.msrc.UpdateOnline(ctx); err != nil {
+				e.log.Warn("scheduled vulndb: msrc update", "err", err)
+			} else {
+				e.log.Info("scheduled vulndb: msrc updated", "entries", n)
+			}
+		}
+	}()
+	return "started"
 }
 
 // fireVulnScan launches a vulnerability scan per target host, bounded by the same

@@ -63,8 +63,17 @@ func (h *handler) toModel(r *http.Request, rq *scheduleReq) (*models.Schedule, s
 	if rq.Name == "" {
 		return nil, "name is required", false
 	}
-	if rq.Kind != "scan" && rq.Kind != "playbook" && rq.Kind != "script" {
-		return nil, "kind must be scan, playbook, or script", false
+	switch rq.Kind {
+	case "scan", "vulnscan", "playbook", "script", "vulndb":
+	default:
+		return nil, "kind must be scan, vulnscan, playbook, script, or vulndb", false
+	}
+	// vulndb (CVE database refresh — grype + MSRC) is not host-targeted.
+	if rq.Kind == "vulndb" {
+		return &models.Schedule{
+			Name: rq.Name, Kind: rq.Kind, Enabled: rq.Enabled, TargetKind: "none",
+			TargetName: "CVE databases", Recurrence: rq.Recurrence, Payload: rq.Payload,
+		}, "", true
 	}
 	if rq.TargetKind == "" {
 		rq.TargetKind = "host"

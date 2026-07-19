@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.24.0 — Scheduled vulnerability scans + CVE database updates
+
+The **Schedules** page gains two new kinds:
+
+- **Vulnerability scan** (`vulnscan`) — run a vuln scan on a recurring schedule
+  against a host or group. Works for **Linux** (grype packages) and **Windows**
+  (missing Microsoft updates via MSRC + curated third-party apps) in one schedule
+  — each host is scanned by the right method. (The engine already supported this;
+  it just wasn't creatable — now it is.)
+- **Vulnerability DB update** (`vulndb`) — refresh the CVE databases on a schedule:
+  the grype vulnerability DB and the MSRC (Windows) mapping, online. Not
+  host-targeted (it's fleet-wide); runs in the background so a long DB download
+  doesn't block the scheduler.
+
+Set them up under Schedules → "What to run", with the usual interval/daily/weekly
+recurrence. Disabled by default like all schedules.
+
 ## v0.23.3 — Faster leader takeover after a restart (reclaim stranded lock)
 
 A restart could leave hosts **offline for minutes**: the new backend couldn't

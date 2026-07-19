@@ -187,7 +187,8 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
   const hosts = hostData?.hosts ?? [];
 
   const [name, setName] = useState(schedule?.name ?? "");
-  const [kind, setKind] = useState<"scan" | "playbook" | "script">(schedule?.kind ?? "scan");
+  const [kind, setKind] = useState<"scan" | "vulnscan" | "playbook" | "script" | "vulndb">(schedule?.kind ?? "scan");
+  const needsTarget = kind !== "vulndb";
   const [targetKind, setTargetKind] = useState<"host" | "group">(schedule?.targetKind ?? "host");
   const [host, setHost] = useState<Host | null>(null);
   const [group, setGroup] = useState<Group | null>(null);
@@ -249,16 +250,20 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
       ? { profile: profile.trim(), skipExpensiveFsRules: skipFs, skipRules: [] }
       : kind === "script"
         ? { scriptId: script?.id ?? "" }
-        : { playbookId: playbook?.id ?? "", checkMode };
+        : kind === "playbook"
+          ? { playbookId: playbook?.id ?? "", checkMode }
+          : {}; // vulnscan / vulndb carry no payload
 
   const targetId = targetKind === "host" ? host?.id : group?.id;
   const payloadOk =
-    (kind !== "playbook" || !!playbook) && (kind !== "script" || !!script);
+    (kind !== "playbook" || !!playbook) &&
+    (kind !== "script" || !!script) &&
+    (!needsTarget || !!targetId);
 
   const save = useMutation({
     mutationFn: () => {
       const input = {
-        name: name.trim(), kind, enabled, targetKind, targetId: targetId as string,
+        name: name.trim(), kind, enabled, targetKind, targetId: (targetId ?? "") as string,
         recurrence: recurrence(), payload: payload(),
       };
       return isNew ? createSchedule(input) : updateSchedule(schedule!.id, input);
@@ -273,13 +278,16 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField label="Name" size="small" value={name} onChange={(e) => setName(e.target.value)} autoFocus fullWidth />
 
-          <TextField label="What to run" size="small" select value={kind} onChange={(e) => setKind(e.target.value as "scan" | "playbook" | "script")}>
-            <MenuItem value="scan">Security scan</MenuItem>
+          <TextField label="What to run" size="small" select value={kind}
+            onChange={(e) => setKind(e.target.value as "scan" | "vulnscan" | "playbook" | "script" | "vulndb")}>
+            <MenuItem value="scan">Compliance scan (OpenSCAP)</MenuItem>
+            <MenuItem value="vulnscan">Vulnerability scan (Linux + Windows)</MenuItem>
             <MenuItem value="playbook">Ansible playbook (Linux)</MenuItem>
             <MenuItem value="script">PowerShell script (Windows)</MenuItem>
+            <MenuItem value="vulndb">Vulnerability DB update (grype + MSRC)</MenuItem>
           </TextField>
 
-          {kind === "scan" ? (
+          {kind === "scan" && (
             <Stack direction="row" spacing={2} alignItems="center">
               <TextField
                 select label="Profile" size="small" value={profile}
@@ -303,7 +311,8 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
               <FormControlLabel control={<Switch checked={skipFs} onChange={(e) => setSkipFs(e.target.checked)} />}
                 label="Skip slow FS rules" />
             </Stack>
-          ) : kind === "playbook" ? (
+          )}
+          {kind === "playbook" && (
             <Stack direction="row" spacing={2} alignItems="center">
               <Autocomplete sx={{ flexGrow: 1 }} options={playbooks} value={playbook}
                 onChange={(_, v) => setPlaybook(v)} getOptionLabel={(p) => p.name}
@@ -312,15 +321,28 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
               <FormControlLabel control={<Switch checked={checkMode} onChange={(e) => setCheckMode(e.target.checked)} />}
                 label="Dry run" />
             </Stack>
-          ) : (
+          )}
+          {kind === "script" && (
             <Autocomplete options={scripts} value={script}
               onChange={(_, v) => setScript(v)} getOptionLabel={(s) => s.name}
               isOptionEqualToValue={(a, b) => a.id === b.id}
               renderInput={(params) => <TextField {...params} label="PowerShell script" size="small"
                 helperText="Runs on the target's Windows hosts as their open-policy credential" />} />
           )}
+          {kind === "vulnscan" && (
+            <Typography variant="body2" color="text.secondary">
+              Runs a vulnerability scan on the target host(s): Linux packages via grype, Windows via
+              missing Microsoft updates (MSRC) + third-party apps. Uses the loaded CVE data.
+            </Typography>
+          )}
+          {kind === "vulndb" && (
+            <Typography variant="body2" color="text.secondary">
+              Refreshes the CVE databases online — the grype vulnerability DB and the MSRC (Windows)
+              mapping. No target; runs for the whole fleet.
+            </Typography>
+          )}
 
-          <Box>
+          {needsTarget && <Box>
             <Typography variant="caption" color="text.secondary">Target</Typography>
             <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 0.5 }}>
               <ToggleButtonGroup size="small" exclusive value={targetKind}
@@ -340,7 +362,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
                   renderInput={(params) => <TextField {...params} label="Group" size="small" />} />
               )}
             </Stack>
-          </Box>
+          </Box>}
 
           <Box>
             <Typography variant="caption" color="text.secondary">Recurrence</Typography>
