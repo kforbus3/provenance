@@ -26,6 +26,7 @@ func Mount(r chi.Router, d *app.Deps) {
 
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts", h.list)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}", h.get)
+		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}/software", h.software)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/wg/next", h.nextWG)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts", h.create)
@@ -63,6 +64,28 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		hosts = []models.Host{}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "count": len(hosts)})
+}
+
+// software returns a Windows host's installed-software inventory.
+func (h *handler) software(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	p := auth.MustPrincipal(r)
+	if !p.Has("Host.Enroll") && !p.Has("Admin.All") {
+		if allowed, aerr := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, id); aerr != nil || !allowed {
+			httpx.WriteError(w, http.StatusNotFound, "host not found")
+			return
+		}
+	}
+	items, err := h.d.Store.ListWindowsSoftware(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list software")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"software": items, "count": len(items)})
 }
 
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {

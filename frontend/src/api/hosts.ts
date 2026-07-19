@@ -167,6 +167,18 @@ export async function nextWGAddress(): Promise<NextWG> {
 
 export type HostStatusStats = Record<string, number>;
 
+export interface WindowsSoftware {
+  name: string;
+  version?: string;
+  publisher?: string;
+  collectedAt: string;
+}
+
+export async function listHostSoftware(id: string): Promise<WindowsSoftware[]> {
+  const { data } = await api.get<{ software: WindowsSoftware[] }>(`/api/v1/hosts/${id}/software`);
+  return data.software ?? [];
+}
+
 export async function getHostStatusStats(): Promise<HostStatusStats> {
   const { data } = await api.get<HostStatusStats>("/api/v1/hosts/stats/status");
   return data;

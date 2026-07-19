@@ -308,10 +308,26 @@ func (m *Monitor) collectWindowsFactsOver(ctx context.Context, jump *ssh.Client,
 	// The pending-updates search (Windows Update Agent) is heavier than the WMI
 	// facts, so run it only when the last check is stale (hourly) rather than every
 	// sweep — the counts are preserved by UpsertInventory's COALESCE in between.
-	f, err := winrm.Collect(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts, updatesStale(h.Inventory))
+	dueUpdates := updatesStale(h.Inventory)
+	f, err := winrm.Collect(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts, dueUpdates)
 	if err != nil {
 		m.log.Debug("rdp facts: winrm collect", "host", h.Hostname, "err", err)
 		return nil
+	}
+	// Refresh the installed-software inventory on the same (hourly) cadence as the
+	// updates search, so the software-inventory view stays current without scanning.
+	if dueUpdates {
+		if sw, serr := winrm.CollectSoftware(ctx, dial, cands[0], user, pass, m.cfg.RDPWinRMPorts, 3*time.Minute); serr == nil {
+			items := make([]models.WindowsSoftware, 0, len(sw))
+			for _, s := range sw {
+				items = append(items, models.WindowsSoftware{Name: s.Name, Version: s.Version, Publisher: s.Publisher})
+			}
+			if perr := m.store.ReplaceWindowsSoftware(ctx, h.ID, items); perr != nil {
+				m.log.Warn("rdp software inventory persist", "host", h.Hostname, "err", perr)
+			}
+		} else {
+			m.log.Debug("rdp software inventory", "host", h.Hostname, "err", serr)
+		}
 	}
 	now := time.Now()
 	inv := &models.HostInventory{

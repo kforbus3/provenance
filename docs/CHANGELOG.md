@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.23.0 — Windows software inventory (over WinRM)
+
+Fleet now inventories the **installed applications** on Windows hosts, read over
+WinRM from the registry Uninstall keys (64- and 32-bit views; Windows/KB updates
+filtered out — those are the MSRC path). It's the foundation for third-party CVE
+coverage (next), and useful on its own:
+
+- The monitor refreshes each Windows host's software list hourly (same cadence as
+  the updates check), stored in a new `windows_software` table (migration `0043`).
+- Host details now show an **Installed software (N)** section for Windows hosts.
+- API: `GET /hosts/{id}/software`.
+
+Registry reads are fast and side-effect-free (no `Win32_Product`).
+
 ## v0.22.1 — Vulnerabilities: fixable subset + severity filtering
 
 Both scanners already report only what's actually on each host (grype reads the

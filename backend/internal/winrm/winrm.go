@@ -190,6 +190,72 @@ const updatesDetailScript = `$s=New-Object -ComObject Microsoft.Update.Session;$
 	`$sec=0;foreach($c in $u.Categories){if($c.CategoryID -eq $sg){$sec=1;break}};$cves=(@($u.CveIDs)) -join ';';` +
 	`Write-Output ("U|"+$kb+"|"+$sev+"|"+$sec+"|"+$cves+"|"+$u.Title)}`
 
+// Software is one installed application on a Windows host.
+type Software struct {
+	Name      string
+	Version   string
+	Publisher string
+}
+
+// softwareScript enumerates installed applications from the registry Uninstall keys
+// (64-bit + 32-bit views), emitting "S|<name>|<version>|<publisher>" per app. It
+// skips entries with no DisplayName and OS/system components. Registry reads are fast
+// and side-effect-free (unlike Win32_Product).
+const softwareScript = `$paths=@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',` +
+	`'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*');` +
+	`foreach($p in $paths){foreach($k in Get-ItemProperty $p -ErrorAction SilentlyContinue){` +
+	`$n=$k.DisplayName;if([string]::IsNullOrWhiteSpace($n)){continue};if($k.SystemComponent -eq 1){continue};` +
+	`Write-Output ("S|"+$n+"|"+[string]$k.DisplayVersion+"|"+[string]$k.Publisher)}}`
+
+// CollectSoftware returns the installed applications on a Windows host over WinRM.
+func CollectSoftware(ctx context.Context, dial DialFunc, host, user, pass string, ports []int, timeout time.Duration) ([]Software, error) {
+	stdout, stderr, code, err := RunScript(ctx, dial, host, user, pass, ports, softwareScript, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("software query exited %d: %s", code, strings.TrimSpace(stderr))
+	}
+	var out []Software
+	seen := map[string]bool{}
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if !strings.HasPrefix(line, "S|") {
+			continue
+		}
+		p := strings.SplitN(line, "|", 4)
+		if len(p) < 4 {
+			continue
+		}
+		name := strings.TrimSpace(p[1])
+		ver := strings.TrimSpace(p[2])
+		if name == "" || isWindowsUpdateName(name) {
+			continue
+		}
+		key := name + "|" + ver
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, Software{Name: name, Version: ver, Publisher: strings.TrimSpace(p[3])})
+	}
+	return out, nil
+}
+
+// isWindowsUpdateName filters out Windows/KB update entries that appear among the
+// uninstall keys — they're covered by the MSRC path, not the software inventory.
+func isWindowsUpdateName(n string) bool {
+	l := strings.ToLower(n)
+	if strings.HasPrefix(l, "security update") || strings.HasPrefix(l, "update for") || strings.HasPrefix(l, "hotfix for") {
+		return true
+	}
+	// "... (KB1234567)" style.
+	if i := strings.Index(l, "(kb"); i >= 0 {
+		return true
+	}
+	return false
+}
+
 // CollectUpdates returns the host's missing updates with their CVE/severity metadata,
 // over WinRM (through the jump-host dialer). Used by the vulnerability scanner: on
 // Windows, "vulnerabilities" are the CVEs remediated by not-yet-installed security

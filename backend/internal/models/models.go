@@ -595,6 +595,16 @@ type VulnScan struct {
 }
 
 // VulnFinding is one CVE affecting one installed package.
+// WindowsSoftware is one installed application on a Windows host, from the registry
+// Uninstall keys (collected over WinRM). Powers the software inventory and the
+// third-party CVE matching.
+type WindowsSoftware struct {
+	Name        string    `json:"name"`
+	Version     string    `json:"version,omitempty"`
+	Publisher   string    `json:"publisher,omitempty"`
+	CollectedAt time.Time `json:"collectedAt"`
+}
+
 // MSRCEntry is one KB→CVE mapping from Microsoft's Security Update Guide (CVRF):
 // installing KB remediates CVE, which carries this severity/CVSS. Used to enrich
 // Windows vulnerability findings.

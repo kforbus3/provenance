@@ -26,7 +26,7 @@ import { MenuItem, ListItemSecondaryAction, Divider } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
-  getHost, getHostAccess, listHosts, nextWGAddress, removeHostGroup, removeHostUser,
+  getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, removeHostGroup, removeHostUser,
   updateHost,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
@@ -1113,6 +1113,11 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
   // RDP (Windows) hosts have no SSH/kernel/apt-updates and aren't on the WireGuard
   // overlay; their facts come from WinRM. Hide the fields that don't apply.
   const isRDP = h?.protocol === "rdp";
+  const { data: software = [] } = useQuery({
+    queryKey: ["host-software", host?.id],
+    queryFn: () => listHostSoftware(host!.id),
+    enabled: Boolean(host) && isRDP,
+  });
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{h?.hostname ?? "Host"} · details</DialogTitle>
@@ -1162,6 +1167,23 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
                 ))}
               </Stack>
             )}
+          </>
+        )}
+        {isRDP && software.length > 0 && (
+          <>
+            <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+              Installed software ({software.length})
+            </Typography>
+            <Box sx={{ maxHeight: 220, overflow: "auto", mt: 0.5 }}>
+              {software.map((s, i) => (
+                <Stack key={`${s.name}-${s.version}-${i}`} direction="row" spacing={2} sx={{ py: 0.25 }}>
+                  <Typography variant="body2" sx={{ flexGrow: 1 }} noWrap title={s.name}>{s.name}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", flexShrink: 0 }}>
+                    {s.version || "—"}
+                  </Typography>
+                </Stack>
+              ))}
+            </Box>
           </>
         )}
         {!inv && (
