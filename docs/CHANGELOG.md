@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.21.0 — Vulnerability scanning for Windows hosts
+
+Vulnerability scans now work on Windows (RDP) hosts, alongside the existing
+Linux/Grype scans — same **Vulnerabilities** page, same findings/severity model,
+same scheduling.
+
+On Windows a host's vulnerabilities are the CVEs remediated by its **missing
+security updates**, sourced directly from Microsoft's update metadata via the
+Windows Update Agent over WinRM (offline search — no external CVE database, no
+grype, no network round-trip). Each missing security update becomes one finding
+per CVE it fixes, with severity mapped from **MSRC severity**
+(Critical→Critical, Important→High, Moderate→Medium, Low→Low); the CVE links to
+its MSRC page and the "fix" is the KB to install. CVSS shows "—" (Microsoft's
+metadata is severity-based, not CVSS).
+
+- `internal/vulnscan.Run` branches on `host.Protocol == "rdp"` to the WinRM path;
+  Linux hosts are unchanged. Authenticated with the host's open-policy vault
+  credential (scans are unattended), tunneled through the jump host.
+- Previously, scanning a Windows host silently failed (no SSH / no package DB);
+  now it produces real findings. Works for manual scans and group schedules.
+
 ## v0.20.4 — Configurable PowerShell script timeout (Settings)
 
 The per-host PowerShell script timeout is now operator-configurable under

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -21,11 +22,13 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/winrm"
 )
 
 // collectScript tars a host's package databases (only the paths that exist, so it
@@ -71,6 +74,26 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host) {
 	}
 	if err := s.store.StartVulnScan(ctx, scanID); err != nil {
 		fail("start: " + err.Error())
+		return
+	}
+
+	// Windows (RDP) hosts have no SSH package databases and grype doesn't cover
+	// Windows. Instead, a host's vulnerabilities are the CVEs remediated by its
+	// missing security updates — collected over WinRM from the Windows Update Agent.
+	if h.Protocol == "rdp" {
+		findings, err := s.collectWindows(ctx, h)
+		if err != nil {
+			fail("collect windows updates: " + err.Error())
+			return
+		}
+		sum, findings := summarize(findings)
+		if err := s.store.CompleteVulnScan(ctx, scanID, sum, findings, nil); err != nil {
+			fail("store findings: " + err.Error())
+			return
+		}
+		s.log.Info("vuln scan completed (windows)", "host", h.Hostname, "total", sum.Total,
+			"critical", sum.Critical, "high", sum.High)
+		s.notify(ctx, h, sum)
 		return
 	}
 
@@ -129,6 +152,114 @@ func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, error) {
 		return nil, fmt.Errorf("no package data collected (unsupported OS?)")
 	}
 	return raw, nil
+}
+
+// collectWindows scans a Windows host by enumerating its missing security updates
+// over WinRM and turning each into vulnerability findings — one per CVE the update
+// remediates (the host is exposed to those CVEs until it's installed). Authenticated
+// with the host's open-policy vault credential (scans are unattended), tunneled
+// through the jump host.
+func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.VulnFinding, error) {
+	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
+	if err != nil {
+		return nil, fmt.Errorf("system signer: %w", err)
+	}
+	jump, err := s.gw.DialJumpWithSigner(ctx, signer)
+	if err != nil {
+		return nil, fmt.Errorf("dial jump host: %w", err)
+	}
+	defer jump.Close()
+
+	key, err := s.cfg.VaultKey()
+	if err != nil {
+		return nil, fmt.Errorf("vault key: %w", err)
+	}
+	user, pass, err := credinject.PasswordForSystem(ctx, s.store, key, h)
+	if err != nil {
+		return nil, fmt.Errorf("credential: %w", err)
+	}
+	cands := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
+	if len(cands) == 0 {
+		return nil, fmt.Errorf("host has no address")
+	}
+	dial := func(_ /*network*/, addr string) (net.Conn, error) { return jump.DialContext(ctx, "tcp", addr) }
+
+	updates, err := winrm.CollectUpdates(ctx, dial, cands[0], user, pass, s.cfg.RDPWinRMPorts, 5*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+
+	var findings []models.VulnFinding
+	seen := map[string]bool{}
+	for _, u := range updates {
+		// Only vulnerability-relevant updates: security category, an MSRC severity,
+		// or a CVE list. Skip ordinary feature/driver updates.
+		if !u.Security && u.Severity == "" && len(u.CVEs) == 0 {
+			continue
+		}
+		sev := mapMsrcSeverity(u.Severity)
+		base := models.VulnFinding{
+			Package: u.KB, InstalledVersion: "not installed", FixedVersion: u.KB,
+			Severity: sev, Description: u.Title,
+		}
+		if len(u.CVEs) == 0 {
+			id := u.KB
+			if id == "" {
+				id = "update"
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			f := base
+			f.CVE = id
+			f.DataSource = kbURL(u.KB) // link the KB to its support page (CVE column links dataSource)
+			findings = append(findings, f)
+			continue
+		}
+		for _, cve := range u.CVEs {
+			k := cve + "|" + u.KB
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			f := base
+			f.CVE = cve
+			f.DataSource = "https://msrc.microsoft.com/update-guide/vulnerability/" + cve
+			findings = append(findings, f)
+		}
+	}
+	return findings, nil
+}
+
+// kbURL builds the Microsoft support URL for a KB (the first, if several), so the
+// finding links somewhere useful when it carries no CVE.
+func kbURL(kb string) string {
+	if i := strings.IndexByte(kb, ';'); i >= 0 {
+		kb = kb[:i]
+	}
+	num := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(kb)), "KB")
+	if num == "" {
+		return ""
+	}
+	return "https://support.microsoft.com/help/" + num
+}
+
+// mapMsrcSeverity maps Microsoft's MSRC severity labels onto the grype-style severity
+// buckets the summary and UI use, so Windows and Linux findings rank consistently.
+func mapMsrcSeverity(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical":
+		return "Critical"
+	case "important":
+		return "High"
+	case "moderate":
+		return "Medium"
+	case "low":
+		return "Low"
+	default:
+		return "Unknown"
+	}
 }
 
 type sidecarResult struct {

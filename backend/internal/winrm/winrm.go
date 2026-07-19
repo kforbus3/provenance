@@ -166,6 +166,63 @@ func RunScript(ctx context.Context, dial DialFunc, host, user, pass string, port
 	return stdout, stderr, code, nil
 }
 
+// UpdateInfo is one missing (not-installed) Windows update with the metadata needed
+// to turn it into vulnerability findings: the KB, MSRC severity, whether it's in the
+// Security Updates category, and the CVE IDs it remediates.
+type UpdateInfo struct {
+	KB       string
+	Title    string
+	Severity string // MsrcSeverity: Critical|Important|Moderate|Low (or "")
+	Security bool
+	CVEs     []string
+}
+
+// updatesDetailScript enumerates missing updates via the Windows Update Agent (OFFLINE
+// search against the local cache, like the facts count) and emits one line per update:
+//
+//	U|<kb(s)>|<msrcSeverity>|<security 0/1>|<cve;cve;...>|<title>
+//
+// The title is last so it may contain the delimiter. String concatenation (not -f) is
+// used so a title with { } braces can't break a format string.
+const updatesDetailScript = `$s=New-Object -ComObject Microsoft.Update.Session;$se=$s.CreateUpdateSearcher();$se.Online=$false;` +
+	`$r=$se.Search("IsInstalled=0 and IsHidden=0");$sg='0FA1201D-4330-4FA8-8AE9-B877473B6441';` +
+	`foreach($u in $r.Updates){$kb=(@($u.KBArticleIDs)|ForEach-Object{"KB"+$_}) -join ';';$sev=[string]$u.MsrcSeverity;` +
+	`$sec=0;foreach($c in $u.Categories){if($c.CategoryID -eq $sg){$sec=1;break}};$cves=(@($u.CveIDs)) -join ';';` +
+	`Write-Output ("U|"+$kb+"|"+$sev+"|"+$sec+"|"+$cves+"|"+$u.Title)}`
+
+// CollectUpdates returns the host's missing updates with their CVE/severity metadata,
+// over WinRM (through the jump-host dialer). Used by the vulnerability scanner: on
+// Windows, "vulnerabilities" are the CVEs remediated by not-yet-installed security
+// updates, sourced directly from Microsoft's update metadata.
+func CollectUpdates(ctx context.Context, dial DialFunc, host, user, pass string, ports []int, timeout time.Duration) ([]UpdateInfo, error) {
+	stdout, stderr, code, err := RunScript(ctx, dial, host, user, pass, ports, updatesDetailScript, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("update search exited %d: %s", code, strings.TrimSpace(stderr))
+	}
+	var out []UpdateInfo
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if !strings.HasPrefix(line, "U|") {
+			continue
+		}
+		p := strings.SplitN(line, "|", 6)
+		if len(p) < 6 {
+			continue
+		}
+		u := UpdateInfo{KB: strings.TrimSpace(p[1]), Severity: strings.TrimSpace(p[2]), Security: p[3] == "1", Title: strings.TrimSpace(p[5])}
+		for _, c := range strings.Split(p[4], ";") {
+			if c = strings.TrimSpace(c); c != "" {
+				u.CVEs = append(u.CVEs, c)
+			}
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
 func parseFacts(out string) *Facts {
 	f := &Facts{}
 	var ver, build string

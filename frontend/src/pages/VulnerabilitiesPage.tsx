@@ -56,7 +56,8 @@ export function VulnerabilitiesPage() {
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h5">Vulnerabilities</Typography>
           <Typography variant="body2" color="text.secondary">
-            Match each host's installed packages against a CVE database (Grype) and score findings by CVSS.
+            Linux hosts: match installed packages against a CVE database (Grype), scored by CVSS.
+            Windows hosts: the CVEs remediated by missing security updates, from Microsoft's update metadata.
           </Typography>
         </Box>
         <Tooltip title="Refresh"><Button startIcon={<RefreshIcon />} onClick={refresh} sx={{ mr: 1 }}>Refresh</Button></Tooltip>
@@ -209,7 +210,8 @@ function ScanDialog({ onClose, onStarted }: { onClose: () => void; onStarted: ()
             />
           )}
           <Typography variant="caption" color="text.secondary">
-            The scan reads the host's package database over SSH; nothing is installed on the host.
+            Read-only: Linux hosts are read over SSH (package database), Windows hosts over WinRM
+            (missing security updates). Nothing is installed on the host.
           </Typography>
         </Stack>
       </DialogContent>
