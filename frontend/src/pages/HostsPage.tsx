@@ -26,8 +26,8 @@ import { MenuItem, ListItemSecondaryAction, Divider } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
-  getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, removeHostGroup, removeHostUser,
-  updateHost,
+  getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
+  removeHostGroup, removeHostUser, updateHost,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
 import {
@@ -1118,6 +1118,7 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
     queryFn: () => listHostSoftware(host!.id),
     enabled: Boolean(host) && isRDP,
   });
+  const refresh = useMutation({ mutationFn: () => refreshHostFacts(host!.id) });
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{h?.hostname ?? "Host"} · details</DialogTitle>
@@ -1193,6 +1194,14 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
         )}
       </DialogContent>
       <DialogActions>
+        <Tooltip title="Re-collect pending updates and inventory on the next monitor check (instead of waiting for the hourly refresh)">
+          <Button
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending || refresh.isSuccess}
+          >
+            {refresh.isSuccess ? "Refresh queued" : refresh.isPending ? "Queuing…" : "Refresh facts"}
+          </Button>
+        </Tooltip>
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>

@@ -27,6 +27,7 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts", h.list)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}/software", h.software)
+		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/{id}/refresh", h.refreshFacts)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/wg/next", h.nextWG)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts", h.create)
@@ -64,6 +65,29 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		hosts = []models.Host{}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": hosts, "count": len(hosts)})
+}
+
+// refreshFacts forces the monitor to re-collect a host's pending-updates (and
+// Windows software inventory) on its next sweep, instead of waiting for the hourly
+// cadence — e.g. right after an operator patches the host.
+func (h *handler) refreshFacts(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	p := auth.MustPrincipal(r)
+	if !p.Has("Host.Enroll") && !p.Has("Admin.All") {
+		if allowed, aerr := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, id); aerr != nil || !allowed {
+			httpx.WriteError(w, http.StatusNotFound, "host not found")
+			return
+		}
+	}
+	if err := h.d.Store.MarkHostFactsStale(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not queue refresh")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"queued": true})
 }
 
 // software returns a Windows host's installed-software inventory.

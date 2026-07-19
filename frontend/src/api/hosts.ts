@@ -179,6 +179,10 @@ export async function listHostSoftware(id: string): Promise<WindowsSoftware[]> {
   return data.software ?? [];
 }
 
+export async function refreshHostFacts(id: string): Promise<void> {
+  await api.post(`/api/v1/hosts/${id}/refresh`);
+}
+
 export async function getHostStatusStats(): Promise<HostStatusStats> {
   const { data } = await api.get<HostStatusStats>("/api/v1/hosts/stats/status");
   return data;

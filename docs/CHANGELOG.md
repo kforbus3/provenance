@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.23.2 — Host details: "Refresh facts" (don't wait for the hourly check)
+
+Pending-updates counts (and the Windows software inventory) are collected on an
+hourly cadence to keep the WinRM/WUA searches cheap, so after patching a host the
+dashboard's "security updates pending" can lag until the next check. Host details
+now has a **Refresh facts** button that clears the update-check timestamp so the
+monitor re-collects that host on its **next sweep** (typically within a minute)
+instead of waiting the hour. `POST /hosts/{id}/refresh` (Host.View + access).
+
 ## v0.23.1 — Windows third-party app CVE coverage (CPE → grype)
 
 Windows vuln scans now also cover **third-party applications** — Chrome, Firefox,

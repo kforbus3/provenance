@@ -365,6 +365,15 @@ func (s *Store) CountHostsByStatus(ctx context.Context) (map[string]int, error) 
 }
 
 // UpsertInventory updates collected facts for a host.
+// MarkHostFactsStale clears the update-check timestamp so the monitor re-collects a
+// host's pending-updates (and, on Windows, software inventory) on its next sweep,
+// rather than waiting for the hourly cadence. Used by the "refresh" action after an
+// operator patches a host.
+func (s *Store) MarkHostFactsStale(ctx context.Context, hostID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE host_inventory SET updates_checked_at=NULL WHERE host_id=$1`, hostID)
+	return err
+}
+
 func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv models.HostInventory) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,
