@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.19.5 — RDP status: report overlay health (wg_ok)
+
+The RDP/Windows status probe reported online/offline and latency but never set
+`wg_ok`, so an enrolled Windows host reachable over the overlay still showed a
+"wg down" badge. It now sets `wg_ok` when the RDP port is reached over the
+WireGuard address, matching the SSH probe.
+
+(Windows SYSTEM facts — OS, CPU, memory, uptime — are collected separately over
+WinRM; if they show "—", WinRM/PSRemoting likely isn't enabled or reachable on
+the host. See the enrollment guide.)
+
 ## v0.19.4 — Windows enrollment: fixed ListenPort so the jump can reach the host
 
 Supersedes the v0.19.3 approach. A Windows host now enrolls with a fixed

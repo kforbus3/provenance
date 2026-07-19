@@ -240,6 +240,8 @@ func (m *Monitor) probeRDP(ctx context.Context, signer ssh.Signer, h *models.Hos
 			st.LatencyMS = &lat
 			st.Status = "online"
 			st.LastSuccessAt = &now
+			// If we reached the RDP port over the WireGuard address, the overlay is up.
+			st.WGOK = addr == h.WGAddress && h.WGAddress != ""
 			return st
 		}
 	}
