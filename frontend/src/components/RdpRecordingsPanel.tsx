@@ -13,7 +13,7 @@ import Guacamole from "guacamole-common-js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
 import {
-  deleteRdpRecording, downloadRdpRecordingBlob, listRdpRecordings, rdpRecordingStats,
+  deleteRdpRecording, downloadRdpPlayerHTML, listRdpRecordings, rdpRecordingStats,
   type RDPRecording,
 } from "../api/rdpRecordings";
 import { getAccessToken } from "../api/client";
@@ -147,14 +147,14 @@ export function RdpRecordingsPanel() {
   };
   const delMut = useMutation({ mutationFn: deleteRdpRecording, onSuccess: invalidate });
 
-  // Download the raw Guacamole recording (.guac) for archival / external playback.
+  // Download a self-contained HTML player (double-click to watch offline).
   const download = async (r: RDPRecording) => {
-    const blob = await downloadRdpRecordingBlob(r.id);
+    const blob = await downloadRdpPlayerHTML(r.id);
     const d = new Date(r.startedAt);
     const p = (n: number) => String(n).padStart(2, "0");
     const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
     const safe = (s: string) => (s || "x").replace(/[^a-zA-Z0-9_.-]/g, "_");
-    const name = `rdp-${safe(r.rdpUser)}-${safe(r.hostname)}-${ts}.guac`;
+    const name = `rdp-${safe(r.rdpUser)}-${safe(r.hostname)}-${ts}.html`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -226,7 +226,7 @@ export function RdpRecordingsPanel() {
                             <PlayArrowIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Download recording (.guac)">
+                        <Tooltip title="Download playable recording (.html) to watch offline">
                           <IconButton size="small" onClick={() => void download(r)}>
                             <DownloadIcon fontSize="small" />
                           </IconButton>

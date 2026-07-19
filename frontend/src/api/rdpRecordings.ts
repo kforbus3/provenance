@@ -25,10 +25,17 @@ export async function listRdpRecordings(): Promise<RDPRecording[]> {
   return data.recordings ?? [];
 }
 
-// downloadRdpRecordingBlob fetches the raw Guacamole recording so it can be fed to
-// Guacamole.SessionRecording for in-app playback.
+// downloadRdpRecordingBlob fetches the raw Guacamole recording (.guac).
 export async function downloadRdpRecordingBlob(id: string): Promise<Blob> {
   const res = await api.get(`/api/v1/rdp/recordings/${id}/download`, { responseType: "blob" });
+  return res.data as Blob;
+}
+
+// downloadRdpPlayerHTML fetches a fully self-contained HTML player (the Guacamole
+// client + the recording embedded) that plays the session offline — double-click to
+// watch, no server required.
+export async function downloadRdpPlayerHTML(id: string): Promise<Blob> {
+  const res = await api.get(`/api/v1/rdp/recordings/${id}/player`, { responseType: "blob" });
   return res.data as Blob;
 }
 

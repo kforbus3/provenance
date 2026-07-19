@@ -5,12 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.4 — Self-contained RDP recording player
+
+The RDP recording download is now a **self-contained HTML player** (double-click to
+watch offline, no server) — full parity with SSH replay export. The Guacamole client
+and the recording are both embedded; the player loads the library via a blob-URL
+dynamic import and replays through the same streaming path as in-app playback. The
+Guacamole client (v1.5.0) is vendored into the backend for embedding.
+
 ## v0.17.3 — Download button for RDP recordings
 
-Session Replay → Desktop (RDP) recordings now have a **download** action, saving the
-raw Guacamole recording (`.guac`) for archival or external playback. (SSH recordings
-download as a self-contained HTML player; a self-contained RDP player would require
-bundling the Guacamole client and is not included.) Frontend-only.
+Session Replay → Desktop (RDP) recordings gained a **download** action (initially the
+raw `.guac` recording; superseded by the self-contained HTML player in v0.17.4).
 
 ## v0.17.2 — Fix white screen when opening an RDP recording
 
