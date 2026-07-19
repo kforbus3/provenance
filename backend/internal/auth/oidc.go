@@ -273,6 +273,14 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	ip, ua := clientMeta(r)
 	tokens, serr := h.svc.CreateSession(ctx, user, ip, ua, true) // IdP handled MFA
 	if serr != nil {
+		if PolicyDenied(serr) {
+			_ = h.svc.store.RecordAuthEvent(ctx, models.AuthEvent{
+				UserID: &user.ID, Username: user.Username, Event: "login_blocked", IP: ip, UserAgent: ua,
+				Detail: map[string]any{"method": "oidc"},
+			})
+			http.Redirect(w, r, "/login?sso=blocked", http.StatusFound)
+			return
+		}
 		fail("session")
 		return
 	}

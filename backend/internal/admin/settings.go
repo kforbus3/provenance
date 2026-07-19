@@ -44,6 +44,12 @@ func (h *handler) setSetting(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if key == sessionPolicyKey {
+		if msg := validateSessionPolicy(value, clientIP(r)); msg != "" {
+			httpx.WriteError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
 	if err := h.d.Store.SetSetting(r.Context(), key, value); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not save setting")
 		return

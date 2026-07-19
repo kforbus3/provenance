@@ -35,6 +35,16 @@ export function LoginPage() {
   const [saml, setSaml] = useState<{ enabled: boolean; buttonText: string } | null>(null);
 
   useEffect(() => {
+    // Surface SSO redirect outcomes (e.g. blocked by conditional-access policy).
+    const sso = new URLSearchParams(window.location.search).get("sso");
+    if (sso === "blocked") {
+      setError("Sign-in was blocked by your organization's access policy (network or session limit).");
+    } else if (sso === "error") {
+      setError("Single sign-on failed. Please try again or contact your administrator.");
+    }
+  }, []);
+
+  useEffect(() => {
     let active = true;
     bootstrapStatus()
       .then((s) => {

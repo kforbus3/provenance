@@ -5,6 +5,53 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.24.4 — Conditional access (IP allowlist + concurrent-session limits)
+
+Gate sign-in on **where** a user connects from and **how many** sessions they may
+hold at once — a core PAM control, enforced at session creation across **every**
+login method (password, LDAP, OIDC, SAML) so there's no per-IdP bypass.
+
+- **Global policy** under **Settings → Authentication → Conditional access**: an
+  **IP allowlist** (CIDRs or bare IPs, one per line — empty = any network) and a
+  **max concurrent sessions per user** (0 = unlimited). Saving an allowlist that
+  wouldn't include your *own* current IP is **rejected**, so you can't lock the
+  fleet out in one click.
+- **Per-user overrides** from a user's **Access policy…** action: each dimension
+  independently overrides the global default or inherits it (e.g. exempt a service
+  admin from the office-network restriction, or give one user a tighter limit).
+- **On denial:** the login is refused with a clear message (SSO users land back on
+  the login page with the reason), and a `login_blocked` auth event is recorded.
+  Idle/absolute session timeouts (already configurable via `FLEET_SESSION_IDLE_TTL`
+  / `FLEET_SESSION_ABSOLUTE_TTL`) are unchanged.
+- API: global policy via the existing `PUT /settings/session_policy`; per-user via
+  `GET/PUT/DELETE /users/{id}/session-policy` (`User.Edit`, audited).
+
+**Client-IP note:** behind a reverse proxy, set `FLEET_TRUSTED_PROXIES` (off by
+default) so the allowlist matches the *user's* IP and not the proxy's. Migration
+`0045` (per-user override table) applies automatically.
+
+## v0.24.3 — Maintenance windows (silence a host's alerts while you patch)
+
+Mark a host **in maintenance** so its offline / updates-pending / scan-failure
+signals stop firing while you patch, reboot, or otherwise take it down on purpose —
+no more chasing an "offline" alert you caused yourself.
+
+- **Silence from host details.** The host-details dialog gains a **Silence alerts**
+  action (1 / 4 / 8 / 24 hours) and, while active, an **End maintenance** button. A
+  host in maintenance shows an **In maintenance** chip in the details header and a
+  **maint** chip on the Hosts grid, so a deliberately-silenced host reads differently
+  from a genuinely-broken one.
+- **What's suppressed.** While the window is open, the monitor doesn't emit
+  offline/recovered **alerts** for the host and the **dashboard insights** skip it —
+  so it drops out of "needs attention" — but health-checking, fact collection, and
+  metrics keep running, so status is still current when you look. The window ends
+  automatically when the timer passes.
+- API: `POST /hosts/{id}/maintenance` (`{minutes}`, default 60, capped 30 days) and
+  `DELETE /hosts/{id}/maintenance`, both gated by `Host.Edit` and audited
+  (`host.maintenance_set` / `host.maintenance_clear`).
+
+**Deploy:** migration `0044` (adds `hosts.maintenance_until`) applies automatically.
+
 ## v0.24.2 — `make redeploy-single`: update app code without dropping the overlay
 
 Root-caused the recurring "hosts offline for minutes after a deploy" on a single

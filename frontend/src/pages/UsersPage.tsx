@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -19,6 +19,7 @@ import {
   removeUserRole, resetUserMFA, resetUserPassword, restoreUserHostAccess,
   revokeUserHostAccess, setGlobalRequireMFA, setUserDisabled, setUserRequireMFA,
   terminateUserSessions, unlockUser, updateUser, userHostAccess, userLoginHistory,
+  getUserSessionPolicy, setUserSessionPolicy, clearUserSessionPolicy,
   type AuthEvent, type CreateUserInput, type User,
 } from "../api/admin";
 
@@ -42,6 +43,7 @@ export function UsersPage() {
   const [history, setHistory] = useState<{ user: User; events: AuthEvent[] } | null>(null);
   const [hostAccessUser, setHostAccessUser] = useState<User | null>(null);
   const [rolesUser, setRolesUser] = useState<User | null>(null);
+  const [policyUser, setPolicyUser] = useState<User | null>(null);
 
   // Per-user host access: the hosts a user can reach plus revoke/restore controls.
   const { data: hostAccess = [], isLoading: hostAccessLoading } = useQuery({
@@ -268,7 +270,12 @@ export function UsersPage() {
           try { setHistory({ user: u, events: await userLoginHistory(u.id) }); }
           catch { setSnack("Failed to load history"); }
         }}>Login history…</MenuItem>
+        <MenuItem onClick={() => { const u = menuUser; closeMenu(); setPolicyUser(u); }}>
+          Access policy…
+        </MenuItem>
       </Menu>
+
+      <SessionPolicyDialog user={policyUser} onClose={() => setPolicyUser(null)} onSaved={setSnack} />
 
       <Dialog open={Boolean(history)} onClose={() => setHistory(null)} fullWidth maxWidth="sm">
         <DialogTitle>Login history — {history?.user.username}</DialogTitle>
@@ -379,5 +386,115 @@ export function UsersPage() {
         <Alert severity="info" onClose={() => setSnack(null)}>{snack}</Alert>
       </Snackbar>
     </Box>
+  );
+}
+
+// SessionPolicyDialog edits a user's per-user conditional-access override. Each
+// dimension (IP allowlist, concurrent-session limit) can independently override
+// the global policy or inherit it. Unchecking both and saving removes the
+// override entirely so the user follows the fleet-wide defaults.
+function SessionPolicyDialog({
+  user, onClose, onSaved,
+}: { user: User | null; onClose: () => void; onSaved: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["user-session-policy", user?.id],
+    queryFn: () => getUserSessionPolicy(user!.id),
+    enabled: Boolean(user),
+  });
+
+  const [overrideIP, setOverrideIP] = useState(false);
+  const [allowlist, setAllowlist] = useState("");
+  const [overrideLimit, setOverrideLimit] = useState(false);
+  const [limit, setLimit] = useState("0");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!data) return;
+    const ov = data.override;
+    setOverrideIP(ov?.ipAllowlist != null);
+    setAllowlist((ov?.ipAllowlist ?? []).join("\n"));
+    setOverrideLimit(ov?.maxConcurrentSessions != null);
+    setLimit(String(ov?.maxConcurrentSessions ?? 0));
+    setError(null);
+  }, [data]);
+
+  const parseAllowlist = () => allowlist.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const ipAllowlist = overrideIP ? parseAllowlist() : null;
+      const maxConcurrentSessions = overrideLimit ? Math.max(0, Number(limit) || 0) : null;
+      if (ipAllowlist == null && maxConcurrentSessions == null) {
+        await clearUserSessionPolicy(user!.id);
+      } else {
+        await setUserSessionPolicy(user!.id, { ipAllowlist, maxConcurrentSessions });
+      }
+    },
+    onSuccess: () => {
+      onSaved(`Access policy saved: ${user?.username}`);
+      void qc.invalidateQueries({ queryKey: ["user-session-policy", user?.id] });
+      onClose();
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(msg ?? "Could not save policy.");
+    },
+  });
+
+  const g = data?.global;
+  return (
+    <Dialog open={Boolean(user)} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Access policy — {user?.username}</DialogTitle>
+      <DialogContent dividers>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Override the fleet-wide conditional-access policy for this user. Each control below either
+          overrides the global default or inherits it.
+        </Typography>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        <Stack spacing={2}>
+          <Box>
+            <FormControlLabel
+              control={<Switch checked={overrideIP} onChange={(e) => setOverrideIP(e.target.checked)} />}
+              label="Override IP allowlist"
+            />
+            {overrideIP ? (
+              <TextField
+                fullWidth label="IP allowlist (one CIDR or IP per line)" multiline minRows={3}
+                value={allowlist} onChange={(e) => setAllowlist(e.target.value)}
+                sx={{ "& textarea": { fontFamily: "monospace" }, mt: 1 }}
+                helperText="Leave empty to exempt this user from any global IP restriction."
+              />
+            ) : (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
+                Inherits global: {g && g.ipAllowlist.length > 0 ? g.ipAllowlist.join(", ") : "no IP restriction"}
+              </Typography>
+            )}
+          </Box>
+          <Box>
+            <FormControlLabel
+              control={<Switch checked={overrideLimit} onChange={(e) => setOverrideLimit(e.target.checked)} />}
+              label="Override concurrent-session limit"
+            />
+            {overrideLimit ? (
+              <TextField
+                label="Max concurrent sessions" type="number" size="small" value={limit}
+                onChange={(e) => setLimit(e.target.value)} inputProps={{ min: 0 }}
+                sx={{ width: 240, ml: 4, mt: 1, display: "block" }}
+                helperText="0 = unlimited"
+              />
+            ) : (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
+                Inherits global: {g ? (g.maxConcurrentSessions > 0 ? `${g.maxConcurrentSessions} sessions` : "unlimited") : "—"}
+              </Typography>
+            )}
+          </Box>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>Save</Button>
+      </DialogActions>
+    </Dialog>
   );
 }

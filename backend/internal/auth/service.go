@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +24,17 @@ var (
 	ErrAccountDisabled    = errors.New("account is disabled")
 	ErrAccountLocked      = errors.New("account is locked")
 	ErrSessionInvalid     = errors.New("session invalid or expired")
+	// Conditional-access denials (surfaced as 403 at login).
+	ErrIPNotAllowed = errors.New("sign-in from your network is not permitted")
+	ErrSessionLimit = errors.New("maximum concurrent sessions reached")
 )
+
+// PolicyDenied reports whether err is a conditional-access denial (IP allowlist
+// or concurrent-session limit) — the login handlers surface these to the user
+// as a 403 rather than a generic session error.
+func PolicyDenied(err error) bool {
+	return errors.Is(err, ErrIPNotAllowed) || errors.Is(err, ErrSessionLimit)
+}
 
 // SessionHook is invoked after a session is created (login) or destroyed
 // (logout), letting the SSH identity layer mint/zeroize ephemeral credentials
@@ -161,7 +173,13 @@ func (s *Service) lockoutPolicy(ctx context.Context) (maxFailed, lockoutMinutes 
 }
 
 // CreateSession issues a session plus access/refresh/CSRF tokens for a user.
+// Conditional-access policy (IP allowlist + concurrent-session limit) is enforced
+// here — the single choke point every login path (local, LDAP, OIDC, SAML) funnels
+// through — so a denial cannot be bypassed via one particular IdP.
 func (s *Service) CreateSession(ctx context.Context, u *models.User, ip, ua string, mfaPassed bool) (*Tokens, error) {
+	if err := s.enforceSessionPolicy(ctx, u.ID, ip); err != nil {
+		return nil, err
+	}
 	refresh, refreshHash, err := NewRefreshToken()
 	if err != nil {
 		return nil, err
@@ -189,6 +207,61 @@ func (s *Service) CreateSession(ctx context.Context, u *models.User, ip, ua stri
 		Access: access, Refresh: refresh, CSRF: csrf, RefreshHash: refreshHash,
 		AccessExpiry: time.Now().Add(s.cfg.AccessTokenTTL), Session: sess,
 	}, nil
+}
+
+// enforceSessionPolicy applies the effective conditional-access policy (per-user
+// override falling back to the global policy) for a login. It returns
+// ErrIPNotAllowed / ErrSessionLimit on denial, nil otherwise. Any store error is
+// treated as "no restriction from that dimension" so a transient DB hiccup can't
+// lock every user out — the policy is a guardrail, not a second auth factor.
+func (s *Service) enforceSessionPolicy(ctx context.Context, userID uuid.UUID, ip string) error {
+	global := s.store.SessionPolicy(ctx)
+	override, _ := s.store.GetUserSessionPolicy(ctx, userID)
+
+	allow := global.IPAllowlist
+	if override != nil && override.IPAllowlist != nil {
+		allow = *override.IPAllowlist
+	}
+	if len(allow) > 0 && !ipAllowed(ip, allow) {
+		return ErrIPNotAllowed
+	}
+
+	max := global.MaxConcurrentSessions
+	if override != nil && override.MaxConcurrentSessions != nil {
+		max = *override.MaxConcurrentSessions
+	}
+	if max > 0 {
+		if n, err := s.store.CountActiveSessions(ctx, userID); err == nil && n >= max {
+			return ErrSessionLimit
+		}
+	}
+	return nil
+}
+
+// ipAllowed reports whether client IP `ip` is covered by any entry in the
+// allowlist. Entries may be CIDRs (10.0.0.0/8) or bare IPs (matched exactly). An
+// unparseable client IP is never allowed when a non-empty list is configured.
+func ipAllowed(ip string, cidrs []string) bool {
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return false
+	}
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if strings.Contains(c, "/") {
+			if _, n, err := net.ParseCIDR(c); err == nil && n.Contains(addr) {
+				return true
+			}
+			continue
+		}
+		if p := net.ParseIP(c); p != nil && p.Equal(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // Refresh rotates a refresh token and issues a new access token. The old refresh

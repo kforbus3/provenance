@@ -106,6 +106,7 @@ export function SettingsPage() {
           )}
           {tab === 1 && (
             <>
+              <SessionPolicyCard current={settings["session_policy"]} />
               <SSOCard />
               <SAMLCard />
               <LDAPCard />
@@ -473,6 +474,76 @@ function ScriptCard({ current }: { current: unknown }) {
         <Button variant="contained" sx={{ mt: 0.5 }} disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
         </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+// SessionPolicyCard configures the global conditional-access policy: which client
+// IP ranges may sign in, and how many concurrent sessions a user may hold. Both
+// are enforced at session creation across every login method (local, LDAP, OIDC,
+// SAML). Per-user overrides live on the user's detail dialog.
+function SessionPolicyCard({ current }: { current: unknown }) {
+  const qc = useQueryClient();
+  const cur = (current ?? {}) as { ipAllowlist?: string[]; maxConcurrentSessions?: number };
+  const [allowlist, setAllowlist] = useState((cur.ipAllowlist ?? []).join("\n"));
+  const [maxConcurrent, setMaxConcurrent] = useState(String(cur.maxConcurrentSessions ?? 0));
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const parseAllowlist = () =>
+    allowlist.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+
+  const save = useMutation({
+    mutationFn: () =>
+      setSetting("session_policy", {
+        ipAllowlist: parseAllowlist(),
+        maxConcurrentSessions: Math.max(0, Number(maxConcurrent) || 0),
+      }),
+    onSuccess: () => { setSaved(true); setError(null); void qc.invalidateQueries({ queryKey: ["settings"] }); },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(msg ?? "Could not save session policy.");
+    },
+  });
+
+  const restricted = parseAllowlist().length > 0;
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Conditional access</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Restrict who can sign in and hold sessions. Enforced at login for every method
+        (password, LDAP, OIDC, SAML). Leave the allowlist empty to allow any network, and the
+        session limit at 0 for unlimited. These are the fleet-wide defaults; you can override
+        them per user from a user's details.
+      </Typography>
+      {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+      <Stack spacing={2} sx={{ maxWidth: 520 }}>
+        <TextField
+          label="IP allowlist (one CIDR or IP per line)"
+          placeholder={"10.0.0.0/8\n203.0.113.5"}
+          value={allowlist} multiline minRows={3}
+          onChange={(e) => { setAllowlist(e.target.value); setSaved(false); }}
+          sx={{ "& textarea": { fontFamily: "monospace" } }}
+          helperText={restricted
+            ? "Only clients in these ranges may sign in. Your current IP must be included, or the save is rejected to prevent lockout."
+            : "Empty — sign-in is allowed from any network."}
+        />
+        <TextField
+          label="Max concurrent sessions per user" type="number" value={maxConcurrent}
+          onChange={(e) => { setMaxConcurrent(e.target.value); setSaved(false); }}
+          inputProps={{ min: 0 }} sx={{ width: 280 }} size="small"
+          helperText="0 = unlimited. New logins are refused once a user is at the limit."
+        />
+        <Box>
+          <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+            {saved ? "Saved" : "Save"}
+          </Button>
+        </Box>
+        <Typography variant="caption" color="text.secondary">
+          Accurate client IPs behind a reverse proxy require FLEET_TRUSTED_PROXIES to be set
+          (off by default) — otherwise the allowlist sees the proxy's address, not the user's.
+        </Typography>
       </Stack>
     </Paper>
   );

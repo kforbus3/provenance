@@ -143,6 +143,36 @@ export async function userLoginHistory(id: string): Promise<AuthEvent[]> {
   return data.events ?? [];
 }
 
+// Per-user conditional-access override. A null field on the override inherits the
+// global policy; a present-but-empty ipAllowlist opts the user out of any global
+// IP restriction. `override` is null when the user has no override set.
+export interface SessionPolicy {
+  ipAllowlist: string[];
+  maxConcurrentSessions: number;
+}
+export interface UserSessionPolicyOverride {
+  ipAllowlist: string[] | null;
+  maxConcurrentSessions: number | null;
+  updatedAt: string;
+}
+export async function getUserSessionPolicy(
+  id: string,
+): Promise<{ override: UserSessionPolicyOverride | null; global: SessionPolicy }> {
+  const { data } = await api.get<{ override: UserSessionPolicyOverride | null; global: SessionPolicy }>(
+    `/api/v1/users/${id}/session-policy`,
+  );
+  return data;
+}
+export async function setUserSessionPolicy(
+  id: string,
+  override: { ipAllowlist: string[] | null; maxConcurrentSessions: number | null },
+): Promise<void> {
+  await api.put(`/api/v1/users/${id}/session-policy`, override);
+}
+export async function clearUserSessionPolicy(id: string): Promise<void> {
+  await api.delete(`/api/v1/users/${id}/session-policy`);
+}
+
 export interface UserHostAccess {
   id: string;
   hostname: string;

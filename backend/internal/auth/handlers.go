@@ -204,6 +204,13 @@ func (h *Handler) mfaSetupConfirm(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) completeLogin(w http.ResponseWriter, r *http.Request, u *models.User, ip, ua string) {
 	tokens, err := h.svc.CreateSession(r.Context(), u, ip, ua, true)
 	if err != nil {
+		if PolicyDenied(err) {
+			_ = h.svc.store.RecordAuthEvent(r.Context(), models.AuthEvent{
+				UserID: &u.ID, Username: u.Username, Event: "login_blocked", IP: ip, UserAgent: ua,
+			})
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
