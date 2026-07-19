@@ -22,6 +22,11 @@ import (
 // ahead of the "/rdp/{hostId}" WebSocket route registered by Mount.
 func MountAPI(r chi.Router, d *app.Deps) {
 	h := &apiHandler{d: d}
+	// The replay stream authenticates via a ?token= query parameter, because the
+	// browser's Guacamole tunnel (an XHR) cannot set the Authorization header — the
+	// same pattern as the terminal/RDP WebSocket endpoints. Registered outside the
+	// Bearer-auth group.
+	r.Get("/rdp/recordings/{id}/stream", h.stream)
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/rdp/recordings", h.list)
@@ -70,8 +75,39 @@ func (h *apiHandler) get(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, rec)
 }
 
-// download streams the raw Guacamole recording so the browser can replay it with
-// Guacamole.SessionRecording.
+// stream serves the raw Guacamole recording for in-browser playback via a
+// Guacamole tunnel (Guacamole.SessionRecording fed by a StaticHTTPTunnel). It
+// authenticates via a ?token= query parameter since the tunnel XHR cannot set the
+// Authorization header. Served as a plain-text instruction stream so the browser's
+// XHR decodes it correctly (unlike the block-sliced Blob path).
+func (h *apiHandler) stream(w http.ResponseWriter, r *http.Request) {
+	p, err := h.d.Auth.AuthenticateToken(r.Context(), r.URL.Query().Get("token"))
+	if err != nil || p == nil || !p.Has("Session.Replay") {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid recording id")
+		return
+	}
+	rec, err := h.d.Store.GetRDPRecording(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	f, err := os.Open(h.resolvePath(rec.Path))
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = io.Copy(w, f)
+}
+
+// download streams the raw Guacamole recording as a file attachment (for saving a
+// copy locally). In-browser playback uses stream() instead.
 func (h *apiHandler) download(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

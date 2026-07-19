@@ -12,9 +12,9 @@ import Guacamole from "guacamole-common-js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
 import {
-  deleteRdpRecording, downloadRdpRecordingBlob, listRdpRecordings, rdpRecordingStats,
-  type RDPRecording,
+  deleteRdpRecording, listRdpRecordings, rdpRecordingStats, type RDPRecording,
 } from "../api/rdpRecordings";
+import { getAccessToken } from "../api/client";
 import { useAuthStore } from "../store/auth";
 
 function formatBytes(n: number): string {
@@ -46,43 +46,41 @@ function RdpPlayer({ id }: { id: string }) {
   const [duration, setDuration] = useState(0);
 
   useEffect(() => {
-    let cancelled = false;
-    let recording: Guacamole.SessionRecording | null = null;
+    if (!containerRef.current) return;
+    const token = getAccessToken();
+    if (!token) { setError("Not authenticated."); setLoading(false); return; }
 
-    downloadRdpRecordingBlob(id)
-      .then((blob) => {
-        if (cancelled || !containerRef.current) return;
-        recording = new Guacamole.SessionRecording(blob);
-        recRef.current = recording;
-        const display = recording.getDisplay();
-        const el = display.getElement();
-        containerRef.current.innerHTML = "";
-        containerRef.current.appendChild(el);
+    // Stream the recording through a Guacamole tunnel (rather than downloading a Blob
+    // and using the library's block-sliced Blob parser, which mis-parses the stream).
+    // The tunnel XHR can't set an auth header, so authenticate via ?token=.
+    const url = `/api/v1/rdp/recordings/${id}/stream?token=${encodeURIComponent(token)}`;
+    const tunnel = new Guacamole.StaticHTTPTunnel(url);
+    const recording = new Guacamole.SessionRecording(tunnel);
+    recRef.current = recording;
 
-        // Scale the desktop to fit the drawer width whenever its size is known.
-        const rescale = () => {
-          if (!containerRef.current) return;
-          const w = display.getWidth();
-          if (w > 0) {
-            const avail = containerRef.current.clientWidth;
-            display.scale(Math.min(1, avail / w));
-          }
-        };
-        display.onresize = rescale;
+    const display = recording.getDisplay();
+    containerRef.current.innerHTML = "";
+    containerRef.current.appendChild(display.getElement());
 
-        recording.onprogress = (dur: number) => setDuration(dur);
-        recording.onload = () => { setLoading(false); setDuration(recording!.getDuration()); rescale(); };
-        recording.onerror = (msg: string) => { setError(msg || "Could not load the recording."); setLoading(false); };
-        recording.onplay = () => setPlaying(true);
-        recording.onpause = () => setPlaying(false);
-        recording.onseek = (pos: number) => setPosition(pos);
-        setLoading(false);
-      })
-      .catch(() => { if (!cancelled) { setError("Could not download the recording."); setLoading(false); } });
+    const rescale = () => {
+      if (!containerRef.current) return;
+      const w = display.getWidth();
+      if (w > 0) {
+        display.scale(Math.min(1, containerRef.current.clientWidth / w));
+      }
+    };
+    display.onresize = rescale;
+
+    recording.onprogress = (dur: number) => { setDuration(dur); setLoading(false); };
+    recording.onload = () => { setLoading(false); setDuration(recording.getDuration()); rescale(); };
+    recording.onerror = (msg: string) => { setError(msg || "Could not load the recording."); setLoading(false); };
+    recording.onplay = () => setPlaying(true);
+    recording.onpause = () => setPlaying(false);
+    recording.onseek = (pos: number) => setPosition(pos);
+    recording.connect(); // begin streaming the recording
 
     return () => {
-      cancelled = true;
-      try { recording?.pause(); recording?.abort(); } catch { /* already gone */ }
+      try { recording.pause(); recording.disconnect(); recording.abort(); } catch { /* already gone */ }
       recRef.current = null;
     };
   }, [id]);

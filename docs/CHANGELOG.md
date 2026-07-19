@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.1 — Fix RDP recording playback
+
+RDP session recordings failed to play back ("Could not download the recording",
+Play greyed out) even though the recording file was valid. The player downloaded the
+recording as a Blob and used `Guacamole.SessionRecording`'s block-sliced Blob parser,
+which mis-parses the stream. Playback now streams the recording through a Guacamole
+tunnel (the reference-player approach) via a new token-authenticated endpoint
+(`GET /rdp/recordings/{id}/stream`). No migration; rebuild the backend + frontend.
+
 ## v0.17.0 — High Availability (multi-instance)
 
 Fleet Terminal can now run as **multiple backend instances** behind a load balancer,
