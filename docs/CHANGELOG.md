@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.7 — Downloaded RDP player: patch the Guacamole Blob bug
+
+The downloaded player threw `cannot read property "size" of undefined` — a bug in
+guacamole-common-js 1.5.0's `SessionRecording` Blob support (it calls its Blob parser
+with an unassigned `recordingBlob`). The vendored library is patched to assign
+`recordingBlob = source`, so the player replays the recording from the embedded Blob
+directly (original bytes, no fetch/tunnel). Backend-only.
+
 ## v0.17.6 — Downloaded RDP player: play from a Blob
 
 Second attempt at the downloaded-player black screen: the recording is now fed to

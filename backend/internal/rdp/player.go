@@ -13,6 +13,12 @@ import (
 //	cp frontend/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js \
 //	   backend/internal/rdp/player/guacamole.esm.min.js
 //
+// PATCHED: v1.5.0 has a bug in SessionRecording's Blob support — it calls
+// parseBlob(recordingBlob,…) with recordingBlob never assigned (undefined), throwing
+// "cannot read property size of undefined". The vendored copy fixes it by assigning
+// recordingBlob = source inline: `if(e instanceof Blob)g(t=e,w,S)` (was `g(t,w,S)`).
+// Re-apply this patch if you re-vendor the library.
+//
 //go:embed player/guacamole.esm.min.js
 var guacamoleESM []byte
 
