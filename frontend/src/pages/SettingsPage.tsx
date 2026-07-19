@@ -126,6 +126,7 @@ export function SettingsPage() {
             <>
               <WGSettingsCard current={settings["wireguard"]} />
               <ScanCard current={settings["scan_policy"]} />
+              <ScriptCard current={settings["scripts"]} />
             </>
           )}
           {tab === 4 && (
@@ -433,6 +434,41 @@ function ScanCard({ current }: { current: unknown }) {
           label="Scan timeout (minutes)" type="number" value={minutes}
           onChange={(e) => { setMinutes(e.target.value); setSaved(false); }}
           inputProps={{ min: 5, max: 480 }} sx={{ width: 220 }} size="small"
+        />
+        <Button variant="contained" sx={{ mt: 0.5 }} disabled={save.isPending} onClick={() => save.mutate()}>
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+// ScriptCard sets the maximum time a PowerShell script may run on a single Windows
+// host (the WinRM operation timeout) before it's stopped. The whole-run timeout scales
+// from this and the host/batch count.
+function ScriptCard({ current }: { current: unknown }) {
+  const qc = useQueryClient();
+  const cur = (current ?? {}) as { timeoutMinutes?: number };
+  const [minutes, setMinutes] = useState(String(cur.timeoutMinutes ?? 15));
+  const [saved, setSaved] = useState(false);
+  const save = useMutation({
+    mutationFn: () => setSetting("scripts", { timeoutMinutes: Math.min(240, Math.max(1, Number(minutes) || 15)) }),
+    onSuccess: () => { setSaved(true); void qc.invalidateQueries({ queryKey: ["settings"] }); },
+  });
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">PowerShell scripts</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        Maximum time a PowerShell script may run on a single Windows host before it's stopped.
+        Raise it for longer scripts; for very long jobs (e.g. installing large Windows updates)
+        prefer a fire-and-forget script that starts a scheduled task on the host and returns.
+        Range 1–240 minutes; defaults to 15.
+      </Typography>
+      <Stack direction="row" spacing={2} alignItems="flex-start">
+        <TextField
+          label="Script timeout (minutes)" type="number" value={minutes}
+          onChange={(e) => { setMinutes(e.target.value); setSaved(false); }}
+          inputProps={{ min: 1, max: 240 }} sx={{ width: 220 }} size="small"
         />
         <Button variant="contained" sx={{ mt: 0.5 }} disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}

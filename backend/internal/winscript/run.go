@@ -17,11 +17,10 @@ import (
 )
 
 const (
-	// defaultRunTimeout bounds a whole run (all hosts); perHostTimeout bounds one
-	// host's WinRM operation. runCertTTL is the jump-hop signer lifetime.
-	defaultRunTimeout = 30 * time.Minute
-	perHostTimeout    = 15 * time.Minute
-	runCertTTL        = 45 * time.Minute
+	// runCertTTL is the jump-hop signer lifetime. The per-host WinRM timeout is
+	// configurable in Settings (Store.ScriptTimeout); the whole-run timeout is
+	// derived from it and the host/batch count at launch.
+	runCertTTL = 45 * time.Minute
 
 	// winScriptConcurrency bounds how many hosts run at once. Each host opens one
 	// jump-host SSH connection (for the WinRM tunnel), so this stays well under the
@@ -85,7 +84,16 @@ func firstWinAddr(h *models.Host) string {
 // A nil userID means a scheduled/unattended run, which — having no interactive
 // check-out — uses only open-policy credentials (like the monitor's fact collection).
 func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, userID *uuid.UUID) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRunTimeout)
+	// Per-host WinRM timeout is operator-configurable in Settings. The whole-run
+	// timeout scales with how many concurrency-bounded batches the hosts take, plus
+	// a buffer, so a large fleet isn't cut off mid-run.
+	perHost := s.store.ScriptTimeout(context.Background())
+	batches := (len(hosts) + winScriptConcurrency - 1) / winScriptConcurrency
+	if batches < 1 {
+		batches = 1
+	}
+	runTimeout := perHost*time.Duration(batches) + 5*time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 
 	live := &liveRun{}
@@ -125,7 +133,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, use
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			out, code, failed := s.runOne(ctx, vaultKey, content, h, userID)
+			out, code, failed := s.runOne(ctx, vaultKey, content, h, userID, perHost)
 			live.append(fmt.Sprintf("===== %s =====\n%s\n", h.Hostname, out))
 			mu.Lock()
 			if failed {
@@ -144,7 +152,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, use
 		status, errMsg = "failed", "one or more hosts failed"
 	}
 	if ctx.Err() != nil {
-		status, errMsg = "failed", fmt.Sprintf("run exceeded the %s timeout", defaultRunTimeout)
+		status, errMsg = "failed", fmt.Sprintf("run exceeded the %s timeout", runTimeout)
 	}
 	exitCode := worstCode
 	complete(status, errMsg, &exitCode)
@@ -166,7 +174,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, use
 // code, and whether it failed. It opens exactly one jump-host connection and reuses it
 // for the WinRM tunnel (same per-host cost as a monitor probe). A nil userID uses the
 // open-policy credential path (scheduled/unattended runs).
-func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h *models.Host, userID *uuid.UUID) (string, int, bool) {
+func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h *models.Host, userID *uuid.UUID, perHost time.Duration) (string, int, bool) {
 	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), runCertTTL)
 	if err != nil {
 		return "could not issue jump credential: " + err.Error(), -1, true
@@ -189,7 +197,7 @@ func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h
 	}
 
 	dial := func(_ /*network*/, addr string) (net.Conn, error) { return jump.DialContext(ctx, "tcp", addr) }
-	stdout, stderr, code, err := winrm.RunScript(ctx, dial, firstWinAddr(h), user, pass, s.cfg.RDPWinRMPorts, content, perHostTimeout)
+	stdout, stderr, code, err := winrm.RunScript(ctx, dial, firstWinAddr(h), user, pass, s.cfg.RDPWinRMPorts, content, perHost)
 	if err != nil {
 		return "winrm error: " + err.Error(), -1, true
 	}

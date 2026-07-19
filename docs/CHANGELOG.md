@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.20.4 — Configurable PowerShell script timeout (Settings)
+
+The per-host PowerShell script timeout is now operator-configurable under
+**Settings → Hosts → PowerShell scripts** (was fixed at 15 minutes). Set how long
+a script may run on a single Windows host before it's stopped (1–240 minutes,
+default 15); the whole-run timeout scales from it and the concurrency-bounded
+batch count. Stored on the `scripts` setting object as `{"timeoutMinutes": N}`.
+
+For very long jobs (e.g. installing large Windows updates, which the WinRM session
+can't hold open — and which the Windows Update Agent won't install from a remote
+session anyway), the right pattern is a fire-and-forget script that starts a local
+scheduled task on the host and returns, rather than raising this timeout.
+
 ## v0.20.3 — Fix: release cluster leadership before the DB pool closes on shutdown
 
 A backend restart/deploy could leave the fleet showing all hosts **offline** for

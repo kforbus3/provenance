@@ -77,6 +77,32 @@ func (s *Store) RequireWireGuard(ctx context.Context) bool {
 	return v.RequireOverlay
 }
 
+// ScriptTimeout is the maximum time a PowerShell script may run on a single host,
+// configurable in Settings (stored on the "scripts" object as
+// {"timeoutMinutes": N}). Defaults to 15 minutes; clamped to [1, 240] so a bad
+// value can't disable the bound or hold a WinRM session open indefinitely.
+func (s *Store) ScriptTimeout(ctx context.Context) time.Duration {
+	const def, lo, hi = 15, 1, 240
+	raw, err := s.GetSetting(ctx, "scripts")
+	if err != nil {
+		return def * time.Minute
+	}
+	var v struct {
+		TimeoutMinutes int `json:"timeoutMinutes"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil || v.TimeoutMinutes <= 0 {
+		return def * time.Minute
+	}
+	m := v.TimeoutMinutes
+	if m < lo {
+		m = lo
+	}
+	if m > hi {
+		m = hi
+	}
+	return time.Duration(m) * time.Minute
+}
+
 // ListSettings returns every setting keyed by name.
 func (s *Store) ListSettings(ctx context.Context) (map[string]json.RawMessage, error) {
 	rows, err := s.pool.Query(ctx, `SELECT key, value FROM settings ORDER BY key`)
