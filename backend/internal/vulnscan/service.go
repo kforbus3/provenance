@@ -268,6 +268,33 @@ func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.
 			findings = append(findings, f)
 		}
 	}
+
+	// Third-party (non-Microsoft) app CVEs: inventory installed software over the
+	// same WinRM connection, persist it, map the curated apps to CPEs, and scan the
+	// resulting SBOM with grype (NVD). Additive to the MSRC findings; best-effort.
+	if sw, serr := winrm.CollectSoftware(ctx, dial, cands[0], user, pass, s.cfg.RDPWinRMPorts, 3*time.Minute); serr == nil {
+		items := make([]models.WindowsSoftware, 0, len(sw))
+		for _, x := range sw {
+			items = append(items, models.WindowsSoftware{Name: x.Name, Version: x.Version, Publisher: x.Publisher})
+		}
+		if perr := s.store.ReplaceWindowsSoftware(ctx, h.ID, items); perr != nil {
+			s.log.Warn("vuln scan: persist software", "host", h.Hostname, "err", perr)
+		}
+		if sbom, mapped := buildSBOM(sw); mapped > 0 {
+			if tp, terr := s.scanSBOM(ctx, sbom); terr == nil {
+				findings = append(findings, tp...)
+				s.log.Info("windows third-party scan", "host", h.Hostname,
+					"installed", len(sw), "mapped", mapped, "findings", len(tp))
+			} else {
+				s.log.Warn("vuln scan: third-party SBOM scan", "host", h.Hostname, "err", terr)
+			}
+		} else {
+			s.log.Info("windows third-party scan", "host", h.Hostname, "installed", len(sw), "mapped", 0)
+		}
+	} else {
+		s.log.Debug("vuln scan: software collect", "host", h.Hostname, "err", serr)
+	}
+
 	return findings, nil
 }
 

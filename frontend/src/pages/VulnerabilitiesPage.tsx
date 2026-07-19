@@ -62,7 +62,8 @@ export function VulnerabilitiesPage() {
           <Typography variant="h5">Vulnerabilities</Typography>
           <Typography variant="body2" color="text.secondary">
             Linux hosts: match installed packages against a CVE database (Grype), scored by CVSS.
-            Windows hosts: the CVEs remediated by missing security updates, from Microsoft's update metadata.
+            Windows hosts: missing Microsoft security updates (via MSRC) plus curated third-party apps
+            (installed software → CPE → Grype/NVD).
           </Typography>
         </Box>
         <Tooltip title="Refresh"><Button startIcon={<RefreshIcon />} onClick={refresh} sx={{ mr: 1 }}>Refresh</Button></Tooltip>

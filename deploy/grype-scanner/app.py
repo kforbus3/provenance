@@ -127,6 +127,38 @@ async def scan(request: Request):
             return JSONResponse({"error": "could not parse grype output"}, status_code=500)
 
 
+@app.post("/scan-sbom")
+async def scan_sbom(request: Request):
+    """Scan a CycloneDX/SPDX SBOM (JSON) whose components carry CPEs.
+
+    Used for Windows third-party apps: the backend inventories installed software,
+    maps it to CPEs, and posts an SBOM here; grype matches the CPEs against NVD.
+    """
+    body = await request.body()
+    if not body:
+        return JSONResponse({"error": "empty sbom"}, status_code=400)
+    if len(body) > MAX_SCAN_UPLOAD:
+        return JSONResponse({"error": "payload too large"}, status_code=413)
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        f.write(body)
+        path = f.name
+    try:
+        proc = subprocess.run(
+            ["grype", f"sbom:{path}", "-o", "json"],
+            capture_output=True, timeout=SCAN_TIMEOUT, env=BASE_ENV,
+        )
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"error": "scan timed out"}, status_code=504)
+    finally:
+        os.remove(path)
+    if proc.returncode != 0:
+        return JSONResponse({"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=500)
+    try:
+        return JSONResponse(_normalize(json.loads(proc.stdout)))
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "could not parse grype output"}, status_code=500)
+
+
 @app.get("/db/status")
 def db_status():
     proc = subprocess.run(["grype", "db", "status"], capture_output=True, env=BASE_ENV, timeout=60)

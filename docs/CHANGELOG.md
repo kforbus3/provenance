@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.23.1 — Windows third-party app CVE coverage (CPE → grype)
+
+Windows vuln scans now also cover **third-party applications** — Chrome, Firefox,
+VLC, 7-Zip, OpenSSL, Node.js, Wireshark, etc. — alongside the Microsoft/MSRC
+findings, closing the gap versus the Linux package scan.
+
+- The scan inventories installed software over WinRM (v0.23.0), maps the **curated**
+  apps to **CPEs** (`internal/cpe` dictionary, precision-first), builds a CycloneDX
+  SBOM, and scans it with the existing **grype** sidecar (new `/scan-sbom` endpoint)
+  — matching the CPEs against NVD. Third-party findings merge with the MSRC ones.
+- Apps not in the curated dictionary are **not** guessed at (a wrong CPE would
+  mislead); coverage ("installed / mapped") is logged. The dictionary starts with
+  ~20 high-value apps and is meant to grow.
+
+**Deploy note:** the grype-scanner sidecar gained an endpoint, so rebuild it
+(`docker compose build grype-scanner && docker compose up -d grype-scanner`). No
+new CVE data source — it reuses grype's existing (online/offline) NVD database.
+
 ## v0.23.0 — Windows software inventory (over WinRM)
 
 Fleet now inventories the **installed applications** on Windows hosts, read over
