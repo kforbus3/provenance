@@ -66,7 +66,11 @@ const b=b64=>Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
 try{
   const src=new TextDecoder().decode(b(GUAC));
   const Guacamole=(await import(URL.createObjectURL(new Blob([src],{type:"text/javascript"})))).default;
-  const tunnel=new Guacamole.StaticHTTPTunnel("data:text/plain;base64,"+REC);
+  // Serve the embedded recording as a blob: URL (a real, chunk-streamed resource,
+  // like the in-app /stream endpoint) rather than a data: URL, which some browsers
+  // deliver as one giant chunk / mishandle under file://.
+  const recUrl=URL.createObjectURL(new Blob([b(REC)],{type:"text/plain"}));
+  const tunnel=new Guacamole.StaticHTTPTunnel(recUrl);
   const rec=new Guacamole.SessionRecording(tunnel);
   $("screen").appendChild(rec.getDisplay().getElement());
   const play=$("play"),seek=$("seek"),cur=$("cur"),dur=$("dur");

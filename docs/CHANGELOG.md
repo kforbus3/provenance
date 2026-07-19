@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.17.5 — Fix black screen in the downloaded RDP player
+
+The downloaded self-contained RDP player showed only a moving cursor on a black screen
+(the desktop image draws were lost) even though in-app playback rendered correctly. The
+embedded recording was served to the player via a large `data:` URL, which browsers
+deliver/stream differently (notably under `file://`); it is now served via a `blob:`
+URL — a real, chunk-streamed resource identical to the in-app playback path.
+Backend-only.
+
 ## v0.17.4 — Self-contained RDP recording player
 
 The RDP recording download is now a **self-contained HTML player** (double-click to
