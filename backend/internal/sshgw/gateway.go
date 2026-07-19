@@ -328,6 +328,38 @@ func (g *Gateway) DialAuthViaJump(ctx context.Context, sessionID, host string, p
 	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
 }
 
+// DialRawViaJump opens a raw TCP tunnel to host:port THROUGH the jump host,
+// authenticating the jump hop with the session's certificate. It returns the
+// target connection and the jump client; the caller must close BOTH when done
+// (close the returned net.Conn, then the *ssh.Client). Used to reach non-SSH
+// services on managed hosts (e.g. RDP on 3389) over the same overlay path.
+func (g *Gateway) DialRawViaJump(ctx context.Context, sessionID, host string, port int) (net.Conn, *ssh.Client, error) {
+	cred, ok := g.vaultLookup(sessionID)
+	if !ok {
+		return nil, nil, fmt.Errorf("no live credential for session")
+	}
+	jumpSigner := cred.CertSigner()
+	if jumpSigner == nil {
+		return nil, nil, fmt.Errorf("session credential unavailable")
+	}
+	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+		User:            g.cfg.JumpUser,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
+		HostKeyCallback: g.hostKeyCallback(),
+		Timeout:         15 * time.Second,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial jump host: %w", err)
+	}
+	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	tunnel, err := jumpClient.DialContext(ctx, "tcp", target)
+	if err != nil {
+		_ = jumpClient.Close()
+		return nil, nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
+	}
+	return tunnel, jumpClient, nil
+}
+
 // DialKeyViaJump bootstraps a host *through the jump host* using a raw key signer
 // for the host, while the session certificate authenticates to the jump host.
 // Use when the backend cannot reach the host directly but the jump host can.

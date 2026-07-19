@@ -11,13 +11,13 @@ import (
 
 const hostCols = `id, hostname, description, environment, owner,
 	COALESCE(address,''), COALESCE(host(wg_address),''), ssh_port, ssh_user,
-	tags, enrolled, auth_method, credential_id, created_at, updated_at`
+	tags, enrolled, auth_method, credential_id, protocol, rdp_port, created_at, updated_at`
 
 func scanHost(row pgx.Row) (*models.Host, error) {
 	var h models.Host
 	err := row.Scan(&h.ID, &h.Hostname, &h.Description, &h.Environment, &h.Owner,
 		&h.Address, &h.WGAddress, &h.SSHPort, &h.SSHUser, &h.Tags, &h.Enrolled,
-		&h.AuthMethod, &h.CredentialID, &h.CreatedAt, &h.UpdatedAt)
+		&h.AuthMethod, &h.CredentialID, &h.Protocol, &h.RDPPort, &h.CreatedAt, &h.UpdatedAt)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -37,6 +37,8 @@ type HostInput struct {
 	Tags         []string
 	AuthMethod   string     // fleet_cert (default) | vault_password | vault_ssh_key
 	CredentialID *uuid.UUID // vault secret when AuthMethod is vaulted
+	Protocol     string     // ssh (default) | rdp
+	RDPPort      int        // RDP port when Protocol is rdp (default 3389)
 }
 
 func (in HostInput) authMethod() string {
@@ -46,6 +48,20 @@ func (in HostInput) authMethod() string {
 	default:
 		return "fleet_cert"
 	}
+}
+
+func (in HostInput) protocol() string {
+	if in.Protocol == "rdp" {
+		return "rdp"
+	}
+	return "ssh"
+}
+
+func (in HostInput) rdpPort() int {
+	if in.RDPPort <= 0 || in.RDPPort > 65535 {
+		return 3389
+	}
+	return in.RDPPort
 }
 
 // CreateHost inserts a host plus empty inventory/status rows.
@@ -62,11 +78,11 @@ func (s *Store) CreateHost(ctx context.Context, in HostInput) (*models.Host, err
 	var h *models.Host
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO hosts (hostname, description, environment, owner, address, wg_address, ssh_port, ssh_user, tags, auth_method, credential_id)
-			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::inet,$7,$8,$9,$10,$11)
+			INSERT INTO hosts (hostname, description, environment, owner, address, wg_address, ssh_port, ssh_user, tags, auth_method, credential_id, protocol, rdp_port)
+			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::inet,$7,$8,$9,$10,$11,$12,$13)
 			RETURNING `+hostCols,
 			in.Hostname, in.Description, in.Environment, in.Owner, in.Address, in.WGAddress,
-			in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID)
+			in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID, in.protocol(), in.rdpPort())
 		var err error
 		h, err = scanHost(row)
 		if err != nil {
@@ -297,10 +313,10 @@ func (s *Store) UpdateHost(ctx context.Context, id uuid.UUID, in HostInput) (*mo
 	row := s.pool.QueryRow(ctx, `
 		UPDATE hosts SET hostname=$2, description=$3, environment=$4, owner=$5,
 			address=NULLIF($6,''), wg_address=NULLIF($7,'')::inet, ssh_port=$8, ssh_user=$9,
-			tags=$10, auth_method=$11, credential_id=$12, updated_at=now()
+			tags=$10, auth_method=$11, credential_id=$12, protocol=$13, rdp_port=$14, updated_at=now()
 		WHERE id=$1 RETURNING `+hostCols,
 		id, in.Hostname, in.Description, in.Environment, in.Owner, in.Address, in.WGAddress,
-		in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID)
+		in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID, in.protocol(), in.rdpPort())
 	return scanHost(row)
 }
 

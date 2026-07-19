@@ -83,3 +83,32 @@ func zero(b []byte) {
 		b[i] = 0
 	}
 }
+
+// PasswordFor resolves a host's attached vault credential to a raw username and
+// password (for protocols like RDP that need them directly, brokered by guacd).
+// It enforces the same check-out policy as SSH injection. The plaintext is for the
+// broker only — never the operator.
+func PasswordFor(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Host, userID uuid.UUID) (username, password string, err error) {
+	if host.CredentialID == nil {
+		return "", "", errors.New("no credential is attached to this host")
+	}
+	secret, err := st.GetVaultSecret(ctx, *host.CredentialID)
+	if err != nil {
+		return "", "", errors.New("the attached credential no longer exists")
+	}
+	if secret.AccessPolicy != "open" {
+		active, _ := st.HasActiveCheckout(ctx, *host.CredentialID, userID)
+		if !active {
+			return "", "", errors.New("check out this credential before connecting to the host")
+		}
+	}
+	sealed, err := st.GetVaultSecretSealed(ctx, *host.CredentialID)
+	if err != nil {
+		return "", "", errors.New("could not load the attached credential")
+	}
+	plaintext, err := secretbox.Open(vaultKey, sealed)
+	if err != nil {
+		return "", "", errors.New("could not decrypt the attached credential")
+	}
+	return secret.Username, string(plaintext), nil
+}

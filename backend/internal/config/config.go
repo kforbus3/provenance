@@ -173,6 +173,13 @@ type Config struct {
 	// falls back to the CA passphrase in development. Resolve it via VaultKey().
 	VaultPassphrase string
 
+	// GuacdAddr is the address of the guacd sidecar that brokers RDP/VNC desktop
+	// sessions. RDPProxyHost is the hostname guacd uses to reach THIS backend for
+	// the per-session tunnel to the target (the backend's name on the internal
+	// network, e.g. the compose service name).
+	GuacdAddr    string
+	RDPProxyHost string
+
 	// SFTP upload size cap in bytes (0 = unlimited).
 	MaxUploadBytes int64
 
@@ -241,6 +248,8 @@ func Load() (*Config, error) {
 		BackupDir:              env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
 		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),
 		VaultPassphrase:        env("FLEET_VAULT_PASSPHRASE", ""),
+		GuacdAddr:              env("FLEET_GUACD_ADDR", "guacd:4822"),
+		RDPProxyHost:           env("FLEET_RDP_PROXY_HOST", "backend"),
 		MaxUploadBytes:         envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
 		LogLevel:               env("FLEET_LOG_LEVEL", "info"),
 		LogFormat:              env("FLEET_LOG_FORMAT", "json"),

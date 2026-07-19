@@ -14,6 +14,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import CableIcon from "@mui/icons-material/Cable";
 import TerminalIcon from "@mui/icons-material/Terminal";
+import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import FolderIcon from "@mui/icons-material/Folder";
 import LockPersonIcon from "@mui/icons-material/LockPerson";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -55,6 +56,7 @@ const EMPTY_FORM: HostInput = {
   hostname: "", description: "", environment: "", owner: "",
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
   authMethod: "fleet_cert", credentialId: null,
+  protocol: "ssh", rdpPort: 3389,
 };
 
 const fmtDate = (value?: string): string => formatDateTime(value);
@@ -139,6 +141,7 @@ const hostToForm = (h: Host): HostInput => ({
   owner: h.owner ?? "", address: h.address ?? "", wgAddress: h.wgAddress ?? "",
   sshPort: h.sshPort || 22, sshUser: h.sshUser ?? "", tags: h.tags ?? [],
   authMethod: h.authMethod ?? "fleet_cert", credentialId: h.credentialId ?? null,
+  protocol: h.protocol ?? "ssh", rdpPort: h.rdpPort || 3389,
 });
 
 // NewHostDialog collects the create/edit payload; tags are entered as a
@@ -184,6 +187,7 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
     onSubmit({
       ...form,
       sshPort: Number(form.sshPort) || 22,
+      rdpPort: Number(form.rdpPort) || 3389,
       tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
     });
   };
@@ -230,12 +234,34 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
             label="Tags" helperText="Comma-separated" value={tags}
             onChange={(e) => setTags(e.target.value)} fullWidth
           />
+          <Stack direction="row" spacing={2}>
+            <TextField select label="Protocol" value={form.protocol ?? "ssh"} fullWidth
+              helperText="How operators connect to this host"
+              onChange={(e) => setForm((f) => ({
+                ...f,
+                protocol: e.target.value,
+                // RDP requires a vaulted password credential.
+                authMethod: e.target.value === "rdp" && (f.authMethod ?? "fleet_cert") === "fleet_cert"
+                  ? "vault_password" : f.authMethod,
+              }))}>
+              <MenuItem value="ssh">SSH (terminal)</MenuItem>
+              <MenuItem value="rdp">RDP (Windows desktop)</MenuItem>
+            </TextField>
+            {form.protocol === "rdp" && (
+              <TextField
+                label="RDP Port" type="number" value={form.rdpPort ?? 3389}
+                onChange={set("rdpPort")} sx={{ width: 140 }}
+              />
+            )}
+          </Stack>
           <TextField select label="Authentication" value={form.authMethod ?? "fleet_cert"} fullWidth
-            helperText="How Fleet authenticates to this host"
+            helperText={form.protocol === "rdp"
+              ? "RDP is brokered with a vaulted password credential — the operator never sees it"
+              : "How Fleet authenticates to this host"}
             onChange={(e) => setForm((f) => ({ ...f, authMethod: e.target.value, credentialId: e.target.value === "fleet_cert" ? null : f.credentialId }))}>
-            <MenuItem value="fleet_cert">Fleet certificate (default)</MenuItem>
+            {form.protocol !== "rdp" && <MenuItem value="fleet_cert">Fleet certificate (default)</MenuItem>}
             <MenuItem value="vault_password">Vault credential — password</MenuItem>
-            <MenuItem value="vault_ssh_key">Vault credential — SSH key</MenuItem>
+            {form.protocol !== "rdp" && <MenuItem value="vault_ssh_key">Vault credential — SSH key</MenuItem>}
           </TextField>
           {form.authMethod && form.authMethod !== "fleet_cert" && (
             <TextField select label="Credential" value={form.credentialId ?? ""} fullWidth
@@ -447,22 +473,35 @@ export function HostsPage() {
             </IconButton>
           </Tooltip>
           <SupportBundleButton host={params.row} />
-          <Tooltip title="Open terminal in a new tab">
-            <IconButton
-              size="small" color="primary"
-              onClick={() => window.open(`/terminals/${params.row.id}`, "_blank", "noopener")}
-            >
-              <TerminalIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Browse files (SFTP) in a new tab">
-            <IconButton
-              size="small"
-              onClick={() => window.open(`/files/${params.row.id}`, "_blank", "noopener")}
-            >
-              <FolderIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+          {params.row.protocol === "rdp" ? (
+            <Tooltip title="Open Windows desktop (RDP) in a new tab">
+              <IconButton
+                size="small" color="primary"
+                onClick={() => window.open(`/desktop/${params.row.id}`, "_blank", "noopener")}
+              >
+                <DesktopWindowsIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <>
+              <Tooltip title="Open terminal in a new tab">
+                <IconButton
+                  size="small" color="primary"
+                  onClick={() => window.open(`/terminals/${params.row.id}`, "_blank", "noopener")}
+                >
+                  <TerminalIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Browse files (SFTP) in a new tab">
+                <IconButton
+                  size="small"
+                  onClick={() => window.open(`/files/${params.row.id}`, "_blank", "noopener")}
+                >
+                  <FolderIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </>
+          )}
           <Tooltip title="Manage access (groups & users)">
             <IconButton size="small" onClick={() => setAccessTarget(params.row)}>
               <LockPersonIcon fontSize="small" />

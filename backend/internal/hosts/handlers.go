@@ -127,6 +127,8 @@ type hostReq struct {
 	Tags         []string   `json:"tags"`
 	AuthMethod   string     `json:"authMethod"`
 	CredentialID *uuid.UUID `json:"credentialId"`
+	Protocol     string     `json:"protocol"`
+	RDPPort      int        `json:"rdpPort"`
 }
 
 func (rq hostReq) toInput() store.HostInput {
@@ -135,6 +137,7 @@ func (rq hostReq) toInput() store.HostInput {
 		Owner: rq.Owner, Address: rq.Address, WGAddress: rq.WGAddress,
 		SSHPort: rq.SSHPort, SSHUser: rq.SSHUser, Tags: rq.Tags,
 		AuthMethod: rq.AuthMethod, CredentialID: rq.CredentialID,
+		Protocol: rq.Protocol, RDPPort: rq.RDPPort,
 	}
 }
 

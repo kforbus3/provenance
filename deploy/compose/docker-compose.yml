@@ -167,6 +167,15 @@ services:
       - grype-db:/home/scanner/.cache/grype
     networks: [fleet]
 
+  # Apache Guacamole daemon: brokers RDP (and VNC) desktop sessions for the
+  # backend. Internal only, reachable at guacd:4822. The backend tunnels the
+  # target's RDP port to guacd through the jump host, so guacd only ever connects
+  # back to the backend — it needs no direct route to managed hosts.
+  guacd:
+    image: guacamole/guacd:1.5.5
+    restart: unless-stopped
+    networks: [fleet]
+
 volumes:
   pgdata:
   redisdata:

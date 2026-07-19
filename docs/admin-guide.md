@@ -724,6 +724,33 @@ a host requires `Host.Edit` plus access to that credential (`Credential.Manage`,
 default to Fleet certificate authentication; use vaulted auth for appliances, network
 gear, and legacy systems that can't accept Fleet's ephemeral certificates.
 
+## 18c. Windows desktops (RDP)
+
+Fleet brokers **RDP (Windows desktop)** sessions to the browser through the bundled
+**guacd** sidecar (Apache Guacamole daemon), so operators reach a full remote desktop
+from the same UI as SSH — no local RDP client, no direct network route to the host.
+
+**How it reaches the host.** The backend tunnels the target's RDP port **through the
+jump host** (the same path as SSH) and exposes it to guacd as an ephemeral local
+proxy. guacd therefore only ever connects back to the backend — it needs **no route to
+managed hosts**, and RDP traffic still rides the WireGuard overlay / jump hop. Two
+settings wire the pair (defaults match the bundled compose file):
+`FLEET_GUACD_ADDR` (where the backend reaches guacd, default `guacd:4822`) and
+`FLEET_RDP_PROXY_HOST` (how guacd reaches the backend, default `backend`).
+
+**Configure an RDP host.** On the host form set **Protocol** to **RDP (Windows
+desktop)** and the **RDP Port** (default `3389`). RDP has no Fleet-certificate mode:
+**Authentication** must be a **Vault credential — password**, so the Windows account
+password is stored in the vault and **injected into guacd in memory** — the operator
+never sees it and it never reaches the browser. Attaching the credential enforces the
+same `Host.Edit` + credential-access checks as SSH injection, and if the credential
+has a check-out policy the operator must hold an active check-out to connect.
+
+**Connect.** An RDP host shows a **desktop** action (instead of terminal/SFTP) that
+opens the live desktop in a new tab, gated by `Host.Connect` and the usual per-host
+access checks. Each connection is audited (`session.rdp_start`). Clipboard, drive
+redirection, multi-monitor, and session recording for RDP are not in this release.
+
 ## 19. Live session shadowing
 
 **Session shadowing** is read-only, real-time viewing of an **active** terminal

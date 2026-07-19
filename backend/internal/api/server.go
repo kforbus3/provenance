@@ -55,6 +55,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/playbook"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
+	"github.com/fleet-terminal/backend/internal/rdp"
 	"github.com/fleet-terminal/backend/internal/reports"
 	"github.com/fleet-terminal/backend/internal/reportsched"
 	"github.com/fleet-terminal/backend/internal/scan"
@@ -703,6 +704,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
 	vault.Mount(r, deps, s.Gateway)
+	rdp.Mount(r, deps, s.Gateway)
 	auditapi.Mount(r, deps)
 	reports.Mount(r, deps)
 	reportsched.Mount(r, s.Auth, s.reportSched)

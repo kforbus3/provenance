@@ -75,6 +75,8 @@ export interface Host {
   tags: string[];
   authMethod: string; // fleet_cert | vault_password | vault_ssh_key
   credentialId?: string | null;
+  protocol: string; // ssh | rdp
+  rdpPort: number;
   enrolled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +104,8 @@ export interface HostInput {
   tags: string[];
   authMethod?: string;
   credentialId?: string | null;
+  protocol?: string;
+  rdpPort?: number;
 }
 
 export async function listHosts(): Promise<HostListResponse> {

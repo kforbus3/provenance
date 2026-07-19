@@ -193,8 +193,12 @@ type Host struct {
 	// at connect time). CredentialID references the vault secret when vaulted.
 	AuthMethod   string     `json:"authMethod"`
 	CredentialID *uuid.UUID `json:"credentialId,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	// Protocol is how Fleet reaches the host: ssh (default; terminal/SFTP) or rdp
+	// (Windows desktop brokered through guacd, on RDPPort).
+	Protocol  string    `json:"protocol"`
+	RDPPort   int       `json:"rdpPort"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 
 	Groups    []string       `json:"groups,omitempty"`
 	Inventory *HostInventory `json:"inventory,omitempty"`

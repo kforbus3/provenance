@@ -22,6 +22,7 @@ const AuditPage = lazy(() => named(import("./pages/AuditPage"), "AuditPage"));
 const ApprovalsPage = lazy(() => named(import("./pages/ApprovalsPage"), "ApprovalsPage"));
 const SessionsPage = lazy(() => named(import("./pages/SessionsPage"), "SessionsPage"));
 const TerminalPage = lazy(() => named(import("./pages/TerminalPage"), "TerminalPage"));
+const RdpPage = lazy(() => named(import("./pages/RdpPage"), "RdpPage"));
 const TerminalsPage = lazy(() => named(import("./pages/TerminalsPage"), "TerminalsPage"));
 const FilesPage = lazy(() => named(import("./pages/FilesPage"), "FilesPage"));
 const SecurityPage = lazy(() => named(import("./pages/SecurityPage"), "SecurityPage"));
@@ -67,6 +68,10 @@ export function App() {
           <Route
             path="/terminals/:hostId"
             element={<ProtectedRoute permission="Host.Connect"><TerminalPage /></ProtectedRoute>}
+          />
+          <Route
+            path="/desktop/:hostId"
+            element={<ProtectedRoute permission="Host.Connect"><RdpPage /></ProtectedRoute>}
           />
           <Route
             path="/files/:hostId"

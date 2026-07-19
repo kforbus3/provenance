@@ -5,6 +5,31 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.15.0 — Windows desktops (RDP)
+
+Fleet brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
+terminals and SFTP — no local RDP client, no direct route to the host.
+
+- **Live RDP in the browser.** Set a host's **Protocol** to **RDP** and pick its port
+  (default `3389`); the host then shows a **desktop** action that opens the live
+  Windows desktop in a new tab, gated by `Host.Connect` and the usual per-host access
+  checks. Mouse and keyboard are wired through; each connect is audited
+  (`session.rdp_start`).
+- **Brokered through the jump host.** The backend tunnels the target's RDP port over
+  the **same jump-host / WireGuard path as SSH** and hands the bundled **guacd**
+  sidecar an ephemeral local proxy — so guacd only ever connects back to the backend
+  and needs no route to managed hosts.
+- **Credential injected, never seen.** RDP authenticates with a **vaulted password
+  credential** injected into guacd **in memory** — the operator never sees it and it
+  never reaches the browser. Attaching it enforces the same `Host.Edit` +
+  credential-access (and check-out policy) rules as SSH injection.
+
+*Deploy:* add the `guacd` service (bundled in `deploy/compose/docker-compose.yml`) to
+your stack. Optional `FLEET_GUACD_ADDR` / `FLEET_RDP_PROXY_HOST` default to the
+compose service names. Migration `0033` (host `protocol` + `rdp_port`) applies
+automatically. Clipboard, drive redirection, multi-monitor, and RDP session recording
+are not in this release.
+
 ## v0.14.0 — Credential vault: injection, check-out, rotation
 
 The credential vault becomes a full PAM workflow: connect through credentials
