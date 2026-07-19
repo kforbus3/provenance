@@ -87,11 +87,16 @@ func (m *Monitor) Run(ctx context.Context, leader func() bool) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			t.Reset(m.interval)
 			if leader != nil && !leader() {
+				// Not leader yet (e.g. still acquiring leadership after a restart):
+				// poll frequently so the first sweep happens within seconds of taking
+				// over, instead of waiting up to a full interval (which would keep
+				// hosts showing offline long after leadership is settled).
+				t.Reset(5 * time.Second)
 				continue
 			}
 			m.sweep(ctx)
+			t.Reset(m.interval)
 		}
 	}
 }

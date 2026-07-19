@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.24.1 — Monitor sweeps promptly on becoming leader (offline-after-restart)
+
+Compounding the leader-handoff delay: while an instance wasn't leader yet, the
+monitor's timer still reset to the full sweep **interval** each tick, so even once
+it became leader the first host sweep could be up to a whole interval away — hosts
+stayed "offline" long after leadership settled. Now the monitor **polls every 5s
+until it's leader**, then sweeps and returns to the normal interval — so the first
+sweep lands within ~5s of taking over. Combined with v0.23.3's stranded-lock
+reclaim, a restart's offline window is now bounded to a few tens of seconds
+(instant on a clean handoff).
+
 ## v0.24.0 — Scheduled vulnerability scans + CVE database updates
 
 The **Schedules** page gains two new kinds:
