@@ -50,6 +50,7 @@ Usage:
   fleetctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
   fleetctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
   fleetctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
+  fleetctl fips flag-stale-passwords                     Force non-FIPS local passwords to change (re-hash) on next login
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)
@@ -185,8 +186,15 @@ func run(cmd string, args []string) error {
 			return fipsCheck(ctx, pool, cfg)
 		case "reseal-secrets":
 			return fipsReseal(st, cfg)
+		case "flag-stale-passwords":
+			n, err := st.FlagNonFIPSPasswords(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("flagged %d local account(s) with a non-FIPS password hash to change on next login\n", n)
+			return nil
 		default:
-			return fmt.Errorf("usage: fleetctl fips check | fleetctl fips reseal-secrets")
+			return fmt.Errorf("usage: fleetctl fips check | reseal-secrets | flag-stale-passwords")
 		}
 
 	default:
@@ -235,6 +243,21 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 		}
 		rows.Close()
 		_ = anyArgon
+	}
+
+	// MFA factors: TOTP secrets re-seal with the other at-rest secrets, but a WebAuthn
+	// passkey registered before FIPS may use an EdDSA (Ed25519) COSE key, which FIPS
+	// forbids — that can't be told from the sealed blob here, so we surface the count
+	// and advise re-registration rather than assert compliance.
+	var totpN, webauthnN int
+	_ = pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE kind='totp' AND confirmed),
+		count(*) FILTER (WHERE kind='webauthn' AND confirmed) FROM mfa_methods`).Scan(&totpN, &webauthnN)
+	fmt.Printf("  MFA factors            : %d TOTP, %d WebAuthn\n", totpN, webauthnN)
+	if webauthnN > 0 {
+		fmt.Println("      note: WebAuthn passkeys registered before FIPS may use EdDSA (not")
+		fmt.Println("            FIPS-approved). Have those users re-register a passkey under FIPS")
+		fmt.Println("            (new registrations are restricted to ES256/RS256).")
 	}
 
 	fmt.Println("--------------------------------------")

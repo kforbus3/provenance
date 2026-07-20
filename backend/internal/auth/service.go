@@ -128,6 +128,17 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		s.applyFailure(ctx, u.ID)
 		return nil, ErrInvalidCredentials
 	}
+	// Verify-then-upgrade-on-login (FIPS M5): if the stored hash uses a non-active KDF
+	// (an Argon2id hash under FIPS), transparently re-hash the just-verified plaintext
+	// to the active algorithm and persist it. Best-effort — a failure here must never
+	// block an otherwise-valid login; the next login simply retries.
+	if PasswordNeedsRehash(hash) {
+		if newHash, herr := HashPassword(password); herr == nil {
+			if serr := s.store.SetPasswordHash(ctx, u.ID, newHash); serr != nil {
+				s.log.Warn("rehash password on login", "user", u.Username, "err", serr)
+			}
+		}
+	}
 	return u, nil
 }
 
