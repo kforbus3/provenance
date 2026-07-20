@@ -38,7 +38,9 @@ export interface VulnFinding {
   description?: string;
 }
 
-export async function triggerVulnScan(target: { hostId?: string; groupId?: string }): Promise<string[]> {
+export async function triggerVulnScan(
+  target: { hostId?: string; groupId?: string; hostIds?: string[] },
+): Promise<string[]> {
   const { data } = await api.post<{ scanIds: string[] }>("/api/v1/vuln-scans", target);
   return data.scanIds ?? [];
 }

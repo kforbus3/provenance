@@ -28,6 +28,7 @@ import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
   getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
   removeHostGroup, removeHostUser, updateHost, setHostMaintenance, clearHostMaintenance, maintenanceActive,
+  bulkRefreshHosts, bulkHostMaintenance, bulkHostTags,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
 import {
@@ -40,6 +41,7 @@ import {
   type HostScan, type ScanFinding,
 } from "../api/scans";
 import { downloadSupportBundle } from "../api/support";
+import { triggerVulnScan } from "../api/vulnscan";
 import { useAuthStore } from "../store/auth";
 import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
@@ -96,11 +98,14 @@ function SupportBundleButton({ host }: { host: Host }) {
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
+type BulkAction = "scan" | "refresh" | "maintenance" | "tags";
+
 interface ToolbarProps {
   selectedCount: number;
   onNew: () => void;
   onDelete: () => void;
   onRefresh: () => void;
+  onBulk: (action: BulkAction) => void;
 }
 
 // Teach the DataGrid slotProps about our custom toolbar's extra props.
@@ -108,20 +113,33 @@ declare module "@mui/x-data-grid" {
   interface ToolbarPropsOverrides extends ToolbarProps {}
 }
 
-function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh }: ToolbarProps) {
+function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh, onBulk }: ToolbarProps) {
+  const [bulkEl, setBulkEl] = useState<null | HTMLElement>(null);
+  const pick = (a: BulkAction) => { setBulkEl(null); onBulk(a); };
   return (
     <GridToolbarContainer sx={{ p: 1, gap: 1 }}>
       <GridToolbarQuickFilter />
       <Box sx={{ flexGrow: 1 }} />
       {selectedCount > 0 && (
-        <Button
-          color="error"
-          size="small"
-          startIcon={<DeleteIcon />}
-          onClick={onDelete}
-        >
-          Delete ({selectedCount})
-        </Button>
+        <>
+          <Button size="small" variant="outlined" onClick={(e) => setBulkEl(e.currentTarget)}>
+            Bulk actions ({selectedCount})
+          </Button>
+          <Menu anchorEl={bulkEl} open={Boolean(bulkEl)} onClose={() => setBulkEl(null)}>
+            <MenuItem onClick={() => pick("scan")}>Run vulnerability scan</MenuItem>
+            <MenuItem onClick={() => pick("refresh")}>Refresh facts</MenuItem>
+            <MenuItem onClick={() => pick("maintenance")}>Maintenance…</MenuItem>
+            <MenuItem onClick={() => pick("tags")}>Edit tags…</MenuItem>
+          </Menu>
+          <Button
+            color="error"
+            size="small"
+            startIcon={<DeleteIcon />}
+            onClick={onDelete}
+          >
+            Delete ({selectedCount})
+          </Button>
+        </>
       )}
       <Tooltip title="Refresh">
         <IconButton size="small" onClick={onRefresh}>
@@ -392,6 +410,27 @@ export function HostsPage() {
   const [detailsTarget, setDetailsTarget] = useState<Host | null>(null);
   const [scanTarget, setScanTarget] = useState<Host | null>(null);
   const [editTarget, setEditTarget] = useState<Host | null>(null);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  const [bulkMaintOpen, setBulkMaintOpen] = useState(false);
+  const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
+
+  const selectedIds = selection.map(String);
+  const bulkScanMut = useMutation({
+    mutationFn: () => triggerVulnScan({ hostIds: selectedIds }),
+    onSuccess: (ids) => setBulkMsg(`Started ${ids.length} vulnerability scan(s)`),
+    onError: () => setBulkMsg("Bulk scan failed"),
+  });
+  const bulkRefreshMut = useMutation({
+    mutationFn: () => bulkRefreshHosts(selectedIds),
+    onSuccess: (n) => setBulkMsg(`Queued a facts refresh on ${n} host(s)`),
+    onError: () => setBulkMsg("Bulk refresh failed"),
+  });
+  const onBulk = (action: BulkAction) => {
+    if (action === "scan") bulkScanMut.mutate();
+    else if (action === "refresh") bulkRefreshMut.mutate();
+    else if (action === "maintenance") setBulkMaintOpen(true);
+    else if (action === "tags") setBulkTagsOpen(true);
+  };
 
   const createMut = useMutation({
     mutationFn: createHost,
@@ -679,6 +718,7 @@ export function HostsPage() {
               onNew: () => setDialogOpen(true),
               onDelete: () => deleteMut.mutate(selection.map(String)),
               onRefresh: () => void refetch(),
+              onBulk,
             },
           }}
           sx={{ "& .MuiDataGrid-cell": { alignItems: "flex-start", py: 0.5 } }}
@@ -720,7 +760,110 @@ export function HostsPage() {
       <HostDetailsDialog key={detailsTarget?.id ?? "details-none"} host={detailsTarget} onClose={() => setDetailsTarget(null)} />
 
       <HostScanDialog key={scanTarget?.id ?? "scan-none"} host={scanTarget} onClose={() => setScanTarget(null)} />
+
+      <BulkMaintenanceDialog
+        open={bulkMaintOpen} count={selectedIds.length}
+        onClose={() => setBulkMaintOpen(false)}
+        onApply={async (minutes) => {
+          try {
+            const n = await bulkHostMaintenance(selectedIds, minutes);
+            setBulkMsg(minutes > 0 ? `Put ${n} host(s) in maintenance` : `Cleared maintenance on ${n} host(s)`);
+            void qc.invalidateQueries({ queryKey: ["hosts"] });
+          } catch { setBulkMsg("Bulk maintenance failed"); }
+          setBulkMaintOpen(false);
+        }}
+      />
+      <BulkTagsDialog
+        open={bulkTagsOpen} count={selectedIds.length}
+        onClose={() => setBulkTagsOpen(false)}
+        onApply={async (add, remove) => {
+          try {
+            const n = await bulkHostTags(selectedIds, { add, remove });
+            setBulkMsg(`Updated tags on ${n} host(s)`);
+            void qc.invalidateQueries({ queryKey: ["hosts"] });
+          } catch { setBulkMsg("Bulk tag update failed"); }
+          setBulkTagsOpen(false);
+        }}
+      />
+      <Snackbar
+        open={!!bulkMsg} autoHideDuration={4000} onClose={() => setBulkMsg(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="info" onClose={() => setBulkMsg(null)}>{bulkMsg}</Alert>
+      </Snackbar>
     </Box>
+  );
+}
+
+// BulkMaintenanceDialog silences (or clears) alerts on the selected hosts.
+function BulkMaintenanceDialog({
+  open, count, onClose, onApply,
+}: { open: boolean; count: number; onClose: () => void; onApply: (minutes: number) => void }) {
+  const [minutes, setMinutes] = useState(60);
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>Maintenance — {count} host(s)</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Silence offline / updates-pending / scan-failure alerts on the selected hosts while you
+          patch or reboot them, or clear an active window.
+        </Typography>
+        <TextField
+          select fullWidth size="small" label="Silence for" value={minutes}
+          onChange={(e) => setMinutes(Number(e.target.value))}
+        >
+          <MenuItem value={60}>1 hour</MenuItem>
+          <MenuItem value={240}>4 hours</MenuItem>
+          <MenuItem value={480}>8 hours</MenuItem>
+          <MenuItem value={1440}>24 hours</MenuItem>
+        </TextField>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button color="warning" onClick={() => onApply(0)}>Clear maintenance</Button>
+        <Button variant="contained" onClick={() => onApply(minutes)}>Silence</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// BulkTagsDialog adds and/or removes tags across the selected hosts.
+function BulkTagsDialog({
+  open, count, onClose, onApply,
+}: { open: boolean; count: number; onClose: () => void; onApply: (add: string[], remove: string[]) => void }) {
+  const [add, setAdd] = useState("");
+  const [remove, setRemove] = useState("");
+  const parse = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+  const addTags = parse(add);
+  const removeTags = parse(remove);
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>Edit tags — {count} host(s)</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField
+            label="Add tags" size="small" fullWidth value={add}
+            onChange={(e) => setAdd(e.target.value)}
+            helperText="Comma- or newline-separated"
+          />
+          <TextField
+            label="Remove tags" size="small" fullWidth value={remove}
+            onChange={(e) => setRemove(e.target.value)}
+            helperText="Comma- or newline-separated"
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          disabled={addTags.length === 0 && removeTags.length === 0}
+          onClick={() => onApply(addTags, removeTags)}
+        >
+          Apply
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

@@ -365,6 +365,22 @@ func (s *Store) CountHostsByStatus(ctx context.Context) (map[string]int, error) 
 	return out, rows.Err()
 }
 
+// AddHostTag appends a tag to a host (no-op if already present). Atomic, so it's
+// safe under the concurrent per-host writes a bulk tag action performs.
+func (s *Store) AddHostTag(ctx context.Context, id uuid.UUID, tag string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET tags = array_append(tags, $2), updated_at=now()
+		 WHERE id=$1 AND NOT ($2 = ANY(tags))`, id, tag)
+	return err
+}
+
+// RemoveHostTag removes a tag from a host (no-op if absent).
+func (s *Store) RemoveHostTag(ctx context.Context, id uuid.UUID, tag string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET tags = array_remove(tags, $2), updated_at=now() WHERE id=$1`, id, tag)
+	return err
+}
+
 // SetHostMaintenance sets (or clears, with nil) a host's maintenance window.
 func (s *Store) SetHostMaintenance(ctx context.Context, hostID uuid.UUID, until *time.Time) error {
 	_, err := s.pool.Exec(ctx, `UPDATE hosts SET maintenance_until=$2, updated_at=now() WHERE id=$1`, hostID, until)

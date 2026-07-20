@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.25.0 — Bulk host actions
+
+Act on many hosts at once. Select hosts in the grid (the checkboxes were already
+there) and a **Bulk actions** menu appears in the toolbar:
+
+- **Run vulnerability scan** on the whole selection (Linux via grype, Windows via
+  MSRC + third-party — each host scanned by the right method).
+- **Refresh facts** — queue a re-collect of pending updates / inventory on the
+  next monitor sweep for every selected host.
+- **Maintenance…** — silence alerts on the selection for 1 / 4 / 8 / 24 hours, or
+  clear an active window, in one step (pairs with v0.24.3 maintenance windows).
+- **Edit tags…** — add and/or remove tags across the selection (comma- or
+  newline-separated); useful for driving dynamic-group membership at scale.
+
+Each action reuses the existing per-host operation and its permission
+(`Host.Scan` / `Host.View` / `Host.Edit`), and the server filters the selection to
+hosts you can actually access — so a bulk action can never reach a host you
+couldn't touch one at a time. Bulk operations are bounded (max 1000 hosts/request)
+and audited (`host.bulk_*`). New endpoints: `POST /hosts/bulk/refresh`,
+`/hosts/bulk/maintenance`, `/hosts/bulk/tags`, and `hostIds` on `POST /vuln-scans`.
+
+*Note:* a **raw ad-hoc command runner** (type a shell command, run it on a
+selection) is intentionally **not** here yet — it's the execution surface the
+upcoming **privileged-command policy** work will govern, so it ships alongside
+those guardrails rather than ungoverned. Today, run vetted automation in bulk via
+the Automation page (playbooks/scripts) or a group schedule.
+
 ## v0.24.5 — Fix: couldn't schedule a Vulnerability DB update
 
 The **Create** button stayed greyed out when adding a **Vulnerability DB update**

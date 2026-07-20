@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,6 +32,11 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/{id}/refresh", h.refreshFacts)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/{id}/maintenance", h.setMaintenance)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Delete("/hosts/{id}/maintenance", h.clearMaintenance)
+		// Bulk actions over an ad-hoc host selection. Each mirrors its single-host
+		// counterpart's permission, applied to every host in the list.
+		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/bulk/refresh", h.bulkRefresh)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/maintenance", h.bulkMaintenance)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/tags", h.bulkTags)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/wg/next", h.nextWG)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts", h.create)
@@ -133,6 +139,167 @@ func (h *handler) clearMaintenance(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "host.maintenance_clear", id.String(), nil)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"cleared": true})
+}
+
+// maxBulkHosts bounds a single bulk action so one request can't fan out without
+// limit (and, for maintenance/tags, hammer the DB). The UI selects from a paged
+// grid, so this is generous headroom, not a real constraint.
+const maxBulkHosts = 1000
+
+// parseHostIDs decodes and validates a bulk request's host-id list, writing the
+// appropriate 400 and returning ok=false on any problem.
+func parseHostIDs(w http.ResponseWriter, raw []string) ([]uuid.UUID, bool) {
+	if len(raw) == 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "hostIds is required")
+		return nil, false
+	}
+	if len(raw) > maxBulkHosts {
+		httpx.WriteError(w, http.StatusBadRequest, "too many hosts in one request")
+		return nil, false
+	}
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid host id: "+s)
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+// accessibleIDs filters ids to those the principal may act on. Admin-equivalent
+// principals (Host.Enroll / Admin.All) see everything; others are limited to
+// hosts they can access — matching the per-host access check the single-host
+// handlers apply, so a bulk action can't reach hosts a user couldn't touch one at
+// a time.
+func (h *handler) accessibleIDs(r *http.Request, ids []uuid.UUID) []uuid.UUID {
+	p := auth.MustPrincipal(r)
+	if p.Has("Host.Enroll") || p.Has("Admin.All") {
+		return ids
+	}
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, id); err == nil && ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// bulkRefresh marks each selected host's facts stale so the monitor re-collects
+// pending updates (and Windows software) on its next sweep — the batch form of
+// the per-host "Refresh facts" action.
+func (h *handler) bulkRefresh(w http.ResponseWriter, r *http.Request) {
+	var rq struct {
+		HostIDs []string `json:"hostIds"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&rq)
+	ids, ok := parseHostIDs(w, rq.HostIDs)
+	if !ok {
+		return
+	}
+	ids = h.accessibleIDs(r, ids)
+	done := 0
+	for _, id := range ids {
+		if err := h.d.Store.MarkHostFactsStale(r.Context(), id); err == nil {
+			done++
+		}
+	}
+	h.audit(r, "host.bulk_refresh", "", map[string]any{"requested": len(ids), "applied": done})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"applied": done})
+}
+
+// bulkMaintenance sets (minutes > 0) or clears (minutes <= 0) a maintenance
+// window on every selected host at once.
+func (h *handler) bulkMaintenance(w http.ResponseWriter, r *http.Request) {
+	var rq struct {
+		HostIDs []string `json:"hostIds"`
+		Minutes int      `json:"minutes"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&rq)
+	ids, ok := parseHostIDs(w, rq.HostIDs)
+	if !ok {
+		return
+	}
+	ids = h.accessibleIDs(r, ids)
+	var until *time.Time
+	if rq.Minutes > 0 {
+		if rq.Minutes > 60*24*30 {
+			rq.Minutes = 60 * 24 * 30
+		}
+		t := time.Now().Add(time.Duration(rq.Minutes) * time.Minute)
+		until = &t
+	}
+	done := 0
+	for _, id := range ids {
+		if err := h.d.Store.SetHostMaintenance(r.Context(), id, until); err == nil {
+			done++
+		}
+	}
+	h.audit(r, "host.bulk_maintenance", "", map[string]any{
+		"requested": len(ids), "applied": done, "minutes": rq.Minutes,
+	})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"applied": done})
+}
+
+// bulkTags adds and/or removes tags across every selected host. Adds are applied
+// before removes, so passing the same tag in both is a no-op rather than ambiguous.
+func (h *handler) bulkTags(w http.ResponseWriter, r *http.Request) {
+	var rq struct {
+		HostIDs []string `json:"hostIds"`
+		Add     []string `json:"add"`
+		Remove  []string `json:"remove"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&rq)
+	ids, ok := parseHostIDs(w, rq.HostIDs)
+	if !ok {
+		return
+	}
+	add := cleanTags(rq.Add)
+	remove := cleanTags(rq.Remove)
+	if len(add) == 0 && len(remove) == 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "at least one tag to add or remove is required")
+		return
+	}
+	ids = h.accessibleIDs(r, ids)
+	done := 0
+	for _, id := range ids {
+		var err error
+		for _, t := range add {
+			if e := h.d.Store.AddHostTag(r.Context(), id, t); e != nil {
+				err = e
+			}
+		}
+		for _, t := range remove {
+			if e := h.d.Store.RemoveHostTag(r.Context(), id, t); e != nil {
+				err = e
+			}
+		}
+		if err == nil {
+			done++
+		}
+	}
+	h.audit(r, "host.bulk_tags", "", map[string]any{
+		"requested": len(ids), "applied": done, "add": add, "remove": remove,
+	})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"applied": done})
+}
+
+// cleanTags trims, de-dupes, and drops empty tag strings.
+func cleanTags(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range in {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out
 }
 
 // software returns a Windows host's installed-software inventory.

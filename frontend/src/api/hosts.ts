@@ -198,6 +198,24 @@ export function maintenanceActive(h: { maintenanceUntil?: string }): boolean {
   return !!h.maintenanceUntil && new Date(h.maintenanceUntil).getTime() > Date.now();
 }
 
+// Bulk actions over an ad-hoc host selection. Each returns the number of hosts the
+// action was applied to (the server filters to hosts the caller can access).
+export async function bulkRefreshHosts(hostIds: string[]): Promise<number> {
+  const { data } = await api.post<{ applied: number }>("/api/v1/hosts/bulk/refresh", { hostIds });
+  return data.applied;
+}
+export async function bulkHostMaintenance(hostIds: string[], minutes: number): Promise<number> {
+  // minutes <= 0 clears the maintenance window on every selected host.
+  const { data } = await api.post<{ applied: number }>("/api/v1/hosts/bulk/maintenance", { hostIds, minutes });
+  return data.applied;
+}
+export async function bulkHostTags(
+  hostIds: string[], tags: { add?: string[]; remove?: string[] },
+): Promise<number> {
+  const { data } = await api.post<{ applied: number }>("/api/v1/hosts/bulk/tags", { hostIds, ...tags });
+  return data.applied;
+}
+
 export async function getHostStatusStats(): Promise<HostStatusStats> {
   const { data } = await api.get<HostStatusStats>("/api/v1/hosts/stats/status");
   return data;

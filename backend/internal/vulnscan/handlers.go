@@ -83,12 +83,13 @@ func (h *handler) msrcImport(w http.ResponseWriter, r *http.Request) {
 }
 
 type triggerReq struct {
-	HostID  string `json:"hostId"`
-	GroupID string `json:"groupId"`
+	HostID  string   `json:"hostId"`
+	GroupID string   `json:"groupId"`
+	HostIDs []string `json:"hostIds"` // bulk: scan an ad-hoc selection of hosts
 }
 
-// trigger starts a scan for one host or every host in a group, returning the
-// created scan ids.
+// trigger starts a scan for one host, an ad-hoc list of hosts, or every host in a
+// group, returning the created scan ids.
 func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
 	var rq triggerReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
@@ -110,6 +111,23 @@ func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		hosts = []*models.Host{host}
+	case len(rq.HostIDs) > 0:
+		if len(rq.HostIDs) > 1000 {
+			httpx.WriteError(w, http.StatusBadRequest, "too many hosts in one request")
+			return
+		}
+		for _, s := range rq.HostIDs {
+			id, err := uuid.Parse(s)
+			if err != nil {
+				httpx.WriteError(w, http.StatusBadRequest, "invalid host id: "+s)
+				return
+			}
+			host, err := h.d.Store.GetHost(r.Context(), id)
+			if err != nil {
+				continue // skip hosts that vanished between selection and submit
+			}
+			hosts = append(hosts, host)
+		}
 	case rq.GroupID != "":
 		id, err := uuid.Parse(rq.GroupID)
 		if err != nil {
