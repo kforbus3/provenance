@@ -60,6 +60,32 @@ export async function getJobs(): Promise<JobsResponse> {
   return data;
 }
 
+export interface FipsAlgCount {
+  algorithm: string;
+  count: number;
+  fips: boolean;
+}
+
+// FipsReadiness mirrors `fleetctl fips check`: whether each FIPS-critical artifact
+// is on an approved algorithm, plus an overall readiness verdict.
+export interface FipsReadiness {
+  moduleActive: boolean;
+  configFips: boolean;
+  overlay: string;
+  overlayOk: boolean;
+  caKeyAlgo: string;
+  caKeyOk: boolean;
+  passwords: FipsAlgCount[];
+  totp: number;
+  webauthn: number;
+  ready: boolean;
+}
+
+export async function getFipsReadiness(): Promise<FipsReadiness> {
+  const { data } = await api.get<FipsReadiness>("/api/v1/system/fips");
+  return data;
+}
+
 // downloadBackup streams a pg_dump of the database and saves it locally.
 export async function downloadBackup(): Promise<void> {
   const res = await api.get("/api/v1/system/backup", { responseType: "blob" });
