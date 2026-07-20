@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.26.0 — Expiry & Rotation dashboard
+
+A new **Expiry & Rotation** page (nav; `System.Configure`) gives one at-a-glance
+view of the credentials and keys that need lifecycle attention, so nothing silently
+ages out:
+
+- **API tokens** that are **expired**, **expiring** within 30 days, or **unused**
+  (never used and older than 30 days, or not used in 90 days).
+- **Vault credentials** not **rotated** in over 90 days (based on the last version
+  written — pairs with the `Credential.Rotate` action).
+- **User passwords** older than 90 days (active accounts).
+- **CA keys** older than a year (rotation hygiene, informational).
+
+The page shows per-status counts and a table ranked most-urgent first. Everything
+is **metadata only** — no secret material is ever read or shown. Backed by a single
+read-only endpoint, `GET /lifecycle/expiry`; a healthy fleet shows "nothing needs
+attention." Thresholds are fixed for now (they may become configurable later).
+
 ## v0.25.0 — Bulk host actions
 
 Act on many hosts at once. Select hosts in the grid (the checkboxes were already

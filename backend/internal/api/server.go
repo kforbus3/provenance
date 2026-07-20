@@ -48,6 +48,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/krl"
+	"github.com/fleet-terminal/backend/internal/lifecycle"
 	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
@@ -813,6 +814,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	auditapi.Mount(r, deps)
 	reports.Mount(r, deps)
 	reportsched.Mount(r, s.Auth, s.reportSched)
+	lifecycle.Mount(r, deps)
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)
 	approvals.Mount(r, deps)
