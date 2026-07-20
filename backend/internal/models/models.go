@@ -184,10 +184,14 @@ type Host struct {
 	Owner       string    `json:"owner"`
 	Address     string    `json:"address,omitempty"`
 	WGAddress   string    `json:"wgAddress,omitempty"`
-	SSHPort     int       `json:"sshPort"`
-	SSHUser     string    `json:"sshUser"`
-	Tags        []string  `json:"tags"`
-	Enrolled    bool      `json:"enrolled"`
+	// Overlay is the per-host reachability transport chosen at enrollment: "" (use the
+	// deployment default FLEET_OVERLAY), "wireguard", "openvpn", or "strongswan". The
+	// assigned overlay address lives in WGAddress regardless of transport.
+	Overlay  string   `json:"overlay,omitempty"`
+	SSHPort  int      `json:"sshPort"`
+	SSHUser  string   `json:"sshUser"`
+	Tags     []string `json:"tags"`
+	Enrolled bool     `json:"enrolled"`
 	// AuthMethod is how the host authenticates: fleet_cert (default, ephemeral
 	// certificates) | vault_password | vault_ssh_key (a vaulted credential injected
 	// at connect time). CredentialID references the vault secret when vaulted.

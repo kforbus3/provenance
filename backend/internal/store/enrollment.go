@@ -135,6 +135,15 @@ func (s *Store) SetHostWGAddress(ctx context.Context, hostID uuid.UUID, wgAddr s
 	return err
 }
 
+// SetHostOverlay records the reachability transport a host was enrolled with
+// (wireguard | openvpn | strongswan), so re-enrollment and monitoring know which
+// overlay the host is on regardless of the current deployment default.
+func (s *Store) SetHostOverlay(ctx context.Context, hostID uuid.UUID, overlay string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET overlay=$2, updated_at=now() WHERE id=$1`, hostID, overlay)
+	return err
+}
+
 // SetHostWGPublicKey records a host's WireGuard public key so a standby jump host can
 // rebuild the overlay peer list from Postgres on failover.
 func (s *Store) SetHostWGPublicKey(ctx context.Context, hostID uuid.UUID, pubKey string) error {
