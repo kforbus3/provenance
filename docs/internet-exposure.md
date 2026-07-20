@@ -102,6 +102,54 @@ replace — per-account lockout (`lockout_policy` setting: `max_failed`,
    ranges, add an NPM Access List to allow only those — the single biggest
    reduction in attack surface.
 
+### Using your own certificate (instead of Let's Encrypt)
+
+If you have a certificate from your own CA — a commercial/purchased cert, an
+enterprise/internal PKI, or a wildcard you manage — use it in place of the
+Let's Encrypt request:
+
+1. In NPM, go to **SSL Certificates → Add SSL Certificate → Custom**.
+2. Provide, in **PEM** format:
+   - **Certificate** — your leaf certificate followed by any intermediate/chain
+     certificates (the "full chain"). Order: leaf first, then intermediates.
+   - **Certificate Key** — the matching **private key**, and it must be
+     **unencrypted** (NPM cannot prompt for a passphrase; run
+     `openssl rsa -in enc.key -out plain.key` to strip one first).
+   - **Intermediate Certificate** — only if your chain isn't already bundled into
+     the Certificate field.
+3. On the Proxy Host's **SSL tab**, choose that custom certificate instead of
+   "Request a new SSL Certificate", and keep **Force SSL**, **HTTP/2**, and
+   **HSTS** enabled exactly as with Let's Encrypt.
+
+Requirements and caveats:
+
+- **The certificate's SAN (or CN) must match the hostname in `FLEET_PUBLIC_URL`.**
+  Fleet derives the cookie domain, CORS origin, and the **WebAuthn/passkey relying
+  party ID** from that hostname, so a mismatched cert breaks login and passkeys, not
+  just the TLS padlock.
+- **Internal/enterprise CA:** every client browser must **trust your CA** (its root
+  installed in the OS/browser trust store), or users get a certificate warning and
+  WebAuthn refuses to run. Public/commercial certs need no client-side trust.
+- **Renewal is on you.** Unlike Let's Encrypt (which NPM auto-renews), a custom cert
+  does **not** auto-renew — replace it in NPM before it expires (re-upload, or script
+  it against the NPM API). Fleet's Expiry & Rotation dashboard tracks *Fleet's* CA
+  and tokens, **not** the front-door proxy certificate, so track that one separately.
+
+### Not using Nginx Proxy Manager?
+
+Any TLS-terminating reverse proxy works — **Caddy** (automatic HTTPS with your own
+cert via the `tls <cert> <key>` directive), **nginx** (`ssl_certificate` /
+`ssl_certificate_key`), **Traefik**, or a Kubernetes ingress. Whatever you use must:
+
+- terminate TLS with your certificate and forward to the **frontend** container;
+- pass **WebSocket** upgrades through (the terminal, SFTP, RDP, and the live events
+  feed are all WebSockets);
+- set `X-Forwarded-For` / `X-Forwarded-Proto`, and — so Fleet sees the real client
+  IP for the audit log, rate limiter, and the conditional-access IP allowlist — add
+  the proxy's address to **`FLEET_TRUSTED_PROXIES`** (see the conditional-access
+  notes); and
+- match **`FLEET_PUBLIC_URL`** to the external `https://…` hostname the cert covers.
+
 ## Defense-in-depth in front of NPM
 
 - **Cloudflare (recommended):** proxy the DNS record and enable WAF, Bot Fight
