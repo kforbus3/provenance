@@ -116,6 +116,12 @@ type Config struct {
 	WGJumpEndpoint string // endpoint managed hosts dial to reach the jump, host:port
 	WGPort         int    // WireGuard listen port on managed hosts
 
+	// OVPNPort is the OpenVPN server's UDP listen port on the jump host, used only
+	// when Overlay=openvpn (FIPS). The OpenVPN overlay reuses WGSubnet/WGJumpIP so a
+	// host's assigned overlay address (stored in the same wg_address column) works
+	// identically for dialing regardless of overlay type.
+	OVPNPort int
+
 	// Host metric history (append-only time series behind trend queries). Sample
 	// bounds how often a per-host sample is recorded (independent of the 30s probe
 	// cadence, to keep the table small); Retention bounds how long samples are kept
@@ -259,6 +265,7 @@ func Load() (*Config, error) {
 		WGJumpIP:               env("FLEET_WG_JUMP_IP", "10.100.0.1"),
 		WGJumpEndpoint:         env("FLEET_WG_JUMP_ENDPOINT", "jumphost:51820"),
 		WGPort:                 envInt("FLEET_WG_PORT", 51820),
+		OVPNPort:               envInt("FLEET_OVPN_PORT", 1194),
 		MetricHistorySample:    envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
 		MetricHistoryRetention: envDuration("FLEET_METRIC_HISTORY_RETENTION", 720*time.Hour),
 		MonitorConcurrency:     envInt("FLEET_MONITOR_CONCURRENCY", 6),
