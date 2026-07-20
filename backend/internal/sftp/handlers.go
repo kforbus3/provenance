@@ -5,10 +5,12 @@ package sftp
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -37,6 +39,11 @@ func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
 		pr.With(d.Auth.RequirePermission("File.Transfer")).Get("/hosts/{id}/sftp/download", h.download)
 		pr.With(d.Auth.RequirePermission("File.Transfer")).Get("/hosts/{id}/sftp/download-dir", h.downloadDir)
 		pr.With(d.Auth.RequirePermission("File.Transfer")).Post("/hosts/{id}/sftp/upload", h.upload)
+		// In-browser config-file editor: read a text file, and write it back with an
+		// automatic on-host backup. Same File.Transfer gate as upload (SFTP already
+		// permits overwriting arbitrary files — this is a nicer, audited UX over it).
+		pr.With(d.Auth.RequirePermission("File.Transfer")).Get("/hosts/{id}/sftp/read", h.readText)
+		pr.With(d.Auth.RequirePermission("File.Transfer")).Post("/hosts/{id}/sftp/write", h.writeText)
 		pr.With(d.Auth.RequirePermission("File.Transfer")).Get("/hosts/{id}/sftp/transfers", h.transfers)
 	})
 }
@@ -386,6 +393,169 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	h.finishTransfer(r, rec, n)
 	h.audit(r, p, "sftp.upload", host.ID, remote, n)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": remote, "size": n})
+}
+
+// maxEditBytes caps the size of a file the config editor will read or write. The
+// editor is for config files, not data; a larger file is rejected rather than
+// loaded into a browser textarea.
+const maxEditBytes = 2 << 20 // 2 MiB
+
+// readText returns a remote text file's contents for the in-browser editor. It
+// refuses files larger than maxEditBytes and files that don't look like text
+// (contain a NUL byte), so the editor never mangles a binary.
+func (h *handler) readText(w http.ResponseWriter, r *http.Request) {
+	client, p, host, cleanup, ok := h.connect(w, r)
+	if !ok {
+		return
+	}
+	defer cleanup()
+
+	remote := r.URL.Query().Get("path")
+	if remote == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "path required")
+		return
+	}
+	f, err := client.Open(remote)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "open: "+err.Error())
+		return
+	}
+	defer f.Close()
+	if fi, serr := f.Stat(); serr == nil {
+		if fi.IsDir() {
+			httpx.WriteError(w, http.StatusBadRequest, "path is a directory")
+			return
+		}
+		if fi.Size() > maxEditBytes {
+			httpx.WriteError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("file is %d bytes; the editor handles up to %d", fi.Size(), maxEditBytes))
+			return
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxEditBytes+1))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadGateway, "read: "+err.Error())
+		return
+	}
+	if len(data) > maxEditBytes {
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "file too large to edit")
+		return
+	}
+	if bytesContainNUL(data) {
+		httpx.WriteError(w, http.StatusUnsupportedMediaType, "file appears to be binary, not text")
+		return
+	}
+	h.audit(r, p, "sftp.read", host.ID, remote, int64(len(data)))
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": remote, "content": string(data), "size": len(data)})
+}
+
+// writeText overwrites a remote text file for the editor, taking an on-host backup
+// of the previous contents first (best-effort) and preserving the file's mode. The
+// backup is written alongside the file as <name>.fleetbak-<timestamp>.
+func (h *handler) writeText(w http.ResponseWriter, r *http.Request) {
+	client, p, host, cleanup, ok := h.connect(w, r)
+	if !ok {
+		return
+	}
+	defer cleanup()
+
+	var rq struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+		Backup  *bool  `json:"backup"` // default true
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxEditBytes+1024)).Decode(&rq); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if rq.Path == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "path required")
+		return
+	}
+	if len(rq.Content) > maxEditBytes {
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "content too large")
+		return
+	}
+
+	// Preserve the existing file's mode; back up its current contents first.
+	var mode os.FileMode = 0o644
+	backupPath := ""
+	if fi, serr := client.Stat(rq.Path); serr == nil {
+		if fi.IsDir() {
+			httpx.WriteError(w, http.StatusBadRequest, "path is a directory")
+			return
+		}
+		mode = fi.Mode().Perm()
+		if rq.Backup == nil || *rq.Backup {
+			if bp, berr := h.backupRemote(client, rq.Path); berr != nil {
+				httpx.WriteError(w, http.StatusBadGateway, "could not back up the file before writing: "+berr.Error())
+				return
+			} else {
+				backupPath = bp
+			}
+		}
+	}
+
+	dst, err := client.Create(rq.Path) // truncates existing
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadGateway, "could not open the file for writing: "+err.Error())
+		return
+	}
+	if _, werr := io.Copy(dst, strings.NewReader(rq.Content)); werr != nil {
+		_ = dst.Close()
+		httpx.WriteError(w, http.StatusBadGateway, "write: "+werr.Error())
+		return
+	}
+	if cerr := dst.Close(); cerr != nil {
+		httpx.WriteError(w, http.StatusBadGateway, "finalize write: "+cerr.Error())
+		return
+	}
+	_ = client.Chmod(rq.Path, mode) // best-effort: keep original permissions
+
+	h.finishTransfer(r, mustRecord(h, r, p, host, rq.Path), int64(len(rq.Content)))
+	h.audit(r, p, "sftp.edit", host.ID, rq.Path, int64(len(rq.Content)))
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": rq.Path, "size": len(rq.Content), "backup": backupPath})
+}
+
+// backupRemote copies a remote file to a timestamped sibling and returns the
+// backup path. Used before an edit overwrites the original.
+func (h *handler) backupRemote(client *pkgsftp.Client, remote string) (string, error) {
+	src, err := client.Open(remote)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	backup := remote + ".fleetbak-" + time.Now().Format("20060102-150405")
+	dst, err := client.Create(backup)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(dst, io.LimitReader(src, maxEditBytes)); err != nil {
+		_ = dst.Close()
+		return "", err
+	}
+	if err := dst.Close(); err != nil {
+		return "", err
+	}
+	return backup, nil
+}
+
+// mustRecord opens a transfer record for an edit (best-effort; nil is tolerated by
+// finishTransfer).
+func mustRecord(h *handler, r *http.Request, p *auth.Principal, host *models.Host, remote string) *store.SFTPTransfer {
+	rec, _ := h.d.Store.RecordSFTPTransfer(r.Context(), store.SFTPTransferInput{
+		UserID: &p.UserID, HostID: &host.ID, Direction: "upload", RemotePath: remote, Status: "started",
+	})
+	return rec
+}
+
+func bytesContainNUL(b []byte) bool {
+	for _, c := range b {
+		if c == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) transfers(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.27.0 — In-browser config-file editor
+
+Edit a remote text file — `/etc/nginx/nginx.conf`, a `.env`, a unit file — right in
+the **Files** browser, without downloading, editing locally, and re-uploading. Each
+file row now has an **Edit** (pencil) action that opens the contents in a monospace
+editor; **Save** writes it back over the same audited jump-host/SFTP path.
+
+- **Automatic on-host backup.** Before overwriting, Fleet copies the current file
+  to `<name>.fleetbak-<timestamp>` on the host (toggle off if you don't want it), so
+  a bad edit is always recoverable. The save reports where the backup went.
+- **Safe by construction.** The editor refuses files over 2 MiB or that look
+  binary (contain NUL), and **preserves the file's existing permissions** on save.
+  It's gated by the same **`File.Transfer`** permission and per-host access as
+  upload — this is a nicer, audited UX over a capability SFTP already had (you can
+  overwrite files today), not a new one. Reads and writes are audited
+  (`sftp.read` / `sftp.edit`).
+- New endpoints: `GET /hosts/{id}/sftp/read`, `POST /hosts/{id}/sftp/write`.
+
 ## v0.26.0 — Expiry & Rotation dashboard
 
 A new **Expiry & Rotation** page (nav; `System.Configure`) gives one at-a-glance

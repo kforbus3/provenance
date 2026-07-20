@@ -22,6 +22,26 @@ export async function listDir(hostId: string, path: string): Promise<SftpListing
   return data;
 }
 
+// readTextFile fetches a remote text file's contents for the in-browser editor.
+// The backend rejects files that are too large or binary.
+export async function readTextFile(hostId: string, path: string): Promise<{ content: string; size: number }> {
+  const { data } = await api.get<{ content: string; size: number }>(`/api/v1/hosts/${hostId}/sftp/read`, {
+    params: { path },
+  });
+  return data;
+}
+
+// writeTextFile overwrites a remote text file, taking an on-host backup first
+// (unless backup=false). Returns the backup path the server created (if any).
+export async function writeTextFile(
+  hostId: string, path: string, content: string, backup = true,
+): Promise<{ backup: string }> {
+  const { data } = await api.post<{ backup: string }>(`/api/v1/hosts/${hostId}/sftp/write`, {
+    path, content, backup,
+  });
+  return data;
+}
+
 // uploadFile streams a file to the host with progress. `name` may include a
 // relative subpath (folder uploads); the backend creates intermediate dirs.
 export async function uploadFile(

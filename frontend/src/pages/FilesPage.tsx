@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  Alert, Box, Breadcrumbs, Button, Chip, IconButton, LinearProgress, Link, List,
-  ListItem, ListItemButton, ListItemIcon, ListItemText, Paper, Stack, Typography,
+  Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Dialog, DialogActions,
+  DialogContent, DialogTitle, FormControlLabel, IconButton, LinearProgress, Link, List,
+  ListItem, ListItemButton, ListItemIcon, ListItemText, Paper, Stack, Switch, TextField, Typography,
 } from "@mui/material";
 import FolderIcon from "@mui/icons-material/Folder";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import DownloadIcon from "@mui/icons-material/Download";
+import EditIcon from "@mui/icons-material/Edit";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import CloseIcon from "@mui/icons-material/Close";
 import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { downloadDir, downloadFile, listDir, uploadFile } from "../api/sftp";
+import { downloadDir, downloadFile, listDir, uploadFile, readTextFile, writeTextFile } from "../api/sftp";
 import { getHost } from "../api/hosts";
 import { useDocumentTitle } from "../api/branding";
 
@@ -38,6 +40,7 @@ export function FilesPage() {
   const [path, setPath] = useState(".");
   const [dragOver, setDragOver] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [editPath, setEditPath] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
 
@@ -218,15 +221,26 @@ export function FilesPage() {
             <ListItem
               key={e.name}
               secondaryAction={
-                <IconButton
-                  edge="end"
-                  title={e.isDir ? "Download folder as .tar" : "Download"}
-                  onClick={() =>
-                    void startDownload(resolved.replace(/\/$/, "") + "/" + e.name, e.name, e.isDir)
-                  }
-                >
-                  <DownloadIcon />
-                </IconButton>
+                <Stack direction="row" spacing={0.5}>
+                  {!e.isDir && (
+                    <IconButton
+                      edge="end"
+                      title="Edit as text"
+                      onClick={() => setEditPath(resolved.replace(/\/$/, "") + "/" + e.name)}
+                    >
+                      <EditIcon />
+                    </IconButton>
+                  )}
+                  <IconButton
+                    edge="end"
+                    title={e.isDir ? "Download folder as .tar" : "Download"}
+                    onClick={() =>
+                      void startDownload(resolved.replace(/\/$/, "") + "/" + e.name, e.name, e.isDir)
+                    }
+                  >
+                    <DownloadIcon />
+                  </IconButton>
+                </Stack>
               }
               disablePadding
             >
@@ -250,7 +264,88 @@ export function FilesPage() {
         Drag files here to upload, or use “Upload folder” for whole directories. Folders download
         as a .tar archive. All transfers are audited and can be cancelled.
       </Typography>
+
+      <FileEditorDialog
+        key={editPath ?? "no-edit"}
+        hostId={hostId!}
+        path={editPath}
+        onClose={() => setEditPath(null)}
+        onSaved={() => void qc.invalidateQueries({ queryKey: ["sftp", hostId] })}
+      />
     </Box>
+  );
+}
+
+// FileEditorDialog reads a remote text file into an editor and writes it back with
+// an automatic on-host backup. It's a thin, audited convenience over SFTP upload —
+// not a new capability (SFTP already overwrites files).
+function FileEditorDialog({
+  hostId, path, onClose, onSaved,
+}: { hostId: string; path: string | null; onClose: () => void; onSaved: () => void }) {
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [backup, setBackup] = useState(true);
+
+  useEffect(() => {
+    if (!path) return;
+    setLoading(true); setError(null); setStatus(null);
+    readTextFile(hostId, path)
+      .then((r) => setContent(r.content))
+      .catch((e) => setError((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Could not read file"))
+      .finally(() => setLoading(false));
+  }, [hostId, path]);
+
+  const save = async () => {
+    if (!path) return;
+    setSaving(true); setError(null); setStatus(null);
+    try {
+      const { backup: bp } = await writeTextFile(hostId, path, content, backup);
+      setStatus(bp ? `Saved. Backup written to ${bp}` : "Saved.");
+      onSaved();
+    } catch (e) {
+      setError((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Could not save file");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const name = path ? path.split("/").pop() : "";
+  return (
+    <Dialog open={Boolean(path)} onClose={onClose} fullWidth maxWidth="md">
+      <DialogTitle>Edit · {name}</DialogTitle>
+      <DialogContent dividers>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, wordBreak: "break-all" }}>
+          {path}
+        </Typography>
+        {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+        {status && <Alert severity="success" sx={{ mb: 1 }}>{status}</Alert>}
+        {loading ? (
+          <Box sx={{ display: "flex", justifyContent: "center", my: 4 }}><CircularProgress /></Box>
+        ) : (
+          <TextField
+            value={content} onChange={(e) => { setContent(e.target.value); setStatus(null); }}
+            multiline minRows={16} fullWidth
+            spellCheck={false}
+            sx={{ "& textarea": { fontFamily: "monospace", fontSize: 13, whiteSpace: "pre", overflowWrap: "normal" } }}
+          />
+        )}
+      </DialogContent>
+      <DialogActions sx={{ justifyContent: "space-between" }}>
+        <FormControlLabel
+          control={<Switch checked={backup} onChange={(e) => setBackup(e.target.checked)} />}
+          label="Back up on host before saving"
+        />
+        <Box>
+          <Button onClick={onClose}>Close</Button>
+          <Button variant="contained" onClick={() => void save()} disabled={loading || saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </Box>
+      </DialogActions>
+    </Dialog>
   );
 }
 
