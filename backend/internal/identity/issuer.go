@@ -2,8 +2,6 @@ package identity
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"time"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
 	princ "github.com/fleet-terminal/backend/internal/principals"
@@ -70,14 +69,15 @@ func (i *Issuer) IssueForHost(ctx context.Context, sessionID, userID, hostID uui
 // metadata (binding it to hostID when non-nil) and stores the live key in the
 // vault under (sessionID, hostID).
 func (i *Issuer) issue(ctx context.Context, sessionID, hostID, userID uuid.UUID, username string, principals []string, keyID, _hostname string) (*Credential, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := cryptoprofile.For(i.cfg.FIPSMode).GenerateSigningKey()
 	if err != nil {
 		return nil, err
 	}
-	sshPub, err := ssh.NewPublicKey(pub)
+	keySigner, err := ssh.NewSignerFromSigner(priv)
 	if err != nil {
 		return nil, err
 	}
+	sshPub := keySigner.PublicKey()
 	serial, err := i.store.NextCertSerial(ctx)
 	if err != nil {
 		return nil, err
@@ -86,10 +86,6 @@ func (i *Issuer) issue(ctx context.Context, sessionID, hostID, userID uuid.UUID,
 	fullKeyID := fmt.Sprintf("%s/%d", keyID, serial)
 
 	cert, err := i.ca.SignUserCertificate(sshPub, fullKeyID, principals, serial, i.cfg.UserCertTTL)
-	if err != nil {
-		return nil, err
-	}
-	keySigner, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
 		return nil, err
 	}

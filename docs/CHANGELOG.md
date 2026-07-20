@@ -5,6 +5,34 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.0-fips (preview) — FIPS 140-3 crypto profile (opt-in, P0+P1)
+
+> Preview on branch `feature/fips-mode` — **not on the default release line.**
+> Opt-in and default-off: with `FLEET_FIPS_MODE` unset, behavior is byte-for-byte
+> unchanged (Ed25519, WireGuard, Argon2id).
+
+An opt-in **FIPS mode** that routes every in-process cryptographic choice through a
+FIPS 140-3 approved profile, running inside Go 1.24's native validated module.
+
+- **Runtime toggle, one image.** The Go FIPS module is compiled into every Go 1.24
+  binary; `FLEET_FIPS_MODE=true` makes the entrypoint set `GODEBUG=fips140=on`, and
+  the backend **fails closed** at boot if the module isn't active.
+- **Approved algorithms under FIPS:** **ECDSA P-256** for the CA and all
+  session/host/system certificates; **PBKDF2-HMAC-SHA256** for at-rest secrets and
+  passwords (with dual-format decrypt + verify-then-upgrade so nothing is stranded);
+  **HKDF-SHA256** for the MFA-at-rest key; SSH **pinned** to AES-GCM + ECDH-P256/384
+  + ECDSA/RSA host keys + HMAC-SHA-256; **SHA-256 TOTP**; **ES256/RS256-only**
+  WebAuthn.
+- **Tooling:** a boot self-check (module active + CA not Ed25519) and
+  `fleetctl fips check` readiness report.
+- **Not yet included:** the WireGuard→OpenVPN overlay (P2, infrastructure) and the
+  existing-install migration toolset (P3). A fresh FIPS deploy works for the control
+  and SSH planes today; the overlay is the open item. See `docs/fips-mode-plan.md`.
+
+Validated end-to-end against a real Postgres: a fresh FIPS deploy activates the
+module and generates an ECDSA CA; FIPS-without-module refuses to start; a non-FIPS
+deploy is unchanged (Ed25519, module off).
+
 ## v0.32.0 — Read-only DR standby mode (usable warm standby)
 
 Makes the two-site warm standby (v0.31.0) actually **runnable on the replica**.

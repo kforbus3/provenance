@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,9 +21,14 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// magic marks a v2 envelope: magic ‖ salt ‖ nonce ‖ ciphertext. The final byte is
-// the format version. A legacy blob (bare nonce ‖ ciphertext) has no such prefix.
-var magic = []byte{0xF1, 0x33, 0x7B, 0x02}
+// magic marks a v2 (argon2id) envelope: magic ‖ salt ‖ nonce ‖ ciphertext. The
+// final byte is the format version. magicV3 marks a v3 (PBKDF2-HMAC-SHA256, FIPS)
+// envelope with the same layout. A legacy blob (bare nonce ‖ ciphertext) has no
+// such prefix. Open reads all three; Seal picks v2 or v3 per the active KDF.
+var (
+	magic   = []byte{0xF1, 0x33, 0x7B, 0x02}
+	magicV3 = []byte{0xF1, 0x33, 0x7B, 0x03}
+)
 
 const saltLen = 16
 
@@ -34,13 +40,36 @@ const (
 	argonThreads = 4
 )
 
-// SealBytes encrypts plaintext into a self-describing v2 envelope.
+// pbkdf2Iterations is the PBKDF2-HMAC-SHA256 work factor for FIPS mode (SP 800-132);
+// 600k matches current OWASP guidance for PBKDF2-SHA256.
+const pbkdf2Iterations = 600_000
+
+// useFIPS selects the KDF for NEW seals. It is set once at boot (SetFIPS) from
+// FLEET_FIPS_MODE; default false keeps argon2id (v2) so non-FIPS installs are
+// unchanged. Open always auto-detects the format, so both KDFs decrypt regardless.
+var useFIPS bool
+
+// SetFIPS selects PBKDF2 (FIPS) vs argon2id for subsequent seals. Call once at boot.
+func SetFIPS(on bool) { useFIPS = on }
+
+// SealBytes encrypts plaintext into a self-describing envelope (v3/PBKDF2 in FIPS
+// mode, v2/argon2id otherwise).
 func SealBytes(passphrase, plaintext []byte) ([]byte, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	gcm, err := gcmFor(argonKey(passphrase, salt))
+	prefix := magic
+	key := argonKey(passphrase, salt)
+	if useFIPS {
+		prefix = magicV3
+		k, err := pbkdf2Key(passphrase, salt)
+		if err != nil {
+			return nil, err
+		}
+		key = k
+	}
+	gcm, err := gcmFor(key)
 	if err != nil {
 		return nil, err
 	}
@@ -48,15 +77,21 @@ func SealBytes(passphrase, plaintext []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	out := append([]byte{}, magic...)
+	out := append([]byte{}, prefix...)
 	out = append(out, salt...)
 	out = append(out, nonce...)
-	// gcm.Seal appends the ciphertext to out, giving magic ‖ salt ‖ nonce ‖ ct.
+	// gcm.Seal appends the ciphertext to out, giving prefix ‖ salt ‖ nonce ‖ ct.
 	return gcm.Seal(out, nonce, plaintext, nil), nil
 }
 
-// OpenBytes reverses SealBytes and also decrypts legacy (pre-upgrade) blobs.
+// OpenBytes reverses SealBytes and also decrypts v2 (argon2id) and legacy blobs —
+// so a value sealed by any build (or the other KDF profile) keeps decrypting.
 func OpenBytes(passphrase, raw []byte) ([]byte, error) {
+	if bytes.HasPrefix(raw, magicV3) {
+		if pt, err := openV3(passphrase, raw[len(magicV3):]); err == nil {
+			return pt, nil
+		}
+	}
 	if bytes.HasPrefix(raw, magic) {
 		if pt, err := openV2(passphrase, raw[len(magic):]); err == nil {
 			return pt, nil
@@ -65,6 +100,30 @@ func OpenBytes(passphrase, raw []byte) ([]byte, error) {
 		// Fall through and try the legacy scheme.
 	}
 	return openLegacy(passphrase, raw)
+}
+
+func openV3(passphrase, body []byte) ([]byte, error) {
+	if len(body) < saltLen {
+		return nil, errors.New("ciphertext too short")
+	}
+	salt, rest := body[:saltLen], body[saltLen:]
+	key, err := pbkdf2Key(passphrase, salt)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := gcmFor(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) < gcm.NonceSize() {
+		return nil, errors.New("ciphertext too short")
+	}
+	nonce, ct := rest[:gcm.NonceSize()], rest[gcm.NonceSize():]
+	return gcm.Open(nil, nonce, ct, nil)
+}
+
+func pbkdf2Key(passphrase, salt []byte) ([]byte, error) {
+	return pbkdf2.Key(sha256.New, string(passphrase), salt, pbkdf2Iterations, 32)
 }
 
 func openV2(passphrase, body []byte) ([]byte, error) {
@@ -96,9 +155,24 @@ func openLegacy(passphrase, raw []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, ct, nil)
 }
 
-// IsLegacy reports whether raw is an old (pre-upgrade) blob, so callers can
-// opportunistically re-seal it as v2.
-func IsLegacy(raw []byte) bool { return !bytes.HasPrefix(raw, magic) }
+// IsLegacy reports whether raw is an old (pre-v2) blob, so callers can
+// opportunistically re-seal it in the current format.
+func IsLegacy(raw []byte) bool {
+	return !bytes.HasPrefix(raw, magic) && !bytes.HasPrefix(raw, magicV3)
+}
+
+// IsFIPSSealed reports whether raw uses the v3 (PBKDF2) envelope.
+func IsFIPSSealed(raw []byte) bool { return bytes.HasPrefix(raw, magicV3) }
+
+// NeedsReseal reports whether raw should be re-sealed to match the active KDF
+// profile — legacy/v2 under FIPS, or (harmlessly) a v3 blob when FIPS is off. Used
+// by the migration re-seal sweep.
+func NeedsReseal(raw []byte) bool {
+	if useFIPS {
+		return !bytes.HasPrefix(raw, magicV3)
+	}
+	return IsLegacy(raw)
+}
 
 func argonKey(passphrase, salt []byte) []byte {
 	return argon2.IDKey(passphrase, salt, argonTime, argonMemory, argonThreads, 32)

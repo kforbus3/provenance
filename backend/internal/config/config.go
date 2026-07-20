@@ -21,6 +21,16 @@ type Config struct {
 	PublicURL       string // external base URL, used for cookies/WebAuthn
 	ShutdownTimeout time.Duration
 
+	// FIPS mode (opt-in policy profile). When true, every crypto choice routes
+	// through the FIPS-approved set (ECDSA P-256 CA/certs, PBKDF2 KDF, pinned SSH
+	// suites, SHA-256 TOTP, ES256 WebAuthn) and the boot self-check fails closed if
+	// the validated Go crypto module isn't active or a non-FIPS artifact remains.
+	// Off by default — non-FIPS installs are unchanged.
+	FIPSMode bool
+	// Overlay selects the host-reachability transport: "wireguard" (default) or,
+	// under FIPS, "openvpn" / "strongswan". Empty derives from FIPSMode.
+	Overlay string
+
 	// Database
 	DatabaseURL    string
 	DBMaxConns     int32
@@ -222,6 +232,8 @@ func Load() (*Config, error) {
 		DBMinConns:             int32(envInt("FLEET_DB_MIN_CONNS", 2)),
 		MigrateOnStart:         envBool("FLEET_MIGRATE_ON_START", true),
 		DRStandbyToken:         env("FLEET_DR_STANDBY_TOKEN", ""),
+		FIPSMode:               envBool("FLEET_FIPS_MODE", false),
+		Overlay:                env("FLEET_OVERLAY", ""),
 		RedisURL:               env("FLEET_REDIS_URL", "redis://redis:6379/0"),
 		AccessTokenTTL:         envDuration("FLEET_ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:        envDuration("FLEET_REFRESH_TOKEN_TTL", 720*time.Hour),
@@ -292,6 +304,16 @@ func Load() (*Config, error) {
 		c.WebAuthnOrigins = strings.Split(origins, ",")
 	} else {
 		c.WebAuthnOrigins = []string{c.PublicURL, "http://localhost:5173", "http://localhost:8080"}
+	}
+
+	// Derive the overlay transport from FIPS mode when not set explicitly. WireGuard
+	// has no FIPS mode, so a FIPS deployment defaults to OpenVPN.
+	if c.Overlay == "" {
+		if c.FIPSMode {
+			c.Overlay = "openvpn"
+		} else {
+			c.Overlay = "wireguard"
+		}
 	}
 
 	if err := c.validate(); err != nil {

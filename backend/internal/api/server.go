@@ -248,6 +248,15 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	if err := s.CA.EnsureUserCA(ctx); err != nil {
 		return err
 	}
+	// FIPS boot self-check: the active user CA must be an approved key type. A fresh
+	// FIPS deploy generates ECDSA; an existing Ed25519 CA means the FIPS CA migration
+	// hasn't run — fail closed with a clear pointer rather than issue non-FIPS certs.
+	if s.Cfg.FIPSMode {
+		if kt := s.CA.ActiveKeyType(); strings.Contains(kt, "ed25519") {
+			return fmt.Errorf("FIPS mode: active user CA is %q (not FIPS-approved); "+
+				"run the FIPS CA migration (docs/fips-mode-plan.md M2)", kt)
+		}
+	}
 	// Start cluster membership first so leadership is established before the
 	// singleton loops below decide whether to run, and so reconciliation can see the
 	// live-instance set.

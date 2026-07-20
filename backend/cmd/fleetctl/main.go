@@ -8,11 +8,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/db"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -39,6 +43,7 @@ Usage:
   fleetctl rotate-ca                                     Generate a new active user CA
   fleetctl list-users                                    List accounts
   fleetctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
+  fleetctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)
@@ -164,9 +169,81 @@ func run(cmd string, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "emitted %d overlay peer(s)\n", len(peers))
 
+	case "fips":
+		sub := ""
+		if len(args) > 0 {
+			sub = args[0]
+		}
+		if sub != "check" {
+			return fmt.Errorf("usage: fleetctl fips check")
+		}
+		return fipsCheck(ctx, pool, cfg)
+
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 	return nil
+}
+
+// fipsCheck prints a FIPS readiness report: the module/runtime status, config, the
+// active CA key type, and password-hash algorithm counts, plus a ready/not-ready
+// verdict for flipping FLEET_FIPS_MODE=true. Read-only.
+func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) error {
+	ok := func(b bool) string {
+		if b {
+			return "OK"
+		}
+		return "NOT-FIPS"
+	}
+
+	fmt.Println("Fleet Terminal — FIPS readiness report")
+	fmt.Println("======================================")
+	fmt.Printf("  Config FLEET_FIPS_MODE : %v\n", cfg.FIPSMode)
+	fmt.Printf("  Config FLEET_OVERLAY   : %s   [%s]\n", cfg.Overlay, ok(cfg.Overlay != "wireguard"))
+	fmt.Printf("  Go FIPS module active  : %v   [%s]\n", cryptoprofile.ModuleActive(), ok(cryptoprofile.ModuleActive()))
+
+	var caAlgo string
+	_ = pool.QueryRow(ctx, `SELECT algo FROM ca_keys WHERE kind='user' AND active=true ORDER BY created_at DESC LIMIT 1`).Scan(&caAlgo)
+	caOK := caAlgo != "" && !strings.Contains(caAlgo, "ed25519")
+	fmt.Printf("  Active user CA key     : %s   [%s]\n", orNone(caAlgo), ok(caOK))
+
+	rows, err := pool.Query(ctx, `SELECT split_part(password_hash,'$',2) AS alg, count(*) FROM user_credentials GROUP BY 1 ORDER BY 1`)
+	if err == nil {
+		fmt.Println("  Password hashes by algorithm:")
+		anyArgon := false
+		for rows.Next() {
+			var alg string
+			var n int
+			if rows.Scan(&alg, &n) == nil {
+				fipsAlg := alg == "pbkdf2-sha256"
+				if !fipsAlg {
+					anyArgon = true
+				}
+				fmt.Printf("      %-14s : %d   [%s]\n", orNone(alg), n, ok(fipsAlg))
+			}
+		}
+		rows.Close()
+		_ = anyArgon
+	}
+
+	fmt.Println("--------------------------------------")
+	ready := cryptoprofile.ModuleActive() && caOK && cfg.Overlay != "wireguard"
+	if ready {
+		fmt.Println("  VERDICT: core artifacts are FIPS-approved. Note: this report does not")
+		fmt.Println("           scan every at-rest secret's KDF or the running overlay — see")
+		fmt.Println("           docs/fips-mode-plan.md for the full M0–M6 migration.")
+	} else {
+		fmt.Println("  VERDICT: NOT ready to enable FIPS. Address the [NOT-FIPS] items above")
+		fmt.Println("           (CA migration, OpenVPN overlay, GOFIPS140 binary). See")
+		fmt.Println("           docs/fips-mode-plan.md.")
+	}
+	return nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
 }

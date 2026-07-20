@@ -1,6 +1,50 @@
 # FIPS Mode — Design & Migration Plan
 
-Status: **plan only, not started.** Grounded in a full crypto inventory of the codebase.
+Status: **P0 + P1 implemented** on branch `feature/fips-mode` (opt-in, default-off,
+non-FIPS behavior unchanged). P2 (OpenVPN overlay) and P3 (existing-install
+migration toolset) remain — see "Implementation status" below.
+
+## Implementation status
+
+**Done (P0 — foundation, and P1 — in-process crypto):**
+- **Go 1.24 toolchain** with the native FIPS 140-3 module. It is compiled into every
+  Go 1.24 binary, so FIPS is a **runtime toggle** — no separate artifact. The
+  entrypoint sets `GODEBUG=fips140=on` when `FLEET_FIPS_MODE=true`; the backend
+  **fails closed** at boot if the module isn't active in FIPS mode.
+- **`internal/cryptoprofile`** — the single policy hub. `Default` = today's behavior
+  verbatim; `FIPS` = the approved set. Selected once at boot from `FLEET_FIPS_MODE`.
+- **ECDSA P-256** for the user CA and every per-session/host/system identity
+  (`ca`, `identity/{issuer,system,material}`); the key type is derived from the
+  signer, and the in-RAM key **zeroize** handles both Ed25519 and ECDSA.
+- **PBKDF2-HMAC-SHA256** KDF (600k iters) for at-rest secrets (`secretbox` v3
+  envelope; Open still reads v2/argon2id + legacy) and passwords (`auth/password`;
+  Verify auto-detects the algorithm, enabling verify-then-upgrade-on-login). The
+  MFA-at-rest key uses **HKDF-SHA256** under FIPS.
+- **SSH transport pinned** to AES-GCM + ECDH-P256/384 + ECDSA/RSA host keys +
+  HMAC-SHA-256 across every gateway `ssh.ClientConfig` (never negotiates
+  curve25519/chacha20).
+- **TOTP → HMAC-SHA256** and **WebAuthn → ES256/RS256 only** (no EdDSA) under FIPS.
+- **Boot self-check** (module active + active CA not Ed25519) and **`fleetctl fips
+  check`** readiness report.
+
+Validated end-to-end: a fresh `FLEET_FIPS_MODE=true` deploy activates the module,
+generates an ECDSA CA, and passes the self-check; a non-FIPS deploy is byte-for-byte
+unchanged (Ed25519, module off); FIPS-without-module refuses to start.
+
+**Remaining:**
+- **P2 — OpenVPN overlay.** WireGuard has no FIPS mode; the profile derives
+  `FLEET_OVERLAY=openvpn` in FIPS mode, but the OpenVPN jump-host server + enrollment
+  provisioning are **not built** — this is infrastructure work (new server image,
+  fleet-wide re-enrollment, test fabric), tracked here as the next phase. Until then a
+  FIPS deploy works for the control/SSH plane; the overlay is the open item.
+- **P3 — existing-install migration** (`fleetctl fips` M0–M6: CA dual-rotation,
+  dual-overlay re-enroll, secret re-seal, credential upgrade, fail-closed flip +
+  attestation). The building blocks exist (v3 re-seal detection, verify-then-upgrade
+  password path, dual-format Open), but the staged migration driver is not built.
+
+---
+
+## Original design (grounded in a full crypto inventory of the codebase)
 
 ## Goal & boundary
 

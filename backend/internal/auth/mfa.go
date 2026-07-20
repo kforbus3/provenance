@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,10 +19,20 @@ import (
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
+// totpAlg is the HMAC hash for TOTP, set once at boot from the crypto profile:
+// SHA-256 under FIPS, SHA-1 otherwise. All of a deployment's TOTP secrets use one
+// algorithm (a FIPS migration re-enrolls users), so a package-level value is correct.
+var totpAlg = otp.AlgorithmSHA1
+
+// SetTOTPAlgorithm selects the TOTP HMAC hash. Call once at boot.
+func SetTOTPAlgorithm(a otp.Algorithm) { totpAlg = a }
+
 // GenerateTOTP creates a new TOTP secret for an account and returns the base32
 // secret plus the otpauth:// URL (rendered as a QR code by the client).
 func GenerateTOTP(issuer, account string) (secret, url string, err error) {
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: issuer, AccountName: account})
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer: issuer, AccountName: account, Digits: otp.DigitsSix, Algorithm: totpAlg,
+	})
 	if err != nil {
 		return "", "", err
 	}
@@ -32,14 +43,29 @@ func GenerateTOTP(issuer, account string) (secret, url string, err error) {
 // clock skew window.
 func ValidateTOTP(secret, code string) bool {
 	ok, err := totp.ValidateCustom(code, secret, time.Now(), totp.ValidateOpts{
-		Period: 30, Skew: 1, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1,
+		Period: 30, Skew: 1, Digits: otp.DigitsSix, Algorithm: totpAlg,
 	})
 	return err == nil && ok
 }
 
 // --- secret encryption at rest (AES-256-GCM, key derived from the JWT secret) ---
 
-func (s *Service) mfaKey() [32]byte { return sha256.Sum256(append([]byte("mfa:"), s.cfg.JWTSecret...)) }
+// mfaKey derives the AES key that protects TOTP secrets at rest. In FIPS mode it
+// uses HKDF-SHA256 (an approved KDF); otherwise it keeps the original bare-SHA-256
+// derivation so existing non-FIPS secrets keep decrypting. A fresh FIPS deploy has
+// no prior secrets, so there is nothing to migrate.
+func (s *Service) mfaKey() [32]byte {
+	var out [32]byte
+	if s.cfg.FIPSMode {
+		k, err := hkdf.Key(sha256.New, s.cfg.JWTSecret, []byte("fleet-mfa"), "totp-at-rest-v1", 32)
+		if err == nil {
+			copy(out[:], k)
+			return out
+		}
+		// Fall through to the legacy derivation only if HKDF somehow fails.
+	}
+	return sha256.Sum256(append([]byte("mfa:"), s.cfg.JWTSecret...))
+}
 
 // EncryptSecret encrypts a TOTP secret for storage.
 func (s *Service) EncryptSecret(plain string) ([]byte, error) {
@@ -205,7 +231,7 @@ func matchTOTPStep(secret, code string) (int64, bool) {
 	for d := -skew; d <= skew; d++ {
 		step := cur + d
 		gen, err := totp.GenerateCodeCustom(secret, time.Unix(step*period, 0), totp.ValidateOpts{
-			Period: 30, Skew: 0, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1,
+			Period: 30, Skew: 0, Digits: otp.DigitsSix, Algorithm: totpAlg,
 		})
 		if err == nil && subtle.ConstantTimeCompare([]byte(gen), []byte(code)) == 1 {
 			return step, true

@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/identity"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 )
@@ -25,11 +26,25 @@ type Gateway struct {
 	vault    *identity.Vault
 	issuer   *identity.Issuer
 	hostKeys *hostKeyVerifier
+	profile  cryptoprofile.Profile
 }
 
 // New constructs a Gateway.
 func New(cfg *config.Config, log *slog.Logger, vault *identity.Vault, issuer *identity.Issuer) *Gateway {
-	return &Gateway{cfg: cfg, log: log, vault: vault, issuer: issuer, hostKeys: newHostKeyVerifier(log)}
+	return &Gateway{
+		cfg: cfg, log: log, vault: vault, issuer: issuer,
+		hostKeys: newHostKeyVerifier(log),
+		profile:  cryptoprofile.For(cfg.FIPSMode),
+	}
+}
+
+// pin applies the crypto profile's SSH algorithm pins to a client config and
+// returns it, so every dial routes through the FIPS-approved suite in FIPS mode
+// and is unchanged (default negotiation) otherwise. Every ssh.ClientConfig in this
+// file is wrapped with this.
+func (g *Gateway) pin(c *ssh.ClientConfig) *ssh.ClientConfig {
+	g.profile.ApplySSHClientConfig(c)
+	return c
 }
 
 // Conn bundles a live SSH client and its underlying network connections so the
@@ -71,12 +86,12 @@ func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, h
 	// test fabric sets FLEET_SSH_INSECURE_HOST_KEYS to accept ephemeral keys.
 	hostKeyCB := g.hostKeyCallback()
 
-	jumpCfg := &ssh.ClientConfig{
+	jumpCfg := g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
-	}
+	})
 	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, jumpCfg)
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
@@ -89,12 +104,12 @@ func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, h
 		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
 	}
 
-	hostCfg := &ssh.ClientConfig{
+	hostCfg := g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
-	}
+	})
 	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, hostCfg)
 	if err != nil {
 		_ = tunnel.Close()
@@ -194,12 +209,12 @@ func (g *Gateway) DialHost(handle, host string, port int, user string) (any, err
 // password. Enrollment uses this to bootstrap a brand-new host that does not yet
 // trust the Fleet CA (chicken-and-egg: we install the trust over this session).
 func (g *Gateway) DialDirectPassword(ctx context.Context, addr string, port int, user, password string) (*ssh.Client, error) {
-	cfg := &ssh.ClientConfig{
+	cfg := g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(password)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	}
+	})
 	d := net.Dialer{Timeout: 15 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
 	if err != nil {
@@ -226,12 +241,12 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 	if signer == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
 	}
@@ -241,12 +256,12 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 		_ = jumpClient.Close()
 		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
 	}
-	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, &ssh.ClientConfig{
+	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(password)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	})
+	}))
 	if err != nil {
 		_ = tunnel.Close()
 		_ = jumpClient.Close()
@@ -267,12 +282,12 @@ func (g *Gateway) DialDirectKey(ctx context.Context, addr string, port int, user
 // Enrollment uses this for SSH-agent bootstrap, where the auth method delegates
 // signing to the operator's forwarded agent (the private key never reaches us).
 func (g *Gateway) DialDirectAuth(ctx context.Context, addr string, port int, user string, auth ssh.AuthMethod) (*ssh.Client, error) {
-	cfg := &ssh.ClientConfig{
+	cfg := g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         20 * time.Second,
-	}
+	})
 	d := net.Dialer{Timeout: 15 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
 	if err != nil {
@@ -299,12 +314,12 @@ func (g *Gateway) DialAuthViaJump(ctx context.Context, sessionID, host string, p
 	if jumpSigner == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
 	}
@@ -314,12 +329,12 @@ func (g *Gateway) DialAuthViaJump(ctx context.Context, sessionID, host string, p
 		_ = jumpClient.Close()
 		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
 	}
-	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, &ssh.ClientConfig{
+	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         20 * time.Second,
-	})
+	}))
 	if err != nil {
 		_ = tunnel.Close()
 		_ = jumpClient.Close()
@@ -342,12 +357,12 @@ func (g *Gateway) DialRawViaJump(ctx context.Context, sessionID, host string, po
 	if jumpSigner == nil {
 		return nil, nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial jump host: %w", err)
 	}
@@ -372,12 +387,12 @@ func (g *Gateway) DialKeyViaJump(ctx context.Context, sessionID, host string, po
 	if jumpSigner == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
 	}
@@ -387,12 +402,12 @@ func (g *Gateway) DialKeyViaJump(ctx context.Context, sessionID, host string, po
 		_ = jumpClient.Close()
 		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
 	}
-	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, &ssh.ClientConfig{
+	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
-	})
+	}))
 	if err != nil {
 		_ = tunnel.Close()
 		_ = jumpClient.Close()
@@ -409,12 +424,12 @@ func (g *Gateway) DialWithSigner(ctx context.Context, signer ssh.Signer, host st
 		return nil, fmt.Errorf("nil signer")
 	}
 	hostKeyCB := g.hostKeyCallback()
-	jumpCfg := &ssh.ClientConfig{
+	jumpCfg := g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
-	}
+	})
 	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, jumpCfg)
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
@@ -425,12 +440,12 @@ func (g *Gateway) DialWithSigner(ctx context.Context, signer ssh.Signer, host st
 		_ = jumpClient.Close()
 		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
 	}
-	hostCfg := &ssh.ClientConfig{
+	hostCfg := g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
-	}
+	})
 	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, hostCfg)
 	if err != nil {
 		_ = tunnel.Close()
@@ -448,12 +463,12 @@ func (g *Gateway) DialJumpWithSigner(ctx context.Context, signer ssh.Signer) (*s
 	if signer == nil {
 		return nil, fmt.Errorf("nil signer")
 	}
-	client, err := ssh.Dial("tcp", g.cfg.JumpHost, &ssh.ClientConfig{
+	client, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         10 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
 	}
@@ -472,12 +487,12 @@ func (g *Gateway) DialDirect(ctx context.Context, sessionID, addr string, port i
 	if signer == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	cfg := &ssh.ClientConfig{
+	cfg := g.pin(&ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         10 * time.Second,
-	}
+	})
 	d := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
 	if err != nil {

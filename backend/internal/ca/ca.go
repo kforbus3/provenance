@@ -7,7 +7,7 @@ package ca
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
+	"crypto"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/secretbox"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -26,7 +27,8 @@ import (
 type CA struct {
 	store      *store.Store
 	passphrase []byte
-	reencrypt  bool // upgrade a legacy CA-key envelope to argon2id on boot
+	reencrypt  bool                  // upgrade a legacy CA-key envelope on boot
+	profile    cryptoprofile.Profile // selects the CA key type (Ed25519 vs ECDSA P-256)
 
 	mu     sync.RWMutex
 	signer ssh.Signer // active user-CA signer, held only in RAM
@@ -35,7 +37,12 @@ type CA struct {
 
 // New constructs a CA bound to the store and at-rest encryption passphrase.
 func New(st *store.Store, cfg *config.Config) *CA {
-	return &CA{store: st, passphrase: cfg.CAKeyPassphrase, reencrypt: cfg.ReencryptSecrets}
+	return &CA{
+		store:      st,
+		passphrase: cfg.CAKeyPassphrase,
+		reencrypt:  cfg.ReencryptSecrets,
+		profile:    cryptoprofile.For(cfg.FIPSMode),
+	}
 }
 
 // EnsureUserCA loads the active user CA into memory, generating one on first run.
@@ -84,26 +91,26 @@ func (c *CA) reSealActiveKey(ctx context.Context, id uuid.UUID, oldEnc []byte) {
 	_ = c.store.ReSealCAKey(ctx, id, newEnc)
 }
 
-// generate creates a fresh Ed25519 user CA, encrypts the private key, and stores it.
+// generate creates a fresh user CA of the profile's key type (Ed25519 by default,
+// ECDSA P-256 under FIPS), encrypts the private key, and stores it.
 func (c *CA) generate(ctx context.Context) error {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := c.profile.GenerateSigningKey()
 	if err != nil {
 		return err
 	}
-	signer, err := ssh.NewSignerFromKey(priv)
+	signer, err := ssh.NewSignerFromSigner(priv)
 	if err != nil {
 		return err
 	}
-	sshPub, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		return err
-	}
+	sshPub := signer.PublicKey()
 	enc, err := c.encryptKey(priv)
 	if err != nil {
 		return err
 	}
 	authorized := string(ssh.MarshalAuthorizedKey(sshPub))
-	rec, err := c.store.InsertCAKey(ctx, "user", "ssh-ed25519", authorized, enc, ssh.FingerprintSHA256(sshPub))
+	// The algorithm string (ssh-ed25519 / ecdsa-sha2-nistp256) is taken from the key
+	// itself, so the stored CA record reflects whichever type the profile generated.
+	rec, err := c.store.InsertCAKey(ctx, "user", sshPub.Type(), authorized, enc, ssh.FingerprintSHA256(sshPub))
 	if err != nil {
 		return err
 	}
@@ -154,6 +161,18 @@ func (c *CA) SignUserCertificate(pub ssh.PublicKey, keyID string, principals []s
 	return cert, nil
 }
 
+// ActiveKeyType returns the active CA signer's SSH key algorithm (e.g.
+// "ssh-ed25519" or "ecdsa-sha2-nistp256"), or "" if uninitialized. Used by the
+// FIPS boot self-check to refuse a non-approved (Ed25519) CA.
+func (c *CA) ActiveKeyType() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.signer == nil {
+		return ""
+	}
+	return c.signer.PublicKey().Type()
+}
+
 // ActiveID returns the active CA key id.
 func (c *CA) ActiveID() string {
 	c.mu.RLock()
@@ -176,7 +195,7 @@ func (c *CA) PublicKeyAuthorized() string {
 // encryptKey / decryptSigner delegate to the shared secretbox envelope, which
 // derives its key with argon2id and reads both the new (v2) and the legacy
 // SHA-256 format — so a CA key sealed by an older build still decrypts.
-func (c *CA) encryptKey(priv ed25519.PrivateKey) ([]byte, error) {
+func (c *CA) encryptKey(priv crypto.Signer) ([]byte, error) {
 	block, err := pemPrivate(priv)
 	if err != nil {
 		return nil, err

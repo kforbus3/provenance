@@ -58,6 +58,11 @@ func TestVaultDestroyZeroizesAllSessionCredentials(t *testing.T) {
 	v.put(sessCred)
 	v.put(hostCred)
 
+	// Capture the underlying key byte slices before Destroy so we can confirm they
+	// were scrubbed in place (Destroy also drops the reference).
+	sessKey := sessCred.privateKey.(ed25519.PrivateKey)
+	hostKey := hostCred.privateKey.(ed25519.PrivateKey)
+
 	if !v.Destroy(session) {
 		t.Fatal("Destroy returned false for a live session")
 	}
@@ -69,12 +74,12 @@ func TestVaultDestroyZeroizesAllSessionCredentials(t *testing.T) {
 		t.Fatal("per-host credential survived Destroy")
 	}
 	// Private key bytes were zeroized for both.
-	for _, b := range sessCred.privateKey {
+	for _, b := range sessKey {
 		if b != 0 {
 			t.Fatal("session private key not zeroized")
 		}
 	}
-	for _, b := range hostCred.privateKey {
+	for _, b := range hostKey {
 		if b != 0 {
 			t.Fatal("host private key not zeroized")
 		}
@@ -88,6 +93,7 @@ func TestVaultPutReplacesAndZeroizesPrevious(t *testing.T) {
 	user := uuid.New()
 
 	first := newCred(session, host, user, 10)
+	firstKey := first.privateKey.(ed25519.PrivateKey)
 	v.put(first)
 	second := newCred(session, host, user, 11)
 	v.put(second)
@@ -95,7 +101,7 @@ func TestVaultPutReplacesAndZeroizesPrevious(t *testing.T) {
 	if c, ok := v.GetHost(session, host); !ok || c.Serial != 11 {
 		t.Fatalf("GetHost after replace = %v ok=%v; want serial 11", c, ok)
 	}
-	for _, b := range first.privateKey {
+	for _, b := range firstKey {
 		if b != 0 {
 			t.Fatal("replaced credential's private key not zeroized")
 		}
