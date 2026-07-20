@@ -71,6 +71,7 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		CanViewAudit:     p.Has("Audit.View"),
 		CanViewSchedules: p.Has("Schedule.Manage"),
 		CanViewTransfers: p.Has("File.Transfer"),
+		CanViewCommands:  p.Has("Command.Run"),
 		CanAct:           p.Has("Assistant.Act"),
 		Perms:            p.Permissions,
 	})

@@ -43,6 +43,10 @@ CHOOSING TOOLS
   an action or a person.
 - recent_file_transfers: SFTP uploads/downloads — who moved which file to/from which
   host, size, and status.
+- recent_commands: who ran which ad-hoc command via Fleet's Run-Command feature (exact
+  command text, requester, target, status, exit code). Use for "who ran <command>",
+  "what commands ran today". This is NOT the contents of interactive terminal sessions
+  (those are only in session recordings) — say so if asked about terminal keystrokes.
 - fleet_insights: the already-computed list of what needs attention across the fleet —
   offline hosts, low/critically-low disk, disk-runway projections (days-to-full with a
   confidence label), high memory/load, pending security updates. This is the fastest,
@@ -308,6 +312,20 @@ var tools = []toolDef{{
 			"required": []string{"query"},
 		},
 	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "recent_commands",
+		Description: "List ad-hoc commands run through Fleet's Run-Command feature, most recent first — the authoritative 'who ran which command' record. Each entry has the exact command text, who requested it, the target (a host or a group + host count), status (completed/failed), exit code, and when it ran. Use for questions like 'who ran systemctl restart on web-01', 'what commands were run today', or 'did anyone run a reboot recently'. NOTE: this covers commands issued via Fleet's Run-Command feature, NOT commands typed inside an interactive SSH terminal session (those live only in the session recordings). Optionally filter by a command substring (contains) or target hostname.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"contains": map[string]any{"type": "string", "description": "case-insensitive substring of the command text to match"},
+				"hostname": map[string]any{"type": "string", "description": "only runs targeting this host or group name"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
+			},
+		},
+	},
 }}
 
 type metricHistoryArgs struct {
@@ -333,6 +351,12 @@ type auditLogArgs struct {
 type fileTransfersArgs struct {
 	Hostname string `json:"hostname"`
 	Hours    int    `json:"hours"`
+	Limit    int    `json:"limit"`
+}
+
+type recentCommandsArgs struct {
+	Contains string `json:"contains"` // case-insensitive substring of the command text
+	Hostname string `json:"hostname"` // filter to runs targeting this host/group name
 	Limit    int    `json:"limit"`
 }
 

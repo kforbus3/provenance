@@ -177,6 +177,7 @@ type Caller struct {
 	CanViewAudit     bool // Audit.View — gates the audit_log tool
 	CanViewSchedules bool // Schedule.Manage — gates the list_schedules tool
 	CanViewTransfers bool // File.Transfer — gates the recent_file_transfers tool
+	CanViewCommands  bool // Command.Run — gates the recent_commands tool
 	CanAct           bool // Assistant.Act — gates the propose_* action tools
 	// Perms is a snapshot of the caller's permission set, used to authorize a
 	// proposed action at propose time (execution re-checks the live principal).
@@ -299,6 +300,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				result = s.runRecentScans(ctx, tc.Function.Arguments, who)
 			case "recent_playbook_runs":
 				result = s.runRecentPlaybookRuns(ctx, who)
+			case "recent_commands":
+				tbl, payload := s.runRecentCommands(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			case "host_metric_history":
 				hist, payload := s.runMetricHistory(ctx, tc.Function.Arguments, who)
 				if hist != nil {
@@ -479,6 +486,72 @@ func (s *Service) runRecentPlaybookRuns(ctx context.Context, who Caller) any {
 		return map[string]any{"error": "could not list playbook runs"}
 	}
 	return map[string]any{"count": len(rows), "runs": rows}
+}
+
+// runRecentCommands returns ad-hoc Run-Command executions (gated by Command.Run) — the
+// authoritative "who ran which command" record for Fleet-issued commands. It excludes
+// the command output bodies (kept out of the model context) and optionally filters by a
+// command substring or target name.
+func (s *Service) runRecentCommands(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if !who.CanViewCommands && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view command runs"}
+	}
+	var a recentCommandsArgs
+	_ = json.Unmarshal(raw, &a)
+	limit := a.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	// Fetch a generous window, then apply the (optional) substring/target filters and
+	// cap to the requested limit.
+	runs, err := s.store.ListCommandRuns(ctx, 200)
+	if err != nil {
+		s.log.Warn("assistant recent_commands", "err", err)
+		return nil, map[string]any{"error": "could not list command runs"}
+	}
+	contains := strings.ToLower(strings.TrimSpace(a.Contains))
+	host := strings.ToLower(strings.TrimSpace(a.Hostname))
+	tbl := &AssistantTable{
+		Title: "Command runs",
+		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "Requester"}, {Label: "Target"},
+			{Label: "Command"}, {Label: "Status"}, {Label: "Exit"}},
+	}
+	type cmdRow struct {
+		Command    string     `json:"command"`
+		Requester  string     `json:"requester"`
+		Target     string     `json:"target"`
+		HostCount  int        `json:"hostCount"`
+		Status     string     `json:"status"`
+		ExitCode   *int       `json:"exitCode,omitempty"`
+		RanAt      time.Time  `json:"ranAt"`
+		FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	}
+	var out []cmdRow
+	for _, r := range runs {
+		if contains != "" && !strings.Contains(strings.ToLower(r.Command), contains) {
+			continue
+		}
+		if host != "" && !strings.Contains(strings.ToLower(r.TargetName), host) {
+			continue
+		}
+		exit := ""
+		if r.ExitCode != nil {
+			exit = fmt.Sprint(*r.ExitCode)
+		}
+		tbl.Rows = append(tbl.Rows, []string{tableTime(r.CreatedAt), r.Requester, r.TargetName,
+			r.Command, r.Status, exit})
+		out = append(out, cmdRow{
+			Command: r.Command, Requester: r.Requester, Target: r.TargetName, HostCount: r.HostCount,
+			Status: r.Status, ExitCode: r.ExitCode, RanAt: r.CreatedAt, FinishedAt: r.FinishedAt,
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	if len(out) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{"count": len(out), "commands": out}
 }
 
 // runMetricHistory returns a host's bucketed metric history for trend questions,
