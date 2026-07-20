@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.32.2 — Fix: blank Disaster Recovery page + stuck Authentication settings
+
+Two UI robustness fixes.
+
+- **Disaster Recovery page no longer blanks on a single instance.** The page crashed
+  to a white screen when this instance is a primary with no downstream standbys —
+  the API returned `replicas: null` and the page called `.length`/`.map` on it. The
+  page now normalizes that to an empty list, and the backend returns `[]` instead of
+  `null`.
+- **Authentication settings (OIDC / LDAP / SAML) no longer hang on "Loading…".** If a
+  card's config request fails, it now shows a clear error with a **Retry** button and
+  a hint to hard-refresh (a stale cached bundle after an update is the usual cause),
+  instead of an indefinite spinner. The backend endpoints were already fine; this is
+  purely making the cards fail visibly rather than silently.
+
+**Deploy:** `make redeploy-single`, then **hard-refresh your browser**
+(Ctrl/Cmd-Shift-R) — a redeploy invalidates the old bundle/session, and a cached SPA
+can otherwise show stale-load symptoms.
+
+---
+
 ## v0.32.1 — Fix: fleet-wide vulnerability scans timing out at the scanner
 
 A scheduled "scan all hosts" could fail several hosts with

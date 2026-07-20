@@ -23,6 +23,9 @@ export function DisasterRecoveryPage() {
   }
 
   const { config, replication, peer } = data;
+  // A single-instance primary has no downstream standbys, so the backend returns
+  // replicas: null — normalize to an array so the render can't crash on .length/.map.
+  const replicas = replication.replicas ?? [];
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["dr-status"] });
 
   return (
@@ -71,7 +74,7 @@ export function DisasterRecoveryPage() {
         </Paper>
       </Stack>
 
-      {!replication.inRecovery && replication.replicas.length > 0 && (
+      {!replication.inRecovery && replicas.length > 0 && (
         <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
           <Typography variant="overline" color="text.secondary">Connected standbys</Typography>
           <Table size="small" sx={{ mt: 0.5 }}>
@@ -79,7 +82,7 @@ export function DisasterRecoveryPage() {
               <TableCell>Client</TableCell><TableCell>State</TableCell><TableCell>Sync</TableCell><TableCell>Lag (bytes)</TableCell>
             </TableRow></TableHead>
             <TableBody>
-              {replication.replicas.map((r, i) => (
+              {replicas.map((r, i) => (
                 <TableRow key={i}>
                   <TableCell>{r.clientAddr || "—"}</TableCell>
                   <TableCell>{r.state}</TableCell>

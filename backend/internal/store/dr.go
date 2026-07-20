@@ -64,7 +64,7 @@ type DRReplica struct {
 }
 
 func (s *Store) DBReplication(ctx context.Context) (DBReplication, error) {
-	var out DBReplication
+	out := DBReplication{Replicas: []DRReplica{}} // never JSON null (the UI maps over it)
 	if err := s.pool.QueryRow(ctx, `SELECT pg_is_in_recovery()`).Scan(&out.InRecovery); err != nil {
 		return out, err
 	}

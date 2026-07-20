@@ -643,7 +643,7 @@ function RetentionCard({ current }: { current: unknown }) {
 // Authentik, …). The client secret is write-only; group→role mappings provision
 // access from the IdP's groups claim.
 function SSOCard() {
-  const { data: loaded } = useQuery({ queryKey: ["oidc-config"], queryFn: getOidcConfig });
+  const { data: loaded, isError, refetch } = useQuery({ queryKey: ["oidc-config"], queryFn: getOidcConfig });
   const [cfg, setCfg] = useState<OidcConfig | null>(null);
   const [groupMap, setGroupMap] = useState("");
   const [saved, setSaved] = useState(false);
@@ -667,6 +667,17 @@ function SSOCard() {
     onSuccess: () => setSaved(true),
   });
 
+  if (isError) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6" gutterBottom>Single sign-on (OIDC)</Typography>
+        <Alert severity="error" action={<Button size="small" onClick={() => void refetch()}>Retry</Button>}>
+          Couldn't load the current configuration. If you just updated Fleet, hard-refresh the page
+          (Ctrl/Cmd-Shift-R) to clear a cached bundle, then retry.
+        </Alert>
+      </Paper>
+    );
+  }
   if (!cfg) {
     return (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
@@ -736,7 +747,7 @@ function SSOCard() {
 // IdP's entity ID, SSO URL, and signing certificate; Fleet exposes the ACS,
 // entity ID, and metadata URL the IdP needs in return.
 function SAMLCard() {
-  const { data: loaded } = useQuery({ queryKey: ["saml-config"], queryFn: getSamlConfig });
+  const { data: loaded, isError, refetch } = useQuery({ queryKey: ["saml-config"], queryFn: getSamlConfig });
   const [cfg, setCfg] = useState<SamlConfig | null>(null);
   const [groupMap, setGroupMap] = useState("");
   const [saved, setSaved] = useState(false);
@@ -760,6 +771,17 @@ function SAMLCard() {
     onSuccess: () => setSaved(true),
   });
 
+  if (isError) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6" gutterBottom>Single sign-on (SAML)</Typography>
+        <Alert severity="error" action={<Button size="small" onClick={() => void refetch()}>Retry</Button>}>
+          Couldn't load the current configuration. If you just updated Fleet, hard-refresh the page
+          (Ctrl/Cmd-Shift-R) to clear a cached bundle, then retry.
+        </Alert>
+      </Paper>
+    );
+  }
   if (!cfg) {
     return (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
@@ -908,7 +930,7 @@ function SCIMCard() {
 // the normal form with their directory credentials; accounts are provisioned
 // from directory attributes and group→role mappings.
 function LDAPCard() {
-  const { data: loaded } = useQuery({ queryKey: ["ldap-config"], queryFn: getLdapConfig });
+  const { data: loaded, isError, refetch } = useQuery({ queryKey: ["ldap-config"], queryFn: getLdapConfig });
   const [cfg, setCfg] = useState<LdapConfig | null>(null);
   const [groupMap, setGroupMap] = useState("");
   const [saved, setSaved] = useState(false);
@@ -932,6 +954,17 @@ function LDAPCard() {
     onSuccess: () => setSaved(true),
   });
 
+  if (isError) {
+    return (
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6" gutterBottom>LDAP / Active Directory</Typography>
+        <Alert severity="error" action={<Button size="small" onClick={() => void refetch()}>Retry</Button>}>
+          Couldn't load the current configuration. If you just updated Fleet, hard-refresh the page
+          (Ctrl/Cmd-Shift-R) to clear a cached bundle, then retry.
+        </Alert>
+      </Paper>
+    );
+  }
   if (!cfg) {
     return (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
