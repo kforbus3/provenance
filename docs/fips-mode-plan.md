@@ -1,9 +1,12 @@
 # FIPS Mode — Design & Migration Plan
 
-Status: **P0 + P1 + P2 implemented** on branch `feature/fips-mode` (opt-in, default-off,
-non-FIPS behavior unchanged). A **fresh `FLEET_FIPS_MODE=true` deploy now works
-end-to-end including the OpenVPN overlay.** P3 (existing-install migration toolset) is
-partially landed — see "Implementation status" below.
+Status: **P0–P4 implemented** on branch `feature/fips-mode` (opt-in, default-off,
+non-FIPS behavior unchanged). A fresh `FLEET_FIPS_MODE=true` deploy works end-to-end
+including the OpenVPN overlay, and the existing-install migration toolset (`fleetctl
+fips …`, verify-then-upgrade-on-login, secret re-seal sweep) and a UI readiness
+dashboard are in place. Both a FIPS boot and a default WireGuard boot are validated in
+Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images) — see
+"Implementation status" below.
 
 ## Implementation status
 
@@ -55,28 +58,46 @@ Validated end-to-end: a fresh `FLEET_FIPS_MODE=true` deploy activates the module
 generates an ECDSA CA, and passes the self-check; a non-FIPS deploy is byte-for-byte
 unchanged (Ed25519, module off); FIPS-without-module refuses to start.
 
-**Also done (P1 TLS pins + P3 partial):**
+**Done (P1 TLS pins):**
 - **Outbound TLS pinned** to `MinVersion: TLS 1.2` on SMTP (`notify/senders.go`) and
   LDAP StartTLS (`auth/ldap.go`); the enroll-agent **fails closed** on `-insecure` when
   `FLEET_FIPS_MODE` is set, and pins TLS 1.2 on its remaining paths.
-- **M2 (CA migration)** is supported today: `fleetctl rotate-ca` in a FIPS-configured
-  environment mints an **ECDSA** CA (the key type follows `cryptoprofile.For(FIPS)`), and
-  rotation keeps the prior CA trusted through the transition (dual-CA).
-- **M3 (CA-key re-seal)**: the boot re-seal (`FLEET_REENCRYPT_SECRETS=true`) now upgrades
-  the CA-key envelope on `secretbox.NeedsReseal` (KDF-profile mismatch), so an argon2id
-  CA key becomes PBKDF2 under FIPS — verify-before-overwrite, so it can never brick the key.
-- **M6 (attestation)**: `fleetctl fips check` reports module status, overlay, CA key type,
-  and password-hash algorithms with a ready/not-ready verdict.
 
-**Remaining (P3/P4 tail):**
-- **Full secret re-seal sweep** — the CA key auto-migrates (above); the settings-held
-  credentials (SMTP/PagerDuty/Opsgenie/LDAP/OIDC) currently re-seal to v3 **on next
-  save**, and vault entries use a separate per-entry key. A one-shot
-  `fleetctl fips reseal-secrets` that sweeps every sealed column is not yet built.
-- **M5 credential refresh UX** — the verify-then-upgrade-on-login password path exists;
-  the admin "force reset for stale accounts" + TOTP/WebAuthn re-enrollment prompts are not.
-- **P4 UI** — a FIPS readiness dashboard mirroring `fleetctl fips check` in the web UI.
-- **Host-OS FIPS OpenSSL images** — operator-provided today (documented requirement).
+**Done (P3 — existing-install migration toolset, M2–M6):**
+- **M2 (CA migration):** `fleetctl rotate-ca` in a FIPS-configured environment mints an
+  **ECDSA** CA (key type follows `cryptoprofile.For(FIPS)`); rotation keeps the prior CA
+  trusted through the transition (dual-CA).
+- **M3 (secret re-seal):** the boot re-seal (`FLEET_REENCRYPT_SECRETS=true`) upgrades the
+  CA-key envelope on `secretbox.NeedsReseal`; and **`fleetctl fips reseal-secrets`** sweeps
+  every at-rest secret to PBKDF2 in place — CA key, overlay CA key, notification secrets
+  (SMTP/PagerDuty/Opsgenie), LDAP/OIDC secrets, and vault entries — each verify-before-
+  overwrite via `secretbox.ResealBytes`. Targets v3 unconditionally (run before the flip).
+- **M5 (credential refresh):** login now **verify-then-upgrades** a matched Argon2id
+  password to PBKDF2 (best-effort, never blocks login); **`fleetctl fips
+  flag-stale-passwords`** forces `must_change_pw` on local accounts still on a non-FIPS
+  hash (for accounts that never log in). WebAuthn EdDSA passkeys are surfaced for
+  re-registration in the readiness report.
+- **M6 (attestation):** `fleetctl fips check` reports module status, overlay, CA key type,
+  password-hash algorithms, and MFA factors with a ready/not-ready verdict.
+
+**Done (P4 — docs + UI):**
+- This runbook (deploy config, jump-host requirements, migration steps).
+- A **FIPS 140-3 Readiness** card on the System Health page (`GET /api/v1/system/fips`),
+  mirroring `fleetctl fips check` with per-artifact OK / NOT-FIPS chips and an overall
+  verdict. Hides itself on older backends.
+
+Validated end-to-end (Docker): a `FLEET_FIPS_MODE=true` backend boots with the module
+active, applies all migrations, creates the overlay PKI CA, generates an **ECDSA** user
+CA, and `fips check` returns a green verdict; a default (non-FIPS) boot on a fresh DB is
+unchanged — Ed25519 CA, WireGuard overlay, module off, and the overlay PKI is never
+created.
+
+**Remaining (operator-provided / optional):**
+- **Host-OS FIPS OpenSSL images** — the jump host and managed hosts must run a
+  FIPS-validated OpenSSL for the whole trust chain to be FIPS; Fleet documents this
+  requirement but does not ship the host images.
+- **Guided TOTP re-enrollment UX** — SHA-1 TOTP still verifies (HMAC-SHA-1 is technically
+  FIPS-approved); a forced SHA-256 TOTP re-enrollment flow is not built, by choice.
 
 ---
 
