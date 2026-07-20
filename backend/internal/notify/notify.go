@@ -31,6 +31,9 @@ const (
 	EventCAKeyAging       = "ca.aging"
 	EventFleetDigest      = "fleet.digest"
 	EventReportScheduled  = "report.scheduled"
+	EventCommandFlagged   = "command.flagged"
+	EventCommandBlocked   = "command.blocked"
+	EventCommandApproval  = "command.approval"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -49,6 +52,9 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventCAKeyAging, "CA key due for rotation"},
 	{EventFleetDigest, "Scheduled fleet-health digest"},
 	{EventReportScheduled, "Scheduled compliance report"},
+	{EventCommandFlagged, "Privileged command flagged"},
+	{EventCommandBlocked, "Command blocked by policy"},
+	{EventCommandApproval, "Command awaiting approval"},
 }
 
 const settingKey = "notifications"

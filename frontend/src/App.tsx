@@ -41,6 +41,7 @@ const SchedulesPage = lazy(() => named(import("./pages/SchedulesPage"), "Schedul
 const HealthPage = lazy(() => named(import("./pages/HealthPage"), "HealthPage"));
 const VaultPage = lazy(() => named(import("./pages/VaultPage"), "VaultPage"));
 const LifecyclePage = lazy(() => named(import("./pages/LifecyclePage"), "LifecyclePage"));
+const CommandPolicyPage = lazy(() => named(import("./pages/CommandPolicyPage"), "CommandPolicyPage"));
 
 function PageFallback() {
   return (
@@ -105,6 +106,7 @@ export function App() {
               <Route path="enrollment" element={<ProtectedRoute permission="Host.Enroll"><EnrollmentPage /></ProtectedRoute>} />
               <Route path="certificates" element={<ProtectedRoute permission="Certificate.Manage"><CertificatesPage /></ProtectedRoute>} />
               <Route path="lifecycle" element={<ProtectedRoute permission="System.Configure"><LifecyclePage /></ProtectedRoute>} />
+              <Route path="command-policy" element={<ProtectedRoute permission="CommandPolicy.Manage"><CommandPolicyPage /></ProtectedRoute>} />
               <Route path="security" element={<SecurityPage />} />
               <Route path="vulnerabilities" element={<ProtectedRoute permission="Host.Scan"><VulnerabilitiesPage /></ProtectedRoute>} />
               <Route path="jobs" element={<ProtectedRoute permission="System.Configure"><JobsPage /></ProtectedRoute>} />

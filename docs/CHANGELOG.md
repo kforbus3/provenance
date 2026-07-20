@@ -5,6 +5,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.29.0 — Command control (privileged-command policy)
+
+Define rules that match commands typed in interactive terminal sessions and act on
+them — a core PAM control. A new **Command Control** page (`CommandPolicy.Manage`)
+manages the ruleset; enforcement happens at the terminal relay.
+
+- **Three per-rule actions:** **flag** (allow, but audit + alert), **block**
+  (refuse to run — the relay withholds the command and clears the line), and
+  **approval** (refuse until an approver grants a time-boxed waiver, then the user
+  re-runs it). Patterns are RE2 regular expressions matched against each command
+  line.
+- **Scope:** each rule is **global** or scoped to a **host group** (e.g. stricter
+  blocks on production). A host's applicable rules are loaded once per session.
+- **Approvals:** an approval-gated command creates a request; an admin approves it
+  from the Command Control page (you can't approve your own — separation of duties),
+  granting a 10-minute waiver. Every decision is audited and notified.
+- **Fully audited:** `command.flagged` / `command.blocked` /
+  `command.approval_requested` / `command.approved_run`, plus notification event
+  types you can route (flagged / blocked / awaiting-approval).
+
+**Important — what this is and isn't:** enforcement inspects the interactive input
+stream, so it is a strong **deterrent and a complete audit trail**, not a
+cryptographic guarantee. A determined insider can obfuscate (paste-splitting,
+base64, launching a sub-shell or editor). It raises the bar and records intent; it
+does not make a hostile operator harmless. Hosts with **no** rules are completely
+unaffected — the input path is an unchanged, zero-overhead passthrough. Migration
+`0046` (rules + approvals + the `CommandPolicy.Manage` permission) applies
+automatically.
+
 ## v0.28.0 — Fleet-wide session content search
 
 Search across recorded terminal sessions for a string — "who ran `X`, where, and

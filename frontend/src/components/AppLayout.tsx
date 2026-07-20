@@ -22,6 +22,7 @@ import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import KeyIcon from "@mui/icons-material/Key";
 import SettingsIcon from "@mui/icons-material/Settings";
 import HourglassBottomIcon from "@mui/icons-material/HourglassBottom";
+import PolicyIcon from "@mui/icons-material/Policy";
 import ShieldIcon from "@mui/icons-material/Shield";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import ScheduleIcon from "@mui/icons-material/Schedule";
@@ -69,6 +70,7 @@ const NAV = [
   { to: "/lifecycle", label: "Expiry & Rotation", icon: <HourglassBottomIcon />, perm: "System.Configure" },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },
   { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
+  { to: "/command-policy", label: "Command Control", icon: <PolicyIcon />, perm: "CommandPolicy.Manage" },
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
   { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },

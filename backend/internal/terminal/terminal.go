@@ -20,10 +20,12 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/commandpolicy"
 	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/livesessions"
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/recorder"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -278,6 +280,11 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 		})
 	}
 
+	// Command-control policy: load the rules that apply to this host once, and build
+	// a guard. With no rules the guard is nil and the input path below is unchanged
+	// (byte-for-byte passthrough, zero overhead).
+	guard := h.buildCommandGuard(ctx, p, host, sshSessionID, safeWrite)
+
 	var bytesIn, bytesOut int64
 	done := make(chan struct{})
 	// The stdout pump, stderr pump, and input reader all end by signalling done.
@@ -399,7 +406,11 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 				if capture != nil {
 					capture.Input(data)
 				}
-				_, _ = stdin.Write(data)
+				fwd, notice := guard.Input(data)
+				_, _ = stdin.Write(fwd)
+				if notice != "" {
+					_ = safeWrite(websocket.BinaryMessage, []byte(notice))
+				}
 			case websocket.TextMessage:
 				var cm controlMsg
 				if json.Unmarshal(data, &cm) == nil {
@@ -421,7 +432,11 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 						if capture != nil {
 							capture.Input(b)
 						}
-						_, _ = stdin.Write(b)
+						fwd, notice := guard.Input(b)
+						_, _ = stdin.Write(fwd)
+						if notice != "" {
+							_ = safeWrite(websocket.BinaryMessage, []byte(notice))
+						}
 					}
 				}
 			}
@@ -466,6 +481,64 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			"hostId": host.ID, "hostname": host.Hostname,
 		})
 	}
+}
+
+// buildCommandGuard loads the command-control rules that apply to this host and
+// returns a guard wired to audit/notify and the approval-waiver store. It returns
+// nil when there are no rules, so the input relay is an unchanged passthrough. The
+// callbacks fire at most once per entered command (never per keystroke).
+func (h *handler) buildCommandGuard(ctx context.Context, p *auth.Principal, host *models.Host, sshSessionID uuid.UUID, safeWrite func(int, []byte) error) *commandpolicy.Guard {
+	rules, err := h.d.Store.RulesForHost(ctx, host.ID)
+	if err != nil || len(rules) == 0 {
+		return nil
+	}
+	specs := make([]commandpolicy.Spec, 0, len(rules))
+	for _, r := range rules {
+		specs = append(specs, commandpolicy.Spec{ID: r.ID, Name: r.Name, Action: r.Action, Pattern: r.Pattern})
+	}
+
+	// audit records a command-policy decision to the tamper-evident audit log. It
+	// uses context.Background so a decision late in a session (whose request ctx may
+	// be cancelling) is still recorded.
+	audit := func(action, rule, command string) {
+		_, _ = h.d.Store.AppendAudit(context.Background(), models.AuditEvent{
+			ActorID: &p.UserID, ActorName: p.Username, Action: action,
+			TargetKind: "host", TargetID: host.ID.String(),
+			Detail: map[string]any{"rule": rule, "command": command, "hostname": host.Hostname, "sshSessionId": sshSessionID},
+		})
+	}
+	notifyEv := func(typ string, sev notify.Severity, title, body string) {
+		if h.d.Notify != nil {
+			h.d.Notify.Notify(context.Background(), notify.Event{Type: typ, Severity: sev, Title: title, Body: body})
+		}
+	}
+
+	return commandpolicy.NewGuard(commandpolicy.Compile(specs), commandpolicy.Callbacks{
+		HasWaiver: func(ruleID uuid.UUID) bool {
+			ok, _ := h.d.Store.ActiveWaiver(context.Background(), p.UserID, host.ID, &ruleID)
+			return ok
+		},
+		OnFlag: func(r commandpolicy.Rule, command string) {
+			audit("command.flagged", r.Name, command)
+			notifyEv(notify.EventCommandFlagged, notify.SeverityWarning, "Privileged command run",
+				p.Username+" ran a flagged command on "+host.Hostname+": "+command)
+		},
+		OnBlock: func(r commandpolicy.Rule, command string) {
+			audit("command.blocked", r.Name, command)
+			notifyEv(notify.EventCommandBlocked, notify.SeverityWarning, "Command blocked by policy",
+				p.Username+" was blocked on "+host.Hostname+" ("+r.Name+"): "+command)
+		},
+		OnApprovalRequest: func(r commandpolicy.Rule, command string) {
+			ruleID := r.ID
+			_, _ = h.d.Store.CreateCommandApproval(context.Background(), &ruleID, p.UserID, p.Username, &host.ID, host.Hostname, command)
+			audit("command.approval_requested", r.Name, command)
+			notifyEv(notify.EventCommandApproval, notify.SeverityWarning, "Command awaiting approval",
+				p.Username+" requested approval to run on "+host.Hostname+" ("+r.Name+"): "+command)
+		},
+		OnApprovedRun: func(r commandpolicy.Rule, command string) {
+			audit("command.approved_run", r.Name, command)
+		},
+	})
 }
 
 func recordingInput(sshSessionID uuid.UUID, res recorder.Result) store.RecordingInput {
