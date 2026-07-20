@@ -49,3 +49,70 @@ func TestFIPSKDFRoundTripAndCrossOpen(t *testing.T) {
 	// Reset to default so other tests in the package are unaffected.
 	SetFIPS(false)
 }
+
+func TestResealBytesUpgradesV2ToV3(t *testing.T) {
+	pass := []byte("a-strong-passphrase")
+	plain := []byte("SMTP app password")
+
+	SetFIPS(false)
+	v2, err := SealBytes(pass, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer SetFIPS(false)
+
+	// Under FIPS, a v2 blob reseals to v3 and still decrypts to the same plaintext.
+	SetFIPS(true)
+	out, changed, err := ResealBytes(pass, v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("v2 under FIPS should have been re-sealed")
+	}
+	if !IsFIPSSealed(out) {
+		t.Error("re-sealed blob should be v3/PBKDF2")
+	}
+	got, err := OpenBytes(pass, out)
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("re-sealed blob does not round-trip: got=%q err=%v", got, err)
+	}
+
+	// Idempotent: a v3 blob under FIPS is left untouched.
+	out2, changed2, err := ResealBytes(pass, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed2 {
+		t.Error("a v3 blob under FIPS should not be re-sealed again")
+	}
+	if !bytes.Equal(out2, out) {
+		t.Error("no-op reseal must return the identical envelope")
+	}
+}
+
+func TestResealStringRoundTrip(t *testing.T) {
+	pass := []byte("a-strong-passphrase")
+	defer SetFIPS(false)
+
+	SetFIPS(false)
+	enc, err := Seal(pass, []byte("client-secret-value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	SetFIPS(true)
+	out, changed, err := ResealString(pass, enc)
+	if err != nil || !changed {
+		t.Fatalf("expected reseal: changed=%v err=%v", changed, err)
+	}
+	got, err := Open(pass, out)
+	if err != nil || string(got) != "client-secret-value" {
+		t.Fatalf("re-sealed string mismatch: got=%q err=%v", got, err)
+	}
+
+	// Empty string is a no-op, never an error.
+	if o, c, e := ResealString(pass, ""); o != "" || c || e != nil {
+		t.Errorf("empty reseal should be a clean no-op, got %q %v %v", o, c, e)
+	}
+}
