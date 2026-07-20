@@ -37,6 +37,13 @@ func (s *Store) InsertOverlayCA(ctx context.Context, certPEM string, keyEnc []by
 	return id, err
 }
 
+// UpdateOverlayCAKeyEnc replaces the sealed key blob for an overlay CA in place (used
+// by the FIPS re-seal sweep to re-KDF the envelope without rotating the CA).
+func (s *Store) UpdateOverlayCAKeyEnc(ctx context.Context, id uuid.UUID, keyEnc []byte) error {
+	_, err := s.pool.Exec(ctx, `UPDATE overlay_ca SET key_enc=$2 WHERE id=$1`, id, keyEnc)
+	return err
+}
+
 // RecordOverlayClient records an issued client certificate for a host.
 func (s *Store) RecordOverlayClient(ctx context.Context, hostID uuid.UUID, commonName, serial string, notAfter time.Time) error {
 	_, err := s.pool.Exec(ctx, `

@@ -156,6 +156,24 @@ func (p *PKI) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ResealCA re-seals the overlay CA private key to the active KDF profile if it needs
+// it (only relevant if the CA was created outside FIPS then FIPS was enabled).
+// Returns whether it changed. Used by the FIPS migration sweep.
+func (p *PKI) ResealCA(ctx context.Context) (bool, error) {
+	rec, err := p.store.GetActiveOverlayCA(ctx)
+	if err != nil {
+		return false, err
+	}
+	newEnc, changed, err := secretbox.ResealBytes(p.passphrase, rec.KeyEnc)
+	if err != nil || !changed {
+		return false, err
+	}
+	if err := p.store.UpdateOverlayCAKeyEnc(ctx, rec.ID, newEnc); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // IssueServer issues a server certificate (extKeyUsage serverAuth) for the OpenVPN
 // server, with the given DNS-name and IP SANs.
 func (p *PKI) IssueServer(cn string, dnsNames []string, ips []net.IP, ttl time.Duration) (certPEM, keyPEM []byte, err error) {

@@ -93,6 +93,25 @@ func (c *CA) reSealActiveKey(ctx context.Context, id uuid.UUID, oldEnc []byte) {
 	_ = c.store.ReSealCAKey(ctx, id, newEnc)
 }
 
+// ResealActiveKey re-seals the active user CA private key to the active KDF profile
+// (argon2id→PBKDF2 under FIPS) if it needs it, verifying the new envelope decrypts
+// identically before overwriting. Returns whether it changed. This is the on-demand
+// form of the opportunistic boot upgrade; used by the FIPS migration sweep.
+func (c *CA) ResealActiveKey(ctx context.Context) (bool, error) {
+	rec, priv, err := c.store.GetActiveCAKey(ctx, "user")
+	if err != nil {
+		return false, err
+	}
+	newEnc, changed, err := secretbox.ResealBytes(c.passphrase, priv)
+	if err != nil || !changed {
+		return false, err
+	}
+	if err := c.store.ReSealCAKey(ctx, rec.ID, newEnc); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // generate creates a fresh user CA of the profile's key type (Ed25519 by default,
 // ECDSA P-256 under FIPS), encrypts the private key, and stores it.
 func (c *CA) generate(ctx context.Context) error {

@@ -8,6 +8,38 @@ import (
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
+// VaultVersionSeal is one sealed vault-secret version, for the FIPS re-seal sweep.
+type VaultVersionSeal struct {
+	ID     uuid.UUID
+	Sealed string
+}
+
+// AllVaultVersionSeals returns every stored vault-secret version's sealed payload, so
+// the FIPS migration can re-KDF each in place. Read-only.
+func (s *Store) AllVaultVersionSeals(ctx context.Context) ([]VaultVersionSeal, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, sealed FROM vault_secret_versions`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VaultVersionSeal
+	for rows.Next() {
+		var v VaultVersionSeal
+		if err := rows.Scan(&v.ID, &v.Sealed); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// UpdateVaultVersionSeal replaces a version's sealed payload IN PLACE (a KDF re-wrap
+// is not a value change, so it must not create a new version). Used by the FIPS sweep.
+func (s *Store) UpdateVaultVersionSeal(ctx context.Context, id uuid.UUID, sealed string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE vault_secret_versions SET sealed=$2 WHERE id=$1`, id, sealed)
+	return err
+}
+
 // VaultSecretInput is the metadata for creating a credential.
 type VaultSecretInput struct {
 	Name         string

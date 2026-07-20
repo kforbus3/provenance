@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -19,7 +20,11 @@ import (
 	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/db"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/notify"
+	"github.com/fleet-terminal/backend/internal/overlaypki"
+	"github.com/fleet-terminal/backend/internal/secretbox"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/vault"
 )
 
 func main() {
@@ -44,6 +49,7 @@ Usage:
   fleetctl list-users                                    List accounts
   fleetctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
   fleetctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
+  fleetctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)
@@ -174,10 +180,14 @@ func run(cmd string, args []string) error {
 		if len(args) > 0 {
 			sub = args[0]
 		}
-		if sub != "check" {
-			return fmt.Errorf("usage: fleetctl fips check")
+		switch sub {
+		case "check":
+			return fipsCheck(ctx, pool, cfg)
+		case "reseal-secrets":
+			return fipsReseal(st, cfg)
+		default:
+			return fmt.Errorf("usage: fleetctl fips check | fleetctl fips reseal-secrets")
 		}
-		return fipsCheck(ctx, pool, cfg)
 
 	default:
 		usage()
@@ -238,6 +248,77 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 		fmt.Println("           (CA migration, OpenVPN overlay, GOFIPS140 binary). See")
 		fmt.Println("           docs/fips-mode-plan.md.")
 	}
+	return nil
+}
+
+// fipsReseal re-seals every at-rest secret Fleet holds to the FIPS (PBKDF2 / v3)
+// envelope, in place, without needing any secret re-entered. It targets the FIPS
+// profile unconditionally — you run this DURING migration, before flipping
+// FLEET_FIPS_MODE=true (M4). Every re-seal verifies the new envelope decrypts to the
+// identical plaintext before overwriting, and values already on the target profile are
+// left untouched, so it is safe and idempotent. Password hashes are NOT covered here:
+// they upgrade on next login (verify-then-upgrade); MFA/WebAuthn re-enroll as needed.
+func fipsReseal(st *store.Store, cfg *config.Config) error {
+	// Re-KDF work (argon2 open + 600k-iter PBKDF2 seal) is slow per secret, so give the
+	// sweep a generous budget independent of the CLI's default 30s.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	// The whole point of the command is to prepare for FIPS, so target v3 regardless of
+	// the current mode. v3 is readable by every build, so this is safe pre-flip.
+	secretbox.SetFIPS(true)
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	total := 0
+	report := func(name string, n int, err error) error {
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		fmt.Printf("  %-22s %d re-sealed\n", name, n)
+		total += n
+		return nil
+	}
+	b2i := func(b bool) int {
+		if b {
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Println("Re-sealing at-rest secrets to the FIPS (PBKDF2) envelope…")
+
+	changed, err := ca.New(st, cfg).ResealActiveKey(ctx)
+	if err := report("user CA key", b2i(changed), err); err != nil {
+		return err
+	}
+
+	if _, gerr := st.GetActiveOverlayCA(ctx); gerr == nil {
+		changed, err := overlaypki.New(st, cfg).ResealCA(ctx)
+		if err := report("overlay CA key", b2i(changed), err); err != nil {
+			return err
+		}
+	}
+
+	nn, err := notify.New(st, cfg, log).ResealSecrets(ctx)
+	if err := report("notification secrets", nn, err); err != nil {
+		return err
+	}
+
+	an, err := auth.NewService(st, cfg, log).ResealSecrets(ctx)
+	if err := report("LDAP/OIDC secrets", an, err); err != nil {
+		return err
+	}
+
+	if key, verr := cfg.VaultKey(); verr == nil {
+		vn, err := vault.ResealSecrets(ctx, st, key)
+		if err := report("vault entries", vn, err); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("  %-22s skipped (%v)\n", "vault entries", verr)
+	}
+
+	fmt.Printf("Done — %d secret(s) upgraded to PBKDF2. Run `fleetctl fips check` to confirm readiness.\n", total)
 	return nil
 }
 

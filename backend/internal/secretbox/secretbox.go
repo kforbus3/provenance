@@ -174,6 +174,46 @@ func NeedsReseal(raw []byte) bool {
 	return IsLegacy(raw)
 }
 
+// ResealBytes re-seals a raw envelope to the active KDF profile if (and only if) it
+// needs it, verifying the new envelope decrypts to the identical plaintext before
+// returning it. It returns the (possibly unchanged) envelope and whether it changed.
+// A value that already matches the active profile is returned untouched.
+func ResealBytes(passphrase, raw []byte) (out []byte, changed bool, err error) {
+	if !NeedsReseal(raw) {
+		return raw, false, nil
+	}
+	plain, err := OpenBytes(passphrase, raw)
+	if err != nil {
+		return raw, false, err
+	}
+	sealed, err := SealBytes(passphrase, plain)
+	if err != nil {
+		return raw, false, err
+	}
+	// Verify-before-return: never hand back an envelope that doesn't round-trip.
+	if check, oerr := OpenBytes(passphrase, sealed); oerr != nil || !bytes.Equal(check, plain) {
+		return raw, false, errors.New("reseal verification failed")
+	}
+	return sealed, true, nil
+}
+
+// ResealString is ResealBytes over a base64 (Seal) value: returns the (possibly new)
+// base64 string and whether it changed. An empty string is a no-op.
+func ResealString(passphrase []byte, encoded string) (out string, changed bool, err error) {
+	if encoded == "" {
+		return encoded, false, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return encoded, false, err
+	}
+	sealed, changed, err := ResealBytes(passphrase, raw)
+	if err != nil || !changed {
+		return encoded, false, err
+	}
+	return base64.StdEncoding.EncodeToString(sealed), true, nil
+}
+
 func argonKey(passphrase, salt []byte) []byte {
 	return argon2.IDKey(passphrase, salt, argonTime, argonMemory, argonThreads, 32)
 }
