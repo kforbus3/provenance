@@ -291,6 +291,10 @@ export interface EnrollParams {
   // Skip WireGuard: the host is directly reachable from the jump host (same LAN,
   // or the host that runs Fleet itself), so no overlay is set up.
   skipWireGuard?: boolean;
+  // VPN overlay transport for this host: "" / undefined = deployment default,
+  // otherwise wireguard | openvpn | strongswan. openvpn/strongswan are the FIPS
+  // (certificate-authenticated) overlays.
+  overlay?: "" | "wireguard" | "openvpn" | "strongswan";
 }
 
 // Enroll installs CA trust + WireGuard on the host (when bootstrapping), sets up
