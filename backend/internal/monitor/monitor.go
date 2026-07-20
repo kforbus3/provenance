@@ -534,47 +534,76 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 	return inv, true
 }
 
-// collectUpdates counts pending package updates from the host's *cached* package
+// updatePackagesCap bounds how many pending-update package rows we store per host, so
+// a badly-out-of-date host can't bloat the inventory row (the counts are still exact).
+const updatePackagesCap = 500
+
+// collectUpdates gathers pending package updates from the host's *cached* package
 // metadata (no network refresh, so it's cheap and reflects the host's own update
-// cadence). Output is "total;security"; best-effort across apt/dnf/yum. A failure
-// leaves the fields nil so the last-known counts are preserved.
+// cadence). It emits a `COUNTS|total|security` line plus one `PKG|name|version|sec`
+// line per upgradable package (best-effort across apt/dnf/yum). A failure leaves the
+// fields nil so the last-known values are preserved.
 func collectUpdates(conn *sshgw.Conn, inv *models.HostInventory) {
 	const cmd = `
 if command -v apt-get >/dev/null 2>&1; then
-  if [ -x /usr/lib/update-notifier/apt-check ]; then
-    /usr/lib/update-notifier/apt-check 2>&1
-  else
-    up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep -c '^Inst')
-    sec=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst' | grep -ci 'security')
-    echo "$up;$sec"
-  fi
+  sim=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null)
+  up=$(printf '%s' "$sim" | grep -c '^Inst')
+  sec=$(printf '%s' "$sim" | grep '^Inst' | grep -ci 'security')
+  printf 'COUNTS|%s|%s\n' "$up" "$sec"
+  printf '%s' "$sim" | grep '^Inst' | while read -r _ name rest; do
+    ver=$(printf '%s' "$rest" | sed -n 's/^\[[^]]*\] (\([^ ]*\).*/\1/p')
+    s=0; printf '%s' "$rest" | grep -qi 'security' && s=1
+    printf 'PKG|%s|%s|%s\n' "$name" "$ver" "$s"
+  done
 elif command -v dnf >/dev/null 2>&1; then
   up=$(dnf -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
   sec=$(dnf -q -C updateinfo list security 2>/dev/null | grep -cE '^[A-Za-z]')
-  echo "$up;$sec"
+  printf 'COUNTS|%s|%s\n' "$up" "$sec"
+  dnf -q -C check-update 2>/dev/null | awk 'NF>=3 && $1 ~ /^[A-Za-z0-9]/ {print "PKG|"$1"|"$2"|0"}'
 elif command -v yum >/dev/null 2>&1; then
   up=$(yum -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
-  echo "$up;0"
+  printf 'COUNTS|%s|0\n' "$up"
+  yum -q -C check-update 2>/dev/null | awk 'NF>=3 && $1 ~ /^[A-Za-z0-9]/ {print "PKG|"$1"|"$2"|0"}'
 fi`
 	out, err := runCmd(conn, cmd)
 	if err != nil {
 		return
 	}
-	line := strings.TrimSpace(out)
-	total, sec, ok := strings.Cut(line, ";")
-	if !ok {
-		return
+	var gotCounts bool
+	pkgs := []models.PendingUpdate{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "COUNTS|"):
+			f := strings.Split(line, "|")
+			if len(f) < 3 {
+				continue
+			}
+			if t, terr := strconv.Atoi(strings.TrimSpace(f[1])); terr == nil {
+				inv.UpdatesAvailable = &t
+				gotCounts = true
+			}
+			if s, serr := strconv.Atoi(strings.TrimSpace(f[2])); serr == nil {
+				inv.SecurityUpdates = &s
+			}
+		case strings.HasPrefix(line, "PKG|"):
+			f := strings.Split(line, "|")
+			if len(f) < 4 || f[1] == "" {
+				continue
+			}
+			if len(pkgs) < updatePackagesCap {
+				pkgs = append(pkgs, models.PendingUpdate{
+					Package: f[1], NewVersion: f[2], Security: strings.TrimSpace(f[3]) == "1",
+				})
+			}
+		}
 	}
-	t, terr := strconv.Atoi(strings.TrimSpace(total))
-	if terr != nil {
-		return
+	if !gotCounts {
+		return // package manager not found / no parseable output — preserve last known
 	}
 	now := time.Now()
-	inv.UpdatesAvailable = &t
 	inv.UpdatesCheckedAt = &now
-	if s, serr := strconv.Atoi(strings.TrimSpace(sec)); serr == nil {
-		inv.SecurityUpdates = &s
-	}
+	inv.UpdatePackages = pkgs
 }
 
 func runCmd(conn *sshgw.Conn, cmd string) (string, error) {

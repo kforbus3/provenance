@@ -192,7 +192,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_detail",
-		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use after query_hosts when the user asks about a specific host's filesystems or network.",
+		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, all network interfaces with their addresses, AND the pending-update package list (inventory.updatePackages: each package's name, target newVersion, and a security flag). Use after query_hosts when the user asks about a specific host's filesystems, network, or WHICH packages have updates available (query_hosts gives only the update counts; this gives the actual package names).",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname"}},

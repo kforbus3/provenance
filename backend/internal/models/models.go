@@ -296,6 +296,17 @@ type HostInventory struct {
 	UpdatesAvailable *int       `json:"updatesAvailable,omitempty"`
 	SecurityUpdates  *int       `json:"securityUpdates,omitempty"`
 	UpdatesCheckedAt *time.Time `json:"updatesCheckedAt,omitempty"`
+	// UpdatePackages is the actual pending-update package list (bounded), so the UI and
+	// the assistant can answer "which packages need updating on host X", not just how
+	// many. Nil = not yet collected; empty = collected and up to date.
+	UpdatePackages []PendingUpdate `json:"updatePackages,omitempty"`
+}
+
+// PendingUpdate is one upgradable package on a host.
+type PendingUpdate struct {
+	Package    string `json:"package"`
+	NewVersion string `json:"newVersion,omitempty"`
+	Security   bool   `json:"security,omitempty"`
 }
 
 // HostStatus is the live health of a host.

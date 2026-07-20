@@ -157,13 +157,17 @@ func (s *Store) attachHostDetails(ctx context.Context, h *models.Host) {
 		SELECT g.name FROM host_groups hg JOIN groups g ON g.id=hg.group_id
 		WHERE hg.host_id=$1 ORDER BY g.name`, h.ID)
 	var inv models.HostInventory
+	var updatePkgs []byte
 	if err := s.pool.QueryRow(ctx, `
 		SELECT os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
-			updates_available, security_updates, updates_checked_at
+			updates_available, security_updates, updates_checked_at, update_packages
 		FROM host_inventory WHERE host_id=$1`, h.ID).
 		Scan(&inv.OSName, &inv.OSVersion, &inv.KernelVersion, &inv.Architecture,
 			&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
-			&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt); err == nil {
+			&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs); err == nil {
+		if len(updatePkgs) > 0 {
+			_ = json.Unmarshal(updatePkgs, &inv.UpdatePackages)
+		}
 		h.Inventory = &inv
 	}
 	var st models.HostStatus
@@ -398,21 +402,28 @@ func (s *Store) MarkHostFactsStale(ctx context.Context, hostID uuid.UUID) error 
 
 // UpsertInventory updates collected facts for a host.
 func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv models.HostInventory) error {
+	// Marshal the pending-update list only when it was collected this pass; nil is
+	// passed through and COALESCE preserves the last-known list.
+	var updatePkgs []byte
+	if inv.UpdatePackages != nil {
+		updatePkgs, _ = json.Marshal(inv.UpdatePackages)
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,
-			updates_available, security_updates, updates_checked_at, collected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+			updates_available, security_updates, updates_checked_at, update_packages, collected_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
 		ON CONFLICT (host_id) DO UPDATE SET
 			os_name=EXCLUDED.os_name, os_version=EXCLUDED.os_version, kernel_version=EXCLUDED.kernel_version,
 			architecture=EXCLUDED.architecture, ssh_version=EXCLUDED.ssh_version, cpu_count=EXCLUDED.cpu_count,
 			memory_mb=EXCLUDED.memory_mb,
-			-- keep the last-known update counts when a check didn't return one
+			-- keep the last-known update counts + package list when a check didn't return one
 			updates_available=COALESCE(EXCLUDED.updates_available, host_inventory.updates_available),
 			security_updates=COALESCE(EXCLUDED.security_updates, host_inventory.security_updates),
 			updates_checked_at=COALESCE(EXCLUDED.updates_checked_at, host_inventory.updates_checked_at),
+			update_packages=COALESCE(EXCLUDED.update_packages, host_inventory.update_packages),
 			collected_at=now()`,
 		hostID, inv.OSName, inv.OSVersion, inv.KernelVersion, inv.Architecture, inv.SSHVersion, inv.CPUCount, inv.MemoryMB,
-		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt)
+		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs)
 	return err
 }
 
