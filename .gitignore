@@ -25,3 +25,7 @@ recordings/
 # Volume backups (make backup-volumes)
 /volume-backups/
 *.tar.gz
+
+# Python
+__pycache__/
+*.pyc

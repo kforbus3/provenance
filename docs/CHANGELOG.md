@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.32.3 — Fix: vulnerability scan 504 "scan timed out" on large hosts
+
+The grype scanner sidecar capped each scan at **5 minutes** (`GRYPE_SCAN_TIMEOUT`,
+its built-in default) while the backend was willing to wait **20 minutes**
+(`FLEET_VULN_SCAN_TIMEOUT`) — and the bundled compose never overrode the scanner's
+cap. A host with a large package database (e.g. an ML/CUDA box with thousands of
+installed packages) legitimately takes longer than 5 minutes to scan, so it always
+came back as `scanner error (504): scan timed out` even though the backend would have
+waited.
+
+- The scanner's per-scan timeout now **defaults to 20 minutes**, matching the backend,
+  and is exposed as `GRYPE_SCAN_TIMEOUT` (seconds) in the compose file and
+  `.env.example`. Raise both it and `FLEET_VULN_SCAN_TIMEOUT` further if a host still
+  times out.
+- **Deploy:** pull, then recreate the scanner: `docker compose up -d grype-scanner`
+  (no rebuild needed unless you also want the updated in-image default). Existing
+  `.env` values are respected.
+
 ## v0.32.2 — Fix: blank Disaster Recovery page + stuck Authentication settings
 
 Two UI robustness fixes.

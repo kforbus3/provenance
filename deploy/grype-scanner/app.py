@@ -29,7 +29,10 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 app = FastAPI(title="fleet-grype-scanner", version="1")
 
-SCAN_TIMEOUT = int(os.environ.get("GRYPE_SCAN_TIMEOUT", "300"))
+# Per-scan wall-clock cap. Default aligns with the backend's FLEET_VULN_SCAN_TIMEOUT
+# (20m) so the scanner never 504s before the backend would wait — a host with a large
+# package database (e.g. an ML/CUDA box) can legitimately take several minutes.
+SCAN_TIMEOUT = int(os.environ.get("GRYPE_SCAN_TIMEOUT", "1200"))
 DB_TIMEOUT = int(os.environ.get("GRYPE_DB_TIMEOUT", "900"))
 
 # grype is CPU/memory-heavy (it loads the vuln DB per run). A scheduled "scan all

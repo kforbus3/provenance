@@ -179,6 +179,14 @@ services:
       # the vuln DB per run), so a fleet-wide scan is bounded here rather than
       # serialized. Raise on a beefier host; keep low (1–2) on a small box.
       GRYPE_SCAN_CONCURRENCY: ${GRYPE_SCAN_CONCURRENCY:-2}
+      # Per-scan wall-clock cap (seconds) before the scanner returns 504 "scan timed
+      # out". Must be >= the time grype needs on your LARGEST host: a host with a big
+      # package database (e.g. an ML/CUDA box with thousands of dpkg entries) can take
+      # several minutes. Default 20m to match the backend's FLEET_VULN_SCAN_TIMEOUT so
+      # the scanner never gives up before the backend would. Raise if a host still 504s.
+      GRYPE_SCAN_TIMEOUT: ${GRYPE_SCAN_TIMEOUT:-1200}
+      # Wall-clock cap (seconds) for a grype DB update/import (the ~1 GB vuln DB).
+      GRYPE_DB_TIMEOUT: ${GRYPE_DB_TIMEOUT:-900}
     volumes:
       - grype-db:/home/scanner/.cache/grype
     networks: [fleet]
