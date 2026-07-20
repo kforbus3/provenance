@@ -52,6 +52,18 @@ type Spec struct {
 	Pattern string
 }
 
+// Evaluate returns the first rule whose pattern matches the command, or nil if
+// none do. Used by the non-interactive path (the ad-hoc command runner), where a
+// whole command is evaluated at once instead of a keystroke stream.
+func Evaluate(rules []Rule, command string) *Rule {
+	for i := range rules {
+		if rules[i].re.MatchString(command) {
+			return &rules[i]
+		}
+	}
+	return nil
+}
+
 // Callbacks lets the relay supply the side effects the guard triggers, keeping the
 // guard itself free of DB/notify imports. All are called at most once per entered
 // command line (never per keystroke), and may be nil.

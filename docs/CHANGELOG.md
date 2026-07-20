@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.30.0 — Ad-hoc command runner (Linux)
+
+Run a one-off shell command on one or many Linux hosts without authoring a
+playbook — the lightweight counterpart to Ansible playbooks and PowerShell scripts.
+A new **Ad-hoc Command** tab on the **Automation** page (`Command.Run`) takes a
+command and a host/group target, runs it over the jump host, and streams the
+aggregated per-host output; recent runs are listed with status.
+
+- **Governed by command control.** Every command is evaluated against the
+  command-control policy (v0.29.0) per host *before* it runs: a **blocked** command
+  is refused on that host, an **approval-gated** one is refused and files an
+  approval request (and runs once a waiver is granted), and a **flagged** one runs
+  with an audit + alert. So the ad-hoc runner can't be used to bypass the rules
+  that apply to interactive sessions.
+- **Safe + scalable by construction.** Runs as each host's configured SSH user
+  through the jump host, with a **bounded worker pool** (6 hosts at once), a
+  per-host **timeout**, and a **4 MiB output cap**. Windows hosts are rejected (use
+  PowerShell scripts). HA-aware: a run abandoned by a dead instance is reconciled to
+  `failed` on startup. Every run is audited (`command.run`).
+- API: `POST /commands/run`, `GET /command-runs`, `GET /command-runs/{id}`.
+  Migration `0047` (the `command_runs` table + the `Command.Run` permission,
+  Administrator-only by default) applies automatically.
+
+This is the raw ad-hoc runner deferred from v0.25.0 — it ships now that command
+control exists to govern it, rather than ungoverned.
+
 ## v0.29.0 — Command control (privileged-command policy)
 
 Define rules that match commands typed in interactive terminal sessions and act on

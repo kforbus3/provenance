@@ -39,6 +39,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/certificates"
 	"github.com/fleet-terminal/backend/internal/cluster"
+	"github.com/fleet-terminal/backend/internal/command"
 	"github.com/fleet-terminal/backend/internal/commandpolicyapi"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/digest"
@@ -107,6 +108,7 @@ type Server struct {
 	actionReg    *aiaction.Registry
 	playbookSvc  *playbook.Service
 	winscriptSvc *winscript.Service
+	commandSvc   *command.Service
 	scheduler    *scheduler.Engine
 	backups      *backup.Service
 	auditFwd     *auditfwd.Forwarder
@@ -181,6 +183,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify)
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.winscriptSvc = winscript.New(st, cfg, log, gateway, issuer, s.Notify)
+	s.commandSvc = command.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.auditFwd = auditfwd.New(st, log)
@@ -292,6 +295,9 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	}
 	if n, err := s.Store.FailStalePlaybookRuns(ctx, lease); err == nil && n > 0 {
 		s.Log.Info("failed orphaned playbook runs", "count", n)
+	}
+	if n, err := s.Store.FailStaleCommandRuns(ctx, lease); err == nil && n > 0 {
+		s.Log.Info("reconciled stale command runs", "count", n)
 	}
 	if n, err := s.Store.FailStaleWinScriptRuns(ctx, lease); err == nil && n > 0 {
 		s.Log.Info("failed orphaned script runs", "count", n)
@@ -795,6 +801,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	playbook.Mount(r, deps, s.playbookSvc)
 	winscript.Mount(r, deps, s.winscriptSvc)
+	command.Mount(r, deps, s.commandSvc)
 
 	notify.Mount(r, s.Auth, s.Notify)
 
