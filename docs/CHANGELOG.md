@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.24.5 — Fix: couldn't schedule a Vulnerability DB update
+
+The **Create** button stayed greyed out when adding a **Vulnerability DB update**
+(`vulndb`) schedule. That kind is fleet-wide and has no host/group target, but the
+form still required a target to be selected before enabling **Create** — so it
+could never be saved. The button now only requires a target for the kinds that
+have one (scan / vulnscan / playbook / script); `vulndb` can be scheduled again.
+Frontend-only; the backend already accepted target-less `vulndb` schedules.
+
 ## v0.24.4 — Conditional access (IP allowlist + concurrent-session limits)
 
 Gate sign-in on **where** a user connects from and **how many** sessions they may

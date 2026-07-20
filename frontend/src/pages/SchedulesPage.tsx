@@ -398,7 +398,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={!name.trim() || !targetId || !payloadOk || save.isPending}
+        <Button variant="contained" disabled={!name.trim() || (needsTarget && !targetId) || !payloadOk || save.isPending}
           onClick={() => save.mutate()}>
           {isNew ? "Create" : "Save"}
         </Button>
