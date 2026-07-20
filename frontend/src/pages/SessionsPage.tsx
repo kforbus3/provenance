@@ -10,6 +10,8 @@ import DownloadIcon from "@mui/icons-material/Download";
 import DeleteIcon from "@mui/icons-material/Delete";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import FullscreenIcon from "@mui/icons-material/Fullscreen";
+import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -58,6 +60,9 @@ function parseCast(cast: string): ParsedCast {
 
 function ReplayTerminal({ sessionId }: { sessionId: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const { data, isLoading, isError } = useQuery({
     queryKey: ["recording", sessionId],
     queryFn: () => getRecording(sessionId),
@@ -69,11 +74,13 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
     const parsed = parseCast(data.cast);
     const term = new Terminal({
       cols: parsed.width, rows: parsed.height,
-      fontSize: 12, convertEol: true, disableStdin: true,
+      fontSize: 13, convertEol: true, disableStdin: true, scrollback: 5000,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
+    termRef.current = term;
+    fitRef.current = fit;
     try { fit.fit(); } catch { /* container may not be laid out yet */ }
 
     // Schedule each output frame at its asciicast timestamp (seconds -> ms).
@@ -85,8 +92,33 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
     return () => {
       timers.forEach(clearTimeout);
       term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
     };
   }, [data]);
+
+  // Re-fit (and bump the font size) when toggling full screen or on window resize, so
+  // the recording fills the larger area and stays legible. The grid grows to fit — the
+  // recorded content keeps its geometry and simply gets more room around it.
+  useEffect(() => {
+    const refit = () => {
+      const term = termRef.current, fit = fitRef.current;
+      if (!term || !fit) return;
+      term.options.fontSize = fullscreen ? 16 : 13;
+      requestAnimationFrame(() => { try { fit.fit(); } catch { /* not laid out */ } });
+    };
+    refit();
+    window.addEventListener("resize", refit);
+    return () => window.removeEventListener("resize", refit);
+  }, [fullscreen]);
+
+  // Esc exits full screen.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
 
   if (isLoading) {
     return <Box sx={{ p: 3, textAlign: "center" }}><CircularProgress size={24} /></Box>;
@@ -99,12 +131,30 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
     );
   }
   return (
-    <Box>
-      <Typography variant="caption" color="text.secondary">
-        {data.recording.format} · {(data.recording.sizeBytes / 1024).toFixed(1)} KiB ·
-        {" "}{Math.round(data.recording.durationMs / 1000)}s
-      </Typography>
-      <Box ref={containerRef} sx={{ mt: 1, height: 480, bgcolor: "#000", p: 1, borderRadius: 1 }} />
+    <Box
+      sx={fullscreen
+        ? { position: "fixed", inset: 0, zIndex: 1400, bgcolor: "#000", p: 2, display: "flex", flexDirection: "column" }
+        : undefined}
+    >
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Typography variant="caption" sx={{ color: fullscreen ? "grey.400" : "text.secondary" }}>
+          {data.recording.format} · {(data.recording.sizeBytes / 1024).toFixed(1)} KiB ·
+          {" "}{Math.round(data.recording.durationMs / 1000)}s
+        </Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}>
+          <IconButton size="small" onClick={() => setFullscreen((f) => !f)} sx={{ color: fullscreen ? "#fff" : undefined }}>
+            {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+      </Stack>
+      <Box
+        ref={containerRef}
+        sx={{
+          mt: 1, bgcolor: "#000", p: 1, borderRadius: 1, overflow: "hidden",
+          ...(fullscreen ? { flexGrow: 1, minHeight: 0 } : { height: 480 }),
+        }}
+      />
     </Box>
   );
 }
