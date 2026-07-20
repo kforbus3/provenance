@@ -28,6 +28,7 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.Use(d.Auth.RequireAuth)
 
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/sessions", h.list)
+		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/sessions/search", h.search)
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/sessions/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/sessions/{id}/recording", h.recording)
 		pr.With(d.Auth.RequirePermission("Session.Replay")).Get("/sessions/{id}/recording/download", h.downloadRecording)

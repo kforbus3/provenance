@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.28.0 — Fleet-wide session content search
+
+Search across recorded terminal sessions for a string — "who ran `X`, where, and
+when" — instead of opening recordings one by one. A new **Content search** tab on
+**Session Replay** (`Session.Replay`) takes a query and returns the matching
+sessions with **context snippets**, each linking straight to its replay.
+
+- Searches the recorded session content (the terminal output stream, which echoes
+  what was typed), across the most recent recordings. ANSI escape codes and control
+  characters are stripped so matches are on the visible text, not terminal codes.
+- **Bounded by design:** a single query scans the most recent 500 recordings, caps
+  the bytes read per recording, and returns snippets/results within fixed limits —
+  the response says how many recordings were scanned and whether the set was capped
+  (so you can narrow with a more specific term). Keeps search cost predictable
+  regardless of history size.
+- Session content is sensitive, so **every search is audited** (`session.search`,
+  with the query and match count). Endpoint: `GET /sessions/search?q=`.
+
+*Note:* this searches recorded **content**; there is no separate parsed
+command-history store (Fleet records full PTY sessions, not individual commands).
+
 ## v0.27.0 — In-browser config-file editor
 
 Edit a remote text file — `/etc/nginx/nginx.conf`, a `.env`, a unit file — right in

@@ -46,6 +46,34 @@ export async function getRecording(id: string): Promise<RecordingPayload> {
   return data;
 }
 
+export interface SessionSearchResult {
+  sessionId: string;
+  username: string;
+  hostname: string;
+  startedAt: string;
+  matchCount: number;
+  snippets: string[];
+}
+
+export interface SessionSearchResponse {
+  results: SessionSearchResult[];
+  recordingsInSet: number;
+  scanned: number;
+  capped: boolean;
+}
+
+// searchSessionContent full-text searches recorded SSH session content (what was
+// typed and shown), across the most recent recordings.
+export async function searchSessionContent(q: string): Promise<SessionSearchResponse> {
+  const { data } = await api.get<SessionSearchResponse>("/api/v1/sessions/search", { params: { q } });
+  return {
+    results: data.results ?? [],
+    recordingsInSet: data.recordingsInSet ?? 0,
+    scanned: data.scanned ?? 0,
+    capped: data.capped ?? false,
+  };
+}
+
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

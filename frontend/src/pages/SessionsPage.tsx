@@ -15,7 +15,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteRecording, downloadRecording, getRecording, listSessions, pruneRecordings,
-  recordingStats, type SSHSession,
+  recordingStats, searchSessionContent, type SSHSession, type SessionSearchResult,
 } from "../api/sessions";
 import { useAuthStore } from "../store/auth";
 import { RdpRecordingsPanel } from "../components/RdpRecordingsPanel";
@@ -166,9 +166,11 @@ export function SessionsPage() {
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Terminal (SSH)" />
         <Tab label="Desktop (RDP)" />
+        <Tab label="Content search" />
       </Tabs>
 
       {tab === 1 && <RdpRecordingsPanel />}
+      {tab === 2 && <ContentSearchPanel />}
 
       {tab === 0 && (
       <Box>
@@ -353,4 +355,97 @@ function formatBytes(n: number): string {
   let i = 0;
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(1)} ${units[i]}`;
+}
+
+// ContentSearchPanel searches across recorded SSH session content (what was typed
+// and shown) — "who ran `X`, where, when" — and links each hit to its replay.
+function ContentSearchPanel() {
+  const [q, setQ] = useState("");
+  const [replay, setReplay] = useState<SessionSearchResult | null>(null);
+  const search = useMutation({
+    mutationFn: (query: string) => searchSessionContent(query),
+  });
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (q.trim().length >= 2) search.mutate(q.trim());
+  };
+  const data = search.data;
+  return (
+    <Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Search the content of recorded terminal sessions — commands typed and output shown — across
+        the most recent recordings. Every search is audited.
+      </Typography>
+      <form onSubmit={submit}>
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+          <TextField
+            size="small" fullWidth autoFocus
+            label="Search recorded sessions (e.g. a command, path, or hostname)"
+            value={q} onChange={(e) => setQ(e.target.value)}
+          />
+          <Button type="submit" variant="contained" disabled={q.trim().length < 2 || search.isPending}>
+            {search.isPending ? "Searching…" : "Search"}
+          </Button>
+        </Stack>
+      </form>
+
+      {search.isError && <Alert severity="error" sx={{ mb: 2 }}>{(search.error as Error).message}</Alert>}
+
+      {data && (
+        <>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            {data.results.length} matching session(s) · scanned {data.scanned} of {data.recordingsInSet} recent recordings
+            {data.capped ? " (capped — narrow by a more specific term)" : ""}
+          </Typography>
+          {data.results.length === 0 ? (
+            <Paper variant="outlined" sx={{ p: 3, textAlign: "center" }}>
+              <Typography color="text.secondary">No recorded session content matched.</Typography>
+            </Paper>
+          ) : (
+            <Stack spacing={1.5}>
+              {data.results.map((res: SessionSearchResult) => (
+                <Paper key={res.sessionId} variant="outlined" sx={{ p: 1.5 }}>
+                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+                    <Typography variant="subtitle2">{res.username || "—"}</Typography>
+                    <Typography variant="body2" color="text.secondary">on {res.hostname || "—"}</Typography>
+                    <Typography variant="caption" color="text.secondary">{formatDateTime(res.startedAt)}</Typography>
+                    <Chip size="small" label={`${res.matchCount} match${res.matchCount === 1 ? "" : "es"}`} />
+                    <Box sx={{ flexGrow: 1 }} />
+                    <Button size="small" startIcon={<PlayArrowIcon />} onClick={() => setReplay(res)}>
+                      Replay
+                    </Button>
+                  </Stack>
+                  <Stack spacing={0.5}>
+                    {res.snippets.map((s, i) => (
+                      <Typography
+                        key={i} variant="caption"
+                        sx={{ fontFamily: "monospace", color: "text.secondary", wordBreak: "break-all" }}
+                      >
+                        …{s}…
+                      </Typography>
+                    ))}
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </>
+      )}
+
+      <Drawer anchor="right" open={replay !== null} onClose={() => setReplay(null)}
+        PaperProps={{ sx: { width: { xs: "100%", md: 760 }, p: 2 } }}>
+        {replay && (
+          <Box>
+            <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+              <Typography variant="h6" sx={{ flexGrow: 1 }}>{replay.username}@{replay.hostname}</Typography>
+              <IconButton onClick={() => setReplay(null)}><CloseIcon /></IconButton>
+            </Stack>
+            <Typography variant="caption" color="text.secondary">Started {formatDateTime(replay.startedAt)}</Typography>
+            <Divider sx={{ my: 2 }} />
+            <ReplayTerminal sessionId={replay.sessionId} />
+          </Box>
+        )}
+      </Drawer>
+    </Box>
+  );
 }
