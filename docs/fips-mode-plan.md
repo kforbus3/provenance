@@ -1,10 +1,34 @@
 # FIPS Mode — Design & Migration Plan
 
-Status: **P0 + P1 implemented** on branch `feature/fips-mode` (opt-in, default-off,
-non-FIPS behavior unchanged). P2 (OpenVPN overlay) and P3 (existing-install
-migration toolset) remain — see "Implementation status" below.
+Status: **P0 + P1 + P2 implemented** on branch `feature/fips-mode` (opt-in, default-off,
+non-FIPS behavior unchanged). A **fresh `FLEET_FIPS_MODE=true` deploy now works
+end-to-end including the OpenVPN overlay.** P3 (existing-install migration toolset) is
+partially landed — see "Implementation status" below.
 
 ## Implementation status
+
+**Done (P2 — OpenVPN overlay, FIPS transport):**
+- **`internal/overlaypki`** — an X.509 CA (ECDSA P-256) distinct from the SSH CA, since
+  OpenVPN authenticates peers with X.509 certs an SSH CA cannot issue. The CA key is
+  `secretbox`-sealed at rest (v3/PBKDF2 under FIPS) in `overlay_ca`; it is generated once
+  on first boot and **reloaded** (decrypted) on restart. Client certs are CN-bound to the
+  host UUID (`fleet-h-<id>`), recorded in `overlay_clients`.
+- **`internal/overlay`** — generates the jump-host `server.conf`, per-host `client.ovpn`,
+  and `ccd` static-IP pins, plus the idempotent provisioning scripts (jump server, ccd,
+  host install). Validated suite: TLS 1.2/1.3, AES-256-GCM, **ECDHE-P256** (the config
+  pins `tls-groups secp256r1:secp384r1` — OpenSSL 3 ignores the deprecated `ecdh-curve`
+  and would otherwise negotiate non-approved X25519), ECDSA-P256 mutual cert auth.
+- **Enrollment** branches on `FLEET_OVERLAY=openvpn`: `enrollOpenVPN` brings up the jump
+  server, issues the host client cert, pins its overlay IP by CN (ccd), and installs the
+  tunnel — storing the assigned address in the **same `wg_address` column** WireGuard
+  uses, so the SSH gateway dials the host identically regardless of overlay. The WireGuard
+  path is untouched (every change is additive, gated on `cfg.Overlay == "openvpn"`).
+- **Server boot** constructs the overlay PKI + provisioner and `EnsureCA`s only when
+  `overlay=openvpn`; both are nil under WireGuard.
+- Validated end-to-end in Docker: PKI chain (`openssl verify`), a live tunnel using
+  Fleet's generated configs (mutual ECDSA auth, TLS1.3/`TLS_AES_256_GCM`, ECDHE-P256,
+  ping over the tunnel), ccd static per-host IP, and Fleet's actual provisioning scripts
+  on real containers. Overlay-CA persistence/reload proven against a real Postgres.
 
 **Done (P0 — foundation, and P1 — in-process crypto):**
 - **Go 1.24 toolchain** with the native FIPS 140-3 module. It is compiled into every
@@ -31,16 +55,28 @@ Validated end-to-end: a fresh `FLEET_FIPS_MODE=true` deploy activates the module
 generates an ECDSA CA, and passes the self-check; a non-FIPS deploy is byte-for-byte
 unchanged (Ed25519, module off); FIPS-without-module refuses to start.
 
-**Remaining:**
-- **P2 — OpenVPN overlay.** WireGuard has no FIPS mode; the profile derives
-  `FLEET_OVERLAY=openvpn` in FIPS mode, but the OpenVPN jump-host server + enrollment
-  provisioning are **not built** — this is infrastructure work (new server image,
-  fleet-wide re-enrollment, test fabric), tracked here as the next phase. Until then a
-  FIPS deploy works for the control/SSH plane; the overlay is the open item.
-- **P3 — existing-install migration** (`fleetctl fips` M0–M6: CA dual-rotation,
-  dual-overlay re-enroll, secret re-seal, credential upgrade, fail-closed flip +
-  attestation). The building blocks exist (v3 re-seal detection, verify-then-upgrade
-  password path, dual-format Open), but the staged migration driver is not built.
+**Also done (P1 TLS pins + P3 partial):**
+- **Outbound TLS pinned** to `MinVersion: TLS 1.2` on SMTP (`notify/senders.go`) and
+  LDAP StartTLS (`auth/ldap.go`); the enroll-agent **fails closed** on `-insecure` when
+  `FLEET_FIPS_MODE` is set, and pins TLS 1.2 on its remaining paths.
+- **M2 (CA migration)** is supported today: `fleetctl rotate-ca` in a FIPS-configured
+  environment mints an **ECDSA** CA (the key type follows `cryptoprofile.For(FIPS)`), and
+  rotation keeps the prior CA trusted through the transition (dual-CA).
+- **M3 (CA-key re-seal)**: the boot re-seal (`FLEET_REENCRYPT_SECRETS=true`) now upgrades
+  the CA-key envelope on `secretbox.NeedsReseal` (KDF-profile mismatch), so an argon2id
+  CA key becomes PBKDF2 under FIPS — verify-before-overwrite, so it can never brick the key.
+- **M6 (attestation)**: `fleetctl fips check` reports module status, overlay, CA key type,
+  and password-hash algorithms with a ready/not-ready verdict.
+
+**Remaining (P3/P4 tail):**
+- **Full secret re-seal sweep** — the CA key auto-migrates (above); the settings-held
+  credentials (SMTP/PagerDuty/Opsgenie/LDAP/OIDC) currently re-seal to v3 **on next
+  save**, and vault entries use a separate per-entry key. A one-shot
+  `fleetctl fips reseal-secrets` that sweeps every sealed column is not yet built.
+- **M5 credential refresh UX** — the verify-then-upgrade-on-login password path exists;
+  the admin "force reset for stale accounts" + TOTP/WebAuthn re-enrollment prompts are not.
+- **P4 UI** — a FIPS readiness dashboard mirroring `fleetctl fips check` in the web UI.
+- **Host-OS FIPS OpenSSL images** — operator-provided today (documented requirement).
 
 ---
 
@@ -179,6 +215,25 @@ Fleet changes:
 `FLEET_FIPS_MODE=true` + the FIPS image. First boot: CA generated ECDSA P-256, secrets
 PBKDF2-sealed, overlay = OpenVPN, TOTP SHA-256, WebAuthn ES256-only, SSH pinned. Boot
 self-check passes. Done — indistinguishable in workflow from a normal deploy.
+
+**Config for the OpenVPN overlay (derived automatically under FIPS; shown for clarity):**
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `FLEET_FIPS_MODE` | `false` | `true` sets `GODEBUG=fips140=on` and derives the FIPS profile. |
+| `FLEET_OVERLAY` | derived | `openvpn` under FIPS (else `wireguard`). Set explicitly to override. |
+| `FLEET_OVPN_PORT` | `1194` | UDP port the jump-host OpenVPN server listens on. |
+| `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` | — | Reused verbatim for the OpenVPN overlay's address plan (`server` + `ccd` static IPs). |
+| `FLEET_WG_JUMP_ENDPOINT` | — | Host managed hosts dial; the overlay reuses the host and applies `FLEET_OVPN_PORT`. |
+
+**Jump host** needs `openvpn` (the test-fabric image installs it), a `/dev/net/tun`
+device, and `NET_ADMIN` (the enrollment scripts install openvpn on demand if missing).
+The first host enrollment provisions the jump-host OpenVPN server idempotently; the
+overlay CA is created on backend boot (`EnsureCA`).
+
+**Verify** with `fleetctl fips check` (module active, overlay=openvpn, ECDSA CA) and,
+on the jump host, `pgrep -f 'openvpn .*server.conf'`. A managed host that enrolled over
+the overlay shows its assigned address (same column as WireGuard) and a `tun0` interface.
 
 ---
 
