@@ -5,6 +5,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.32.0 — Read-only DR standby mode (usable warm standby)
+
+Makes the two-site warm standby (v0.31.0) actually **runnable on the replica**.
+Previously, a standby Fleet pointed at a read-only replica couldn't serve requests
+(login/audit/heartbeat all write), so the DR console could only *finish* a failover
+after the database was promoted by other means. Now Fleet detects the replica and
+runs in a dedicated **standby mode**:
+
+- **Automatic detection.** On startup Fleet checks `pg_is_in_recovery()`. If its
+  database is a replica it boots read-only: **migrations are skipped**, **no
+  background writers start** (cluster/monitor/scheduler/CA — none of which a replica
+  can service), and the API surface is reduced to a health check plus the DR
+  standby console. Migrations auto-skip on a replica, so the old
+  `FLEET_MIGRATE_ON_START=false` requirement is now just belt-and-suspenders.
+- **Break-glass standby console.** The web UI detects standby posture (unauthenticated
+  `GET /dr/mode`) and replaces the whole app with a console showing **live replication
+  lag** and a **Promote this instance to primary** action — authenticated by a static
+  **`FLEET_DR_STANDBY_TOKEN`** (a login can't be used: the replica can't write a
+  session). Promotion runs `pg_promote()` and the instance **restarts into full normal
+  mode** against the now-primary database (give the container a restart policy).
+- **Peer health still works:** a standby answers `/ready`, so the primary's DR page
+  shows it reachable.
+
+Validated end-to-end against a real streaming replica (base-backup standby):
+detection, migration/writer suppression, lag reporting, token-gated promotion, and
+the restart-into-primary handoff. See the updated **Two-site warm standby** section of
+`docs/disaster-recovery.md`. No migration; standby mode is inert until an instance is
+actually pointed at a replica, so existing single-instance deployments are unaffected.
+
 ## v0.31.0 — Disaster Recovery console (two-site warm standby)
 
 A new **Disaster Recovery** page (nav; `DR.Manage` — Super Administrator +

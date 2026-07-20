@@ -59,7 +59,19 @@ func run() error {
 	defer pool.Close()
 	log.Info("database connected")
 
-	if cfg.MigrateOnStart {
+	// Read-only DR standby: if the database is a replica (in recovery), this instance
+	// cannot write, so it boots into standby mode — no migrations, no background
+	// writers, and only a minimal break-glass DR console (see internal/dr). It flips
+	// to normal operation on restart once its database has been promoted to primary.
+	standby, rerr := db.InRecovery(ctx, pool)
+	if rerr != nil {
+		return rerr
+	}
+	if standby {
+		log.Warn("database is in recovery — starting in READ-ONLY DR STANDBY mode (no migrations, no background jobs, DR console only)")
+	}
+
+	if cfg.MigrateOnStart && !standby {
 		applied, merr := db.Migrate(ctx, pool)
 		if merr != nil {
 			return merr
@@ -71,11 +83,13 @@ func run() error {
 		}
 	}
 
-	srv := api.NewServer(cfg, pool, log, version)
-	if err := srv.InitBackground(ctx); err != nil {
-		return err
+	srv := api.NewServer(cfg, pool, log, version, standby)
+	if !standby {
+		if err := srv.InitBackground(ctx); err != nil {
+			return err
+		}
+		log.Info("ssh certificate authority ready")
 	}
-	log.Info("ssh certificate authority ready")
 
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -101,6 +115,16 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	srvErr := httpSrv.Shutdown(shutdownCtx)
+
+	// A standby never started the cluster coordinator, so there's no leadership to
+	// release; the step-down below is only for a normally-running instance.
+	if standby {
+		if srvErr != nil {
+			return srvErr
+		}
+		log.Info("standby shutdown complete")
+		return nil
+	}
 
 	// Step down from cluster leadership BEFORE the deferred pool.Close(): releasing
 	// the Postgres advisory lock while the pool is still open lets a standby instance

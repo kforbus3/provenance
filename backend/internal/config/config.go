@@ -26,6 +26,11 @@ type Config struct {
 	DBMaxConns     int32
 	DBMinConns     int32
 	MigrateOnStart bool
+	// DRStandbyToken authorizes the promote action on the read-only DR standby
+	// console (a write-free break-glass path, since a standby DB can't create a
+	// login session). Empty = the standby console is status-only; promote via
+	// fleetctl / your DB tooling instead.
+	DRStandbyToken string
 
 	// Redis (jobs/cache). Optional; if empty an in-process scheduler is used.
 	RedisURL string
@@ -216,6 +221,7 @@ func Load() (*Config, error) {
 		DBMaxConns:             int32(envInt("FLEET_DB_MAX_CONNS", 20)),
 		DBMinConns:             int32(envInt("FLEET_DB_MIN_CONNS", 2)),
 		MigrateOnStart:         envBool("FLEET_MIGRATE_ON_START", true),
+		DRStandbyToken:         env("FLEET_DR_STANDBY_TOKEN", ""),
 		RedisURL:               env("FLEET_REDIS_URL", "redis://redis:6379/0"),
 		AccessTokenTTL:         envDuration("FLEET_ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:        envDuration("FLEET_REFRESH_TOKEN_TTL", 720*time.Hour),

@@ -89,6 +89,9 @@ type Server struct {
 	DB      *pgxpool.Pool
 	Log     *slog.Logger
 	Version string
+	// Standby is set when the database is a read-only replica: the router serves
+	// only the DR standby console and no background writers run.
+	Standby bool
 
 	Store     *store.Store
 	Auth      *auth.Service
@@ -123,8 +126,10 @@ type Server struct {
 	router chi.Router
 }
 
-// NewServer constructs a Server and builds its router.
-func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version string) *Server {
+// NewServer constructs a Server and builds its router. When standby is true the DB
+// is a read-only replica: the router exposes only the minimal DR standby console and
+// no write subsystem is started (the caller skips InitBackground).
+func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version string, standby bool) *Server {
 	st := store.New(db)
 	authSvc := auth.NewService(st, cfg, log)
 	caMgr := ca.New(st, cfg)
@@ -133,7 +138,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	gateway := sshgw.New(cfg, log, vault, issuer)
 
 	s := &Server{
-		Cfg: cfg, DB: db, Log: log, Version: version,
+		Cfg: cfg, DB: db, Log: log, Version: version, Standby: standby,
 		Store:   st,
 		Auth:    authSvc,
 		CA:      caMgr,
@@ -733,7 +738,12 @@ func (s *Server) buildRouter() chi.Router {
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(rateLimitMW)
 		api.Use(bodyLimitMW)
-		s.registerRoutes(api)
+		if s.Standby {
+			// Read-only DR standby: only the break-glass console, nothing that writes.
+			dr.MountStandby(api, &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log}, s.Cfg.DRStandbyToken)
+		} else {
+			s.registerRoutes(api)
+		}
 	})
 
 	return r
@@ -826,6 +836,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	lifecycle.Mount(r, deps)
 	commandpolicyapi.Mount(r, deps)
 	dr.Mount(r, deps)
+	dr.MountPublic(r) // unauthenticated GET /dr/mode → {standby:false} so the SPA can detect posture
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)
 	approvals.Mount(r, deps)

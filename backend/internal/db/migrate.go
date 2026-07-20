@@ -14,6 +14,15 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// InRecovery reports whether the connected PostgreSQL is a standby (in recovery /
+// read-only). Fleet uses this to boot into read-only DR standby mode — skipping
+// migrations and every write subsystem — when pointed at a replica.
+func InRecovery(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	var inRecovery bool
+	err := pool.QueryRow(ctx, `SELECT pg_is_in_recovery()`).Scan(&inRecovery)
+	return inRecovery, err
+}
+
 // migrateLockKey serializes concurrent migrators via a Postgres advisory lock, so
 // that when multiple instances boot together (HA / rolling upgrade) only one applies
 // migrations and the others wait, then find everything already applied. Distinct from

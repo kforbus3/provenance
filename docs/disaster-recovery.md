@@ -286,13 +286,23 @@ standby, **Force failover** with "Also promote this database" → point the stan
 `FLEET_DATABASE_URL` at the now-primary DB if needed → operators move to the standby
 domain.
 
-**Unplanned (primary down):** the taking-over instance must be running to serve the
-console, but a Fleet pointed at a read replica cannot serve writes (including login)
-until the DB is promoted — so break the bootstrap at the DB first (`pg_ctl promote` /
-`SELECT pg_promote();` / your Patroni/managed failover), then start the standby's
-Fleet against the promoted DB and use **Force failover** (DB promotion off) to fire
-the DNS/WG webhook. `fleetctl` on the standby is the break-glass path when no UI is
-up. **Hosts that died with the primary site do not come back** — that is workload DR.
+**Unplanned (primary down):** the standby runs a **read-only standby console**
+automatically — when Fleet detects its database is a replica (`pg_is_in_recovery()`)
+it boots in **standby mode**: migrations are skipped, no background writers start,
+and the entire UI is replaced by a break-glass console (login isn't possible against
+a replica). Go to the standby's address, and the console shows replication lag and a
+**Promote this instance to primary** action gated by `FLEET_DR_STANDBY_TOKEN`. Enter
+the token and promote: Fleet runs `pg_promote()` and **restarts into normal mode**
+against the now-primary database (ensure the container has a restart policy). Then
+fire the DNS/WG webhook (from the now-normal **Force failover**, or your automation).
+`fleetctl` on the standby remains the fallback if the console can't run.
+**Hosts that died with the primary site do not come back** — that is workload DR.
+
+> Standby mode is automatic (driven by `pg_is_in_recovery()`); migrations are
+> auto-skipped on a replica, so `FLEET_MIGRATE_ON_START=false` is belt-and-suspenders
+> rather than required. Set `FLEET_DR_STANDBY_TOKEN` (a strong secret, same on both
+> stacks) to enable console promotion; leave it unset to require `fleetctl`/DB
+> promotion instead.
 
 ## Failback
 

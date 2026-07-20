@@ -45,6 +45,27 @@ type handler struct {
 	http *http.Client
 }
 
+// MountPublic mounts the unauthenticated GET /dr/mode in NORMAL operation, so the
+// SPA can detect posture on load without logging in. It always reports standby:false
+// here — a standby instance mounts the standby variant instead (MountStandby).
+func MountPublic(r chi.Router) {
+	r.Get("/dr/mode", func(w http.ResponseWriter, _ *http.Request) {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"standby": false})
+	})
+}
+
+// MountStandby mounts the entire API surface for a read-only DR standby instance:
+// GET /dr/mode (reports standby + live replication lag) and POST /dr/standby/promote
+// (a write-free, token-gated break-glass promotion). No other routes exist, and no
+// endpoint here writes to the database (a replica can't) except pg_promote(), which
+// is a promotion request, not a table write.
+func MountStandby(r chi.Router, d *app.Deps, token string) {
+	h := &standbyHandler{d: d, token: token}
+	r.Get("/dr/mode", h.mode)
+	r.Get("/dr/standby/status", h.mode)
+	r.Post("/dr/standby/promote", h.promoteAndRestart)
+}
+
 // status reports the DR configuration, this DB's replication posture, and peer
 // reachability, so the console can show readiness before an admin acts.
 func (h *handler) status(w http.ResponseWriter, r *http.Request) {

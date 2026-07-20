@@ -1,6 +1,8 @@
 import { Box, CircularProgress, CssBaseline, ThemeProvider } from "@mui/material";
 import { Route, Routes, Navigate } from "react-router-dom";
 import { lazy, Suspense, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getDRMode } from "./api/dr";
 import { buildTheme } from "./theme";
 import { useUIStore } from "./store/ui";
 import { AppLayout } from "./components/AppLayout";
@@ -52,12 +54,40 @@ function PageFallback() {
   );
 }
 
+const StandbyConsole = lazy(() => named(import("./pages/StandbyConsole"), "StandbyConsole"));
+
 // Root component. Public routes (login, bootstrap) sit outside the guarded
 // AppLayout; every other route requires authentication and, where relevant, a
 // specific backend permission. Backend remains the sole authorization authority.
 export function App() {
   const mode = useUIStore((s) => s.mode);
   const theme = useMemo(() => buildTheme(mode), [mode]);
+
+  // Detect a read-only DR standby BEFORE any normal flow: the replica database
+  // can't service login/session writes, so the entire app is replaced by the
+  // break-glass standby console. /dr/mode is unauthenticated and works on a replica.
+  const { data: drMode, isLoading: drLoading } = useQuery({
+    queryKey: ["dr-mode"], queryFn: getDRMode, retry: false, staleTime: 30_000,
+  });
+
+  if (drLoading) {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <PageFallback />
+      </ThemeProvider>
+    );
+  }
+  if (drMode?.standby) {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Suspense fallback={<PageFallback />}>
+          <StandbyConsole />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
 
   return (
     <ThemeProvider theme={theme}>

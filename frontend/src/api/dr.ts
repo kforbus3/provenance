@@ -37,6 +37,28 @@ export interface DRActionResult {
   steps: { step: string; ok: boolean; error?: string; skipped?: string }[];
 }
 
+export interface DRMode {
+  standby: boolean;
+  inRecovery?: boolean;
+  replayLagSeconds?: number | null;
+  promotionEnabled?: boolean;
+}
+
+// getDRMode is called on app load (unauthenticated) to detect whether this instance
+// is a read-only DR standby, so the SPA can show the break-glass console instead of
+// attempting a normal login the replica database can't service.
+export async function getDRMode(): Promise<DRMode> {
+  const { data } = await api.get<DRMode>("/api/v1/dr/mode");
+  return data;
+}
+
+// standbyPromote promotes the standby's database to primary (break-glass; requires
+// the DR token). The instance then restarts into normal mode.
+export async function standbyPromote(token: string): Promise<{ ok: boolean; message: string }> {
+  const { data } = await api.post<{ ok: boolean; message: string }>("/api/v1/dr/standby/promote", { token });
+  return data;
+}
+
 export async function getDRStatus(): Promise<DRStatus> {
   const { data } = await api.get<DRStatus>("/api/v1/dr/status");
   return data;
