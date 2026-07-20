@@ -188,3 +188,130 @@ fleetctl rotate-ca                             # rotate the user CA
 
 Note: SSH **session recordings** live on the recordings volume (`FLEET_RECORDING_DIR`),
 not in the database — back that volume up alongside the database backup.
+
+---
+
+# Two-site warm standby (cross-site DR)
+
+Everything above is **single-instance** DR (protect state, restore from an encrypted
+backup). This section covers the **multi-site** posture: **two independent instances
+at two sites** — an active **primary** and a warm **standby** — so that if the
+primary site is lost you bring the standby up at **its own address** and keep
+managing your fleet. It is a deliberate alternative to stretching one HA cluster
+across the WAN (`high-availability.md`) and to federation (`federation.md`, a
+single-pane model, not a DR model). The in-app **Disaster Recovery** page (nav;
+`DR.Manage`) drives it.
+
+> **What this is:** two *complete, independent* stacks, each with its own database,
+> CA, jump host, WireGuard overlay, proxy, and domain — kept in sync by **PostgreSQL
+> replication**, with one writable at a time. On failure you promote the standby and
+> use its domain.
+>
+> **What this is not:** it is **not** zero-touch or shared-nothing magic. Fleet
+> reflects replication state and *triggers* your orchestration; the actual database
+> promotion, DNS changes, and jump-host WireGuard bring-up are steps you wire up. And
+> it does **not** bring back hosts that die with a site — that is workload DR.
+
+## Model: active / standby (never active / active)
+
+Run exactly **one writable instance at a time.** PostgreSQL has no safe
+multi-master, and two control planes each issuing certificates, mutating RBAC, and
+appending to their own tamper-evident audit hash-chain would diverge irreconcilably.
+The standby's PostgreSQL continuously replicates from the primary; you do **not**
+write to it until you fail over.
+
+## Requirement 1 — data parity ("up to date at failure")
+
+- **Streaming replication** primary → standby: **async** (RPO = lag, seconds) or
+  **synchronous** (zero loss, WAN latency cost). Fleet does not manage this — use
+  native replication, Patroni, or a managed cross-region replica; Fleet only needs
+  `FLEET_DATABASE_URL` pointed at whatever is currently primary. The DR page shows
+  this instance's live posture (in-recovery + replay lag).
+- **Identical secrets on both stacks** — mandatory: `FLEET_CA_PASSPHRASE` (**the
+  linchpin** — the CA private key lives encrypted in `ca_keys`; a different CA means
+  no host accepts the standby's certs), `FLEET_VAULT_PASSPHRASE`, `FLEET_JWT_SECRET`,
+  `FLEET_CSRF_SECRET`. The in-RAM ephemeral cert vault is per-instance and rebuilt on
+  demand — it is not replicated, and that is fine.
+- **Recordings** (`FLEET_RECORDING_DIR`) are on disk, not in the DB — replicate the
+  directory only if you want replay history to survive failover.
+
+## Requirement 2 — web reachability (easy)
+
+Each site keeps its **own proxy, TLS cert, and domain.** No VIP, no DNS failover of
+the web domain — on failover, operators just go to the standby's domain. Accepting
+"different address after failover" is exactly what lets you avoid every
+shared-endpoint problem.
+
+## Requirement 3 — host reachability (the hard part)
+
+Hosts **physically at the primary site die with it** — moot, they are off. Hosts that
+**survive but dial the primary's WG hub** (cloud/remote, or standby-site-local hosts
+pointed at the primary) need one of:
+
+- **Option A — fail the WireGuard endpoint *name* over:** repoint the WG endpoint DNS
+  to the standby jump host, which holds the **replicated WG server private key** and
+  rebuilds peers from the promoted DB (`wg addconf wg0 <(fleetctl wg-peers)`). Peers
+  roam and re-handshake with no re-enrollment. Your *web* domains stay separate; only
+  the *WG endpoint name* fails over. (This is `high-availability.md` §5 across sites.)
+- **Option B — dual-home the hosts:** enroll each survive-critical host into **both**
+  WG hubs. Nothing has to move; costs a second tunnel per host.
+
+For a home-site DR where nearly all hosts are at the primary, this collapses to "the
+survivors are the standby's own hosts, trivially reachable" — done.
+
+## The Disaster Recovery console
+
+**Disaster Recovery** (nav; `DR.Manage` — Super Administrator + Administrator by
+default) provides:
+
+- **Status:** configured role, whether this DB is a standby (in recovery) + replay
+  lag, connected standbys when it is a primary, and peer-instance reachability.
+- **Configuration:** role label, peer URL (health only), and **failover/failback
+  webhooks**.
+- **Force failover / Force failback:** run from the instance **taking over**. Each
+  optionally runs `pg_promote()` on this DB (enable "Also promote this database" when
+  the standby steps up), then POSTs the configured webhook, auditing every step
+  (`dr.failover` / `dr.failback` / `dr.promote`, hash-chained).
+
+**Scope boundary (by design):** the console is a **trigger + status surface**, not
+the orchestrator. `pg_promote()` works only when this DB is actually a standby and
+the role may run it (superuser-only unless you `GRANT EXECUTE ON FUNCTION
+pg_promote`); the console surfaces the DB's error verbatim otherwise. The **DNS
+repoint and jump-host WireGuard bring-up happen in your webhook.**
+
+## Failover
+
+**Planned:** quiesce the primary → confirm standby lag ≈ 0 (DR page) → on the
+standby, **Force failover** with "Also promote this database" → point the standby's
+`FLEET_DATABASE_URL` at the now-primary DB if needed → operators move to the standby
+domain.
+
+**Unplanned (primary down):** the taking-over instance must be running to serve the
+console, but a Fleet pointed at a read replica cannot serve writes (including login)
+until the DB is promoted — so break the bootstrap at the DB first (`pg_ctl promote` /
+`SELECT pg_promote();` / your Patroni/managed failover), then start the standby's
+Fleet against the promoted DB and use **Force failover** (DB promotion off) to fire
+the DNS/WG webhook. `fleetctl` on the standby is the break-glass path when no UI is
+up. **Hosts that died with the primary site do not come back** — that is workload DR.
+
+## Failback
+
+Not symmetric — it needs replication re-established the *other* way first:
+
+1. Bring the old primary back; **re-seed its PostgreSQL as a fresh standby of the
+   now-primary** (base backup or `pg_rewind`) — it cannot resume as primary with
+   stale data.
+2. Let it catch up (watch its DR page replay lag).
+3. In a maintenance window, **Force failover on the old primary** with DB promotion,
+   fire its webhook to move DNS/WG back, return operators to its domain.
+4. Re-seed the other side as its standby to restore the original posture.
+
+## What Fleet does vs. what you do
+
+| Fleet does | You do |
+|------------|--------|
+| Show recovery/replication state + peer health | Set up and monitor PostgreSQL replication |
+| Optionally run `pg_promote()` from the console | Grant `pg_promote` execution / run it via DB tooling |
+| Fire a failover/failback webhook, audit every action | Wire the webhook to DNS repoint + standby jump-host WG bring-up |
+| Keep CA/vault/RBAC/audit in the replicated database | Replicate the DB and keep the secret set identical |
+| Manage every *surviving, reachable* host from the standby | Provide host reachability (Req. 3) + workload DR for the failed site |

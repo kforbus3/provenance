@@ -23,6 +23,7 @@ import KeyIcon from "@mui/icons-material/Key";
 import SettingsIcon from "@mui/icons-material/Settings";
 import HourglassBottomIcon from "@mui/icons-material/HourglassBottom";
 import PolicyIcon from "@mui/icons-material/Policy";
+import SyncAltIcon from "@mui/icons-material/SyncAlt";
 import ShieldIcon from "@mui/icons-material/Shield";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import ScheduleIcon from "@mui/icons-material/Schedule";
@@ -73,6 +74,7 @@ const NAV = [
   { to: "/command-policy", label: "Command Control", icon: <PolicyIcon />, perm: "CommandPolicy.Manage" },
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
   { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
+  { to: "/disaster-recovery", label: "Disaster Recovery", icon: <SyncAltIcon />, perm: "DR.Manage" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
   { to: "/help", label: "Help", icon: <HelpOutlineIcon /> },
 ];

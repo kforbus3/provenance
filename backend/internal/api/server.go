@@ -43,6 +43,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/commandpolicyapi"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/digest"
+	"github.com/fleet-terminal/backend/internal/dr"
 	"github.com/fleet-terminal/backend/internal/enrollment"
 	"github.com/fleet-terminal/backend/internal/hosts"
 	"github.com/fleet-terminal/backend/internal/httpx"
@@ -824,6 +825,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	reportsched.Mount(r, s.Auth, s.reportSched)
 	lifecycle.Mount(r, deps)
 	commandpolicyapi.Mount(r, deps)
+	dr.Mount(r, deps)
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)
 	approvals.Mount(r, deps)

@@ -5,6 +5,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.31.0 — Disaster Recovery console (two-site warm standby)
+
+A new **Disaster Recovery** page (nav; `DR.Manage` — Super Administrator +
+Administrator by default) for running Fleet as **two independent instances** — an
+active primary and a warm standby at a second site — with administrator-triggered
+**failover / failback** from the UI.
+
+- **Live status:** whether this instance's PostgreSQL is a **standby (in recovery)**
+  and its **replay lag**, the **connected standbys** when it's a primary (from
+  `pg_stat_replication`), and the **reachability of the peer instance** (`/ready`).
+- **Force failover / Force failback:** run from the instance taking over. Each
+  optionally runs **`pg_promote()`** on this instance's database (enable "Also
+  promote this database" when the standby steps up), then **POSTs a configured
+  webhook** — which you wire to your DNS repoint + standby jump-host WireGuard
+  bring-up — and audits every step (`dr.failover` / `dr.failback` / `dr.promote`,
+  hash-chained). Guarded by a confirmation dialog.
+- **Configuration:** role label (standalone / primary / standby), peer URL, and the
+  failover/failback webhook URLs.
+
+**Scope boundary (by design):** the console is a **trigger + status surface**, not
+the orchestrator — Fleet does not replicate the database or move DNS itself.
+`pg_promote()` works only when this DB is actually a standby and the role may run it
+(superuser-only unless you `GRANT EXECUTE ON FUNCTION pg_promote`); the console
+surfaces the DB's error verbatim otherwise. Full runbook — replication setup, the
+mandatory secret-parity checklist (`FLEET_CA_PASSPHRASE` is the linchpin), host
+reachability options, and the failover/failback procedures — is in the new **Two-site
+warm standby** section of `docs/disaster-recovery.md`. Migration `0048` (the
+`DR.Manage` permission) applies automatically; no schema tables are added.
+
 ## v0.30.0 — Ad-hoc command runner (Linux)
 
 Run a one-off shell command on one or many Linux hosts without authoring a
