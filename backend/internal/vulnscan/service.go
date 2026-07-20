@@ -59,14 +59,20 @@ type Service struct {
 }
 
 func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, nfy *notify.Service) *Service {
+	// The client timeout must cover a per-host request that queues behind other
+	// hosts at the shared grype-scanner during a fleet-wide scan (configurable via
+	// FLEET_VULN_SCAN_TIMEOUT). The per-scan context in Run uses the same bound.
 	return &Service{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, nfy: nfy,
-		client: &http.Client{Timeout: 6 * time.Minute}}
+		client: &http.Client{Timeout: cfg.VulnScanTimeout}}
 }
 
 // Run performs a scan in the background: collect package DBs over SSH, hand them
 // to the sidecar, store the findings. Marks the scan failed on any error.
 func (s *Service) Run(scanID uuid.UUID, h *models.Host) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	// Cover SSH collection plus the (possibly queued) grype-scanner request. A small
+	// margin over the HTTP client timeout so the client timeout surfaces first with a
+	// clearer "scanner unreachable" message rather than a bare context cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.VulnScanTimeout+2*time.Minute)
 	defer cancel()
 	fail := func(msg string) {
 		s.log.Warn("vuln scan failed", "host", h.Hostname, "err", msg)

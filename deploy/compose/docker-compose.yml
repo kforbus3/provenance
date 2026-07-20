@@ -174,6 +174,11 @@ services:
       context: ../grype-scanner
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      # How many grype scans run concurrently. grype is CPU/memory-heavy (it loads
+      # the vuln DB per run), so a fleet-wide scan is bounded here rather than
+      # serialized. Raise on a beefier host; keep low (1–2) on a small box.
+      GRYPE_SCAN_CONCURRENCY: ${GRYPE_SCAN_CONCURRENCY:-2}
     volumes:
       - grype-db:/home/scanner/.cache/grype
     networks: [fleet]

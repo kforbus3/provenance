@@ -17,6 +17,7 @@ Endpoints:
 """
 
 import io
+import asyncio
 import json
 import os
 import subprocess
@@ -30,6 +31,24 @@ app = FastAPI(title="fleet-grype-scanner", version="1")
 
 SCAN_TIMEOUT = int(os.environ.get("GRYPE_SCAN_TIMEOUT", "300"))
 DB_TIMEOUT = int(os.environ.get("GRYPE_DB_TIMEOUT", "900"))
+
+# grype is CPU/memory-heavy (it loads the vuln DB per run). A scheduled "scan all
+# hosts" fans many requests here at once, so bound how many grype processes run
+# concurrently and run each OFF the event loop (asyncio.to_thread). Without this,
+# a single blocking subprocess.run inside an async handler froze the lone uvicorn
+# worker and serialized every scan — so a fleet-wide scan timed out at the back of
+# the queue. Extra requests now wait on the semaphore with the loop free, instead
+# of blocking the whole worker.
+SCAN_CONCURRENCY = int(os.environ.get("GRYPE_SCAN_CONCURRENCY", "2"))
+_scan_sem = asyncio.Semaphore(max(1, SCAN_CONCURRENCY))
+
+
+async def _run_grype(args: list[str], timeout: int) -> subprocess.CompletedProcess:
+    """Run grype off the event loop, bounded by the concurrency semaphore."""
+    async with _scan_sem:
+        return await asyncio.to_thread(
+            subprocess.run, args, capture_output=True, timeout=timeout, env=BASE_ENV
+        )
 MAX_SCAN_UPLOAD = int(os.environ.get("GRYPE_MAX_SCAN_BYTES", str(256 << 20)))   # host package DBs
 MAX_DB_UPLOAD = int(os.environ.get("GRYPE_MAX_DB_BYTES", str(2 << 30)))          # DB archive can be ~1GB
 
@@ -113,10 +132,7 @@ async def scan(request: Request):
         except Exception as e:  # noqa: BLE001 — any bad archive is a 400
             return JSONResponse({"error": f"bad archive: {e}"}, status_code=400)
         try:
-            proc = subprocess.run(
-                ["grype", f"dir:{root}", "-o", "json"],
-                capture_output=True, timeout=SCAN_TIMEOUT, env=BASE_ENV,
-            )
+            proc = await _run_grype(["grype", f"dir:{root}", "-o", "json"], SCAN_TIMEOUT)
         except subprocess.TimeoutExpired:
             return JSONResponse({"error": "scan timed out"}, status_code=504)
         if proc.returncode != 0:
@@ -143,10 +159,7 @@ async def scan_sbom(request: Request):
         f.write(body)
         path = f.name
     try:
-        proc = subprocess.run(
-            ["grype", f"sbom:{path}", "-o", "json"],
-            capture_output=True, timeout=SCAN_TIMEOUT, env=BASE_ENV,
-        )
+        proc = await _run_grype(["grype", f"sbom:{path}", "-o", "json"], SCAN_TIMEOUT)
     except subprocess.TimeoutExpired:
         return JSONResponse({"error": "scan timed out"}, status_code=504)
     finally:

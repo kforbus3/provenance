@@ -136,6 +136,11 @@ type Config struct {
 	// OpenSCAP scan report storage
 	ScanDir     string
 	ScanTimeout time.Duration // max duration of a scan/remediation (oscap can be slow)
+	// VulnScanTimeout bounds a single host's vulnerability scan (collect package DBs
+	// over SSH + the grype-scanner request). It must be generous: a fleet-wide
+	// scheduled scan queues many hosts at the shared scanner, so a per-host request
+	// can legitimately wait behind others before grype runs.
+	VulnScanTimeout time.Duration
 
 	// ReencryptSecrets, when true, opportunistically re-encrypts existing at-rest
 	// secrets (the CA key) from the legacy SHA-256 envelope to the argon2id one on
@@ -255,6 +260,7 @@ func Load() (*Config, error) {
 		RecordingDir:           env("FLEET_RECORDING_DIR", "/var/lib/fleet/recordings"),
 		ScanDir:                env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
 		ScanTimeout:            envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
+		VulnScanTimeout:        envDuration("FLEET_VULN_SCAN_TIMEOUT", 20*time.Minute),
 		ControlPlaneHosts:      splitList(env("FLEET_CONTROL_PLANE_HOSTS", "")),
 		ReencryptSecrets:       envBool("FLEET_REENCRYPT_SECRETS", false),
 		ScapContentDir:         env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),

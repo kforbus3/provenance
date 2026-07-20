@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.32.1 — Fix: fleet-wide vulnerability scans timing out at the scanner
+
+A scheduled "scan all hosts" could fail several hosts with
+`scanner unreachable: Post "http://grype-scanner:8000/scan": context deadline
+exceeded (Client.Timeout exceeded while awaiting headers)`. Root cause: the
+scheduler fans out up to 16 host scans at once, but the grype-scanner sidecar ran a
+**blocking** `grype` call inside an **async** handler on a **single worker** — which
+froze its event loop and processed scans strictly one at a time. Hosts stuck at the
+back of that serialized queue blew past the backend's timeout.
+
+- **Scanner now processes scans concurrently, bounded.** grype runs off the event
+  loop with a small concurrency cap (`GRYPE_SCAN_CONCURRENCY`, default 2 — grype is
+  CPU/memory-heavy, so it's deliberately modest and tunable per host size). Extra
+  requests queue with the worker responsive instead of freezing it.
+- **Backend scan timeout is now realistic + configurable.** A per-host request that
+  legitimately waits behind others no longer fails at a hard 6 minutes; the bound is
+  `FLEET_VULN_SCAN_TIMEOUT` (default **20 minutes**), applied to both the HTTP client
+  and the per-scan context.
+
+**Deploy:** rebuild the scanner + backend — `make redeploy-single` (it rebuilds
+`grype-scanner` and `backend`). Then re-run the scan or clear the recent failures on
+the Vulnerabilities page. On a small box, keep `GRYPE_SCAN_CONCURRENCY` at 1–2; raise
+it on a beefier host.
+
+---
+
 ## v0.32.0 — Read-only DR standby mode (usable warm standby)
 
 Makes the two-site warm standby (v0.31.0) actually **runnable on the replica**.
