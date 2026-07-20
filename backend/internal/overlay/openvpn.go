@@ -93,9 +93,14 @@ verb 3
 }
 
 // ClientConfig returns a managed host's client.ovpn (references the cert/key/ca
-// files the install script writes next to it).
+// files the install script writes next to it). Any port on `endpoint` is ignored —
+// the overlay always dials the configured OVPNPort, never the WireGuard endpoint's.
 func (o *OpenVPN) ClientConfig(endpoint string) string {
-	host, port := splitEndpoint(endpoint, o.cfg.OVPNPort)
+	host := endpoint
+	if h, _, err := net.SplitHostPort(endpoint); err == nil {
+		host = h
+	}
+	port := o.cfg.OVPNPort
 	return fmt.Sprintf(`# Fleet OpenVPN overlay — managed-host client (FIPS). Managed by Fleet; do not edit.
 dev tun
 proto udp

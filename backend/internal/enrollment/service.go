@@ -18,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/overlay"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -33,11 +34,15 @@ type Service struct {
 	cfg   *config.Config
 	log   *slog.Logger
 	gw    *sshgw.Gateway
+	// ovpn is the OpenVPN overlay provisioner, non-nil only when the FIPS overlay
+	// (FLEET_OVERLAY=openvpn) is selected. When nil, enrollment uses WireGuard.
+	ovpn *overlay.OpenVPN
 }
 
-// New constructs the enrollment Service.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway) *Service {
-	return &Service{store: st, cfg: cfg, log: log, gw: gw}
+// New constructs the enrollment Service. ovpn may be nil (WireGuard overlay); it is
+// non-nil only under the FIPS OpenVPN overlay.
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, ovpn *overlay.OpenVPN) *Service {
+	return &Service{store: st, cfg: cfg, log: log, gw: gw, ovpn: ovpn}
 }
 
 // Result summarizes an enrollment run.
@@ -156,20 +161,26 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		}
 	}
 
-	// 1) Reach the jump host (the VPN server, which already trusts the CA) and
-	//    read its WireGuard public key.
+	// 1) Reach the jump host (the VPN server, which already trusts the CA). For the
+	//    WireGuard overlay, read its public key (needed to configure the host peer);
+	//    the OpenVPN overlay authenticates with X.509 certs and has no such key.
 	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
 	jumpClient, err := s.gw.DialDirect(ctx, sessionID.String(), jumpAddr, jumpPort, s.cfg.JumpUser)
 	if err != nil {
 		return fail("connect_jump_host", err)
 	}
 	defer jumpClient.Close()
-	jumpPub, err := run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
-	if err != nil || strings.TrimSpace(jumpPub) == "" {
-		return fail("read_jump_public_key", orErr(err, "jump host has no WireGuard public key"))
+	var jumpPub string
+	if s.cfg.Overlay == "openvpn" {
+		step("connect_jump_host", "ok", "reached jump host (OpenVPN overlay)")
+	} else {
+		jumpPub, err = run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
+		if err != nil || strings.TrimSpace(jumpPub) == "" {
+			return fail("read_jump_public_key", orErr(err, "jump host has no WireGuard public key"))
+		}
+		jumpPub = strings.TrimSpace(jumpPub)
+		step("connect_jump_host", "ok", "jump WG pubkey "+short(jumpPub))
 	}
-	jumpPub = strings.TrimSpace(jumpPub)
-	step("connect_jump_host", "ok", "jump WG pubkey "+short(jumpPub))
 
 	// 2) Connect to the host for bootstrap. With "password" we authenticate with a
 	//    bootstrap credential (the host need not trust the CA yet); with "trusted"
@@ -312,17 +323,33 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		step("install_trust", "ok", "CA trust + login user '"+loginUser+"' + sshd configured")
 	}
 
-	// 5) Ensure WireGuard is installed (no-op if already present).
-	if out, err := priv(wgInstallScript); err != nil || strings.Contains(out, "WG_MISSING") {
-		return fail("install_wireguard", orErr(err, out+" (could not install wireguard tools)"))
-	} else {
-		step("install_wireguard", "ok", "wireguard tooling present")
+	// 5) Ensure WireGuard is installed (no-op if already present). Skipped under the
+	//    OpenVPN overlay, which installs openvpn on the host instead (see step 6).
+	if s.cfg.Overlay != "openvpn" {
+		if out, err := priv(wgInstallScript); err != nil || strings.Contains(out, "WG_MISSING") {
+			return fail("install_wireguard", orErr(err, out+" (could not install wireguard tools)"))
+		} else {
+			step("install_wireguard", "ok", "wireguard tooling present")
+		}
 	}
 
 	// 6) Determine the overlay address (operator-specified or auto-assigned).
 	//    Skipped for a directly-reachable host — it has no overlay address.
 	var wgIP, hostPub string
-	if !params.SkipWireGuard {
+	if s.cfg.Overlay == "openvpn" {
+		// FIPS OpenVPN overlay: provision the tunnel via X.509 mutual auth instead of
+		// WireGuard. The assigned address is stored in the same wg_address column below,
+		// so the SSH gateway dials the host identically regardless of overlay.
+		if params.SkipWireGuard {
+			step("configure_host_overlay", "skipped",
+				"host is directly reachable from the jump host — no overlay")
+		} else {
+			var oerr error
+			if wgIP, oerr = s.enrollOpenVPN(ctx, host, jumpClient, priv, params, step); oerr != nil {
+				return fail("configure_overlay", oerr)
+			}
+		}
+	} else if !params.SkipWireGuard {
 		wgIP = strings.TrimSpace(host.WGAddress)
 		if wgIP != "" {
 			if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
@@ -411,8 +438,9 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	// 9) Connectivity check: confirm the WireGuard tunnel actually establishes a
 	//    handshake. A failure here usually means the jump endpoint is not
 	//    reachable from the host (firewall / wrong address / UDP port closed).
-	//    Skipped for a directly-reachable host (no tunnel to verify).
-	if !params.SkipWireGuard {
+	//    Skipped for a directly-reachable host (no tunnel to verify) and for the
+	//    OpenVPN overlay (its tunnel-up check runs inside enrollOpenVPN).
+	if !params.SkipWireGuard && s.cfg.Overlay != "openvpn" {
 		if ok, detail := s.verifyWireGuard(priv); ok {
 			step("verify_connectivity", "ok", detail)
 		} else {

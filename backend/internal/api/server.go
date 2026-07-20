@@ -58,6 +58,8 @@ import (
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/msrc"
 	"github.com/fleet-terminal/backend/internal/notify"
+	"github.com/fleet-terminal/backend/internal/overlay"
+	"github.com/fleet-terminal/backend/internal/overlaypki"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
@@ -106,6 +108,11 @@ type Server struct {
 	Cluster   *cluster.Coordinator // HA: identity, heartbeat lease, leader election
 	backplane *ws.Backplane        // HA: cross-instance event/control bridge
 
+	// overlayPKI / overlaySvc are non-nil only under the FIPS OpenVPN overlay
+	// (FLEET_OVERLAY=openvpn); WireGuard deployments leave them nil.
+	overlayPKI *overlaypki.PKI
+	overlaySvc *overlay.OpenVPN
+
 	scanSvc      *scan.Service
 	vulnScan     *vulnscan.Service
 	msrcSvc      *msrc.Service
@@ -137,6 +144,15 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	issuer := identity.NewIssuer(st, caMgr, cfg, log, vault)
 	gateway := sshgw.New(cfg, log, vault, issuer)
 
+	// FIPS OpenVPN overlay: build the X.509 overlay PKI + provisioner. Left nil for
+	// the default WireGuard overlay, so that path is entirely unaffected.
+	var overlayPKI *overlaypki.PKI
+	var overlaySvc *overlay.OpenVPN
+	if cfg.Overlay == "openvpn" {
+		overlayPKI = overlaypki.New(st, cfg)
+		overlaySvc = overlay.New(cfg, overlayPKI)
+	}
+
 	s := &Server{
 		Cfg: cfg, DB: db, Log: log, Version: version, Standby: standby,
 		Store:   st,
@@ -149,6 +165,9 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Live:    livesessions.New(),
 		Watch:   livesessions.NewBroker(),
 		Notify:  notify.New(st, cfg, log),
+
+		overlayPKI: overlayPKI,
+		overlaySvc: overlaySvc,
 	}
 	hostname, _ := os.Hostname()
 	s.Cluster = cluster.New(st, hostname, version, log)
@@ -256,6 +275,14 @@ func (s *Server) InitBackground(ctx context.Context) error {
 			return fmt.Errorf("FIPS mode: active user CA is %q (not FIPS-approved); "+
 				"run the FIPS CA migration (docs/fips-mode-plan.md M2)", kt)
 		}
+	}
+	// FIPS OpenVPN overlay: ensure the X.509 overlay CA exists so the first enrollment
+	// (and jump-server provisioning) has issuing material ready. No-op for WireGuard.
+	if s.overlayPKI != nil {
+		if err := s.overlayPKI.EnsureCA(ctx); err != nil {
+			return fmt.Errorf("overlay PKI: %w", err)
+		}
+		s.Log.Info("overlay PKI ready (OpenVPN overlay)", "fingerprint", s.overlayPKI.Fingerprint())
 	}
 	// Start cluster membership first so leadership is established before the
 	// singleton loops below decide whether to run, and so reconciliation can see the
@@ -795,7 +822,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	terminal.Mount(r, deps, s.Gateway)
 
 	// M8 — host enrollment (WireGuard provisioning + trust).
-	enrollment.Mount(r, deps, enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway))
+	enrollment.Mount(r, deps, enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway, s.overlaySvc))
 
 	// M7 — live status WebSocket.
 	ws.Mount(r, deps, s.Hub)
