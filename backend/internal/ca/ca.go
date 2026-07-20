@@ -61,10 +61,12 @@ func (c *CA) EnsureUserCA(ctx context.Context) error {
 	c.mu.Lock()
 	c.signer, c.caID = signer, rec.ID.String()
 	c.mu.Unlock()
-	// Opportunistically upgrade a legacy (SHA-256) CA-key envelope to argon2id,
-	// but only when explicitly enabled (a v2 blob can't be read by an older build,
-	// so this is a one-way, opt-in step).
-	if c.reencrypt && secretbox.IsLegacy(priv) {
+	// Opportunistically upgrade the CA-key envelope to match the active KDF profile:
+	// legacy(SHA-256)/argon2id -> argon2id normally, and legacy/argon2id -> PBKDF2
+	// under FIPS. Gated behind the opt-in flag because the upgraded blob can't be read
+	// by an older build (a one-way step). reSealActiveKey verifies the re-sealed value
+	// decrypts identically before overwriting, so it can never brick the CA key.
+	if c.reencrypt && secretbox.NeedsReseal(priv) {
 		c.reSealActiveKey(ctx, rec.ID, priv)
 	}
 	return nil
