@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.7 — Full-screen for RDP replay + a visible SSH exit button
+
+- **RDP session replay can now go full screen** — a control it never had. The Guacamole
+  desktop scales to fill the viewport, with the same Esc-to-exit and a floating "Exit
+  full screen" button.
+- **SSH replay exit is now unmissable** — replaced the small top-row icon with a floating
+  **"Exit full screen (Esc)"** button fixed to the viewport corner, above the player.
+
 ## v0.33.6 — Session replay: reliable full-screen exit
 
 Fixes the recorded-session full-screen view: **Esc now always exits** (the key listener

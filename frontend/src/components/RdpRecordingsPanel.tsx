@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Box, Chip, CircularProgress, Divider, Drawer, IconButton, Slider, Stack,
+  Box, Button, Chip, CircularProgress, Divider, Drawer, IconButton, Slider, Stack,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField,
   Tooltip, Typography, Paper,
 } from "@mui/material";
@@ -9,6 +9,8 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import DownloadIcon from "@mui/icons-material/Download";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
+import FullscreenIcon from "@mui/icons-material/Fullscreen";
+import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import Guacamole from "guacamole-common-js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
@@ -41,11 +43,29 @@ function formatDuration(ms: number): string {
 function RdpPlayer({ id }: { id: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const recRef = useRef<Guacamole.SessionRecording | null>(null);
+  const displayRef = useRef<Guacamole.Display | null>(null);
+  const fullscreenRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  // rescale fits the Guacamole canvas to its container: to the container WIDTH normally
+  // (never upscaling past 1×), and to fit BOTH width and height in full screen so the
+  // desktop fills the viewport.
+  const rescale = useCallback(() => {
+    const box = containerRef.current, display = displayRef.current;
+    if (!box || !display) return;
+    const w = display.getWidth(), h = display.getHeight();
+    if (w <= 0) return;
+    if (fullscreenRef.current && h > 0) {
+      display.scale(Math.min(box.clientWidth / w, box.clientHeight / h));
+    } else {
+      display.scale(Math.min(1, box.clientWidth / w));
+    }
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -61,16 +81,9 @@ function RdpPlayer({ id }: { id: string }) {
     recRef.current = recording;
 
     const display = recording.getDisplay();
+    displayRef.current = display;
     containerRef.current.innerHTML = "";
     containerRef.current.appendChild(display.getElement());
-
-    const rescale = () => {
-      if (!containerRef.current) return;
-      const w = display.getWidth();
-      if (w > 0) {
-        display.scale(Math.min(1, containerRef.current.clientWidth / w));
-      }
-    };
     display.onresize = rescale;
 
     recording.onprogress = (dur: number) => { setDuration(dur); setLoading(false); };
@@ -84,8 +97,20 @@ function RdpPlayer({ id }: { id: string }) {
     return () => {
       try { recording.pause(); recording.disconnect(); recording.abort(); } catch { /* already gone */ }
       recRef.current = null;
+      displayRef.current = null;
     };
-  }, [id]);
+  }, [id, rescale]);
+
+  // Full-screen: rescale to fit, Esc (capture phase) exits, re-fit on window resize.
+  useEffect(() => {
+    fullscreenRef.current = fullscreen;
+    requestAnimationFrame(rescale);
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setFullscreen(false); } };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", rescale);
+    return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("resize", rescale); };
+  }, [fullscreen, rescale]);
 
   const toggle = () => {
     const rec = recRef.current;
@@ -103,31 +128,54 @@ function RdpPlayer({ id }: { id: string }) {
   };
 
   return (
-    <Box>
+    <Box sx={fullscreen ? { position: "fixed", inset: 0, zIndex: 1400, bgcolor: "black", display: "flex", flexDirection: "column", p: 1 } : undefined}>
       {error && <Typography color="error" sx={{ mb: 1 }}>{error}</Typography>}
-      <Box sx={{ position: "relative", bgcolor: "black", minHeight: 240, borderRadius: 1, overflow: "auto" }}>
+      <Box sx={{ position: "relative", bgcolor: "black", borderRadius: fullscreen ? 0 : 1, overflow: "auto",
+        ...(fullscreen ? { flexGrow: 1, minHeight: 0 } : { minHeight: 240 }) }}>
         {/* Guacamole appends its canvas here; this node has NO React children so
             React never reconciles against the manually-inserted canvas. */}
         <Box
           ref={containerRef}
-          sx={{ display: "flex", justifyContent: "center", "& canvas": { display: "block" } }}
+          sx={{ display: "flex", justifyContent: "center", alignItems: "center",
+            height: fullscreen ? "100%" : "auto", "& canvas": { display: "block" } }}
         />
         {loading && !error && (
           <Box sx={{ position: "absolute", inset: 0, display: "flex", justifyContent: "center", alignItems: "center" }}>
             <CircularProgress sx={{ color: "grey.500" }} />
           </Box>
         )}
+        {/* Full-screen toggle: a floating control that's always visible over the canvas. */}
+        <Box sx={{ position: "absolute", top: 8, right: 8, zIndex: 2 }}>
+          {fullscreen ? (
+            <Button
+              size="small" variant="contained" startIcon={<FullscreenExitIcon />}
+              onClick={() => setFullscreen(false)}
+              sx={{ bgcolor: "grey.100", color: "#000", "&:hover": { bgcolor: "grey.300" } }}
+            >
+              Exit full screen (Esc)
+            </Button>
+          ) : (
+            <Tooltip title="Full screen">
+              <IconButton
+                size="small" onClick={() => setFullscreen(true)}
+                sx={{ bgcolor: "rgba(0,0,0,0.55)", color: "#fff", "&:hover": { bgcolor: "rgba(0,0,0,0.75)" } }}
+              >
+                <FullscreenIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1 }}>
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1, ...(fullscreen ? { color: "grey.300" } : {}) }}>
         <IconButton onClick={toggle} disabled={!!error} color="primary">
           {playing ? <PauseIcon /> : <PlayArrowIcon />}
         </IconButton>
-        <Typography variant="caption" sx={{ minWidth: 44 }}>{formatDuration(position)}</Typography>
+        <Typography variant="caption" sx={{ minWidth: 44, color: fullscreen ? "grey.300" : undefined }}>{formatDuration(position)}</Typography>
         <Slider
           size="small" min={0} max={Math.max(duration, 1)} value={Math.min(position, duration)}
           onChange={onSeek} disabled={!!error || duration === 0}
         />
-        <Typography variant="caption" sx={{ minWidth: 44 }}>{formatDuration(duration)}</Typography>
+        <Typography variant="caption" sx={{ minWidth: 44, color: fullscreen ? "grey.300" : undefined }}>{formatDuration(duration)}</Typography>
       </Stack>
     </Box>
   );

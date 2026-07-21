@@ -148,16 +148,7 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
           {" "}{Math.round(data.recording.durationMs / 1000)}s
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
-        {fullscreen ? (
-          <Button
-            size="small" variant="contained" color="inherit"
-            startIcon={<FullscreenExitIcon />}
-            onClick={() => setFullscreen(false)}
-            sx={{ bgcolor: "grey.100", color: "#000", "&:hover": { bgcolor: "grey.300" } }}
-          >
-            Exit full screen (Esc)
-          </Button>
-        ) : (
+        {!fullscreen && (
           <Tooltip title="Full screen">
             <IconButton size="small" onClick={() => setFullscreen(true)}>
               <FullscreenIcon fontSize="small" />
@@ -172,6 +163,16 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
           ...(fullscreen ? { flexGrow: 1, minHeight: 0 } : { height: 480 }),
         }}
       />
+      {fullscreen && (
+        // Floating, always-visible exit — fixed to the viewport corner, above the overlay.
+        <Button
+          variant="contained" startIcon={<FullscreenExitIcon />}
+          onClick={() => setFullscreen(false)}
+          sx={{ position: "fixed", top: 12, right: 12, zIndex: 1401, bgcolor: "grey.100", color: "#000", "&:hover": { bgcolor: "grey.300" } }}
+        >
+          Exit full screen (Esc)
+        </Button>
+      )}
     </Box>
   );
 }
