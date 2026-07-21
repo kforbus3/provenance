@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.35.0 — Multi-tenancy (MSP) — experimental, default off
+
+One deployment can now serve multiple **isolated customer tenants**, for MSPs. Opt in
+with `FLEET_MULTI_TENANCY=true` (default off — with it off, Fleet is unchanged).
+
+- **Provider manages many customers.** Existing data lands in a seeded **Provider**
+  tenant; its admins get a **Tenants** console to create customer tenants and **switch
+  into** one to operate within it. Each customer's hosts, users, sessions, credentials,
+  audit and everything else are fully isolated.
+- **Enforced by Postgres row-level security**, not hand-scoped queries: a `tenant_id` +
+  RLS policy on every tenant-scoped table, driven by the request's tenant — so a missed
+  filter physically cannot leak, and an unscoped request sees nothing (fail closed).
+  Proven end-to-end (a provider can't see a customer's hosts, and vice versa).
+- **Requirement:** enabling it needs the app's database role to be a **non-superuser**
+  (Postgres superusers ignore RLS). See docs/multi-tenancy-plan.md.
+
+Treat as **experimental** until you've validated it for your data; single-tenant
+deployments are entirely unaffected. Migration `0051_tenancy`.
+
 ## v0.34.0 — Offline .guac player + content-search keyword highlighting
 
 - **Offline RDP recording player.** A self-contained, cross-platform HTML player for
