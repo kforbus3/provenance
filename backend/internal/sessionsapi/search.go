@@ -114,6 +114,31 @@ func (h *handler) search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// commandSearch searches the INDEXED commands users typed in recorded sessions
+// (reconstructed by the background indexer), as opposed to `search`, which scans full
+// recording content on the fly. Fast and covers all history; results are scoped to the
+// caller's accessible hosts inside the store. Gated by Session.Replay.
+func (h *handler) commandSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) < 2 {
+		httpx.WriteError(w, http.StatusBadRequest, "q must be at least 2 characters")
+		return
+	}
+	hostname := strings.TrimSpace(r.URL.Query().Get("hostname"))
+	p := auth.MustPrincipal(r)
+	rows, err := h.d.Store.SearchSessionCommands(r.Context(), p.UserID, p.IsSuperAdmin, q, hostname, 200)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not search commands")
+		return
+	}
+	// Searching what people typed is sensitive; record who searched for what.
+	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+		ActorID: &p.UserID, ActorName: p.Username, Action: "session.command_search",
+		TargetKind: "session", Detail: map[string]any{"query": q, "matches": len(rows)},
+	})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"results": rows})
+}
+
 // cleanedRecording reads an asciicast file and returns its output text with ANSI
 // escapes and control characters stripped, bounded in size. Returns "" on any read
 // error (a missing/rotated-out recording is simply skipped).

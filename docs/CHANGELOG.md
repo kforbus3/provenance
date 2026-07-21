@@ -5,6 +5,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.2 — Sessions: "Commands" search view
+
+A new **Commands** tab on the Sessions page searches the commands users **typed** in
+recorded terminal sessions ("who ran `X`"), backed by the v0.33.0 command index — fast
+and across all history (unlike the on-the-fly Content search). Filter by host, see
+user/host/time/command, and jump straight to the session replay. Gated by
+Session.Replay, scoped to the caller's accessible hosts, and audited. Results are a
+best-effort reconstruction (tab-completion / recalled history may be partial) and cover
+recorded sessions only. New endpoint `GET /api/v1/session-commands`.
+
 ## v0.33.1 — Host detail: pending-update package list
 
 The host-detail dialog now shows the **pending update packages** collected in v0.33.0,

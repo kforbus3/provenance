@@ -74,6 +74,25 @@ export async function searchSessionContent(q: string): Promise<SessionSearchResp
   };
 }
 
+// One indexed command a user typed in a recorded session.
+export interface SessionCommand {
+  username: string;
+  hostname: string;
+  command: string;
+  at: string;
+  sshSessionId: string;
+}
+
+// searchSessionCommands searches the INDEXED commands users typed in recorded SSH
+// sessions (reconstructed by the background indexer) — fast and across all history,
+// scoped to the caller's accessible hosts. Optionally narrowed by hostname.
+export async function searchSessionCommands(q: string, hostname?: string): Promise<SessionCommand[]> {
+  const { data } = await api.get<{ results: SessionCommand[] }>("/api/v1/session-commands", {
+    params: { q, ...(hostname ? { hostname } : {}) },
+  });
+  return data.results ?? [];
+}
+
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

@@ -17,7 +17,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteRecording, downloadRecording, getRecording, listSessions, pruneRecordings,
-  recordingStats, searchSessionContent, type SSHSession, type SessionSearchResult,
+  recordingStats, searchSessionContent, searchSessionCommands,
+  type SSHSession, type SessionSearchResult, type SessionCommand,
 } from "../api/sessions";
 import { useAuthStore } from "../store/auth";
 import { RdpRecordingsPanel } from "../components/RdpRecordingsPanel";
@@ -217,10 +218,12 @@ export function SessionsPage() {
         <Tab label="Terminal (SSH)" />
         <Tab label="Desktop (RDP)" />
         <Tab label="Content search" />
+        <Tab label="Commands" />
       </Tabs>
 
       {tab === 1 && <RdpRecordingsPanel />}
       {tab === 2 && <ContentSearchPanel />}
+      {tab === 3 && <CommandSearchPanel />}
 
       {tab === 0 && (
       <Box>
@@ -493,6 +496,103 @@ function ContentSearchPanel() {
             <Typography variant="caption" color="text.secondary">Started {formatDateTime(replay.startedAt)}</Typography>
             <Divider sx={{ my: 2 }} />
             <ReplayTerminal sessionId={replay.sessionId} />
+          </Box>
+        )}
+      </Drawer>
+    </Box>
+  );
+}
+
+// CommandSearchPanel searches the INDEXED commands users TYPED in recorded terminal
+// sessions ("who ran X") — fast and across all history, unlike the on-the-fly content
+// search. Best-effort reconstruction; each hit links to its replay.
+function CommandSearchPanel() {
+  const [q, setQ] = useState("");
+  const [hostname, setHostname] = useState("");
+  const [replayId, setReplayId] = useState<string | null>(null);
+  const search = useMutation({
+    mutationFn: ({ query, host }: { query: string; host: string }) => searchSessionCommands(query, host || undefined),
+  });
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (q.trim().length >= 2) search.mutate({ query: q.trim(), host: hostname.trim() });
+  };
+  const results = search.data;
+  return (
+    <Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Search the commands users <b>typed</b> in recorded terminal sessions, across all history.
+        Reconstructed from the recordings (best-effort — tab-completion and history-recalled commands
+        may be partial), and only recorded sessions are covered. Every search is audited.
+      </Typography>
+      <form onSubmit={submit}>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>
+          <TextField
+            size="small" fullWidth autoFocus
+            label="Command contains (e.g. systemctl, rm -rf)"
+            value={q} onChange={(e) => setQ(e.target.value)}
+          />
+          <TextField
+            size="small" label="Host (optional)" value={hostname}
+            onChange={(e) => setHostname(e.target.value)} sx={{ minWidth: 180 }}
+          />
+          <Button type="submit" variant="contained" disabled={q.trim().length < 2 || search.isPending}>
+            {search.isPending ? "Searching…" : "Search"}
+          </Button>
+        </Stack>
+      </form>
+
+      {search.isError && <Alert severity="error" sx={{ mb: 2 }}>{(search.error as Error).message}</Alert>}
+
+      {results && (
+        results.length === 0 ? (
+          <Paper variant="outlined" sx={{ p: 3, textAlign: "center" }}>
+            <Typography color="text.secondary">No typed commands matched.</Typography>
+          </Paper>
+        ) : (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {results.length} match{results.length === 1 ? "" : "es"}{results.length >= 200 ? " (showing the 200 most recent — narrow your query)" : ""}
+            </Typography>
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Time</TableCell><TableCell>User</TableCell><TableCell>Host</TableCell>
+                    <TableCell>Command (typed)</TableCell><TableCell />
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {results.map((r: SessionCommand, i) => (
+                    <TableRow key={i} hover>
+                      <TableCell sx={{ whiteSpace: "nowrap", color: "text.secondary" }}>{formatDateTime(r.at)}</TableCell>
+                      <TableCell>{r.username || "—"}</TableCell>
+                      <TableCell>{r.hostname || "—"}</TableCell>
+                      <TableCell sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>{r.command}</TableCell>
+                      <TableCell align="right">
+                        <Button size="small" startIcon={<PlayArrowIcon />} onClick={() => setReplayId(r.sshSessionId)}>
+                          Replay
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </>
+        )
+      )}
+
+      <Drawer anchor="right" open={replayId !== null} onClose={() => setReplayId(null)}
+        PaperProps={{ sx: { width: { xs: "100%", md: 760 }, p: 2 } }}>
+        {replayId && (
+          <Box>
+            <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+              <Typography variant="h6" sx={{ flexGrow: 1 }}>Session replay</Typography>
+              <IconButton onClick={() => setReplayId(null)}><CloseIcon /></IconButton>
+            </Stack>
+            <Divider sx={{ my: 2 }} />
+            <ReplayTerminal sessionId={replayId} />
           </Box>
         )}
       </Drawer>
