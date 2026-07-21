@@ -6,12 +6,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
 
 // Connect opens a pgx connection pool and verifies connectivity with retries,
-// since Postgres may still be starting up in a fresh Compose stack.
-func Connect(ctx context.Context, url string, maxConns, minConns int32) (*pgxpool.Pool, error) {
+// since Postgres may still be starting up in a fresh Compose stack. When multiTenancy
+// is on, a BeforeAcquire hook sets the `app.tenant_id` GUC from the request context on
+// every connection, so the row-level-security policies scope every query to the
+// caller's tenant (see internal/tenant + migration 0051).
+func Connect(ctx context.Context, url string, maxConns, minConns int32, multiTenancy bool) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)
@@ -21,6 +27,21 @@ func Connect(ctx context.Context, url string, maxConns, minConns int32) (*pgxpoo
 	}
 	if minConns > 0 {
 		cfg.MinConns = minConns
+	}
+
+	// Scope every acquired connection to the request's tenant so RLS can filter. Set on
+	// both modes: with the flag off we set Bypass (RLS is satisfied for all rows, so the
+	// FORCE'd policies are a no-op and behavior is unchanged); with it on we set the
+	// context's tenant, or "" for an unmarked context — which RLS denies (fail closed).
+	cfg.BeforeAcquire = func(ctx context.Context, conn *pgx.Conn) bool {
+		val := tenant.Bypass
+		if multiTenancy {
+			val = tenant.GUCValue(ctx)
+		}
+		if _, err := conn.Exec(ctx, "SELECT set_config($1, $2, false)", tenant.GUC, val); err != nil {
+			return false // don't hand out a connection we couldn't scope
+		}
+		return true
 	}
 	cfg.MaxConnLifetime = time.Hour
 	cfg.HealthCheckPeriod = 30 * time.Second

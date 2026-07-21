@@ -52,7 +52,9 @@ func run(cmd string, args []string) error {
 	if err != nil {
 		return err
 	}
-	pool, err := db.Connect(ctx, cfg.DatabaseURL, 4, 1)
+	// The recovery CLI operates across all tenants; pass multiTenancy=false so its
+	// connections always bypass row-level security regardless of the deployment flag.
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, 4, 1, false)
 	if err != nil {
 		return err
 	}

@@ -26,6 +26,11 @@ type Config struct {
 	DBMaxConns     int32
 	DBMinConns     int32
 	MigrateOnStart bool
+	// MultiTenancy enables the MSP multi-tenant mode (FLEET_MULTI_TENANCY). Default
+	// off: Fleet is single-tenant and every row belongs to the seeded default tenant,
+	// with no tenant filtering (behavior unchanged). When on, Postgres row-level
+	// security scopes every query to the request's tenant. See docs/multi-tenancy-plan.md.
+	MultiTenancy bool
 	// DRStandbyToken authorizes the promote action on the read-only DR standby
 	// console (a write-free break-glass path, since a standby DB can't create a
 	// login session). Empty = the standby console is status-only; promote via
@@ -226,6 +231,7 @@ func Load() (*Config, error) {
 		DBMaxConns:             int32(envInt("FLEET_DB_MAX_CONNS", 20)),
 		DBMinConns:             int32(envInt("FLEET_DB_MIN_CONNS", 2)),
 		MigrateOnStart:         envBool("FLEET_MIGRATE_ON_START", true),
+		MultiTenancy:           envBool("FLEET_MULTI_TENANCY", false),
 		DRStandbyToken:         env("FLEET_DR_STANDBY_TOKEN", ""),
 		RedisURL:               env("FLEET_REDIS_URL", "redis://redis:6379/0"),
 		AccessTokenTTL:         envDuration("FLEET_ACCESS_TOKEN_TTL", 15*time.Minute),

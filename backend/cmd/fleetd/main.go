@@ -18,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/db"
 	"github.com/fleet-terminal/backend/internal/telemetry"
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -41,6 +42,11 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Boot, migrations, and every background worker legitimately span all tenants, so
+	// the root context bypasses row-level security. HTTP requests get their own context
+	// (tenant-scoped by middleware); a request that skips that middleware is denied, not
+	// leaked. No effect when FLEET_MULTI_TENANCY is off.
+	ctx = tenant.WithBypass(ctx)
 
 	shutdownTracing, err := telemetry.SetupTracing(ctx, cfg.TracingOn, cfg.OTLPEndpoint, "fleet-terminal-backend", version, log)
 	if err != nil {
@@ -52,7 +58,7 @@ func run() error {
 		_ = shutdownTracing(sctx)
 	}()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL, cfg.DBMaxConns, cfg.DBMinConns)
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, cfg.DBMaxConns, cfg.DBMinConns, cfg.MultiTenancy)
 	if err != nil {
 		return err
 	}
