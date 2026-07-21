@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.36.2 — System Health page reachable on direct load
+
+- **Fixed** the System Health page showing raw `{"status":"ok"}` JSON on a hard refresh or
+  direct link. nginx proxies the exact path `/health` to the backend liveness endpoint (for
+  infra/monitoring probes), which shadowed the SPA's `/health` route. Moved the UI page to
+  **`/system-health`**; the `/health` liveness endpoint is unchanged. In-app navigation was
+  never affected — only a direct load of that URL.
+
 ## v0.36.1 — Session-replay full-screen fix + tenant-switch UX + multi-tenancy compose wiring
 
 - **Tenant switching is now obvious from anywhere.** While a provider admin is acting

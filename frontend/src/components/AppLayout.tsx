@@ -77,7 +77,7 @@ const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: stri
   { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
   { to: "/command-policy", label: "Command Control", icon: <PolicyIcon />, perm: "CommandPolicy.Manage" },
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
-  { to: "/health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
+  { to: "/system-health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
   { to: "/disaster-recovery", label: "Disaster Recovery", icon: <SyncAltIcon />, perm: "DR.Manage" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
   { to: "/help", label: "Help", icon: <HelpOutlineIcon /> },

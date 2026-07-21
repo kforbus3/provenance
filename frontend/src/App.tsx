@@ -144,7 +144,10 @@ export function App() {
               <Route path="security" element={<SecurityPage />} />
               <Route path="vulnerabilities" element={<ProtectedRoute permission="Host.Scan"><VulnerabilitiesPage /></ProtectedRoute>} />
               <Route path="jobs" element={<ProtectedRoute permission="System.Configure"><JobsPage /></ProtectedRoute>} />
-              <Route path="health" element={<ProtectedRoute permission="System.Configure"><HealthPage /></ProtectedRoute>} />
+              {/* The System Health UI lives at /system-health, not /health: nginx proxies
+                  the exact path /health to the backend liveness endpoint (for infra probes),
+                  which would otherwise shadow this page on a hard load/refresh. */}
+              <Route path="system-health" element={<ProtectedRoute permission="System.Configure"><HealthPage /></ProtectedRoute>} />
               <Route path="settings" element={<ProtectedRoute permission="System.Configure"><SettingsPage /></ProtectedRoute>} />
               <Route path="help" element={<HelpPage />} />
               <Route path="help/:slug" element={<HelpPage />} />
