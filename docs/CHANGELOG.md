@@ -5,8 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v0.36.1 — Session-replay full-screen fix + multi-tenancy compose wiring
+## v0.36.1 — Session-replay full-screen fix + tenant-switch UX + multi-tenancy compose wiring
 
+- **Tenant switching is now obvious from anywhere.** While a provider admin is acting
+  inside a customer tenant, the top bar shows the tenant's **name** ("Tenant: Acme") on
+  every page, next to a one-click **Exit** button that returns to the provider's own view
+  (clears the tenant header, refetches under the restored context, lands on the dashboard).
+  Previously the only always-visible affordance was a generic "In customer tenant" chip
+  that merely linked to the Tenants console — the actual switch-back was buried there.
 - **Fixed** the "Exit full screen" control being invisible when replaying an SSH session
   full-screen. The replay renders inside a right-anchored drawer (a modal whose stacking
   context tops out just below the app bar), so a top-right exit button was painted over by

@@ -1,5 +1,5 @@
 import {
-  AppBar, Badge, Box, Chip, CssBaseline, Drawer, IconButton, List, ListItemButton,
+  AppBar, Badge, Box, Button, Chip, CssBaseline, Drawer, IconButton, List, ListItemButton,
   ListItemIcon, ListItemText, Toolbar, Typography, Tooltip,
 } from "@mui/material";
 import DnsIcon from "@mui/icons-material/Dns";
@@ -34,12 +34,14 @@ import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import MenuIcon from "@mui/icons-material/Menu";
 import LogoutIcon from "@mui/icons-material/Logout";
+import ExitToAppIcon from "@mui/icons-material/ExitToApp";
 import { Link as RouterLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
+import { listTenants } from "../api/tenants";
 import { listAssistantApprovals } from "../api/assistant";
 import { setDisplayTimezone } from "../lib/datetime";
 
@@ -92,6 +94,24 @@ export function AppLayout() {
   const has = useAuthStore((s) => s.has);
   const showProvider = useAuthStore((s) => s.multiTenancy && s.isProviderAdmin);
   const activeTenant = useAuthStore((s) => s.activeTenant);
+  const switchTenant = useAuthStore((s) => s.switchTenant);
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  // While switched into a customer tenant, resolve its name so it can be shown on every
+  // page. Reuses the ["tenants"] cache the Tenants console already populates; gated so we
+  // only fetch when actually inside a tenant.
+  const { data: tenants } = useQuery({
+    queryKey: ["tenants"], queryFn: listTenants, enabled: !!activeTenant,
+  });
+  const activeTenantName = tenants?.find((t) => t.id === activeTenant)?.name;
+  // One-click return to the provider's own view: clear the tenant header, refetch every
+  // query under the restored context, and land on the dashboard. Mirrors the Tenants
+  // console's "Return to your tenant" action so both entry points behave identically.
+  const exitTenant = () => {
+    switchTenant(null);
+    void qc.invalidateQueries();
+    navigate("/");
+  };
   // Pending assistant-action approvals awaiting this user (approvers only), shown
   // as a badge on the Ask nav item.
   const { data: pendingApprovals = [] } = useQuery({
@@ -106,7 +126,6 @@ export function AppLayout() {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const logout = useAuthStore((s) => s.logout);
   const username = useAuthStore((s) => s.user?.username);
-  const navigate = useNavigate();
   const appName = useAppName();
   useDocumentTitle();
 
@@ -130,12 +149,24 @@ export function AppLayout() {
             {appName}
           </Typography>
           {activeTenant && (
-            <Tooltip title="You are acting inside a customer tenant — click to manage tenants / switch back">
-              <Chip
-                size="small" color="warning" clickable component={RouterLink} to="/tenants"
-                icon={<ApartmentIcon />} label="In customer tenant" sx={{ mr: 1 }}
-              />
-            </Tooltip>
+            <Box sx={{ display: "flex", alignItems: "center", mr: 1 }}>
+              <Tooltip title="You are acting inside this customer tenant — click to manage tenants">
+                <Chip
+                  size="small" color="warning" clickable component={RouterLink} to="/tenants"
+                  icon={<ApartmentIcon />}
+                  label={activeTenantName ? `Tenant: ${activeTenantName}` : "In customer tenant"}
+                  sx={{ mr: 0.5, fontWeight: 600, maxWidth: 280, "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" } }}
+                />
+              </Tooltip>
+              <Tooltip title="Return to your provider view">
+                <Button
+                  color="inherit" size="small" startIcon={<ExitToAppIcon />}
+                  onClick={exitTenant} sx={{ whiteSpace: "nowrap" }}
+                >
+                  Exit
+                </Button>
+              </Tooltip>
+            </Box>
           )}
           <Tooltip title="Toggle theme">
             <IconButton color="inherit" onClick={toggleMode}>
