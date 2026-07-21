@@ -48,6 +48,10 @@ type VaultSecret struct {
 	CreatedBy    string    `json:"createdBy,omitempty"` // resolved username
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
+	// Automatic rotation policy (password credentials only). 0 = disabled.
+	RotationIntervalDays int        `json:"rotationIntervalDays"`
+	LastRotatedAt        *time.Time `json:"lastRotatedAt,omitempty"`
+	NextRotationAt       *time.Time `json:"nextRotationAt,omitempty"`
 	// Access is the requesting caller's effective access (view|use|manage), set on
 	// list/get for the UI. Empty means access is via the Credential.Manage role.
 	Access string `json:"access,omitempty"`

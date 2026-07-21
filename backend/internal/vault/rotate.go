@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -22,6 +23,43 @@ import (
 // The vault is kept consistent with the host — if the host change fails, the stored
 // value is reverted. On-demand only (a user's live session authenticates the jump
 // hop); the operator never sees any password.
+// setRotationPolicy configures (or clears, with intervalDays=0) automatic scheduled
+// rotation for a password credential. The background rotation loop then rotates it on
+// its host every intervalDays.
+func (h *handler) setRotationPolicy(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		IntervalDays int `json:"intervalDays"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.IntervalDays < 0 || body.IntervalDays > 3650 {
+		httpx.WriteError(w, http.StatusBadRequest, "intervalDays must be between 0 and 3650")
+		return
+	}
+	sec, err := h.d.Store.GetVaultSecret(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "credential not found")
+		return
+	}
+	if body.IntervalDays > 0 && sec.Type != "password" {
+		httpx.WriteError(w, http.StatusBadRequest, "only password credentials can be rotated automatically")
+		return
+	}
+	if err := h.d.Store.SetVaultRotationPolicy(r.Context(), id, body.IntervalDays); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not set the rotation policy")
+		return
+	}
+	h.audit(r, "credential.rotation_policy", id, map[string]any{"intervalDays": body.IntervalDays})
+	updated, _ := h.d.Store.GetVaultSecret(r.Context(), id)
+	httpx.WriteJSON(w, http.StatusOK, updated)
+}
+
 func (h *handler) rotate(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r, "id")
 	if !ok {

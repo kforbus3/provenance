@@ -18,6 +18,9 @@ export interface VaultSecret {
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
+  rotationIntervalDays: number; // 0 = automatic rotation disabled
+  lastRotatedAt?: string;
+  nextRotationAt?: string;
   access?: string; // caller's effective access: view | use | manage
 }
 
@@ -136,5 +139,13 @@ export interface RotateResult {
 // backend generates a new secret, changes it on the host, and stores it.
 export async function rotateVaultSecret(id: string): Promise<RotateResult> {
   const { data } = await api.post<RotateResult>(`/api/v1/vault/secrets/${id}/rotate`);
+  return data;
+}
+
+// setVaultRotationPolicy sets (or clears, with intervalDays=0) automatic scheduled
+// rotation for a password credential. A background job rotates it on its host every
+// intervalDays.
+export async function setVaultRotationPolicy(id: string, intervalDays: number): Promise<VaultSecret> {
+  const { data } = await api.put<VaultSecret>(`/api/v1/vault/secrets/${id}/rotation-policy`, { intervalDays });
   return data;
 }

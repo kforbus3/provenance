@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.38.0 — Scheduled automatic credential rotation
+
+The credential vault could already rotate a password on its host **on demand**; it can now do
+so **automatically on a schedule**. Set a rotation interval (1/7/30/60/90 days) on a password
+credential from the Credentials page, and a background job rotates it on its host every
+interval — generating a new value, changing it over SSH, verifying it by re-login, and storing
+the new sealed version. No one ever sees the password.
+
+- Reaches the host with a short-lived **system certificate** through the jump hop (no user
+  session required); the change-and-verify contract is shared with the on-demand path.
+- **Backs off on failure** (retries at the next scheduled time rather than every check) and
+  emits `credential.rotated` / `credential.rotate_failed` notifications; every rotation is
+  audited.
+- Leader-gated and RLS-bypassed so one instance rotates due credentials across all tenants,
+  with each stored version tagged to the credential's own tenant.
+- New knob `FLEET_VAULT_ROTATION_CHECK` (default 30m) sets how often the leader scans for due
+  credentials. Migration `0052_vault_rotation`.
+
 ## v0.37.1 — Multi-tenancy: keep the audit hash-chain global (append fix)
 
 Completes the audit-chain hardening started in v0.37.0. `AppendAudit` read the previous hash

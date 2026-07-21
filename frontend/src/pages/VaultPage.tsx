@@ -12,14 +12,16 @@ import GroupIcon from "@mui/icons-material/Group";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import LockClockIcon from "@mui/icons-material/LockClock";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
+import ScheduleIcon from "@mui/icons-material/Schedule";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import { listUsers, listGroups } from "../api/admin";
+import { formatDateTime } from "../lib/datetime";
 import {
   listVaultSecrets, createVaultSecret, updateVaultSecret, deleteVaultSecret, revealVaultSecret,
   listVaultGrants, createVaultGrant, deleteVaultGrant,
   requestCheckout, listMyCheckouts, listCheckoutApprovals, approveCheckout, denyCheckout,
-  rotateVaultSecret,
+  rotateVaultSecret, setVaultRotationPolicy,
   type VaultSecret, type VaultSecretInput,
 } from "../api/vault";
 
@@ -46,6 +48,7 @@ export function VaultPage() {
   const [revealing, setRevealing] = useState<VaultSecret | null>(null);
   const [granting, setGranting] = useState<VaultSecret | null>(null);
   const [checkingOut, setCheckingOut] = useState<VaultSecret | null>(null);
+  const [scheduling, setScheduling] = useState<VaultSecret | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["vault-secrets"] });
 
   // Secrets the caller currently holds an active check-out for.
@@ -101,6 +104,12 @@ export function VaultPage() {
                     <Chip size="small" variant="outlined" color="warning" sx={{ ml: 0.5 }}
                       label={s.accessPolicy === "approval" ? "approval" : "checkout"} />
                   )}
+                  {s.rotationIntervalDays > 0 && (
+                    <Tooltip title={s.nextRotationAt ? `Next rotation ${formatDateTime(s.nextRotationAt)}` : "Automatic rotation scheduled"}>
+                      <Chip size="small" variant="outlined" color="success" icon={<ScheduleIcon />} sx={{ ml: 0.5 }}
+                        label={`auto ${s.rotationIntervalDays}d`} />
+                    </Tooltip>
+                  )}
                 </TableCell>
                 <TableCell><Chip size="small" variant="outlined" label={TYPES.find((t) => t.value === s.type)?.label ?? s.type} /></TableCell>
                 <TableCell>{s.username || "—"}</TableCell>
@@ -114,6 +123,11 @@ export function VaultPage() {
                     <Tooltip title="Rotate on host"><span><IconButton size="small" disabled={rotate.isPending}
                       onClick={() => { if (window.confirm(`Rotate the password for "${s.name}" on its host now? A new value is set on the host and stored.`)) rotate.mutate(s.id); }}>
                       <AutorenewIcon fontSize="small" /></IconButton></span></Tooltip>
+                  )}
+                  {canRotate && s.type === "password" && (
+                    <Tooltip title="Schedule automatic rotation"><IconButton size="small"
+                      color={s.rotationIntervalDays > 0 ? "success" : "default"} onClick={() => setScheduling(s)}>
+                      <ScheduleIcon fontSize="small" /></IconButton></Tooltip>
                   )}
                   {canManage && <>
                     <Tooltip title="Edit"><IconButton size="small" onClick={() => setEditing(s)}><EditIcon fontSize="small" /></IconButton></Tooltip>
@@ -143,7 +157,52 @@ export function VaultPage() {
       {checkingOut && <CheckoutDialog secret={checkingOut}
         onClose={() => setCheckingOut(null)}
         onDone={() => { setCheckingOut(null); qc.invalidateQueries({ queryKey: ["vault-my-checkouts"] }); }} />}
+      {scheduling && <RotationPolicyDialog secret={scheduling}
+        onClose={() => setScheduling(null)}
+        onSaved={() => { setScheduling(null); invalidate(); }} />}
     </Box>
+  );
+}
+
+// RotationPolicyDialog configures automatic scheduled rotation for a password
+// credential. A background job rotates it on its host every N days; 0 disables it.
+function RotationPolicyDialog({ secret, onClose, onSaved }: { secret: VaultSecret; onClose: () => void; onSaved: () => void }) {
+  const [days, setDays] = useState<number>(secret.rotationIntervalDays || 0);
+  const save = useMutation({
+    mutationFn: () => setVaultRotationPolicy(secret.id, days),
+    onSuccess: onSaved,
+  });
+  return (
+    <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Automatic rotation — {secret.name}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Rotate this password on its host automatically. A background job generates a new
+          value, changes it on the host, verifies it, and stores it — no one sees the password.
+          Set to “Off” to disable.
+        </Typography>
+        <TextField select fullWidth label="Rotate every" value={days}
+          onChange={(e) => setDays(Number(e.target.value))}>
+          <MenuItem value={0}>Off (manual only)</MenuItem>
+          <MenuItem value={1}>1 day</MenuItem>
+          <MenuItem value={7}>7 days</MenuItem>
+          <MenuItem value={30}>30 days</MenuItem>
+          <MenuItem value={60}>60 days</MenuItem>
+          <MenuItem value={90}>90 days</MenuItem>
+        </TextField>
+        {secret.lastRotatedAt && (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: "block" }}>
+            Last rotated {formatDateTime(secret.lastRotatedAt)}
+            {days > 0 && secret.nextRotationAt ? ` · next ${formatDateTime(secret.nextRotationAt)}` : ""}
+          </Typography>
+        )}
+        {save.isError && <Alert severity="error" sx={{ mt: 2 }}>Could not save the rotation policy.</Alert>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>Save</Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

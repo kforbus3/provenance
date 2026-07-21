@@ -80,7 +80,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/system"
 	"github.com/fleet-terminal/backend/internal/tenantapi"
 	"github.com/fleet-terminal/backend/internal/terminal"
-	"github.com/fleet-terminal/backend/internal/vault"
+	credvault "github.com/fleet-terminal/backend/internal/vault"
 	"github.com/fleet-terminal/backend/internal/vulnscan"
 	"github.com/fleet-terminal/backend/internal/winscript"
 	"github.com/fleet-terminal/backend/internal/ws"
@@ -129,6 +129,7 @@ type Server struct {
 	insights     *insights.Service
 	digest       *digest.Service
 	reportSched  *reportsched.Service
+	rotator      *credvault.Rotator
 
 	// lastCANotify throttles the CA-rotation reminder (touched only by renewalLoop).
 	lastCANotify time.Time
@@ -218,6 +219,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
 	s.digest = digest.New(st, s.insights, s.Notify, log)
 	s.reportSched = reportsched.New(st, s.Notify, log)
+	s.rotator = credvault.NewRotator(st, gateway, cfg, log, s.Notify)
 	st.SetAuditSink(s.auditFwd.Forward) // forward audit events to syslog/SIEM when enabled
 
 	// On login, mint an ephemeral SSH identity bound to the session; on logout,
@@ -305,6 +307,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.reportSched.Run(ctx, s.isLeader)
 	go s.dynamicGroupLoop(ctx)
 	go s.krlLoop(ctx)
+	go s.vaultRotationLoop(ctx)
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx, s.isLeader)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx, s.isLeader)
@@ -667,6 +670,39 @@ func (s *Server) pruneAudit(ctx context.Context) {
 	s.Jobs.Record("audit-retention", nil)
 }
 
+// vaultRotationLoop rotates vaulted password credentials whose scheduled rotation is
+// due. Leader-gated (a singleton across the cluster) and RLS-bypassed (ctx is the
+// background context) so it sees due credentials across all tenants — each version
+// write inherits the credential's own tenant. FLEET_VAULT_ROTATION_CHECK only sets how
+// often the leader checks; the per-credential interval is configured per credential.
+func (s *Server) vaultRotationLoop(ctx context.Context) {
+	interval := s.Cfg.VaultRotationCheck
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	run := func() {
+		if !s.isLeader() {
+			return // singleton: only the leader rotates
+		}
+		n, err := s.rotator.RunDue(ctx)
+		if n > 0 {
+			s.Log.Info("rotated vault credentials on schedule", "count", n)
+		}
+		s.Jobs.Record("vault-rotation", err)
+	}
+	run() // an initial pass shortly after boot
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
 // dynamicGroupLoop periodically recomputes rule-managed (dynamic) group
 // membership so host, tag, and inventory changes are reflected without per-change
 // hooks. Runs once shortly after startup, then on an interval.
@@ -937,7 +973,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	tenantapi.Mount(r, deps)
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
-	vault.Mount(r, deps, s.Gateway)
+	credvault.Mount(r, deps, s.Gateway)
 	rdp.Mount(r, deps, s.Gateway)
 	rdp.MountAPI(r, deps)
 	auditapi.Mount(r, deps)

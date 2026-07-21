@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -62,15 +63,84 @@ func (in VaultSecretInput) accessPolicy() string {
 }
 
 const vaultSecretCols = `s.id, s.name, s.folder, s.type, s.username, s.target, s.description, s.access_policy, s.version,
-	COALESCE(u.username,''), s.created_at, s.updated_at`
+	COALESCE(u.username,''), s.created_at, s.updated_at, s.rotation_interval_days, s.last_rotated_at, s.next_rotation_at`
 
 func scanVaultSecret(row interface{ Scan(...any) error }) (*models.VaultSecret, error) {
 	var v models.VaultSecret
 	if err := row.Scan(&v.ID, &v.Name, &v.Folder, &v.Type, &v.Username, &v.Target, &v.Description,
-		&v.AccessPolicy, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		&v.AccessPolicy, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt,
+		&v.RotationIntervalDays, &v.LastRotatedAt, &v.NextRotationAt); err != nil {
 		return nil, err
 	}
 	return &v, nil
+}
+
+// SetVaultRotationPolicy sets (or clears, with days=0) automatic rotation for a
+// credential. Setting a policy schedules the next rotation one interval out; the
+// on-demand rotate endpoint independently refreshes next_rotation_at via MarkVaultRotated.
+func (s *Store) SetVaultRotationPolicy(ctx context.Context, id uuid.UUID, days int) error {
+	if days < 0 {
+		days = 0
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE vault_secrets
+		SET rotation_interval_days = $2,
+		    next_rotation_at = CASE WHEN $2 > 0
+		        THEN COALESCE(last_rotated_at, now()) + ($2 || ' days')::interval
+		        ELSE NULL END,
+		    updated_at = now()
+		WHERE id = $1`, id, days)
+	return err
+}
+
+// MarkVaultRotated records a successful rotation and schedules the next one.
+func (s *Store) MarkVaultRotated(ctx context.Context, id uuid.UUID, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE vault_secrets
+		SET last_rotated_at = $2::timestamptz,
+		    next_rotation_at = CASE WHEN rotation_interval_days > 0
+		        THEN $2::timestamptz + (rotation_interval_days || ' days')::interval ELSE NULL END,
+		    updated_at = now()
+		WHERE id = $1`, id, at)
+	return err
+}
+
+// DeferVaultRotation pushes a credential's next scheduled rotation one interval into
+// the future WITHOUT recording a successful rotation. The loop calls this after a
+// failed attempt so it backs off (retries at the next scheduled time) instead of
+// hammering a broken credential every check cycle.
+func (s *Store) DeferVaultRotation(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE vault_secrets
+		SET next_rotation_at = CASE WHEN rotation_interval_days > 0
+		        THEN now() + (rotation_interval_days || ' days')::interval ELSE NULL END,
+		    updated_at = now()
+		WHERE id = $1`, id)
+	return err
+}
+
+// DueVaultRotations returns password credentials whose automatic rotation is due
+// (policy set and next_rotation_at reached). Only password credentials can be
+// rotated automatically.
+func (s *Store) DueVaultRotations(ctx context.Context, now time.Time) ([]models.VaultSecret, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+vaultSecretCols+`
+		FROM vault_secrets s LEFT JOIN users u ON u.id = s.created_by
+		WHERE s.type = 'password' AND s.rotation_interval_days > 0
+		  AND s.next_rotation_at IS NOT NULL AND s.next_rotation_at <= $1
+		ORDER BY s.next_rotation_at`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.VaultSecret
+	for rows.Next() {
+		v, err := scanVaultSecret(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
 }
 
 // CreateVaultSecret inserts a credential and its first sealed version in one tx.
@@ -114,8 +184,13 @@ func (s *Store) AddVaultSecretVersion(ctx context.Context, secretID uuid.UUID, s
 		secretID).Scan(&next); err != nil {
 		return 0, err
 	}
+	// Inherit the parent secret's tenant_id explicitly (so an unattended/system
+	// rotation running under RLS bypass still tags the version to the right tenant),
+	// and NULL created_by when the writer is the system (zero UUID), not a user.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO vault_secret_versions (secret_id, version, sealed, created_by) VALUES ($1,$2,$3,$4)`,
+		INSERT INTO vault_secret_versions (secret_id, version, sealed, created_by, tenant_id)
+		SELECT $1, $2, $3, NULLIF($4, '00000000-0000-0000-0000-000000000000'::uuid), s.tenant_id
+		FROM vault_secrets s WHERE s.id = $1`,
 		secretID, next, sealed, createdBy); err != nil {
 		return 0, err
 	}

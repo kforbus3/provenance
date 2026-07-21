@@ -46,6 +46,7 @@ func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Post("/vault/secrets/{id}/grants", h.createGrant)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Delete("/vault/secrets/{id}/grants/{grantId}", h.deleteGrant)
 		pr.With(d.Auth.RequirePermission("Credential.Rotate")).Post("/vault/secrets/{id}/rotate", h.rotate)
+		pr.With(d.Auth.RequirePermission("Credential.Rotate")).Put("/vault/secrets/{id}/rotation-policy", h.setRotationPolicy)
 
 		// Check-out / approval workflow.
 		h.mountCheckout(pr, d.Auth.RequirePermission("Credential.Approve"))

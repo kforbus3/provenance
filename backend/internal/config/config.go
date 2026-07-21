@@ -205,6 +205,9 @@ type Config struct {
 	// secretbox. Must be set and distinct from the CA passphrase in production;
 	// falls back to the CA passphrase in development. Resolve it via VaultKey().
 	VaultPassphrase string
+	// VaultRotationCheck is how often the leader scans for password credentials whose
+	// scheduled rotation is due (the per-credential interval is set in the UI).
+	VaultRotationCheck time.Duration
 
 	// GuacdAddr is the address of the guacd sidecar that brokers RDP/VNC desktop
 	// sessions. RDPProxyHost is the hostname guacd uses to reach THIS backend for
@@ -277,6 +280,7 @@ func Load() (*Config, error) {
 		WGJumpEndpoint:         env("FLEET_WG_JUMP_ENDPOINT", "jumphost:51820"),
 		WGPort:                 envInt("FLEET_WG_PORT", 51820),
 		OVPNPort:               envInt("FLEET_OVPN_PORT", 1194),
+		VaultRotationCheck:     envDuration("FLEET_VAULT_ROTATION_CHECK", 30*time.Minute),
 		MetricHistorySample:    envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
 		MetricHistoryRetention: envDuration("FLEET_METRIC_HISTORY_RETENTION", 720*time.Hour),
 		MonitorConcurrency:     envInt("FLEET_MONITOR_CONCURRENCY", 6),

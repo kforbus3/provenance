@@ -270,6 +270,42 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
 }
 
+// DialSystemPasswordViaJump reaches a host through the jump hop using a short-lived
+// SYSTEM certificate (no user session required) and then authenticates to the target
+// with a password. It is the unattended counterpart of DialPasswordViaJump, used by
+// the scheduled credential-rotation loop to change a vaulted password on its host.
+func (g *Gateway) DialSystemPasswordViaJump(ctx context.Context, hostID uuid.UUID, host string, port int, user, password string) (*Conn, error) {
+	if g.issuer == nil {
+		return nil, fmt.Errorf("gateway issuer unavailable")
+	}
+	signer, err := g.issuer.SystemSigner(ctx, g.issuer.SystemHostPrincipals(hostID), 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	jumpClient, err := g.DialJumpWithSigner(ctx, signer)
+	if err != nil {
+		return nil, err
+	}
+	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	tunnel, err := jumpClient.DialContext(ctx, "tcp", target)
+	if err != nil {
+		_ = jumpClient.Close()
+		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
+	}
+	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, g.pin(&ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.Password(password)},
+		HostKeyCallback: g.hostKeyCallback(),
+		Timeout:         15 * time.Second,
+	}))
+	if err != nil {
+		_ = tunnel.Close()
+		_ = jumpClient.Close()
+		return nil, fmt.Errorf("ssh password auth to %s via jump: %w", target, err)
+	}
+	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
+}
+
 // DialDirectKey opens a direct SSH connection authenticating with a raw key
 // signer (a plain public key, not a certificate). Enrollment uses this to
 // bootstrap a host that has no password auth but already trusts an operator's

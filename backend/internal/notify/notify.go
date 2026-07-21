@@ -34,6 +34,8 @@ const (
 	EventCommandFlagged   = "command.flagged"
 	EventCommandBlocked   = "command.blocked"
 	EventCommandApproval  = "command.approval"
+	EventCredentialRotated      = "credential.rotated"
+	EventCredentialRotateFailed = "credential.rotate_failed"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -55,6 +57,8 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventCommandFlagged, "Privileged command flagged"},
 	{EventCommandBlocked, "Command blocked by policy"},
 	{EventCommandApproval, "Command awaiting approval"},
+	{EventCredentialRotated, "Vault credential auto-rotated"},
+	{EventCredentialRotateFailed, "Vault credential auto-rotation failed"},
 }
 
 const settingKey = "notifications"
