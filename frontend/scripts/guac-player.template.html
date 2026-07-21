@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Terminal — Offline .guac Recording Player</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background: #0d1117; color: #e6edf3; }
+  header { padding: 14px 18px; border-bottom: 1px solid #21262d; display: flex; align-items: baseline; gap: 10px; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 12px; color: #8b949e; }
+  main { padding: 18px; max-width: 1200px; margin: 0 auto; }
+  #drop { border: 2px dashed #30363d; border-radius: 10px; padding: 44px 18px; text-align: center;
+          color: #8b949e; transition: border-color .15s, background .15s; cursor: pointer; }
+  #drop.drag { border-color: #2f81f7; background: #10203a; color: #cfe3ff; }
+  #drop strong { color: #e6edf3; }
+  #drop input { display: none; }
+  #status { margin-top: 12px; font-size: 13px; color: #8b949e; min-height: 18px; }
+  #status.error { color: #ff7b72; }
+  #viewer { margin-top: 16px; display: none; }
+  #screen { background: #000; border-radius: 8px; overflow: auto; display: flex;
+            justify-content: center; align-items: center; min-height: 320px; }
+  #screen canvas { display: block; }
+  #viewer:fullscreen { background: #000; padding: 0; }
+  #viewer:fullscreen #screen { height: calc(100vh - 56px); border-radius: 0; }
+  #controls { display: flex; align-items: center; gap: 14px; padding: 10px 4px; }
+  #controls button { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px;
+                     width: 38px; height: 34px; font-size: 15px; cursor: pointer; }
+  #controls button:hover { background: #30363d; }
+  #controls button:disabled { opacity: .4; cursor: default; }
+  #seek { flex: 1; accent-color: #2f81f7; }
+  .time { font-variant-numeric: tabular-nums; font-size: 12px; color: #8b949e; min-width: 46px; text-align: center; }
+  footer { padding: 10px 18px; color: #6e7681; font-size: 11px; border-top: 1px solid #21262d; }
+  a { color: #2f81f7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fleet Terminal — Offline .guac Player</h1>
+  <span class="sub">Play downloaded RDP session recordings locally. Works fully offline — no server.</span>
+</header>
+<main>
+  <label id="drop" for="file">
+    <div>Drop a <strong>.guac</strong> recording here, or <strong>click to choose a file</strong>.</div>
+    <input type="file" id="file" accept=".guac">
+  </label>
+  <div id="status"></div>
+
+  <div id="viewer">
+    <div id="screen"></div>
+    <div id="controls">
+      <button id="playpause" title="Play / pause (Space)" disabled>&#9658;</button>
+      <span class="time" id="cur">0:00</span>
+      <input type="range" id="seek" min="0" max="1" value="0" step="1" disabled>
+      <span class="time" id="dur">0:00</span>
+      <button id="fs" title="Full screen (F)">&#9974;</button>
+    </div>
+  </div>
+</main>
+<footer>
+  This is a self-contained player: your recording is read locally in your browser and never uploaded.
+  Bundles Apache Guacamole (guacamole-common-js), Apache License 2.0.
+</footer>
+
+<script>/*__GUACAMOLE_LIB__*/</script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var rec = null, display = null, objURL = null, duration = 0;
+
+  function fmt(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  function setStatus(msg, isError) {
+    var el = $('status'); el.textContent = msg || ''; el.className = isError ? 'error' : '';
+  }
+  function cleanup() {
+    if (rec) { try { rec.pause(); rec.disconnect && rec.disconnect(); rec.abort && rec.abort(); } catch (e) {} }
+    if (objURL) { URL.revokeObjectURL(objURL); objURL = null; }
+    rec = null; display = null;
+  }
+  function rescale() {
+    if (!display) return;
+    var screen = $('screen'); var w = display.getWidth(); var h = display.getHeight();
+    if (w <= 0) return;
+    var fs = document.fullscreenElement;
+    if (fs && h > 0) display.scale(Math.min(screen.clientWidth / w, screen.clientHeight / h));
+    else display.scale(Math.min(1, screen.clientWidth / w));
+  }
+
+  function load(file) {
+    if (!file) return;
+    if (typeof Guacamole === 'undefined') { setStatus('Player library failed to load.', true); return; }
+    cleanup();
+    setStatus('Loading ' + file.name + ' …');
+    $('viewer').style.display = 'block';
+    $('screen').innerHTML = '';
+
+    // Read the local file through a Guacamole tunnel over an object URL — entirely local,
+    // no network — reusing the same recording-playback path the online app uses.
+    objURL = URL.createObjectURL(file);
+    var tunnel = new Guacamole.StaticHTTPTunnel(objURL);
+    rec = new Guacamole.SessionRecording(tunnel);
+    display = rec.getDisplay();
+    $('screen').appendChild(display.getElement());
+    display.showCursor && display.showCursor(false);
+    display.onresize = rescale;
+
+    var ready = function (dur) {
+      duration = dur || rec.getDuration();
+      $('dur').textContent = fmt(duration);
+      var seek = $('seek'); seek.max = String(Math.max(1, duration)); seek.disabled = false;
+      $('playpause').disabled = false;
+      setStatus('Loaded ' + file.name + ' — ' + fmt(duration) + '. Press play.');
+      rescale();
+    };
+    rec.onprogress = function (dur) { ready(dur); };
+    rec.onload = function () { ready(rec.getDuration()); };
+    rec.onerror = function (msg) { setStatus('Could not read this recording: ' + (msg || 'unknown error'), true); };
+    rec.onplay = function () { $('playpause').innerHTML = '&#9208;'; };
+    rec.onpause = function () { $('playpause').innerHTML = '&#9658;'; };
+    rec.onseek = function (pos) { $('seek').value = String(pos); $('cur').textContent = fmt(pos); };
+    rec.connect();
+  }
+
+  // Controls
+  $('playpause').onclick = function () { if (rec) { rec.isPlaying() ? rec.pause() : rec.play(); } };
+  $('seek').oninput = function (e) {
+    if (!rec) return; var p = Number(e.target.value); $('cur').textContent = fmt(p); rec.seek(p);
+  };
+  $('file').onchange = function (e) { load(e.target.files && e.target.files[0]); };
+  $('fs').onclick = function () {
+    var v = $('viewer');
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (v.requestFullscreen) v.requestFullscreen();
+  };
+  document.addEventListener('fullscreenchange', function () { setTimeout(rescale, 50); });
+  window.addEventListener('resize', rescale);
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    if (e.key === ' ') { e.preventDefault(); if (rec) { rec.isPlaying() ? rec.pause() : rec.play(); } }
+    else if (e.key === 'f' || e.key === 'F') { $('fs').click(); }
+  });
+
+  // Drag & drop
+  var drop = $('drop');
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('drag'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('drag'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) load(f);
+  });
+})();
+</script>
+</body>
+</html>

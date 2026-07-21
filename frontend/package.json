@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "build-help": "node scripts/build-help.mjs",
-    "predev": "node scripts/build-help.mjs",
+    "build-guac-player": "node scripts/build-guac-player.mjs",
+    "predev": "node scripts/build-help.mjs && node scripts/build-guac-player.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/build-help.mjs",
+    "prebuild": "node scripts/build-help.mjs && node scripts/build-guac-player.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",

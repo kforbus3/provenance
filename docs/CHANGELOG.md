@@ -5,6 +5,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.34.0 — Offline .guac player + content-search keyword highlighting
+
+- **Offline RDP recording player.** A self-contained, cross-platform HTML player for
+  downloaded `.guac` recordings — get it from **RDP recordings → "Offline player"**. It's
+  a single file that runs in any browser on any OS with **no server and no install**: open
+  it, drop in a `.guac` file, and play/pause/seek/full-screen. Recordings are read locally
+  and never uploaded. (Bundles Apache Guacamole's player, Apache-2.0.)
+- **Content search highlights the keyword.** In Sessions → Content search, the searched
+  term is now highlighted in each result snippet for easier scanning.
+
 ## v0.33.7 — Full-screen for RDP replay + a visible SSH exit button
 
 - **RDP session replay can now go full screen** — a control it never had. The Guacamole

@@ -427,6 +427,29 @@ function formatBytes(n: number): string {
   return `${v.toFixed(1)} ${units[i]}`;
 }
 
+// highlightMatch wraps every case-insensitive occurrence of `term` in `text` with a
+// marked span, so the searched keyword stands out in the content-search snippets.
+function highlightMatch(text: string, term?: string): React.ReactNode {
+  const needle = (term ?? "").toLowerCase();
+  if (!needle) return text;
+  const lower = text.toLowerCase();
+  const out: React.ReactNode[] = [];
+  let from = 0;
+  let key = 0;
+  for (;;) {
+    const i = lower.indexOf(needle, from);
+    if (i < 0) { out.push(text.slice(from)); break; }
+    if (i > from) out.push(text.slice(from, i));
+    out.push(
+      <Box component="mark" key={key++} sx={{ bgcolor: "warning.light", color: "#000", px: 0.25, borderRadius: 0.5 }}>
+        {text.slice(i, i + term!.length)}
+      </Box>,
+    );
+    from = i + needle.length;
+  }
+  return out;
+}
+
 // ContentSearchPanel searches across recorded SSH session content (what was typed
 // and shown) — "who ran `X`, where, when" — and links each hit to its replay.
 function ContentSearchPanel() {
@@ -491,7 +514,7 @@ function ContentSearchPanel() {
                         key={i} variant="caption"
                         sx={{ fontFamily: "monospace", color: "text.secondary", wordBreak: "break-all" }}
                       >
-                        …{s}…
+                        …{highlightMatch(s, search.variables)}…
                       </Typography>
                     ))}
                   </Stack>

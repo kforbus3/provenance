@@ -228,6 +228,14 @@ export function RdpRecordingsPanel() {
           size="small" label="Search host or user" value={search}
           onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 260 }}
         />
+        <Tooltip title="A self-contained HTML player for downloaded .guac recordings — works offline in any browser, on any OS. Downloads never leave your machine.">
+          <Button
+            size="small" variant="outlined" startIcon={<DownloadIcon />}
+            component="a" href="/guac-player.html" download="fleet-guac-player.html"
+          >
+            Offline player
+          </Button>
+        </Tooltip>
         <Box sx={{ flexGrow: 1 }} />
         {stats && (
           <Typography variant="body2" color="text.secondary">
