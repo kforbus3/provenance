@@ -1,8 +1,28 @@
 # Multi-Tenancy (MSP) — Design & Phased Plan
 
-Status: **Phase 0 (foundation) in progress.** Opt-in via `FLEET_MULTI_TENANCY` (default
-**off**); with the flag off, Fleet is byte-for-byte single-tenant as today. Built
-incrementally on `main` behind the flag.
+Status: **P0 (RLS foundation) + P1 (tenant management, auth scoping, provider console)
+shipped.** Opt-in via `FLEET_MULTI_TENANCY` (default **off**); with the flag off, Fleet
+is byte-for-byte single-tenant as today. Built incrementally on `main`.
+
+**Proven end-to-end** (real API, non-superuser DB role): a provider admin creates a
+customer tenant, switches into it, and each tenant's hosts/data are fully isolated —
+the provider cannot see a customer's hosts and vice versa; an unscoped request sees
+nothing (fail closed).
+
+## Enabling it
+
+1. Set `FLEET_MULTI_TENANCY=true`.
+2. **The app's database role MUST be a non-superuser** (Postgres superusers and
+   `BYPASSRLS` roles ignore row-level security even when it is FORCEd, so isolation would
+   silently not apply). Create a dedicated non-superuser role with `USAGE` on the schema
+   and privileges on the tables, run migrations as the owner, and point
+   `FLEET_DATABASE_URL` at the non-superuser role for serving.
+3. Existing data lands in the seeded **Provider** tenant; its admins get a **Tenants**
+   console (provider console) to create customer tenants and switch into them. A provider
+   admin acting inside a customer sends `X-Fleet-Tenant: <id>` (the UI's tenant switcher).
+
+Until every subsystem is covered (see phases), treat the flag as **experimental** and do
+not enable it against real multi-customer data.
 
 ## Goal
 
@@ -50,19 +70,23 @@ enforceable rather than hopeful:
 
 ## Phases
 
-- **P0 — Foundation (this phase).** Config flag; `tenants` table + seeded default +
-  provider tenant; `tenant_id` on the core identity tables (`users`, `hosts`) defaulted
-  + backfilled to the default tenant; `Tenant.Manage` permission; tenant context on the
-  principal (always the default tenant when the flag is off). No query scoping yet, no UI
-  — pure groundwork, provably zero behavior change.
-- **P1 — Tenant management + membership.** Provider-admin API + UI (behind the flag) to
-  create/list customer tenants and assign users to a tenant; login carries tenant
-  context; new users/hosts get the acting tenant.
-- **P2 — Scope the access plane.** tenant_id + scoping on hosts, host groups, host
-  access, sessions, SFTP, credentials/vault — the data-reachability core. Isolation tests.
-- **P3 — Scope the rest.** audit, scans/vuln, recordings, schedules, playbooks,
-  enrollment, notifications, reports, assistant data — every remaining tenant-scoped
-  table. Add Postgres RLS policies as the backstop.
+- **P0 — RLS foundation (DONE).** Config flag; `tenants` table + seeded provider tenant;
+  `tenant_id` + `ENABLE/FORCE ROW LEVEL SECURITY` + isolation policy on ~50 tenant-scoped
+  tables (migration 0051); the `app.tenant_id` GUC set per connection by a pgxpool hook
+  from the request context, so **every existing query is scoped with no per-query change**;
+  `Tenant.Manage` permission. Flag off → the hook sets `bypass` → unchanged. **Because P2/P3
+  scoping is achieved by RLS at P0, the whole table set is covered now, not incrementally.**
+- **P1 — Tenant management + auth scoping + provider console (DONE).** `Principal.TenantID`;
+  RequireAuth resolves the principal cross-tenant (bypass) then scopes the request to the
+  caller's tenant; provider admins switch into a customer via `X-Fleet-Tenant`; pre-auth
+  routes (login/SSO/bootstrap) bypass; tenant CRUD API (provider-admin gated, audited) +
+  a **Tenants** console UI with a context switcher.
+- **P2/P3 — Table coverage (DONE at P0 via RLS).** The ~50 tenant-scoped tables listed in
+  migration 0051 (identity, hosts+facts, sessions/recordings/certs, audit, automation,
+  vault, scanning, assistant, reviews) are all isolated by the RLS policies. Remaining:
+  audit any code path that runs its own goroutine with a fresh context so it re-carries
+  the tenant (enrollment/terminal async work), and confirm no tenant-scoped table was
+  missed.
 - **P4 — Provider console + context switch.** Provider admins list all tenants, switch
   into a customer context (audited), cross-tenant roll-ups; customer users hard-locked.
 - **P5 — Polish.** Per-tenant branding/settings, per-tenant quotas, tenant lifecycle

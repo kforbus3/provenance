@@ -101,6 +101,10 @@ export interface MeResponse {
   user: User;
   permissions: string[];
   isSuperAdmin: boolean;
+  // Multi-tenancy (present when the mode is enabled).
+  multiTenancy?: boolean;
+  isProviderAdmin?: boolean;
+  tenantId?: string;
 }
 
 export interface BootstrapStatus {

@@ -17,6 +17,25 @@ export function setAccessToken(token: string | null) {
   accessToken = token;
 }
 
+// Multi-tenancy: the tenant a provider admin has switched INTO. When set, it is sent as
+// X-Fleet-Tenant so the backend scopes the request to that customer tenant. null = the
+// caller's own tenant. Persisted so the selection survives a reload.
+let activeTenant: string | null = (() => {
+  try { return localStorage.getItem("fleet.activeTenant"); } catch { return null; }
+})();
+
+export function setActiveTenant(id: string | null) {
+  activeTenant = id;
+  try {
+    if (id) localStorage.setItem("fleet.activeTenant", id);
+    else localStorage.removeItem("fleet.activeTenant");
+  } catch { /* storage unavailable */ }
+}
+
+export function getActiveTenant(): string | null {
+  return activeTenant;
+}
+
 export function setTokenChangeHandler(fn: (t: string | null) => void) {
   onTokenChange = fn;
 }
@@ -30,6 +49,9 @@ export function getAccessToken(): string | null {
 api.interceptors.request.use((cfg) => {
   if (accessToken) {
     cfg.headers.Authorization = `Bearer ${accessToken}`;
+  }
+  if (activeTenant) {
+    cfg.headers["X-Fleet-Tenant"] = activeTenant;
   }
   return cfg;
 });

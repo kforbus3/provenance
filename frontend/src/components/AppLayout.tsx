@@ -1,10 +1,11 @@
 import {
-  AppBar, Badge, Box, CssBaseline, Drawer, IconButton, List, ListItemButton,
+  AppBar, Badge, Box, Chip, CssBaseline, Drawer, IconButton, List, ListItemButton,
   ListItemIcon, ListItemText, Toolbar, Typography, Tooltip,
 } from "@mui/material";
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import DashboardIcon from "@mui/icons-material/Dashboard";
+import ApartmentIcon from "@mui/icons-material/Apartment";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import HistoryIcon from "@mui/icons-material/History";
 import ApprovalIcon from "@mui/icons-material/HowToReg";
@@ -49,7 +50,8 @@ const DRAWER_WIDTH = 232;
 // `perm` (Dashboard, Approvals, Security) are available to every authenticated
 // user, matching their unguarded routes. The backend remains the sole
 // authorization authority — this filtering is cosmetic.
-const NAV = [
+const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: string; providerOnly?: boolean }> = [
+  { to: "/tenants", label: "Tenants", icon: <ApartmentIcon />, providerOnly: true },
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
   { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
@@ -88,6 +90,8 @@ export function AppLayout() {
   const { data: tz } = useQuery({ queryKey: ["timezone"], queryFn: getTimezone });
   setDisplayTimezone(tz);
   const has = useAuthStore((s) => s.has);
+  const showProvider = useAuthStore((s) => s.multiTenancy && s.isProviderAdmin);
+  const activeTenant = useAuthStore((s) => s.activeTenant);
   // Pending assistant-action approvals awaiting this user (approvers only), shown
   // as a badge on the Ask nav item.
   const { data: pendingApprovals = [] } = useQuery({
@@ -125,6 +129,14 @@ export function AppLayout() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 600 }}>
             {appName}
           </Typography>
+          {activeTenant && (
+            <Tooltip title="You are acting inside a customer tenant — click to manage tenants / switch back">
+              <Chip
+                size="small" color="warning" clickable component={RouterLink} to="/tenants"
+                icon={<ApartmentIcon />} label="In customer tenant" sx={{ mr: 1 }}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Toggle theme">
             <IconButton color="inherit" onClick={toggleMode}>
               {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
@@ -164,7 +176,7 @@ export function AppLayout() {
         <Toolbar variant="dense" />
         <Box sx={{ overflow: "auto" }}>
           <List dense>
-            {NAV.filter((item) => !item.perm || has(item.perm)).map((item) => {
+            {NAV.filter((item) => (!item.perm || has(item.perm)) && (!item.providerOnly || showProvider)).map((item) => {
               const selected =
                 item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
               return (

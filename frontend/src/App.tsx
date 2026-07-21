@@ -17,6 +17,7 @@ import { BootstrapPage } from "./pages/BootstrapPage";
 const named = <T,>(p: Promise<T>, key: keyof T) => p.then((m) => ({ default: m[key] as React.ComponentType }));
 const HostsPage = lazy(() => named(import("./pages/HostsPage"), "HostsPage"));
 const UsersPage = lazy(() => named(import("./pages/UsersPage"), "UsersPage"));
+const TenantsPage = lazy(() => named(import("./pages/TenantsPage"), "TenantsPage"));
 const RolesPage = lazy(() => named(import("./pages/RolesPage"), "RolesPage"));
 const GroupsPage = lazy(() => named(import("./pages/GroupsPage"), "GroupsPage"));
 const SettingsPage = lazy(() => named(import("./pages/SettingsPage"), "SettingsPage"));
@@ -121,6 +122,7 @@ export function App() {
               <Route path="ask" element={<ProtectedRoute permission="Assistant.Use"><AssistantPage /></ProtectedRoute>} />
               <Route path="terminals" element={<ProtectedRoute permission="Host.Connect"><TerminalsPage /></ProtectedRoute>} />
               <Route path="hosts" element={<ProtectedRoute permission="Host.View"><HostsPage /></ProtectedRoute>} />
+              <Route path="tenants" element={<TenantsPage />} />
               <Route path="sessions" element={<ProtectedRoute permission="Session.Replay"><SessionsPage /></ProtectedRoute>} />
               <Route path="automation" element={<ProtectedRoute permission="Playbook.Edit"><AutomationPage /></ProtectedRoute>} />
               <Route path="playbooks" element={<Navigate to="/automation" replace />} />

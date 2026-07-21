@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { setAccessToken, setTokenChangeHandler } from "../api/client";
+import { setAccessToken, setTokenChangeHandler, setActiveTenant, getActiveTenant } from "../api/client";
 import * as authApi from "../api/auth";
 import type { User } from "../api/auth";
 import { authenticatePasskey } from "../api/webauthn";
@@ -10,6 +10,12 @@ interface AuthState {
   accessToken: string | null;
   isSuperAdmin: boolean;
   loaded: boolean;
+  // Multi-tenancy.
+  multiTenancy: boolean;
+  isProviderAdmin: boolean;
+  tenantId: string | null;
+  activeTenant: string | null; // the customer tenant a provider admin switched into (null = own)
+  switchTenant: (id: string | null) => void;
   // login returns {mfaRequired, challenge} when a second factor is needed, or
   // {mfaEnrollmentRequired, setupToken} when MFA is mandatory but not yet
   // enrolled; otherwise the session is established.
@@ -37,6 +43,17 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   accessToken: null,
   isSuperAdmin: false,
   loaded: false,
+  multiTenancy: false,
+  isProviderAdmin: false,
+  tenantId: null,
+  activeTenant: getActiveTenant(),
+
+  // switchTenant sets (or clears) the customer tenant a provider admin is acting within.
+  // The X-Fleet-Tenant header follows; a reload keeps the selection.
+  switchTenant: (id) => {
+    setActiveTenant(id);
+    set({ activeTenant: id });
+  },
 
   login: async (username, password) => {
     const res = await authApi.login(username, password);
@@ -78,11 +95,16 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await authApi.logout();
     } finally {
       setAccessToken(null);
+      setActiveTenant(null);
       set({
         user: null,
         permissions: [],
         accessToken: null,
         isSuperAdmin: false,
+        multiTenancy: false,
+        isProviderAdmin: false,
+        tenantId: null,
+        activeTenant: null,
         loaded: true,
       });
     }
@@ -104,10 +126,18 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   loadMe: async () => {
     try {
       const res = await authApi.me();
+      // A non-provider-admin must never carry a tenant-switch header.
+      if (!res.isProviderAdmin && getActiveTenant()) {
+        setActiveTenant(null);
+      }
       set({
         user: res.user,
         permissions: res.permissions,
         isSuperAdmin: res.isSuperAdmin,
+        multiTenancy: !!res.multiTenancy,
+        isProviderAdmin: !!res.isProviderAdmin,
+        tenantId: res.tenantId ?? null,
+        activeTenant: res.isProviderAdmin ? getActiveTenant() : null,
         loaded: true,
       });
     } catch {
