@@ -13,6 +13,14 @@ export interface HostInventory {
   updatesAvailable?: number;
   securityUpdates?: number;
   updatesCheckedAt?: string;
+  updatePackages?: PendingUpdate[];
+}
+
+// One upgradable package on a host (collected alongside the update counts).
+export interface PendingUpdate {
+  package: string;
+  newVersion?: string;
+  security?: boolean;
 }
 
 export interface HostStatus {

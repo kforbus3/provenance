@@ -5,6 +5,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.1 — Host detail: pending-update package list
+
+The host-detail dialog now shows the **pending update packages** collected in v0.33.0,
+not just the count: a scrollable "Pending updates" list under System, each entry showing
+the package name and target version, security fixes flagged and sorted first. Appears
+once the monitor has collected the list (frontend-only; no migration).
+
 ## v0.33.0 — Ask AI: command history & update details; session-replay full screen
 
 Four enhancements, led by deepening the Ask AI assistant.

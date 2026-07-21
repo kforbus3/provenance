@@ -1305,6 +1305,28 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
           ]),
           ["Facts collected", inv?.collectedAt ? fmtDate(inv.collectedAt) : ""],
         ]} />
+        {inv?.updatePackages && inv.updatePackages.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>
+              Pending updates ({inv.updatePackages.length})
+            </Typography>
+            <Box sx={{ maxHeight: 220, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 1, p: 1 }}>
+              <Stack spacing={0.25}>
+                {[...inv.updatePackages]
+                  .sort((a, b) => Number(b.security ?? false) - Number(a.security ?? false) || a.package.localeCompare(b.package))
+                  .map((p) => (
+                    <Stack key={p.package} direction="row" spacing={1} alignItems="center">
+                      {p.security
+                        ? <Chip size="small" color="error" label="security" sx={{ height: 18, "& .MuiChip-label": { px: 0.75, fontSize: 11 } }} />
+                        : <Box sx={{ width: 64, flexShrink: 0 }} />}
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>{p.package}</Typography>
+                      {p.newVersion && <Typography variant="caption" color="text.secondary" noWrap>→ {p.newVersion}</Typography>}
+                    </Stack>
+                  ))}
+              </Stack>
+            </Box>
+          </Box>
+        )}
         <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>Status</Typography>
         <DetailRows rows={[
           ["State", st?.status],
