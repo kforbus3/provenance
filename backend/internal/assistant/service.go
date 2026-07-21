@@ -258,6 +258,35 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	messages = append(messages, chatMessage{Role: "user", Content: question})
 	var data answerData
 
+	// Fast path: for a few unambiguous question shapes (who ran <command>, what are the
+	// pending updates), run the correct tool DETERMINISTICALLY and have the model narrate
+	// from that data with tools disabled — so a small local model can't mis-route (e.g.
+	// answer "who ran df" with fleet health, or dump the whole host for an updates
+	// question). The structured result still populates the UI. Anything not recognized
+	// falls through to the normal model-driven loop below.
+	if name, fargs, ok := fastPathTool(question); ok {
+		var result any
+		switch name {
+		case "host_updates":
+			tbl, payload := s.runHostUpdates(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		case "search_commands":
+			tbl, payload := s.runSearchCommands(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		}
+		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil {
+			s.remember(convoID, who.UserID, question, final)
+			return final, data, nil
+		}
+		// On a narration failure, fall through to the normal loop rather than error out.
+	}
+
 	// Offer the action (propose_*) tools only to callers permitted to act and only
 	// when the registry is wired; everyone else sees the read-only tool surface.
 	toolset := tools
@@ -379,6 +408,25 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	final := "I couldn't fully resolve that. Here is the data I found."
 	s.remember(convoID, who.UserID, question, final)
 	return final, data, nil
+}
+
+// narrateFromData asks the model to write the answer from a fast-path tool's result,
+// with tools DISABLED so it can't mis-route to another tool. base is the built-up
+// message history (system prompt + prior turns + the user question).
+func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage, toolName string, result any) (string, error) {
+	raw, _ := json.Marshal(result)
+	msgs := append(append([]chatMessage(nil), base...), chatMessage{
+		Role: "system",
+		Content: fmt.Sprintf("The %s tool was already run for this question and returned this data:\n%s\n\n"+
+			"Answer the user's question using ONLY this data. If it has no rows or is empty, say plainly "+
+			"that nothing matched. Be concise and summarize — the full structured data is shown to the user "+
+			"separately, so do not dump every row.", toolName, string(raw)),
+	})
+	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp.Message.Content), nil
 }
 
 // priorMessages returns the carried conversation history for convoID, but only if

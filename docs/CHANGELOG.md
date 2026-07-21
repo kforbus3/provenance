@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.5 — Ask AI: deterministic fast-path for obvious questions
+
+Small local models often mis-route clear questions (answering "who ran df" with fleet
+health, or dumping the whole host for an updates question). Ask AI now **bypasses the
+model's tool choice** for a couple of unambiguous shapes: it detects the intent, runs
+the correct tool directly with the right arguments, and has the model only narrate the
+result (with tools disabled so it can't mis-route):
+
+- **"who ran / typed / executed `<command>`"** (optionally "on `<host>`") → `search_commands`.
+- **"what are the pending updates" / "which packages need updating" / "what security
+  updates are pending"** (optionally per host) → `host_updates`.
+
+It's high-precision — anything it doesn't clearly recognize still goes through the normal
+model-driven tool loop, so nothing else changes. This makes those answers reliable
+regardless of how capable the configured local model is.
+
 ## v0.33.4 — Ask AI: focused host_updates tool (no more whole-host dump)
 
 Asking Ask AI "what are the pending updates?" used to answer via `host_detail`, which
