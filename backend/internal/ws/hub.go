@@ -127,13 +127,13 @@ type client struct {
 // short-lived access token passed as a query parameter.
 func Mount(r chi.Router, d *app.Deps, hub *Hub) {
 	r.Get("/events/ws", func(w http.ResponseWriter, req *http.Request) {
-		token := req.URL.Query().Get("token")
+		token, respHeader := d.Auth.WSToken(req)
 		p, err := d.Auth.AuthenticateToken(req.Context(), token)
 		if err != nil || p == nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		conn, err := upgrader.Upgrade(w, req, nil)
+		conn, err := upgrader.Upgrade(w, req, respHeader)
 		if err != nil {
 			return
 		}

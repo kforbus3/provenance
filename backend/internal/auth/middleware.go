@@ -88,29 +88,51 @@ func (s *Service) RequirePermission(perm string) func(http.Handler) http.Handler
 	}
 }
 
-// RequireCSRF enforces the double-submit cookie pattern for state-changing,
-// cookie-authenticated requests (refresh/logout). Bearer-only API calls that
-// don't rely on cookies are exempt.
-func (s *Service) RequireCSRF(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions:
-			next.ServeHTTP(w, r)
-			return
+// CSRF note: there is intentionally no CSRF-enforcing middleware. State-changing
+// API calls authenticate with a Bearer access token in the Authorization header,
+// which a cross-site attacker cannot forge (the browser never attaches it
+// automatically); the only cookie-authenticated endpoints (refresh/logout) use a
+// SameSite=Strict cookie, so the browser won't send it on a cross-site request.
+// A readable double-submit token is still issued (fleet_csrf cookie + login
+// response) so explicit double-submit enforcement can be layered on later without
+// re-plumbing, but it is not required by the current design.
+
+// WSToken extracts the access token from a WebSocket upgrade request. Browsers
+// cannot set an Authorization header on a WebSocket, so the token is carried in the
+// Sec-WebSocket-Protocol subprotocol ("fleet-bearer, <token>") — which, unlike a
+// ?token= query parameter, never appears in the request URL or in reverse-proxy
+// access logs. It falls back to the legacy ?token= query param for older clients
+// and non-browser callers. respHeader is what to pass to Upgrade: when the token
+// came from the subprotocol it echoes the "fleet-bearer" marker (required, or the
+// browser handshake fails); it is nil when the token came from the query param.
+func (s *Service) WSToken(r *http.Request) (token string, respHeader http.Header) {
+	const marker = "fleet-bearer"
+	var protos []string
+	for _, h := range r.Header.Values("Sec-WebSocket-Protocol") {
+		for _, p := range strings.Split(h, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				protos = append(protos, p)
+			}
 		}
-		cookie, err := r.Cookie(CSRFCookie)
-		header := r.Header.Get("X-CSRF-Token")
-		if err != nil || header == "" || cookie.Value != header {
-			forbidden(w, "csrf validation failed")
-			return
+	}
+	for i, p := range protos {
+		if p == marker && i+1 < len(protos) {
+			// Build via Set so the key is canonicalized: gorilla's Upgrade echoes the
+			// response subprotocol by calling responseHeader.Get, which canonicalizes
+			// the lookup key — a raw non-canonical map key would be missed and the
+			// server would fail to echo the subprotocol.
+			resp := http.Header{}
+			resp.Set("Sec-WebSocket-Protocol", marker)
+			return protos[i+1], resp
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	return r.URL.Query().Get("token"), nil
 }
 
 // AuthenticateToken validates a raw access token and returns its Principal. Used
-// by the WebSocket terminal endpoint, where browsers cannot set an Authorization
-// header and pass the short-lived token via a query parameter instead.
+// by the WebSocket endpoints, where browsers cannot set an Authorization header;
+// the token arrives via the Sec-WebSocket-Protocol subprotocol (see WSToken) or,
+// for older/non-browser clients, a query parameter.
 func (s *Service) AuthenticateToken(ctx context.Context, tokenStr string) (*Principal, error) {
 	claims, err := ParseAccessToken(s.cfg.JWTSecret, tokenStr)
 	if err != nil {

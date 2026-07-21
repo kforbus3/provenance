@@ -98,3 +98,41 @@ func (s *Store) PruneSSHSessionsBefore(ctx context.Context, cutoff time.Time) (i
 	}
 	return tag.RowsAffected(), nil
 }
+
+// PruneExpiredCertificatesBefore deletes issued-cert metadata rows whose validity
+// ended before cutoff. Keyed on expires_at (not issued_at) so an unexpired cert is
+// never removed regardless of retention window. Safe against the revocation path:
+// the KRL is built from cert_revocations (pruned separately once past the cert TTL),
+// not from this table, so removing long-expired rows can't un-revoke anything.
+// ssh_certificates has no FK dependents.
+func (s *Store) PruneExpiredCertificatesBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM ssh_certificates WHERE expires_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// PruneApprovalRequestsBefore deletes resolved access-request rows older than cutoff.
+// Two guards keep it from destroying live state: pending requests are never removed
+// (they may still be actionable), and a request with an active temporary_permission
+// is never removed — temporary_permissions cascades from approval_requests, so deleting
+// a request whose grant has not yet expired/been revoked would silently strip that
+// user's access. Such requests become eligible on a later pass once the grant lapses.
+func (s *Store) PruneApprovalRequestsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM approval_requests ar
+		WHERE ar.created_at < $1
+		  AND ar.status <> 'pending'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM temporary_permissions tp
+		      WHERE tp.request_id = ar.id
+		        AND tp.revoked_at IS NULL
+		        AND tp.expires_at > now()
+		  )`,
+		cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

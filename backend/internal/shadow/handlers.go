@@ -41,7 +41,8 @@ type controlMsg struct {
 
 func (h *handler) watch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	principal, err := h.d.Auth.AuthenticateToken(ctx, r.URL.Query().Get("token"))
+	token, wsRespHeader := h.d.Auth.WSToken(r)
+	principal, err := h.d.Auth.AuthenticateToken(ctx, token)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -60,7 +61,7 @@ func (h *handler) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := upgrader.Upgrade(w, r, wsRespHeader)
 	if err != nil {
 		return
 	}

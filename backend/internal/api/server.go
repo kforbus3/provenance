@@ -643,6 +643,11 @@ func (s *Server) pruneActivity(ctx context.Context) {
 	prune("sftp transfers", s.Store.PruneSFTPTransfersBefore)
 	prune("playbook runs", s.Store.PrunePlaybookRunsBefore)
 	prune("auth events", s.Store.PruneAuthEventsBefore)
+	// Expired session/host cert metadata and resolved access requests also grow
+	// unbounded; prune both (the cert prune is expiry-keyed, the approval prune skips
+	// pending requests and any still holding a live grant — see the store methods).
+	prune("expired certificates", s.Store.PruneExpiredCertificatesBefore)
+	prune("approval requests", s.Store.PruneApprovalRequestsBefore)
 	s.Jobs.Record("activity-retention", nil)
 }
 

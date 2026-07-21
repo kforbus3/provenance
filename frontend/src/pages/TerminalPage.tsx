@@ -48,8 +48,9 @@ export function TerminalPage() {
     fit.fit();
 
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const url = `${proto}://${window.location.host}/api/v1/terminal/${hostId}?token=${encodeURIComponent(accessToken)}`;
-    const ws = new WebSocket(url);
+    // Token via subprotocol (see events.ts) so it stays out of the URL / proxy logs.
+    const url = `${proto}://${window.location.host}/api/v1/terminal/${hostId}`;
+    const ws = new WebSocket(url, ["fleet-bearer", accessToken]);
     ws.binaryType = "arraybuffer";
 
     const sendResize = () => {

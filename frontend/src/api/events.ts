@@ -22,8 +22,12 @@ export function useFleetEvents(onEvent: (e: FleetEvent) => void) {
     const connect = () => {
       if (closed) return;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      // Carry the access token in the Sec-WebSocket-Protocol subprotocol rather than
+      // the URL query, so it never lands in reverse-proxy access logs. The server
+      // reads the value after the "fleet-bearer" marker and echoes the marker back.
       ws = new WebSocket(
-        `${proto}://${window.location.host}/api/v1/events/ws?token=${encodeURIComponent(accessToken)}`,
+        `${proto}://${window.location.host}/api/v1/events/ws`,
+        ["fleet-bearer", accessToken],
       );
       ws.onmessage = (ev) => {
         try {

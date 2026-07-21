@@ -5,6 +5,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.36.4 — Deep-review hardening: retention, WebSocket token, CSRF cleanup
+
+A verification pass over an earlier code review confirmed most flagged issues were already
+fixed; this closes the few real remainders.
+
+- **Retention now covers issued certificates and resolved access requests.** The activity-
+  retention loop additionally prunes expired `ssh_certificates` (keyed on expiry, so an
+  unexpired cert is never removed; the KRL is built from `cert_revocations`, unaffected) and
+  resolved `approval_requests` — skipping any pending request or any request still holding a
+  live grant, so pruning can never strip a user's access. Both were previously unbounded.
+- **WebSocket access tokens no longer travel in the URL.** The browser terminal, live-events,
+  and session-watch sockets now carry the short-lived token in the `Sec-WebSocket-Protocol`
+  subprotocol instead of a `?token=` query parameter, so it no longer appears in reverse-proxy
+  access logs. The server still accepts the query parameter as a fallback for older/non-browser
+  clients.
+- **Removed dead CSRF-validation middleware.** State-changing API calls authenticate with a
+  Bearer token (which a cross-site page cannot forge) and the only cookie-authenticated
+  endpoints use SameSite=Strict cookies, so the unused double-submit validator was removed and
+  the design documented in place.
+
 ## v0.36.3 — Wider third-party CVE coverage on Windows
 
 - Expanded the curated Windows app→CPE dictionary from 19 to 35 entries, so more installed

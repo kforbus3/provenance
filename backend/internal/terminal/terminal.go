@@ -59,7 +59,7 @@ type controlMsg struct {
 
 func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	token := r.URL.Query().Get("token")
+	token, wsRespHeader := h.d.Auth.WSToken(r)
 	principal, err := h.d.Auth.AuthenticateToken(ctx, token)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -95,7 +95,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		clientIP = ip
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := upgrader.Upgrade(w, r, wsRespHeader)
 	if err != nil {
 		return
 	}
