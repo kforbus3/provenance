@@ -56,7 +56,7 @@ services:
       TZ: ${TZ:-UTC}
       FLEET_HTTP_ADDR: ":8080"
       FLEET_PUBLIC_URL: ${FLEET_PUBLIC_URL:-http://localhost:8080}
-      FLEET_DATABASE_URL: postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable
+      FLEET_DATABASE_URL: ${FLEET_DATABASE_URL:-postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable}
       FLEET_REDIS_URL: redis://redis:6379/0
       FLEET_JWT_SECRET: ${FLEET_JWT_SECRET:-}
       FLEET_CSRF_SECRET: ${FLEET_CSRF_SECRET:-}
@@ -72,6 +72,10 @@ services:
       FLEET_CONTROL_PLANE_HOSTS: ${FLEET_CONTROL_PLANE_HOSTS:-}
       FLEET_REENCRYPT_SECRETS: ${FLEET_REENCRYPT_SECRETS:-}
       FLEET_HOST_SCOPED_ONLY: ${FLEET_HOST_SCOPED_ONLY:-}
+      # Multi-tenancy (MSP mode). Off = byte-for-byte single-tenant. When enabled,
+      # the app DB role MUST be non-superuser (and lack BYPASSRLS) or row-level
+      # isolation is silently ineffective — Postgres superusers bypass RLS.
+      FLEET_MULTI_TENANCY: ${FLEET_MULTI_TENANCY:-false}
       FLEET_RDP_COLLECT_FACTS: ${FLEET_RDP_COLLECT_FACTS:-}
       FLEET_RDP_WINRM_PORTS: ${FLEET_RDP_WINRM_PORTS:-}
       FLEET_RECORDING_DIR: /var/lib/fleet/recordings

@@ -5,6 +5,42 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.36.1 — Session-replay full-screen fix + multi-tenancy compose wiring
+
+- **Fixed** the "Exit full screen" control being invisible when replaying an SSH session
+  full-screen. The replay renders inside a right-anchored drawer (a modal whose stacking
+  context tops out just below the app bar), so a top-right exit button was painted over by
+  the app bar — the button existed but couldn't be seen or clicked. Moved it to the
+  bottom-right (always clear of the app bar) and padded the top of the overlay so the
+  caption and first line of output are no longer hidden behind the bar. (The RDP replay's
+  full-screen control was already correct — it renders at the page root, not in a drawer.)
+- **Compose:** `FLEET_MULTI_TENANCY` is now passed through to the backend and
+  `FLEET_DATABASE_URL` is overridable, so MSP mode can be enabled without editing the
+  compose file. Note (documented inline): with multi-tenancy on, the app's DB role must be
+  **non-superuser** and lack `BYPASSRLS`, or row-level isolation is silently ineffective.
+
+## v0.36.0 — FIPS 140-3 mode merged (opt-in, default off)
+
+The FIPS work (previously on `feature/fips-mode`) is merged into main. Opt in with
+`FLEET_FIPS_MODE=true` (default off — non-FIPS deployments are unchanged: Ed25519,
+WireGuard, Argon2id as before).
+
+- **FIPS 140-3 crypto profile** via Go 1.24's native module (`GODEBUG=fips140=on`,
+  runtime toggle, one image): ECDSA P-256 CA + identities, pinned SSH suites
+  (AES-GCM/ECDH-P256/HMAC-SHA256), PBKDF2 at-rest KDF + password hashing, SHA-256 TOTP,
+  ES256/RS256 WebAuthn, TLS 1.2 floor on outbound clients. Fails closed if the module
+  isn't active in FIPS mode.
+- **Certificate-authenticated overlay (OpenVPN)** as a FIPS alternative to WireGuard,
+  **selectable per host** at enrollment (WireGuard remains the default). Its own X.509
+  overlay PKI. (A strongSwan/IPsec variant was prototyped but removed until it can be
+  validated on real IPsec-capable hosts.)
+- **Migration toolset** (`fleetctl fips check` / `reseal-secrets` / `flag-stale-passwords`,
+  verify-then-upgrade-on-login) + a FIPS readiness card in System Health.
+
+Validated in Docker: a FIPS deploy boots with the module active, ECDSA CA, and a green
+readiness verdict; a default deploy is byte-for-byte unchanged. Migrations
+`0049_overlay_pki`, `0050_host_overlay`.
+
 ## v0.35.0 — Multi-tenancy (MSP) — experimental, default off
 
 One deployment can now serve multiple **isolated customer tenants**, for MSPs. Opt in

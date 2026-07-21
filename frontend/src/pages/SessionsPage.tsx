@@ -139,7 +139,9 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
   return (
     <Box
       sx={fullscreen
-        ? { position: "fixed", inset: 0, zIndex: 1400, bgcolor: "#000", p: 2, display: "flex", flexDirection: "column" }
+        // Clear the AppBar (dense toolbar ~48px) at the top so the caption and the first
+        // line of recorded output aren't hidden behind it while expanded.
+        ? { position: "fixed", inset: 0, zIndex: 1400, bgcolor: "#000", p: 2, pt: 7, display: "flex", flexDirection: "column" }
         : undefined}
     >
       <Stack direction="row" alignItems="center" spacing={1}>
@@ -164,11 +166,14 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
         }}
       />
       {fullscreen && (
-        // Floating, always-visible exit — fixed to the viewport corner, above the overlay.
+        // Floating, always-visible exit. Anchored bottom-right: the player renders inside a
+        // right-anchored Drawer (a Modal portal whose stacking context tops out below the
+        // AppBar at zIndex appBar+1), so a top-right button would be painted over by the app
+        // bar. The bottom-right corner is always clear of the app bar and stays clickable.
         <Button
           variant="contained" startIcon={<FullscreenExitIcon />}
           onClick={() => setFullscreen(false)}
-          sx={{ position: "fixed", top: 12, right: 12, zIndex: 1401, bgcolor: "grey.100", color: "#000", "&:hover": { bgcolor: "grey.300" } }}
+          sx={{ position: "fixed", bottom: 24, right: 24, zIndex: 1401, boxShadow: 6, bgcolor: "grey.100", color: "#000", "&:hover": { bgcolor: "grey.300" } }}
         >
           Exit full screen (Esc)
         </Button>
