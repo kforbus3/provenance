@@ -86,12 +86,14 @@ func (h *apiHandler) stream(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	// Token-authed (bypasses RequireAuth); scope to the caller's tenant for RLS.
+	ctx := h.d.Auth.TenantScope(r.Context(), p)
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid recording id")
 		return
 	}
-	rec, err := h.d.Store.GetRDPRecording(r.Context(), id)
+	rec, err := h.d.Store.GetRDPRecording(ctx, id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return

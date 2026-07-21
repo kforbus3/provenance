@@ -45,6 +45,9 @@ func (h *handler) enrollAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Bypasses RequireAuth — scope to the caller's tenant so the host lookup and
+	// enrollment writes aren't RLS-denied under multi-tenancy.
+	ctx = h.d.Auth.TenantScope(ctx, principal)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "bad host id", http.StatusBadRequest)

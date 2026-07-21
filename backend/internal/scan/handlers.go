@@ -200,6 +200,10 @@ func (h *handler) report(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Token-authed (bypasses RequireAuth): re-scope the request to the caller's tenant so
+	// every downstream r.Context() — GetHostScan and canAccess's UserCanAccessHost — is
+	// RLS-scoped under multi-tenancy.
+	r = r.WithContext(h.d.Auth.TenantScope(r.Context(), principal))
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "bad scan id", http.StatusBadRequest)

@@ -52,6 +52,7 @@ type activeSession struct {
 	start     time.Time
 	actorID   uuid.UUID
 	actorName string
+	tenantID  uuid.UUID // caller's tenant, so the disconnect finalize can scope RLS
 	hostID    uuid.UUID
 	hostname  string
 	rdpUser   string
@@ -95,6 +96,9 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	if !p.Has("Host.Connect") {
 		return nil, fmt.Errorf("forbidden")
 	}
+	// Bypasses RequireAuth — scope to the caller's tenant so the host lookup, credential
+	// injection, and recording writes aren't RLS-denied under multi-tenancy.
+	ctx = h.d.Auth.TenantScope(ctx, p)
 	hostID, err := uuid.Parse(chi.URLParam(r, "hostId"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid host id")
@@ -172,7 +176,7 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	applyRDPOptions(cfg, host.RDPOptions)
 
 	sess := &activeSession{
-		start: time.Now(), actorID: p.UserID, actorName: p.Username,
+		start: time.Now(), actorID: p.UserID, actorName: p.Username, tenantID: p.TenantID,
 		hostID: host.ID, hostname: host.Hostname, rdpUser: username,
 	}
 	// Record the session: guacd streams a Guacamole recording to the shared volume.
@@ -319,8 +323,10 @@ func (h *handler) onDisconnect(connID string, _ *http.Request, _ guac.Tunnel) {
 		return
 	}
 
-	// The request context is already cancelled (WS closed); use a fresh one.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// The request context is already cancelled (WS closed); use a fresh one, scoped to
+	// the session's tenant so the recording finalize and session.end audit aren't
+	// RLS-denied under multi-tenancy.
+	ctx, cancel := context.WithTimeout(h.d.Auth.TenantScopeID(context.Background(), sess.tenantID), 15*time.Second)
 	defer cancel()
 
 	duration := time.Since(sess.start).Milliseconds()

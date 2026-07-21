@@ -5,7 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v0.36.4 — Deep-review hardening: retention, WebSocket token, CSRF cleanup
+## v0.36.5 — Multi-tenancy: scope token-authenticated endpoints
+
+Fixes a multi-tenancy correctness bug (single-tenant deployments unaffected). Endpoints that
+authenticate with a token instead of the `RequireAuth` middleware — the WebSocket terminal,
+session-watch, RDP session, plus the RDP-recording / scan-report streams and the enrollment
+agent — resolve the caller under RLS-bypass but then ran their queries without re-applying the
+caller's tenant. Under multi-tenancy that made row-level security deny the row: opening a
+terminal to one of your own hosts returned "host not found", and the terminal's detached
+finalize writes (session-end audit, recording metadata) were silently dropped.
+
+Each such endpoint now scopes its work to the caller's tenant (`Auth.TenantScope`), including
+the **detached `context.Background()` contexts** that outlive the request (terminal finalize +
+command-policy audit/waiver/approval; RDP disconnect finalize). Verified end-to-end with
+multi-tenancy on: the terminal connects and its `session.start`/`session.end` audit events are
+recorded under the correct tenant; cross-tenant isolation is unchanged. The live-events socket
+needs no change (it pushes in-memory events and issues no tenant-scoped query).
 
 A verification pass over an earlier code review confirmed most flagged issues were already
 fixed; this closes the few real remainders.

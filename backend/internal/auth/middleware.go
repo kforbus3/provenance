@@ -142,6 +142,30 @@ func (s *Service) AuthenticateToken(ctx context.Context, tokenStr string) (*Prin
 	return s.loadPrincipal(tenant.WithBypass(ctx), claims)
 }
 
+// TenantScope returns ctx scoped to the principal's tenant so row-level security
+// filters every subsequent query. Token-authenticated endpoints (the WebSocket
+// terminal/events/watch, streaming downloads, enrollment agent) resolve the principal
+// under bypass via AuthenticateToken and DON'T pass through RequireAuth, so — under
+// multi-tenancy — they MUST call this before ANY tenant-scoped DB access or RLS denies
+// the row (e.g. a host lookup returns "not found"). It applies to any context,
+// including a detached context.Background() used for work that must outlive the
+// request (session-end audit, recording writes) — those need the tenant too. No-op
+// when multi-tenancy is off (the pool's BeforeAcquire hook bypasses RLS regardless).
+// WebSocket clients can't send the X-Fleet-Tenant switch header, so this scopes to the
+// principal's home tenant; a provider admin reaches only their own tenant over a socket.
+func (s *Service) TenantScope(ctx context.Context, p *Principal) context.Context {
+	return s.TenantScopeID(ctx, p.TenantID)
+}
+
+// TenantScopeID is TenantScope by tenant id, for detached contexts (e.g. an RDP
+// disconnect callback) that no longer hold the *Principal but stashed its tenant.
+func (s *Service) TenantScopeID(ctx context.Context, tenantID uuid.UUID) context.Context {
+	if tenantID == uuid.Nil {
+		tenantID = ProviderTenantID
+	}
+	return tenant.WithID(ctx, tenantID.String())
+}
+
 // TenantBypass runs the wrapped handlers with row-level security bypassed — for
 // pre-authentication endpoints (login, SSO callbacks, bootstrap) that must look up or
 // create accounts before the caller's tenant is known. New accounts created under it

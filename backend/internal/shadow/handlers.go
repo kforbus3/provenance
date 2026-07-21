@@ -47,6 +47,9 @@ func (h *handler) watch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Bypasses RequireAuth — scope to the caller's tenant so the watch audit write
+	// (and any tenant-scoped lookup) isn't RLS-denied under multi-tenancy.
+	ctx = h.d.Auth.TenantScope(ctx, principal)
 	if !principal.Has("Session.Watch") {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return

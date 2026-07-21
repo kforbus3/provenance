@@ -65,6 +65,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// This endpoint bypasses RequireAuth, so scope every downstream query to the
+	// caller's tenant (RLS) — otherwise the host lookup (and all session DB work) is
+	// denied under multi-tenancy. Detached contexts below are scoped the same way.
+	ctx = h.d.Auth.TenantScope(ctx, principal)
 	if !principal.Has("Host.Connect") {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -453,8 +457,9 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 
 	// Finalize with a FRESH context: the request context (ctx) is cancelled once
 	// the WebSocket closes, which would otherwise abort these writes and leave the
-	// recording file orphaned without a DB row.
-	fin, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// recording file orphaned without a DB row. Tenant-scoped so the recording and
+	// session.end audit writes aren't RLS-denied under multi-tenancy.
+	fin, cancel := context.WithTimeout(h.d.Auth.TenantScope(context.Background(), p), 15*time.Second)
 	defer cancel()
 
 	exitCode := 0
@@ -497,11 +502,14 @@ func (h *handler) buildCommandGuard(ctx context.Context, p *auth.Principal, host
 		specs = append(specs, commandpolicy.Spec{ID: r.ID, Name: r.Name, Action: r.Action, Pattern: r.Pattern})
 	}
 
-	// audit records a command-policy decision to the tamper-evident audit log. It
-	// uses context.Background so a decision late in a session (whose request ctx may
-	// be cancelling) is still recorded.
+	// Detached, tenant-scoped context for callbacks that fire late in a session (when
+	// the request ctx may be cancelling) but must still record: context.Background so
+	// the write isn't aborted, TenantScope so it isn't RLS-denied under multi-tenancy.
+	dctx := h.d.Auth.TenantScope(context.Background(), p)
+
+	// audit records a command-policy decision to the tamper-evident audit log.
 	audit := func(action, rule, command string) {
-		_, _ = h.d.Store.AppendAudit(context.Background(), models.AuditEvent{
+		_, _ = h.d.Store.AppendAudit(dctx, models.AuditEvent{
 			ActorID: &p.UserID, ActorName: p.Username, Action: action,
 			TargetKind: "host", TargetID: host.ID.String(),
 			Detail: map[string]any{"rule": rule, "command": command, "hostname": host.Hostname, "sshSessionId": sshSessionID},
@@ -509,13 +517,13 @@ func (h *handler) buildCommandGuard(ctx context.Context, p *auth.Principal, host
 	}
 	notifyEv := func(typ string, sev notify.Severity, title, body string) {
 		if h.d.Notify != nil {
-			h.d.Notify.Notify(context.Background(), notify.Event{Type: typ, Severity: sev, Title: title, Body: body})
+			h.d.Notify.Notify(dctx, notify.Event{Type: typ, Severity: sev, Title: title, Body: body})
 		}
 	}
 
 	return commandpolicy.NewGuard(commandpolicy.Compile(specs), commandpolicy.Callbacks{
 		HasWaiver: func(ruleID uuid.UUID) bool {
-			ok, _ := h.d.Store.ActiveWaiver(context.Background(), p.UserID, host.ID, &ruleID)
+			ok, _ := h.d.Store.ActiveWaiver(dctx, p.UserID, host.ID, &ruleID)
 			return ok
 		},
 		OnFlag: func(r commandpolicy.Rule, command string) {
@@ -530,7 +538,7 @@ func (h *handler) buildCommandGuard(ctx context.Context, p *auth.Principal, host
 		},
 		OnApprovalRequest: func(r commandpolicy.Rule, command string) {
 			ruleID := r.ID
-			_, _ = h.d.Store.CreateCommandApproval(context.Background(), &ruleID, p.UserID, p.Username, &host.ID, host.Hostname, command)
+			_, _ = h.d.Store.CreateCommandApproval(dctx, &ruleID, p.UserID, p.Username, &host.ID, host.Hostname, command)
 			audit("command.approval_requested", r.Name, command)
 			notifyEv(notify.EventCommandApproval, notify.SeverityWarning, "Command awaiting approval",
 				p.Username+" requested approval to run on "+host.Hostname+" ("+r.Name+"): "+command)
