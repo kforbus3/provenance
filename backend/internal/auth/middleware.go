@@ -4,6 +4,10 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
 
 // RequireAuth validates the bearer access token and attaches the Principal.
@@ -15,12 +19,16 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 			unauthorized(w, "missing access token")
 			return
 		}
+		// Authenticating is a cross-tenant lookup (we don't yet know the caller's
+		// tenant), so resolve the principal with RLS bypassed. The request is then
+		// re-scoped to the caller's tenant below, before any handler runs.
+		authCtx := tenant.WithBypass(r.Context())
 		var p *Principal
 		if strings.HasPrefix(tok, APITokenPrefix) {
 			// Service-account API token (for automation/CI): authenticate against
 			// the api_tokens table rather than parsing a JWT session.
 			var err error
-			p, err = s.authenticateAPIToken(r.Context(), tok)
+			p, err = s.authenticateAPIToken(authCtx, tok)
 			if err != nil {
 				unauthorized(w, "invalid api token")
 				return
@@ -31,7 +39,7 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 				unauthorized(w, "invalid access token")
 				return
 			}
-			p, err = s.loadPrincipal(r.Context(), claims)
+			p, err = s.loadPrincipal(authCtx, claims)
 			if err != nil {
 				unauthorized(w, "session invalid")
 				return
@@ -44,7 +52,20 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 			forbidden(w, "password change required")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
+		// Scope the request to the caller's tenant so row-level security filters every
+		// query. A provider admin may act within a customer tenant by selecting it via
+		// the X-Fleet-Tenant header (audited by the tenant API).
+		effective := p.TenantID
+		if effective == uuid.Nil {
+			effective = ProviderTenantID
+		}
+		if sel := r.Header.Get("X-Fleet-Tenant"); sel != "" && p.IsProviderAdmin() {
+			if tid, err := uuid.Parse(sel); err == nil {
+				effective = tid
+			}
+		}
+		ctx := tenant.WithID(withPrincipal(r.Context(), p), effective.String())
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -95,7 +116,18 @@ func (s *Service) AuthenticateToken(ctx context.Context, tokenStr string) (*Prin
 	if err != nil {
 		return nil, err
 	}
-	return s.loadPrincipal(ctx, claims)
+	// Cross-tenant lookup (see RequireAuth); callers scope their work to p.TenantID.
+	return s.loadPrincipal(tenant.WithBypass(ctx), claims)
+}
+
+// TenantBypass runs the wrapped handlers with row-level security bypassed — for
+// pre-authentication endpoints (login, SSO callbacks, bootstrap) that must look up or
+// create accounts before the caller's tenant is known. New accounts created under it
+// default to the provider tenant. No effect when multi-tenancy is off.
+func TenantBypass(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(tenant.WithBypass(r.Context())))
+	})
 }
 
 func bearerToken(r *http.Request) string {

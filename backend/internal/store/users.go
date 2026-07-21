@@ -102,13 +102,13 @@ func (s *Store) CreateInitialSuperAdmin(ctx context.Context, p CreateUserParams)
 
 const userCols = `id, username, COALESCE(email,''), display_name, is_super_admin,
 	is_disabled, email_verified, must_change_pw, require_mfa, auth_source, failed_logins, locked_until,
-	last_login_at, created_at, updated_at`
+	last_login_at, created_at, updated_at, COALESCE(tenant_id,'00000000-0000-0000-0000-000000000001'::uuid)`
 
 func scanUser(row pgx.Row) (*models.User, error) {
 	var u models.User
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.IsSuperAdmin,
 		&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.RequireMFA, &u.AuthSource, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt)
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.TenantID)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}

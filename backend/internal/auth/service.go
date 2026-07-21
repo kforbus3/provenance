@@ -397,6 +397,7 @@ func (s *Service) authenticateAPIToken(ctx context.Context, tokenStr string) (*P
 		Username:     rec.Username,
 		IsSuperAdmin: false,
 		Permissions:  perms,
+		TenantID:     rec.TenantID,
 	}, nil
 }
 
@@ -447,7 +448,7 @@ func (s *Service) loadPrincipal(ctx context.Context, claims *Claims) (*Principal
 	return &Principal{
 		UserID: u.ID, SessionID: sess.ID, Username: u.Username,
 		IsSuperAdmin: u.IsSuperAdmin, Permissions: perms,
-		MustChangePw: u.MustChangePw,
+		MustChangePw: u.MustChangePw, TenantID: u.TenantID,
 	}, nil
 }
 

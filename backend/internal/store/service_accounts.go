@@ -195,6 +195,7 @@ type APITokenAuth struct {
 	Disabled         bool
 	ExpiresAt        *time.Time
 	RevokedAt        *time.Time
+	TenantID         uuid.UUID
 }
 
 // GetAPITokenByHash looks up a token by its SHA-256 hash, joining its service
@@ -202,10 +203,11 @@ type APITokenAuth struct {
 func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*APITokenAuth, error) {
 	var a APITokenAuth
 	err := s.pool.QueryRow(ctx, `
-		SELECT t.id, t.service_account_id, u.username, u.is_disabled, t.expires_at, t.revoked_at
+		SELECT t.id, t.service_account_id, u.username, u.is_disabled, t.expires_at, t.revoked_at,
+			COALESCE(u.tenant_id,'00000000-0000-0000-0000-000000000001'::uuid)
 		FROM api_tokens t JOIN users u ON u.id = t.service_account_id
 		WHERE t.token_hash=$1 AND u.is_service_account`, hash).
-		Scan(&a.TokenID, &a.ServiceAccountID, &a.Username, &a.Disabled, &a.ExpiresAt, &a.RevokedAt)
+		Scan(&a.TokenID, &a.ServiceAccountID, &a.Username, &a.Disabled, &a.ExpiresAt, &a.RevokedAt, &a.TenantID)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}

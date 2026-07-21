@@ -21,6 +21,24 @@ type Principal struct {
 	// MustChangePw is set when the account is flagged to change its password
 	// before it may use the rest of the API (enforced in RequireAuth).
 	MustChangePw bool
+	// TenantID is the account's home tenant (multi-tenancy). All of the account's
+	// requests are scoped to it, except a provider admin who has switched into a
+	// customer tenant's context (see RequireAuth). Zero value = the provider tenant.
+	TenantID uuid.UUID
+}
+
+// ProviderTenantID is the fixed id of the seeded provider (default) tenant — the MSP
+// itself, and the tenant all data belongs to in single-tenant mode. Kept in sync with
+// migration 0051.
+var ProviderTenantID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+// IsProviderAdmin reports whether the principal may operate across tenants: a member of
+// the provider tenant who holds Tenant.Manage (or is a super admin).
+func (p *Principal) IsProviderAdmin() bool {
+	if p == nil {
+		return false
+	}
+	return p.TenantID == ProviderTenantID && (p.IsSuperAdmin || p.Has("Tenant.Manage"))
 }
 
 // Has reports whether the principal holds a permission. Super admins and holders

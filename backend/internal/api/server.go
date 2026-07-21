@@ -76,6 +76,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/support"
 	"github.com/fleet-terminal/backend/internal/system"
+	"github.com/fleet-terminal/backend/internal/tenantapi"
 	"github.com/fleet-terminal/backend/internal/terminal"
 	"github.com/fleet-terminal/backend/internal/vault"
 	"github.com/fleet-terminal/backend/internal/vulnscan"
@@ -831,8 +832,13 @@ func (s *Server) registerRoutes(r chi.Router) {
 	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Watch: s.Watch, Events: s.Hub, Notify: s.Notify}
 	deps.DistributeKRL = s.distributeKRL
 
-	// M2 — first-run wizard + authentication.
-	bootstrap.NewHandler(s.Store, s.Cfg).Mount(r)
+	// M2 — first-run wizard + authentication. Bootstrap creates the first admin before
+	// any tenant exists, so it runs with row-level security bypassed (the admin lands in
+	// the provider tenant).
+	r.Group(func(gr chi.Router) {
+		gr.Use(auth.TenantBypass)
+		bootstrap.NewHandler(s.Store, s.Cfg).Mount(gr)
+	})
 	auth.NewHandler(s.Auth).Mount(r)
 
 	// M3 — host inventory.
@@ -884,6 +890,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// Orchestrated modules (admin, audit, sessions, approvals).
 	admin.Mount(r, deps)
 	serviceaccounts.Mount(r, deps)
+	tenantapi.Mount(r, deps)
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
 	vault.Mount(r, deps, s.Gateway)

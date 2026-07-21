@@ -21,22 +21,27 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
 // Mount attaches auth routes under the given router.
 func (h *Handler) Mount(r chi.Router) {
-	r.Post("/auth/login", h.login)
-	r.Post("/auth/refresh", h.refresh)
-	r.Post("/auth/mfa/verify", h.mfaVerify) // login step 2 (uses challenge token)
-	// Forced MFA enrollment (gated by the login setup token, not a session).
-	r.Post("/auth/mfa/setup/begin", h.mfaSetupBegin)
-	r.Post("/auth/mfa/setup/confirm", h.mfaSetupConfirm)
-	// OIDC SSO (public: browser redirects + the login-page status probe).
-	r.Get("/auth/oidc/status", h.oidcStatus)
-	r.Get("/auth/oidc/login", h.oidcLogin)
-	r.Get("/auth/oidc/callback", h.oidcCallback)
-	// SAML SSO (public: SP-initiated redirect, IdP-initiated ACS POST, SP metadata,
-	// and the login-page status probe). The ACS handles both flows.
-	r.Get("/auth/saml/status", h.samlStatus)
-	r.Get("/auth/saml/login", h.samlLogin)
-	r.Post("/auth/saml/acs", h.samlACS)
-	r.Get("/auth/saml/metadata", h.samlMetadata)
+	// Pre-authentication endpoints look up (or provision) accounts across tenants
+	// before the caller's tenant is known, so they run with RLS bypassed.
+	r.Group(func(gr chi.Router) {
+		gr.Use(TenantBypass)
+		gr.Post("/auth/login", h.login)
+		gr.Post("/auth/refresh", h.refresh)
+		gr.Post("/auth/mfa/verify", h.mfaVerify) // login step 2 (uses challenge token)
+		// Forced MFA enrollment (gated by the login setup token, not a session).
+		gr.Post("/auth/mfa/setup/begin", h.mfaSetupBegin)
+		gr.Post("/auth/mfa/setup/confirm", h.mfaSetupConfirm)
+		// OIDC SSO (public: browser redirects + the login-page status probe).
+		gr.Get("/auth/oidc/status", h.oidcStatus)
+		gr.Get("/auth/oidc/login", h.oidcLogin)
+		gr.Get("/auth/oidc/callback", h.oidcCallback)
+		// SAML SSO (public: SP-initiated redirect, IdP-initiated ACS POST, SP metadata,
+		// and the login-page status probe). The ACS handles both flows.
+		gr.Get("/auth/saml/status", h.samlStatus)
+		gr.Get("/auth/saml/login", h.samlLogin)
+		gr.Post("/auth/saml/acs", h.samlACS)
+		gr.Get("/auth/saml/metadata", h.samlMetadata)
+	})
 	r.Group(func(pr chi.Router) {
 		pr.Use(h.svc.RequireAuth)
 		pr.Post("/auth/logout", h.logout)
@@ -370,7 +375,15 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	for k := range p.Permissions {
 		perms = append(perms, k)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": u, "permissions": perms, "isSuperAdmin": u.IsSuperAdmin})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": u, "permissions": perms, "isSuperAdmin": u.IsSuperAdmin,
+		// Multi-tenancy: whether the mode is on, and whether this caller is a provider
+		// admin (may manage tenants + switch tenant context). The frontend uses these to
+		// show the Tenants console + the tenant switcher.
+		"multiTenancy":    h.svc.cfg.MultiTenancy,
+		"isProviderAdmin": p.IsProviderAdmin(),
+		"tenantId":        p.TenantID,
+	})
 }
 
 type changePwReq struct {

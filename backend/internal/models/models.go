@@ -81,9 +81,23 @@ type VaultGrant struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+// Tenant is one isolated customer (or the provider itself) in multi-tenant mode.
+type Tenant struct {
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
+	Kind      string    `json:"kind"`   // provider | customer
+	Status    string    `json:"status"` // active | suspended
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	UserCount int       `json:"userCount"`
+	HostCount int       `json:"hostCount"`
+}
+
 // User is an application account.
 type User struct {
 	ID            uuid.UUID  `json:"id"`
+	TenantID      uuid.UUID  `json:"tenantId,omitempty"`
 	Username      string     `json:"username"`
 	Email         string     `json:"email,omitempty"`
 	DisplayName   string     `json:"displayName"`
