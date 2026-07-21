@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.36.3 — Wider third-party CVE coverage on Windows
+
+- Expanded the curated Windows app→CPE dictionary from 19 to 35 entries, so more installed
+  third-party software is matched against NVD CVEs during a vulnerability scan: WinRAR,
+  TeamViewer, Slack, Oracle VirtualBox, VMware Workstation, GIMP, Audacity, KeePass,
+  KeePassXC, Dropbox, Opera, Apache Tomcat, Apache HTTP Server, MySQL Server, nginx, Grafana,
+  and Jenkins. Same precision-first rule — only confident NVD vendor/product identifiers;
+  apps still not in the dictionary are reported as not scanned rather than guessed. (Zoom,
+  Redis, and MongoDB were deliberately left out: Zoom's CPE is inconsistent, and the Redis/
+  MongoDB names collide with their separate GUI tools. "MySQL Server" is matched specifically
+  so MySQL Workbench doesn't inherit the server's CVEs.)
+
 ## v0.36.2 — System Health page reachable on direct load
 
 - **Fixed** the System Health page showing raw `{"status":"ok"}` JSON on a hard refresh or

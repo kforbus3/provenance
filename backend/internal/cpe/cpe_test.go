@@ -9,6 +9,18 @@ func TestMatch(t *testing.T) {
 		{"7-Zip 23.01 (x64)", "7-zip", "7-zip"},
 		{"VLC media player", "videolan", "vlc_media_player"},
 		{"Python 3.11.5 (64-bit)", "python", "python"},
+		// Curated additions.
+		{"WinRAR 6.24 (64-bit)", "rarlab", "winrar"},
+		{"TeamViewer", "teamviewer", "teamviewer"},
+		{"Slack", "slack", "slack"},
+		{"Oracle VM VirtualBox 7.0.14", "oracle", "vm_virtualbox"},
+		{"VMware Workstation", "vmware", "workstation"},
+		{"Audacity 3.4.2", "audacityteam", "audacity"},
+		{"Apache Tomcat 9.0", "apache", "tomcat"},
+		{"MySQL Server 8.0", "oracle", "mysql"},
+		// KeePassXC must map to keepassxc, NOT keepass (most-specific first).
+		{"KeePassXC", "keepassxc", "keepassxc"},
+		{"KeePass Password Safe 2.56", "keepass", "keepass"},
 	}
 	for _, c := range cases {
 		v, p, ok := Match(c.name)
@@ -22,6 +34,11 @@ func TestMatch(t *testing.T) {
 	// Bare "Python" (launcher/library) must NOT match the "python 3" rule.
 	if _, _, ok := Match("Python Launcher"); ok {
 		t.Error("Python Launcher should not match")
+	}
+	// MySQL Workbench is a different product from the server; the "mysql server"
+	// match must not claim it (it would otherwise inherit the server's CVEs).
+	if _, _, ok := Match("MySQL Workbench 8.0"); ok {
+		t.Error("MySQL Workbench should not match the server CPE")
 	}
 }
 

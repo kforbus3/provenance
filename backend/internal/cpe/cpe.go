@@ -42,6 +42,29 @@ var dictionary = []entry{
 	{"putty", "putty", "putty"},
 	// "python 3" (not bare "python", which also matches launchers/libraries).
 	{"python 3", "python", "python"},
+
+	// --- Additional curated entries (v0.36.x). Same precision-first rule: only
+	// apps whose NVD vendor/product is confidently known. Multi-word matches are
+	// used where a bare token would over-match (e.g. "mysql server" so MySQL
+	// Workbench doesn't map to the server's CVEs; "keepassxc" before "keepass" so
+	// the distinct products don't collide — most-specific first, first match wins).
+	{"winrar", "rarlab", "winrar"},
+	{"teamviewer", "teamviewer", "teamviewer"},
+	{"slack", "slack", "slack"},
+	{"oracle vm virtualbox", "oracle", "vm_virtualbox"},
+	{"vmware workstation", "vmware", "workstation"},
+	{"gimp", "gimp", "gimp"},
+	{"audacity", "audacityteam", "audacity"},
+	{"keepassxc", "keepassxc", "keepassxc"},
+	{"keepass", "keepass", "keepass"},
+	{"dropbox", "dropbox", "dropbox"},
+	{"opera", "opera", "opera"},
+	{"apache tomcat", "apache", "tomcat"},
+	{"apache http server", "apache", "http_server"},
+	{"mysql server", "oracle", "mysql"},
+	{"nginx", "nginx", "nginx"},
+	{"grafana", "grafana", "grafana"},
+	{"jenkins", "jenkins", "jenkins"},
 }
 
 // Match returns the CPE vendor/product for an app DisplayName, if it is in the
