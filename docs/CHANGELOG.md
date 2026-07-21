@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.37.1 — Multi-tenancy: keep the audit hash-chain global (append fix)
+
+Completes the audit-chain hardening started in v0.37.0. `AppendAudit` read the previous hash
+inside the request's tenant-scoped transaction, so under multi-tenancy an event written while
+acting inside a customer tenant chained to that tenant's last *visible* hash instead of the true
+global head — corrupting the single global hash chain and defeating tamper-evidence.
+
+The chain-head read, advisory lock, and insert now run under RLS bypass so `prev_hash` is always
+the true global head regardless of the caller's tenant, while the row's `tenant_id` is set
+explicitly (so tenant-scoped audit reads still work; `tenant_id` is deliberately not part of the
+hashed record). Verified: an audit event created while acting inside a customer tenant now chains
+to the global head and is tagged with that tenant, and the chain tail is internally consistent.
+Single-tenant deployments are unaffected. (v0.37.0 already fixed the verification side to read the
+chain globally.)
+
 ## v0.37.0 — Compliance evidence pack (PDF)
 
 Adds a single, auditor-ready PDF to the Reports page that complements the existing per-domain

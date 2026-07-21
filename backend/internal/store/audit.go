@@ -12,7 +12,26 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
+
+// providerTenantID is the seeded Provider tenant; audit events for background/system
+// work (no request tenant) belong to it. Kept as a local literal so the store layer
+// need not import auth (which imports store).
+const providerTenantID = "00000000-0000-0000-0000-000000000001"
+
+// auditRowTenant resolves the tenant_id column value for an audit event from the
+// request context: the caller's tenant when scoped to one, else the Provider tenant
+// for cross-tenant/background/unscoped work. This tags the row for tenant-scoped
+// audit READS; it is deliberately NOT part of the hash chain (which is global).
+func auditRowTenant(ctx context.Context) string {
+	if v := tenant.GUCValue(ctx); v != "" && v != tenant.Bypass {
+		if _, err := uuid.Parse(v); err == nil {
+			return v
+		}
+	}
+	return providerTenantID
+}
 
 // AppendAudit writes a tamper-evident audit event. Each event's hash chains to
 // the previous event's hash: hash = SHA256(prev_hash || canonical(event)).
@@ -22,14 +41,24 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 	if e.Detail == nil {
 		e.Detail = map[string]any{}
 	}
+	// The hash chain is a SINGLE GLOBAL sequence (ordered by seq across all tenants).
+	// Resolve the event's tenant from the request context BEFORE bypassing, then run the
+	// chain-critical section under RLS bypass: otherwise, under multi-tenancy, the
+	// prev_hash read is RLS-filtered and an event written while acting inside a customer
+	// tenant chains to that tenant's last visible hash — corrupting the global chain and
+	// defeating tamper-evidence. The row's tenant_id is inserted EXPLICITLY (the RLS
+	// default under bypass would mis-tag it), so tenant-scoped audit reads still work.
+	// tenant_id is intentionally NOT part of the hashed canonical record.
+	rowTenant := auditRowTenant(ctx)
+	bctx := tenant.WithBypass(ctx)
 	var out models.AuditEvent
-	err := s.tx(ctx, func(tx pgx.Tx) error {
+	err := s.tx(bctx, func(tx pgx.Tx) error {
 		// Serialize appends so prev_hash is read consistently.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('fleet_audit_chain'))`); err != nil {
+		if _, err := tx.Exec(bctx, `SELECT pg_advisory_xact_lock(hashtext('fleet_audit_chain'))`); err != nil {
 			return err
 		}
 		var prev string
-		err := tx.QueryRow(ctx, `SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1`).Scan(&prev)
+		err := tx.QueryRow(bctx, `SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1`).Scan(&prev)
 		if err != nil && err != pgx.ErrNoRows {
 			return err
 		}
@@ -40,12 +69,12 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 		sum := sha256.Sum256([]byte(prev + "|" + canonical))
 		hash := hex.EncodeToString(sum[:])
 
-		row := tx.QueryRow(ctx, `
+		row := tx.QueryRow(bctx, `
 			INSERT INTO audit_events
-				(actor_id, actor_name, action, target_kind, target_id, ip, detail, prev_hash, hash)
-			VALUES ($1, NULLIF($2,'')::citext, $3, $4, $5, NULLIF($6,'')::inet, $7, $8, $9)
+				(tenant_id, actor_id, actor_name, action, target_kind, target_id, ip, detail, prev_hash, hash)
+			VALUES ($1::uuid, $2, NULLIF($3,'')::citext, $4, $5, $6, NULLIF($7,'')::inet, $8, $9, $10)
 			RETURNING seq, id, action, target_kind, target_id, prev_hash, hash, created_at`,
-			e.ActorID, e.ActorName, e.Action, e.TargetKind, e.TargetID, e.IP, detailJSON, prev, hash)
+			rowTenant, e.ActorID, e.ActorName, e.Action, e.TargetKind, e.TargetID, e.IP, detailJSON, prev, hash)
 		return row.Scan(&out.Seq, &out.ID, &out.Action, &out.TargetKind, &out.TargetID,
 			&out.PrevHash, &out.Hash, &out.CreatedAt)
 	})
