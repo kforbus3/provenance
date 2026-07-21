@@ -5,6 +5,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.6 — Session replay: reliable full-screen exit
+
+Fixes the recorded-session full-screen view: **Esc now always exits** (the key listener
+moved to the capture phase, so the terminal — which could swallow keydowns when focused —
+no longer eats it), and the exit control is now a clear **"Exit full screen (Esc)"
+button** instead of a small corner icon.
+
 ## v0.33.5 — Ask AI: deterministic fast-path for obvious questions
 
 Small local models often mis-route clear questions (answering "who ran df" with fleet

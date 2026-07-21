@@ -113,12 +113,17 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
     return () => window.removeEventListener("resize", refit);
   }, [fullscreen]);
 
-  // Esc exits full screen.
+  // Esc exits full screen. Use the CAPTURE phase: the xterm terminal can call
+  // stopPropagation on keydown (so a bubble-phase window listener was missed when the
+  // terminal had focus — the "sometimes Esc doesn't work"), but a capture-phase listener
+  // runs first.
   useEffect(() => {
     if (!fullscreen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFullscreen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); setFullscreen(false); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [fullscreen]);
 
   if (isLoading) {
@@ -143,11 +148,22 @@ function ReplayTerminal({ sessionId }: { sessionId: string }) {
           {" "}{Math.round(data.recording.durationMs / 1000)}s
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
-        <Tooltip title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}>
-          <IconButton size="small" onClick={() => setFullscreen((f) => !f)} sx={{ color: fullscreen ? "#fff" : undefined }}>
-            {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
-          </IconButton>
-        </Tooltip>
+        {fullscreen ? (
+          <Button
+            size="small" variant="contained" color="inherit"
+            startIcon={<FullscreenExitIcon />}
+            onClick={() => setFullscreen(false)}
+            sx={{ bgcolor: "grey.100", color: "#000", "&:hover": { bgcolor: "grey.300" } }}
+          >
+            Exit full screen (Esc)
+          </Button>
+        ) : (
+          <Tooltip title="Full screen">
+            <IconButton size="small" onClick={() => setFullscreen(true)}>
+              <FullscreenIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Stack>
       <Box
         ref={containerRef}
