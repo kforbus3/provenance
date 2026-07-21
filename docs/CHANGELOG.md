@@ -5,6 +5,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.3 — Ask AI: route "who ran <command>" to the command tools
+
+Tightened the assistant's tool-selection guidance so questions like "who ran df" /
+"did anyone run rm -rf" go firmly to **search_commands** (interactive terminals) and
+**recent_commands** (Fleet Run-Command), instead of being answered by the fleet-health
+tool. `fleet_insights` is now scoped explicitly to health/capacity questions only.
+Helps smaller local models route these correctly. (Prompt-only; requires the assistant
+tools from v0.33.0 to be deployed — if your Sessions page has no "Commands" tab, deploy
+the newer build first.)
+
 ## v0.33.2 — Sessions: "Commands" search view
 
 A new **Commands** tab on the Sessions page searches the commands users **typed** in

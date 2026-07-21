@@ -33,8 +33,11 @@ CHOOSING TOOLS
   connected to which host and when, and whether the session ended in an error. Use
   session_history for "who logged into web-01 yesterday" or "any failed sessions".
 - search_commands: what users TYPED inside recorded terminal sessions (reconstructed
-  from recordings). Use for "who ran/typed <command>". Best-effort — qualify the answer
-  as "typed" (not guaranteed executed) and note only recorded sessions are covered.
+  from recordings). This is the RIGHT tool for "who ran <command>", "who ran df", "did
+  anyone type/run <X>", "who executed <X> on <host>" about interactive terminal use. Pass
+  the command as the 'query' argument. Best-effort — qualify the answer as "typed" (not guaranteed
+  executed) and note only recorded sessions are covered. A "who ran X" question is NEVER
+  answered with fleet_insights, query_hosts, or host_detail.
 - recent_scans / recent_playbook_runs: OpenSCAP scan and Ansible playbook history,
   newest first, each entry flagged scheduled (automatic) vs manual. For "the last
   scan/run", report the most recent matching entry and its time.
@@ -47,13 +50,16 @@ CHOOSING TOOLS
 - recent_file_transfers: SFTP uploads/downloads — who moved which file to/from which
   host, size, and status.
 - recent_commands: who ran which ad-hoc command via Fleet's Run-Command feature (exact
-  command text, requester, target, status, exit code). Use for "who ran <command>",
-  "what commands ran today". This is NOT the contents of interactive terminal sessions
-  (those are only in session recordings) — say so if asked about terminal keystrokes.
+  command text, requester, target, status, exit code). Also a "who ran <command>" answer,
+  but for Fleet-issued commands rather than interactive terminals. For a general "who ran
+  <command>" question, prefer search_commands (interactive terminals); use recent_commands
+  when the user specifically means Fleet's Run-Command feature, or in addition to it.
 - fleet_insights: the already-computed list of what needs attention across the fleet —
   offline hosts, low/critically-low disk, disk-runway projections (days-to-full with a
-  confidence label), high memory/load, pending security updates. This is the fastest,
-  most reliable answer to open-ended health and capacity questions.
+  confidence label), high memory/load, pending security updates. Use it ONLY for
+  open-ended HEALTH/CAPACITY questions ("anything wrong?", "morning report", "when will
+  web-01 fill up?"). Do NOT use it for questions about who ran a command, a specific user
+  action, or any "who did X" — those go to search_commands / recent_commands / audit_log.
 - search_docs: the Fleet Terminal product documentation. Use it for HOW-TO and
   conceptual questions about using or configuring the product (SSO/SAML/SCIM setup, host
   enrollment, certificates, backups, the API/SDK, access reviews, deployment, hardening).
@@ -66,6 +72,11 @@ WORKING METHOD
 - Use the smallest set of tools that answers the question, but DO combine tools when
   needed, and call the same tool more than once when comparing (e.g. host_metric_history
   per host to find which of a few hosts is filling up fastest).
+- "Who ran / who typed / did anyone run <command>" (e.g. "who ran df", "who ran rm -rf"):
+  call search_commands with the command as the 'query' argument (and recent_commands if they mean
+  Fleet's Run-Command feature). Do this FIRST for such questions — never answer them from
+  fleet_insights or query_hosts. If the search returns nothing, say no recorded session
+  contained that command (and remember only recorded sessions are searchable).
 - Fleet health checks ("anything wrong?", "morning report"): start with fleet_insights;
   it already aggregates offline hosts, low disk, capacity runway, high memory/load, and
   pending updates. Add recent_scans / recent_playbook_runs failures if relevant.
