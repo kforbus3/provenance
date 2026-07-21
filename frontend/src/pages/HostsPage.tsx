@@ -1547,8 +1547,8 @@ function EnrollCredsDialog({
   const [wgEndpoint, setWgEndpoint] = useState("");
   const [viaJump, setViaJump] = useState(false);
   const [skipWireGuard, setSkipWireGuard] = useState(false);
-  // VPN overlay: "" = deployment default. openvpn/strongswan are the FIPS overlays.
-  const [overlay, setOverlay] = useState<"" | "wireguard" | "openvpn" | "strongswan">("");
+  // VPN overlay: "" = deployment default. openvpn is the FIPS overlay.
+  const [overlay, setOverlay] = useState<"" | "wireguard" | "openvpn">("");
   // No-install (ssh-pipe) flow state.
   const [sshTarget, setSshTarget] = useState("");
   const [hostPubKey, setHostPubKey] = useState("");
@@ -1783,14 +1783,13 @@ function EnrollCredsDialog({
         <TextField
           select fullWidth sx={{ mt: 2 }}
           label="VPN overlay" value={overlay}
-          onChange={(e) => setOverlay(e.target.value as "" | "wireguard" | "openvpn" | "strongswan")}
+          onChange={(e) => setOverlay(e.target.value as "" | "wireguard" | "openvpn")}
           disabled={skipWireGuard}
-          helperText="Transport the host uses to reach the jump host. OpenVPN and strongSwan/IPsec are the FIPS-approved (certificate-authenticated) overlays; WireGuard is the default. Leave on default unless this host needs a specific transport."
+          helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Leave on default unless this host needs a specific transport."
         >
           <MenuItem value="">Deployment default</MenuItem>
           <MenuItem value="wireguard">WireGuard</MenuItem>
           <MenuItem value="openvpn">OpenVPN (FIPS)</MenuItem>
-          <MenuItem value="strongswan">strongSwan / IPsec (FIPS)</MenuItem>
         </TextField>
         <TextField
           fullWidth sx={{ mt: 2 }}

@@ -48,7 +48,7 @@ type enrollReq struct {
 	WGEndpoint    string `json:"wgEndpoint"`    // jump host's public WireGuard endpoint
 	ViaJump       bool   `json:"viaJump"`       // route bootstrap through the jump host
 	SkipWireGuard bool   `json:"skipWireGuard"` // host is directly reachable from the jump host
-	Overlay       string `json:"overlay"`       // "" (default) | wireguard | openvpn | strongswan
+	Overlay       string `json:"overlay"`       // "" (default) | wireguard | openvpn
 }
 
 func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
@@ -74,10 +74,10 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Overlay {
-	case "", "wireguard", "openvpn", "strongswan":
+	case "", "wireguard", "openvpn":
 		// ok
 	default:
-		httpx.WriteError(w, http.StatusBadRequest, "overlay must be one of: wireguard, openvpn, strongswan")
+		httpx.WriteError(w, http.StatusBadRequest, "overlay must be one of: wireguard, openvpn")
 		return
 	}
 	res, err := h.svc.Enroll(r.Context(), p.SessionID, host, &p.UserID, EnrollParams{

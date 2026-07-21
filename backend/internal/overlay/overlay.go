@@ -1,6 +1,6 @@
 // Package overlay provisions Fleet's host-reachability transports. WireGuard is
 // handled inline by the enrollment package; the certificate-authenticated overlays
-// (OpenVPN, strongSwan/IPsec) implement the Overlay interface here so enrollment can
+// (OpenVPN) implement the Overlay interface here so enrollment can
 // treat them uniformly and select one per host. All cert overlays share the X.509
 // overlay PKI and the wg_address-based addressing, so the SSH gateway stays
 // overlay-agnostic.
@@ -23,7 +23,7 @@ type RunFunc func(script string) (string, error)
 // scripts and issue certs from the shared overlay PKI; the enrollment layer runs the
 // scripts over SSH and owns address assignment.
 type Overlay interface {
-	// Name is the FLEET_OVERLAY value this overlay answers to ("openvpn", "strongswan").
+	// Name is the FLEET_OVERLAY value this overlay answers to ("openvpn").
 	Name() string
 
 	// EnsureServer idempotently provisions and starts the VPN server on the jump host
@@ -39,9 +39,9 @@ type Overlay interface {
 }
 
 // IsCertOverlay reports whether name selects a certificate-authenticated overlay
-// (OpenVPN / strongSwan) rather than WireGuard. Empty and "wireguard" are WireGuard.
+// (OpenVPN) rather than WireGuard. Empty and "wireguard" are WireGuard.
 func IsCertOverlay(name string) bool {
-	return name == "openvpn" || name == "strongswan"
+	return name == "openvpn"
 }
 
 // oneLine collapses a script's multi-line output to a single trimmed line for error

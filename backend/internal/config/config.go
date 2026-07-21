@@ -28,7 +28,7 @@ type Config struct {
 	// Off by default — non-FIPS installs are unchanged.
 	FIPSMode bool
 	// Overlay selects the host-reachability transport: "wireguard" (default) or,
-	// under FIPS, "openvpn" / "strongswan". Empty derives from FIPSMode.
+	// under FIPS, "openvpn". Empty derives from FIPSMode.
 	Overlay string
 
 	// Database

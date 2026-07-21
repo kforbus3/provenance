@@ -11,8 +11,8 @@ import (
 	"github.com/fleet-terminal/backend/internal/overlay"
 )
 
-// enrollCertOverlay provisions a certificate-authenticated overlay (OpenVPN or
-// strongSwan) for a host in place of WireGuard: it assigns the host a stable overlay
+// enrollCertOverlay provisions a certificate-authenticated overlay (OpenVPN)
+// for a host in place of WireGuard: it assigns the host a stable overlay
 // address, brings up the VPN server on the jump host, and provisions the host onto the
 // tunnel. The assigned address is returned and stored in the same wg_address column
 // WireGuard uses, so the SSH gateway dials the host identically regardless of overlay.

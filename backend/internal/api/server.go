@@ -109,7 +109,7 @@ type Server struct {
 	backplane *ws.Backplane        // HA: cross-instance event/control bridge
 
 	// overlayPKI is the shared X.509 CA for the certificate-authenticated overlays;
-	// overlays maps overlay name -> provisioner ("openvpn", "strongswan"). Both are
+	// overlays maps overlay name -> provisioner ("openvpn"). It is
 	// always built, but the CA is created lazily (only when a host uses a cert overlay).
 	overlayPKI *overlaypki.PKI
 	overlays   map[string]overlay.Overlay
@@ -145,14 +145,13 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	issuer := identity.NewIssuer(st, caMgr, cfg, log, vault)
 	gateway := sshgw.New(cfg, log, vault, issuer)
 
-	// Certificate-authenticated overlays (OpenVPN, strongSwan) share the X.509 overlay
-	// PKI. They are always constructed so a host can be enrolled onto one per-host, but
-	// the overlay CA is created lazily on first use (see InitBackground) — a pure
-	// WireGuard deployment never touches it.
+	// The certificate-authenticated overlay (OpenVPN) shares the X.509 overlay PKI. It is
+	// always constructed so a host can be enrolled onto it per-host, but the overlay CA
+	// is created lazily on first use (see InitBackground) — a pure WireGuard deployment
+	// never touches it.
 	overlayPKI := overlaypki.New(st, cfg)
 	overlays := map[string]overlay.Overlay{
-		"openvpn":    overlay.New(cfg, overlayPKI),
-		"strongswan": overlay.NewStrongSwan(cfg, overlayPKI),
+		"openvpn": overlay.New(cfg, overlayPKI),
 	}
 
 	s := &Server{

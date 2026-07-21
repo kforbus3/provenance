@@ -10,37 +10,35 @@ Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images
 
 ## Implementation status
 
-**Done (P2 — cert-authenticated overlays: OpenVPN + strongSwan, per-host selectable):**
-- **`internal/overlaypki`** — an X.509 CA (ECDSA P-256) distinct from the SSH CA, shared by
-  both cert overlays (which authenticate peers with X.509 certs an SSH CA cannot issue).
-  The CA key is `secretbox`-sealed at rest (v3/PBKDF2 under FIPS) in `overlay_ca`; generated
-  once and **reloaded** (decrypted) on restart. Client certs are CN-bound to the host UUID
+**Done (P2 — cert-authenticated overlay: OpenVPN, per-host selectable):**
+> Note: a strongSwan/IPsec provisioner was prototyped but **removed** because it could
+> not be validated end-to-end without a real IPsec (kernel-`xfrm`) capable host. The
+> overlay abstraction remains, so a second cert overlay can be added later once it can
+> be properly tested.
+- **`internal/overlaypki`** — an X.509 CA (ECDSA P-256) distinct from the SSH CA (OpenVPN
+  authenticates peers with X.509 certs an SSH CA cannot issue). The CA key is
+  `secretbox`-sealed at rest (v3/PBKDF2 under FIPS) in `overlay_ca`; generated once and
+  **reloaded** (decrypted) on restart. Client certs are CN-bound to the host UUID
   (`fleet-h-<id>`), recorded in `overlay_clients`.
-- **`internal/overlay`** — an `Overlay` interface (`EnsureServer` / `ProvisionHost`) with two
-  implementations:
-  - **OpenVPN**: jump-host `server.conf`, per-host `client.ovpn`, `ccd` static-IP pins.
-    Suite: TLS 1.2/1.3, AES-256-GCM, **ECDHE-P256** (pins `tls-groups secp256r1:secp384r1`
-    — OpenSSL 3 ignores the deprecated `ecdh-curve` and would otherwise pick non-approved
-    X25519), ECDSA-P256 mutual cert auth.
-  - **strongSwan / IPsec (IKEv2)**: `swanctl` responder + initiator config, per-host virtual
-    IP pinned **server-side** to the client cert CN via a single-address pool (spoof-proof).
-    Suite: `aes256-sha256-ecp256` (IKE, ECDHE P-256) + `aes256gcm16-ecp256` (ESP).
+- **`internal/overlay`** — an `Overlay` interface (`EnsureServer` / `ProvisionHost`)
+  implemented by **OpenVPN**: jump-host `server.conf`, per-host `client.ovpn`, `ccd`
+  static-IP pins. Suite: TLS 1.2/1.3, AES-256-GCM, **ECDHE-P256** (pins
+  `tls-groups secp256r1:secp384r1` — OpenSSL 3 ignores the deprecated `ecdh-curve` and
+  would otherwise pick non-approved X25519), ECDSA-P256 mutual cert auth.
 - **Per-host selection.** The overlay is chosen **per host** at enrollment (`hosts.overlay`
   column; enroll dialog dropdown / `overlay` API field), resolved as per-enroll choice →
   the host's recorded overlay → the deployment default `FLEET_OVERLAY`. Enrollment dispatches
-  WireGuard vs. a cert overlay on that effective value and provisions via the overlay
+  WireGuard vs. the cert overlay on that effective value and provisions via the overlay
   registry, storing the assigned address in the **same `wg_address` column** WireGuard uses —
   so the SSH gateway dials the host identically regardless of transport. The WireGuard path
   is untouched (all changes are additive, gated on `overlay.IsCertOverlay(effective)`).
-- **Server boot** builds both provisioners sharing the PKI; the overlay CA is created
-  **lazily** (only when a host actually uses a cert overlay), pre-warmed on boot only when the
-  deployment default is itself a cert overlay — so a pure-WireGuard deployment never creates it.
+- **Server boot** builds the provisioner sharing the PKI; the overlay CA is created
+  **lazily** (only when a host actually uses the cert overlay), pre-warmed on boot only when
+  the deployment default is a cert overlay — so a pure-WireGuard deployment never creates it.
 - Validated end-to-end in Docker: OpenVPN PKI chain + live tunnel (mutual ECDSA auth,
   TLS1.3/`TLS_AES_256_GCM`, ECDHE-P256, ping over the tunnel), ccd static per-host IP,
   Fleet's actual provisioning scripts on real containers; overlay-CA persistence/reload
-  against real Postgres; FIPS + WireGuard boots both validated. strongSwan config generation
-  is unit-tested (FIPS proposals, CN-pinned IP, no non-approved curves); its live IPsec
-  tunnel requires an IPsec-capable host to exercise (kernel xfrm), documented as such.
+  against real Postgres; FIPS + WireGuard boots both validated.
 
 **Done (P0 — foundation, and P1 — in-process crypto):**
 - **Go 1.24 toolchain** with the native FIPS 140-3 module. It is compiled into every
@@ -251,26 +249,22 @@ self-check passes. Done — indistinguishable in workflow from a normal deploy.
 | Env var | Default | Meaning |
 |---|---|---|
 | `FLEET_FIPS_MODE` | `false` | `true` sets `GODEBUG=fips140=on` and derives the FIPS profile. |
-| `FLEET_OVERLAY` | derived | Deployment **default** overlay: `openvpn` under FIPS (else `wireguard`). Overridable per host at enrollment (`wireguard` \| `openvpn` \| `strongswan`). |
+| `FLEET_OVERLAY` | derived | Deployment **default** overlay: `openvpn` under FIPS (else `wireguard`). Overridable per host at enrollment (`wireguard` \| `openvpn`). |
 | `FLEET_OVPN_PORT` | `1194` | UDP port the jump-host OpenVPN server listens on. |
-| `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` | — | Reused verbatim for every overlay's address plan (OpenVPN `server`/`ccd`, strongSwan pool/virtual IPs). |
-| `FLEET_WG_JUMP_ENDPOINT` | — | Address managed hosts dial; OpenVPN applies `FLEET_OVPN_PORT`, strongSwan uses IKE UDP 500/4500. |
+| `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` | — | Reused verbatim for the OpenVPN overlay's address plan (`server` + `ccd` static IPs). |
+| `FLEET_WG_JUMP_ENDPOINT` | — | Address managed hosts dial; OpenVPN applies `FLEET_OVPN_PORT`. |
 
 Per host, the overlay is chosen in the **enroll dialog's "VPN overlay" dropdown** (or the
 `overlay` field of the enroll API) — "Deployment default" keeps `FLEET_OVERLAY`.
 
-**Jump host** needs the relevant VPN package(s) — `openvpn` and/or `strongswan` +
-`strongswan-swanctl` (the test-fabric image installs all three) — plus a `/dev/net/tun`
-device (OpenVPN) or kernel IPsec/`xfrm` (strongSwan), and `NET_ADMIN` (the enrollment
-scripts install the VPN package on demand if missing). The first host on a given overlay
-provisions that overlay's jump-host server idempotently; the overlay CA is created on
-first use (or on boot when the default is a cert overlay).
+**Jump host** needs `openvpn` (the test-fabric image installs it), a `/dev/net/tun`
+device, and `NET_ADMIN` (the enrollment scripts install openvpn on demand if missing).
+The first host on the cert overlay provisions the jump-host OpenVPN server idempotently;
+the overlay CA is created on first use (or on boot when the default is a cert overlay).
 
 **Verify** with `fleetctl fips check` (module active, overlay, ECDSA CA) and, on the jump
-host, `pgrep -f 'openvpn .*server.conf'` (OpenVPN) or `swanctl --list-conns` / `swanctl
---list-sas` (strongSwan). A managed host that enrolled over a cert overlay shows its
-assigned address (same column as WireGuard) and a `tun0` (OpenVPN) or IPsec policy to the
-jump's overlay IP.
+host, `pgrep -f 'openvpn .*server.conf'`. A managed host that enrolled over the cert
+overlay shows its assigned address (same column as WireGuard) and a `tun0` interface.
 
 ---
 

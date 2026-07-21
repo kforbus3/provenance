@@ -13,7 +13,7 @@ import (
 type fipsReadiness struct {
 	ModuleActive bool           `json:"moduleActive"` // Go FIPS 140-3 module active in this process
 	ConfigFIPS   bool           `json:"configFips"`   // FLEET_FIPS_MODE
-	Overlay      string         `json:"overlay"`      // wireguard | openvpn | strongswan
+	Overlay      string         `json:"overlay"`      // wireguard | openvpn
 	OverlayOK    bool           `json:"overlayOk"`    // overlay is a FIPS transport (not WireGuard)
 	CAKeyAlgo    string         `json:"caKeyAlgo"`    // active user CA key algorithm
 	CAKeyOK      bool           `json:"caKeyOk"`      // CA key is FIPS-approved (not Ed25519)

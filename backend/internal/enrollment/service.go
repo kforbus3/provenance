@@ -35,13 +35,13 @@ type Service struct {
 	log   *slog.Logger
 	gw    *sshgw.Gateway
 	// overlays holds the certificate-authenticated overlay provisioners by name
-	// ("openvpn", "strongswan"). Empty when only WireGuard is available. A host is
+	// ("openvpn"). Empty when only WireGuard is available. A host is
 	// provisioned onto whichever overlay its effective selection names.
 	overlays map[string]overlay.Overlay
 }
 
 // New constructs the enrollment Service. overlays may be nil/empty (WireGuard only);
-// it carries the cert-overlay provisioners (OpenVPN, strongSwan) when built.
+// it carries the cert-overlay provisioners (OpenVPN) when built.
 func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, overlays map[string]overlay.Overlay) *Service {
 	return &Service{store: st, cfg: cfg, log: log, gw: gw, overlays: overlays}
 }
@@ -111,7 +111,7 @@ type EnrollParams struct {
 	// gateway reaches it through the jump host at its management address.
 	SkipWireGuard bool
 	// Overlay overrides the reachability transport for THIS host: "" (deployment
-	// default FLEET_OVERLAY), "wireguard", "openvpn", or "strongswan". Lets an operator
+	// default FLEET_OVERLAY), "wireguard" or "openvpn". Lets an operator
 	// pick a per-host VPN at enrollment. Ignored when SkipWireGuard is set.
 	Overlay string
 }
@@ -348,7 +348,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	}
 
 	// 5) Ensure WireGuard is installed (no-op if already present). Skipped under a
-	//    cert overlay (OpenVPN/strongSwan), which installs its own tooling in step 6.
+	//    cert overlay (OpenVPN), which installs its own tooling in step 6.
 	if !overlay.IsCertOverlay(effOverlay) {
 		if out, err := priv(wgInstallScript); err != nil || strings.Contains(out, "WG_MISSING") {
 			return fail("install_wireguard", orErr(err, out+" (could not install wireguard tools)"))
@@ -361,7 +361,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	//    Skipped for a directly-reachable host — it has no overlay address.
 	var wgIP, hostPub string
 	if overlay.IsCertOverlay(effOverlay) {
-		// Cert overlay (OpenVPN/strongSwan): provision the tunnel via X.509 mutual auth
+		// Cert overlay (OpenVPN): provision the tunnel via X.509 mutual auth
 		// instead of WireGuard. The assigned address is stored in the same wg_address
 		// column below, so the SSH gateway dials the host identically regardless of overlay.
 		ov := s.overlays[effOverlay]

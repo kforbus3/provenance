@@ -1,5 +1,5 @@
 // Package overlaypki is an X.509 certificate authority (ECDSA P-256) for the FIPS
-// OpenVPN / strongSwan overlay. OpenVPN authenticates peers with X.509 certificates,
+// OpenVPN overlay. OpenVPN authenticates peers with X.509 certificates,
 // which Fleet's SSH CA (internal/ca) cannot issue — so this is a parallel PKI of the
 // same key type and assurance. It is only used when FLEET_OVERLAY=openvpn; the
 // default WireGuard overlay never touches it.

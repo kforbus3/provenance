@@ -18,8 +18,6 @@ RUN apt-get update \
       openssh-server \
       wireguard-tools \
       openvpn \
-      strongswan \
-      strongswan-swanctl \
       iproute2 \
       iptables \
       sudo \
@@ -46,7 +44,6 @@ COPY sshd_fleet.conf /etc/ssh/sshd_config.d/00-fleet.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 51820/udp = WireGuard; 1194/udp = OpenVPN; 500/4500 udp = strongSwan/IPsec (IKE + NAT-T).
-# The FIPS cert overlays (openvpn, strongswan) are selectable per host at enrollment.
-EXPOSE 22 51820/udp 1194/udp 500/udp 4500/udp
+# 51820/udp = WireGuard overlay; 1194/udp = OpenVPN overlay (FIPS, selectable per host).
+EXPOSE 22 51820/udp 1194/udp
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

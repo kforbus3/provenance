@@ -185,7 +185,7 @@ type Host struct {
 	Address     string    `json:"address,omitempty"`
 	WGAddress   string    `json:"wgAddress,omitempty"`
 	// Overlay is the per-host reachability transport chosen at enrollment: "" (use the
-	// deployment default FLEET_OVERLAY), "wireguard", "openvpn", or "strongswan". The
+	// deployment default FLEET_OVERLAY), "wireguard" or "openvpn". The
 	// assigned overlay address lives in WGAddress regardless of transport.
 	Overlay  string   `json:"overlay,omitempty"`
 	SSHPort  int      `json:"sshPort"`
