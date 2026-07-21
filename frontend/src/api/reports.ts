@@ -10,13 +10,28 @@ export async function downloadReport(kind: ReportKind, from: string, to: string)
     params: { from, to },
     responseType: "blob",
   });
-  const blob = new Blob([data as BlobPart], { type: "text/csv" });
+  saveBlob(data as BlobPart, "text/csv", headers["content-disposition"] as string | undefined,
+    `fleet-${kind}-${from}-${to}.csv`);
+}
+
+// downloadEvidencePack fetches the single-file PDF compliance evidence pack (cover +
+// audit-integrity attestation + summary statistics) for the date range and saves it.
+export async function downloadEvidencePack(from: string, to: string): Promise<void> {
+  const { data, headers } = await api.get(`/api/v1/reports/evidence-pack.pdf`, {
+    params: { from, to },
+    responseType: "blob",
+  });
+  saveBlob(data as BlobPart, "application/pdf", headers["content-disposition"] as string | undefined,
+    `fleet-evidence-pack-${from}-${to}.pdf`);
+}
+
+function saveBlob(data: BlobPart, type: string, contentDisposition: string | undefined, fallback: string) {
+  const blob = new Blob([data], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  const cd = (headers["content-disposition"] as string | undefined) ?? "";
-  const match = cd.match(/filename="?([^"]+)"?/);
-  a.download = match?.[1] || `fleet-${kind}-${from}-${to}.csv`;
+  const match = (contentDisposition ?? "").match(/filename="?([^"]+)"?/);
+  a.download = match?.[1] || fallback;
   document.body.appendChild(a);
   a.click();
   a.remove();

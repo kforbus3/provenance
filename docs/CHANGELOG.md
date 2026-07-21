@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.37.0 — Compliance evidence pack (PDF)
+
+Adds a single, auditor-ready PDF to the Reports page that complements the existing per-domain
+CSV exports. For a chosen date range it bundles:
+
+- an **audit-log integrity attestation** — a genesis-to-latest verification of the hash-chained
+  audit log, stated as PASS (chain cryptographically intact) or FAIL with the broken sequence.
+  This is Fleet's tamper-evidence guarantee rendered as evidence auditors can file;
+- summary statistics for privileged access (sessions, distinct users/hosts), certificate
+  issuance (and revocations), scan posture (pass/fail), vulnerabilities (with critical/high
+  counts), and privileged-command activity (flagged/blocked).
+
+Generated server-side as a real PDF (pure-Go, CGO-free), white-label aware, with the full
+line-item detail still available as the individual CSV exports. Gated by `Audit.View`.
+
+Also fixed: the audit-chain verification (`/audit/verify` and the new attestation) now runs
+globally regardless of the caller's tenant — the hash chain is a single cross-tenant sequence,
+so a tenant-scoped read would hide rows and falsely report the chain broken.
+
 ## v0.36.5 — Multi-tenancy: scope token-authenticated endpoints
 
 Fixes a multi-tenancy correctness bug (single-tenant deployments unaffected). Endpoints that

@@ -16,6 +16,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
 
 // Mount attaches audit routes to r, gated by authentication and permissions.
@@ -214,7 +215,9 @@ func (h *handler) actions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) verify(w http.ResponseWriter, r *http.Request) {
-	intact, brokenAt, err := h.d.Store.VerifyAuditChain(r.Context())
+	// Verify under bypass: the hash chain is a single global sequence across all
+	// tenants, so a tenant-scoped read would hide rows and falsely report a break.
+	intact, brokenAt, err := h.d.Store.VerifyAuditChain(tenant.WithBypass(r.Context()))
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not verify audit chain")
 		return

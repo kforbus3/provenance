@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/fleet-terminal/backend/internal/app"
+	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -38,7 +39,34 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.Get("/reports/vulnerabilities.csv", h.csv("vulnerabilities", func(ctx context.Context, from, to time.Time) (*store.ReportTable, error) {
 			return h.d.Store.ExportVulnScanFindings(ctx, from, to)
 		}))
+		// A single, human-readable PDF that bundles the above into an auditor-ready
+		// evidence pack, led by a tamper-evidence attestation of the audit chain.
+		pr.Get("/reports/evidence-pack.pdf", h.evidencePack)
 	})
+}
+
+// evidencePack streams the PDF compliance evidence pack for the requested window.
+func (h *handler) evidencePack(w http.ResponseWriter, r *http.Request) {
+	from, to := dateRange(r)
+	by := "unknown"
+	if p := auth.MustPrincipal(r); p != nil {
+		by = p.Username
+	}
+	pdf, err := buildEvidencePack(r.Context(), h.d.Store, packMeta{
+		AppName:     h.d.Store.AppName(r.Context()),
+		GeneratedBy: by,
+		From:        from,
+		To:          to,
+		Now:         time.Now().UTC(),
+	})
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not build evidence pack")
+		return
+	}
+	filename := "fleet-evidence-pack-" + from.Format("20060102") + "-" + to.Format("20060102") + ".pdf"
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	_, _ = w.Write(pdf)
 }
 
 type handler struct{ d *app.Deps }

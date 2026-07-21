@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,24 @@ func (s *Store) GetSetting(ctx context.Context, key string) (json.RawMessage, er
 		return nil, mapNotFound(err)
 	}
 	return v, nil
+}
+
+// AppName returns the configured brand/application name from the branding setting,
+// falling back to "Fleet Terminal" when unset or invalid. Shared by the API version
+// endpoint and the compliance evidence pack so both honor white-labeling.
+func (s *Store) AppName(ctx context.Context) string {
+	const def = "Fleet Terminal"
+	raw, err := s.GetSetting(ctx, "branding")
+	if err != nil {
+		return def
+	}
+	var b struct {
+		AppName string `json:"app_name"`
+	}
+	if err := json.Unmarshal(raw, &b); err != nil || strings.TrimSpace(b.AppName) == "" {
+		return def
+	}
+	return b.AppName
 }
 
 // SetSetting upserts a settings key with the given JSON-encodable value.

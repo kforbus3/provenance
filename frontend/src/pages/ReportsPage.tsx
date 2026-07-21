@@ -4,7 +4,8 @@ import {
 } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
 import { useMutation } from "@tanstack/react-query";
-import { downloadReport, type ReportKind } from "../api/reports";
+import { downloadReport, downloadEvidencePack, type ReportKind } from "../api/reports";
+import DescriptionIcon from "@mui/icons-material/Description";
 
 const REPORTS: Array<{ kind: ReportKind; title: string; desc: string }> = [
   { kind: "access", title: "Access report", desc: "Every SSH session — who connected to which host, from where, when it started and ended, and how it closed." },
@@ -32,6 +33,7 @@ export function ReportsPage() {
     onMutate: (kind) => setPending(kind),
     onSettled: () => setPending(null),
   });
+  const pack = useMutation({ mutationFn: () => downloadEvidencePack(from, to) });
 
   return (
     <Box sx={{ maxWidth: 900 }}>
@@ -57,7 +59,31 @@ export function ReportsPage() {
         </CardContent>
       </Card>
 
-      {dl.isError && <Alert severity="error" sx={{ mb: 2 }}>Could not build the report.</Alert>}
+      {(dl.isError || pack.isError) && <Alert severity="error" sx={{ mb: 2 }}>Could not build the report.</Alert>}
+
+      <Card variant="outlined" sx={{ mb: 2, borderColor: "primary.main" }}>
+        <CardContent>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }} justifyContent="space-between">
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <DescriptionIcon color="primary" fontSize="small" />
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Compliance evidence pack (PDF)</Typography>
+              </Stack>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                One auditor-ready PDF for the selected period: a tamper-evidence attestation of the
+                hash-chained audit log, plus summary statistics for access, certificates, scan posture,
+                vulnerabilities, and privileged-command activity. Line-item detail stays in the CSVs below.
+              </Typography>
+            </Box>
+            <Button
+              variant="contained" startIcon={<DescriptionIcon />} sx={{ flexShrink: 0 }}
+              disabled={pack.isPending} onClick={() => pack.mutate()}
+            >
+              {pack.isPending ? "Preparing…" : "Download PDF"}
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
 
       <Grid container spacing={2}>
         {REPORTS.map((r) => (
