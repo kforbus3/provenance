@@ -2,8 +2,6 @@ package identity
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 )
 
@@ -41,24 +40,21 @@ func (i *Issuer) SystemSigner(ctx context.Context, principals []string, ttl time
 	if h := systemCache[key]; h != nil && h.signer != nil && time.Until(h.expiresAt) > 5*time.Minute {
 		return h.signer, nil
 	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := cryptoprofile.For(i.cfg.FIPSMode).GenerateSigningKey()
 	if err != nil {
 		return nil, err
 	}
-	sshPub, err := ssh.NewPublicKey(pub)
+	keySigner, err := ssh.NewSignerFromSigner(priv)
 	if err != nil {
 		return nil, err
 	}
+	sshPub := keySigner.PublicKey()
 	serial, err := i.store.NextCertSerial(ctx)
 	if err != nil {
 		return nil, err
 	}
 	keyID := fmt.Sprintf("system/monitor/%d", serial)
 	cert, err := i.ca.SignUserCertificate(sshPub, keyID, principals, serial, ttl)
-	if err != nil {
-		return nil, err
-	}
-	keySigner, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
 		return nil, err
 	}

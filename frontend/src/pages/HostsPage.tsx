@@ -1569,6 +1569,8 @@ function EnrollCredsDialog({
   const [wgEndpoint, setWgEndpoint] = useState("");
   const [viaJump, setViaJump] = useState(false);
   const [skipWireGuard, setSkipWireGuard] = useState(false);
+  // VPN overlay: "" = deployment default. openvpn is the FIPS overlay.
+  const [overlay, setOverlay] = useState<"" | "wireguard" | "openvpn">("");
   // No-install (ssh-pipe) flow state.
   const [sshTarget, setSshTarget] = useState("");
   const [hostPubKey, setHostPubKey] = useState("");
@@ -1801,8 +1803,19 @@ function EnrollCredsDialog({
           </Typography>
         )}
         <TextField
+          select fullWidth sx={{ mt: 2 }}
+          label="VPN overlay" value={overlay}
+          onChange={(e) => setOverlay(e.target.value as "" | "wireguard" | "openvpn")}
+          disabled={skipWireGuard}
+          helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Leave on default unless this host needs a specific transport."
+        >
+          <MenuItem value="">Deployment default</MenuItem>
+          <MenuItem value="wireguard">WireGuard</MenuItem>
+          <MenuItem value="openvpn">OpenVPN (FIPS)</MenuItem>
+        </TextField>
+        <TextField
           fullWidth sx={{ mt: 2 }}
-          label="Jump host WireGuard endpoint" value={wgEndpoint}
+          label="Jump host VPN endpoint" value={wgEndpoint}
           onChange={(e) => setWgEndpoint(e.target.value)}
           disabled={skipWireGuard}
           helperText="Public address:port the HOST uses to reach the VPN server (e.g. vpn.example.com:51820). Must be resolvable from the host — not an internal Docker name."
@@ -1827,7 +1840,7 @@ function EnrollCredsDialog({
           <Button
             variant="contained"
             disabled={method === "agent" || (method === "password" && password === "") || (method === "key" && privateKey.trim() === "")}
-            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump, skipWireGuard })}
+            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump, skipWireGuard, overlay: overlay || undefined })}
           >
             Enroll
           </Button>

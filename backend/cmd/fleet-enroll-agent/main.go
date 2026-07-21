@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,9 +60,15 @@ func run() error {
 		return fmt.Errorf("no SSH agent: set SSH_AUTH_SOCK or -agent (run `ssh-add` first)")
 	}
 
+	// FIPS mode forbids skipping peer-certificate verification. Fail closed rather
+	// than silently downgrade the operator's connection to the backend.
+	if *insecure && fipsEnabled() {
+		return fmt.Errorf("-insecure is not allowed in FIPS mode (FLEET_FIPS_MODE): peer certificates must be verified")
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	if *insecure {
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}
 	}
 
 	tok := *token
@@ -95,7 +102,7 @@ func run() error {
 	}
 	dialer := *websocket.DefaultDialer
 	if *insecure {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
 	}
 	ws, resp, err := dialer.Dial(wsURL, nil)
 	if err != nil {
@@ -244,6 +251,18 @@ func wsEndpoint(base, hostID, token string) (string, error) {
 	u.Path = fmt.Sprintf("/api/v1/hosts/%s/enroll/agent", hostID)
 	u.RawQuery = "token=" + url.QueryEscape(token)
 	return u.String(), nil
+}
+
+// fipsEnabled reports whether FLEET_FIPS_MODE is set to a truthy value, mirroring
+// the backend's config parsing (strconv.ParseBool) so the agent enforces the same
+// TLS posture the backend runs under.
+func fipsEnabled() bool {
+	if v, ok := os.LookupEnv("FLEET_FIPS_MODE"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return false
 }
 
 func looksLikeUUID(s string) bool {

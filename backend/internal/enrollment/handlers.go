@@ -48,6 +48,7 @@ type enrollReq struct {
 	WGEndpoint    string `json:"wgEndpoint"`    // jump host's public WireGuard endpoint
 	ViaJump       bool   `json:"viaJump"`       // route bootstrap through the jump host
 	SkipWireGuard bool   `json:"skipWireGuard"` // host is directly reachable from the jump host
+	Overlay       string `json:"overlay"`       // "" (default) | wireguard | openvpn
 }
 
 func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
@@ -72,11 +73,18 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "private key is required for key bootstrap")
 		return
 	}
+	switch req.Overlay {
+	case "", "wireguard", "openvpn":
+		// ok
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "overlay must be one of: wireguard, openvpn")
+		return
+	}
 	res, err := h.svc.Enroll(r.Context(), p.SessionID, host, &p.UserID, EnrollParams{
 		Method: req.Method, BootstrapUser: req.BootstrapUser, Password: req.Password,
 		PrivateKey: req.PrivateKey, KeyPassphrase: req.KeyPassphrase,
 		SudoPassword: req.SudoPassword, WGEndpoint: req.WGEndpoint, ViaJump: req.ViaJump,
-		SkipWireGuard: req.SkipWireGuard,
+		SkipWireGuard: req.SkipWireGuard, Overlay: req.Overlay,
 	})
 	if err != nil {
 		// Surface the failed job so the UI can show which step failed.

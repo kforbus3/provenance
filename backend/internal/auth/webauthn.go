@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
@@ -131,7 +132,17 @@ func (h *Handler) webauthnRegisterBegin(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
-	options, sessionData, err := wa.BeginRegistration(wu)
+	// FIPS: restrict the credential algorithms the authenticator may use to
+	// ES256 (P-256) and RS256 — excluding EdDSA (Ed25519), which is not in the
+	// FIPS-approved WebAuthn set. Default profile advertises the library's full set.
+	var regOpts []webauthn.RegistrationOption
+	if h.svc.cfg.FIPSMode {
+		regOpts = append(regOpts, webauthn.WithCredentialParameters([]protocol.CredentialParameter{
+			{Type: protocol.PublicKeyCredentialType, Algorithm: webauthncose.AlgES256},
+			{Type: protocol.PublicKeyCredentialType, Algorithm: webauthncose.AlgRS256},
+		}))
+	}
+	options, sessionData, err := wa.BeginRegistration(wu, regOpts...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

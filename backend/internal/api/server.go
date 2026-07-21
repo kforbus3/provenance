@@ -59,6 +59,8 @@ import (
 	"github.com/fleet-terminal/backend/internal/monitor"
 	"github.com/fleet-terminal/backend/internal/msrc"
 	"github.com/fleet-terminal/backend/internal/notify"
+	"github.com/fleet-terminal/backend/internal/overlay"
+	"github.com/fleet-terminal/backend/internal/overlaypki"
 	"github.com/fleet-terminal/backend/internal/playbook"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
@@ -108,6 +110,12 @@ type Server struct {
 	Cluster   *cluster.Coordinator // HA: identity, heartbeat lease, leader election
 	backplane *ws.Backplane        // HA: cross-instance event/control bridge
 
+	// overlayPKI is the shared X.509 CA for the certificate-authenticated overlays;
+	// overlays maps overlay name -> provisioner ("openvpn"). It is
+	// always built, but the CA is created lazily (only when a host uses a cert overlay).
+	overlayPKI *overlaypki.PKI
+	overlays   map[string]overlay.Overlay
+
 	scanSvc      *scan.Service
 	vulnScan     *vulnscan.Service
 	msrcSvc      *msrc.Service
@@ -139,6 +147,15 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	issuer := identity.NewIssuer(st, caMgr, cfg, log, vault)
 	gateway := sshgw.New(cfg, log, vault, issuer)
 
+	// The certificate-authenticated overlay (OpenVPN) shares the X.509 overlay PKI. It is
+	// always constructed so a host can be enrolled onto it per-host, but the overlay CA
+	// is created lazily on first use (see InitBackground) — a pure WireGuard deployment
+	// never touches it.
+	overlayPKI := overlaypki.New(st, cfg)
+	overlays := map[string]overlay.Overlay{
+		"openvpn": overlay.New(cfg, overlayPKI),
+	}
+
 	s := &Server{
 		Cfg: cfg, DB: db, Log: log, Version: version, Standby: standby,
 		Store:   st,
@@ -151,6 +168,9 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Live:    livesessions.New(),
 		Watch:   livesessions.NewBroker(),
 		Notify:  notify.New(st, cfg, log),
+
+		overlayPKI: overlayPKI,
+		overlays:   overlays,
 	}
 	hostname, _ := os.Hostname()
 	s.Cluster = cluster.New(st, hostname, version, log)
@@ -249,6 +269,25 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 func (s *Server) InitBackground(ctx context.Context) error {
 	if err := s.CA.EnsureUserCA(ctx); err != nil {
 		return err
+	}
+	// FIPS boot self-check: the active user CA must be an approved key type. A fresh
+	// FIPS deploy generates ECDSA; an existing Ed25519 CA means the FIPS CA migration
+	// hasn't run — fail closed with a clear pointer rather than issue non-FIPS certs.
+	if s.Cfg.FIPSMode {
+		if kt := s.CA.ActiveKeyType(); strings.Contains(kt, "ed25519") {
+			return fmt.Errorf("FIPS mode: active user CA is %q (not FIPS-approved); "+
+				"run the FIPS CA migration (docs/fips-mode-plan.md M2)", kt)
+		}
+	}
+	// Cert overlays: when the deployment DEFAULT is a cert overlay, pre-warm the X.509
+	// overlay CA so the first enrollment has issuing material ready. When the default is
+	// WireGuard, the CA is created lazily on the first host that opts into a cert overlay
+	// (so a pure-WireGuard deployment never creates it).
+	if overlay.IsCertOverlay(s.Cfg.Overlay) {
+		if err := s.overlayPKI.EnsureCA(ctx); err != nil {
+			return fmt.Errorf("overlay PKI: %w", err)
+		}
+		s.Log.Info("overlay PKI ready", "overlay", s.Cfg.Overlay, "fingerprint", s.overlayPKI.Fingerprint())
 	}
 	// Start cluster membership first so leadership is established before the
 	// singleton loops below decide whether to run, and so reconciliation can see the
@@ -851,7 +890,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	terminal.Mount(r, deps, s.Gateway)
 
 	// M8 — host enrollment (WireGuard provisioning + trust).
-	enrollment.Mount(r, deps, enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway))
+	enrollment.Mount(r, deps, enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway, s.overlays))
 
 	// M7 — live status WebSocket.
 	ws.Mount(r, deps, s.Hub)

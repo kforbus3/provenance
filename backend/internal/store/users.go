@@ -183,6 +183,26 @@ func (s *Store) SetPasswordHash(ctx context.Context, userID uuid.UUID, hash stri
 	})
 }
 
+// FlagNonFIPSPasswords sets must_change_pw for every local account whose stored
+// password hash is not PBKDF2 (the FIPS-approved KDF), forcing a password change — and
+// thus a re-hash to PBKDF2 — on next login. Accounts authenticated via SSO/LDAP have
+// no local password and are skipped. Returns the number flagged. Used by the FIPS
+// migration (M5) to sweep up accounts that never log in (so verify-then-upgrade would
+// never reach them). Idempotent.
+func (s *Store) FlagNonFIPSPasswords(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE users u SET must_change_pw=true, updated_at=now()
+		FROM user_credentials c
+		WHERE c.user_id = u.id
+		  AND COALESCE(u.auth_source,'') IN ('','local')
+		  AND split_part(c.password_hash,'$',2) <> 'pbkdf2-sha256'
+		  AND u.must_change_pw = false`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListUsers returns all users with their roles and groups.
 func (s *Store) ListUsers(ctx context.Context) ([]models.User, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+userCols+` FROM users ORDER BY username`)

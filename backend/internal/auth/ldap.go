@@ -75,7 +75,7 @@ func (s *Service) authenticateLDAP(ctx context.Context, username, password strin
 	}
 	defer conn.Close()
 	if c.StartTLS {
-		if err := conn.StartTLS(&tls.Config{ServerName: ldapHost(c.URL)}); err != nil {
+		if err := conn.StartTLS(&tls.Config{ServerName: ldapHost(c.URL), MinVersion: tls.VersionTLS12}); err != nil {
 			return nil, ErrInvalidCredentials
 		}
 	}

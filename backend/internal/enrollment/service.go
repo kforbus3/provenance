@@ -18,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/overlay"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -33,11 +34,33 @@ type Service struct {
 	cfg   *config.Config
 	log   *slog.Logger
 	gw    *sshgw.Gateway
+	// overlays holds the certificate-authenticated overlay provisioners by name
+	// ("openvpn"). Empty when only WireGuard is available. A host is
+	// provisioned onto whichever overlay its effective selection names.
+	overlays map[string]overlay.Overlay
 }
 
-// New constructs the enrollment Service.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway) *Service {
-	return &Service{store: st, cfg: cfg, log: log, gw: gw}
+// New constructs the enrollment Service. overlays may be nil/empty (WireGuard only);
+// it carries the cert-overlay provisioners (OpenVPN) when built.
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, overlays map[string]overlay.Overlay) *Service {
+	return &Service{store: st, cfg: cfg, log: log, gw: gw, overlays: overlays}
+}
+
+// effectiveOverlay resolves which transport to enroll a host onto: an explicit
+// per-enroll choice wins, then the host's previously-recorded overlay, then the
+// deployment default (FLEET_OVERLAY). Empty/"wireguard" both mean WireGuard.
+func (s *Service) effectiveOverlay(params EnrollParams, host *models.Host) string {
+	pick := strings.TrimSpace(params.Overlay)
+	if pick == "" {
+		pick = strings.TrimSpace(host.Overlay)
+	}
+	if pick == "" {
+		pick = s.cfg.Overlay
+	}
+	if pick == "" {
+		pick = "wireguard"
+	}
+	return pick
 }
 
 // Result summarizes an enrollment run.
@@ -87,6 +110,10 @@ type EnrollParams struct {
 	// WireGuard overlay is unnecessary. The host keeps no overlay address and the
 	// gateway reaches it through the jump host at its management address.
 	SkipWireGuard bool
+	// Overlay overrides the reachability transport for THIS host: "" (deployment
+	// default FLEET_OVERLAY), "wireguard" or "openvpn". Lets an operator
+	// pick a per-host VPN at enrollment. Ignored when SkipWireGuard is set.
+	Overlay string
 }
 
 func (p EnrollParams) method() string {
@@ -156,20 +183,28 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		}
 	}
 
-	// 1) Reach the jump host (the VPN server, which already trusts the CA) and
-	//    read its WireGuard public key.
+	// 1) Reach the jump host (the VPN server, which already trusts the CA). For the
+	//    WireGuard overlay, read its public key (needed to configure the host peer);
+	//    the OpenVPN overlay authenticates with X.509 certs and has no such key.
 	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
 	jumpClient, err := s.gw.DialDirect(ctx, sessionID.String(), jumpAddr, jumpPort, s.cfg.JumpUser)
 	if err != nil {
 		return fail("connect_jump_host", err)
 	}
 	defer jumpClient.Close()
-	jumpPub, err := run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
-	if err != nil || strings.TrimSpace(jumpPub) == "" {
-		return fail("read_jump_public_key", orErr(err, "jump host has no WireGuard public key"))
+	// Resolve which overlay transport this host uses (per-host choice > recorded > default).
+	effOverlay := s.effectiveOverlay(params, host)
+	var jumpPub string
+	if overlay.IsCertOverlay(effOverlay) {
+		step("connect_jump_host", "ok", "reached jump host ("+effOverlay+" overlay)")
+	} else {
+		jumpPub, err = run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
+		if err != nil || strings.TrimSpace(jumpPub) == "" {
+			return fail("read_jump_public_key", orErr(err, "jump host has no WireGuard public key"))
+		}
+		jumpPub = strings.TrimSpace(jumpPub)
+		step("connect_jump_host", "ok", "jump WG pubkey "+short(jumpPub))
 	}
-	jumpPub = strings.TrimSpace(jumpPub)
-	step("connect_jump_host", "ok", "jump WG pubkey "+short(jumpPub))
 
 	// 2) Connect to the host for bootstrap. With "password" we authenticate with a
 	//    bootstrap credential (the host need not trust the CA yet); with "trusted"
@@ -312,17 +347,37 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		step("install_trust", "ok", "CA trust + login user '"+loginUser+"' + sshd configured")
 	}
 
-	// 5) Ensure WireGuard is installed (no-op if already present).
-	if out, err := priv(wgInstallScript); err != nil || strings.Contains(out, "WG_MISSING") {
-		return fail("install_wireguard", orErr(err, out+" (could not install wireguard tools)"))
-	} else {
-		step("install_wireguard", "ok", "wireguard tooling present")
+	// 5) Ensure WireGuard is installed (no-op if already present). Skipped under a
+	//    cert overlay (OpenVPN), which installs its own tooling in step 6.
+	if !overlay.IsCertOverlay(effOverlay) {
+		if out, err := priv(wgInstallScript); err != nil || strings.Contains(out, "WG_MISSING") {
+			return fail("install_wireguard", orErr(err, out+" (could not install wireguard tools)"))
+		} else {
+			step("install_wireguard", "ok", "wireguard tooling present")
+		}
 	}
 
 	// 6) Determine the overlay address (operator-specified or auto-assigned).
 	//    Skipped for a directly-reachable host — it has no overlay address.
 	var wgIP, hostPub string
-	if !params.SkipWireGuard {
+	if overlay.IsCertOverlay(effOverlay) {
+		// Cert overlay (OpenVPN): provision the tunnel via X.509 mutual auth
+		// instead of WireGuard. The assigned address is stored in the same wg_address
+		// column below, so the SSH gateway dials the host identically regardless of overlay.
+		ov := s.overlays[effOverlay]
+		if ov == nil {
+			return fail("configure_overlay", fmt.Errorf("overlay %q is not available on this deployment", effOverlay))
+		}
+		if params.SkipWireGuard {
+			step("configure_host_overlay", "skipped",
+				"host is directly reachable from the jump host — no overlay")
+		} else {
+			var oerr error
+			if wgIP, oerr = s.enrollCertOverlay(ctx, ov, host, jumpClient, priv, params, step); oerr != nil {
+				return fail("configure_overlay", oerr)
+			}
+		}
+	} else if !params.SkipWireGuard {
 		wgIP = strings.TrimSpace(host.WGAddress)
 		if wgIP != "" {
 			if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
@@ -411,8 +466,9 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	// 9) Connectivity check: confirm the WireGuard tunnel actually establishes a
 	//    handshake. A failure here usually means the jump endpoint is not
 	//    reachable from the host (firewall / wrong address / UDP port closed).
-	//    Skipped for a directly-reachable host (no tunnel to verify).
-	if !params.SkipWireGuard {
+	//    Skipped for a directly-reachable host (no tunnel to verify) and for a cert
+	//    overlay (its tunnel-up check runs inside enrollCertOverlay).
+	if !params.SkipWireGuard && !overlay.IsCertOverlay(effOverlay) {
 		if ok, detail := s.verifyWireGuard(priv); ok {
 			step("verify_connectivity", "ok", detail)
 		} else {
@@ -423,7 +479,9 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	}
 
 	// 10) Persist the address/enrolled state now so the validation dial can use it.
+	//     Record the resolved overlay so re-enrollment/monitoring stays on the same one.
 	_ = s.store.SetHostWGAddress(ctx, host.ID, wgIP)
+	_ = s.store.SetHostOverlay(ctx, host.ID, effOverlay)
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
 
 	// 11) Validate end to end: connect through the jump host using a per-user

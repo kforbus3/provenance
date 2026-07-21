@@ -26,6 +26,7 @@ func Mount(r chi.Router, d *app.Deps, reg *jobs.Registry) {
 		pr.Use(d.Auth.RequireAuth)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/system/jobs", h.jobs)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/system/backup", h.backup)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/system/fips", h.fips)
 	})
 }
 

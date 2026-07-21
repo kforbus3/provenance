@@ -6,6 +6,10 @@
 /backend/bin/
 *.test
 *.out
+# Built command binaries (produced by `go build ./cmd/...` in backend/)
+/backend/fleetctl
+/backend/fleetd
+/backend/fleet-enroll-agent
 
 # Node
 node_modules/

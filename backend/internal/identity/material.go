@@ -2,13 +2,13 @@ package identity
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/pem"
 	"fmt"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 )
 
 // KeyMaterial is an ephemeral key + signed certificate exported as files for an
@@ -30,14 +30,15 @@ type KeyMaterial struct {
 // for a single operation, and is responsible for prompt cleanup. The TTL should
 // be only as long as the operation needs.
 func (i *Issuer) SystemKeyMaterial(ctx context.Context, principals []string, ttl time.Duration) (*KeyMaterial, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := cryptoprofile.For(i.cfg.FIPSMode).GenerateSigningKey()
 	if err != nil {
 		return nil, err
 	}
-	sshPub, err := ssh.NewPublicKey(pub)
+	keySigner, err := ssh.NewSignerFromSigner(priv)
 	if err != nil {
 		return nil, err
 	}
+	sshPub := keySigner.PublicKey()
 	serial, err := i.store.NextCertSerial(ctx)
 	if err != nil {
 		return nil, err

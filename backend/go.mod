@@ -1,8 +1,6 @@
 module github.com/fleet-terminal/backend
 
-go 1.23.0
-
-toolchain go1.23.12
+go 1.24.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.11.0

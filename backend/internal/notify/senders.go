@@ -66,7 +66,8 @@ func (s *Service) sendEmail(_ context.Context, cfg *Config, ev Event, toOverride
 
 // sendImplicitTLS handles SMTPS (TLS from the first byte).
 func sendImplicitTLS(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{ServerName: host})
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr,
+		&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
 	if err != nil {
 		return err
 	}

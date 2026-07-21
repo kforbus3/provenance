@@ -15,8 +15,11 @@ import (
 	_ "time/tzdata"
 
 	"github.com/fleet-terminal/backend/internal/api"
+	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/db"
+	"github.com/fleet-terminal/backend/internal/secretbox"
 	"github.com/fleet-terminal/backend/internal/telemetry"
 	"github.com/fleet-terminal/backend/internal/tenant"
 )
@@ -39,6 +42,21 @@ func run() error {
 	}
 	log := telemetry.NewLogger(cfg.LogLevel, cfg.LogFormat)
 	log.Info("starting fleetd", "version", version, "env", cfg.Environment)
+
+	// Crypto profile: select the FIPS-approved algorithm set (or default) once, up
+	// front. In FIPS mode this FAILS CLOSED if the validated Go crypto module isn't
+	// active. The boot-time selectors below must run before any hashing/sealing.
+	profile := cryptoprofile.For(cfg.FIPSMode)
+	if err := profile.VerifyModuleActive(); err != nil {
+		return err
+	}
+	secretbox.SetFIPS(cfg.FIPSMode)
+	auth.SetPasswordFIPS(cfg.FIPSMode)
+	auth.SetTOTPAlgorithm(profile.TOTPAlgorithm())
+	if cfg.FIPSMode {
+		log.Warn("FIPS MODE ENABLED — using FIPS 140-3 approved crypto profile",
+			"overlay", cfg.Overlay, "moduleActive", cryptoprofile.ModuleActive())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

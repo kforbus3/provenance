@@ -1,15 +1,15 @@
 package ca
 
 import (
-	"crypto/ed25519"
+	"crypto"
 	"encoding/pem"
 
 	"golang.org/x/crypto/ssh"
 )
 
-// pemPrivate serializes an Ed25519 private key to OpenSSH PEM bytes, which is
-// what ssh.ParsePrivateKey reads back after decryption.
-func pemPrivate(priv ed25519.PrivateKey) ([]byte, error) {
+// pemPrivate serializes a signing key (Ed25519 or ECDSA) to OpenSSH PEM bytes,
+// which is what ssh.ParsePrivateKey reads back after decryption.
+func pemPrivate(priv crypto.PrivateKey) ([]byte, error) {
 	block, err := ssh.MarshalPrivateKey(priv, "fleet-ca")
 	if err != nil {
 		return nil, err

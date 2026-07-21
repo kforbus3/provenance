@@ -50,6 +50,32 @@ func (s *Service) Save(ctx context.Context, in *Config) error {
 	return s.store.SetSetting(ctx, settingKey, in)
 }
 
+// ResealSecrets re-seals this subsystem's at-rest secrets (SMTP password, PagerDuty
+// routing key, Opsgenie API key) to the active KDF profile, in place, without needing
+// the plaintext re-entered. It only rewrites settings if something changed. Returns
+// the number of secrets upgraded. Used by the FIPS migration sweep.
+func (s *Service) ResealSecrets(ctx context.Context) (int, error) {
+	c, err := s.LoadConfig(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, f := range []*string{&c.Email.PasswordEnc, &c.PagerDuty.RoutingKeyEnc, &c.Opsgenie.APIKeyEnc} {
+		out, changed, rerr := secretbox.ResealString(s.cfg.CAKeyPassphrase, *f)
+		if rerr != nil {
+			return n, rerr
+		}
+		if changed {
+			*f = out
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return n, s.store.SetSetting(ctx, settingKey, c)
+}
+
 // Redacted returns the config safe to send to the UI: no secret material, with a
 // flag indicating whether a password is set.
 type Redacted struct {

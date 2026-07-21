@@ -4,6 +4,8 @@
 package identity
 
 import (
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"sync"
 	"time"
@@ -31,7 +33,7 @@ type Credential struct {
 	Principals []string
 	ExpiresAt  time.Time
 
-	privateKey ed25519.PrivateKey // zeroized on Destroy
+	privateKey crypto.Signer // Ed25519 or ECDSA; zeroized on Destroy
 	cert       *ssh.Certificate
 	certSigner ssh.Signer // signer presenting the certificate to hosts
 }
@@ -116,10 +118,24 @@ func (v *Vault) Sessions() []uuid.UUID {
 	return out
 }
 
-// zero overwrites private key bytes so they cannot be recovered from memory.
+// zero overwrites the private key material so it cannot be recovered from memory.
+// Ed25519 keys are byte slices (overwrite in place); ECDSA keys hold their secret
+// in a big.Int (overwrite its backing words), so both key types are best-effort
+// scrubbed before the reference is dropped.
 func (c *Credential) zero() {
-	for i := range c.privateKey {
-		c.privateKey[i] = 0
+	switch k := c.privateKey.(type) {
+	case ed25519.PrivateKey:
+		for i := range k {
+			k[i] = 0
+		}
+	case *ecdsa.PrivateKey:
+		if k.D != nil {
+			words := k.D.Bits()
+			for i := range words {
+				words[i] = 0
+			}
+			k.D.SetInt64(0)
+		}
 	}
 	c.privateKey = nil
 	c.certSigner = nil

@@ -12,7 +12,7 @@ import (
 )
 
 const hostCols = `id, hostname, description, environment, owner,
-	COALESCE(address,''), COALESCE(host(wg_address),''), ssh_port, ssh_user,
+	COALESCE(address,''), COALESCE(host(wg_address),''), COALESCE(overlay,''), ssh_port, ssh_user,
 	tags, enrolled, auth_method, credential_id, protocol, rdp_port,
 	COALESCE(rdp_options, '{}'::jsonb), created_at, updated_at, maintenance_until`
 
@@ -20,7 +20,7 @@ func scanHost(row pgx.Row) (*models.Host, error) {
 	var h models.Host
 	var rdpOpts []byte
 	err := row.Scan(&h.ID, &h.Hostname, &h.Description, &h.Environment, &h.Owner,
-		&h.Address, &h.WGAddress, &h.SSHPort, &h.SSHUser, &h.Tags, &h.Enrolled,
+		&h.Address, &h.WGAddress, &h.Overlay, &h.SSHPort, &h.SSHUser, &h.Tags, &h.Enrolled,
 		&h.AuthMethod, &h.CredentialID, &h.Protocol, &h.RDPPort, &rdpOpts,
 		&h.CreatedAt, &h.UpdatedAt, &h.MaintenanceUntil)
 	if err != nil {

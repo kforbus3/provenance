@@ -17,6 +17,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       openssh-server \
       wireguard-tools \
+      openvpn \
       iproute2 \
       iptables \
       sudo \
@@ -43,5 +44,6 @@ COPY sshd_fleet.conf /etc/ssh/sshd_config.d/00-fleet.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-EXPOSE 22 51820/udp
+# 51820/udp = WireGuard overlay; 1194/udp = OpenVPN overlay (FIPS, selectable per host).
+EXPOSE 22 51820/udp 1194/udp
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
