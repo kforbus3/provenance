@@ -32,6 +32,9 @@ CHOOSING TOOLS
 - list_sessions: SSH sessions active RIGHT NOW. session_history: PAST sessions — who
   connected to which host and when, and whether the session ended in an error. Use
   session_history for "who logged into web-01 yesterday" or "any failed sessions".
+- search_commands: what users TYPED inside recorded terminal sessions (reconstructed
+  from recordings). Use for "who ran/typed <command>". Best-effort — qualify the answer
+  as "typed" (not guaranteed executed) and note only recorded sessions are covered.
 - recent_scans / recent_playbook_runs: OpenSCAP scan and Ansible playbook history,
   newest first, each entry flagged scheduled (automatic) vs manual. For "the last
   scan/run", report the most recent matching entry and its time.
@@ -315,6 +318,21 @@ var tools = []toolDef{{
 }, {
 	Type: "function",
 	Function: toolFunction{
+		Name:        "search_commands",
+		Description: "Search the commands users TYPED in recorded interactive SSH terminal sessions, reconstructed from the session recordings — the way to answer 'who ran <command> in a terminal', 'did anyone type rm -rf', 'who ran systemctl on web-01'. Each match returns the reconstructed command line, the user, the host, and when. IMPORTANT CAVEATS to convey: this is a BEST-EFFORT reconstruction from keystrokes (tab-completion and up-arrow history recall may be missing or partial), so present results as what was 'typed', not a guaranteed executed-command log; and it only covers sessions that were RECORDED. For commands run via Fleet's Run-Command feature (not a terminal), use recent_commands instead. Provide a `query` (a word or substring to search for); optionally narrow by hostname.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":    map[string]any{"type": "string", "description": "word or substring to search for in typed commands (e.g. 'systemctl', 'rm -rf')"},
+				"hostname": map[string]any{"type": "string", "description": "only sessions on this host"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
+			},
+			"required": []string{"query"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
 		Name:        "recent_commands",
 		Description: "List ad-hoc commands run through Fleet's Run-Command feature, most recent first — the authoritative 'who ran which command' record. Each entry has the exact command text, who requested it, the target (a host or a group + host count), status (completed/failed), exit code, and when it ran. Use for questions like 'who ran systemctl restart on web-01', 'what commands were run today', or 'did anyone run a reboot recently'. NOTE: this covers commands issued via Fleet's Run-Command feature, NOT commands typed inside an interactive SSH terminal session (those live only in the session recordings). Optionally filter by a command substring (contains) or target hostname.",
 		Parameters: map[string]any{
@@ -357,6 +375,12 @@ type fileTransfersArgs struct {
 type recentCommandsArgs struct {
 	Contains string `json:"contains"` // case-insensitive substring of the command text
 	Hostname string `json:"hostname"` // filter to runs targeting this host/group name
+	Limit    int    `json:"limit"`
+}
+
+type searchCommandsArgs struct {
+	Query    string `json:"query"`
+	Hostname string `json:"hostname"`
 	Limit    int    `json:"limit"`
 }
 

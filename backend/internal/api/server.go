@@ -39,6 +39,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/ca"
 	"github.com/fleet-terminal/backend/internal/certificates"
 	"github.com/fleet-terminal/backend/internal/cluster"
+	"github.com/fleet-terminal/backend/internal/cmdindex"
 	"github.com/fleet-terminal/backend/internal/command"
 	"github.com/fleet-terminal/backend/internal/commandpolicyapi"
 	"github.com/fleet-terminal/backend/internal/config"
@@ -259,6 +260,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.renewalLoop(ctx)
 	go s.reaperLoop(ctx)
 	go s.retentionLoop(ctx)
+	go s.commandIndexLoop(ctx)
 	go s.digest.Run(ctx, s.isLeader)
 	go s.reportSched.Run(ctx, s.isLeader)
 	go s.dynamicGroupLoop(ctx)
@@ -503,6 +505,63 @@ func (s *Server) retentionLoop(ctx context.Context) {
 		case <-t.C:
 			prune()
 		}
+	}
+}
+
+// commandIndexLoop reconstructs and indexes the commands typed in recorded SSH
+// sessions so they are searchable ("who ran command X"). It runs shortly after startup
+// (which also backfills pre-existing recordings) and periodically thereafter; new
+// recordings are picked up within one tick. Leader-gated (single writer).
+func (s *Server) commandIndexLoop(ctx context.Context) {
+	t := time.NewTicker(2 * time.Minute)
+	defer t.Stop()
+	for {
+		if s.isLeader() {
+			s.indexSessionCommands(ctx)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// indexSessionCommands processes a batch of not-yet-indexed recordings: it streams each
+// asciicast, reconstructs the typed command lines, and stores them. A recording whose
+// file is gone (pruned) is marked indexed with no commands so it isn't retried forever.
+func (s *Server) indexSessionCommands(ctx context.Context) {
+	recs, err := s.Store.UnindexedRecordings(ctx, 100)
+	if err != nil {
+		s.Jobs.Record("command-index", err)
+		return
+	}
+	indexed := 0
+	for _, rec := range recs {
+		p := rec.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(s.Cfg.RecordingDir, p)
+		}
+		f, oerr := os.Open(p)
+		if oerr != nil {
+			_ = s.Store.IndexRecordingCommands(ctx, rec.RecordingID, rec.SSHSessionID, nil)
+			continue
+		}
+		cmds := cmdindex.ExtractCommands(f)
+		f.Close()
+		in := make([]store.SessionCommandInput, 0, len(cmds))
+		for _, c := range cmds {
+			in = append(in, store.SessionCommandInput{Text: c.Text, Offset: c.Offset})
+		}
+		if err := s.Store.IndexRecordingCommands(ctx, rec.RecordingID, rec.SSHSessionID, in); err != nil {
+			s.Jobs.Record("command-index", err)
+			continue
+		}
+		indexed++
+	}
+	if indexed > 0 {
+		s.Jobs.Record("command-index", nil)
+		s.Log.Info("indexed session commands", "recordings", indexed)
 	}
 }
 

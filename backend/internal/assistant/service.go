@@ -306,6 +306,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					data.table = tbl
 				}
 				result = payload
+			case "search_commands":
+				tbl, payload := s.runSearchCommands(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			case "host_metric_history":
 				hist, payload := s.runMetricHistory(ctx, tc.Function.Arguments, who)
 				if hist != nil {
@@ -552,6 +558,40 @@ func (s *Service) runRecentCommands(ctx context.Context, raw json.RawMessage, wh
 		tbl = nil
 	}
 	return tbl, map[string]any{"count": len(out), "commands": out}
+}
+
+// runSearchCommands searches the reconstructed commands typed in recorded SSH sessions
+// (gated by Session.Replay, scoped to the caller's accessible hosts). Best-effort — the
+// payload flags it so the model qualifies its answer.
+func (s *Service) runSearchCommands(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if !who.CanViewSessions && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view session recordings"}
+	}
+	var a searchCommandsArgs
+	_ = json.Unmarshal(raw, &a)
+	if strings.TrimSpace(a.Query) == "" {
+		return nil, map[string]any{"error": "a search query is required"}
+	}
+	rows, err := s.store.SearchSessionCommands(ctx, who.UserID, who.IsSuperAdmin, strings.TrimSpace(a.Query), strings.TrimSpace(a.Hostname), a.Limit)
+	if err != nil {
+		s.log.Warn("assistant search_commands", "err", err)
+		return nil, map[string]any{"error": "could not search session commands"}
+	}
+	tbl := &AssistantTable{
+		Title:   "Typed commands (from session recordings)",
+		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "User"}, {Label: "Host"}, {Label: "Command (typed)"}},
+	}
+	for _, r := range rows {
+		tbl.Rows = append(tbl.Rows, []string{tableTime(r.At), r.Username, r.Hostname, r.Command})
+	}
+	if len(rows) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{
+		"count":   len(rows),
+		"matches": rows,
+		"caveat":  "Reconstructed from terminal keystrokes (best-effort): tab-completion and history-recalled commands may be missing or partial, and only RECORDED sessions are covered. Present as what was typed, not a guaranteed executed-command log.",
+	}
 }
 
 // runMetricHistory returns a host's bucketed metric history for trend questions,
