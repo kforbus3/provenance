@@ -104,6 +104,62 @@ func buildHostQueryWhere(q HostQuery) (string, []any) {
 	return "WHERE " + strings.Join(conds, " AND "), args
 }
 
+// HostUpdateRow is one pending package update on a host, for the host_updates tool.
+type HostUpdateRow struct {
+	Hostname   string `json:"hostname"`
+	Package    string `json:"package"`
+	NewVersion string `json:"newVersion,omitempty"`
+	Security   bool   `json:"security,omitempty"`
+}
+
+// HostUpdatePackagesForAssistant returns the pending-update package list for accessible
+// hosts (optionally narrowed to a hostname substring), security fixes first. Scoped to
+// the caller's reachable hosts exactly like query_hosts. This is the focused source for
+// "which packages need updating" — it returns just the packages, not a whole host.
+func (s *Store) HostUpdatePackagesForAssistant(ctx context.Context, userID uuid.UUID, isSuper bool, hostname string, limit int) ([]HostUpdateRow, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	conds := []string{"i.update_packages IS NOT NULL"}
+	args := []any{}
+	if hostname != "" {
+		args = append(args, hostname)
+		conds = append(conds, fmt.Sprintf("h.hostname ILIKE '%%'||$%d||'%%'", len(args)))
+	}
+	if !isSuper {
+		args = append(args, userID)
+		conds = append(conds, fmt.Sprintf(`h.id IN (
+			SELECT hg.host_id FROM user_groups ug JOIN host_groups hg ON hg.group_id=ug.group_id WHERE ug.user_id=$%[1]d
+			UNION SELECT host_id FROM host_users WHERE user_id=$%[1]d
+			UNION SELECT host_id FROM temporary_permissions WHERE user_id=$%[1]d AND revoked_at IS NULL AND expires_at>now() AND host_id IS NOT NULL
+			UNION SELECT hg.host_id FROM temporary_permissions tp JOIN host_groups hg ON hg.group_id=tp.group_id WHERE tp.user_id=$%[1]d AND tp.revoked_at IS NULL AND tp.expires_at>now())`, len(args)))
+	}
+	args = append(args, limit)
+	sql := `
+		SELECT h.hostname, COALESCE(pkg->>'package',''), COALESCE(pkg->>'newVersion',''),
+			COALESCE((pkg->>'security')::boolean, false)
+		FROM hosts h
+		JOIN host_inventory i ON i.host_id = h.id
+		CROSS JOIN LATERAL jsonb_array_elements(i.update_packages) AS pkg
+		WHERE ` + strings.Join(conds, " AND ") + `
+		ORDER BY h.hostname, COALESCE((pkg->>'security')::boolean, false) DESC, pkg->>'package'
+		LIMIT $` + fmt.Sprint(len(args))
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HostUpdateRow{}
+	for rows.Next() {
+		var r HostUpdateRow
+		if err := rows.Scan(&r.Hostname, &r.Package, &r.NewVersion, &r.Security); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ActiveSSHSessions returns currently-open SSH sessions for the assistant's
 // list_sessions tool (newest first).
 func (s *Store) ActiveSSHSessions(ctx context.Context, limit int) ([]models.SSHSession, error) {

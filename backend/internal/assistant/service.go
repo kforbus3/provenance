@@ -290,6 +290,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					data.sessions = sessions
 				}
 				result = payload
+			case "host_updates":
+				tbl, payload := s.runHostUpdates(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			case "host_detail":
 				host, payload := s.hostDetail(ctx, tc.Function.Arguments, who)
 				if host != nil {
@@ -444,6 +450,34 @@ func (s *Service) listSessions(ctx context.Context, who Caller) ([]SessionRow, a
 		})
 	}
 	return out, map[string]any{"count": len(out), "sessions": out}
+}
+
+// runHostUpdates returns the pending-update package list (one host or all accessible
+// hosts) as a focused table — the update-specific alternative to host_detail, which
+// would render the whole host card. Scoped to the caller's accessible hosts.
+func (s *Service) runHostUpdates(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	var a hostUpdatesArgs
+	_ = json.Unmarshal(raw, &a)
+	rows, err := s.store.HostUpdatePackagesForAssistant(ctx, who.UserID, who.IsSuperAdmin, strings.TrimSpace(a.Hostname), a.Limit)
+	if err != nil {
+		s.log.Warn("assistant host_updates", "err", err)
+		return nil, map[string]any{"error": "could not list pending updates"}
+	}
+	tbl := &AssistantTable{
+		Title:   "Pending updates",
+		Columns: []TableColumn{{Label: "Host"}, {Label: "Package"}, {Label: "New version"}, {Label: "Security"}},
+	}
+	for _, r := range rows {
+		sec := ""
+		if r.Security {
+			sec = "security"
+		}
+		tbl.Rows = append(tbl.Rows, []string{r.Hostname, r.Package, r.NewVersion, sec})
+	}
+	if len(rows) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{"count": len(rows), "updates": rows}
 }
 
 // hostDetail returns the full host (nil on error/denied) plus the model payload.

@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.4 — Ask AI: focused host_updates tool (no more whole-host dump)
+
+Asking Ask AI "what are the pending updates?" used to answer via `host_detail`, which
+returns the entire host — so the UI rendered the full host card (OS, filesystems,
+interfaces) beneath the answer. A new **`host_updates`** tool returns just the pending
+packages (host · package · target version · security) as a focused table, for one host
+or all accessible hosts. Update questions now route there; `host_detail` is reserved for
+filesystem/network deep-dives. Scoped to the caller's accessible hosts.
+
 ## v0.33.3 — Ask AI: route "who ran <command>" to the command tools
 
 Tightened the assistant's tool-selection guidance so questions like "who ran df" /

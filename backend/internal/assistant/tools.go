@@ -22,7 +22,12 @@ CHOOSING TOOLS
   - "kernel versions of all hosts" -> no filters, then read each host's kernel field
 - host_detail: deep-dive on ONE host by exact hostname — every mounted filesystem's
   usage and all network interfaces ("which filesystem is full on web-01",
-  "what subnet is db-02 on").
+  "what subnet is db-02 on"). Returns the whole host, so use it only for filesystem/
+  network questions — for pending updates use host_updates.
+- host_updates: the pending-update PACKAGES (name, target version, security flag) for
+  one host or all accessible hosts. Use for "what are the pending updates", "which
+  packages need updating on web-01", "what security updates are pending". query_hosts
+  gives the update COUNTS; host_updates gives the actual package names in a focused list.
 - host_metric_history: ONE host's disk/memory/load OVER TIME, in time-ordered buckets.
   Use it whenever the question involves a trend, a change, or a time range — query_hosts
   and host_detail only know the current value. Set metrics to ONLY what the question
@@ -206,11 +211,24 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_detail",
-		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, all network interfaces with their addresses, AND the pending-update package list (inventory.updatePackages: each package's name, target newVersion, and a security flag). Use after query_hosts when the user asks about a specific host's filesystems, network, or WHICH packages have updates available (query_hosts gives only the update counts; this gives the actual package names).",
+		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use when the user asks about a specific host's FILESYSTEMS or NETWORK ('which filesystem is full on web-01', 'what subnet is db-02 on'). For pending package updates, use host_updates instead (this returns the whole host card, which is noisy for an updates question).",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname"}},
 			"required":   []string{"hostname"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "host_updates",
+		Description: "List the pending package updates as a focused table: for one host (by hostname) or across all accessible hosts with updates. Each row has the host, the package name, its target version, and whether it's a security update (security fixes are listed first). This is the RIGHT tool for 'what are the pending updates', 'which packages need updating on web-01', 'what security updates are pending' — it returns just the packages, unlike host_detail which returns the whole host. (query_hosts still gives just the COUNTS; host_updates gives the actual package names.)",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "narrow to this host (substring match); omit for all accessible hosts with updates"},
+				"limit":    map[string]any{"type": "integer", "description": "max package rows (default 500)"},
+			},
 		},
 	},
 }, {
@@ -391,6 +409,11 @@ type recentCommandsArgs struct {
 
 type searchCommandsArgs struct {
 	Query    string `json:"query"`
+	Hostname string `json:"hostname"`
+	Limit    int    `json:"limit"`
+}
+
+type hostUpdatesArgs struct {
 	Hostname string `json:"hostname"`
 	Limit    int    `json:"limit"`
 }
