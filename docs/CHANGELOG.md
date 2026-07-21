@@ -5,6 +5,31 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.33.0 — Ask AI: command history & update details; session-replay full screen
+
+Four enhancements, led by deepening the Ask AI assistant.
+
+- **Ask AI — "who ran command X".** Two new assistant tools:
+  - **`recent_commands`** — the authoritative record of commands run through Fleet's
+    Run-Command feature (exact command, who ran it, target, status, exit code, when),
+    gated by Command.Run.
+  - **`search_commands`** — searches the commands users **typed** in recorded interactive
+    SSH sessions, reconstructed from the recordings (backspace/Ctrl-U/escape aware). A
+    background indexer builds a full-text index (backfilling existing recordings); search
+    is scoped to the caller's accessible hosts and gated by Session.Replay. This is a
+    best-effort reconstruction (tab-completion / history-recall may be partial), so the
+    assistant qualifies results as "typed", and it only covers recorded sessions.
+- **Ask AI — which packages need updating.** The monitor now collects the actual pending
+  **update package list** per host (name, target version, security flag — apt/dnf/yum),
+  not just the counts, so `host_detail` (and the API) can answer "which packages need
+  updating on web-01".
+- **Session replay — full screen.** The recorded-session player has a full-screen toggle
+  (Esc to exit) with a larger font, re-fitting on resize, so recordings are easier to read.
+
+Migrations: `0049_host_update_packages`, `0050_session_commands`. Command indexing runs
+in the background after startup; on a large recording archive the first pass may take a
+few minutes to backfill.
+
 ## v0.32.3 — Fix: vulnerability scan 504 "scan timed out" on large hosts
 
 The grype scanner sidecar capped each scan at **5 minutes** (`GRYPE_SCAN_TIMEOUT`,
