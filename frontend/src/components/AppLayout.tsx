@@ -1,6 +1,6 @@
 import {
   AppBar, Badge, Box, Button, Chip, CssBaseline, Drawer, IconButton, List, ListItemButton,
-  ListItemIcon, ListItemText, Toolbar, Typography, Tooltip,
+  ListItemIcon, ListItemText, MenuItem, Select, Toolbar, Typography, Tooltip,
 } from "@mui/material";
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -41,6 +41,7 @@ import ExitToAppIcon from "@mui/icons-material/ExitToApp";
 import { Link as RouterLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useUIStore } from "../store/ui";
+import { getFederationMode, listSites } from "../api/federation";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
@@ -55,9 +56,10 @@ const DRAWER_WIDTH = 232;
 // `perm` (Dashboard, Approvals, Security) are available to every authenticated
 // user, matching their unguarded routes. The backend remains the sole
 // authorization authority — this filtering is cosmetic.
-const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: string; providerOnly?: boolean }> = [
+const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: string; providerOnly?: boolean; hubOnly?: boolean }> = [
   { to: "/tenants", label: "Tenants", icon: <ApartmentIcon />, providerOnly: true },
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
+  { to: "/sites", label: "Sites", icon: <HubIcon />, perm: "Federation.Manage", hubOnly: true },
   { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
   { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
   { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
@@ -104,6 +106,20 @@ export function AppLayout() {
   const switchTenant = useAuthStore((s) => s.switchTenant);
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // Federation role: hub-only navigation + the site selector appear only on a hub.
+  const { data: fedMode } = useQuery({ queryKey: ["fed-mode"], queryFn: getFederationMode, staleTime: 300_000 });
+  const isHub = fedMode === "hub";
+  const siteScope = useUIStore((s) => s.siteScope);
+  const setSiteScope = useUIStore((s) => s.setSiteScope);
+  const { data: fedSites = [] } = useQuery({
+    queryKey: ["fed-sites-nav"], queryFn: listSites, enabled: isHub, refetchInterval: 10000,
+  });
+  const changeScope = (id: string | null) => {
+    setSiteScope(id);
+    // Every cached query was fetched against the previous scope; drop them so pages
+    // refetch against the newly selected site (or the hub).
+    void qc.invalidateQueries();
+  };
   // While switched into a customer tenant, resolve its name so it can be shown on every
   // page. Reuses the ["tenants"] cache the Tenants console already populates; gated so we
   // only fetch when actually inside a tenant.
@@ -175,6 +191,27 @@ export function AppLayout() {
               </Tooltip>
             </Box>
           )}
+          {isHub && (
+            <Tooltip title="Manage a federated site — every page targets it until you switch back">
+              <Select
+                size="small" variant="standard" disableUnderline
+                value={siteScope ?? "hub"}
+                onChange={(e) => changeScope(e.target.value === "hub" ? null : String(e.target.value))}
+                sx={{
+                  mr: 2, minWidth: 150, color: "inherit",
+                  ".MuiSelect-icon": { color: "inherit" },
+                  ...(siteScope ? { bgcolor: "warning.dark", px: 1, borderRadius: 1 } : {}),
+                }}
+              >
+                <MenuItem value="hub">◎ Hub (local)</MenuItem>
+                {fedSites.filter((s) => s.status === "active").map((s) => (
+                  <MenuItem key={s.id} value={s.id}>
+                    {s.linkState === "up" ? "🟢" : "🔴"} {s.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </Tooltip>
+          )}
           <Tooltip title="Toggle theme">
             <IconButton color="inherit" onClick={toggleMode}>
               {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
@@ -214,7 +251,7 @@ export function AppLayout() {
         <Toolbar variant="dense" />
         <Box sx={{ overflow: "auto" }}>
           <List dense>
-            {NAV.filter((item) => (!item.perm || has(item.perm)) && (!item.providerOnly || showProvider)).map((item) => {
+            {NAV.filter((item) => (!item.perm || has(item.perm)) && (!item.providerOnly || showProvider) && (!item.hubOnly || isHub)).map((item) => {
               const selected =
                 item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
               return (

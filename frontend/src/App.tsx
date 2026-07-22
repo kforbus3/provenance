@@ -49,6 +49,7 @@ const CommandPolicyPage = lazy(() => named(import("./pages/CommandPolicyPage"), 
 const AccessPolicyPage = lazy(() => named(import("./pages/AccessPolicyPage"), "AccessPolicyPage"));
 const KubernetesPage = lazy(() => named(import("./pages/KubernetesPage"), "KubernetesPage"));
 const BehaviorPage = lazy(() => named(import("./pages/BehaviorPage"), "BehaviorPage"));
+const SitesPage = lazy(() => named(import("./pages/SitesPage"), "SitesPage"));
 const DisasterRecoveryPage = lazy(() => named(import("./pages/DisasterRecoveryPage"), "DisasterRecoveryPage"));
 
 function PageFallback() {
@@ -107,12 +108,22 @@ export function App() {
             path="/terminals/:hostId"
             element={<ProtectedRoute permission="Host.Connect"><TerminalPage /></ProtectedRoute>}
           />
+          {/* Federated terminal: a host on a remote site, proxied through the hub. */}
+          <Route
+            path="/sites/:siteId/terminals/:hostId"
+            element={<ProtectedRoute permission="Host.Connect"><TerminalPage /></ProtectedRoute>}
+          />
           <Route
             path="/desktop/:hostId"
             element={<ProtectedRoute permission="Host.Connect"><RdpPage /></ProtectedRoute>}
           />
           <Route
             path="/files/:hostId"
+            element={<ProtectedRoute permission="File.Transfer"><FilesPage /></ProtectedRoute>}
+          />
+          {/* Federated file browser: a host on a remote site, proxied through the hub. */}
+          <Route
+            path="/sites/:siteId/files/:hostId"
             element={<ProtectedRoute permission="File.Transfer"><FilesPage /></ProtectedRoute>}
           />
           <Route
@@ -139,6 +150,7 @@ export function App() {
               <Route path="users" element={<ProtectedRoute permission="User.Edit"><UsersPage /></ProtectedRoute>} />
               <Route path="roles" element={<ProtectedRoute permission="Role.Edit"><RolesPage /></ProtectedRoute>} />
               <Route path="groups" element={<ProtectedRoute permission="Group.Edit"><GroupsPage /></ProtectedRoute>} />
+              <Route path="sites" element={<ProtectedRoute permission="Federation.Manage"><SitesPage /></ProtectedRoute>} />
               <Route path="service-accounts" element={<ProtectedRoute permission="ServiceAccount.Manage"><ServiceAccountsPage /></ProtectedRoute>} />
               <Route path="vault" element={<ProtectedRoute permission="Credential.View"><VaultPage /></ProtectedRoute>} />
               <Route path="databases" element={<ProtectedRoute permission="Database.Connect"><DatabasesPage /></ProtectedRoute>} />

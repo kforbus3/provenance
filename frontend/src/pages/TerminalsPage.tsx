@@ -10,6 +10,7 @@ import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import { useQuery } from "@tanstack/react-query";
 import { listHosts, type Host } from "../api/hosts";
 import { WgDownChip, WgOnChip, wgDegraded, wgHealthy } from "../components/WgStatus";
+import { useUIStore } from "../store/ui";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -50,8 +51,12 @@ export function TerminalsPage() {
     });
   }, [data, q, groups, status]);
 
-  const openTerminal = (id: string) => window.open(`/terminals/${id}`, "_blank", "noopener");
-  const openFiles = (id: string) => window.open(`/files/${id}`, "_blank", "noopener");
+  // When a federated site is selected, launch the hub-proxied terminal/files
+  // routes for that site; otherwise the local ones.
+  const scope = useUIStore((s) => s.siteScope);
+  const prefix = scope ? `/sites/${scope}` : "";
+  const openTerminal = (id: string) => window.open(`${prefix}/terminals/${id}`, "_blank", "noopener");
+  const openFiles = (id: string) => window.open(`${prefix}/files/${id}`, "_blank", "noopener");
   const openDesktop = (id: string) => window.open(`/desktop/${id}`, "_blank", "noopener");
 
   return (

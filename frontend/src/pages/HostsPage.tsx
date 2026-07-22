@@ -43,6 +43,7 @@ import {
 import { downloadSupportBundle } from "../api/support";
 import { triggerVulnScan } from "../api/vulnscan";
 import { useAuthStore } from "../store/auth";
+import { useUIStore } from "../store/ui";
 import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
 } from "@mui/material";
@@ -394,6 +395,10 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
 // delete and a create dialog. Theme (light/dark) is inherited from the provider.
 export function HostsPage() {
   const qc = useQueryClient();
+  // When a federated site is selected, terminal/files launch the hub-proxied
+  // routes for that site (the host list itself is already proxied).
+  const scope = useUIStore((s) => s.siteScope);
+  const launchPrefix = scope ? `/sites/${scope}` : "";
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["hosts"],
     queryFn: listHosts,
@@ -619,7 +624,7 @@ export function HostsPage() {
               <Tooltip title="Open terminal in a new tab">
                 <IconButton
                   size="small" color="primary"
-                  onClick={() => window.open(`/terminals/${params.row.id}`, "_blank", "noopener")}
+                  onClick={() => window.open(`${launchPrefix}/terminals/${params.row.id}`, "_blank", "noopener")}
                 >
                   <TerminalIcon fontSize="small" />
                 </IconButton>
@@ -627,7 +632,7 @@ export function HostsPage() {
               <Tooltip title="Browse files (SFTP) in a new tab">
                 <IconButton
                   size="small"
-                  onClick={() => window.open(`/files/${params.row.id}`, "_blank", "noopener")}
+                  onClick={() => window.open(`${launchPrefix}/files/${params.row.id}`, "_blank", "noopener")}
                 >
                   <FolderIcon fontSize="small" />
                 </IconButton>
@@ -668,7 +673,7 @@ export function HostsPage() {
         </Stack>
       ),
     },
-  ], [deleteMut, enrollMut]);
+  ], [deleteMut, enrollMut, launchPrefix]);
 
   const allHosts = data?.hosts ?? [];
   const groupOptions = Array.from(new Set(allHosts.flatMap((h) => h.groups ?? []))).sort();

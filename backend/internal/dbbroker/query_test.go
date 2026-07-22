@@ -30,12 +30,12 @@ func TestNormalizeAndSupportEngine(t *testing.T) {
 	if normalizeEngine("  MySQL ") != "mysql" {
 		t.Error("engine should be lower-cased and trimmed")
 	}
-	for _, e := range []string{"postgres", "mysql", "mariadb", "sqlserver"} {
+	for _, e := range []string{"postgres", "mysql", "mariadb", "sqlserver", "mongodb"} {
 		if !engineSupported(e) {
 			t.Errorf("engine %q should be supported", e)
 		}
 	}
-	for _, e := range []string{"oracle", "mongodb", ""} {
+	for _, e := range []string{"oracle", "cassandra", ""} {
 		if engineSupported(e) {
 			t.Errorf("engine %q should not be supported", e)
 		}

@@ -16,7 +16,9 @@ type Status = "connecting" | "connected" | "closed" | "error";
 // sent as binary; resize is sent as a JSON control message. The browser never
 // holds SSH keys or certificates.
 export function TerminalPage() {
-  const { hostId } = useParams<{ hostId: string }>();
+  // siteId is present only for a federated terminal (a host on a remote site
+  // reached through the hub); local terminals have just hostId.
+  const { hostId, siteId } = useParams<{ hostId: string; siteId?: string }>();
   const navigate = useNavigate();
   const accessToken = useAuthStore((s) => s.accessToken);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -25,9 +27,9 @@ export function TerminalPage() {
   const { data: host } = useQuery({
     queryKey: ["host", hostId],
     queryFn: () => getHost(hostId!),
-    enabled: !!hostId,
+    enabled: !!hostId && !siteId, // the hub has no local copy of a remote host
   });
-  const hostname = host?.hostname ?? "";
+  const hostname = host?.hostname ?? (siteId ? "remote host" : "");
 
   // Reflect the host in the browser tab title.
   useDocumentTitle(hostname || undefined);
@@ -49,7 +51,11 @@ export function TerminalPage() {
 
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     // Token via subprotocol (see events.ts) so it stays out of the URL / proxy logs.
-    const url = `${proto}://${window.location.host}/api/v1/terminal/${hostId}`;
+    // Federated terminals are proxied through the hub to the owning site.
+    const path = siteId
+      ? `/api/v1/federation/sites/${siteId}/terminal/${hostId}`
+      : `/api/v1/terminal/${hostId}`;
+    const url = `${proto}://${window.location.host}${path}`;
     const ws = new WebSocket(url, ["fleet-bearer", accessToken]);
     ws.binaryType = "arraybuffer";
 
@@ -90,7 +96,7 @@ export function TerminalPage() {
       ws.close();
       term.dispose();
     };
-  }, [hostId, accessToken]);
+  }, [hostId, siteId, accessToken]);
 
   const color =
     status === "connected" ? "success" : status === "connecting" ? "warning" : "error";

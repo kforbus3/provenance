@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useUIStore } from "../store/ui";
 import {
   Alert, Box, Breadcrumbs, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, FormControlLabel, IconButton, LinearProgress, Link, List,
@@ -34,9 +35,19 @@ interface Transfer {
 // from disk and downloads stream to disk (File System Access API) so large files
 // never sit in memory; both show progress.
 export function FilesPage() {
-  const { hostId } = useParams<{ hostId: string }>();
+  // siteId is present for a federated host (reached through the hub). Setting the
+  // site scope makes every SFTP call transparently proxy to that site.
+  const { hostId, siteId } = useParams<{ hostId: string; siteId?: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const scope = useUIStore((s) => s.siteScope);
+  const setSiteScope = useUIStore((s) => s.setSiteScope);
+  useEffect(() => {
+    if (siteId && scope !== siteId) setSiteScope(siteId);
+  }, [siteId, scope, setSiteScope]);
+  // Wait until the scope matches the route's site before firing SFTP calls, so
+  // they proxy to the correct site instead of racing against the hub.
+  const scopeReady = !siteId || scope === siteId;
   const [path, setPath] = useState(".");
   const [dragOver, setDragOver] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -51,16 +62,16 @@ export function FilesPage() {
   }, []);
 
   const { data: host } = useQuery({
-    queryKey: ["host", hostId],
+    queryKey: ["host", hostId, siteId],
     queryFn: () => getHost(hostId!),
-    enabled: !!hostId,
+    enabled: !!hostId && scopeReady,
   });
   useDocumentTitle(host?.hostname ? `Files · ${host.hostname}` : undefined);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["sftp", hostId, path],
+    queryKey: ["sftp", hostId, siteId, path],
     queryFn: () => listDir(hostId!, path),
-    enabled: !!hostId,
+    enabled: !!hostId && scopeReady,
   });
 
   const resolved = data?.path ?? path;

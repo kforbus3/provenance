@@ -1,4 +1,4 @@
-import { api, getAccessToken } from "./client";
+import { api, getAccessToken, scopedURL } from "./client";
 
 export interface SftpEntry {
   name: string;
@@ -132,7 +132,7 @@ export function downloadFile(
   onProgress?: ProgressFn,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `/api/v1/hosts/${hostId}/sftp/download?path=${encodeURIComponent(path)}`;
+  const url = scopedURL(`/api/v1/hosts/${hostId}/sftp/download?path=${encodeURIComponent(path)}`);
   return streamToDisk(url, path.split("/").pop() ?? "download", onProgress, signal);
 }
 
@@ -143,7 +143,7 @@ export function downloadDir(
   onProgress?: ProgressFn,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `/api/v1/hosts/${hostId}/sftp/download-dir?path=${encodeURIComponent(path)}`;
+  const url = scopedURL(`/api/v1/hosts/${hostId}/sftp/download-dir?path=${encodeURIComponent(path)}`);
   const base = path.split("/").filter(Boolean).pop() ?? "archive";
   return streamToDisk(url, `${base}.tar`, onProgress, signal);
 }

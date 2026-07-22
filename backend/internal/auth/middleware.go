@@ -14,6 +14,14 @@ import (
 // Requests without a valid session receive 401.
 func (s *Service) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Federation: a request dispatched by the site-ingress carries a principal
+		// synthesized from a verified hub-signed assertion (no bearer token). Honor
+		// it in place of token auth so the request flows through the normal routes
+		// and RequirePermission checks. Only the federation layer can set this key.
+		if fp := federatedPrincipal(r.Context()); fp != nil {
+			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), fp)))
+			return
+		}
 		tok := bearerToken(r)
 		if tok == "" {
 			unauthorized(w, "missing access token")

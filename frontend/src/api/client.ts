@@ -1,4 +1,20 @@
 import axios from "axios";
+import { currentSiteScope } from "../store/ui";
+
+// Paths that must always reach the hub itself, never a proxied site: auth,
+// federation control, first-run bootstrap.
+const HUB_ONLY = /^\/api\/v1\/(auth|federation|bootstrap)\b/;
+
+// scopedURL rewrites an /api/v1/* request to a selected federation site by routing
+// it through the hub's transparent proxy, so every existing page works against a
+// remote site with no per-page changes.
+export function scopedURL(url: string): string {
+  const site = currentSiteScope();
+  if (!site || !url.startsWith("/api/v1/") || HUB_ONLY.test(url)) {
+    return url;
+  }
+  return `/api/v1/federation/sites/${site}/proxy/` + url.slice("/api/v1/".length);
+}
 
 // Single axios instance. Credentials are sent so the HttpOnly refresh cookie
 // flows automatically; the access token is attached by an interceptor once auth
@@ -52,6 +68,10 @@ api.interceptors.request.use((cfg) => {
   }
   if (activeTenant) {
     cfg.headers["X-Fleet-Tenant"] = activeTenant;
+  }
+  // When a federation site is selected, transparently route API calls to it.
+  if (cfg.url) {
+    cfg.url = scopedURL(cfg.url);
   }
   return cfg;
 });

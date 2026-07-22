@@ -51,6 +51,24 @@ type handler struct {
 	gw *sshgw.Gateway
 }
 
+// WSTransport is the minimal message transport the terminal relay drives. A browser
+// *websocket.Conn satisfies it directly; the multi-site federation layer provides an
+// equivalent backed by a hub↔site tunnel stream, so the exact same relay (recording,
+// audit, session lifecycle) serves both a local browser and a hub-proxied terminal.
+type WSTransport interface {
+	ReadMessage() (messageType int, p []byte, err error)
+	WriteMessage(messageType int, data []byte) error
+	Close() error
+}
+
+// ServeFederated runs the terminal relay for a hub-proxied session on the site. The
+// caller (federation site-ingress) has already verified the hub-signed assertion and
+// resolved the host + principal, so this bypasses the browser-auth and per-host access
+// checks in serve() — the hub is the authorization authority.
+func ServeFederated(d *app.Deps, gw *sshgw.Gateway, ctx context.Context, t WSTransport, p *auth.Principal, host *models.Host, clientIP string) {
+	(&handler{d: d, gw: gw}).run(ctx, t, p, host, clientIP)
+}
+
 type controlMsg struct {
 	Type string `json:"type"`
 	Cols int    `json:"cols"`
@@ -124,7 +142,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 // run drives a single terminal session lifecycle.
-func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal, host *models.Host, clientIP string) {
+func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, host *models.Host, clientIP string) {
 	// gorilla/websocket permits only one data writer at a time. The output pumps,
 	// the setup-error path, and the admin-terminate callback (which fires from an
 	// unrelated goroutine) all write frames, so every write goes through this
@@ -316,29 +334,34 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 	// quiet long-running command) no longer trips a proxy's idle timeout — and a
 	// genuinely dead peer is detected within ~70s and cleaned up. Without this the
 	// terminal relies entirely on the proxy chain never idling out the socket.
-	const (
-		pongWait   = 70 * time.Second
-		pingPeriod = 54 * time.Second
-	)
-	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
-	ws.SetPongHandler(func(string) error {
-		return ws.SetReadDeadline(time.Now().Add(pongWait))
-	})
-	go func() {
-		t := time.NewTicker(pingPeriod)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				// WriteControl is safe to call concurrently with the output pumps.
-				if err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+	// Ping/pong keepalive applies only to a browser WebSocket (idle-timeout defense
+	// across reverse proxies). The federation tunnel transport is a reliable stream
+	// that needs none, so it is skipped for the hub-proxied path.
+	if wsConn, ok := ws.(*websocket.Conn); ok {
+		const (
+			pongWait   = 70 * time.Second
+			pingPeriod = 54 * time.Second
+		)
+		_ = wsConn.SetReadDeadline(time.Now().Add(pongWait))
+		wsConn.SetPongHandler(func(string) error {
+			return wsConn.SetReadDeadline(time.Now().Add(pongWait))
+		})
+		go func() {
+			t := time.NewTicker(pingPeriod)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
 					return
+				case <-t.C:
+					// WriteControl is safe to call concurrently with the output pumps.
+					if err := wsConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+						return
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 
 	// Terminal traffic is genuine session activity, but it flows over this
 	// WebSocket rather than the HTTP API — and the idle reaper only tracks

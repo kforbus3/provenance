@@ -281,6 +281,20 @@ type Config struct {
 	// Bootstrap
 	AllowBootstrap bool
 
+	// Multi-site federation. Mode selects the instance's role:
+	//   standalone (default) — today's behavior, no federation code active.
+	//   hub  — aggregates and manages remote "site" instances (single pane of glass).
+	//   site — a normal Fleet instance that also dials out to a hub and accepts
+	//          hub-authorized, key-verified requests (managed mode).
+	// Standalone requires none of the fields below and is byte-for-byte unchanged.
+	Mode string
+
+	// Site-mode: how to reach and trust the hub.
+	HubURL              string // wss://hub/federation/link (the hub's public base for federation)
+	HubJoinToken        string // one-time pairing token, only needed for the first join
+	HubKeyFingerprint   string // pinned hub federation public-key fingerprint (TOFU defense)
+	FederationTransport string // "wss" (default) | "wireguard" (opt-in alternative)
+
 	Environment string // "development" | "production"
 }
 
@@ -357,6 +371,11 @@ func Load() (*Config, error) {
 		OTLPEndpoint:           env("FLEET_OTLP_ENDPOINT", ""),
 		TracingOn:              envBool("FLEET_TRACING", false),
 		AllowBootstrap:         envBool("FLEET_ALLOW_BOOTSTRAP", true),
+		Mode:                   strings.ToLower(env("FLEET_MODE", "standalone")),
+		HubURL:                 env("FLEET_HUB_URL", ""),
+		HubJoinToken:           env("FLEET_HUB_JOIN_TOKEN", ""),
+		HubKeyFingerprint:      env("FLEET_HUB_KEY_FINGERPRINT", ""),
+		FederationTransport:    strings.ToLower(env("FLEET_FEDERATION_TRANSPORT", "wss")),
 		Environment:            env("FLEET_ENV", "development"),
 	}
 
@@ -490,8 +509,57 @@ func (c *Config) validate() error {
 		return fmt.Errorf("FLEET_CERT_RENEW_BEFORE (%s) must be less than FLEET_USER_CERT_TTL (%s)",
 			c.CertRenewBefore, c.UserCertTTL)
 	}
+	if err := c.validateFederation(); err != nil {
+		return err
+	}
 	return nil
 }
+
+// validateFederation checks the multi-site federation settings. Standalone (the
+// default) requires nothing and leaves every other check untouched.
+func (c *Config) validateFederation() error {
+	switch c.Mode {
+	case "", "standalone":
+		c.Mode = "standalone"
+		return nil
+	case "hub", "site":
+		// ok
+	default:
+		return fmt.Errorf("FLEET_MODE must be standalone, hub, or site (got %q)", c.Mode)
+	}
+	// Federation crosses a trust boundary between instances, so it must not run on
+	// the insecure development defaults (ephemeral JWT, publicly-known CA passphrase).
+	if c.Environment == "development" {
+		return fmt.Errorf("FLEET_MODE=%s requires FLEET_ENV=production (or staging) with real secrets", c.Mode)
+	}
+	if c.FederationTransport == "" {
+		c.FederationTransport = "wss"
+	}
+	if c.FederationTransport != "wss" && c.FederationTransport != "wireguard" {
+		return fmt.Errorf("FLEET_FEDERATION_TRANSPORT must be wss or wireguard (got %q)", c.FederationTransport)
+	}
+	if c.Mode == "site" {
+		if c.HubURL == "" {
+			return fmt.Errorf("FLEET_MODE=site requires FLEET_HUB_URL")
+		}
+		// A site refuses to enter managed mode without a pinned hub key: on the
+		// very first join the fingerprint is learned and persisted, but a join
+		// token must then be present to establish that trust.
+		if c.HubKeyFingerprint == "" && c.HubJoinToken == "" {
+			return fmt.Errorf("FLEET_MODE=site requires FLEET_HUB_JOIN_TOKEN (first join) or FLEET_HUB_KEY_FINGERPRINT (subsequent boots)")
+		}
+	}
+	return nil
+}
+
+// IsStandalone reports the default single-instance mode (no federation).
+func (c *Config) IsStandalone() bool { return c.Mode == "" || c.Mode == "standalone" }
+
+// IsHub reports whether this instance aggregates and manages remote sites.
+func (c *Config) IsHub() bool { return c.Mode == "hub" }
+
+// IsSite reports whether this instance dials out to and is managed by a hub.
+func (c *Config) IsSite() bool { return c.Mode == "site" }
 
 // randomSecret returns n cryptographically-random bytes, used only for ephemeral
 // development secrets. crypto/rand failure is a catastrophic platform fault, so it
