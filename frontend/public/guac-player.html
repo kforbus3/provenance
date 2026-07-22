@@ -13,11 +13,26 @@
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
   header .sub { font-size: 12px; color: #8b949e; }
   main { padding: 18px; max-width: 1200px; margin: 0 auto; }
-  #drop { border: 2px dashed #30363d; border-radius: 10px; padding: 44px 18px; text-align: center;
-          color: #8b949e; transition: border-color .15s, background .15s; cursor: pointer; }
+  #drop { border: 2px dashed #30363d; border-radius: 10px; padding: 40px 18px; min-height: 200px;
+          display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+          text-align: center; color: #8b949e; transition: border-color .15s, background .15s; cursor: pointer; }
+  #drop:hover { border-color: #3d444d; background: #10151c; }
   #drop.drag { border-color: #2f81f7; background: #10203a; color: #cfe3ff; }
   #drop strong { color: #e6edf3; }
+  #drop .big { font-size: 17px; }
+  #drop .hint { font-size: 12px; color: #6e7681; }
+  #drop .icon { font-size: 40px; line-height: 1; opacity: .55; }
   #drop input { display: none; }
+  /* Full-window drop overlay: the whole page accepts the file, so the user never has
+     to hit a small target. Shown only while a file is dragged over the window. */
+  #dragoverlay { position: fixed; inset: 0; z-index: 1000; display: none; padding: 24px;
+                 background: rgba(13,17,23,.94); border: 4px dashed #2f81f7;
+                 flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+                 text-align: center; color: #cfe3ff; }
+  #dragoverlay.show { display: flex; }
+  #dragoverlay .title { font-size: 26px; font-weight: 700; }
+  #dragoverlay .sub { font-size: 14px; color: #8b949e; }
+  #dragoverlay .icon { font-size: 64px; line-height: 1; }
   #status { margin-top: 12px; font-size: 13px; color: #8b949e; min-height: 18px; }
   #status.error { color: #ff7b72; }
   #viewer { margin-top: 16px; display: none; }
@@ -44,7 +59,10 @@
 </header>
 <main>
   <label id="drop" for="file">
-    <div>Drop a <strong>.guac</strong> recording here, or <strong>click to choose a file</strong>.</div>
+    <div class="icon">&#128190;</div>
+    <div class="big">Drop a <strong>.guac</strong> recording <strong>anywhere on this page</strong></div>
+    <div>or <strong>click here to choose a file</strong></div>
+    <div class="hint">Nothing is uploaded — the recording plays locally in your browser.</div>
     <input type="file" id="file" accept=".guac">
   </label>
   <div id="status"></div>
@@ -60,6 +78,11 @@
     </div>
   </div>
 </main>
+<div id="dragoverlay">
+  <div class="icon">&#128229;</div>
+  <div class="title">Drop your .guac recording to play it</div>
+  <div class="sub">Release anywhere on the page</div>
+</div>
 <footer>
   This is a self-contained player: your recording is read locally in your browser and never uploaded.
   Bundles Apache Guacamole (guacamole-common-js), Apache License 2.0.
@@ -16405,15 +16428,38 @@ Guacamole.VideoPlayer.getInstance = function getInstance(stream, layer, mimetype
     else if (e.key === 'f' || e.key === 'F') { $('fs').click(); }
   });
 
-  // Drag & drop
+  // Drag & drop — the ENTIRE window is a drop target so the file can be released
+  // anywhere; a full-page overlay makes the target obvious while dragging. Without
+  // window-level preventDefault the browser would just open the dropped file and
+  // navigate away from the player.
+  var overlay = $('dragoverlay');
   var drop = $('drop');
-  ['dragenter', 'dragover'].forEach(function (ev) {
-    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('drag'); });
+  var dragDepth = 0; // dragenter/dragleave fire per child element; count to know when we truly leave
+  function showOverlay(on) {
+    dragDepth = on ? dragDepth : 0;
+    overlay.classList.toggle('show', on);
+    drop.classList.toggle('drag', on);
+  }
+  // Only react to drags that actually carry files (ignore text selections etc.).
+  function hasFiles(e) {
+    var dt = e.dataTransfer; if (!dt) return false;
+    if (dt.types) { for (var i = 0; i < dt.types.length; i++) { if (dt.types[i] === 'Files') return true; } }
+    return false;
+  }
+  window.addEventListener('dragenter', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dragDepth++; showOverlay(true);
   });
-  ['dragleave', 'drop'].forEach(function (ev) {
-    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('drag'); });
+  window.addEventListener('dragover', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   });
-  drop.addEventListener('drop', function (e) {
+  window.addEventListener('dragleave', function (e) {
+    e.preventDefault(); dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) showOverlay(false);
+  });
+  window.addEventListener('drop', function (e) {
+    e.preventDefault(); showOverlay(false);
     var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (f) load(f);
   });

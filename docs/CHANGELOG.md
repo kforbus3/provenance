@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.41.1 — Offline .guac player: drop a recording anywhere
+
+The offline RDP recording player only accepted a file dropped precisely on a small box.
+Now the **entire page** is a drop target: dragging a `.guac` file over the window shows a
+large, unmistakable overlay ("Drop your .guac recording to play it — release anywhere on the
+page"), and releasing anywhere loads it. The click-to-browse area is also enlarged with
+clearer copy. Prevents the browser from navigating away when a file is dropped off-target.
+
 ## v0.41.0 — Database broker: MySQL, MariaDB & SQL Server
 
 The database broker (v0.39.0) now speaks three more engines. Register a **MySQL**,
