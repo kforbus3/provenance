@@ -290,10 +290,15 @@ type Config struct {
 	Mode string
 
 	// Site-mode: how to reach and trust the hub.
-	HubURL              string // wss://hub/federation/link (the hub's public base for federation)
-	HubJoinToken        string // one-time pairing token, only needed for the first join
-	HubKeyFingerprint   string // pinned hub federation public-key fingerprint (TOFU defense)
-	FederationTransport string // "wss" (default) | "wireguard" (opt-in alternative)
+	HubURL            string // wss://hub/federation/link (the hub's public base for federation)
+	HubJoinToken      string // one-time pairing token, only needed for the first join
+	HubKeyFingerprint string // pinned hub federation public-key fingerprint (TOFU defense)
+	// FederationTransport selects how the site reaches the hub. The application
+	// protocol is always WSS (outbound TLS 443 + Ed25519 auth). "wireguard" is not a
+	// distinct wire protocol: it declares that the WSS link rides an operator-provided
+	// WireGuard/VPN underlay (point HubURL at the hub's overlay address), so no inbound
+	// reachability is exposed on the public internet. Both values run identical code.
+	FederationTransport string // "wss" (default) | "wireguard" (WSS over a WG underlay)
 
 	Environment string // "development" | "production"
 }

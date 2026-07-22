@@ -2,6 +2,7 @@ package federation
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -141,9 +142,26 @@ func (s *Service) handleLink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "bad site key")
 		return
 	}
-	if _, err := fedauth.ParseLinkToken(r.URL.Query().Get("token"), pub); err != nil {
-		writeErr(w, http.StatusUnauthorized, "bad link token")
-		return
+	token := r.URL.Query().Get("token")
+	if _, err := fedauth.ParseLinkToken(token, pub); err != nil {
+		// The site may have rotated its key: try the staged pending key, and if
+		// that authenticates, promote it to active (site-initiated key rotation).
+		promoted := false
+		if len(site.PendingPublicKey) > 0 {
+			if pend, perr := keys.PublicFromBytes(site.PendingPublicKey); perr == nil {
+				if _, verr := fedauth.ParseLinkToken(token, pend); verr == nil {
+					if err := s.deps.Store.PromoteSitePendingKey(bctx, siteID); err == nil {
+						promoted = true
+						s.log.Info("promoted rotated site key", "site", siteID)
+						s.audit(bctx, nil, "site:"+site.Name, "federation.site_key_rotated", siteID.String(), nil)
+					}
+				}
+			}
+		}
+		if !promoted {
+			writeErr(w, http.StatusUnauthorized, "bad link token")
+			return
+		}
 	}
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -192,7 +210,64 @@ func (s *Service) handleSiteStream(ctx context.Context, siteID, siteTenant uuid.
 		s.ingestPush(ctx, siteID, siteTenant, br)
 	case "ping":
 		_ = s.deps.Store.SetSiteLink(ctx, siteID, "up", 0, time.Now())
+	case "sitekey-rotate":
+		s.handleSiteKeyRotate(ctx, siteID, br, stream)
 	}
+}
+
+// handleSiteKeyRotate stages a site-proposed new identity key. The site signs the
+// new key with its CURRENT key over the (already-authenticated) live link; the hub
+// verifies that signature against the site's active key and, if valid, records the
+// new key as pending. The active key stays in force until the site reconnects with
+// the new key, at which point handleLink promotes it — so a crash mid-rotation
+// never locks the site out (it simply reconnects with whichever key it still holds).
+func (s *Service) handleSiteKeyRotate(ctx context.Context, siteID uuid.UUID, body io.Reader, stream io.Writer) {
+	var msg struct {
+		NewPublicKey string `json:"newPublicKey"` // base64 std
+		Nonce        string `json:"nonce"`
+		Sig          string `json:"sig"` // base64 std, over siteRotateMessage(...)
+	}
+	ackErr := func(m string) { _ = json.NewEncoder(stream).Encode(map[string]any{"ok": false, "error": m}) }
+	if err := json.NewDecoder(io.LimitReader(body, 1<<14)).Decode(&msg); err != nil {
+		ackErr("bad request")
+		return
+	}
+	newPub, err := base64.StdEncoding.DecodeString(msg.NewPublicKey)
+	if err != nil || len(newPub) != ed25519.PublicKeySize {
+		ackErr("bad new key")
+		return
+	}
+	sig, err := base64.StdEncoding.DecodeString(msg.Sig)
+	if err != nil {
+		ackErr("bad signature")
+		return
+	}
+	site, err := s.deps.Store.GetSite(ctx, siteID)
+	if err != nil {
+		ackErr("unknown site")
+		return
+	}
+	curPub, err := keys.PublicFromBytes(site.PublicKey)
+	if err != nil {
+		ackErr("bad current key")
+		return
+	}
+	// Single-use nonce (replay defense) + signature by the site's current key.
+	fresh, err := s.deps.Store.UseNonce(ctx, "siterot:"+msg.Nonce, time.Now().Add(5*time.Minute))
+	if err != nil || !fresh {
+		ackErr("stale nonce")
+		return
+	}
+	if !ed25519.Verify(curPub, siteRotateMessage(siteID.String(), newPub, msg.Nonce), sig) {
+		ackErr("signature verification failed")
+		return
+	}
+	if err := s.deps.Store.SetSitePendingKey(ctx, siteID, newPub); err != nil {
+		ackErr("could not stage key")
+		return
+	}
+	s.log.Info("staged rotated site key", "site", siteID, "fingerprint", keys.Fingerprint(newPub))
+	_ = json.NewEncoder(stream).Encode(map[string]any{"ok": true, "fingerprint": keys.Fingerprint(newPub)})
 }
 
 // handleRotateKey generates a new hub federation identity, retires the previous

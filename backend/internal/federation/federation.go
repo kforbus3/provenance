@@ -13,6 +13,7 @@ import (
 	"crypto/ed25519"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,6 +38,22 @@ type Service struct {
 	// Site role
 	siteHandler http.Handler   // the site's own router, for serving proxied requests
 	gw          *sshgw.Gateway // the site's SSH gateway, for the federated terminal relay
+
+	mu       sync.Mutex    // guards siteSess
+	siteSess *link.Session // the current outbound link to the hub, if up
+}
+
+// currentSession returns the live hub link, or nil if the site is not linked.
+func (s *Service) currentSession() *link.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.siteSess
+}
+
+func (s *Service) setSession(sess *link.Session) {
+	s.mu.Lock()
+	s.siteSess = sess
+	s.mu.Unlock()
 }
 
 // SetGateway gives the site service its SSH gateway so a hub-proxied terminal can
@@ -114,6 +131,7 @@ func MountSite(r chi.Router, d *app.Deps, s *Service) {
 		pr.Group(func(ar chi.Router) {
 			ar.Use(d.Auth.RequireAuth)
 			ar.With(d.Auth.RequirePermission("System.Configure")).Post("/leave", s.handleLeave)
+			ar.With(d.Auth.RequirePermission("System.Configure")).Post("/site/rotate-key", s.handleRotateSiteKey)
 		})
 	})
 }

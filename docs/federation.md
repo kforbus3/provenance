@@ -45,6 +45,35 @@ Three short-lived EdDSA token types (`internal/federation/fedauth`):
   and the permissions the hub authorized, bound to one exact request by a
   `sha256(method+path+body)` digest and a single-use nonce.
 
+### Key rotation
+
+Both identities can be rotated in place, with no re-enrollment and no link downtime:
+
+- **Hub key** — an operator clicks **Rotate hub key** on the Sites page (or `POST
+  /api/v1/federation/keys/rotate`). The hub generates a new identity, retires the old
+  one (kept briefly for verification overlap), and pushes the new public key to every
+  live site over the control channel; offline sites re-learn it when they next link.
+- **Site key** — a site operator triggers `POST /api/v1/federation/site/rotate-key`
+  (permission `System.Configure`). The site generates a new keypair and, over the
+  already-authenticated link, sends the new public key **signed by its current key**.
+  The hub verifies that signature against the site's active key and stages the new key
+  as *pending* — leaving the current key in force. The site then commits the new key
+  locally and reconnects; on that reconnect the hub sees the new key authenticate,
+  **promotes** it to active, and clears the pending slot. Because the hub accepts both
+  the active and the pending key during the overlap, a crash or drop mid-rotation never
+  locks the site out — it simply reconnects with whichever key it still holds.
+
+## Transport
+
+The federation application protocol is always **WSS** — a single outbound TLS
+connection on 443 from the site to the hub, authenticated by the Ed25519 tokens above.
+This is deliberate: a site needs **no inbound reachability**, so it works from behind
+NAT and restrictive egress firewalls. `FLEET_FEDERATION_TRANSPORT=wireguard` does not
+change the wire protocol; it documents that the WSS link rides an operator-provided
+WireGuard (or other VPN) underlay — point `FLEET_HUB_URL` at the hub's overlay address
+so the control plane never traverses the public internet. Both settings run identical
+code; the choice is purely which network the WSS link is carried over.
+
 ## Joining a site
 
 1. On the hub: **Sites → Add Site**, name it. The hub mints a one-time,

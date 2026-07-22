@@ -132,6 +132,26 @@ func (s *Store) SetSiteLink(ctx context.Context, id uuid.UUID, linkState string,
 	return err
 }
 
+// SetSitePendingKey stages a site-proposed new public key. The site rotates its
+// own identity by signing the new key with its current key over the live link;
+// the hub records it here (leaving the active key in force) and promotes it on
+// the site's next reconnect with the new key — so there is no window in which the
+// link cannot be re-established. Site-initiated key rotation (mirror of the hub's).
+func (s *Store) SetSitePendingKey(ctx context.Context, id uuid.UUID, pendingPub []byte) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE federation_sites SET pending_public_key=$2, updated_at=now() WHERE id=$1`, id, pendingPub)
+	return err
+}
+
+// PromoteSitePendingKey makes the staged key the active key and clears the
+// pending slot. Called when a site first authenticates with its rotated key.
+func (s *Store) PromoteSitePendingKey(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE federation_sites SET public_key=pending_public_key, pending_public_key=NULL, updated_at=now()
+		 WHERE id=$1 AND pending_public_key IS NOT NULL`, id)
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // Hub: join tokens (self-gating, single-use)
 // ---------------------------------------------------------------------------

@@ -32,3 +32,18 @@ func hashToken(tok string) []byte {
 	sum := sha256.Sum256([]byte(tok))
 	return sum[:]
 }
+
+// siteRotateMessage is the exact byte string a site signs with its CURRENT
+// private key to authorize rotating to newPub. Binding siteID + nonce makes the
+// signature specific to this site and single-use. Both sides construct it
+// identically so the hub can verify with the site's active public key.
+func siteRotateMessage(siteID string, newPub []byte, nonce string) []byte {
+	h := sha256.New()
+	h.Write([]byte("fleet-fed-site-rotate\x00"))
+	h.Write([]byte(siteID))
+	h.Write([]byte{0})
+	h.Write(newPub)
+	h.Write([]byte{0})
+	h.Write([]byte(nonce))
+	return h.Sum(nil)
+}

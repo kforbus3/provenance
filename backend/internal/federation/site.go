@@ -158,11 +158,105 @@ func (s *Service) connectAndServe(ctx context.Context, st *siteState) error {
 	}
 	defer sess.Close()
 	s.log.Info("linked to hub", "site", st.siteID)
+	s.setSession(sess)
+	defer s.setSession(nil)
 
 	linkCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go s.acceptHubStreams(linkCtx, sess) // hub-initiated proxy streams (F3/F4)
 	return s.pushLoop(linkCtx, sess)     // blocks; returns on error/close
+}
+
+// rotateSiteKey generates a fresh site identity and rotates to it over the live
+// hub link: it signs the new public key with the CURRENT key, sends it to the hub
+// (which stages it as pending), and only commits the new keypair locally once the
+// hub acks — so the hub always holds a key the site can authenticate with. On the
+// next reconnect the site presents the new key and the hub promotes it to active.
+func (s *Service) rotateSiteKey(ctx context.Context) (string, error) {
+	sess := s.currentSession()
+	if sess == nil {
+		return "", errors.New("not linked to hub")
+	}
+	hub, err := s.deps.Store.GetFederationHub(ctx)
+	if err != nil {
+		return "", errors.New("site is not joined to a hub")
+	}
+	curPriv, err := keys.OpenPrivate(s.deps.Cfg.CAKeyPassphrase, hub.SitePrivateKeyEnc)
+	if err != nil {
+		return "", err
+	}
+	id, err := keys.Generate()
+	if err != nil {
+		return "", err
+	}
+	nonce, err := randToken(16)
+	if err != nil {
+		return "", err
+	}
+	sig := ed25519.Sign(curPriv, siteRotateMessage(hub.SiteID.String(), id.Public, nonce))
+
+	stream, err := sess.OpenStream()
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	if err := WriteFrame(stream, &Frame{Kind: "sitekey-rotate"}); err != nil {
+		return "", err
+	}
+	body, _ := json.Marshal(map[string]string{
+		"newPublicKey": base64.StdEncoding.EncodeToString(id.Public),
+		"nonce":        nonce,
+		"sig":          base64.StdEncoding.EncodeToString(sig),
+	})
+	if _, err := stream.Write(body); err != nil {
+		return "", err
+	}
+	var ack struct {
+		OK          bool   `json:"ok"`
+		Error       string `json:"error"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.NewDecoder(io.LimitReader(stream, 1<<12)).Decode(&ack); err != nil {
+		return "", fmt.Errorf("no hub ack: %w", err)
+	}
+	if !ack.OK {
+		return "", fmt.Errorf("hub rejected rotation: %s", ack.Error)
+	}
+	// Hub has staged the new key; commit it locally so the next reconnect uses it.
+	sealed, err := keys.SealPrivate(s.deps.Cfg.CAKeyPassphrase, id.Private)
+	if err != nil {
+		return "", err
+	}
+	if err := s.deps.Store.SaveFederationHub(ctx, &store.FederationHub{
+		HubURL: hub.HubURL, HubPublicKey: hub.HubPublicKey, HubFingerprint: hub.HubFingerprint,
+		SiteID: hub.SiteID, SitePublicKey: id.Public, SitePrivateKeyEnc: sealed, ManagedMode: hub.ManagedMode,
+	}); err != nil {
+		return "", err
+	}
+	s.log.Info("rotated site identity key", "site", hub.SiteID, "fingerprint", id.Fingerprint)
+	// Reconnect now so the hub promotes the new key immediately (rather than at the
+	// next incidental drop). Closing the session ends connectAndServe; runSiteLink
+	// redials with the freshly-committed key.
+	sess.Close()
+	return id.Fingerprint, nil
+}
+
+// handleRotateSiteKey is the operator-facing trigger on a site to rotate its own
+// federation identity key.
+func (s *Service) handleRotateSiteKey(w http.ResponseWriter, r *http.Request) {
+	p := auth.MustPrincipal(r)
+	fp, err := s.rotateSiteKey(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	var actorID *uuid.UUID
+	if p != nil {
+		actorID = &p.UserID
+	}
+	s.audit(r.Context(), actorID, actorName(p), "federation.site_key_rotated", "",
+		map[string]any{"fingerprint": fp})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "rotated", "fingerprint": fp})
 }
 
 // pushLoop opens a push stream and streams host snapshots + heartbeats.
@@ -206,6 +300,10 @@ func (s *Service) pushLoop(ctx context.Context, sess *fedlink.Session) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-sess.CloseChan():
+			// The link was torn down (peer drop or a local key rotation): return now
+			// so runSiteLink redials promptly rather than after the next tick.
+			return errors.New("link session closed")
 		case <-t.C:
 			if err := send(); err != nil {
 				return err

@@ -32,6 +32,11 @@ func (s *Session) Close() error { return s.mux.Close() }
 // IsClosed reports whether the underlying session has gone away.
 func (s *Session) IsClosed() bool { return s.mux.IsClosed() }
 
+// CloseChan is closed when the session goes away, so a blocked loop can react to
+// a teardown (e.g. a local key rotation closing the link) without waiting for its
+// next timer tick.
+func (s *Session) CloseChan() <-chan struct{} { return s.mux.CloseChan() }
+
 // Wrap builds a yamux Session over a websocket connection. server=true on the
 // hub (accepting), false on the site (dialing).
 func Wrap(siteID uuid.UUID, ws *websocket.Conn, server bool) (*Session, error) {

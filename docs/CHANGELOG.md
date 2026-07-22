@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.54.0 — Federation site key rotation
+
+Completes federation key lifecycle: a **site can rotate its own identity key** in
+place, mirroring the existing hub-key rotation, with no re-enrollment and no link
+downtime.
+
+- **Site-initiated rotation** (`POST /api/v1/federation/site/rotate-key`,
+  `System.Configure`). The site generates a new keypair and, over its
+  already-authenticated link, sends the new public key **signed by its current key**.
+  The hub verifies that against the site's active key and stages the new key as
+  *pending* — leaving the current key in force — then **promotes** it to active on the
+  site's next reconnect with the new key. The hub accepts both keys during the overlap,
+  so a crash or drop mid-rotation never locks a site out.
+- **Prompt reconnect.** A site reacts to its link closing immediately (rather than at
+  the next push tick), so a rotation promotes within seconds.
+- **Transport honesty.** `FLEET_FEDERATION_TRANSPORT=wireguard` no longer implies a
+  distinct wire protocol. The federation protocol is always WSS (outbound TLS 443 +
+  Ed25519 auth); `wireguard` documents that the WSS link rides a WireGuard/VPN underlay
+  (point `FLEET_HUB_URL` at the overlay address). Both values run identical code.
+- Uses the pre-existing `pending_public_key` column (no new migration). See
+  docs/federation.md ("Key rotation", "Transport").
+
 ## v0.53.0 — Federation site-as-tenant
 
 A multi-tenant **hub** now isolates federated sites per tenant, completing the MSP shape where one
