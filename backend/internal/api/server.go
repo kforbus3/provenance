@@ -53,6 +53,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/insights"
+	"github.com/fleet-terminal/backend/internal/itsmapi"
 	"github.com/fleet-terminal/backend/internal/jobs"
 	"github.com/fleet-terminal/backend/internal/k8sbroker"
 	"github.com/fleet-terminal/backend/internal/kmsapi"
@@ -995,6 +996,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	accesspolicyapi.Mount(r, deps)
 	k8sbroker.Mount(r, deps)
 	uebaapi.Mount(r, deps)
+	itsmapi.Mount(r, deps)
 	dr.MountPublic(r) // unauthenticated GET /dr/mode → {standby:false} so the SPA can detect posture
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)

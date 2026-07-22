@@ -19,6 +19,7 @@ import {
 } from "../api/backups";
 import { getTimezone, saveTimezone } from "../api/timezone";
 import { getKMSStatus } from "../api/kms";
+import { getITSM, saveITSM, testITSM } from "../api/itsm";
 import {
   getAuditForwarding, saveAuditForwarding, testAuditForwarding, type AuditForwardConfig,
 } from "../api/auditForwarding";
@@ -121,6 +122,7 @@ export function SettingsPage() {
               <NotificationsCard />
               <DigestCard />
               <ReportScheduleCard />
+              <ITSMCard />
               <AuditForwardingCard />
             </>
           )}
@@ -611,6 +613,64 @@ function EncryptionCard() {
               <code> fleetctl kms wrap</code>. See docs/kms.md.
             </Alert>
           )}
+        </Stack>
+      )}
+    </Paper>
+  );
+}
+
+// ITSMCard configures the ServiceNow/Jira integration: opening a change ticket for
+// each access approval so privileged-access requests carry a change reference.
+function ITSMCard() {
+  const { data, isLoading } = useQuery({ queryKey: ["itsm"], queryFn: getITSM });
+  const [form, setForm] = useState<{ provider: string; baseUrl: string; user: string; project: string; enabled: boolean; token: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const f = form ?? {
+    provider: data?.provider || "servicenow", baseUrl: data?.baseUrl ?? "", user: data?.user ?? "",
+    project: data?.project ?? "", enabled: data?.enabled ?? false, token: "",
+  };
+  const set = (patch: Partial<typeof f>) => setForm({ ...f, ...patch });
+  const save = useMutation({
+    mutationFn: () => saveITSM({ provider: f.provider, baseUrl: f.baseUrl, user: f.user, project: f.project, enabled: f.enabled, token: f.token || undefined }),
+    onSuccess: () => setMsg({ ok: true, text: "Saved." }),
+    onError: () => setMsg({ ok: false, text: "Could not save." }),
+  });
+  const test = useMutation({
+    mutationFn: testITSM,
+    onSuccess: () => setMsg({ ok: true, text: "Connection OK." }),
+    onError: (e) => setMsg({ ok: false, text: ((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Connection failed." }),
+  });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">ITSM integration (ServiceNow / Jira)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        When enabled, Fleet opens a change/incident ticket for each just-in-time access request and
+        attaches its reference to the approval. Best-effort — a request is never blocked if the ITSM is
+        unreachable.
+      </Typography>
+      {isLoading ? <CircularProgress size={22} /> : (
+        <Stack spacing={2}>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <TextField select label="Provider" size="small" value={f.provider} onChange={(e) => set({ provider: e.target.value })} sx={{ width: 160 }}>
+              <MenuItem value="servicenow">ServiceNow</MenuItem>
+              <MenuItem value="jira">Jira</MenuItem>
+            </TextField>
+            <FormControlLabel control={<Switch checked={f.enabled} onChange={(e) => set({ enabled: e.target.checked })} />} label="Enabled" />
+          </Stack>
+          <TextField label={f.provider === "jira" ? "Base URL (https://org.atlassian.net)" : "Instance URL (https://org.service-now.com)"}
+            size="small" value={f.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })} fullWidth />
+          <Stack direction="row" spacing={2}>
+            <TextField label={f.provider === "jira" ? "Account email" : "Username"} size="small" value={f.user} onChange={(e) => set({ user: e.target.value })} sx={{ flexGrow: 1 }} />
+            <TextField label={f.provider === "jira" ? "Project key (e.g. OPS)" : "Table (default incident)"} size="small" value={f.project} onChange={(e) => set({ project: e.target.value })} sx={{ width: 220 }} />
+          </Stack>
+          <TextField label={data?.hasToken ? (f.provider === "jira" ? "API token (leave blank to keep current)" : "Password (leave blank to keep current)") : (f.provider === "jira" ? "API token" : "Password")}
+            size="small" type="password" value={f.token} onChange={(e) => set({ token: e.target.value })} autoComplete="new-password" fullWidth />
+          {msg && <Alert severity={msg.ok ? "success" : "error"}>{msg.text}</Alert>}
+          <Stack direction="row" spacing={1}>
+            <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>Save</Button>
+            <Button variant="outlined" disabled={test.isPending || !data?.enabled} onClick={() => test.mutate()}>Test connection</Button>
+          </Stack>
         </Stack>
       )}
     </Paper>

@@ -29,6 +29,7 @@ const DOCS = [
   { file: "kms.md", title: "Encryption at Rest (KMS)", category: "Security", order: 10 },
   { file: "behavior-analytics.md", title: "Behavior Analytics (UEBA)", category: "Security", order: 11 },
   { file: "api.md", title: "API Reference", category: "Reference", order: 12 },
+  { file: "itsm.md", title: "ITSM (ServiceNow / Jira)", category: "Administration", order: 12.5 },
   { file: "automation.md", title: "Automation (SDK & CLI)", category: "Reference", order: 13 },
   { file: "security-guide.md", title: "Security", category: "Reference", order: 14 },
   { file: "deployment.md", title: "Deployment", category: "Reference", order: 15 },

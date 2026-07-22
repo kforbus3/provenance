@@ -16,6 +16,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/httpx"
+	"github.com/fleet-terminal/backend/internal/itsm"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -92,13 +93,39 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "approval.request", ar.ID.String(), map[string]any{
 		"targetKind": ar.TargetKind, "targetName": ar.TargetName, "requestedSecs": ar.RequestedSecs,
 	})
+
+	// ITSM: if configured and the requester didn't supply a ticket, best-effort open a
+	// change ticket and attach its reference. Never blocks the request on ITSM failure.
+	ticketLink := ""
+	if ar.TicketRef == "" {
+		if cfg, cerr := itsm.LoadConfig(r.Context(), h.d.Store, h.d.Cfg.CAKeyPassphrase); cerr == nil && cfg.Configured() {
+			summary := fmt.Sprintf("Fleet access request: %s → %s %s", p.Username, ar.TargetKind, ar.TargetName)
+			desc := fmt.Sprintf("%s requested %s of access to %s %q via Fleet Terminal.\nReason: %s",
+				p.Username, (time.Duration(ar.RequestedSecs) * time.Second).String(), ar.TargetKind, ar.TargetName, ar.Reason)
+			ictx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			ref, url, terr := itsm.New(cfg).CreateTicket(ictx, summary, desc)
+			cancel()
+			if terr != nil {
+				h.d.Log.Warn("itsm: could not open ticket for approval", "error", terr, "approval", ar.ID)
+			} else if ref != "" {
+				if uerr := h.d.Store.SetApprovalTicketRef(r.Context(), ar.ID, ref); uerr == nil {
+					ar.TicketRef = ref
+				}
+				ticketLink = " Ticket: " + ref
+				if url != "" {
+					ticketLink += " (" + url + ")"
+				}
+				h.audit(r, "approval.ticket", ar.ID.String(), map[string]any{"provider": cfg.Provider, "ref": ref})
+			}
+		}
+	}
+
 	if h.d.Notify != nil {
-		p := auth.MustPrincipal(r)
 		h.d.Notify.Notify(r.Context(), notify.Event{
 			Type: notify.EventApprovalPending, Severity: notify.SeverityInfo,
 			Title: "Access request pending approval",
-			Body: fmt.Sprintf("%s requested access to %s %q. Review it in Approvals → Queue.",
-				p.Username, ar.TargetKind, ar.TargetName),
+			Body: fmt.Sprintf("%s requested access to %s %q. Review it in Approvals → Queue.%s",
+				p.Username, ar.TargetKind, ar.TargetName, ticketLink),
 		})
 	}
 	httpx.WriteJSON(w, http.StatusCreated, ar)

@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.48.0 — ITSM integration (ServiceNow / Jira)
+
+Tie privileged access to change management. When enabled, Fleet opens a **change/incident ticket**
+in ServiceNow or Jira for each just-in-time access request and attaches the ticket reference to the
+approval, so every grant carries a change record.
+
+- Best-effort and non-blocking: if the ITSM is unreachable the access request still proceeds
+  (failures logged, successes audited as `approval.ticket`). The ticket reference and link are
+  included in the approval notification.
+- Configure under Settings → Integrations (`System.Configure`): provider, base URL, user, token,
+  and table/project. The token is sealed at rest and never returned by the API; a **Test
+  connection** button validates credentials without creating a ticket.
+- New `internal/itsm` (ServiceNow + Jira clients, stdlib HTTP, no SDK) and `itsm/config` +
+  `GET/PUT /itsm/config`, `POST /itsm/test`. Verified end-to-end (a request opened a ServiceNow
+  ticket and attached its reference). See docs/itsm.md.
+
 ## v0.47.0 — External secrets manager (vault-of-record)
 
 A vault credential can now be **external-backed**: instead of Fleet storing the secret material, the

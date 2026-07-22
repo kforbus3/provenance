@@ -57,6 +57,13 @@ func (s *Store) CreateApprovalRequest(ctx context.Context, in ApprovalRequestInp
 	return s.GetApprovalRequest(ctx, id)
 }
 
+// SetApprovalTicketRef attaches an ITSM ticket reference to an approval request
+// (best-effort, set after an external ticket is opened).
+func (s *Store) SetApprovalTicketRef(ctx context.Context, id uuid.UUID, ref string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE approval_requests SET ticket_ref=$2 WHERE id=$1`, id, ref)
+	return err
+}
+
 // GetApprovalRequest loads a single approval request by id.
 func (s *Store) GetApprovalRequest(ctx context.Context, id uuid.UUID) (*models.ApprovalRequest, error) {
 	return scanApprovalRequest(s.pool.QueryRow(ctx, `SELECT `+approvalCols+` FROM `+approvalFrom+` WHERE ar.id=$1`, id))
