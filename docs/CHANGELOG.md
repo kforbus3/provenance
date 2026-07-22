@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.41.0 — Database broker: MySQL, MariaDB & SQL Server
+
+The database broker (v0.39.0) now speaks three more engines. Register a **MySQL**,
+**MariaDB**, or **SQL Server** target alongside PostgreSQL and run brokered SQL through the
+jump host with the same vaulted-credential injection, row/statement caps, and `db.query`
+auditing — the operator never sees the password.
+
+- Each engine connects over the existing single SSH-tunneled connection: the per-engine driver
+  (pgx for Postgres, the MySQL wire protocol for MySQL/MariaDB, TDS for SQL Server) runs over the
+  tunnel via a one-shot dialer. No cloud SDK is pulled into the binary.
+- The SQL console adapts per engine: engine-aware default port (5432 / 3306 / 1433) and starter
+  query (`LIMIT` vs `TOP`). Row-returning statements render a grid; other statements report rows
+  affected.
+- Migration `0054_database_broker_engines` widens the engine constraint; existing PostgreSQL
+  targets are untouched.
+
 ## v0.40.0 — External KMS / HSM for master-key protection
 
 Fleet's at-rest secrets (the CA signing key and every credential-vault entry) were already

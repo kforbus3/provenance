@@ -59,20 +59,14 @@ type DatabaseInput struct {
 	CreatedBy    uuid.UUID
 }
 
-func (in DatabaseInput) engine() string {
-	if in.Engine == "postgres" {
-		return in.Engine
-	}
-	return "postgres"
-}
-
-// CreateDatabase registers a database target.
+// CreateDatabase registers a database target. The engine is validated by the handler
+// (dbbroker.engineSupported) before reaching here.
 func (s *Store) CreateDatabase(ctx context.Context, in DatabaseInput) (*models.Database, error) {
 	var id uuid.UUID
 	if err := s.pool.QueryRow(ctx, `
 		INSERT INTO databases (name, engine, address, port, database_name, credential_id, description, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-		in.Name, in.engine(), in.Address, in.Port, in.DatabaseName, in.CredentialID, in.Description, in.CreatedBy).Scan(&id); err != nil {
+		in.Name, in.Engine, in.Address, in.Port, in.DatabaseName, in.CredentialID, in.Description, in.CreatedBy).Scan(&id); err != nil {
 		return nil, err
 	}
 	return s.GetDatabase(ctx, id)
@@ -84,7 +78,7 @@ func (s *Store) UpdateDatabase(ctx context.Context, id uuid.UUID, in DatabaseInp
 		UPDATE databases SET name=$2, engine=$3, address=$4, port=$5, database_name=$6,
 			credential_id=$7, description=$8, updated_at=now()
 		WHERE id=$1`,
-		id, in.Name, in.engine(), in.Address, in.Port, in.DatabaseName, in.CredentialID, in.Description); err != nil {
+		id, in.Name, in.Engine, in.Address, in.Port, in.DatabaseName, in.CredentialID, in.Description); err != nil {
 		return nil, err
 	}
 	return s.GetDatabase(ctx, id)

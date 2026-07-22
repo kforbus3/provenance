@@ -116,9 +116,11 @@ func (h *handler) credential(ctx context.Context, credID uuid.UUID) (user, pass 
 	return sec.Username, string(pw), nil
 }
 
-// execute opens a Postgres connection to the target THROUGH the jump host (using the
-// caller's session certificate for the jump hop and the vaulted credential for the
-// database), runs the statement, and returns the (row-capped) result.
+// execute reaches the target database THROUGH the jump host (using the caller's
+// session certificate for the jump hop and the vaulted credential for the database),
+// runs the statement, and returns the (row-capped) result. The transport is a single
+// SSH-tunneled TCP connection shared by every engine; the per-engine driver runs over
+// it. Branch on db.Engine to add engines.
 func (h *handler) execute(ctx context.Context, sessionID uuid.UUID, db *models.Database, dbUser, dbPass, sql string) (*QueryResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, queryLimit)
 	defer cancel()
@@ -133,6 +135,21 @@ func (h *handler) execute(ctx context.Context, sessionID uuid.UUID, db *models.D
 		}
 	}()
 
+	switch normalizeEngine(db.Engine) {
+	case "postgres":
+		return executePostgres(cctx, tunnel, db, dbUser, dbPass, sql)
+	case "mysql", "mariadb":
+		return executeMySQL(cctx, tunnel, sessionID, db, dbUser, dbPass, sql)
+	case "sqlserver":
+		return executeSQLServer(cctx, tunnel, db, dbUser, dbPass, sql)
+	default:
+		_ = tunnel.Close()
+		return nil, fmt.Errorf("unsupported engine %q", db.Engine)
+	}
+}
+
+// executePostgres runs the statement over the tunnel using pgx.
+func executePostgres(cctx context.Context, tunnel net.Conn, db *models.Database, dbUser, dbPass, sql string) (*QueryResult, error) {
 	cfg, err := pgx.ParseConfig(fmt.Sprintf("host=%s port=%d dbname=%s sslmode=disable", db.Address, db.Port, db.DatabaseName))
 	if err != nil {
 		_ = tunnel.Close()

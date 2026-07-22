@@ -8,12 +8,14 @@ require (
 	github.com/go-chi/cors v1.2.1
 	github.com/go-ldap/ldap/v3 v3.4.8
 	github.com/go-pdf/fpdf v0.9.0
+	github.com/go-sql-driver/mysql v1.8.1
 	github.com/go-webauthn/webauthn v0.11.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
+	github.com/microsoft/go-mssqldb v1.7.2
 	github.com/pkg/sftp v1.13.10
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.20.5
@@ -29,6 +31,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
 	github.com/ChrisTrenkamp/goxpath v0.0.0-20210404020558-97928f7e12b6 // indirect
 	github.com/beevik/etree v1.5.0 // indirect
@@ -46,6 +49,8 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-webauthn/x v0.1.14 // indirect
 	github.com/gofrs/uuid v4.4.0+incompatible // indirect
+	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
+	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/google/go-tpm v0.9.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect

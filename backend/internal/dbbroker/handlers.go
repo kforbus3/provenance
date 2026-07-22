@@ -63,16 +63,18 @@ type dbReq struct {
 }
 
 func (rq dbReq) toInput(by uuid.UUID) store.DatabaseInput {
+	engine := normalizeEngine(rq.Engine)
+	info := engines[engine] // engine validity is checked by the caller before this
 	port := rq.Port
 	if port == 0 {
-		port = 5432
+		port = info.defaultPort
 	}
 	dbName := strings.TrimSpace(rq.DatabaseName)
 	if dbName == "" {
-		dbName = "postgres"
+		dbName = info.defaultDB
 	}
 	return store.DatabaseInput{
-		Name: strings.TrimSpace(rq.Name), Engine: "postgres", Address: strings.TrimSpace(rq.Address),
+		Name: strings.TrimSpace(rq.Name), Engine: engine, Address: strings.TrimSpace(rq.Address),
 		Port: port, DatabaseName: dbName, CredentialID: rq.CredentialID,
 		Description: rq.Description, CreatedBy: by,
 	}
@@ -86,6 +88,10 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(rq.Name) == "" || strings.TrimSpace(rq.Address) == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "name and address are required")
+		return
+	}
+	if !engineSupported(normalizeEngine(rq.Engine)) {
+		httpx.WriteError(w, http.StatusBadRequest, "unsupported engine (want postgres, mysql, mariadb, or sqlserver)")
 		return
 	}
 	p := auth.MustPrincipal(r)
@@ -106,6 +112,10 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	var rq dbReq
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !engineSupported(normalizeEngine(rq.Engine)) {
+		httpx.WriteError(w, http.StatusBadRequest, "unsupported engine (want postgres, mysql, mariadb, or sqlserver)")
 		return
 	}
 	p := auth.MustPrincipal(r)

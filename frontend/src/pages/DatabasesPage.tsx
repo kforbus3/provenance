@@ -17,6 +17,10 @@ import {
 } from "../api/databases";
 import { listVaultSecrets } from "../api/vault";
 
+// Per-engine connection defaults, mirrored from the backend (internal/dbbroker/engines.go).
+const ENGINE_DEFAULT_PORT: Record<string, number> = { postgres: 5432, mysql: 3306, mariadb: 3306, sqlserver: 1433 };
+const ENGINE_DEFAULT_DB: Record<string, string> = { postgres: "postgres", mysql: "", mariadb: "", sqlserver: "master" };
+
 // DatabasesPage: register database targets and run brokered SQL — Fleet reaches the
 // database through the jump host with a vaulted credential injected, and audits every
 // query, so the operator never sees the password.
@@ -101,7 +105,11 @@ export function DatabasesPage() {
 
 // QueryConsole runs SQL against one database and renders the result grid.
 function QueryConsole({ db, onClose }: { db: Database; onClose: () => void }) {
-  const [sql, setSql] = useState("SELECT * FROM information_schema.tables LIMIT 20;");
+  const [sql, setSql] = useState(
+    db.engine === "sqlserver"
+      ? "SELECT TOP 20 * FROM information_schema.tables;"
+      : "SELECT * FROM information_schema.tables LIMIT 20;",
+  );
   const [result, setResult] = useState<QueryResult | null>(null);
   const run = useMutation({
     mutationFn: () => runQuery(db.id, sql),
@@ -180,6 +188,20 @@ function DatabaseDialog({ db, onClose, onSaved }: { db?: Database; onClose: () =
     onSuccess: onSaved,
   });
   const set = (k: keyof DatabaseInput, v: string | number | null) => setForm((f) => ({ ...f, [k]: v }));
+  // Switching engine (on a new registration) snaps the port to that engine's default
+  // so the operator doesn't have to remember 5432 / 3306 / 1433.
+  const onEngineChange = (engine: string) => {
+    setForm((f) => {
+      const next = { ...f, engine };
+      if (!db && (f.port === ENGINE_DEFAULT_PORT[f.engine] || !f.port)) {
+        next.port = ENGINE_DEFAULT_PORT[engine] ?? f.port;
+      }
+      if (!db && (f.databaseName === ENGINE_DEFAULT_DB[f.engine] || !f.databaseName)) {
+        next.databaseName = ENGINE_DEFAULT_DB[engine] ?? f.databaseName;
+      }
+      return next;
+    });
+  };
   return (
     <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{db ? "Edit database" : "Register database"}</DialogTitle>
@@ -187,8 +209,11 @@ function DatabaseDialog({ db, onClose, onSaved }: { db?: Database; onClose: () =
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           <TextField label="Name" value={form.name} onChange={(e) => set("name", e.target.value)} fullWidth autoFocus />
           <Stack direction="row" spacing={2}>
-            <TextField select label="Engine" value={form.engine} onChange={(e) => set("engine", e.target.value)} sx={{ minWidth: 140 }}>
+            <TextField select label="Engine" value={form.engine} onChange={(e) => onEngineChange(e.target.value)} sx={{ minWidth: 150 }}>
               <MenuItem value="postgres">PostgreSQL</MenuItem>
+              <MenuItem value="mysql">MySQL</MenuItem>
+              <MenuItem value="mariadb">MariaDB</MenuItem>
+              <MenuItem value="sqlserver">SQL Server</MenuItem>
             </TextField>
             <TextField label="Address (reachable from the jump host)" value={form.address}
               onChange={(e) => set("address", e.target.value)} fullWidth />
