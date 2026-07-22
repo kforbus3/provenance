@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.45.0 — Kubernetes access brokering
+
+Broker access to Kubernetes clusters the way Fleet brokers SSH/RDP/databases. Register a
+cluster (API server + a vaulted bearer-token credential), and Fleet becomes an **authenticating
+proxy**: a user — or their `kubectl` — authenticates to Fleet, and Fleet forwards to the cluster's
+API server with the vaulted token injected, **auditing every call**. The operator never sees the token.
+
+- **Resource browser** built in: list pods, deployments, services, namespaces, and nodes per
+  cluster/namespace with no kubectl required.
+- **Raw authenticating proxy** at `/k8s/clusters/{id}/proxy/*` — point `kubectl` at Fleet with a
+  Fleet token and reach the cluster through the broker.
+- Per-cluster TLS: verify the API server against a stored CA bundle, or skip verification for test
+  clusters. New permissions `Kubernetes.Manage` / `Kubernetes.Access`; migration `0057`; new
+  **Kubernetes** page. Every call audited (`k8s.proxy`, `k8s.list`).
+- Verified end-to-end against a live k3s cluster (listed real pods; proxied the version endpoint).
+
 ## v0.44.0 — Policy-as-code: attribute-based access control (ABAC)
 
 Layer contextual **deny** rules on top of RBAC. An access policy can block a host connection

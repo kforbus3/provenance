@@ -47,6 +47,7 @@ const DatabasesPage = lazy(() => named(import("./pages/DatabasesPage"), "Databas
 const LifecyclePage = lazy(() => named(import("./pages/LifecyclePage"), "LifecyclePage"));
 const CommandPolicyPage = lazy(() => named(import("./pages/CommandPolicyPage"), "CommandPolicyPage"));
 const AccessPolicyPage = lazy(() => named(import("./pages/AccessPolicyPage"), "AccessPolicyPage"));
+const KubernetesPage = lazy(() => named(import("./pages/KubernetesPage"), "KubernetesPage"));
 const DisasterRecoveryPage = lazy(() => named(import("./pages/DisasterRecoveryPage"), "DisasterRecoveryPage"));
 
 function PageFallback() {
@@ -139,6 +140,7 @@ export function App() {
               <Route path="service-accounts" element={<ProtectedRoute permission="ServiceAccount.Manage"><ServiceAccountsPage /></ProtectedRoute>} />
               <Route path="vault" element={<ProtectedRoute permission="Credential.View"><VaultPage /></ProtectedRoute>} />
               <Route path="databases" element={<ProtectedRoute permission="Database.Connect"><DatabasesPage /></ProtectedRoute>} />
+              <Route path="kubernetes" element={<ProtectedRoute permission="Kubernetes.Access"><KubernetesPage /></ProtectedRoute>} />
               <Route path="enrollment" element={<ProtectedRoute permission="Host.Enroll"><EnrollmentPage /></ProtectedRoute>} />
               <Route path="certificates" element={<ProtectedRoute permission="Certificate.Manage"><CertificatesPage /></ProtectedRoute>} />
               <Route path="lifecycle" element={<ProtectedRoute permission="System.Configure"><LifecyclePage /></ProtectedRoute>} />
