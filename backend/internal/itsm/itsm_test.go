@@ -79,6 +79,52 @@ func TestCreateTicketErrorStatus(t *testing.T) {
 	}
 }
 
+func TestServiceNowComment(t *testing.T) {
+	var gotLookup, gotPatchPath, gotPatchBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gotLookup = r.URL.RawQuery
+			_, _ = w.Write([]byte(`{"result":[{"sys_id":"sid42"}]}`))
+			return
+		}
+		// PATCH
+		gotPatchPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotPatchBody = string(b)
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+	c := New(Config{Provider: ProviderServiceNow, BaseURL: srv.URL, User: "u", Token: "t", Project: "incident"})
+	if err := c.Comment(context.Background(), "INC0099001", "decided"); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	if !strings.Contains(gotLookup, "number=INC0099001") {
+		t.Errorf("lookup query = %q", gotLookup)
+	}
+	if gotPatchPath != "/api/now/table/incident/sid42" {
+		t.Errorf("patch path = %q", gotPatchPath)
+	}
+	if !strings.Contains(gotPatchBody, "work_notes") {
+		t.Errorf("patch body = %q", gotPatchBody)
+	}
+}
+
+func TestJiraComment(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	c := New(Config{Provider: ProviderJira, BaseURL: srv.URL, User: "a@b.com", Token: "t"})
+	if err := c.Comment(context.Background(), "OPS-42", "decided"); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	if gotPath != "/rest/api/2/issue/OPS-42/comment" {
+		t.Errorf("path = %q", gotPath)
+	}
+}
+
 func TestConfiguredAndSupported(t *testing.T) {
 	if (Config{}).Configured() {
 		t.Error("empty config should not be Configured")

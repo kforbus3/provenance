@@ -336,6 +336,26 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 			Recipient: recipient,
 		})
 	}
+
+	// ITSM 2-way sync: record the decision back on the linked ticket. Best-effort.
+	if ar.TicketRef != "" {
+		if cfg, cerr := itsm.LoadConfig(r.Context(), h.d.Store, h.d.Cfg.CAKeyPassphrase); cerr == nil && cfg.Configured() {
+			comment := fmt.Sprintf("Fleet Terminal: access request %s by %s.", ar.Status, p.Username)
+			if ar.Status == "approved" && ar.GrantedSecs != nil {
+				comment += fmt.Sprintf(" Access granted for %s.", (time.Duration(*ar.GrantedSecs) * time.Second).String())
+			}
+			if ar.DecisionNote != "" {
+				comment += " Note: " + ar.DecisionNote
+			}
+			ictx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			if uerr := itsm.New(cfg).Comment(ictx, ar.TicketRef, comment); uerr != nil {
+				h.d.Log.Warn("itsm: could not update ticket on decision", "error", uerr, "ref", ar.TicketRef)
+			} else {
+				h.audit(r, "approval.ticket_update", ar.ID.String(), map[string]any{"ref": ar.TicketRef, "status": ar.Status})
+			}
+			cancel()
+		}
+	}
 	httpx.WriteJSON(w, http.StatusOK, ar)
 }
 

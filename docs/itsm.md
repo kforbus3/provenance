@@ -12,6 +12,10 @@ Configure it under **Settings → Integrations → ITSM integration** (requires 
   and the requester didn't already supply a ticket reference, Fleet opens a ticket describing the
   request (who, what, how long, and the stated reason) and stores its reference on the approval.
 - The ticket reference (and a link) is included in the approval notification.
+- **Two-way sync**: when the request is later **approved or denied**, Fleet records the decision back
+  on the ticket — a ServiceNow *work note* or a Jira *comment* — noting the outcome, who decided, and
+  the granted duration (audited as `approval.ticket_update`). Closing/transitioning the ticket is
+  left to your ITSM's own workflow.
 - It is **best-effort**: if the ITSM is unreachable the access request still proceeds — it is never
   blocked on the ticketing system. Failures are logged; successes are audited (`approval.ticket`).
 

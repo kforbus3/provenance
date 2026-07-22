@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.51.0 — ITSM two-way sync
+
+The ITSM integration (v0.48.0) now writes the **decision back** to the linked ticket: when an access
+request is approved or denied, Fleet posts a ServiceNow *work note* or a Jira *comment* recording the
+outcome, who decided, and the granted duration (audited as `approval.ticket_update`). Best-effort, so
+a decision is never blocked on the ITSM. Closing/transitioning the ticket remains the ITSM workflow's
+job. Verified end-to-end (request → ticket opened → approval → comment written back). See docs/itsm.md.
+
 ## v0.50.0 — External secrets: AWS Secrets Manager
 
 The external secrets manager (vault-of-record, v0.47.0) now supports **AWS Secrets Manager**

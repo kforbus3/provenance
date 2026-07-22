@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -93,6 +94,38 @@ func (c *Client) CreateTicket(ctx context.Context, summary, description string) 
 
 	default:
 		return "", "", fmt.Errorf("itsm: unsupported provider %q", c.cfg.Provider)
+	}
+}
+
+// Comment adds a note to an existing ticket (identified by the reference returned from
+// CreateTicket) — used to record the approval decision back on the change record. For
+// ServiceNow it looks up the record by number and patches its work_notes; for Jira it
+// posts an issue comment. Closing/transitioning is left to the ITSM's own workflow.
+func (c *Client) Comment(ctx context.Context, ref, text string) error {
+	base := strings.TrimRight(c.cfg.BaseURL, "/")
+	switch c.cfg.Provider {
+	case ProviderServiceNow:
+		table := c.cfg.Project
+		if table == "" {
+			table = "incident"
+		}
+		var q struct {
+			Result []struct {
+				SysID string `json:"sys_id"`
+			} `json:"result"`
+		}
+		lookup := base + "/api/now/table/" + table + "?sysparm_query=number=" + url.QueryEscape(ref) + "&sysparm_fields=sys_id&sysparm_limit=1"
+		if err := c.do(ctx, http.MethodGet, lookup, nil, &q); err != nil {
+			return err
+		}
+		if len(q.Result) == 0 {
+			return fmt.Errorf("itsm(servicenow): ticket %q not found", ref)
+		}
+		return c.do(ctx, http.MethodPatch, base+"/api/now/table/"+table+"/"+q.Result[0].SysID, map[string]string{"work_notes": text}, nil)
+	case ProviderJira:
+		return c.do(ctx, http.MethodPost, base+"/rest/api/2/issue/"+url.PathEscape(ref)+"/comment", map[string]string{"body": text}, nil)
+	default:
+		return fmt.Errorf("itsm: unsupported provider %q", c.cfg.Provider)
 	}
 }
 
