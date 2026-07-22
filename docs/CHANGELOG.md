@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.47.0 — External secrets manager (vault-of-record)
+
+A vault credential can now be **external-backed**: instead of Fleet storing the secret material, the
+credential references it in an external secrets manager (**HashiCorp Vault KV v2**), and Fleet
+fetches the value **on demand** at point of use. Integrate with the secrets manager your
+organization already runs instead of keeping a second copy.
+
+- **No local copy.** An external-backed credential stores only `provider` + `reference` (e.g.
+  `secret/db/prod#password`); the local sealed blob is empty. Every reader — reveal, SSH/RDP
+  credential injection, the database broker, the Kubernetes broker — resolves the value live through
+  one new central resolver (`internal/credresolve`), so it always reflects the manager's current
+  contents and is never cached.
+- **Manager is source of record.** Fleet does not rotate or re-seal external-backed credentials
+  (rotate them in the manager); local rotation is refused.
+- Locally-sealed credentials are byte-for-byte unchanged. Configure with `FLEET_EXTSECRET_VAULT_*`;
+  tick "Store in an external secrets manager" when creating a credential. Migration `0058`. Verified
+  end-to-end against a live Vault KV. See docs/external-secrets.md.
+
+Also exposes the `FLEET_KMS_*` and `FLEET_EXTSECRET_*` settings in the reference compose file so the
+external-KMS and external-secrets features are configurable in the standard deployment.
+
 ## v0.46.0 — Behavior analytics (UEBA)
 
 Surface access patterns that deviate from a user's established baseline, computed from Fleet's own

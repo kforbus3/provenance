@@ -25,6 +25,7 @@ const DOCS = [
   { file: "access-policies.md", title: "Access Policies (ABAC)", category: "Administration", order: 7 },
   { file: "database-broker.md", title: "Database Access", category: "Brokered access", order: 8 },
   { file: "kubernetes.md", title: "Kubernetes Access", category: "Brokered access", order: 9 },
+  { file: "external-secrets.md", title: "External Secrets Manager", category: "Security", order: 9.5 },
   { file: "kms.md", title: "Encryption at Rest (KMS)", category: "Security", order: 10 },
   { file: "behavior-analytics.md", title: "Behavior Analytics (UEBA)", category: "Security", order: 11 },
   { file: "api.md", title: "API Reference", category: "Reference", order: 12 },

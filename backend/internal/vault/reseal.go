@@ -22,6 +22,11 @@ func ResealSecrets(ctx context.Context, st *store.Store, key []byte) (int, error
 	}
 	n := 0
 	for _, v := range versions {
+		// External-backed secrets store no local sealed material (empty placeholder);
+		// there is nothing to re-wrap.
+		if v.Sealed == "" {
+			continue
+		}
 		out, changed, rerr := secretbox.ResealString(key, v.Sealed)
 		if rerr != nil {
 			return n, rerr

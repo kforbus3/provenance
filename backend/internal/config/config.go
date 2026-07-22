@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fleet-terminal/backend/internal/extsecret"
 	"github.com/fleet-terminal/backend/internal/kms"
 )
 
@@ -103,6 +104,15 @@ type Config struct {
 	KMSGCPCredentialsFile  string
 	CAKeyPassphraseWrapped string // KMS-wrapped FLEET_CA_PASSPHRASE (optional)
 	VaultPassphraseWrapped string // KMS-wrapped FLEET_VAULT_PASSPHRASE (optional)
+
+	// External secrets manager (vault-of-record). When configured, a vault credential
+	// marked external-backed is fetched on demand from the manager (HashiCorp Vault KV)
+	// instead of from a locally sealed blob. Off by default; non-external secrets are
+	// unaffected.
+	ExtSecretVaultAddr          string
+	ExtSecretVaultToken         string
+	ExtSecretVaultCACertFile    string
+	ExtSecretVaultTLSSkipVerify bool
 
 	// SSH Certificate Authority
 	CAKeyPassphrase []byte        // encrypts CA private key at rest
@@ -370,6 +380,12 @@ func Load() (*Config, error) {
 	c.CAKeyPassphraseWrapped = env("FLEET_CA_PASSPHRASE_WRAPPED", "")
 	c.VaultPassphraseWrapped = env("FLEET_VAULT_PASSPHRASE_WRAPPED", "")
 
+	// External secrets manager (vault-of-record).
+	c.ExtSecretVaultAddr = env("FLEET_EXTSECRET_VAULT_ADDR", "")
+	c.ExtSecretVaultToken = env("FLEET_EXTSECRET_VAULT_TOKEN", "")
+	c.ExtSecretVaultCACertFile = env("FLEET_EXTSECRET_VAULT_CACERT", "")
+	c.ExtSecretVaultTLSSkipVerify = envBool("FLEET_EXTSECRET_VAULT_SKIP_VERIFY", false)
+
 	// WebAuthn: derive sensible localhost defaults from the public URL.
 	c.WebAuthnRPID = env("FLEET_WEBAUTHN_RPID", hostOnly(c.PublicURL))
 	c.WebAuthnRPName = env("FLEET_WEBAUTHN_RP_NAME", "Fleet Terminal")
@@ -524,6 +540,19 @@ func (c *Config) KMS() kms.Config {
 
 // KMSEnabled reports whether an external KMS/HSM backend is configured.
 func (c *Config) KMSEnabled() bool { return c.KMS().ProviderConfigured() }
+
+// ExtSecret builds the external secrets-manager configuration from the environment.
+func (c *Config) ExtSecret() extsecret.Config {
+	return extsecret.Config{
+		VaultAddr:          c.ExtSecretVaultAddr,
+		VaultToken:         c.ExtSecretVaultToken,
+		VaultCACertFile:    c.ExtSecretVaultCACertFile,
+		VaultTLSSkipVerify: c.ExtSecretVaultTLSSkipVerify,
+	}
+}
+
+// ExtSecretEnabled reports whether an external secrets manager is configured.
+func (c *Config) ExtSecretEnabled() bool { return c.ExtSecret().Configured() }
 
 // caPassphraseViaKMS reports whether the CA passphrase is provided as a KMS-wrapped
 // blob rather than plaintext.

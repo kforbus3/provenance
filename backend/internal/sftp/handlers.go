@@ -131,7 +131,7 @@ func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*
 		if err != nil {
 			return nil, err
 		}
-		if injection, err = credinject.For(r.Context(), h.d.Store, key, host, p.UserID); err != nil {
+		if injection, err = credinject.For(r.Context(), h.d.Store, key, h.d.Cfg.ExtSecret(), host, p.UserID); err != nil {
 			return nil, err
 		}
 	}

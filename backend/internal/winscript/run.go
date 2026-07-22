@@ -188,9 +188,9 @@ func (s *Service) runOne(ctx context.Context, vaultKey []byte, content string, h
 	var user, pass string
 	if userID == nil {
 		// Scheduled/unattended: only open-policy credentials, no interactive check-out.
-		user, pass, err = credinject.PasswordForSystem(ctx, s.store, vaultKey, h)
+		user, pass, err = credinject.PasswordForSystem(ctx, s.store, vaultKey, s.cfg.ExtSecret(), h)
 	} else {
-		user, pass, err = credinject.PasswordFor(ctx, s.store, vaultKey, h, *userID)
+		user, pass, err = credinject.PasswordFor(ctx, s.store, vaultKey, s.cfg.ExtSecret(), h, *userID)
 	}
 	if err != nil {
 		return "credential unavailable: " + err.Error(), -1, true

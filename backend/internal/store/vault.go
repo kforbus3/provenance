@@ -43,14 +43,16 @@ func (s *Store) UpdateVaultVersionSeal(ctx context.Context, id uuid.UUID, sealed
 
 // VaultSecretInput is the metadata for creating a credential.
 type VaultSecretInput struct {
-	Name         string
-	Folder       string
-	Type         string
-	Username     string
-	Target       string
-	Description  string
-	AccessPolicy string
-	CreatedBy    uuid.UUID
+	Name             string
+	Folder           string
+	Type             string
+	Username         string
+	Target           string
+	Description      string
+	AccessPolicy     string
+	ExternalProvider string
+	ExternalRef      string
+	CreatedBy        uuid.UUID
 }
 
 func (in VaultSecretInput) accessPolicy() string {
@@ -63,13 +65,15 @@ func (in VaultSecretInput) accessPolicy() string {
 }
 
 const vaultSecretCols = `s.id, s.name, s.folder, s.type, s.username, s.target, s.description, s.access_policy, s.version,
-	COALESCE(u.username,''), s.created_at, s.updated_at, s.rotation_interval_days, s.last_rotated_at, s.next_rotation_at`
+	COALESCE(u.username,''), s.created_at, s.updated_at, s.rotation_interval_days, s.last_rotated_at, s.next_rotation_at,
+	s.external_provider, s.external_ref`
 
 func scanVaultSecret(row interface{ Scan(...any) error }) (*models.VaultSecret, error) {
 	var v models.VaultSecret
 	if err := row.Scan(&v.ID, &v.Name, &v.Folder, &v.Type, &v.Username, &v.Target, &v.Description,
 		&v.AccessPolicy, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt,
-		&v.RotationIntervalDays, &v.LastRotatedAt, &v.NextRotationAt); err != nil {
+		&v.RotationIntervalDays, &v.LastRotatedAt, &v.NextRotationAt,
+		&v.ExternalProvider, &v.ExternalRef); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -126,6 +130,7 @@ func (s *Store) DueVaultRotations(ctx context.Context, now time.Time) ([]models.
 	rows, err := s.pool.Query(ctx, `SELECT `+vaultSecretCols+`
 		FROM vault_secrets s LEFT JOIN users u ON u.id = s.created_by
 		WHERE s.type = 'password' AND s.rotation_interval_days > 0
+		  AND s.external_provider = ''
 		  AND s.next_rotation_at IS NOT NULL AND s.next_rotation_at <= $1
 		ORDER BY s.next_rotation_at`, now)
 	if err != nil {
@@ -153,9 +158,10 @@ func (s *Store) CreateVaultSecret(ctx context.Context, in VaultSecretInput, seal
 
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO vault_secrets (name, folder, type, username, target, description, access_policy, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-		in.Name, in.Folder, in.Type, in.Username, in.Target, in.Description, in.accessPolicy(), in.CreatedBy).Scan(&id); err != nil {
+		INSERT INTO vault_secrets (name, folder, type, username, target, description, access_policy, external_provider, external_ref, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+		in.Name, in.Folder, in.Type, in.Username, in.Target, in.Description, in.accessPolicy(),
+		in.ExternalProvider, in.ExternalRef, in.CreatedBy).Scan(&id); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `

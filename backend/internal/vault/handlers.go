@@ -15,6 +15,8 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/credresolve"
+	"github.com/fleet-terminal/backend/internal/extsecret"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/secretbox"
@@ -154,33 +156,38 @@ func (h *handler) reveal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	key, ok := h.vaultKey(w)
-	if !ok {
-		return
-	}
-	sealed, err := h.d.Store.GetVaultSecretSealed(r.Context(), id)
+	secret, err := h.d.Store.GetVaultSecret(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "credential not found")
 		return
 	}
-	plaintext, err := secretbox.Open(key, sealed)
+	// A locally-sealed secret needs the vault key; an external-backed one is fetched
+	// from the manager and never touches it.
+	var key []byte
+	if secret.ExternalProvider == "" {
+		if key, ok = h.vaultKey(w); !ok {
+			return
+		}
+	}
+	plaintext, err := credresolve.Open(r.Context(), h.d.Store, secret, key, h.d.Cfg.ExtSecret())
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not decrypt credential")
+		httpx.WriteError(w, http.StatusBadGateway, "could not resolve credential: "+err.Error())
 		return
 	}
-	secret, _ := h.d.Store.GetVaultSecret(r.Context(), id)
 	h.audit(r, "credential.reveal", id, secretDetail(secret))
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"secret": string(plaintext)})
 }
 
 type secretReq struct {
-	Name        string `json:"name"`
-	Folder      string `json:"folder"`
-	Type        string `json:"type"`
-	Username    string `json:"username"`
-	Target      string `json:"target"`
-	Description string `json:"description"`
-	Secret      string `json:"secret"` // plaintext; sealed server-side, never stored raw
+	Name             string `json:"name"`
+	Folder           string `json:"folder"`
+	Type             string `json:"type"`
+	Username         string `json:"username"`
+	Target           string `json:"target"`
+	Description      string `json:"description"`
+	Secret           string `json:"secret"`           // plaintext; sealed server-side, never stored raw
+	ExternalProvider string `json:"externalProvider"` // set = external-backed (e.g. "vault-kv")
+	ExternalRef      string `json:"externalRef"`      // manager reference, e.g. "secret/db/prod#password"
 }
 
 func (rq secretReq) toInput(createdBy uuid.UUID) store.VaultSecretInput {
@@ -192,7 +199,9 @@ func (rq secretReq) toInput(createdBy uuid.UUID) store.VaultSecretInput {
 	}
 	return store.VaultSecretInput{
 		Name: strings.TrimSpace(rq.Name), Folder: strings.TrimSpace(rq.Folder), Type: t,
-		Username: rq.Username, Target: rq.Target, Description: rq.Description, CreatedBy: createdBy,
+		Username: rq.Username, Target: rq.Target, Description: rq.Description,
+		ExternalProvider: strings.TrimSpace(rq.ExternalProvider), ExternalRef: strings.TrimSpace(rq.ExternalRef),
+		CreatedBy: createdBy,
 	}
 }
 
@@ -201,18 +210,39 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if err := decode(w, r, &rq); err != nil {
 		return
 	}
-	if strings.TrimSpace(rq.Name) == "" || rq.Secret == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "name and secret are required")
+	if strings.TrimSpace(rq.Name) == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	key, ok := h.vaultKey(w)
-	if !ok {
-		return
-	}
-	sealed, err := secretbox.Seal(key, []byte(rq.Secret))
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not seal credential")
-		return
+	external := strings.TrimSpace(rq.ExternalProvider) != ""
+	var sealed string // empty for external-backed secrets (no local material)
+	if external {
+		if !extsecret.Supported(strings.TrimSpace(rq.ExternalProvider)) {
+			httpx.WriteError(w, http.StatusBadRequest, "unsupported external secrets provider")
+			return
+		}
+		if strings.TrimSpace(rq.ExternalRef) == "" {
+			httpx.WriteError(w, http.StatusBadRequest, "an external reference is required for an external-backed credential")
+			return
+		}
+		if !h.d.Cfg.ExtSecretEnabled() {
+			httpx.WriteError(w, http.StatusBadRequest, "no external secrets manager is configured (set FLEET_EXTSECRET_*)")
+			return
+		}
+	} else {
+		if rq.Secret == "" {
+			httpx.WriteError(w, http.StatusBadRequest, "a secret value is required")
+			return
+		}
+		key, ok := h.vaultKey(w)
+		if !ok {
+			return
+		}
+		var err error
+		if sealed, err = secretbox.Seal(key, []byte(rq.Secret)); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not seal credential")
+			return
+		}
 	}
 	p := auth.MustPrincipal(r)
 	secret, err := h.d.Store.CreateVaultSecret(r.Context(), rq.toInput(p.UserID), sealed)
@@ -238,12 +268,21 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.MustPrincipal(r)
+	existing, err := h.d.Store.GetVaultSecret(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "credential not found")
+		return
+	}
+	if existing.ExternalProvider != "" && rq.Secret != "" {
+		httpx.WriteError(w, http.StatusBadRequest, "external-backed credentials store no local value; change it in the external secrets manager")
+		return
+	}
 	if err := h.d.Store.UpdateVaultSecretMeta(r.Context(), id, rq.toInput(p.UserID)); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not update credential")
 		return
 	}
-	// A non-empty secret rotates the value into a new version.
-	if rq.Secret != "" {
+	// A non-empty secret rotates the value into a new version (local secrets only).
+	if rq.Secret != "" && existing.ExternalProvider == "" {
 		key, ok := h.vaultKey(w)
 		if !ok {
 			return

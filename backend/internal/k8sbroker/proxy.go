@@ -15,8 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/fleet-terminal/backend/internal/credresolve"
 	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/secretbox"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -191,17 +191,10 @@ func (h *handler) dialCluster(ctx context.Context, id uuid.UUID) (*store.K8sClus
 // credentialToken decrypts the vaulted secret and returns its value as the bearer
 // token. Zero-knowledge: the plaintext exists only in RAM at point of use.
 func (h *handler) credentialToken(ctx context.Context, credID uuid.UUID) (string, error) {
-	key, err := h.d.Cfg.VaultKey()
+	key, _ := h.d.Cfg.VaultKey() // used only for locally-sealed secrets; external ignores it
+	_, pt, err := credresolve.OpenByID(ctx, h.d.Store, credID, key, h.d.Cfg.ExtSecret())
 	if err != nil {
-		return "", err
-	}
-	sealed, err := h.d.Store.GetVaultSecretSealed(ctx, credID)
-	if err != nil {
-		return "", err
-	}
-	pt, err := secretbox.Open(key, sealed)
-	if err != nil {
-		return "", fmt.Errorf("could not decrypt credential")
+		return "", fmt.Errorf("could not resolve credential")
 	}
 	return strings.TrimSpace(string(pt)), nil
 }

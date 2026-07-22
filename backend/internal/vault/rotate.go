@@ -74,6 +74,10 @@ func (h *handler) rotate(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "only password credentials can be rotated automatically")
 		return
 	}
+	if secret.ExternalProvider != "" {
+		httpx.WriteError(w, http.StatusBadRequest, "external-backed credentials are rotated in the external secrets manager, not by Fleet")
+		return
+	}
 	hosts, err := h.d.Store.HostsUsingCredential(r.Context(), id)
 	if err != nil || len(hosts) == 0 {
 		httpx.WriteError(w, http.StatusBadRequest, "attach this credential to a host before rotating it")

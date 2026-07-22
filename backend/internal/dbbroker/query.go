@@ -13,9 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/fleet-terminal/backend/internal/auth"
+	"github.com/fleet-terminal/backend/internal/credresolve"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/secretbox"
 )
 
 const (
@@ -101,17 +101,10 @@ func (h *handler) credential(ctx context.Context, credID uuid.UUID) (user, pass 
 	if sec.Type != "password" {
 		return "", "", fmt.Errorf("attached credential is not a password")
 	}
-	key, err := h.d.Cfg.VaultKey()
+	key, _ := h.d.Cfg.VaultKey() // used only for locally-sealed secrets; external ignores it
+	pw, err := credresolve.Open(ctx, h.d.Store, sec, key, h.d.Cfg.ExtSecret())
 	if err != nil {
-		return "", "", err
-	}
-	sealed, err := h.d.Store.GetVaultSecretSealed(ctx, credID)
-	if err != nil {
-		return "", "", err
-	}
-	pw, err := secretbox.Open(key, sealed)
-	if err != nil {
-		return "", "", fmt.Errorf("could not decrypt credential")
+		return "", "", fmt.Errorf("could not resolve credential")
 	}
 	return sec.Username, string(pw), nil
 }

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, InputAdornment, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableHead,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableHead,
   TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -276,16 +276,18 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
     name: secret?.name ?? "", folder: secret?.folder ?? "", type: secret?.type ?? "password",
     username: secret?.username ?? "", target: secret?.target ?? "", description: secret?.description ?? "",
     accessPolicy: secret?.accessPolicy ?? "open", secret: "",
+    externalProvider: secret?.externalProvider ?? "", externalRef: secret?.externalRef ?? "",
   });
   const [err, setErr] = useState<string | null>(null);
   const set = (patch: Partial<VaultSecretInput>) => setForm((f) => ({ ...f, ...patch }));
+  const external = !!form.externalProvider;
 
   const save = useMutation({
     mutationFn: () => editing ? updateVaultSecret(secret!.id, form) : createVaultSecret(form),
     onSuccess: onSaved,
     onError: (e) => setErr(((e as { response?: { data?: { error?: string } } })?.response?.data?.error) || "Could not save."),
   });
-  const valid = form.name.trim() && (editing || form.secret);
+  const valid = form.name.trim() && (editing || (external ? form.externalRef?.trim() : form.secret));
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">
@@ -304,8 +306,21 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
             <TextField label="Username" size="small" value={form.username} onChange={(e) => set({ username: e.target.value })} sx={{ flexGrow: 1 }} />
           </Stack>
           <TextField label="Target (host / URL)" size="small" value={form.target} onChange={(e) => set({ target: e.target.value })} placeholder="e.g. switch-01 or https://api.example.com" />
-          <TextField label={editing ? "New secret value (leave blank to keep current)" : "Secret value"} size="small" multiline minRows={form.type === "ssh_key" ? 4 : 1}
-            value={form.secret} onChange={(e) => set({ secret: e.target.value })} type={form.type === "ssh_key" ? "text" : "password"} autoComplete="new-password" />
+          {!editing && (
+            <FormControlLabel
+              control={<Checkbox size="small" checked={external}
+                onChange={(e) => set({ externalProvider: e.target.checked ? "vault-kv" : "", externalRef: "" })} />}
+              label="Store in an external secrets manager (HashiCorp Vault KV)" />
+          )}
+          {external ? (
+            <TextField label="External reference" size="small" value={form.externalRef}
+              onChange={(e) => set({ externalRef: e.target.value })} disabled={editing}
+              placeholder="secret/db/prod#password"
+              helperText="Vault KV path and field. Fleet fetches the value on demand — it is never stored here." />
+          ) : (
+            <TextField label={editing ? "New secret value (leave blank to keep current)" : "Secret value"} size="small" multiline minRows={form.type === "ssh_key" ? 4 : 1}
+              value={form.secret} onChange={(e) => set({ secret: e.target.value })} type={form.type === "ssh_key" ? "text" : "password"} autoComplete="new-password" />
+          )}
           <TextField label="Description" size="small" value={form.description} onChange={(e) => set({ description: e.target.value })} />
           <TextField select label="Access policy" size="small" value={form.accessPolicy} onChange={(e) => set({ accessPolicy: e.target.value })}
             helperText="Whether this credential requires a check-out (and approval) before it can be revealed or injected">

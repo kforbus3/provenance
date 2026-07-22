@@ -180,7 +180,7 @@ func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.
 	if err != nil {
 		return nil, fmt.Errorf("vault key: %w", err)
 	}
-	user, pass, err := credinject.PasswordForSystem(ctx, s.store, key, h)
+	user, pass, err := credinject.PasswordForSystem(ctx, s.store, key, s.cfg.ExtSecret(), h)
 	if err != nil {
 		return nil, fmt.Errorf("credential: %w", err)
 	}

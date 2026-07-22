@@ -52,6 +52,11 @@ type VaultSecret struct {
 	RotationIntervalDays int        `json:"rotationIntervalDays"`
 	LastRotatedAt        *time.Time `json:"lastRotatedAt,omitempty"`
 	NextRotationAt       *time.Time `json:"nextRotationAt,omitempty"`
+	// External-backed credential: when ExternalProvider is set, the secret material
+	// lives in an external secrets manager and is fetched on demand (no local sealed
+	// blob). ExternalRef is the manager-specific reference (e.g. "mount/path#field").
+	ExternalProvider string `json:"externalProvider,omitempty"`
+	ExternalRef      string `json:"externalRef,omitempty"`
 	// Access is the requesting caller's effective access (view|use|manage), set on
 	// list/get for the UI. Empty means access is via the Credential.Manage role.
 	Access string `json:"access,omitempty"`

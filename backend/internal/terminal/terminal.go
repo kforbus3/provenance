@@ -186,7 +186,7 @@ func (h *handler) run(ctx context.Context, ws *websocket.Conn, p *auth.Principal
 			return
 		}
 		var ierr error
-		if injection, ierr = credinject.For(ctx, h.d.Store, key, host, p.UserID); ierr != nil {
+		if injection, ierr = credinject.For(ctx, h.d.Store, key, h.d.Cfg.ExtSecret(), host, p.UserID); ierr != nil {
 			sendErr("credential injection failed: " + ierr.Error())
 			return
 		}

@@ -305,7 +305,7 @@ func (m *Monitor) collectWindowsFactsOver(ctx context.Context, jump *ssh.Client,
 	if err != nil {
 		return nil
 	}
-	user, pass, err := credinject.PasswordForSystem(ctx, m.store, key, h)
+	user, pass, err := credinject.PasswordForSystem(ctx, m.store, key, m.cfg.ExtSecret(), h)
 	if err != nil {
 		m.log.Debug("rdp facts: no usable credential", "host", h.Hostname, "err", err)
 		return nil

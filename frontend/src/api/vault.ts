@@ -22,6 +22,8 @@ export interface VaultSecret {
   lastRotatedAt?: string;
   nextRotationAt?: string;
   access?: string; // caller's effective access: view | use | manage
+  externalProvider?: string; // set = external-backed (fetched from an external secrets manager)
+  externalRef?: string;
 }
 
 export interface VaultCheckout {
@@ -55,6 +57,8 @@ export interface VaultSecretInput {
   description: string;
   accessPolicy: string; // open | checkout | approval
   secret?: string; // plaintext; on update, empty leaves the value unchanged
+  externalProvider?: string; // "vault-kv" = external-backed; omit for a locally-sealed secret
+  externalRef?: string; // e.g. "secret/db/prod#password"
 }
 
 export async function listVaultSecrets(): Promise<VaultSecret[]> {

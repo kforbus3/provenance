@@ -130,7 +130,7 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	if err != nil {
 		return nil, err
 	}
-	username, password, err := credinject.PasswordFor(ctx, h.d.Store, key, host, p.UserID)
+	username, password, err := credinject.PasswordFor(ctx, h.d.Store, key, h.d.Cfg.ExtSecret(), host, p.UserID)
 	if err != nil {
 		return nil, err
 	}

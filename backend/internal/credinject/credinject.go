@@ -12,8 +12,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/fleet-terminal/backend/internal/credresolve"
+	"github.com/fleet-terminal/backend/internal/extsecret"
 	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/secretbox"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -28,7 +29,7 @@ type Injection struct {
 // Fleet's ephemeral certificates (the caller then takes the normal cert path). The
 // connecting userID is required so a credential with a check-out policy is only
 // injected while that user holds an active check-out.
-func For(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Host, userID uuid.UUID) (*Injection, error) {
+func For(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host, userID uuid.UUID) (*Injection, error) {
 	switch host.AuthMethod {
 	case "", "fleet_cert":
 		return nil, nil
@@ -50,13 +51,9 @@ func For(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Hos
 			return nil, errors.New("check out this credential before connecting to the host")
 		}
 	}
-	sealed, err := st.GetVaultSecretSealed(ctx, *host.CredentialID)
+	plaintext, err := credresolve.Open(ctx, st, secret, vaultKey, extCfg)
 	if err != nil {
-		return nil, errors.New("could not load the attached credential")
-	}
-	plaintext, err := secretbox.Open(vaultKey, sealed)
-	if err != nil {
-		return nil, errors.New("could not decrypt the attached credential")
+		return nil, errors.New("could not resolve the attached credential")
 	}
 	defer zero(plaintext)
 
@@ -83,7 +80,7 @@ func For(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Hos
 // WinRM — no user context). It only returns credentials whose access policy is "open":
 // a check-out-gated secret is never used by the unattended monitor, so fact collection
 // is simply skipped for such hosts.
-func PasswordForSystem(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Host) (username, password string, err error) {
+func PasswordForSystem(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host) (username, password string, err error) {
 	if host.CredentialID == nil {
 		return "", "", errors.New("no credential is attached to this host")
 	}
@@ -94,14 +91,11 @@ func PasswordForSystem(ctx context.Context, st *store.Store, vaultKey []byte, ho
 	if secret.AccessPolicy != "open" {
 		return "", "", errors.New("credential requires check-out; fact collection skipped")
 	}
-	sealed, err := st.GetVaultSecretSealed(ctx, *host.CredentialID)
+	plaintext, err := credresolve.Open(ctx, st, secret, vaultKey, extCfg)
 	if err != nil {
-		return "", "", errors.New("could not load the attached credential")
+		return "", "", errors.New("could not resolve the attached credential")
 	}
-	plaintext, err := secretbox.Open(vaultKey, sealed)
-	if err != nil {
-		return "", "", errors.New("could not decrypt the attached credential")
-	}
+	defer zero(plaintext)
 	return secret.Username, string(plaintext), nil
 }
 
@@ -115,7 +109,7 @@ func zero(b []byte) {
 // password (for protocols like RDP that need them directly, brokered by guacd).
 // It enforces the same check-out policy as SSH injection. The plaintext is for the
 // broker only — never the operator.
-func PasswordFor(ctx context.Context, st *store.Store, vaultKey []byte, host *models.Host, userID uuid.UUID) (username, password string, err error) {
+func PasswordFor(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host, userID uuid.UUID) (username, password string, err error) {
 	if host.CredentialID == nil {
 		return "", "", errors.New("no credential is attached to this host")
 	}
@@ -129,13 +123,10 @@ func PasswordFor(ctx context.Context, st *store.Store, vaultKey []byte, host *mo
 			return "", "", errors.New("check out this credential before connecting to the host")
 		}
 	}
-	sealed, err := st.GetVaultSecretSealed(ctx, *host.CredentialID)
+	plaintext, err := credresolve.Open(ctx, st, secret, vaultKey, extCfg)
 	if err != nil {
-		return "", "", errors.New("could not load the attached credential")
+		return "", "", errors.New("could not resolve the attached credential")
 	}
-	plaintext, err := secretbox.Open(vaultKey, sealed)
-	if err != nil {
-		return "", "", errors.New("could not decrypt the attached credential")
-	}
+	defer zero(plaintext)
 	return secret.Username, string(plaintext), nil
 }
