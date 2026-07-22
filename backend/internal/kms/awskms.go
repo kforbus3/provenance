@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/fleet-terminal/backend/internal/awssig"
 )
 
 // awsKMSPrefix tags a wrapped blob produced by the AWS KMS backend so it is
@@ -24,7 +26,7 @@ type awsKMS struct {
 	endpoint string // full base URL, no trailing slash
 	region   string
 	keyID    string
-	creds    awsCreds
+	creds    awssig.Creds
 	client   *http.Client
 	now      func() time.Time // injectable for tests
 }
@@ -48,10 +50,10 @@ func newAWSKMS(cfg Config) (Provider, error) {
 		endpoint: endpoint,
 		region:   region,
 		keyID:    cfg.KeyID,
-		creds: awsCreds{
-			accessKey:    cfg.AWSAccessKey,
-			secretKey:    cfg.AWSSecretKey,
-			sessionToken: cfg.AWSSessionToken,
+		creds: awssig.Creds{
+			AccessKey:    cfg.AWSAccessKey,
+			SecretKey:    cfg.AWSSecretKey,
+			SessionToken: cfg.AWSSessionToken,
 		},
 		client: &http.Client{Timeout: 15 * time.Second},
 		now:    time.Now,
@@ -125,7 +127,7 @@ func (a *awsKMS) call(ctx context.Context, target string, body any, out any) err
 	}
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", target)
-	signV4(req, buf, a.region, "kms", a.creds, a.now())
+	awssig.SignV4(req, buf, a.region, "kms", a.creds, a.now())
 
 	resp, err := a.client.Do(req)
 	if err != nil {

@@ -113,6 +113,11 @@ type Config struct {
 	ExtSecretVaultToken         string
 	ExtSecretVaultCACertFile    string
 	ExtSecretVaultTLSSkipVerify bool
+	ExtSecretAWSRegion          string
+	ExtSecretAWSAccessKey       string
+	ExtSecretAWSSecretKey       string
+	ExtSecretAWSSessionToken    string
+	ExtSecretAWSEndpoint        string
 
 	// SSH Certificate Authority
 	CAKeyPassphrase []byte        // encrypts CA private key at rest
@@ -385,6 +390,11 @@ func Load() (*Config, error) {
 	c.ExtSecretVaultToken = env("FLEET_EXTSECRET_VAULT_TOKEN", "")
 	c.ExtSecretVaultCACertFile = env("FLEET_EXTSECRET_VAULT_CACERT", "")
 	c.ExtSecretVaultTLSSkipVerify = envBool("FLEET_EXTSECRET_VAULT_SKIP_VERIFY", false)
+	c.ExtSecretAWSRegion = env("FLEET_EXTSECRET_AWS_REGION", "")
+	c.ExtSecretAWSAccessKey = env("FLEET_EXTSECRET_AWS_ACCESS_KEY_ID", "")
+	c.ExtSecretAWSSecretKey = env("FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY", "")
+	c.ExtSecretAWSSessionToken = env("FLEET_EXTSECRET_AWS_SESSION_TOKEN", "")
+	c.ExtSecretAWSEndpoint = env("FLEET_EXTSECRET_AWS_ENDPOINT", "")
 
 	// WebAuthn: derive sensible localhost defaults from the public URL.
 	c.WebAuthnRPID = env("FLEET_WEBAUTHN_RPID", hostOnly(c.PublicURL))
@@ -548,6 +558,11 @@ func (c *Config) ExtSecret() extsecret.Config {
 		VaultToken:         c.ExtSecretVaultToken,
 		VaultCACertFile:    c.ExtSecretVaultCACertFile,
 		VaultTLSSkipVerify: c.ExtSecretVaultTLSSkipVerify,
+		AWSRegion:          c.ExtSecretAWSRegion,
+		AWSAccessKey:       c.ExtSecretAWSAccessKey,
+		AWSSecretKey:       c.ExtSecretAWSSecretKey,
+		AWSSessionToken:    c.ExtSecretAWSSessionToken,
+		AWSEndpoint:        c.ExtSecretAWSEndpoint,
 	}
 }
 

@@ -5,7 +5,7 @@ A vault credential can be **external-backed**: instead of Fleet storing the secr
 Fleet fetches the value **on demand** at the point of use. This lets Fleet broker secrets from the
 manager your organization already runs, without becoming a second copy of record.
 
-Today the supported backend is **HashiCorp Vault KV (v2)**.
+Supported backends: **HashiCorp Vault KV (v2)** and **AWS Secrets Manager**.
 
 ## How it works
 
@@ -22,20 +22,33 @@ Today the supported backend is **HashiCorp Vault KV (v2)**.
 
 ## Configure the connection
 
-Set these on the backend (one connection serves all external-backed credentials):
+Set the connection for whichever manager(s) you use (a credential picks its provider):
+
+HashiCorp Vault KV:
 
     FLEET_EXTSECRET_VAULT_ADDR=https://vault.internal:8200
     FLEET_EXTSECRET_VAULT_TOKEN=<token with read on the KV paths you reference>
     # FLEET_EXTSECRET_VAULT_CACERT=/etc/fleet/vault-ca.pem   # optional (private CA)
     # FLEET_EXTSECRET_VAULT_SKIP_VERIFY=true                 # DEV ONLY
 
+AWS Secrets Manager:
+
+    FLEET_EXTSECRET_AWS_REGION=us-east-1
+    FLEET_EXTSECRET_AWS_ACCESS_KEY_ID=...
+    FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY=...
+    # FLEET_EXTSECRET_AWS_SESSION_TOKEN=...                  # optional (STS)
+    # FLEET_EXTSECRET_AWS_ENDPOINT=http://localstack:4566    # optional override (emulator/testing)
+
 ## Create an external-backed credential
 
-In **Vault** → *New credential*, tick **Store in an external secrets manager** and enter the
-reference:
+In **Vault** → *New credential*, tick **Store in an external secrets manager**, pick the manager,
+and enter the reference:
 
 - **Vault KV reference** — `mount/path#field`, e.g. `secret/db/prod#password`. If the KV secret has
   exactly one field, `#field` may be omitted.
+- **AWS Secrets Manager reference** — the secret name or ARN, optionally `#field` to extract one key
+  when the secret's value is a JSON object, e.g. `prod/db#password`. Without `#field` the whole
+  `SecretString` is returned.
 
 The credential is then usable anywhere a vault credential is: reveal, host credential injection, the
 database broker, and the Kubernetes broker. Grants, check-out/approval policies, and auditing apply

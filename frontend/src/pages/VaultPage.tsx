@@ -310,13 +310,22 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
             <FormControlLabel
               control={<Checkbox size="small" checked={external}
                 onChange={(e) => set({ externalProvider: e.target.checked ? "vault-kv" : "", externalRef: "" })} />}
-              label="Store in an external secrets manager (HashiCorp Vault KV)" />
+              label="Store in an external secrets manager" />
           )}
           {external ? (
-            <TextField label="External reference" size="small" value={form.externalRef}
-              onChange={(e) => set({ externalRef: e.target.value })} disabled={editing}
-              placeholder="secret/db/prod#password"
-              helperText="Vault KV path and field. Fleet fetches the value on demand — it is never stored here." />
+            <>
+              <TextField select label="Manager" size="small" value={form.externalProvider} disabled={editing}
+                onChange={(e) => set({ externalProvider: e.target.value })} sx={{ width: 260 }}>
+                <MenuItem value="vault-kv">HashiCorp Vault KV</MenuItem>
+                <MenuItem value="aws-secrets">AWS Secrets Manager</MenuItem>
+              </TextField>
+              <TextField label="External reference" size="small" value={form.externalRef}
+                onChange={(e) => set({ externalRef: e.target.value })} disabled={editing}
+                placeholder={form.externalProvider === "aws-secrets" ? "prod/db#password" : "secret/db/prod#password"}
+                helperText={form.externalProvider === "aws-secrets"
+                  ? "Secrets Manager name/ARN, optionally #field for a JSON key. Fetched on demand — never stored here."
+                  : "Vault KV path and field. Fetched on demand — never stored here."} />
+            </>
           ) : (
             <TextField label={editing ? "New secret value (leave blank to keep current)" : "Secret value"} size="small" multiline minRows={form.type === "ssh_key" ? 4 : 1}
               value={form.secret} onChange={(e) => set({ secret: e.target.value })} type={form.type === "ssh_key" ? "text" : "password"} autoComplete="new-password" />

@@ -5,6 +5,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.50.0 — External secrets: AWS Secrets Manager
+
+The external secrets manager (vault-of-record, v0.47.0) now supports **AWS Secrets Manager**
+alongside HashiCorp Vault KV. Back a vault credential with an AWS secret (name or ARN, optionally
+`#field` to extract one key from a JSON secret); Fleet fetches it on demand via a SigV4-signed
+`GetSecretValue` — no AWS SDK, and no local copy is stored. Configure with `FLEET_EXTSECRET_AWS_*`
+(an endpoint override supports emulators). The SigV4 signer is now shared (`internal/awssig`)
+between AWS KMS and Secrets Manager. Verified end-to-end against LocalStack. See
+docs/external-secrets.md.
+
 ## v0.49.0 — Database broker: MongoDB
 
 The database broker now speaks **MongoDB** alongside PostgreSQL/MySQL/MariaDB/SQL Server. Because

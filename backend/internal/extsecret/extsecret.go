@@ -33,18 +33,26 @@ type Config struct {
 	VaultToken         string
 	VaultCACertFile    string
 	VaultTLSSkipVerify bool
+
+	// AWS Secrets Manager
+	AWSRegion       string
+	AWSAccessKey    string
+	AWSSecretKey    string
+	AWSSessionToken string
+	AWSEndpoint     string // optional override (e.g. LocalStack)
 }
 
 // Providers is the set of provider names Fleet understands for external secrets. A
 // vault secret's external_provider column must be one of these.
 const (
-	ProviderVaultKV = "vault-kv"
+	ProviderVaultKV    = "vault-kv"
+	ProviderAWSSecrets = "aws-secrets"
 )
 
-// Configured reports whether the external secrets-manager connection is set up (i.e. an
-// external-backed secret can actually be resolved).
+// Configured reports whether any external secrets-manager connection is set up.
 func (c Config) Configured() bool {
-	return strings.TrimSpace(c.VaultAddr) != ""
+	return strings.TrimSpace(c.VaultAddr) != "" ||
+		(strings.TrimSpace(c.AWSRegion) != "" && strings.TrimSpace(c.AWSAccessKey) != "")
 }
 
 // New constructs the provider for the given name using cfg.
@@ -52,12 +60,14 @@ func New(provider string, cfg Config) (Provider, error) {
 	switch strings.TrimSpace(provider) {
 	case ProviderVaultKV:
 		return newVaultKV(cfg)
+	case ProviderAWSSecrets:
+		return newAWSSecrets(cfg)
 	default:
-		return nil, fmt.Errorf("extsecret: unknown provider %q (want %q)", provider, ProviderVaultKV)
+		return nil, fmt.Errorf("extsecret: unknown provider %q (want %s or %s)", provider, ProviderVaultKV, ProviderAWSSecrets)
 	}
 }
 
 // Supported reports whether a provider name is one Fleet can resolve.
 func Supported(provider string) bool {
-	return provider == ProviderVaultKV
+	return provider == ProviderVaultKV || provider == ProviderAWSSecrets
 }

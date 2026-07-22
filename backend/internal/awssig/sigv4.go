@@ -1,4 +1,8 @@
-package kms
+// Package awssig implements AWS Signature Version 4 request signing with no AWS SDK,
+// shared by the AWS-backed integrations (KMS, Secrets Manager). The signing time is
+// passed in so signing is deterministic and unit-testable against AWS's published
+// test vectors.
+package awssig
 
 import (
 	"crypto/hmac"
@@ -10,28 +14,23 @@ import (
 	"time"
 )
 
-// awsCreds holds the AWS credentials used to sign a request.
-type awsCreds struct {
-	accessKey    string
-	secretKey    string
-	sessionToken string // optional (STS)
+// Creds holds the AWS credentials used to sign a request.
+type Creds struct {
+	AccessKey    string
+	SecretKey    string
+	SessionToken string // optional (STS)
 }
 
-// signV4 signs an HTTP request with AWS Signature Version 4 and sets the
-// X-Amz-Date, Authorization (and, when present, X-Amz-Security-Token) headers on it.
-// Implemented against the documented algorithm with no AWS SDK. The signing time is
-// passed in so the process is deterministic and unit-testable against AWS's published
-// test vectors.
-func signV4(req *http.Request, body []byte, region, service string, creds awsCreds, t time.Time) {
+// SignV4 signs an HTTP request with AWS Signature Version 4 and sets the X-Amz-Date,
+// Authorization (and, when present, X-Amz-Security-Token) headers on it.
+func SignV4(req *http.Request, body []byte, region, service string, creds Creds, t time.Time) {
 	t = t.UTC()
 	amzDate := t.Format("20060102T150405Z")
 	dateStamp := t.Format("20060102")
 
 	req.Header.Set("X-Amz-Date", amzDate)
-	if creds.sessionToken != "" {
-		// The session token must be present before we compute the signed-header set so
-		// it is covered by the signature.
-		req.Header.Set("X-Amz-Security-Token", creds.sessionToken)
+	if creds.SessionToken != "" {
+		req.Header.Set("X-Amz-Security-Token", creds.SessionToken)
 	}
 
 	host := req.Host
@@ -39,8 +38,6 @@ func signV4(req *http.Request, body []byte, region, service string, creds awsCre
 		host = req.URL.Host
 	}
 
-	// Canonical headers: host plus every X-Amz-* / Content-Type header on the request,
-	// lower-cased and sorted, each "name:trimmed-value\n".
 	type hdr struct{ name, value string }
 	headers := []hdr{{"host", host}}
 	for k, vs := range req.Header {
@@ -71,33 +68,24 @@ func signV4(req *http.Request, body []byte, region, service string, creds awsCre
 	canonQuery := canonicalQuery(req.URL.RawQuery)
 
 	canonicalRequest := strings.Join([]string{
-		req.Method,
-		canonURI,
-		canonQuery,
-		canonHeaders.String(),
-		signedHeaders,
-		payloadHash,
+		req.Method, canonURI, canonQuery, canonHeaders.String(), signedHeaders, payloadHash,
 	}, "\n")
 
 	scope := strings.Join([]string{dateStamp, region, service, "aws4_request"}, "/")
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256",
-		amzDate,
-		scope,
-		hexSHA256([]byte(canonicalRequest)),
+		"AWS4-HMAC-SHA256", amzDate, scope, hexSHA256([]byte(canonicalRequest)),
 	}, "\n")
 
-	kDate := hmacSHA256([]byte("AWS4"+creds.secretKey), dateStamp)
+	kDate := hmacSHA256([]byte("AWS4"+creds.SecretKey), dateStamp)
 	kRegion := hmacSHA256(kDate, region)
 	kService := hmacSHA256(kRegion, service)
 	kSigning := hmacSHA256(kService, "aws4_request")
 	signature := hex.EncodeToString(hmacSHA256(kSigning, stringToSign))
 
-	auth := "AWS4-HMAC-SHA256 " +
-		"Credential=" + creds.accessKey + "/" + scope + ", " +
-		"SignedHeaders=" + signedHeaders + ", " +
-		"Signature=" + signature
-	req.Header.Set("Authorization", auth)
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 "+
+		"Credential="+creds.AccessKey+"/"+scope+", "+
+		"SignedHeaders="+signedHeaders+", "+
+		"Signature="+signature)
 }
 
 func hmacSHA256(key []byte, data string) []byte {
@@ -111,8 +99,6 @@ func hexSHA256(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// canonicalQuery sorts and re-encodes a raw query string per SigV4 rules. Fleet's
-// KMS calls carry no query, but this keeps the signer correct and self-contained.
 func canonicalQuery(raw string) string {
 	if raw == "" {
 		return ""
