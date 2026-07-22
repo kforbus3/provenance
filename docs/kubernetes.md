@@ -33,7 +33,7 @@ Point `kubectl` at Fleet's proxy for a cluster and authenticate with a Fleet tok
 
 Fleet forwards each request to the cluster's API server with the vaulted credential and records it
 (`k8s.proxy`). What the caller can do in the cluster is bounded by the credential's own RBAC on the
-cluster side, on top of Fleet's `Kubernetes.Access` gate and any [access policies](access-policies.md).
+cluster side, on top of Fleet's `Kubernetes.Access` gate and any [access policies](./access-policies.md).
 
 ## Notes
 

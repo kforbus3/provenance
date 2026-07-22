@@ -944,3 +944,27 @@ is the leader, liveness). For the model, deployment topology, shared-storage
 requirements, Postgres-HA and load-balancer notes, jump-host/WireGuard failover
 (`fleetctl wg-peers`), and the rolling-upgrade procedure, see the dedicated
 **[High Availability guide](high-availability.md)**.
+
+## 24. Brokered access, access policies & encryption
+
+Beyond SSH/RDP, Fleet brokers other privileged access the same way — through the jump host with a
+**vaulted credential injected** and every action audited, so operators never hold the credential:
+
+- **Databases** — register PostgreSQL, MySQL, MariaDB, or SQL Server targets and run audited SQL
+  from the Databases page (`Database.Manage` / `Database.Connect`). See
+  **[Database access](./database-broker.md)**.
+- **Kubernetes** — register clusters and reach them via Fleet's authenticating proxy (browse
+  resources, or point `kubectl` at the proxy); `Kubernetes.Manage` / `Kubernetes.Access`. See
+  **[Kubernetes access](./kubernetes.md)**.
+
+Two more controls tighten the platform:
+
+- **Access policies (ABAC)** — contextual *deny* rules on top of RBAC, by host environment/tags/
+  protocol and time of day, with role exemptions (`AccessPolicy.Manage`). Enforced at every
+  interactive connect surface. See **[Access policies](./access-policies.md)**.
+- **Encryption at rest / KMS** — optionally wrap the CA and vault master passphrases with an
+  external KMS/HSM (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, GCP Cloud KMS) via
+  `FLEET_KMS_*` and `fleetctl kms`. Status is shown in Settings → Infrastructure → *Encryption at
+  rest*. See **[Encryption at rest (KMS)](./kms.md)**.
+- **Behavior analytics (UEBA)** — advisory anomaly detection over session records on the Behavior
+  page (`Audit.View`). See **[Behavior analytics](./behavior-analytics.md)**.

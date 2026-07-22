@@ -281,9 +281,9 @@ fixed; this closes the few real remainders.
   compose file. Note (documented inline): with multi-tenancy on, the app's DB role must be
   **non-superuser** and lack `BYPASSRLS`, or row-level isolation is silently ineffective.
 
-## v0.36.0 — FIPS 140-3 mode merged (opt-in, default off)
+## v0.36.0 — FIPS 140-3 mode (opt-in, default off)
 
-The FIPS work (previously on `feature/fips-mode`) is merged into main. Opt in with
+The FIPS 140-3 mode is available. Opt in with
 `FLEET_FIPS_MODE=true` (default off — non-FIPS deployments are unchanged: Ed25519,
 WireGuard, Argon2id as before).
 

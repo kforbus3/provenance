@@ -76,7 +76,9 @@ The home page gives you an at-a-glance overview:
 - **Stat cards** (click to jump to the full page): how many hosts you can reach and
   how many are online, your active sessions, and any pending approvals.
 - **Quick connect** — your hosts, online first, each one click from a Terminal or
-  Files session.
+  Files session. **Customize it** with the tune icon: pick exactly which hosts appear
+  (and in what order), or leave it empty to keep the automatic list. Your choice follows
+  your account across browsers.
 - **Live sessions** (if you can review sessions) — a real-time list of who is
   connected to which host, updating as people connect and disconnect.
 - **Needs attention** — hosts that are currently offline.
@@ -114,6 +116,14 @@ package updates, with security updates called out separately (for example,
 
 > Each connection uses a unique, automatically-issued certificate just for you and
 > that server. You'll only see servers you're allowed to reach.
+
+### Databases and Kubernetes
+
+Fleet also brokers access to **databases** and **Kubernetes clusters** the same way — you never
+handle the credential. On the **Databases** page, run SQL against a registered PostgreSQL, MySQL,
+MariaDB, or SQL Server target (Fleet injects a vaulted credential and audits every query). On the
+**Kubernetes** page, browse cluster resources or point `kubectl` at Fleet's proxy. These appear only
+if an administrator has registered targets and granted you access.
 
 ---
 

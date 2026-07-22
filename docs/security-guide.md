@@ -156,6 +156,11 @@ and operational recommendations.
   - **`Schedule.Manage`** — create and manage scheduled scans and playbook runs.
 - Prefer **least privilege**: narrow custom roles plus just-in-time approvals
   over broad standing access.
+- **Attribute-based access control (ABAC).** Contextual **deny** policies layer on top of RBAC:
+  block a connection RBAC would allow, by host environment/tags/protocol and time-of-day window,
+  with role exemptions. Policies only restrict (never grant), super admins are always exempt, and
+  denials are audited. Enforced at the terminal, RDP, SFTP, and command-runner. See
+  [access-policies.md](./access-policies.md).
 
 ## 6. CSRF & transport
 
@@ -203,6 +208,10 @@ and operational recommendations.
 - **Other secrets encrypted at rest in the DB.** The SMTP / notification password
   is sealed (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`) and never returned by
   the API — like the CA private key, it is stored only as ciphertext.
+- **External KMS / HSM (optional).** The CA and credential-vault master passphrases can be
+  wrapped by an external KMS (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, or GCP Cloud KMS)
+  instead of living in the environment as plaintext — Fleet unwraps them once at boot, so a stolen
+  disk or backup can't be decrypted without live KMS access. See [kms.md](./kms.md).
 
 ## 11. Rate limiting & abuse resistance
 
@@ -225,6 +234,9 @@ and operational recommendations.
 - On suspected compromise: revoke affected certificates (or rotate the CA),
   disable/lock the user, verify the audit chain, and review `auth_events` and
   `ssh_sessions`. See [Disaster Recovery](./disaster-recovery.md).
+- **Behavior analytics (UEBA).** The **Behavior** page surfaces access patterns that deviate from a
+  user's baseline — off-hours access, first access to a host, a new source IP, and activity spikes —
+  as advisory leads for investigation. See [behavior-analytics.md](./behavior-analytics.md).
 
 ## 13. Migrating to host-scoped principals
 

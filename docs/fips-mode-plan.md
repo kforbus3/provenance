@@ -1,7 +1,7 @@
 # FIPS Mode — Design & Migration Plan
 
-Status: **P0–P4 implemented** on branch `feature/fips-mode` (opt-in, default-off,
-non-FIPS behavior unchanged). A fresh `FLEET_FIPS_MODE=true` deploy works end-to-end
+Status: **P0–P4 implemented and released** (opt-in, default-off, non-FIPS behavior
+unchanged). A fresh `FLEET_FIPS_MODE=true` deploy works end-to-end
 including the OpenVPN overlay, and the existing-install migration toolset (`fleetctl
 fips …`, verify-then-upgrade-on-login, secret re-seal sweep) and a UI readiness
 dashboard are in place. Both a FIPS boot and a default WireGuard boot are validated in

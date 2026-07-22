@@ -137,8 +137,8 @@ ssh -i fleet-breakglass fleet@<host-management-ip>
 
 > **Trade-off.** A standing emergency key is a standing credential — keep it
 > offline, scope it to what you need, and rotate it periodically. If you prefer no
-> standing key, the alternative is console/hypervisor access (Proxmox console,
-> IPMI, cloud serial console) to the host, which needs no Fleet component at all.
+> standing key, the alternative is console/hypervisor access (hypervisor console,
+> IPMI/BMC, cloud serial console) to the host, which needs no Fleet component at all.
 
 ### If the backend is down but hosts + jump host are healthy
 

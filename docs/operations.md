@@ -157,7 +157,7 @@ network, and every question is audited. Beyond host data and active sessions, it
 each was **scheduled or run manually** (recent runs need `Playbook.Run`).
 
 **Enable it (admin):** **Settings → AI assistant** — turn it on, enter your Ollama URL
-(e.g. `http://10.10.0.x:11434`), click **Load models**, pick a model, **Save**. Then users with
+(e.g. `http://ollama.internal:11434`), click **Load models**, pick a model, **Save**. Then users with
 the `Assistant.Use` permission get an **Ask** item in the sidebar. The assistant never runs
 commands or changes anything; treat answers as a starting point and verify before acting.
 
