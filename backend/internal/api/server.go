@@ -52,6 +52,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/identity"
 	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/jobs"
+	"github.com/fleet-terminal/backend/internal/kmsapi"
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/lifecycle"
 	"github.com/fleet-terminal/backend/internal/livesessions"
@@ -984,6 +985,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	lifecycle.Mount(r, deps)
 	commandpolicyapi.Mount(r, deps)
 	dr.Mount(r, deps)
+	kmsapi.Mount(r, deps)
 	dr.MountPublic(r) // unauthenticated GET /dr/mode → {standby:false} so the SPA can detect posture
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)

@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.40.0 — External KMS / HSM for master-key protection
+
+Fleet's at-rest secrets (the CA signing key and every credential-vault entry) were already
+AES-256-GCM sealed with a passphrase. That passphrase can now be **protected by an external
+Key Management Service or HSM** instead of living in the environment as plaintext — the
+near-universal enterprise security-review requirement, *"is the master key in a KMS/HSM?"*
+
+- **Unseal-via-KMS.** Wrap your `FLEET_CA_PASSPHRASE` / `FLEET_VAULT_PASSPHRASE` once with the
+  external KMS (`fleetctl kms wrap`) and store only the opaque wrapped blob
+  (`FLEET_CA_PASSPHRASE_WRAPPED` / `FLEET_VAULT_PASSPHRASE_WRAPPED`). At boot Fleet makes a single
+  Unwrap call to recover the passphrase into memory. A stolen disk or database backup is useless
+  without live access to the KMS.
+- **No re-seal, no format change.** The on-disk sealed-data format is unchanged, so enabling (or
+  disabling) a KMS backend needs no migration and no re-encryption — only the passphrase *source*
+  moves. The default provider is `local`, which preserves prior behavior exactly.
+- **Backends:** **HashiCorp Vault Transit** (encryption-as-a-service; the key never leaves Vault)
+  and **AWS KMS** (Encrypt/Decrypt), both implemented against the provider HTTP APIs with **no
+  cloud SDK dependency** (SigV4 signing is validated against AWS's published test vector). An AWS
+  endpoint override supports KMS-compatible emulators. Azure Key Vault / GCP KMS slot into the
+  same `internal/kms` interface next.
+- **Tooling & visibility:** `fleetctl kms status | wrap | unwrap`, and a read-only **Encryption at
+  rest** card (Settings → Infrastructure) showing the provider, key ID, live backend health, and
+  whether each passphrase is KMS-wrapped. New `GET /kms/status` (System.Configure).
+- Fail-closed: production refuses `FLEET_KMS_VAULT_SKIP_VERIFY`, and the CA/vault passphrase
+  distinctness and length invariants are re-checked after unwrapping. See docs/kms.md.
+
 ## v0.39.0 — Database access brokering (PostgreSQL)
 
 Fleet now brokers privileged access to **databases**, not just SSH/RDP hosts. Register a

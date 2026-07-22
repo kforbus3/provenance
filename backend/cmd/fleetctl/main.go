@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/cryptoprofile"
 	"github.com/fleet-terminal/backend/internal/db"
+	"github.com/fleet-terminal/backend/internal/kms"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/overlaypki"
@@ -51,6 +53,9 @@ Usage:
   fleetctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
   fleetctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
   fleetctl fips flag-stale-passwords                     Force non-FIPS local passwords to change (re-hash) on next login
+  fleetctl kms status                                    Report the configured external KMS/HSM backend and its health
+  fleetctl kms wrap [value]                              Wrap a passphrase with the external KMS (reads stdin if no value)
+  fleetctl kms unwrap <token>                            Unwrap a KMS blob to verify it (prints the plaintext)
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)
@@ -64,6 +69,14 @@ func run(cmd string, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// KMS operations are pure crypto calls to the external backend and need no
+	// database, so dispatch them before connecting (the default DATABASE_URL only
+	// resolves inside the compose network).
+	if cmd == "kms" {
+		return runKMS(ctx, cfg, args)
+	}
+
 	// The recovery CLI operates across all tenants; pass multiTenancy=false so its
 	// connections always bypass row-level security regardless of the deployment flag.
 	pool, err := db.Connect(ctx, cfg.DatabaseURL, 4, 1, false)
@@ -204,6 +217,81 @@ func run(cmd string, args []string) error {
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 	return nil
+}
+
+// runKMS handles the external-KMS subcommands (status / wrap / unwrap). These operate
+// only against the configured KMS backend and never touch the database. An operator
+// uses `wrap` once to convert a plaintext passphrase into the KMS-wrapped blob stored
+// in FLEET_CA_PASSPHRASE_WRAPPED / FLEET_VAULT_PASSPHRASE_WRAPPED.
+func runKMS(ctx context.Context, cfg *config.Config, args []string) error {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	if !cfg.KMSEnabled() && sub != "status" {
+		return fmt.Errorf("no external KMS configured — set FLEET_KMS_PROVIDER (vault-transit|aws-kms) and the backend settings")
+	}
+	prov, err := kms.New(cfg.KMS())
+	if err != nil {
+		return err
+	}
+
+	switch sub {
+	case "status":
+		fmt.Println("Fleet Terminal — external KMS status")
+		fmt.Println("====================================")
+		fmt.Printf("  Provider              : %s\n", cfg.KMSProvider)
+		fmt.Printf("  Key ID                : %s\n", orNone(cfg.KMSKeyID))
+		fmt.Printf("  CA passphrase wrapped : %v\n", cfg.CAKeyPassphraseWrapped != "")
+		fmt.Printf("  Vault passphrase wrap : %v\n", cfg.VaultPassphraseWrapped != "")
+		if !cfg.KMSEnabled() {
+			fmt.Println("  Health                : n/a (local provider — no external KMS)")
+			return nil
+		}
+		if err := prov.Health(ctx); err != nil {
+			fmt.Printf("  Health                : UNHEALTHY — %v\n", err)
+			return err
+		}
+		fmt.Println("  Health                : OK")
+		return nil
+
+	case "wrap":
+		var value []byte
+		if len(args) >= 2 {
+			value = []byte(args[1])
+		} else {
+			// Read the secret from stdin so it isn't captured in shell history/argv.
+			b, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+			if err != nil {
+				return err
+			}
+			value = []byte(strings.TrimRight(string(b), "\r\n"))
+		}
+		if len(value) == 0 {
+			return fmt.Errorf("nothing to wrap (pass a value or pipe it on stdin)")
+		}
+		token, err := prov.Wrap(ctx, value)
+		if err != nil {
+			return err
+		}
+		fmt.Println(token)
+		return nil
+
+	case "unwrap":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: fleetctl kms unwrap <token>")
+		}
+		pt, err := prov.Unwrap(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		os.Stdout.Write(pt)
+		fmt.Println()
+		return nil
+
+	default:
+		return fmt.Errorf("usage: fleetctl kms status | wrap [value] | unwrap <token>")
+	}
 }
 
 // fipsCheck prints a FIPS readiness report: the module/runtime status, config, the

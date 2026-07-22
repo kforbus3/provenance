@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack,
   Switch, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, TextField,
   Tooltip, Typography,
@@ -18,6 +18,7 @@ import {
   backupDownloadUrl, createBackup, getBackupPolicy, listBackups, saveBackupPolicy,
 } from "../api/backups";
 import { getTimezone, saveTimezone } from "../api/timezone";
+import { getKMSStatus } from "../api/kms";
 import {
   getAuditForwarding, saveAuditForwarding, testAuditForwarding, type AuditForwardConfig,
 } from "../api/auditForwarding";
@@ -125,6 +126,7 @@ export function SettingsPage() {
           )}
           {tab === 3 && (
             <>
+              <EncryptionCard />
               <WGSettingsCard current={settings["wireguard"]} />
               <ScanCard current={settings["scan_policy"]} />
               <ScriptCard current={settings["scripts"]} />
@@ -545,6 +547,72 @@ function SessionPolicyCard({ current }: { current: unknown }) {
           (off by default) — otherwise the allowlist sees the proxy's address, not the user's.
         </Typography>
       </Stack>
+    </Paper>
+  );
+}
+
+// EncryptionCard reports the at-rest encryption posture: whether an external KMS/HSM
+// envelope-protects the master passphrases (CA signing key + credential vault) and
+// whether that backend is currently healthy. Read-only — KMS configuration is boot-
+// time environment (FLEET_KMS_*); this surfaces it in-product for operators/auditors.
+function EncryptionCard() {
+  const { data, isLoading } = useQuery({ queryKey: ["kms-status"], queryFn: getKMSStatus, refetchInterval: 60_000 });
+  const enabled = data?.enabled ?? false;
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">Encryption at rest</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        The CA signing key and every credential-vault secret are AES-256-GCM sealed. An external
+        Key Management Service (KMS) or HSM can additionally protect the master passphrases: they are
+        stored only in KMS-wrapped form and unsealed into memory at boot, so a stolen disk or database
+        backup cannot be decrypted without live access to the KMS. Configured via <code>FLEET_KMS_*</code>.
+      </Typography>
+      {isLoading ? (
+        <CircularProgress size={22} />
+      ) : (
+        <Stack spacing={1.2}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="body2" sx={{ minWidth: 200 }}>External KMS backend</Typography>
+            {enabled ? (
+              <Chip size="small" color="success" label={data?.provider} />
+            ) : (
+              <Chip size="small" variant="outlined" label="local (no external KMS)" />
+            )}
+          </Stack>
+          {enabled && (
+            <>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="body2" sx={{ minWidth: 200 }}>Key ID</Typography>
+                <Typography variant="body2" sx={{ fontFamily: "monospace" }}>{data?.keyId || "—"}</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="body2" sx={{ minWidth: 200 }}>Backend health</Typography>
+                <Chip size="small" color={data?.healthy ? "success" : "error"}
+                  label={data?.healthy ? "healthy" : (data?.health || "unhealthy")} />
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="body2" sx={{ minWidth: 200 }}>CA passphrase</Typography>
+                <Chip size="small" color={data?.caPassphraseWrapped ? "success" : "default"}
+                  variant={data?.caPassphraseWrapped ? "filled" : "outlined"}
+                  label={data?.caPassphraseWrapped ? "KMS-wrapped" : "plaintext env"} />
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="body2" sx={{ minWidth: 200 }}>Vault passphrase</Typography>
+                <Chip size="small" color={data?.vaultPassphraseWrapped ? "success" : "default"}
+                  variant={data?.vaultPassphraseWrapped ? "filled" : "outlined"}
+                  label={data?.vaultPassphraseWrapped ? "KMS-wrapped" : "plaintext env"} />
+              </Stack>
+            </>
+          )}
+          {!enabled && (
+            <Alert severity="info" sx={{ mt: 0.5 }}>
+              No external KMS is configured. Master passphrases are read from the environment. To enable,
+              set <code>FLEET_KMS_PROVIDER</code> (vault-transit or aws-kms) and wrap your passphrases with
+              <code> fleetctl kms wrap</code>. See docs/kms.md.
+            </Alert>
+          )}
+        </Stack>
+      )}
     </Paper>
   );
 }

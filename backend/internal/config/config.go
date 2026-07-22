@@ -5,6 +5,7 @@
 package config
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fleet-terminal/backend/internal/kms"
 )
 
 // Config is the fully-resolved application configuration.
@@ -74,6 +77,26 @@ type Config struct {
 	WebAuthnRPID    string   // relying party id (registrable domain), e.g. "localhost"
 	WebAuthnRPName  string   // human-readable RP name
 	WebAuthnOrigins []string // allowed origins, e.g. http://localhost:5173
+
+	// External KMS / HSM (envelope-protects the master passphrases at rest). When
+	// KMSProvider is anything other than "local", the CA and/or vault passphrases may
+	// be supplied as KMS-wrapped blobs (*_WRAPPED below) instead of plaintext; Fleet
+	// unwraps them once at boot via ResolveSecrets. The at-rest sealing format itself
+	// is unchanged, so enabling or disabling a KMS backend needs no re-seal. See
+	// internal/kms and docs/kms.md.
+	KMSProvider            string // "local" (default) | "vault-transit" | "aws-kms"
+	KMSKeyID               string
+	KMSVaultAddr           string
+	KMSVaultToken          string
+	KMSVaultCACertFile     string
+	KMSVaultTLSSkipVerify  bool
+	KMSAWSRegion           string
+	KMSAWSAccessKey        string
+	KMSAWSSecretKey        string
+	KMSAWSSessionToken     string
+	KMSAWSEndpoint         string
+	CAKeyPassphraseWrapped string // KMS-wrapped FLEET_CA_PASSPHRASE (optional)
+	VaultPassphraseWrapped string // KMS-wrapped FLEET_VAULT_PASSPHRASE (optional)
 
 	// SSH Certificate Authority
 	CAKeyPassphrase []byte        // encrypts CA private key at rest
@@ -320,6 +343,21 @@ func Load() (*Config, error) {
 	c.CSRFSecret = []byte(env("FLEET_CSRF_SECRET", ""))
 	c.CAKeyPassphrase = []byte(env("FLEET_CA_PASSPHRASE", ""))
 
+	// External KMS / HSM backend (default "local" = no wrapping, behavior unchanged).
+	c.KMSProvider = env("FLEET_KMS_PROVIDER", "local")
+	c.KMSKeyID = env("FLEET_KMS_KEY_ID", "")
+	c.KMSVaultAddr = env("FLEET_KMS_VAULT_ADDR", "")
+	c.KMSVaultToken = env("FLEET_KMS_VAULT_TOKEN", "")
+	c.KMSVaultCACertFile = env("FLEET_KMS_VAULT_CACERT", "")
+	c.KMSVaultTLSSkipVerify = envBool("FLEET_KMS_VAULT_SKIP_VERIFY", false)
+	c.KMSAWSRegion = env("FLEET_KMS_AWS_REGION", "")
+	c.KMSAWSAccessKey = env("FLEET_KMS_AWS_ACCESS_KEY_ID", "")
+	c.KMSAWSSecretKey = env("FLEET_KMS_AWS_SECRET_ACCESS_KEY", "")
+	c.KMSAWSSessionToken = env("FLEET_KMS_AWS_SESSION_TOKEN", "")
+	c.KMSAWSEndpoint = env("FLEET_KMS_AWS_ENDPOINT", "")
+	c.CAKeyPassphraseWrapped = env("FLEET_CA_PASSPHRASE_WRAPPED", "")
+	c.VaultPassphraseWrapped = env("FLEET_VAULT_PASSPHRASE_WRAPPED", "")
+
 	// WebAuthn: derive sensible localhost defaults from the public URL.
 	c.WebAuthnRPID = env("FLEET_WEBAUTHN_RPID", hostOnly(c.PublicURL))
 	c.WebAuthnRPName = env("FLEET_WEBAUTHN_RP_NAME", "Fleet Terminal")
@@ -359,8 +397,11 @@ func (c *Config) validate() error {
 		if len(c.CSRFSecret) < 16 {
 			missing = append(missing, "FLEET_CSRF_SECRET (>=16 bytes)")
 		}
-		if len(c.CAKeyPassphrase) < 16 {
-			missing = append(missing, "FLEET_CA_PASSPHRASE (>=16 bytes)")
+		// The CA passphrase may be supplied plaintext (>=16 bytes) OR as a KMS-wrapped
+		// blob that ResolveSecrets unwraps at boot. Accept either; the length of the
+		// unwrapped value is re-checked after unwrapping in ResolveSecrets.
+		if len(c.CAKeyPassphrase) < 16 && !c.caPassphraseViaKMS() {
+			missing = append(missing, "FLEET_CA_PASSPHRASE (>=16 bytes) or FLEET_CA_PASSPHRASE_WRAPPED with FLEET_KMS_PROVIDER")
 		}
 		if len(missing) > 0 {
 			return fmt.Errorf("missing required config for %q environment: %s",
@@ -368,6 +409,9 @@ func (c *Config) validate() error {
 		}
 		if c.SSHInsecureHostKeys {
 			return fmt.Errorf("FLEET_SSH_INSECURE_HOST_KEYS must not be enabled outside development")
+		}
+		if c.KMSVaultTLSSkipVerify {
+			return fmt.Errorf("FLEET_KMS_VAULT_SKIP_VERIFY must not be enabled outside development")
 		}
 	} else {
 		// Development-only fallbacks so the local stack boots without configured
@@ -441,6 +485,75 @@ func (c *Config) VaultKey() ([]byte, error) {
 		return nil, fmt.Errorf("FLEET_VAULT_PASSPHRASE is required in production to use the credential vault")
 	}
 	return c.CAKeyPassphrase, nil
+}
+
+// KMS builds the KMS provider configuration from the resolved environment.
+func (c *Config) KMS() kms.Config {
+	return kms.Config{
+		Provider:           c.KMSProvider,
+		KeyID:              c.KMSKeyID,
+		VaultAddr:          c.KMSVaultAddr,
+		VaultToken:         c.KMSVaultToken,
+		VaultCACertFile:    c.KMSVaultCACertFile,
+		VaultTLSSkipVerify: c.KMSVaultTLSSkipVerify,
+		AWSRegion:          c.KMSAWSRegion,
+		AWSAccessKey:       c.KMSAWSAccessKey,
+		AWSSecretKey:       c.KMSAWSSecretKey,
+		AWSSessionToken:    c.KMSAWSSessionToken,
+		AWSEndpoint:        c.KMSAWSEndpoint,
+	}
+}
+
+// KMSEnabled reports whether an external KMS/HSM backend is configured.
+func (c *Config) KMSEnabled() bool { return c.KMS().ProviderConfigured() }
+
+// caPassphraseViaKMS reports whether the CA passphrase is provided as a KMS-wrapped
+// blob rather than plaintext.
+func (c *Config) caPassphraseViaKMS() bool {
+	return c.KMSEnabled() && c.CAKeyPassphraseWrapped != ""
+}
+
+// ResolveSecrets unwraps any KMS-wrapped master passphrases into their plaintext
+// fields via the configured external KMS. It must run once at startup — after Load,
+// before the CA or credential vault is used — for both fleetd and fleetctl. With the
+// default "local" provider (or no wrapped values) it is a no-op, so non-KMS
+// deployments are unaffected. After unwrapping it re-checks the invariants Load could
+// not (unwrapped length, CA/vault distinctness), failing closed on a bad key.
+func (c *Config) ResolveSecrets(ctx context.Context) error {
+	if !c.KMSEnabled() {
+		return nil
+	}
+	if c.CAKeyPassphraseWrapped == "" && c.VaultPassphraseWrapped == "" {
+		return nil // provider set but nothing wrapped (e.g. only used via fleetctl kms)
+	}
+	prov, err := kms.New(c.KMS())
+	if err != nil {
+		return err
+	}
+	if c.CAKeyPassphraseWrapped != "" {
+		pt, err := prov.Unwrap(ctx, c.CAKeyPassphraseWrapped)
+		if err != nil {
+			return fmt.Errorf("unwrap CA passphrase via %s KMS: %w", prov.Name(), err)
+		}
+		c.CAKeyPassphrase = pt
+	}
+	if c.VaultPassphraseWrapped != "" {
+		pt, err := prov.Unwrap(ctx, c.VaultPassphraseWrapped)
+		if err != nil {
+			return fmt.Errorf("unwrap vault passphrase via %s KMS: %w", prov.Name(), err)
+		}
+		c.VaultPassphrase = string(pt)
+	}
+	// Post-unwrap invariants (Load ran before the plaintext existed).
+	if c.IsProduction() {
+		if len(c.CAKeyPassphrase) < 16 {
+			return fmt.Errorf("unwrapped FLEET_CA_PASSPHRASE is shorter than 16 bytes")
+		}
+		if c.VaultPassphrase != "" && c.VaultPassphrase == string(c.CAKeyPassphrase) {
+			return fmt.Errorf("FLEET_VAULT_PASSPHRASE must differ from FLEET_CA_PASSPHRASE")
+		}
+	}
+	return nil
 }
 
 // hostOnly extracts the bare host from a URL (no scheme, no port), used as the

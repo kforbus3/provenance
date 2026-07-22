@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -65,6 +66,18 @@ func run() error {
 	// (tenant-scoped by middleware); a request that skips that middleware is denied, not
 	// leaked. No effect when FLEET_MULTI_TENANCY is off.
 	ctx = tenant.WithBypass(ctx)
+
+	// Unwrap any KMS-protected master passphrases before the CA or credential vault is
+	// used. No-op unless an external KMS backend is configured (FLEET_KMS_PROVIDER).
+	if cfg.KMSEnabled() {
+		kctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err := cfg.ResolveSecrets(kctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("KMS unseal failed: %w", err)
+		}
+		log.Info("master passphrases unsealed via external KMS", "provider", cfg.KMSProvider, "keyID", cfg.KMSKeyID)
+	}
 
 	shutdownTracing, err := telemetry.SetupTracing(ctx, cfg.TracingOn, cfg.OTLPEndpoint, "fleet-terminal-backend", version, log)
 	if err != nil {
