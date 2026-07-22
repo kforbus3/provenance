@@ -928,6 +928,17 @@ func (s *Server) buildRouter() chi.Router {
 		}
 	})
 
+	// Multi-site federation (mode-gated; standalone mounts nothing). Mounted on the
+	// TOP-LEVEL router: the site-facing join/link endpoints live outside /api/v1,
+	// and MountHub/MountSite add their own /api/v1/federation operator group.
+	if !s.Standby {
+		if s.Cfg.IsHub() {
+			federation.MountHub(r, s.deps, s.federation)
+		} else if s.Cfg.IsSite() {
+			federation.MountSite(r, s.deps, s.federation)
+		}
+	}
+
 	return r
 }
 
@@ -1045,12 +1056,6 @@ func (s *Server) registerRoutes(r chi.Router) {
 		pr.With(s.Auth.RequirePermission("System.Configure")).Get("/system/health", s.handleSystemHealth)
 	})
 
-	// Multi-site federation (mode-gated; standalone mounts nothing).
-	if s.Cfg.IsHub() {
-		federation.MountHub(r, s.deps, s.federation)
-	} else if s.Cfg.IsSite() {
-		federation.MountSite(r, s.deps, s.federation)
-	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
