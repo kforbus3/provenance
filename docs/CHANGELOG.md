@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.54.1 — Pending-updates accuracy + Ask-AI timezone fixes
+
+Three fixes to how host updates are collected and how the assistant reports times.
+
+- **Pending updates now match `apt update`.** The monitor collected pending updates
+  with `apt-get -s upgrade`, which silently holds back packages that need new
+  dependencies and Ubuntu **phased updates** — so hosts whose only pending updates
+  were phased/kept-back showed *nothing* pending even though `apt update` listed them
+  (and since security updates are rarely phased, a host often surfaced its security
+  updates while all its regular updates stayed invisible). Collection now uses
+  `apt list --upgradable`, which enumerates every upgradable package exactly as
+  `apt update` reports it. Host Details, the dashboard, and Ask AI now reflect the
+  real update posture; counts refresh on the next inventory sweep (hourly).
+- **Ask AI reports schedule times in your timezone.** The assistant rendered schedule
+  and other times in UTC and left recurrences like "daily at 03:00" unlabeled, so it
+  would say a 03:00-Eastern schedule runs at "03:00 UTC". It now knows the configured
+  display timezone, labels recurrences with the zone ("daily at 03:00 EDT"), and
+  reports times in that zone.
+
 ## v0.54.0 — Federation site key rotation
 
 Completes federation key lifecycle: a **site can rotate its own identity key** in

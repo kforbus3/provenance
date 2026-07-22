@@ -253,7 +253,18 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	client := newOllama(cfg.OllamaURL)
 	prior := s.priorMessages(convoID, who.UserID)
 	messages := make([]chatMessage, 0, len(prior)+2)
-	messages = append(messages, chatMessage{Role: "system", Content: systemPrompt})
+	sysPrompt := systemPrompt
+	if tz := s.store.DisplayTimezone(ctx); tz != "" {
+		// The operator has a configured display timezone. Tool results carry absolute
+		// timestamps with an explicit UTC offset, and recurrence strings ("daily at
+		// 03:00") are already expressed in this zone — tell the model so it reports
+		// times in the operator's zone instead of defaulting to UTC.
+		sysPrompt += fmt.Sprintf("\n\nThe operator's display timezone is %s. Report all times in %s. "+
+			"Absolute timestamps in tool results include a UTC offset — convert them to %s. A schedule's "+
+			"recurrence time (e.g. \"daily at 03:00\") is ALREADY in %s, so state it as-is in %s; never label it UTC.",
+			tz, tz, tz, tz, tz)
+	}
+	messages = append(messages, chatMessage{Role: "system", Content: sysPrompt})
 	messages = append(messages, prior...)
 	messages = append(messages, chatMessage{Role: "user", Content: question})
 	var data answerData
@@ -895,6 +906,7 @@ func (s *Service) runListSchedules(ctx context.Context, who Caller) (*AssistantT
 		s.log.Warn("assistant list_schedules", "err", err)
 		return nil, map[string]any{"error": "could not list schedules"}
 	}
+	loc := s.displayLoc(ctx)
 	rows := make([]models.AssistantScheduleRow, 0, len(scheds))
 	for _, sc := range scheds {
 		target := sc.TargetKind
@@ -903,9 +915,11 @@ func (s *Service) runListSchedules(ctx context.Context, who Caller) (*AssistantT
 		}
 		rows = append(rows, models.AssistantScheduleRow{
 			Name: sc.Name, Kind: sc.Kind, Enabled: sc.Enabled, Target: target,
-			Recurrence: recurrenceSummary(sc.Recurrence),
-			LastRunAt:  sc.LastRunAt, LastStatus: sc.LastStatus,
-			NextRunAt: sc.NextRunAt, Running: sc.Running,
+			Recurrence: recurrenceSummary(sc.Recurrence, loc),
+			// Present run times in the operator's display timezone so the model (and
+			// the payload) report them in the operator's zone rather than UTC.
+			LastRunAt: inLoc(sc.LastRunAt, loc), LastStatus: sc.LastStatus,
+			NextRunAt: inLoc(sc.NextRunAt, loc), Running: sc.Running,
 		})
 	}
 	tbl := &AssistantTable{
@@ -924,8 +938,37 @@ func (s *Service) runListSchedules(ctx context.Context, who Caller) (*AssistantT
 	return tbl, map[string]any{"count": len(rows), "schedules": rows}
 }
 
-// recurrenceSummary renders a schedule's recurrence in words for the model/UI.
-func recurrenceSummary(r models.Recurrence) string {
+// displayLoc resolves the operator's configured display timezone, mirroring the
+// scheduler's own fallback (server-local) so the assistant reports schedule times
+// in the exact zone they actually fire in.
+func (s *Service) displayLoc(ctx context.Context) *time.Location {
+	if name := s.store.DisplayTimezone(ctx); name != "" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+	}
+	return time.Local
+}
+
+// inLoc returns t shifted into loc (nil-safe), so a marshaled timestamp carries the
+// display zone's offset rather than UTC's Z.
+func inLoc(t *time.Time, loc *time.Location) *time.Time {
+	if t == nil {
+		return nil
+	}
+	v := t.In(loc)
+	return &v
+}
+
+// recurrenceSummary renders a schedule's recurrence in words for the model/UI. For
+// time-of-day recurrences it appends the display zone (e.g. "daily at 03:00 EDT"),
+// since the time-of-day is interpreted in that zone — without the label the model
+// tends to assume UTC.
+func recurrenceSummary(r models.Recurrence, loc *time.Location) string {
+	tz := ""
+	if loc != nil {
+		tz = " " + time.Now().In(loc).Format("MST")
+	}
 	switch r.Type {
 	case "interval":
 		if r.EveryMinutes > 0 && r.EveryMinutes%60 == 0 {
@@ -933,9 +976,9 @@ func recurrenceSummary(r models.Recurrence) string {
 		}
 		return fmt.Sprintf("every %dm", r.EveryMinutes)
 	case "daily":
-		return "daily at " + r.TimeOfDay
+		return "daily at " + r.TimeOfDay + tz
 	case "weekly":
-		return "weekly on " + time.Weekday(r.Weekday).String() + " at " + r.TimeOfDay
+		return "weekly on " + time.Weekday(r.Weekday).String() + " at " + r.TimeOfDay + tz
 	}
 	return r.Type
 }

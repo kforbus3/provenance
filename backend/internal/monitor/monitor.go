@@ -546,13 +546,21 @@ const updatePackagesCap = 500
 func collectUpdates(conn *sshgw.Conn, inv *models.HostInventory) {
 	const cmd = `
 if command -v apt-get >/dev/null 2>&1; then
-  sim=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null)
-  up=$(printf '%s' "$sim" | grep -c '^Inst')
-  sec=$(printf '%s' "$sim" | grep '^Inst' | grep -ci 'security')
+  # 'apt list --upgradable' enumerates EVERY upgradable package from the cached
+  # metadata — matching what 'apt update' reports as "N can be upgraded", including
+  # packages that 'apt-get upgrade' holds back (ones needing new dependencies and
+  # Ubuntu phased updates). The old 'apt-get -s upgrade' simulation silently
+  # undercounted those to zero, so hosts with only kept-back/phased updates showed
+  # nothing pending here even though 'apt update' listed them.
+  list=$(apt list --upgradable 2>/dev/null | grep '/')
+  up=$(printf '%s\n' "$list" | grep -c '/')
+  sec=$(printf '%s\n' "$list" | grep -Eci '/[^ ]*security')
   printf 'COUNTS|%s|%s\n' "$up" "$sec"
-  printf '%s' "$sim" | grep '^Inst' | while read -r _ name rest; do
-    ver=$(printf '%s' "$rest" | sed -n 's/^\[[^]]*\] (\([^ ]*\).*/\1/p')
-    s=0; printf '%s' "$rest" | grep -qi 'security' && s=1
+  printf '%s\n' "$list" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    name=${line%%/*}
+    ver=$(printf '%s' "$line" | awk '{print $2}')
+    s=0; printf '%s' "$line" | grep -Eqi '/[^ ]*security' && s=1
     printf 'PKG|%s|%s|%s\n' "$name" "$ver" "$s"
   done
 elif command -v dnf >/dev/null 2>&1; then
