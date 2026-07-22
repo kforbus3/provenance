@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.55.3 — Live host status on the terminal view
+
+Extends v0.55.2 to the in-terminal view. The terminal header now shows the host's
+**online/offline** status as its own chip (next to the connection-status chip), and it
+updates live — driven by the same app-wide `host.status` subscription, with a 30-second
+scheduled refetch as a fallback. Invalidation now also refreshes the single-host detail
+query, so the file browser and host-details dialog stay current too.
+
 ## v0.55.2 — Live host status across the UI
 
 Host online/offline changes now show up on their own — no manual page refresh.

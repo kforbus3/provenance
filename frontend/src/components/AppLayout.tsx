@@ -117,6 +117,7 @@ export function AppLayout() {
   useFleetEvents((e) => {
     if (e.type === "host.status") {
       void qc.invalidateQueries({ queryKey: ["hosts"] });
+      void qc.invalidateQueries({ queryKey: ["host"] }); // single-host detail (Terminal view chip)
       void qc.invalidateQueries({ queryKey: ["dash-insights"] });
     } else if (e.type?.startsWith("session")) {
       void qc.invalidateQueries({ queryKey: ["sessions"] });

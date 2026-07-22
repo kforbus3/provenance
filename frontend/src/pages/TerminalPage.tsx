@@ -28,6 +28,9 @@ export function TerminalPage() {
     queryKey: ["host", hostId],
     queryFn: () => getHost(hostId!),
     enabled: !!hostId && !siteId, // the hub has no local copy of a remote host
+    // Live host.status events (AppLayout) invalidate this key; the interval is a
+    // scheduled fallback so the host chip below stays current if the socket drops.
+    refetchInterval: 30000,
   });
   const hostname = host?.hostname ?? (siteId ? "remote host" : "");
 
@@ -100,6 +103,11 @@ export function TerminalPage() {
 
   const color =
     status === "connected" ? "success" : status === "connecting" ? "warning" : "error";
+  // The host's monitor status (online/offline), distinct from the terminal connection
+  // above — updated live by the app-wide host.status subscription + the poll fallback.
+  const hostStatus = host?.status?.status;
+  const hostColor =
+    hostStatus === "online" ? "success" : hostStatus === "offline" ? "error" : "default";
 
   return (
     <Box sx={{ height: "100vh", display: "flex", flexDirection: "column", bgcolor: "#0d1117" }}>
@@ -116,6 +124,7 @@ export function TerminalPage() {
         <Typography variant="subtitle1" sx={{ fontWeight: 600, color: "#e6edf3" }}>
           {hostname || "Terminal"}
         </Typography>
+        {hostStatus && <Chip size="small" variant="outlined" label={hostStatus} color={hostColor} />}
         <Chip size="small" label={status} color={color} />
         <Box sx={{ flexGrow: 1 }} />
         <Typography variant="caption" sx={{ color: "#8b949e" }}>
