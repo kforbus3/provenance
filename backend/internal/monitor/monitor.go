@@ -564,14 +564,39 @@ if command -v apt-get >/dev/null 2>&1; then
     printf 'PKG|%s|%s|%s\n' "$name" "$ver" "$s"
   done
 elif command -v dnf >/dev/null 2>&1; then
-  up=$(dnf -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
-  sec=$(dnf -q -C updateinfo list security 2>/dev/null | grep -cE '^[A-Za-z]')
+  # dnf repoquery gives clean machine-readable rows (no header/wrapping); --latest-limit 1
+  # yields one row per package (matching 'dnf check-update'), and --security narrows to
+  # security-relevant updates so EACH package is correctly flagged (the previous code
+  # hard-coded every dnf package to non-security). dnf doesn't hold updates back the way
+  # 'apt-get upgrade' does. Cache-only (-C) stays cheap; dnf-makecache.timer keeps it fresh.
+  all=$(dnf -q -C repoquery --upgrades --latest-limit 1 --qf '%{name}.%{arch}|%{evr}\n' 2>/dev/null | sort -u)
+  secset=$(dnf -q -C repoquery --upgrades --latest-limit 1 --security --qf '%{name}.%{arch}\n' 2>/dev/null | sort -u)
+  if [ -z "$all" ]; then
+    # Minimal install without repoquery: fall back to parsing check-update columns.
+    all=$(dnf -q -C check-update 2>/dev/null | awk '$1 ~ /\.[a-z0-9_]+$/ && NF>=3 {print $1"|"$2}')
+    secset=$(dnf -q -C --security check-update 2>/dev/null | awk '$1 ~ /\.[a-z0-9_]+$/ && NF>=3 {print $1}')
+  fi
+  up=$(printf '%s\n' "$all" | grep -c '|')
+  sec=$(printf '%s\n' "$secset" | grep -c .)
   printf 'COUNTS|%s|%s\n' "$up" "$sec"
-  dnf -q -C check-update 2>/dev/null | awk 'NF>=3 && $1 ~ /^[A-Za-z0-9]/ {print "PKG|"$1"|"$2"|0"}'
+  printf '%s\n' "$all" | while IFS='|' read -r name ver; do
+    [ -n "$name" ] || continue
+    s=0; printf '%s\n' "$secset" | grep -qxF "$name" && s=1
+    printf 'PKG|%s|%s|%s\n' "$name" "$ver" "$s"
+  done
 elif command -v yum >/dev/null 2>&1; then
-  up=$(yum -q -C check-update 2>/dev/null | grep -cE '^[a-zA-Z0-9._+-]+[[:space:]]')
-  printf 'COUNTS|%s|0\n' "$up"
-  yum -q -C check-update 2>/dev/null | awk 'NF>=3 && $1 ~ /^[A-Za-z0-9]/ {print "PKG|"$1"|"$2"|0"}'
+  # RHEL 7 / older: yum has no built-in repoquery, so parse check-update columns
+  # (name.arch version repo); flag security via yum-plugin-security when installed.
+  all=$(yum -q -C check-update 2>/dev/null | awk '$1 ~ /\.[a-z0-9_]+$/ && NF>=3 {print $1"|"$2}')
+  secset=$(yum -q -C --security check-update 2>/dev/null | awk '$1 ~ /\.[a-z0-9_]+$/ && NF>=3 {print $1}')
+  up=$(printf '%s\n' "$all" | grep -c '|')
+  sec=$(printf '%s\n' "$secset" | grep -c .)
+  printf 'COUNTS|%s|%s\n' "$up" "$sec"
+  printf '%s\n' "$all" | while IFS='|' read -r name ver; do
+    [ -n "$name" ] || continue
+    s=0; printf '%s\n' "$secset" | grep -qxF "$name" && s=1
+    printf 'PKG|%s|%s|%s\n' "$name" "$ver" "$s"
+  done
 fi`
 	out, err := runCmd(conn, cmd)
 	if err != nil {

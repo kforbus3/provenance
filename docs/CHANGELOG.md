@@ -5,6 +5,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.55.1 — Accurate pending updates on RHEL-family hosts
+
+Follows up v0.54.1 (which fixed the Debian/Ubuntu path) with the RHEL/dnf/yum side.
+
+- **Per-package security flags are now correct on dnf hosts.** The dnf path previously
+  hard-coded every pending package to *non-security* in the package list (only the
+  aggregate count tried, via `updateinfo`, to reflect security updates) — so on RHEL,
+  Rocky, Alma, and Fedora hosts no individual package was ever shown as a security
+  update. Collection now uses `dnf repoquery --upgrades --latest-limit 1` for a clean,
+  de-duplicated one-row-per-package list and `--security` to flag each security update,
+  so the per-package flags and the security count agree.
+- **More robust parsing.** repoquery's machine-readable output avoids the header/line-wrap
+  and "Obsoleting Packages" pitfalls of scraping `dnf check-update` columns; a
+  check-update fallback covers minimal installs without repoquery. The yum path (RHEL 7)
+  gains the same per-package security flagging via `yum --security` when available.
+- Validated against a real Rocky Linux 9 host (108 pending, 56 security — counts and
+  per-package flags consistent, matching `dnf check-update`). Counts refresh on the next
+  hourly inventory sweep. Like the apt path, collection reads cached metadata (kept fresh
+  by `dnf-makecache.timer`), so it stays cheap and adds no network load.
+
 ## v0.55.0 — Cross-instance live session shadowing (HA)
 
 Closes the last HA gap: **live session shadowing now works across instances.** Watching
