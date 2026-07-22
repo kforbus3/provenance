@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.42.0 — Customizable dashboard Quick Connect
+
+The dashboard **Quick Connect** list is now personalizable. Click the tune icon to pick
+exactly which hosts appear — and in what order — instead of the automatic top-6. Leave the
+selection empty to restore the automatic list (online hosts first). The choice is stored
+**per user** and follows your account across browsers and devices.
+
+- New reusable per-user preference store: `user_preferences` table (migration `0055`), store
+  helpers, and a self-scoped `GET/PUT /preferences/{key}` API (any signed-in user manages only
+  their own preferences; keys are whitelisted). A foundation for further personalization.
+- The dashboard falls back gracefully: pinned hosts you can no longer reach are skipped, with a
+  hint to update the list.
+
 ## v0.41.1 — Offline .guac player: drop a recording anywhere
 
 The offline RDP recording player only accepted a file dropped precisely on a small box.

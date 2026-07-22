@@ -1,6 +1,7 @@
 import {
-  Box, Button, Card, CardActionArea, CardContent, Chip, Grid,
-  List, ListItem, ListItemText, Stack, Typography,
+  Autocomplete, Box, Button, Card, CardActionArea, CardContent, Checkbox, Chip, Dialog,
+  DialogActions, DialogContent, DialogTitle, Grid, IconButton, List, ListItem, ListItemText,
+  Stack, TextField, Tooltip, Typography,
 } from "@mui/material";
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -9,8 +10,9 @@ import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import HistoryIcon from "@mui/icons-material/History";
 import HowToRegIcon from "@mui/icons-material/HowToReg";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
-import type { ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import TuneIcon from "@mui/icons-material/Tune";
+import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { getVersion } from "../api/client";
 import { listHosts, type Host } from "../api/hosts";
@@ -19,6 +21,7 @@ import { listApprovals, listMyApprovals } from "../api/approvals";
 import { listAudit } from "../api/audit";
 import { listInsights } from "../api/insights";
 import { useFleetEvents } from "../api/events";
+import { getPreference, setPreference, QUICK_CONNECT_PREF, type QuickConnectPref } from "../api/preferences";
 import { useAuthStore } from "../store/auth";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
@@ -85,7 +88,20 @@ export function DashboardPage() {
   });
 
   const online = hosts.filter((h) => h.status?.status === "online").length;
-  const quick = [...hosts].sort((a, b) => rank(a) - rank(b) || a.hostname.localeCompare(b.hostname)).slice(0, 6);
+
+  // Quick Connect is customizable: if the user has pinned specific hosts they show in
+  // the chosen order; otherwise fall back to an auto-ranked top 6 (online first).
+  const { data: quickPref } = useQuery({
+    queryKey: ["pref", QUICK_CONNECT_PREF],
+    queryFn: () => getPreference<QuickConnectPref>(QUICK_CONNECT_PREF),
+    enabled: has("Host.View"), retry: false,
+  });
+  const [customizing, setCustomizing] = useState(false);
+  const pinnedIds = quickPref?.hostIds ?? null;
+  const autoQuick = [...hosts].sort((a, b) => rank(a) - rank(b) || a.hostname.localeCompare(b.hostname)).slice(0, 6);
+  const quick = pinnedIds
+    ? pinnedIds.map((id) => hosts.find((h) => h.id === id)).filter((h): h is Host => Boolean(h))
+    : autoQuick;
 
   const openTerminal = (id: string) => window.open(`/terminals/${id}`, "_blank", "noopener");
 
@@ -141,8 +157,12 @@ export function DashboardPage() {
           <Grid item xs={12} md={7}>
             <Card variant="outlined">
               <CardContent sx={{ pb: 0 }}>
-                <Stack direction="row" alignItems="center">
+                <Stack direction="row" alignItems="center" spacing={0.5}>
                   <Typography variant="subtitle1" sx={{ flexGrow: 1, fontWeight: 600 }}>Quick connect</Typography>
+                  {pinnedIds && <Chip size="small" variant="outlined" label="custom" sx={{ mr: 0.5 }} />}
+                  <Tooltip title="Customize which hosts appear here">
+                    <IconButton size="small" onClick={() => setCustomizing(true)}><TuneIcon fontSize="small" /></IconButton>
+                  </Tooltip>
                   <Button size="small" onClick={() => navigate("/terminals")}>All hosts</Button>
                 </Stack>
               </CardContent>
@@ -168,7 +188,12 @@ export function DashboardPage() {
                   </ListItem>
                 ))}
                 {quick.length === 0 && (
-                  <ListItem><ListItemText primary="No hosts you can reach yet." secondary="Ask an admin for group or direct access, or request it under Approvals." /></ListItem>
+                  pinnedIds ? (
+                    <ListItem><ListItemText primary="Your pinned hosts aren't available."
+                      secondary="They may have been removed or you lost access. Click the tune icon to update your Quick Connect list." /></ListItem>
+                  ) : (
+                    <ListItem><ListItemText primary="No hosts you can reach yet." secondary="Ask an admin for group or direct access, or request it under Approvals." /></ListItem>
+                  )
                 )}
               </List>
             </Card>
@@ -251,6 +276,68 @@ export function DashboardPage() {
           </Stack>
         </Grid>
       </Grid>
+
+      {customizing && (
+        <QuickConnectDialog
+          hosts={hosts}
+          pinnedIds={pinnedIds}
+          onClose={() => setCustomizing(false)}
+          onSaved={() => { setCustomizing(false); void qc.invalidateQueries({ queryKey: ["pref", QUICK_CONNECT_PREF] }); }}
+        />
+      )}
     </Box>
+  );
+}
+
+// QuickConnectDialog lets a user choose exactly which hosts (and in what order) appear
+// in Quick Connect. Saving an empty list clears the customization and restores the
+// automatic top-6.
+function QuickConnectDialog({ hosts, pinnedIds, onClose, onSaved }: {
+  hosts: Host[]; pinnedIds: string[] | null; onClose: () => void; onSaved: () => void;
+}) {
+  const byId = new Map(hosts.map((h) => [h.id, h]));
+  const initial = (pinnedIds ?? []).map((id) => byId.get(id)).filter((h): h is Host => Boolean(h));
+  const [selected, setSelected] = useState<Host[]>(initial);
+  const save = useMutation({
+    mutationFn: () => setPreference<QuickConnectPref>(QUICK_CONNECT_PREF, { hostIds: selected.map((h) => h.id) }),
+    onSuccess: onSaved,
+  });
+  return (
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Customize Quick Connect</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Pick the hosts you want on your dashboard, in the order you want them. Leave it empty to
+          restore the automatic list (online hosts first). This preference follows your account.
+        </Typography>
+        <Autocomplete
+          multiple
+          options={hosts}
+          value={selected}
+          onChange={(_, v) => setSelected(v)}
+          getOptionLabel={(h) => h.hostname}
+          isOptionEqualToValue={(a, b) => a.id === b.id}
+          disableCloseOnSelect
+          renderOption={(props, option, { selected: sel }) => (
+            <li {...props} key={option.id}>
+              <Checkbox size="small" checked={sel} sx={{ mr: 1 }} />
+              <Box>
+                <Typography variant="body2">{option.hostname}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {[option.environment, option.address].filter(Boolean).join(" · ")}
+                </Typography>
+              </Box>
+            </li>
+          )}
+          renderInput={(params) => <TextField {...params} label="Hosts" placeholder="Add a host…" />}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button color="inherit" onClick={() => setSelected([])} disabled={selected.length === 0}>Clear</Button>
+        <Box sx={{ flexGrow: 1 }} />
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>Save</Button>
+      </DialogActions>
+    </Dialog>
   );
 }

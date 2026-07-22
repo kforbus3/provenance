@@ -64,6 +64,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/overlay"
 	"github.com/fleet-terminal/backend/internal/overlaypki"
 	"github.com/fleet-terminal/backend/internal/playbook"
+	"github.com/fleet-terminal/backend/internal/prefs"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/ratelimit"
 	"github.com/fleet-terminal/backend/internal/rdp"
@@ -986,6 +987,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	commandpolicyapi.Mount(r, deps)
 	dr.Mount(r, deps)
 	kmsapi.Mount(r, deps)
+	prefs.Mount(r, deps)
 	dr.MountPublic(r) // unauthenticated GET /dr/mode → {standby:false} so the SPA can detect posture
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)
