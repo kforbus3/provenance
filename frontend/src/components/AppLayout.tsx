@@ -45,6 +45,7 @@ import { getFederationMode, listSites } from "../api/federation";
 import { useAuthStore } from "../store/auth";
 import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
+import { useFleetEvents } from "../api/events";
 import { listTenants } from "../api/tenants";
 import { listAssistantApprovals } from "../api/assistant";
 import { setDisplayTimezone } from "../lib/datetime";
@@ -106,6 +107,22 @@ export function AppLayout() {
   const switchTenant = useAuthStore((s) => s.switchTenant);
   const qc = useQueryClient();
   const navigate = useNavigate();
+
+  // App-wide live updates: the backend broadcasts host.status on every probe and
+  // session start/end over the events WebSocket. Subscribing here (the shell is
+  // mounted on every authenticated page) means any open host list — Dashboard,
+  // Terminals, Hosts — reflects a host coming online/offline within seconds, from a
+  // single connection, without the user refreshing. Cheap: it only marks the shared
+  // queries stale, so react-query refetches just the lists that are actually mounted.
+  useFleetEvents((e) => {
+    if (e.type === "host.status") {
+      void qc.invalidateQueries({ queryKey: ["hosts"] });
+      void qc.invalidateQueries({ queryKey: ["dash-insights"] });
+    } else if (e.type?.startsWith("session")) {
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+    }
+  });
+
   // Federation role: hub-only navigation + the site selector appear only on a hub.
   const { data: fedMode } = useQuery({ queryKey: ["fed-mode"], queryFn: getFederationMode, staleTime: 300_000 });
   const isHub = fedMode === "hub";

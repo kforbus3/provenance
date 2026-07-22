@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.55.2 — Live host status across the UI
+
+Host online/offline changes now show up on their own — no manual page refresh.
+
+- The app already broadcasts `host.status` on every monitor probe over a WebSocket, but
+  only the Dashboard consumed it. That subscription is now **app-wide** (in the shell
+  that's mounted on every page), so the **Terminals** launcher, the **Hosts** grid, and
+  the **Dashboard** all reflect a host coming online/offline within seconds — from a
+  single shared connection. Previously the Terminals and Hosts lists never updated until
+  you reloaded.
+- Added a **30-second scheduled refetch** to the Terminals and Hosts lists as a fallback,
+  so status stays current even if the events socket is briefly disconnected.
+
 ## v0.55.1 — Accurate pending updates on RHEL-family hosts
 
 Follows up v0.54.1 (which fixed the Debian/Ubuntu path) with the RHEL/dnf/yum side.

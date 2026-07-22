@@ -399,9 +399,12 @@ export function HostsPage() {
   // routes for that site (the host list itself is already proxied).
   const scope = useUIStore((s) => s.siteScope);
   const launchPrefix = scope ? `/sites/${scope}` : "";
+  // Live host.status events (AppLayout) refresh the grid instantly; the interval is a
+  // scheduled fallback so status stays current even if the events socket drops.
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["hosts"],
     queryFn: listHosts,
+    refetchInterval: 30000,
   });
 
   const [selection, setSelection] = useState<GridRowSelectionModel>([]);

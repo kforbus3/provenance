@@ -20,7 +20,6 @@ import { listSessions } from "../api/sessions";
 import { listApprovals, listMyApprovals } from "../api/approvals";
 import { listAudit } from "../api/audit";
 import { listInsights } from "../api/insights";
-import { useFleetEvents } from "../api/events";
 import { getPreference, setPreference, QUICK_CONNECT_PREF, type QuickConnectPref } from "../api/preferences";
 import { useAuthStore } from "../store/auth";
 
@@ -79,13 +78,8 @@ export function DashboardPage() {
     enabled: has("Host.View"), retry: false, refetchInterval: 60000,
   });
 
-  useFleetEvents((e) => {
-    if (e.type === "host.status") {
-      void qc.invalidateQueries({ queryKey: ["hosts"] });
-      void qc.invalidateQueries({ queryKey: ["dash-insights"] });
-    }
-    if (e.type?.startsWith("session")) void qc.invalidateQueries({ queryKey: ["sessions"] });
-  });
+  // Live host.status / session updates are handled app-wide in AppLayout, so the
+  // dashboard's shared queries refresh from that single subscription.
 
   const online = hosts.filter((h) => h.status?.status === "online").length;
 

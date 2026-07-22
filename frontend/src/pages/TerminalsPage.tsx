@@ -22,7 +22,11 @@ const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> 
 // terminal (or SFTP) in a new tab. This is the "see all my hosts and connect"
 // view — distinct from the Hosts inventory, which is the full admin surface.
 export function TerminalsPage() {
-  const { data, isLoading } = useQuery({ queryKey: ["hosts"], queryFn: listHosts });
+  // Live host.status events (AppLayout) refresh this instantly; the interval is a
+  // scheduled fallback so status stays current even if the events socket drops.
+  const { data, isLoading } = useQuery({
+    queryKey: ["hosts"], queryFn: listHosts, refetchInterval: 30000,
+  });
   const [q, setQ] = useState("");
   const [groups, setGroups] = useState<string[]>([]);
   const [status, setStatus] = useState("");
