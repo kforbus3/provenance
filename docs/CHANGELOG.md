@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.46.0 — Behavior analytics (UEBA)
+
+Surface access patterns that deviate from a user's established baseline, computed from Fleet's own
+session records — no ML, no external dependency, just explainable statistics over data you already
+have. Four detectors:
+
+- **Off-hours access** — a session started at an hour outside the user's usual pattern.
+- **First access to a host** — a user connecting to a host they've never used.
+- **New source IP** — a connection from an address not seen before for that user.
+- **Activity spike** — session volume well above the user's daily baseline.
+
+A new **Behavior** page (permission `Audit.View`) lists the anomalies with severity; signals are
+advisory ("verify before acting"). New `internal/ueba` (pure, unit-tested engine) and `GET
+/ueba/anomalies` computed on demand over a 30-day baseline / 24-hour recent window. No migration —
+it reads existing session records. Verified end-to-end (off-hours + new-IP anomalies surfaced from
+seeded sessions; normal activity produced none).
+
 ## v0.45.0 — Kubernetes access brokering
 
 Broker access to Kubernetes clusters the way Fleet brokers SSH/RDP/databases. Register a

@@ -48,6 +48,7 @@ const LifecyclePage = lazy(() => named(import("./pages/LifecyclePage"), "Lifecyc
 const CommandPolicyPage = lazy(() => named(import("./pages/CommandPolicyPage"), "CommandPolicyPage"));
 const AccessPolicyPage = lazy(() => named(import("./pages/AccessPolicyPage"), "AccessPolicyPage"));
 const KubernetesPage = lazy(() => named(import("./pages/KubernetesPage"), "KubernetesPage"));
+const BehaviorPage = lazy(() => named(import("./pages/BehaviorPage"), "BehaviorPage"));
 const DisasterRecoveryPage = lazy(() => named(import("./pages/DisasterRecoveryPage"), "DisasterRecoveryPage"));
 
 function PageFallback() {
@@ -133,6 +134,7 @@ export function App() {
               <Route path="approvals" element={<ApprovalsPage />} />
               <Route path="audit" element={<ProtectedRoute permission="Audit.View"><AuditPage /></ProtectedRoute>} />
               <Route path="reports" element={<ProtectedRoute permission="Audit.View"><ReportsPage /></ProtectedRoute>} />
+              <Route path="behavior" element={<ProtectedRoute permission="Audit.View"><BehaviorPage /></ProtectedRoute>} />
               <Route path="access-reviews" element={<ProtectedRoute permission="AccessReview.Manage"><AccessReviewsPage /></ProtectedRoute>} />
               <Route path="users" element={<ProtectedRoute permission="User.Edit"><UsersPage /></ProtectedRoute>} />
               <Route path="roles" element={<ProtectedRoute permission="Role.Edit"><RolesPage /></ProtectedRoute>} />

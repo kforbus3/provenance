@@ -23,6 +23,7 @@ import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import KeyIcon from "@mui/icons-material/Key";
 import StorageIcon from "@mui/icons-material/Storage";
 import HubIcon from "@mui/icons-material/Hub";
+import InsightsIcon from "@mui/icons-material/Insights";
 import SettingsIcon from "@mui/icons-material/Settings";
 import HourglassBottomIcon from "@mui/icons-material/HourglassBottom";
 import PolicyIcon from "@mui/icons-material/Policy";
@@ -66,6 +67,7 @@ const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: stri
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
   { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },
   { to: "/reports", label: "Reports", icon: <AssessmentIcon />, perm: "Audit.View" },
+  { to: "/behavior", label: "Behavior", icon: <InsightsIcon />, perm: "Audit.View" },
   { to: "/access-reviews", label: "Access Reviews", icon: <FactCheckIcon />, perm: "AccessReview.Manage" },
   { to: "/users", label: "Users", icon: <PeopleIcon />, perm: "User.Edit" },
   { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
