@@ -5,6 +5,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.44.0 — Policy-as-code: attribute-based access control (ABAC)
+
+Layer contextual **deny** rules on top of RBAC. An access policy can block a host connection
+that a user's roles would otherwise permit, based on **host attributes** (environment, tags,
+protocol), **time of day** (business-hours windows, including windows that wrap past midnight,
+and specific days of week), with **role exemptions**. Policies only ever *restrict* access —
+they never grant it beyond RBAC — and **super administrators are always exempt** (no self-lockout).
+
+- Enforced at every interactive connect choke point — **browser SSH terminal, RDP, SFTP**, and the
+  **ad-hoc command runner** — immediately after the RBAC/host-access check. Denials return the
+  policy's message and are recorded as `access.denied` audit events (rule, host, surface, reason).
+- Rules evaluate first-match-by-priority in the configured display timezone. Example: "deny
+  production SSH outside 09:00–18:00, except for the SRE role."
+- New **Access Policies** page (permission `AccessPolicy.Manage`) and `access-policies` API;
+  migration `0056`. The evaluation engine is pure and exhaustively unit-tested; enforcement was
+  verified end-to-end (a non-admin blocked from a production host with the rule's message; the
+  admin exempt; disabling the rule restores access).
+- Note: scheduled/automation runs (Ansible playbooks, PowerShell scripts, scheduled scans) are
+  service-account governed and not subject to time-of-day ABAC.
+
 ## v0.43.0 — KMS backends: Azure Key Vault & GCP Cloud KMS
 
 Two more external KMS backends for master-key protection (v0.40.0), so the CA and vault

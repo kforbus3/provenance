@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/fleet-terminal/backend/internal/accesspolicy"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/commandpolicy"
@@ -97,6 +98,17 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 	clientIP := r.RemoteAddr
 	if ip, _, splitErr := net.SplitHostPort(clientIP); splitErr == nil {
 		clientIP = ip
+	}
+
+	// ABAC: contextual policies may deny this connection on top of RBAC (super admins
+	// are exempt inside Authorize). Denials are audited.
+	if dec := h.d.AccessPolicy.Authorize(ctx, accesspolicy.ConnCtx{
+		UserID: principal.UserID, Username: principal.Username, IsSuper: principal.IsSuperAdmin,
+		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "terminal", IP: clientIP,
+	}); dec.Denied {
+		http.Error(w, dec.Reason, http.StatusForbidden)
+		return
 	}
 
 	conn, err := upgrader.Upgrade(w, r, wsRespHeader)

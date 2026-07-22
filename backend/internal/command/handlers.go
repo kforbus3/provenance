@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/fleet-terminal/backend/internal/accesspolicy"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/httpx"
@@ -89,6 +90,10 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 				httpx.WriteError(w, http.StatusForbidden, "not authorized for host "+host.Hostname)
 				return
 			}
+			if dec := h.d.AccessPolicy.Authorize(r.Context(), connCtx(r, p, host)); dec.Denied {
+				httpx.WriteError(w, http.StatusForbidden, dec.Reason)
+				return
+			}
 			hosts = append(hosts, host)
 		}
 		if len(hosts) == 1 {
@@ -116,7 +121,8 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range members {
 			m := members[i]
-			if m.Protocol != "rdp" && h.canAccessHost(r, p, m.ID) {
+			if m.Protocol != "rdp" && h.canAccessHost(r, p, m.ID) &&
+				!h.d.AccessPolicy.Authorize(r.Context(), connCtx(r, p, &m)).Denied {
 				hosts = append(hosts, &m)
 			}
 		}
@@ -192,6 +198,15 @@ func (h *handler) canAccessHost(r *http.Request, p *auth.Principal, hostID uuid.
 	}
 	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
 	return err == nil && ok
+}
+
+// connCtx builds the ABAC evaluation context for a command target.
+func connCtx(r *http.Request, p *auth.Principal, host *models.Host) accesspolicy.ConnCtx {
+	return accesspolicy.ConnCtx{
+		UserID: p.UserID, Username: p.Username, IsSuper: p.IsSuperAdmin,
+		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "command", IP: accesspolicy.RequestIP(r),
+	}
 }
 
 func (h *handler) audit(r *http.Request, action, targetID string, detail map[string]any) {

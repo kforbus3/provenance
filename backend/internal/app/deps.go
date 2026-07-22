@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fleet-terminal/backend/internal/accesspolicy"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/livesessions"
@@ -28,6 +29,11 @@ type Deps struct {
 	// Notify delivers outbound alerts (email/webhook). Handlers call it on
 	// notable events (e.g. a new approval request).
 	Notify *notify.Service
+
+	// AccessPolicy enforces attribute-based access-control (ABAC) deny rules at
+	// connect time, on top of RBAC. Interactive connect surfaces (terminal, RDP,
+	// SFTP) and the ad-hoc command runner consult it after the host-access check.
+	AccessPolicy *accesspolicy.Enforcer
 
 	// SSH services are populated once the gateway/CA are constructed. Modules
 	// that need them (terminal, sftp, enrollment, monitor) read these fields.

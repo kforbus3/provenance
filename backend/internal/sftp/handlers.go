@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	pkgsftp "github.com/pkg/sftp"
 
+	"github.com/fleet-terminal/backend/internal/accesspolicy"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/credinject"
@@ -75,6 +76,15 @@ func (h *handler) connect(w http.ResponseWriter, r *http.Request) (client *pkgsf
 	host, err = h.d.Store.GetHost(r.Context(), hostID)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "host not found")
+		return nil, nil, nil, noop, false
+	}
+	// ABAC: contextual policies may deny this connection on top of RBAC.
+	if dec := h.d.AccessPolicy.Authorize(r.Context(), accesspolicy.ConnCtx{
+		UserID: p.UserID, Username: p.Username, IsSuper: p.IsSuperAdmin,
+		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "sftp", IP: accesspolicy.RequestIP(r),
+	}); dec.Denied {
+		httpx.WriteError(w, http.StatusForbidden, dec.Reason)
 		return nil, nil, nil, noop, false
 	}
 	conn, derr := h.dial(r, p, host)

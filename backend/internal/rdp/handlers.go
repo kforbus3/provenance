@@ -26,6 +26,7 @@ import (
 	"github.com/wwt/guac"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/fleet-terminal/backend/internal/accesspolicy"
 	"github.com/fleet-terminal/backend/internal/app"
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/credinject"
@@ -115,6 +116,14 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	}
 	if host.Protocol != "rdp" {
 		return nil, fmt.Errorf("host is not an RDP host")
+	}
+	// ABAC: contextual policies may deny this connection on top of RBAC.
+	if dec := h.d.AccessPolicy.Authorize(ctx, accesspolicy.ConnCtx{
+		UserID: p.UserID, Username: p.Username, IsSuper: p.IsSuperAdmin,
+		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "rdp", IP: clientIP(r),
+	}); dec.Denied {
+		return nil, fmt.Errorf("%s", dec.Reason)
 	}
 
 	key, err := h.d.Cfg.VaultKey()

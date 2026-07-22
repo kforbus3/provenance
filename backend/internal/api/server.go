@@ -25,6 +25,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/fleet-terminal/backend/internal/accesspolicy"
+	"github.com/fleet-terminal/backend/internal/accesspolicyapi"
 	"github.com/fleet-terminal/backend/internal/accessreview"
 	"github.com/fleet-terminal/backend/internal/admin"
 	"github.com/fleet-terminal/backend/internal/aiaction"
@@ -912,7 +914,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"pong": "ok"})
 	})
 
-	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Watch: s.Watch, Events: s.Hub, Notify: s.Notify}
+	deps := &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer, Gateway: s.Gateway, Live: s.Live, Watch: s.Watch, Events: s.Hub, Notify: s.Notify, AccessPolicy: accesspolicy.NewEnforcer(s.Store, s.Log)}
 	deps.DistributeKRL = s.distributeKRL
 
 	// M2 — first-run wizard + authentication. Bootstrap creates the first admin before
@@ -988,6 +990,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	dr.Mount(r, deps)
 	kmsapi.Mount(r, deps)
 	prefs.Mount(r, deps)
+	accesspolicyapi.Mount(r, deps)
 	dr.MountPublic(r) // unauthenticated GET /dr/mode → {standby:false} so the SPA can detect posture
 	sessionsapi.Mount(r, deps)
 	shadow.Mount(r, deps)
