@@ -27,9 +27,11 @@ migration and no re-seal — only the passphrase *source* moves.
 | Local (default) | `local`              | No external KMS. Passphrases read from the environment. Behavior unchanged. |
 | HashiCorp Vault Transit | `vault-transit` | Vault's encryption-as-a-service. The key never leaves Vault. |
 | AWS KMS         | `aws-kms`            | KMS Encrypt/Decrypt. Endpoint override supports KMS-compatible emulators. |
+| Azure Key Vault | `azure-keyvault`     | wrapKey/unwrapKey (RSA-OAEP-256). Azure AD client-credentials auth. |
+| GCP Cloud KMS   | `gcp-kms`            | cryptoKey encrypt/decrypt. Service-account (RS256 JWT) auth. |
 
-Both external providers are implemented against the vendor HTTP API directly — **no cloud SDK
-dependency**. Azure Key Vault and GCP KMS slot into the same `internal/kms` interface.
+All external providers are implemented against the vendor HTTP/REST API directly — **no cloud SDK
+dependency** — behind the same `internal/kms` interface.
 
 ## Configuration
 
@@ -52,6 +54,19 @@ AWS KMS:
     FLEET_KMS_AWS_SECRET_ACCESS_KEY=...
     # FLEET_KMS_AWS_SESSION_TOKEN=...                 # optional (STS)
     # FLEET_KMS_AWS_ENDPOINT=http://localstack:4566   # optional override (emulator/testing)
+
+Azure Key Vault (FLEET_KMS_KEY_ID is the key name in the vault):
+
+    FLEET_KMS_AZURE_VAULT_URL=https://myvault.vault.azure.net
+    FLEET_KMS_AZURE_TENANT_ID=...
+    FLEET_KMS_AZURE_CLIENT_ID=...
+    FLEET_KMS_AZURE_CLIENT_SECRET=...
+
+GCP Cloud KMS (FLEET_KMS_KEY_ID is the full cryptoKey resource name,
+projects/P/locations/L/keyRings/KR/cryptoKeys/K):
+
+    FLEET_KMS_GCP_CREDENTIALS_FILE=/etc/fleet/gcp-sa.json   # service-account key JSON
+    # or inline: FLEET_KMS_GCP_CREDENTIALS='{"client_email":...,"private_key":...}'
 
 ## One-time setup: wrap your passphrases
 

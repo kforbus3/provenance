@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.43.0 — KMS backends: Azure Key Vault & GCP Cloud KMS
+
+Two more external KMS backends for master-key protection (v0.40.0), so the CA and vault
+passphrases can be wrapped by the KMS your organization already runs:
+
+- **Azure Key Vault** (`FLEET_KMS_PROVIDER=azure-keyvault`) — wrapKey/unwrapKey (RSA-OAEP-256);
+  the key never leaves the vault. Azure AD client-credentials auth with token caching.
+- **GCP Cloud KMS** (`FLEET_KMS_PROVIDER=gcp-kms`) — encrypt/decrypt on a cryptoKey. Service-account
+  auth via an RS256-signed JWT exchanged for an access token.
+
+Both are implemented against the vendor REST APIs directly — **no cloud SDK** — joining the existing
+HashiCorp Vault Transit and AWS KMS backends behind the same `internal/kms` interface, `fleetctl kms`
+tooling, and the Settings "Encryption at rest" status card. See docs/kms.md.
+
 ## v0.42.0 — Customizable dashboard Quick Connect
 
 The dashboard **Quick Connect** list is now personalizable. Click the tune icon to pick

@@ -58,6 +58,16 @@ type Config struct {
 	AWSSecretKey    string
 	AWSSessionToken string // optional (STS)
 	AWSEndpoint     string // optional override (e.g. LocalStack http://localstack:4566)
+
+	// Azure Key Vault
+	AzureVaultURL     string // e.g. https://myvault.vault.azure.net
+	AzureTenantID     string
+	AzureClientID     string
+	AzureClientSecret string
+
+	// GCP Cloud KMS. KeyID is the full cryptoKey resource name.
+	GCPCredentialsJSON string // service-account key JSON (inline)
+	GCPCredentialsFile string // ...or a path to it
 }
 
 // ProviderConfigured reports whether an external KMS provider (anything other than
@@ -77,8 +87,12 @@ func New(cfg Config) (Provider, error) {
 		return newVaultTransit(cfg)
 	case "aws-kms":
 		return newAWSKMS(cfg)
+	case "azure-keyvault":
+		return newAzureKeyVault(cfg)
+	case "gcp-kms":
+		return newGCPKMS(cfg)
 	default:
-		return nil, fmt.Errorf("kms: unknown provider %q (want local|vault-transit|aws-kms)", cfg.Provider)
+		return nil, fmt.Errorf("kms: unknown provider %q (want local|vault-transit|aws-kms|azure-keyvault|gcp-kms)", cfg.Provider)
 	}
 }
 

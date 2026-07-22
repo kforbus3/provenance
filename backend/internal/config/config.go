@@ -84,7 +84,7 @@ type Config struct {
 	// unwraps them once at boot via ResolveSecrets. The at-rest sealing format itself
 	// is unchanged, so enabling or disabling a KMS backend needs no re-seal. See
 	// internal/kms and docs/kms.md.
-	KMSProvider            string // "local" (default) | "vault-transit" | "aws-kms"
+	KMSProvider            string // "local" | "vault-transit" | "aws-kms" | "azure-keyvault" | "gcp-kms"
 	KMSKeyID               string
 	KMSVaultAddr           string
 	KMSVaultToken          string
@@ -95,6 +95,12 @@ type Config struct {
 	KMSAWSSecretKey        string
 	KMSAWSSessionToken     string
 	KMSAWSEndpoint         string
+	KMSAzureVaultURL       string
+	KMSAzureTenantID       string
+	KMSAzureClientID       string
+	KMSAzureClientSecret   string
+	KMSGCPCredentialsJSON  string
+	KMSGCPCredentialsFile  string
 	CAKeyPassphraseWrapped string // KMS-wrapped FLEET_CA_PASSPHRASE (optional)
 	VaultPassphraseWrapped string // KMS-wrapped FLEET_VAULT_PASSPHRASE (optional)
 
@@ -355,6 +361,12 @@ func Load() (*Config, error) {
 	c.KMSAWSSecretKey = env("FLEET_KMS_AWS_SECRET_ACCESS_KEY", "")
 	c.KMSAWSSessionToken = env("FLEET_KMS_AWS_SESSION_TOKEN", "")
 	c.KMSAWSEndpoint = env("FLEET_KMS_AWS_ENDPOINT", "")
+	c.KMSAzureVaultURL = env("FLEET_KMS_AZURE_VAULT_URL", "")
+	c.KMSAzureTenantID = env("FLEET_KMS_AZURE_TENANT_ID", "")
+	c.KMSAzureClientID = env("FLEET_KMS_AZURE_CLIENT_ID", "")
+	c.KMSAzureClientSecret = env("FLEET_KMS_AZURE_CLIENT_SECRET", "")
+	c.KMSGCPCredentialsJSON = env("FLEET_KMS_GCP_CREDENTIALS", "")
+	c.KMSGCPCredentialsFile = env("FLEET_KMS_GCP_CREDENTIALS_FILE", "")
 	c.CAKeyPassphraseWrapped = env("FLEET_CA_PASSPHRASE_WRAPPED", "")
 	c.VaultPassphraseWrapped = env("FLEET_VAULT_PASSPHRASE_WRAPPED", "")
 
@@ -501,6 +513,12 @@ func (c *Config) KMS() kms.Config {
 		AWSSecretKey:       c.KMSAWSSecretKey,
 		AWSSessionToken:    c.KMSAWSSessionToken,
 		AWSEndpoint:        c.KMSAWSEndpoint,
+		AzureVaultURL:      c.KMSAzureVaultURL,
+		AzureTenantID:      c.KMSAzureTenantID,
+		AzureClientID:      c.KMSAzureClientID,
+		AzureClientSecret:  c.KMSAzureClientSecret,
+		GCPCredentialsJSON: c.KMSGCPCredentialsJSON,
+		GCPCredentialsFile: c.KMSGCPCredentialsFile,
 	}
 }
 
