@@ -118,9 +118,23 @@ and command policies independently — the hub is an authorization *initiator*, 
 Audit hash-chains stay **per-site** and authoritative; the hub keeps only a linked copy, so a
 compromised hub cannot rewrite a site's audit history.
 
-> The hub↔site control plane runs in single-tenant mode per instance today; mapping each site
-> to a hub-side tenant (so one hub cleanly serves multiple provider customers) is the intended
-> MSP extension.
+### How the mapping works
+
+When [multi-tenancy](./multi-tenancy-plan.md) is enabled on the hub, **a site belongs to the
+tenant of the operator who minted its join token**. Mint a join token while acting in tenant
+`acme` and the site that redeems it — along with its aggregated read-cache (inventory, sessions,
+scans, schedules, playbook runs, transfers) and sync state — is owned by `acme`. Everything the
+hub shows for that site is then tenant-scoped by row-level security:
+
+- the **Sites list** and the top-bar **site selector** only show a tenant's own sites;
+- the **aggregated inventory** and cross-site dashboards only include that tenant's sites;
+- the **proxy** (browser terminals, SFTP, every management page) refuses to reach a site the
+  acting tenant does not own — a cross-tenant site id resolves to *not found*, never to another
+  customer's infrastructure.
+
+A provider operator switches tenant context (the standard tenant switcher) to manage a different
+customer's sites. Single-tenant and non-multi-tenant hubs are unaffected: every site simply
+belongs to the default tenant, exactly as before.
 
 ## Testing two stacks locally
 

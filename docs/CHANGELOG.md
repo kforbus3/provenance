@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.53.0 — Federation site-as-tenant
+
+A multi-tenant **hub** now isolates federated sites per tenant, completing the MSP shape where one
+hub serves many provider customers. Off by default and a no-op unless multi-tenancy is enabled.
+
+- **A site belongs to the tenant that minted its join token.** The site, its aggregated read-cache
+  (inventory, sessions, scans, schedules, playbook runs, SFTP transfers), and its sync state are all
+  owned by that tenant and enforced by Postgres row-level security.
+- **Everything hub-side is tenant-scoped.** The Sites list, the top-bar site selector, the aggregated
+  cross-site inventory and dashboards, and the proxy all show and reach only the acting tenant's own
+  sites. A cross-tenant site id resolves to *not found* — the proxy (browser terminals, SFTP, every
+  management page) can never reach another customer's infrastructure.
+- **No change for single-tenant / non-multi-tenant hubs.** Every site simply belongs to the default
+  tenant, exactly as in v0.52.0. Standalone instances are unaffected.
+- Migration `0062` adds tenant scoping + RLS to the federation and cache tables. See
+  docs/federation.md ("Federation and multi-tenancy").
+
 ## v0.52.0 — Multi-site federation
 
 Turn one Fleet instance into a **hub** — a single pane of glass over many independent **site**

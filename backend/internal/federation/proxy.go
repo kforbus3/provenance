@@ -26,14 +26,21 @@ func (s *Service) handleProxy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad site id")
 		return
 	}
-	sess, ok := s.registry.Get(siteID)
-	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, "site is not currently linked")
-		return
-	}
 	p := auth.MustPrincipal(r)
 	if p == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	// Tenant isolation (site-as-tenant): resolve the site in the operator's own
+	// tenant context — RLS returns not-found for a site the operator's tenant does
+	// not own, so an operator can never proxy into another tenant's site.
+	if _, err := s.deps.Store.GetSite(r.Context(), siteID); err != nil {
+		writeErr(w, http.StatusNotFound, "unknown site")
+		return
+	}
+	sess, ok := s.registry.Get(siteID)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "site is not currently linked")
 		return
 	}
 
@@ -127,6 +134,12 @@ func (s *Service) handleProxyTerminal(w http.ResponseWriter, r *http.Request) {
 	p, err := s.deps.Auth.AuthenticateToken(r.Context(), r.URL.Query().Get("token"))
 	if err != nil {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	// Tenant isolation: resolve the site in the operator's tenant (WS carries no auth
+	// middleware, so scope explicitly) — RLS hides a site the tenant doesn't own.
+	if _, gerr := s.deps.Store.GetSite(s.deps.Auth.TenantScope(r.Context(), p), siteID); gerr != nil {
+		writeErr(w, http.StatusNotFound, "unknown site")
 		return
 	}
 	if !p.Has("Host.Connect") {

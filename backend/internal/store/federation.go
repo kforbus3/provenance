@@ -24,6 +24,7 @@ type FederationSite struct {
 	LastSeenAt       *time.Time `json:"lastSeenAt,omitempty"`
 	LinkState        string     `json:"linkState"`
 	LagSeconds       int        `json:"lagSeconds"`
+	TenantID         uuid.UUID  `json:"-"` // hub tenant this site belongs to (site-as-tenant)
 	CreatedAt        time.Time  `json:"createdAt"`
 	UpdatedAt        time.Time  `json:"updatedAt"`
 }
@@ -34,6 +35,9 @@ type FederationJoinToken struct {
 	SiteName  string
 	ExpiresAt time.Time
 	UsedAt    *time.Time
+	// TenantID is the hub tenant the minting operator was scoped to; the joining
+	// site inherits it (site-as-tenant).
+	TenantID uuid.UUID
 }
 
 // FederationHubKey is a hub federation identity key.
@@ -64,24 +68,26 @@ type FederationHub struct {
 // ---------------------------------------------------------------------------
 
 const fedSiteCols = `id, name, public_key, pending_public_key, status, hub_key_id,
-	api_version, last_seen_at, link_state, lag_seconds, created_at, updated_at`
+	api_version, last_seen_at, link_state, lag_seconds, tenant_id, created_at, updated_at`
 
 func scanSite(row interface{ Scan(...any) error }) (*FederationSite, error) {
 	var s FederationSite
 	if err := row.Scan(&s.ID, &s.Name, &s.PublicKey, &s.PendingPublicKey, &s.Status,
 		&s.HubKeyID, &s.APIVersion, &s.LastSeenAt, &s.LinkState, &s.LagSeconds,
-		&s.CreatedAt, &s.UpdatedAt); err != nil {
+		&s.TenantID, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &s, nil
 }
 
-// CreateSite registers a newly-joined site.
-func (s *Store) CreateSite(ctx context.Context, site *FederationSite, createdBy *uuid.UUID) (*FederationSite, error) {
+// CreateSite registers a newly-joined site under the given hub tenant (from the join
+// token). tenant_id is set explicitly because join runs outside a tenant-scoped
+// request context (see internal/federation handleJoin).
+func (s *Store) CreateSite(ctx context.Context, site *FederationSite, createdBy *uuid.UUID, tenantID uuid.UUID) (*FederationSite, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO federation_sites(id, name, public_key, status, hub_key_id, api_version, created_by)
-		 VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING `+fedSiteCols,
-		site.ID, site.Name, site.PublicKey, nz(site.Status, "pending"), site.HubKeyID, site.APIVersion, createdBy)
+		`INSERT INTO federation_sites(id, name, public_key, status, hub_key_id, api_version, created_by, tenant_id)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+fedSiteCols,
+		site.ID, site.Name, site.PublicKey, nz(site.Status, "pending"), site.HubKeyID, site.APIVersion, createdBy, tenantID)
 	return scanSite(row)
 }
 
@@ -145,9 +151,9 @@ func (s *Store) ConsumeJoinToken(ctx context.Context, tokenHash []byte, bySiteID
 		`UPDATE federation_join_tokens
 		 SET used_at=$3, used_by_site_id=$4
 		 WHERE token_hash=$1 AND used_at IS NULL AND expires_at > $2
-		 RETURNING id, site_name, expires_at, used_at`, tokenHash, now, now, bySiteID)
+		 RETURNING id, site_name, expires_at, used_at, tenant_id`, tokenHash, now, now, bySiteID)
 	var t FederationJoinToken
-	if err := row.Scan(&t.ID, &t.SiteName, &t.ExpiresAt, &t.UsedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.SiteName, &t.ExpiresAt, &t.UsedAt, &t.TenantID); err != nil {
 		return nil, mapNotFound(err)
 	}
 	return &t, nil
@@ -263,13 +269,14 @@ func (s *Store) PruneNonces(ctx context.Context, now time.Time) error {
 // Hub: read-model cache
 // ---------------------------------------------------------------------------
 
-// UpsertCacheHost stores/updates a site's host snapshot.
-func (s *Store) UpsertCacheHost(ctx context.Context, siteID, hostID uuid.UUID, status string, data json.RawMessage) error {
+// UpsertCacheHost stores/updates a site's host snapshot. tenantID is the site's hub
+// tenant, passed explicitly because ingest runs under bypass (background link).
+func (s *Store) UpsertCacheHost(ctx context.Context, siteID, hostID uuid.UUID, status string, data json.RawMessage, tenantID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO fed_cache_hosts(site_id, host_id, data, status, updated_at)
-		 VALUES($1,$2,$3,$4, now())
+		`INSERT INTO fed_cache_hosts(site_id, host_id, data, status, updated_at, tenant_id)
+		 VALUES($1,$2,$3,$4, now(), $5)
 		 ON CONFLICT (site_id, host_id) DO UPDATE SET data=EXCLUDED.data, status=EXCLUDED.status, updated_at=now()`,
-		siteID, hostID, data, nzp(status))
+		siteID, hostID, data, nzp(status), tenantID)
 	return err
 }
 
@@ -330,23 +337,23 @@ func (s *Store) DeleteSite(ctx context.Context, id uuid.UUID) error {
 
 // UpsertGenericCache stores a snapshot into one of the generic per-site cache
 // tables (fed_cache_scans/schedules/playbook_runs/sftp_transfers/sessions).
-func (s *Store) UpsertGenericCache(ctx context.Context, table string, siteID, itemID uuid.UUID, data json.RawMessage) error {
+func (s *Store) UpsertGenericCache(ctx context.Context, table string, siteID, itemID uuid.UUID, data json.RawMessage, tenantID uuid.UUID) error {
 	// table is a fixed internal constant chosen by the ingester, never user input.
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO `+table+`(site_id, item_id, data, updated_at) VALUES($1,$2,$3, now())
+		`INSERT INTO `+table+`(site_id, item_id, data, updated_at, tenant_id) VALUES($1,$2,$3, now(), $4)
 		 ON CONFLICT (site_id, item_id) DO UPDATE SET data=EXCLUDED.data, updated_at=now()`,
-		siteID, itemID, data)
+		siteID, itemID, data, tenantID)
 	return err
 }
 
 // SetSyncState records a per-stream cursor + freshness for a site.
-func (s *Store) SetSyncState(ctx context.Context, siteID uuid.UUID, stream, cursor string, lagSeconds int, at time.Time) error {
+func (s *Store) SetSyncState(ctx context.Context, siteID uuid.UUID, stream, cursor string, lagSeconds int, at time.Time, tenantID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO fed_site_sync_state(site_id, stream, cursor, last_synced_at, lag_seconds)
-		 VALUES($1,$2,$3,$4,$5)
+		`INSERT INTO fed_site_sync_state(site_id, stream, cursor, last_synced_at, lag_seconds, tenant_id)
+		 VALUES($1,$2,$3,$4,$5,$6)
 		 ON CONFLICT (site_id, stream) DO UPDATE SET cursor=EXCLUDED.cursor,
 			last_synced_at=EXCLUDED.last_synced_at, lag_seconds=EXCLUDED.lag_seconds`,
-		siteID, stream, cursor, at, lagSeconds)
+		siteID, stream, cursor, at, lagSeconds, tenantID)
 	return err
 }
 

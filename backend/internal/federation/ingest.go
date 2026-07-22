@@ -17,8 +17,10 @@ type hostPush struct {
 }
 
 // ingestPush consumes a site→hub push stream, updating the hub read-model and
-// re-broadcasting live events (re-tagged with site_id) to hub dashboards.
-func (s *Service) ingestPush(ctx context.Context, siteID uuid.UUID, r io.Reader) {
+// re-broadcasting live events (re-tagged with site_id) to hub dashboards. ctx runs
+// under bypass; siteTenant is the site's hub tenant, supplied to every cache write so
+// the aggregated read-model is correctly tenant-scoped (site-as-tenant).
+func (s *Service) ingestPush(ctx context.Context, siteID, siteTenant uuid.UUID, r io.Reader) {
 	dec := json.NewDecoder(r)
 	for {
 		var msg PushMsg
@@ -31,7 +33,7 @@ func (s *Service) ingestPush(ctx context.Context, siteID uuid.UUID, r io.Reader)
 			if err := json.Unmarshal(msg.Data, &h); err != nil {
 				continue
 			}
-			if err := s.deps.Store.UpsertCacheHost(ctx, siteID, h.HostID, h.Status, h.Data); err != nil {
+			if err := s.deps.Store.UpsertCacheHost(ctx, siteID, h.HostID, h.Status, h.Data, siteTenant); err != nil {
 				s.log.Warn("ingest host", "site", siteID, "err", err)
 				continue
 			}
@@ -44,6 +46,6 @@ func (s *Service) ingestPush(ctx context.Context, siteID uuid.UUID, r io.Reader)
 		case "heartbeat":
 			_ = s.deps.Store.SetSiteLink(ctx, siteID, "up", 0, time.Now())
 		}
-		_ = s.deps.Store.SetSyncState(ctx, siteID, msg.Type, "", 0, time.Now())
+		_ = s.deps.Store.SetSyncState(ctx, siteID, msg.Type, "", 0, time.Now(), siteTenant)
 	}
 }

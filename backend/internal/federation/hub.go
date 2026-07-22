@@ -19,6 +19,7 @@ import (
 	fedlink "github.com/fleet-terminal/backend/internal/federation/link"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
 
 var upgrader = websocket.Upgrader{
@@ -90,7 +91,10 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	siteID := uuid.New()
-	tok, err := s.deps.Store.ConsumeJoinToken(r.Context(), hashToken(req.JoinToken), siteID, time.Now())
+	// The join endpoint is site-facing (no operator session), so it runs under
+	// bypass; the site inherits the hub tenant of the operator who minted the token.
+	bctx := tenant.WithBypass(r.Context())
+	tok, err := s.deps.Store.ConsumeJoinToken(bctx, hashToken(req.JoinToken), siteID, time.Now())
 	if err != nil {
 		writeErr(w, http.StatusForbidden, "invalid or expired join token")
 		return
@@ -100,10 +104,10 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		name = req.SiteName
 	}
 	hubKeyID, _ := uuid.Parse(s.hubKeyID)
-	if _, err := s.deps.Store.CreateSite(r.Context(), &store.FederationSite{
+	if _, err := s.deps.Store.CreateSite(bctx, &store.FederationSite{
 		ID: siteID, Name: name, PublicKey: pub, Status: "pending",
 		HubKeyID: &hubKeyID, APIVersion: req.APIVersion,
-	}, nil); err != nil {
+	}, nil, tok.TenantID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not register site")
 		return
 	}
@@ -124,7 +128,10 @@ func (s *Service) handleLink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad site id")
 		return
 	}
-	site, err := s.deps.Store.GetSite(r.Context(), siteID)
+	// Site-facing link: no operator session, so all site/cache DB access runs under
+	// bypass with the site's own tenant supplied explicitly (site-as-tenant).
+	bctx := tenant.WithBypass(r.Context())
+	site, err := s.deps.Store.GetSite(bctx, siteID)
 	if err != nil || site.Status == "revoked" {
 		writeErr(w, http.StatusForbidden, "unknown or revoked site")
 		return
@@ -148,33 +155,33 @@ func (s *Service) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.registry.Put(sess)
-	_ = s.deps.Store.SetSiteStatus(r.Context(), siteID, "active")
-	_ = s.deps.Store.SetSiteLink(r.Context(), siteID, "up", 0, time.Now())
+	_ = s.deps.Store.SetSiteStatus(bctx, siteID, "active")
+	_ = s.deps.Store.SetSiteLink(bctx, siteID, "up", 0, time.Now())
 	// Push the current hub key so a site that reconnected after a hub-key rotation
 	// re-learns it before any proxied request arrives.
 	go func() { _ = s.pushHubKey(sess) }()
 	s.log.Info("site linked", "site", siteID, "name", site.Name)
 
-	s.serveSite(r.Context(), sess) // blocks until the link drops
+	s.serveSite(bctx, sess, site.TenantID) // blocks until the link drops
 
 	s.registry.Remove(siteID)
-	_ = s.deps.Store.SetSiteLink(context.Background(), siteID, "down", 0, time.Now())
+	_ = s.deps.Store.SetSiteLink(tenant.WithBypass(context.Background()), siteID, "down", 0, time.Now())
 	s.log.Info("site link closed", "site", siteID)
 }
 
 // serveSite accepts streams the site opens (read-model push, heartbeat) until the
 // session closes.
-func (s *Service) serveSite(ctx context.Context, sess *fedlink.Session) {
+func (s *Service) serveSite(ctx context.Context, sess *fedlink.Session, siteTenant uuid.UUID) {
 	for {
 		stream, err := sess.AcceptStream()
 		if err != nil {
 			return
 		}
-		go s.handleSiteStream(ctx, sess.SiteID, stream)
+		go s.handleSiteStream(ctx, sess.SiteID, siteTenant, stream)
 	}
 }
 
-func (s *Service) handleSiteStream(ctx context.Context, siteID uuid.UUID, stream io.ReadWriteCloser) {
+func (s *Service) handleSiteStream(ctx context.Context, siteID, siteTenant uuid.UUID, stream io.ReadWriteCloser) {
 	defer stream.Close()
 	f, br, err := ReadFrame(stream)
 	if err != nil {
@@ -182,7 +189,7 @@ func (s *Service) handleSiteStream(ctx context.Context, siteID uuid.UUID, stream
 	}
 	switch f.Kind {
 	case "push":
-		s.ingestPush(ctx, siteID, br)
+		s.ingestPush(ctx, siteID, siteTenant, br)
 	case "ping":
 		_ = s.deps.Store.SetSiteLink(ctx, siteID, "up", 0, time.Now())
 	}
