@@ -15,9 +15,19 @@ queries needs `Database.Connect`).
 | PostgreSQL | Default port 5432. |
 | MySQL / MariaDB | MySQL wire protocol; default port 3306. |
 | SQL Server | TDS protocol; default port 1433. |
+| MongoDB | Document-oriented; default port 27017. A **JSON command** console rather than SQL. |
 
-Each engine runs its native driver over the single SSH-tunneled connection Fleet opens through the
-jump host. The SQL console adapts per engine (default port and starter query).
+Each SQL engine runs its native driver over the single SSH-tunneled connection Fleet opens through
+the jump host. The SQL console adapts per engine (default port and starter query).
+
+### MongoDB (document console)
+
+MongoDB is document-oriented, so instead of SQL you enter a **MongoDB command document as JSON** —
+for example `{ "listCollections": 1 }`, `{ "find": "users", "limit": 10 }`, or
+`{ "listDatabases": 1 }` — and Fleet returns the result as formatted JSON. Commands run against the
+target's **Database name**, which is also the authentication database (typically `admin` for a
+root/admin credential). The Mongo driver opens several connections, so Fleet gives each its own
+fresh jump tunnel for the duration of the query.
 
 ## Register a database
 

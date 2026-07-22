@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.49.0 — Database broker: MongoDB
+
+The database broker now speaks **MongoDB** alongside PostgreSQL/MySQL/MariaDB/SQL Server. Because
+MongoDB is document-oriented, its console takes a **MongoDB command document as JSON** (e.g.
+`{ "find": "users", "limit": 10 }`) and returns the result as formatted JSON, with the same
+vaulted-credential injection and `db.query` auditing as the SQL engines.
+
+- The MongoDB driver opens several connections, so each driver dial gets its **own fresh jump
+  tunnel** (rather than the single shared tunnel the SQL engines use); the tunnels are wrapped to
+  tolerate the driver's deadline calls (SSH channels don't support them). This hardening also covers
+  the MySQL/SQL Server drivers over the real jump tunnel.
+- Migration `0059` widens the engine constraint; the Databases page adds MongoDB (default port
+  27017) and a JSON-command console. Verified end-to-end against a live MongoDB (`listDatabases` and
+  `find` through the broker with a vaulted credential). See docs/database-broker.md.
+
 ## v0.48.0 — ITSM integration (ServiceNow / Jira)
 
 Tie privileged access to change management. When enabled, Fleet opens a **change/incident ticket**

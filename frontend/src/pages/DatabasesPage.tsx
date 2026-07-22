@@ -18,8 +18,9 @@ import {
 import { listVaultSecrets } from "../api/vault";
 
 // Per-engine connection defaults, mirrored from the backend (internal/dbbroker/engines.go).
-const ENGINE_DEFAULT_PORT: Record<string, number> = { postgres: 5432, mysql: 3306, mariadb: 3306, sqlserver: 1433 };
-const ENGINE_DEFAULT_DB: Record<string, string> = { postgres: "postgres", mysql: "", mariadb: "", sqlserver: "master" };
+const ENGINE_DEFAULT_PORT: Record<string, number> = { postgres: 5432, mysql: 3306, mariadb: 3306, sqlserver: 1433, mongodb: 27017 };
+const ENGINE_DEFAULT_DB: Record<string, string> = { postgres: "postgres", mysql: "", mariadb: "", sqlserver: "master", mongodb: "admin" };
+const isDocEngine = (engine: string) => engine === "mongodb";
 
 // DatabasesPage: register database targets and run brokered SQL — Fleet reaches the
 // database through the jump host with a vaulted credential injected, and audits every
@@ -105,10 +106,13 @@ export function DatabasesPage() {
 
 // QueryConsole runs SQL against one database and renders the result grid.
 function QueryConsole({ db, onClose }: { db: Database; onClose: () => void }) {
+  const doc = isDocEngine(db.engine);
   const [sql, setSql] = useState(
-    db.engine === "sqlserver"
-      ? "SELECT TOP 20 * FROM information_schema.tables;"
-      : "SELECT * FROM information_schema.tables LIMIT 20;",
+    doc
+      ? '{ "listCollections": 1 }'
+      : db.engine === "sqlserver"
+        ? "SELECT TOP 20 * FROM information_schema.tables;"
+        : "SELECT * FROM information_schema.tables LIMIT 20;",
   );
   const [result, setResult] = useState<QueryResult | null>(null);
   const run = useMutation({
@@ -122,7 +126,7 @@ function QueryConsole({ db, onClose }: { db: Database; onClose: () => void }) {
         <Stack direction="row" spacing={1} alignItems="center">
           <StorageIcon color="primary" fontSize="small" />
           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-            SQL console — {db.name}
+            {doc ? "Command console" : "SQL console"} — {db.name}
           </Typography>
           <Typography variant="caption" color="text.secondary">
             {db.address}:{db.port}/{db.databaseName} · as {db.credentialName}
@@ -132,9 +136,13 @@ function QueryConsole({ db, onClose }: { db: Database; onClose: () => void }) {
       </Stack>
       <TextField
         multiline minRows={3} fullWidth value={sql} onChange={(e) => setSql(e.target.value)}
-        placeholder="SELECT ..." spellCheck={false}
+        placeholder={doc ? '{ "find": "collection", "limit": 5 }' : "SELECT ..."} spellCheck={false}
+        label={doc ? "MongoDB command (JSON)" : undefined}
         sx={{ mb: 1, "& textarea": { fontFamily: "monospace", fontSize: 13 } }}
       />
+      {doc && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+        Enter a MongoDB command document, e.g. <code>{'{ "listCollections": 1 }'}</code> or <code>{'{ "find": "users", "limit": 10 }'}</code>.
+      </Typography>}
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
         <Button variant="contained" size="small" startIcon={<PlayArrowIcon />}
           disabled={run.isPending || !sql.trim()} onClick={() => run.mutate()}>
@@ -147,7 +155,13 @@ function QueryConsole({ db, onClose }: { db: Database; onClose: () => void }) {
         )}
       </Stack>
       {run.isError && <Alert severity="error" sx={{ mb: 1 }}>{errMsg || "Query failed."}</Alert>}
-      {result && result.columns.length > 0 && (
+      {result && result.document && (
+        <Box component="pre" sx={{
+          m: 0, p: 1.5, maxHeight: 460, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 1,
+          fontFamily: "monospace", fontSize: 12.5, bgcolor: "action.hover", whiteSpace: "pre-wrap", wordBreak: "break-word",
+        }}>{result.document}</Box>
+      )}
+      {result && !result.document && result.columns.length > 0 && (
         <TableContainer sx={{ maxHeight: 420, border: 1, borderColor: "divider", borderRadius: 1 }}>
           <Table size="small" stickyHeader>
             <TableHead>
@@ -167,7 +181,7 @@ function QueryConsole({ db, onClose }: { db: Database; onClose: () => void }) {
           </Table>
         </TableContainer>
       )}
-      {result && result.columns.length === 0 && !run.isError && (
+      {result && !result.document && result.columns.length === 0 && !run.isError && (
         <Typography variant="body2" color="text.secondary">{result.command || "Statement executed."}</Typography>
       )}
     </Paper>
@@ -214,6 +228,7 @@ function DatabaseDialog({ db, onClose, onSaved }: { db?: Database; onClose: () =
               <MenuItem value="mysql">MySQL</MenuItem>
               <MenuItem value="mariadb">MariaDB</MenuItem>
               <MenuItem value="sqlserver">SQL Server</MenuItem>
+              <MenuItem value="mongodb">MongoDB</MenuItem>
             </TextField>
             <TextField label="Address (reachable from the jump host)" value={form.address}
               onChange={(e) => set("address", e.target.value)} fullWidth />

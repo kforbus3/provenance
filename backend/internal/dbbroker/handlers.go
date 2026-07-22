@@ -91,7 +91,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !engineSupported(normalizeEngine(rq.Engine)) {
-		httpx.WriteError(w, http.StatusBadRequest, "unsupported engine (want postgres, mysql, mariadb, or sqlserver)")
+		httpx.WriteError(w, http.StatusBadRequest, "unsupported engine (want postgres, mysql, mariadb, sqlserver, or mongodb)")
 		return
 	}
 	p := auth.MustPrincipal(r)
@@ -115,7 +115,7 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !engineSupported(normalizeEngine(rq.Engine)) {
-		httpx.WriteError(w, http.StatusBadRequest, "unsupported engine (want postgres, mysql, mariadb, or sqlserver)")
+		httpx.WriteError(w, http.StatusBadRequest, "unsupported engine (want postgres, mysql, mariadb, sqlserver, or mongodb)")
 		return
 	}
 	p := auth.MustPrincipal(r)

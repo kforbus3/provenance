@@ -34,6 +34,7 @@ export interface QueryResult {
   rowCount: number;
   command: string; // e.g. "SELECT 5"
   truncated: boolean;
+  document?: string; // JSON result for document engines (MongoDB)
 }
 
 export async function listDatabases(): Promise<Database[]> {

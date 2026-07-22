@@ -24,13 +24,15 @@ const (
 	queryLimit = 30 * time.Second
 )
 
-// QueryResult is one executed statement's outcome.
+// QueryResult is one executed statement's outcome. For SQL engines it carries a
+// Columns/Rows grid; for document engines (MongoDB) it carries a Document (pretty JSON).
 type QueryResult struct {
 	Columns   []string   `json:"columns"`
 	Rows      [][]string `json:"rows"`
 	RowCount  int        `json:"rowCount"`
 	Command   string     `json:"command"` // e.g. "SELECT 5", "UPDATE 2"
 	Truncated bool       `json:"truncated"`
+	Document  string     `json:"document,omitempty"` // JSON result for document engines
 }
 
 // query runs a single SQL statement against a registered database through the jump
@@ -118,7 +120,14 @@ func (h *handler) execute(ctx context.Context, sessionID uuid.UUID, db *models.D
 	cctx, cancel := context.WithTimeout(ctx, queryLimit)
 	defer cancel()
 
-	tunnel, jumpClient, err := h.gw.DialRawViaJump(cctx, sessionID.String(), db.Address, db.Port)
+	// MongoDB is document-oriented and its driver opens several connections, so it
+	// manages its own on-demand tunnels (a fresh jump tunnel per driver dial) rather
+	// than sharing the single tunnel the SQL engines use.
+	if normalizeEngine(db.Engine) == "mongodb" {
+		return h.executeMongo(cctx, sessionID, db, dbUser, dbPass, sql)
+	}
+
+	rawTunnel, jumpClient, err := h.gw.DialRawViaJump(cctx, sessionID.String(), db.Address, db.Port)
 	if err != nil {
 		return nil, fmt.Errorf("reach database via jump host: %w", err)
 	}
@@ -127,6 +136,8 @@ func (h *handler) execute(ctx context.Context, sessionID uuid.UUID, db *models.D
 			_ = jumpClient.Close()
 		}
 	}()
+	// SSH channels don't support SetDeadline; some drivers require it.
+	tunnel := noDeadlineConn{rawTunnel}
 
 	switch normalizeEngine(db.Engine) {
 	case "postgres":
@@ -223,3 +234,12 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// noDeadlineConn wraps the SSH-channel tunnel so drivers that call SetDeadline (the
+// MongoDB driver requires it) don't fail — an SSH channel doesn't support deadlines.
+// Overall query duration is still bounded by the request context (queryLimit).
+type noDeadlineConn struct{ net.Conn }
+
+func (noDeadlineConn) SetDeadline(time.Time) error      { return nil }
+func (noDeadlineConn) SetReadDeadline(time.Time) error  { return nil }
+func (noDeadlineConn) SetWriteDeadline(time.Time) error { return nil }

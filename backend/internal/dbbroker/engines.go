@@ -15,7 +15,12 @@ var engines = map[string]engineInfo{
 	"mysql":     {defaultPort: 3306, defaultDB: ""},
 	"mariadb":   {defaultPort: 3306, defaultDB: ""}, // MariaDB speaks the MySQL protocol
 	"sqlserver": {defaultPort: 1433, defaultDB: "master"},
+	"mongodb":   {defaultPort: 27017, defaultDB: "admin"},
 }
+
+// IsDocument reports whether an engine is document-oriented (a JSON command console)
+// rather than SQL.
+func IsDocument(engine string) bool { return normalizeEngine(engine) == "mongodb" }
 
 // normalizeEngine lower-cases/trims an engine string, defaulting to postgres for the
 // empty value (backward compatible with pre-v0.41 targets).
