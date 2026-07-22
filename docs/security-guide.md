@@ -241,6 +241,9 @@ and operational recommendations.
 - **Behavior analytics (UEBA).** The **Behavior** page surfaces access patterns that deviate from a
   user's baseline — off-hours access, first access to a host, a new source IP, and activity spikes —
   as advisory leads for investigation. See [behavior-analytics.md](./behavior-analytics.md).
+- **Multi-site federation (optional).** A hub manages autonomous site instances over site-initiated,
+  key-verified tunnels; each site enforces its own RBAC/policies and keeps its own authoritative audit
+  chain (the hub is an authorization initiator, never a bypass). Off by default. See [federation.md](./federation.md).
 
 ## 13. Migrating to host-scoped principals
 

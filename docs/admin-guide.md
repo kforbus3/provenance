@@ -974,3 +974,7 @@ Two more controls tighten the platform:
 - **ITSM (ServiceNow / Jira)** — open a change/incident ticket for each just-in-time access request
   and attach its reference to the approval (Settings → Integrations, `System.Configure`). See
   **[ITSM integration](./itsm.md)**.
+- **Multi-site federation** — turn one instance into a **hub** aggregating many autonomous
+  **site** instances into a single pane of glass (site-initiated tunnels, Ed25519 acting-user
+  assertions, a global site selector). Opt-in via `FLEET_MODE=hub|site`; off by default. See
+  **[Multi-site federation](./federation.md)**.

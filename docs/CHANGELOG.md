@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.52.0 — Multi-site federation
+
+Turn one Fleet instance into a **hub** — a single pane of glass over many independent **site**
+instances, each a full autonomous Fleet stack on its own network. Opt-in and **off by default**
+(`FLEET_MODE=standalone`): a standalone instance builds and mounts none of it and is unchanged.
+
+- **Site-initiated tunnels.** Sites need no inbound reachability — each dials the hub over a single
+  outbound WSS connection (yamux-multiplexed); the hub never routes back into a site.
+- **Ed25519 trust, no shared secrets.** The hub generates a federation identity on first boot
+  (encrypted at rest with `FLEET_CA_PASSPHRASE`); a site generates its own keypair at join and pins
+  the hub's key fingerprint (MITM defense). Every hub→site action carries a short-lived, hub-signed
+  **acting-user assertion** bound to one exact request (`sha256(method+path+body)` + single-use nonce).
+- **Single pane of glass.** On a hub, a top-bar **site selector** points the *entire* UI at a chosen
+  site — host list, terminals, SFTP, databases, Kubernetes, scans, playbooks, schedules, audit — all
+  transparently proxied to the site's own unmodified API (a request interceptor rewrites `/api/v1/*`).
+- **Autonomy + trust boundaries.** Each site runs proxied requests through its **own** handlers under a
+  site-local shadow user, so it enforces its own RBAC/[access policies](access-policies.md) and keeps
+  its own **authoritative** audit hash-chain (the hub keeps a linked copy) — the hub is an
+  authorization initiator, never a bypass. A site keeps working if the hub or WAN is down.
+- New `internal/federation` package, `Federation.Manage` permission, **Sites** page, and migrations
+  `0060`/`0061`. Verified end-to-end with a live hub+site (join, link, cross-site proxy, revoke). See
+  docs/federation.md — including how federation composes with multi-tenancy.
+
 ## v0.51.0 — ITSM two-way sync
 
 The ITSM integration (v0.48.0) now writes the **decision back** to the linked ticket: when an access

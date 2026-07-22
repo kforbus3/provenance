@@ -5,12 +5,13 @@ glass over many independent **site** instances, each a full Fleet stack on its
 own separated network. Operators log into the hub and manage every site from one
 place.
 
-> Status: F0–F5 implemented. Standalone is unchanged. A hub can add/revoke
-> sites, rotate its federation key, watch live link state, and — via a global
-> **site selector** in the top bar — operate *every* management page against a
-> chosen site (host list, terminals, SFTP/file browser, scans, playbooks,
-> schedules, audit, etc.) transparently through the hub proxy. Remaining polish:
-> site-initiated key rotation and the WireGuard transport option.
+Federation is **opt-in and off by default** (`FLEET_MODE=standalone`): a standalone
+instance builds and mounts none of it and is unchanged. A hub can add/revoke sites,
+rotate its federation key, and watch live link state; via a global **site selector**
+in the top bar it operates *every* management page against a chosen site (host list,
+terminals, SFTP/file browser, databases, Kubernetes, scans, playbooks, schedules,
+audit, and everything else) transparently through the hub proxy — with no per-page
+changes, because the proxy forwards to the site's own unmodified API.
 
 ## Model
 
@@ -96,6 +97,30 @@ schedules, sessions, and audit all transparently route through the hub to that
 site (a request interceptor rewrites `/api/v1/*` to the site proxy). Switch back
 to **Hub (local)** to manage the hub itself. The Sites page always shows the
 registry and the aggregated cross-site host list regardless of the selector.
+
+## Federation and multi-tenancy
+
+Federation and [multi-tenancy](./multi-tenancy-plan.md) are **orthogonal and compose**:
+
+- **Multi-tenancy is horizontal** — it isolates many customers *inside one instance*
+  (Postgres row-level security).
+- **Federation is vertical** — it aggregates many *independent instances* under one hub.
+
+For an **MSP**, the natural shape is *"a federated site is a tenant at the hub"*: the hub
+is the provider's single pane of glass, each customer datacenter is an autonomous **site**,
+and the hub maps each site to a **tenant** so the provider's own operators get per-customer
+isolation on the hub — while each site stays fully autonomous and keeps working if the hub or
+WAN is down.
+
+Because a site runs the request through its **own** handlers under a synthesized site-local
+principal (the shadow user), each site enforces its own RBAC, [access policies](./access-policies.md),
+and command policies independently — the hub is an authorization *initiator*, never a bypass.
+Audit hash-chains stay **per-site** and authoritative; the hub keeps only a linked copy, so a
+compromised hub cannot rewrite a site's audit history.
+
+> The hub↔site control plane runs in single-tenant mode per instance today; mapping each site
+> to a hub-side tenant (so one hub cleanly serves multiple provider customers) is the intended
+> MSP extension.
 
 ## Testing two stacks locally
 

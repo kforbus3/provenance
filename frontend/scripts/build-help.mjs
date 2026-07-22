@@ -28,6 +28,7 @@ const DOCS = [
   { file: "external-secrets.md", title: "External Secrets Manager", category: "Security", order: 9.5 },
   { file: "kms.md", title: "Encryption at Rest (KMS)", category: "Security", order: 10 },
   { file: "behavior-analytics.md", title: "Behavior Analytics (UEBA)", category: "Security", order: 11 },
+  { file: "federation.md", title: "Multi-Site Federation", category: "Administration", order: 11.5 },
   { file: "api.md", title: "API Reference", category: "Reference", order: 12 },
   { file: "itsm.md", title: "ITSM (ServiceNow / Jira)", category: "Administration", order: 12.5 },
   { file: "automation.md", title: "Automation (SDK & CLI)", category: "Reference", order: 13 },
