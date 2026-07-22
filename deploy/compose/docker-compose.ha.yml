@@ -45,12 +45,23 @@ services:
     networks: [fleet]
 
   # Both backends inherit the full environment/build of the base `backend` service
-  # (same secrets from --env-file .env), and only override ports + dependencies. They
-  # share the recordings/rdp-drive volumes (same project) as HA requires.
+  # (secrets from --env-file .env) and only override ports + dependencies. They share
+  # the recordings/rdp-drive volumes (same project) as HA requires.
+  #
+  # This is a SELF-CONTAINED HA test stack: it pins the two backends to THIS stack's
+  # own Postgres as the superuser and runs single-tenant, overriding any
+  # FLEET_DATABASE_URL / FLEET_MULTI_TENANCY your .env sets for production (a
+  # multi-tenant URL points at a `fleet_app` role this fresh Postgres doesn't have, so
+  # the backends would hang on connect). HA is orthogonal to multi-tenancy, so testing
+  # it single-tenant exercises the full cluster machinery. Always `down -v` between
+  # runs — a stale pgdata volume carries a CA key sealed with a different passphrase.
   backend1:
     extends:
       file: docker-compose.yml
       service: backend
+    environment:
+      FLEET_DATABASE_URL: "postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable"
+      FLEET_MULTI_TENANCY: "false"
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,6 +75,9 @@ services:
     extends:
       file: docker-compose.yml
       service: backend
+    environment:
+      FLEET_DATABASE_URL: "postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable"
+      FLEET_MULTI_TENANCY: "false"
     depends_on:
       postgres:
         condition: service_healthy

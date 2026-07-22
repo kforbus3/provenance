@@ -425,9 +425,11 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	go pump(stdout)
 	go pump(stderr)
 
-	// Seed the broker with the starting size so a watcher that joins mid-session
-	// renders at the right dimensions before the next resize.
+	// Mark this session's PTY as living on this instance (so peers' shadow requests
+	// are answered here), and seed the broker with the starting size so a watcher that
+	// joins mid-session renders at the right dimensions before the next resize.
 	if h.d.Watch != nil && sshSessionID != uuid.Nil {
+		h.d.Watch.RegisterLocal(sshSessionID)
 		h.d.Watch.Publish(sshSessionID, livesessions.Frame{Kind: "r", Cols: cols, Rows: rows})
 	}
 

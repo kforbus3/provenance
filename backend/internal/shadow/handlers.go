@@ -71,6 +71,14 @@ func (h *handler) watch(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	conn.SetReadLimit(512) // watchers send nothing meaningful
 
+	// If this session's PTY lives on another instance (HA), ask peers to mirror its
+	// live frames to this instance while we're watching. Balanced on disconnect;
+	// a no-op in a single-instance deployment (the session is always local).
+	if !h.d.Watch.IsLocal(sid) {
+		h.d.Watch.WantRemote(sid)
+		defer h.d.Watch.ReleaseRemote(sid)
+	}
+
 	frames, size, unsub := h.d.Watch.Subscribe(sid)
 	defer unsub()
 

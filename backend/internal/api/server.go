@@ -204,6 +204,26 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 			}
 		}
 	})
+	// Cross-instance live session shadowing: mirror a locally-owned session's frames
+	// to peers on demand, and deliver a peer's mirrored frames to local watchers.
+	s.Watch.SetPeer(
+		func(sid uuid.UUID, f livesessions.Frame) {
+			s.backplane.PublishShadowFrame(sid, f.Kind, f.Data, f.Cols, f.Rows)
+		},
+		func(sid uuid.UUID, want bool) { s.backplane.PublishShadowSub(sid, want) },
+	)
+	s.backplane.SetShadowHandlers(
+		func(action string, sid uuid.UUID, origin string) {
+			if action == "shadow_sub" {
+				s.Watch.RemoteWatchStart(sid, origin) // no-op unless this instance owns sid
+			} else {
+				s.Watch.RemoteWatchStop(sid, origin)
+			}
+		},
+		func(sid uuid.UUID, kind string, data []byte, cols, rows int) {
+			s.Watch.Publish(sid, livesessions.Frame{Kind: kind, Data: data, Cols: cols, Rows: rows})
+		},
+	)
 	s.Hub.SetBackplane(s.backplane)
 
 	// Scan + playbook services are shared between their HTTP handlers and the

@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.55.0 — Cross-instance live session shadowing (HA)
+
+Closes the last HA gap: **live session shadowing now works across instances.** Watching
+an in-progress session (`Session.Watch`) previously only worked if the watcher happened
+to land on the same instance as the session's PTY; otherwise the watcher saw nothing.
+
+- When a watcher attaches to a session another instance owns, it announces interest over
+  the existing Postgres LISTEN/NOTIFY backplane, and the owning instance mirrors that
+  session's live output/resize frames to peers — **only while a remote watcher is
+  attached**, so an unwatched session adds zero backplane traffic.
+- Frames are chunked to fit the NOTIFY payload limit and relayed on a dedicated,
+  non-blocking path, so shadowing never slows the operator's terminal; under a burst a
+  remote watcher drops frames rather than stalling the session (same policy as a local
+  slow watcher).
+- No new infrastructure or configuration — it rides the backplane Fleet already uses, and
+  is inert in a single-instance deployment.
+- The HA test stack (`deploy/compose/docker-compose.ha.yml`) is now self-contained: it
+  pins its two backends to its own Postgres single-tenant, so it runs as-shipped
+  regardless of the production `FLEET_DATABASE_URL` / multi-tenancy in your `.env`.
+
+Verified live: leader-kill failover, ownership reconciliation (dead-owner rows fail while
+live peers are spared), and — via two real backends over one Postgres — cross-instance
+events, terminate, and the shadow subscribe + chunked-frame relay all round-trip.
+
 ## v0.54.1 — Pending-updates accuracy + Ask-AI timezone fixes
 
 Three fixes to how host updates are collected and how the assistant reports times.

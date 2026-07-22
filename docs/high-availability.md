@@ -43,14 +43,18 @@ Because any request can be served correctly by any instance (issue-own-cert), **
 not need sticky sessions / affinity** for correctness. Affinity is only a minor
 optimization (fewer per-instance certs).
 
-### Known limitation — live session shadowing across instances
+### Live session shadowing across instances
 
-Post-hoc **replay** works from any instance (recordings live on shared storage, see
-§4). **Live** shadowing (`Session.Watch` on an *in-progress* session) only works when
-the watcher lands on the instance whose PTY is being watched, because the live frame
-stream is in that instance's RAM. Route the watcher to that instance, or watch after
-the fact via replay. (Full cross-instance live shadowing would need a real-time frame
-pipe and is not implemented.)
+**Live** shadowing (`Session.Watch` on an *in-progress* session) works from **any**
+instance, even when the session's PTY lives on a different one. When a watcher attaches
+to a session this instance doesn't own, it announces interest over the backplane; the
+owning instance then mirrors that session's live output/resize frames to peers (and
+only while a remote watcher is attached, so an unwatched session costs nothing on the
+wire). Frames are chunked to fit the NOTIFY payload limit and relayed on a dedicated,
+non-blocking path, so shadowing never slows the operator's terminal — under a burst a
+remote watcher drops frames rather than stalling the session, exactly as a local slow
+watcher does. Post-hoc **replay** likewise works from any instance (recordings live on
+shared storage, see §4).
 
 ---
 
