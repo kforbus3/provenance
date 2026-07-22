@@ -21,6 +21,7 @@ import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import KeyIcon from "@mui/icons-material/Key";
+import StorageIcon from "@mui/icons-material/Storage";
 import SettingsIcon from "@mui/icons-material/Settings";
 import HourglassBottomIcon from "@mui/icons-material/HourglassBottom";
 import PolicyIcon from "@mui/icons-material/Policy";
@@ -70,6 +71,7 @@ const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: stri
   { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },
   { to: "/service-accounts", label: "Service Accounts", icon: <ApiIcon />, perm: "ServiceAccount.Manage" },
   { to: "/vault", label: "Credentials", icon: <KeyIcon />, perm: "Credential.View" },
+  { to: "/databases", label: "Databases", icon: <StorageIcon />, perm: "Database.Connect" },
   { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
   { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
   { to: "/lifecycle", label: "Expiry & Rotation", icon: <HourglassBottomIcon />, perm: "System.Configure" },

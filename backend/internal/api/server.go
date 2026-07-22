@@ -43,6 +43,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/command"
 	"github.com/fleet-terminal/backend/internal/commandpolicyapi"
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/dbbroker"
 	"github.com/fleet-terminal/backend/internal/digest"
 	"github.com/fleet-terminal/backend/internal/dr"
 	"github.com/fleet-terminal/backend/internal/enrollment"
@@ -974,6 +975,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
 	credvault.Mount(r, deps, s.Gateway)
+	dbbroker.Mount(r, deps, s.Gateway)
 	rdp.Mount(r, deps, s.Gateway)
 	rdp.MountAPI(r, deps)
 	auditapi.Mount(r, deps)

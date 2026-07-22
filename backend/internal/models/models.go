@@ -57,6 +57,24 @@ type VaultSecret struct {
 	Access string `json:"access,omitempty"`
 }
 
+// Database is a registered database target that Fleet brokers SQL access to: it is
+// reached through the jump host and authenticated with a vaulted credential, so the
+// operator never sees the password and every query is audited.
+type Database struct {
+	ID             uuid.UUID  `json:"id"`
+	Name           string     `json:"name"`
+	Engine         string     `json:"engine"` // postgres
+	Address        string     `json:"address"`
+	Port           int        `json:"port"`
+	DatabaseName   string     `json:"databaseName"`
+	CredentialID   *uuid.UUID `json:"credentialId,omitempty"`
+	CredentialName string     `json:"credentialName,omitempty"` // resolved for the UI
+	Description    string     `json:"description"`
+	CreatedBy      string     `json:"createdBy,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
 // VaultCheckout is a time-boxed check-out of a credential (optionally approved by a
 // second person) that grants the requester reveal/inject access while active.
 type VaultCheckout struct {

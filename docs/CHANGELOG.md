@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.39.0 — Database access brokering (PostgreSQL)
+
+Fleet now brokers privileged access to **databases**, not just SSH/RDP hosts. Register a
+PostgreSQL target (address, port, database, and a vaulted credential), then run SQL from the
+new **Databases** page: Fleet reaches the database **through the jump host**, injects the
+vaulted credential (you never see the password), executes your statement, and **audits it**.
+
+- Zero-knowledge: the database password is decrypted in RAM at point of use and never returned
+  to the client; the connection authenticates as the credential's user.
+- Reuses the existing spine — the jump-host tunnel (`DialRawViaJump` with your session
+  certificate), the credential vault, RBAC, and the hash-chained audit log. Every query is
+  recorded (`db.query`) with who ran what against which database.
+- New permissions `Database.Manage` (register/edit/delete targets) and `Database.Connect`
+  (open a session and run queries); a results grid with row/statement caps. Migration
+  `0053_database_broker`.
+- First engine is PostgreSQL (reuses the bundled pgx driver); the model is built to extend to
+  MySQL/others. This version executes one statement per request (no persistent transaction/
+  session yet).
+
 ## v0.38.0 — Scheduled automatic credential rotation
 
 The credential vault could already rotate a password on its host **on demand**; it can now do
