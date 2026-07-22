@@ -212,6 +212,10 @@ and operational recommendations.
   wrapped by an external KMS (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, or GCP Cloud KMS)
   instead of living in the environment as plaintext — Fleet unwraps them once at boot, so a stolen
   disk or backup can't be decrypted without live KMS access. See [kms.md](./kms.md).
+- **External secrets manager (optional).** A vault credential can be *external-backed*: instead of
+  Fleet storing the material, it references a secret in an external manager (HashiCorp Vault KV) and
+  fetches it on demand at point of use — no local copy is kept. See
+  [external-secrets.md](./external-secrets.md).
 
 ## 11. Rate limiting & abuse resistance
 

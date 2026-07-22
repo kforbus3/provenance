@@ -968,3 +968,9 @@ Two more controls tighten the platform:
   rest*. See **[Encryption at rest (KMS)](./kms.md)**.
 - **Behavior analytics (UEBA)** — advisory anomaly detection over session records on the Behavior
   page (`Audit.View`). See **[Behavior analytics](./behavior-analytics.md)**.
+- **External secrets manager** — back a vault credential with an external manager (HashiCorp Vault
+  KV) that Fleet reads on demand instead of storing the material. See
+  **[External secrets](./external-secrets.md)**.
+- **ITSM (ServiceNow / Jira)** — open a change/incident ticket for each just-in-time access request
+  and attach its reference to the approval (Settings → Integrations, `System.Configure`). See
+  **[ITSM integration](./itsm.md)**.
