@@ -20,6 +20,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/tenant"
 )
 
 const (
@@ -211,7 +212,15 @@ func (s *Service) Ask(ctx context.Context, question, conversationID string, who 
 	}
 	askID = uuid.NewString()
 	s.asks.Store(askID, &AskResult{Status: "pending", created: time.Now(), owner: who.UserID})
-	go s.run(askID, convoID, question, who, cfg)
+	// Capture the caller's tenant scope from the request context. The work runs in a
+	// background context (LLM inference outlives the request), so without this the
+	// pool's RLS hook would see an unmarked context and, under multi-tenancy, deny
+	// every row (fail-closed) — the assistant would answer nothing. Propagating the
+	// caller's own tenant makes the background queries behave exactly like a
+	// synchronous request: scoped to that tenant, never cross-tenant. With MT off the
+	// value is still a tenant id but the pool ignores it and uses Bypass, unchanged.
+	tenantScope := tenant.GUCValue(ctx)
+	go s.run(askID, convoID, question, who, cfg, tenantScope)
 	return askID, convoID, true
 }
 
@@ -232,9 +241,15 @@ func (s *Service) Result(id string, caller uuid.UUID) (*AskResult, bool) {
 	return r, true
 }
 
-func (s *Service) run(id, convoID, question string, who Caller, cfg Settings) {
+func (s *Service) run(id, convoID, question string, who Caller, cfg Settings, tenantScope string) {
 	ctx, cancel := context.WithTimeout(context.Background(), askTimeout)
 	defer cancel()
+	// Re-apply the caller's tenant scope so RLS filters every query this background
+	// run makes to the caller's tenant (see Ask). Empty only if the caller was
+	// somehow unauthenticated, in which case fail-closed denial is the safe outcome.
+	if tenantScope != "" {
+		ctx = tenant.WithID(ctx, tenantScope)
+	}
 	s.cleanup()
 
 	answer, data, err := s.converse(ctx, cfg, convoID, question, who)

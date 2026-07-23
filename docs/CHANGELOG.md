@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.58.1 — Ask assistant works under multi-tenancy
+
+Fixed the Ask assistant returning nothing when `FLEET_MULTI_TENANCY` is enabled.
+The assistant answers in a background context (local-LLM inference outlives the
+HTTP request), which was unmarked by tenant — so the row-level-security hook
+denied every row (fail-closed) and answers came back empty. Ask now captures the
+caller's tenant from the request and re-applies it to the background work, so every
+query is scoped to that tenant exactly as a synchronous request would be — never
+cross-tenant. With multi-tenancy off, behavior is unchanged. Verified with a real
+non-superuser role and RLS enforced: an unmarked context sees nothing, each
+tenant's context sees only its own rows, and no data crosses tenants.
+
 ## v0.58.0 — Fuller host support bundle
 
 Expanded the per-host support bundle to cover what a support agent typically
