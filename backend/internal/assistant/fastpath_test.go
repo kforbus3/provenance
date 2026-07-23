@@ -63,6 +63,14 @@ func TestFastPathTool(t *testing.T) {
 		// disk-provenance follow-up -> host_detail
 		{"on nas, which filesystem does the disk-free percentage refer to?", "host_detail", map[string]string{"hostname": "nas"}},
 
+		// schedules -> list_schedules
+		{"what runs on a schedule, and when does it fire next?", "list_schedules", map[string]string{}},
+		{"what is scheduled to run automatically?", "list_schedules", map[string]string{}},
+		{"when is the next scheduled scan?", "list_schedules", map[string]string{}},
+		// but scheduled-run FAILURE/history stays with the model
+		{"did any scheduled scan fail last night?", "", nil},
+		{"when did the nightly playbook last run?", "", nil},
+
 		// action-y scan request must NOT hit the vulnerabilities READ fast-path
 		{"run a vulnerability scan on web-01", "", nil},
 		// session-style "who logged into X" must NOT hit list_users

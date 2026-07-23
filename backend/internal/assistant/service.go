@@ -349,6 +349,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.host = host
 			}
 			result = payload
+		case "list_schedules":
+			tbl, payload := s.runListSchedules(ctx, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
 		}
 		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil && strings.TrimSpace(final) != "" {
 			s.remember(convoID, who.UserID, question, final)
@@ -523,8 +529,19 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			messages = append(messages, chatMessage{Role: "tool", Content: string(payload)})
 		}
 	}
-	// Ran out of iterations; summarize from what we have.
-	final := "I couldn't fully resolve that. Here is the data I found."
+	// Ran out of tool iterations. The tool results are already in `messages`, so make
+	// one final pass with tools DISABLED — the model must now WRITE an answer from what
+	// it has instead of calling yet another tool. This turns a loop into a real answer.
+	if resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages}); err == nil {
+		if final := strings.TrimSpace(resp.Message.Content); final != "" {
+			s.remember(convoID, who.UserID, question, final)
+			return final, data, nil
+		}
+	}
+	final := "Here's what I found — see the details below."
+	if data.table == nil && data.host == nil && data.history == nil && len(data.hosts) == 0 {
+		final = "I couldn't fully resolve that from the data available to me."
+	}
 	s.remember(convoID, who.UserID, question, final)
 	return final, data, nil
 }

@@ -126,7 +126,15 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		}
 	}
 
-	// 10) aggregate / superlative host-metric questions ("how many hosts", "highest
+	// 10) schedule questions ("what runs on a schedule / automatically", "when does
+	// it fire next", "list the schedules") -> list_schedules. History/failure
+	// phrasings ("did the scheduled scan fail", "when did it last run") stay with the
+	// model so they reach recent_scans / recent_playbook_runs.
+	if schedulesIntent(lq) {
+		return "list_schedules", nil, true
+	}
+
+	// 11) aggregate / superlative host-metric questions ("how many hosts", "highest
 	// CPU load", "longest uptime", "which hosts have high memory") -> query_hosts
 	// (list all). These route fine on their own, but small models tend to hallucinate
 	// the FINAL narration (parroting example phrases); routing here forces the grounded
@@ -137,6 +145,33 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	}
 
 	return "", nil, false
+}
+
+// schedulesIntent matches questions about the recurring schedule definitions and
+// their next fire time. It stands down for history/failure phrasings, which belong
+// to the scan/playbook run history tools.
+func schedulesIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false
+	}
+	// History/outcome phrasings are not schedule-definition questions.
+	for _, t := range []string{"fail", "did the", "did any", "did my", "last run", "last fire", "when did"} {
+		if strings.Contains(lq, t) {
+			return false
+		}
+	}
+	for _, t := range []string{
+		"on a schedule", "what schedules", "which schedules", "list schedule", "show schedule",
+		"the schedules", "scheduled job", "scheduled task", "recurring", "fire next", "fires next",
+		"next run", "next fire", "next scheduled", "runs automatically", "run automatically",
+		"what runs weekly", "what runs nightly", "what runs daily", "automatic scan", "automatic playbook",
+		"what is scheduled", "whats scheduled", "what's scheduled",
+	} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
 }
 
 // hostAggregateIntent matches "how many hosts", superlative host-metric questions

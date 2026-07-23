@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.58.2 — Ask: reliable schedule answers + better fallback
+
+- "What runs on a schedule / when does it fire next?" now routes deterministically
+  to the schedule list and answers from it directly, instead of occasionally
+  looping and returning "I couldn't fully resolve that" with a bare table.
+  (History/failure phrasings like "did the scheduled scan fail" still go to the
+  scan/playbook run history.)
+- When the model does run out of tool steps on any question, Ask now makes one
+  final pass over the data it already gathered to write a real answer, rather than
+  giving up — and the last-resort message no longer implies failure when the
+  answer is sitting right there in the results.
+
 ## v0.58.1 — Ask assistant works under multi-tenancy
 
 Fixed the Ask assistant returning nothing when `FLEET_MULTI_TENANCY` is enabled.
