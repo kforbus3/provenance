@@ -1,6 +1,6 @@
 # Terraform Provider for Fleet Terminal
 
-Manage a [Fleet Terminal](https://github.com/kforbus3/Fleet-Terminal) deployment as
+Manage a [Fleet Terminal](https://github.com/your-org/Fleet-Terminal) deployment as
 infrastructure-as-code: hosts, groups (including dynamic membership rules), service
 accounts, and their API tokens. Built on the official Go SDK and the modern
 [terraform-plugin-framework](https://github.com/hashicorp/terraform-plugin-framework).
@@ -53,7 +53,7 @@ in your `~/.terraformrc`:
 ```hcl
 provider_installation {
   dev_overrides {
-    "kforbus3/fleet" = "/absolute/path/to/terraform-provider-fleet"
+    "your-org/fleet" = "/absolute/path/to/terraform-provider-fleet"
   }
   direct {}
 }

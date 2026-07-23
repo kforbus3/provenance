@@ -10,7 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/kforbus3/Fleet-Terminal/terraform-provider-fleet/internal/provider"
+	"github.com/your-org/Fleet-Terminal/terraform-provider-fleet/internal/provider"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -23,7 +23,7 @@ func main() {
 
 	err := providerserver.Serve(context.Background(), provider.New(version), providerserver.ServeOpts{
 		// Registry address once published; also the source used in required_providers.
-		Address: "registry.terraform.io/kforbus3/fleet",
+		Address: "registry.terraform.io/your-org/fleet",
 		Debug:   debug,
 	})
 	if err != nil {

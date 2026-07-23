@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.55.4 — Generic org placeholder in module paths
+
+The Go SDK and Terraform provider module paths, and the clone/`go get`/`go install`
+examples in the docs, now use a generic `your-org` placeholder
+(`github.com/your-org/Fleet-Terminal/...`) instead of a specific GitHub account.
+
+- **Action for SDK / Terraform users:** substitute your own GitHub org in the import
+  path and provider source (or use a local `replace` directive, as the bundled
+  Terraform provider already does against `../sdk`). Building from this repo is
+  unaffected — the local replace directive resolves the SDK without a network fetch.
+
 ## v0.55.3 — Live host status on the terminal view
 
 Extends v0.55.2 to the in-terminal view. The terminal header now shows the host's
@@ -1724,7 +1735,7 @@ and federate identity with SAML SSO and SCIM provisioning.
   `AccessReview.Manage` permission (granted to Super Administrator, Administrator,
   and Auditor).
 - **Automation: Go SDK + `fleet` CLI.** A standalone, dependency-free Go module
-  (`github.com/kforbus3/Fleet-Terminal/sdk`) and a token-authenticated `fleet`
+  (`github.com/your-org/Fleet-Terminal/sdk`) and a token-authenticated `fleet`
   command-line tool for managing hosts, groups (incl. dynamic rules), users, roles,
   service accounts and tokens, vulnerability scans, and CSV reports — for CI/CD,
   scheduled jobs, and custom tooling. Authenticates with a service-account `flt_`

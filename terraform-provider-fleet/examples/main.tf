@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     fleet = {
-      source = "kforbus3/fleet"
+      source = "your-org/fleet"
     }
   }
 }

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
+	fleet "github.com/your-org/Fleet-Terminal/sdk"
 )
 
 // splitList parses a comma-separated flag value into a trimmed, non-empty slice.

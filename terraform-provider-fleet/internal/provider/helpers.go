@@ -7,7 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
+	fleet "github.com/your-org/Fleet-Terminal/sdk"
 )
 
 // clientFromProviderData extracts the configured *fleet.Client passed from the
