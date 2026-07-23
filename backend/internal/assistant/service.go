@@ -300,8 +300,42 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.table = tbl
 			}
 			result = payload
+		case "capacity_outlook":
+			tbl, payload := s.runCapacityOutlook(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		case "security_events":
+			tbl, payload := s.runSecurityEvents(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		case "vulnerabilities":
+			tbl, payload := s.runVulnerabilities(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		case "list_users":
+			tbl, payload := s.runListUsers(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		case "query_hosts":
+			rows := s.runQueryHosts(ctx, fargs, who)
+			data.hosts = rows
+			result = map[string]any{"count": len(rows), "hosts": rows}
+		case "host_detail":
+			host, payload := s.hostDetail(ctx, fargs, who)
+			if host != nil {
+				data.host = host
+			}
+			result = payload
 		}
-		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil {
+		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil && strings.TrimSpace(final) != "" {
 			s.remember(convoID, who.UserID, question, final)
 			return final, data, nil
 		}
@@ -323,6 +357,17 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 		msg := resp.Message
 		if len(msg.ToolCalls) == 0 {
 			final := strings.TrimSpace(msg.Content)
+			if final == "" {
+				// The model returned an empty message (observed with small models when
+				// they can't map a question to a tool). Give a useful fallback rather
+				// than a blank answer: if a tool did populate data, note it; otherwise
+				// say plainly that Fleet has no data for this.
+				if data.table != nil || data.host != nil || data.history != nil || len(data.hosts) > 0 {
+					final = "Here is what I found for that (see the details below)."
+				} else {
+					final = "I couldn't find anything in Fleet that answers that. Fleet may not collect that data — it tracks host status, inventory, metrics, updates, vulnerabilities, sessions, audit and auth events, scans, playbook runs, users, and approvals."
+				}
+			}
 			s.remember(convoID, who.UserID, question, final)
 			return final, data, nil
 		}
@@ -430,6 +475,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				result = payload
 			case "windows_software":
 				tbl, payload := s.runWindowsSoftware(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "security_events":
+				tbl, payload := s.runSecurityEvents(ctx, tc.Function.Arguments, who)
 				if tbl != nil {
 					data.table = tbl
 				}

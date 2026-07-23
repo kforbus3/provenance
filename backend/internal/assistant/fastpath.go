@@ -24,6 +24,13 @@ var (
 	// A reachability/downtime token: "offline", "outage(s)", "downtime",
 	// "unreachable", or "<aux> [subject] down" (went/was/is/... [nas] down).
 	downRE = regexp.MustCompile(`(?i)\b(?:offline|outages?|downtime|unreachable|(?:go(?:ne|es|ing)?|went|was|were|been|is|are)\s+(?:[a-z0-9._-]+\s+)?down)\b`)
+	// A capacity/exhaustion phrase: running out / filling up / low on space, etc.
+	capacityVerbRE = regexp.MustCompile(`(?i)\b(?:runn?ing?\s+out|ran\s+out|run\s+out|fill(?:ing)?\s+up|out\s+of\s+(?:disk|space|storage|memory|ram)|runn?ing?\s+low|low\s+on\s+(?:disk|space|storage|memory|ram)|used?\s+up|exhaust|runway|capacity)\b`)
+	// "on <host>" / "for <host>" anywhere (not anchored to the end of the string).
+	hostAnywhereRE = regexp.MustCompile(`(?i)\b(?:on|for)\s+([a-z0-9][a-z0-9._-]*)`)
+	// An imperative that means "run a scan", so a vulnerability READ fast-path stands
+	// down and lets the action/model path propose a scan instead.
+	scanVerbRE = regexp.MustCompile(`(?i)\b(?:run|start|kick|initiate|perform|launch|trigger|do)\b[^.?!]*\bscan\b`)
 )
 
 // fastPathTool returns the tool + JSON args to run directly for an unambiguous
@@ -65,7 +72,226 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "host_availability", a, true
 	}
 
+	// 4) capacity / runway questions -> capacity_outlook. Routes "will any host run
+	// out of disk/memory" to a capacity-FILTERED insights view that answers plainly
+	// when nothing is at risk, instead of dumping unrelated insight rows.
+	if disk, mem, ok := capacityIntent(lq); ok {
+		a, _ := json.Marshal(capacityArgs{Disk: disk, Memory: mem, Days: daysFromText(lq)})
+		return "capacity_outlook", a, true
+	}
+
+	// 5) failed-login / brute-force / lockout questions -> security_events. (Kept
+	// distinct from "security updates", which is a package-update question above.)
+	if securityEventsIntent(lq) {
+		a, _ := json.Marshal(securityEventsArgs{FailedOnly: true, Hours: 24})
+		return "security_events", a, true
+	}
+
+	// 6) CVE / vulnerability READ questions -> vulnerabilities (not a "run a scan"
+	// request, which the action path handles).
+	if !scanVerbRE.MatchString(lq) && vulnReadIntent(lq) {
+		host := ""
+		if hm := hostAnywhereRE.FindStringSubmatch(lq); hm != nil {
+			host = hm[1]
+		}
+		sev := ""
+		if strings.Contains(lq, "critical") {
+			sev = "critical"
+		} else if strings.Contains(lq, "high") {
+			sev = "high"
+		}
+		a, _ := json.Marshal(vulnArgs{Hostname: host, MinSeverity: sev})
+		return "vulnerabilities", a, true
+	}
+
+	// 7) accounts / roles / MFA questions -> list_users (but not "who is connected").
+	if withoutMFA, ok := usersIntent(lq); ok {
+		a, _ := json.Marshal(listUsersArgs{WithoutMFA: withoutMFA})
+		return "list_users", a, true
+	}
+
+	// 8) "which OS / kernel versions" inventory questions -> query_hosts (list all).
+	if osInventoryIntent(lq) {
+		a, _ := json.Marshal(queryHostsArgs{})
+		return "query_hosts", a, true
+	}
+
+	// 9) disk-provenance follow-ups ("which filesystem is that / where did 31% come
+	// from") -> host_detail, whose diskBreakdown names the driving mount. Only when a
+	// host is identifiable.
+	if diskProvenanceIntent(lq) {
+		if hm := hostAnywhereRE.FindStringSubmatch(lq); hm != nil {
+			a, _ := json.Marshal(hostDetailArgs{Hostname: hm[1]})
+			return "host_detail", a, true
+		}
+	}
+
+	// 10) aggregate / superlative host-metric questions ("how many hosts", "highest
+	// CPU load", "longest uptime", "which hosts have high memory") -> query_hosts
+	// (list all). These route fine on their own, but small models tend to hallucinate
+	// the FINAL narration (parroting example phrases); routing here forces the grounded
+	// narrate-from-data path instead. Kept last so specific intents win.
+	if hostAggregateIntent(lq) {
+		a, _ := json.Marshal(queryHostsArgs{})
+		return "query_hosts", a, true
+	}
+
 	return "", nil, false
+}
+
+// hostAggregateIntent matches "how many hosts", superlative host-metric questions
+// ("highest CPU load", "longest uptime"), and "high memory/cpu usage".
+func hostAggregateIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false
+	}
+	if strings.Contains(lq, "how many host") || strings.Contains(lq, "how many server") ||
+		strings.Contains(lq, "number of host") || strings.Contains(lq, "host count") ||
+		strings.Contains(lq, "total hosts") || strings.Contains(lq, "count of host") {
+		return true
+	}
+	resource := func(s string) bool {
+		for _, r := range []string{"host", "server", "cpu", "load", "memory", "ram", "disk", "uptime", "space", "machine"} {
+			if strings.Contains(s, r) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, sup := range []string{"highest", "lowest", "most", "least", "longest", "shortest",
+		"top ", "maximum", "minimum", "biggest", "smallest", "greatest", "busiest"} {
+		if strings.Contains(lq, sup) && resource(lq) {
+			return true
+		}
+	}
+	for _, hi := range []string{"high memory", "high cpu", "high load", "heavy load", "heavy memory",
+		"high ram", "elevated memory", "elevated cpu", "high utilization", "high usage", "under heavy",
+		"memory pressure", "cpu pressure"} {
+		if strings.Contains(lq, hi) {
+			return true
+		}
+	}
+	return false
+}
+
+// securityEventsIntent matches failed-login / brute-force / lockout / MFA-failure
+// questions (auth_events), deliberately NOT "security updates" (package updates).
+func securityEventsIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false
+	}
+	for _, t := range []string{
+		"failed login", "failed logins", "login failure", "login failures",
+		"brute forc", "brute-forc", "bruteforc", "login attempt", "lockout",
+		"locked out", "account locked", "mfa failure", "authentication failure",
+		"auth failure", "failed authentication", "failed sign", "failed to log",
+	} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// vulnReadIntent matches CVE/vulnerability questions.
+func vulnReadIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false
+	}
+	return strings.Contains(lq, "cve") || strings.Contains(lq, "vulnerabilit") || strings.Contains(lq, "vulnerable")
+}
+
+// usersIntent matches account/role/MFA questions and reports whether it asks
+// specifically for accounts WITHOUT MFA. It stands down for "who is connected"
+// style questions, which are about sessions, not the account list.
+func usersIntent(lq string) (withoutMFA, ok bool) {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false, false
+	}
+	// Session-style phrasings ("who logged into web-01", "who is connected") are
+	// about sessions, not the account list. Note: bare "haven't logged in" (account
+	// inactivity) is a users question, so only guard the host-directed forms.
+	for _, t := range []string{"connected", "logged into", "logged in to", "session", "who is on", "currently on"} {
+		if strings.Contains(lq, t) {
+			return false, false
+		}
+	}
+	mfa := strings.Contains(lq, "mfa") || strings.Contains(lq, "2fa") ||
+		strings.Contains(lq, "two-factor") || strings.Contains(lq, "two factor") || strings.Contains(lq, "multi-factor")
+	account := strings.Contains(lq, "administrator") || strings.Contains(lq, "admins") ||
+		strings.Contains(lq, "user account") || strings.Contains(lq, "accounts") ||
+		((strings.Contains(lq, "which") || strings.Contains(lq, "what") || strings.Contains(lq, "list") ||
+			strings.Contains(lq, "show") || strings.Contains(lq, "how many")) && strings.Contains(lq, "user"))
+	if !mfa && !account {
+		return false, false
+	}
+	for _, t := range []string{"without mfa", "no mfa", "lack", "missing mfa", "don't have mfa", "do not have mfa",
+		"without 2fa", "no 2fa", "not enrolled", "missing 2fa", "aren't enrolled", "no second factor"} {
+		if strings.Contains(lq, t) {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// osInventoryIntent matches "which OS/kernel versions are deployed" fleet-wide
+// inventory questions.
+func osInventoryIntent(lq string) bool {
+	for _, t := range []string{"os version", "os versions", "operating system", "which os", "what os",
+		"os are", "distro", "distros", "distribution", "kernel version", "kernel versions", "which kernel"} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// diskProvenanceIntent matches "which filesystem is that / where did the disk %
+// come from" follow-ups about a host's headline disk-free number.
+func diskProvenanceIntent(lq string) bool {
+	if strings.Contains(lq, "which filesystem") || strings.Contains(lq, "which mount") || strings.Contains(lq, "what filesystem") {
+		return true
+	}
+	if (strings.Contains(lq, "where") || strings.Contains(lq, "why")) &&
+		(strings.Contains(lq, "come from") || strings.Contains(lq, "%") || strings.Contains(lq, "percent")) &&
+		(strings.Contains(lq, "disk") || strings.Contains(lq, "free") || strings.Contains(lq, "space")) {
+		return true
+	}
+	return false
+}
+
+// capacityIntent detects a "going to run out of disk/memory" question and which
+// resource(s) it is about. ok=false means it is not a capacity question.
+func capacityIntent(lq string) (disk, memory, ok bool) {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") || strings.Contains(lq, "how can") {
+		return false, false, false
+	}
+	if !capacityVerbRE.MatchString(lq) {
+		return false, false, false
+	}
+	memory = strings.Contains(lq, "memory") || strings.Contains(lq, "ram")
+	disk = strings.Contains(lq, "disk") || strings.Contains(lq, "space") ||
+		strings.Contains(lq, "storage") || strings.Contains(lq, "/")
+	if !disk && !memory {
+		disk = true // a bare "running out"/"capacity" defaults to disk
+	}
+	return disk, memory, true
+}
+
+// daysFromText maps a coarse horizon phrase to a day window for capacity answers.
+func daysFromText(lq string) int {
+	switch {
+	case strings.Contains(lq, "today"), strings.Contains(lq, "tomorrow"), strings.Contains(lq, "24 h"), strings.Contains(lq, "24h"):
+		return 1
+	case strings.Contains(lq, "month"):
+		return 30
+	case strings.Contains(lq, "two week"), strings.Contains(lq, "2 week"), strings.Contains(lq, "14 day"):
+		return 14
+	case strings.Contains(lq, "week"): // "this week" / "next week" / "a week"
+		return 7
+	default:
+		return 7
+	}
 }
 
 // availabilityIntent reports whether a (lowercased) question is about PAST

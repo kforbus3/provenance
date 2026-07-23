@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
@@ -106,6 +107,182 @@ func (s *Service) runHostAvailability(ctx context.Context, raw json.RawMessage, 
 	return tbl, map[string]any{
 		"count": len(events), "windowHours": hours,
 		"summary": summary, "events": events,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// capacity_outlook — "will any host run out of disk/memory soon" (fast-path only)
+// ---------------------------------------------------------------------------
+
+type capacityArgs struct {
+	Disk   bool `json:"disk"`
+	Memory bool `json:"memory"`
+	Days   int  `json:"days"`
+}
+
+// runCapacityOutlook answers "is any host going to run out of disk/memory in the
+// next week". It reuses the insights engine (which carries the disk-runway
+// projection) but FILTERS to capacity categories and, crucially, gives a clear
+// negative answer when nothing is at risk — instead of dumping unrelated insight
+// rows (e.g. pending security updates) as if they answered the question.
+func (s *Service) runCapacityOutlook(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if s.insights == nil {
+		return nil, map[string]any{"error": "insights are not available"}
+	}
+	var a capacityArgs
+	_ = json.Unmarshal(raw, &a)
+	if !a.Disk && !a.Memory {
+		a.Disk = true
+	}
+	days := a.Days
+	if days <= 0 {
+		days = 7
+	}
+	items, err := s.insights.Compute(ctx, who.UserID, who.IsSuperAdmin)
+	if err != nil {
+		s.log.Warn("assistant capacity_outlook", "err", err)
+		return nil, map[string]any{"error": "could not compute capacity outlook"}
+	}
+	want := map[string]bool{}
+	if a.Disk {
+		want["disk"], want["disk-runway"] = true, true
+	}
+	if a.Memory {
+		want["memory"] = true
+	}
+	kept := make([]insights.Insight, 0, len(items))
+	for _, it := range items {
+		if want[it.Category] {
+			kept = append(kept, it)
+		}
+	}
+	subject := "disk"
+	if a.Disk && a.Memory {
+		subject = "disk or memory"
+	} else if a.Memory {
+		subject = "memory"
+	}
+	if len(kept) == 0 {
+		return nil, map[string]any{
+			"count": 0, "horizonDays": days, "subject": subject, "atRisk": false,
+			"note": fmt.Sprintf("No host is low on %s or projected to run out within the next %d days. "+
+				"(The disk-runway projection flags any host below 50%% free that is trending toward full within ~14 days; none currently qualify. "+
+				"Memory is flagged when currently high.) Answer plainly that no host is at risk, and do NOT mention unrelated issues like pending updates.", subject, days),
+		}
+	}
+	tbl := &AssistantTable{
+		Title:   "Capacity outlook",
+		Columns: []TableColumn{{Label: "Severity"}, {Label: "Host"}, {Label: "Issue"}, {Label: "Detail"}},
+	}
+	for _, it := range kept {
+		tbl.Rows = append(tbl.Rows, []string{it.Severity, it.Hostname, it.Title, it.Detail})
+	}
+	return tbl, map[string]any{"count": len(kept), "horizonDays": days, "subject": subject, "atRisk": true, "items": kept}
+}
+
+// ---------------------------------------------------------------------------
+// security_events — auth event stream (failed logins, lockouts, MFA), Audit.View
+// ---------------------------------------------------------------------------
+
+type securityEventsArgs struct {
+	Event      string `json:"event"`
+	Username   string `json:"username"`
+	FailedOnly bool   `json:"failedOnly"`
+	Hours      int    `json:"hours"`
+	Limit      int    `json:"limit"`
+}
+
+// looksLikeAuthFailure reports whether an auth_events event type is a failure/
+// abuse signal (login_failure, lockout, mfa_failure, invalid, denied).
+func looksLikeAuthFailure(ev string) bool {
+	ev = strings.ToLower(ev)
+	for _, k := range []string{"fail", "lockout", "invalid", "denied", "locked"} {
+		if strings.Contains(ev, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// runSecurityEvents answers authentication-security questions from the auth_events
+// stream: "any failed logins?", "is there a brute-force attempt?", "any account
+// lockouts / MFA failures?". These live in auth_events, NOT the audit_events that
+// audit_log reads, so this is the only tool that can answer them. Gated by
+// Audit.View. It also computes a per-IP failure tally as a brute-force signal.
+func (s *Service) runSecurityEvents(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
+	if !who.CanViewAudit && !who.IsSuperAdmin {
+		return nil, map[string]any{"error": "you do not have permission to view authentication events"}
+	}
+	var a securityEventsArgs
+	_ = json.Unmarshal(raw, &a)
+	hours := a.Hours
+	if hours <= 0 {
+		hours = 24
+	}
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+	evs, err := s.store.ListAuthEvents(ctx, nil, 1000)
+	if err != nil {
+		s.log.Warn("assistant security_events", "err", err)
+		return nil, map[string]any{"error": "could not read authentication events"}
+	}
+	evFilter := strings.ToLower(strings.TrimSpace(a.Event))
+	userFilter := strings.ToLower(strings.TrimSpace(a.Username))
+	limit := a.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	tbl := &AssistantTable{
+		Title:   "Authentication events",
+		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "Event"}, {Label: "User"}, {Label: "IP"}},
+	}
+	type evRow struct {
+		Time     time.Time `json:"time"`
+		Event    string    `json:"event"`
+		Username string    `json:"username,omitempty"`
+		IP       string    `json:"ip,omitempty"`
+	}
+	out := []evRow{}
+	failures := 0
+	failByIP := map[string]int{}
+	for _, e := range evs {
+		if e.CreatedAt.Before(cutoff) {
+			continue
+		}
+		if evFilter != "" && !strings.Contains(strings.ToLower(e.Event), evFilter) {
+			continue
+		}
+		if userFilter != "" && !strings.Contains(strings.ToLower(e.Username), userFilter) {
+			continue
+		}
+		fail := looksLikeAuthFailure(e.Event)
+		if a.FailedOnly && !fail {
+			continue
+		}
+		if fail {
+			failures++
+			if e.IP != "" {
+				failByIP[e.IP]++
+			}
+		}
+		out = append(out, evRow{Time: e.CreatedAt, Event: e.Event, Username: e.Username, IP: e.IP})
+		if len(tbl.Rows) < limit {
+			tbl.Rows = append(tbl.Rows, []string{tableTime(e.CreatedAt), e.Event, e.Username, e.IP})
+		}
+	}
+	// Brute-force signal: the IP with the most failures in the window.
+	topIP, topCount := "", 0
+	for ip, n := range failByIP {
+		if n > topCount {
+			topIP, topCount = ip, n
+		}
+	}
+	if len(out) == 0 {
+		tbl = nil
+	}
+	return tbl, map[string]any{
+		"windowHours": hours, "count": len(out), "failureCount": failures,
+		"distinctFailingIPs": len(failByIP), "topFailingIP": topIP, "topFailingIPCount": topCount,
+		"bruteForceSuspected": topCount >= 5, "events": out,
 	}
 }
 

@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.57.0 — Ask assistant: capacity + login security, and reliable routing
+
+Follows v0.56.0 with two more answerable areas and a substantial reliability pass
+on how questions are routed — validated end-to-end against a local model.
+
+**New**
+- **Capacity outlook** — "are any hosts going to run out of disk or memory this
+  week?" now gives a direct answer: it filters the insights engine to the disk-
+  runway and memory signals and states plainly when nothing is at risk, instead of
+  returning unrelated items (e.g. pending updates) as if they answered the question.
+- **Login security** — a new `security_events` view over the authentication event
+  stream answers "any failed logins?", "is someone brute-forcing the login?",
+  "any account lockouts / MFA failures?", including a per-IP failure tally as a
+  brute-force signal. These events are separate from the change/audit trail, so
+  this is distinct from the audit log. Requires `Audit.View`.
+
+**Reliability**
+- Expanded the deterministic fast-path so common sysadmin question shapes route to
+  the right data and are answered from that data directly — vulnerabilities/CVEs,
+  users/roles/MFA, login-security, OS/kernel inventory, disk-provenance follow-ups
+  ("which filesystem is that %?"), and aggregate/superlative host questions ("which
+  host has the highest load / longest uptime", "how many hosts are online"). This
+  removes a class of misroutes and stops a small local model from answering with a
+  canned example instead of the real data.
+- When a question maps to no available data, Ask now says so plainly (and notes what
+  it *can* answer) instead of returning a blank response.
+
 ## v0.56.0 — Ask assistant: six new answerable areas + accuracy fixes
 
 A coverage pass over the **Ask** assistant so it can answer the questions an IT

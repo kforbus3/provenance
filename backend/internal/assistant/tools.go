@@ -97,6 +97,10 @@ CHOOSING TOOLS
 - platform_status: Fleet's own control-plane health — the HA cluster roster + leader, and
   recent host-enrollment jobs. Use for "is the cluster healthy", "who is the leader", "did
   <host> enroll". This is the platform, not the managed hosts.
+- security_events: failed logins, lockouts, and MFA failures for Fleet sign-ins, with a
+  per-IP failure tally. Use for "any failed logins", "brute-force attempts", "account
+  lockouts", "MFA failures". These are separate from audit_log — use this for login
+  security. (Fleet sign-ins only; it does not have host-level auth logs.)
 - search_docs: the Fleet Terminal product documentation. Use it for HOW-TO and
   conceptual questions about using or configuring the product (SSO/SAML/SCIM setup, host
   enrollment, certificates, backups, the API/SDK, access reviews, deployment, hardening).
@@ -117,10 +121,13 @@ WORKING METHOD
 - Fleet health checks ("anything wrong?", "morning report"): start with fleet_insights;
   it already aggregates offline hosts, low disk, capacity runway, high memory/load, and
   pending updates. Add recent_scans / recent_playbook_runs failures if relevant.
-- Capacity questions ("when will web-01 run out of disk?"): prefer fleet_insights, which
-  carries the runway estimate and its confidence. Only fall back to host_metric_history
-  (extrapolating the recent rate linearly, stated as a rough estimate) if the host isn't
-  in the insights list.
+- Capacity questions ("when will web-01 run out of disk?", "will any host run out of disk
+  or memory this week?"): fleet_insights carries the disk-runway projection. Cite ONLY the
+  capacity categories (disk, disk-runway, memory) — if none are present, the correct answer
+  is that NO host is projected to run out in that window; say so plainly and do NOT cite
+  unrelated categories like pending updates. Only fall back to host_metric_history
+  (extrapolating the recent rate linearly, stated as a rough estimate) if a named host
+  isn't in the insights list.
 - "Disk free %" (a host's diskFreePct / the disk-free trend) is the free space on the
   host's TIGHTEST filesystem, computed as df Available / size. To say WHICH filesystem it
   is, or to reconcile it with a mount's Used%, call host_detail and read its diskBreakdown
@@ -484,6 +491,22 @@ var tools = []toolDef{{
 				"limit":    map[string]any{"type": "integer", "description": "max rows (default 500)"},
 			},
 			"required": []string{"hostname"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "security_events",
+		Description: "The authentication security event stream (Fleet sign-ins): failed logins, account lockouts, and MFA failures/successes, newest first, with a per-IP failure tally for spotting brute-force attempts. Use for 'any failed logins?', 'is someone brute-forcing the login?', 'any account lockouts?', 'any MFA failures?', 'authentication failures today'. These events live separately from the change/audit trail, so this — NOT audit_log — is the tool for login-security questions. Requires Audit.View. NOTE: these are sign-ins to Fleet itself, not host-level auth logs (Fleet does not collect logs from managed hosts).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"failedOnly": map[string]any{"type": "boolean", "description": "true = only failures/lockouts (for 'failed logins' / 'brute force' questions)"},
+				"event":      map[string]any{"type": "string", "description": "substring match on the event type, e.g. 'lockout', 'mfa', 'login_failure' (optional)"},
+				"username":   map[string]any{"type": "string", "description": "filter to one username (optional)"},
+				"hours":      map[string]any{"type": "integer", "description": "how many hours back to look (default 24)"},
+				"limit":      map[string]any{"type": "integer", "description": "max rows (default 100)"},
+			},
 		},
 	},
 }, {

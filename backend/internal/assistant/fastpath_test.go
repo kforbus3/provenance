@@ -30,6 +30,44 @@ func TestFastPathTool(t *testing.T) {
 		{"was anything down overnight?", "host_availability", map[string]string{}},
 		{"has any host gone offline recently?", "host_availability", map[string]string{}},
 
+		// capacity / runway -> capacity_outlook
+		{"are any hosts going to run out of disk space or memory in the next week?", "capacity_outlook", map[string]string{}},
+		{"are any hosts going to run out of disk space soon?", "capacity_outlook", map[string]string{}},
+		{"is anything about to run out of memory?", "capacity_outlook", map[string]string{}},
+		{"which hosts are low on disk space?", "capacity_outlook", map[string]string{}},
+
+		// failed logins / brute force -> security_events
+		{"have there been any failed logins?", "security_events", map[string]string{}},
+		{"is anyone brute-forcing the login?", "security_events", map[string]string{}},
+		{"any account lockouts today?", "security_events", map[string]string{}},
+
+		// CVE / vulnerability -> vulnerabilities
+		{"what critical vulnerabilities are on debian?", "vulnerabilities", map[string]string{"hostname": "debian", "minSeverity": "critical"}},
+		{"which hosts have CVEs?", "vulnerabilities", map[string]string{}},
+
+		// accounts / MFA -> list_users
+		{"who are the administrators?", "list_users", map[string]string{}},
+		{"which accounts lack MFA?", "list_users", map[string]string{}},
+		{"which accounts haven't logged in recently?", "list_users", map[string]string{}},
+
+		// OS inventory -> query_hosts
+		{"which OS versions are deployed across the fleet?", "query_hosts", map[string]string{}},
+		{"what kernel versions are running?", "query_hosts", map[string]string{}},
+
+		// aggregate / superlative -> query_hosts
+		{"which host has the highest CPU load?", "query_hosts", map[string]string{}},
+		{"which host has been up the longest?", "query_hosts", map[string]string{}},
+		{"how many hosts are online?", "query_hosts", map[string]string{}},
+		{"which hosts have high memory usage?", "query_hosts", map[string]string{}},
+
+		// disk-provenance follow-up -> host_detail
+		{"on nas, which filesystem does the disk-free percentage refer to?", "host_detail", map[string]string{"hostname": "nas"}},
+
+		// action-y scan request must NOT hit the vulnerabilities READ fast-path
+		{"run a vulnerability scan on web-01", "", nil},
+		// session-style "who logged into X" must NOT hit list_users
+		{"who logged into nas today?", "", nil},
+
 		// must NOT fast-path (defer to the model)
 		{"who logged into web-01 yesterday?", "", nil},
 		{"who has access to db-02?", "", nil},

@@ -199,6 +199,12 @@ action" below). You can ask about:
   *"was web-01 down this week?"*, *"how much downtime has db-02 had?"*. This is the
   record of hosts going offline and recovering, so it catches outages that already
   cleared — something the current-status view can't show you.
+- **Capacity outlook** — *"are any hosts going to run out of disk or memory this
+  week?"*. Ask projects disk runway and calls out anything trending toward full — and
+  tells you plainly when nothing is at risk.
+- **Login security** — *"any failed logins or brute-force attempts?"*, *"any account
+  lockouts or MFA failures?"*, drawn from the authentication event stream with a
+  per-IP failure tally (requires `Audit.View`).
 - **Vulnerabilities (CVEs)** — *"what critical vulnerabilities are on web-01?"* or
   *"which hosts have the worst CVE exposure?"*, from the vulnerability scanner
   (distinct from OpenSCAP compliance scans). Requires the `Host.Scan` permission.
