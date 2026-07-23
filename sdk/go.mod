@@ -1,3 +1,3 @@
-module github.com/your-org/Fleet-Terminal/sdk
+module github.com/kforbus3/Fleet-Terminal/sdk
 
 go 1.23.0

@@ -42,7 +42,7 @@ expiry (`--expires-days`) on tokens used by short-lived jobs.
 Install:
 
 ```bash
-go install github.com/your-org/Fleet-Terminal/sdk/cmd/fleet@latest
+go install github.com/kforbus3/Fleet-Terminal/sdk/cmd/fleet@latest
 ```
 
 Verify the token and see its effective permissions:
@@ -90,7 +90,7 @@ so redirecting stdout captures exactly the secret.
 Add it to a module:
 
 ```bash
-go get github.com/your-org/Fleet-Terminal/sdk@latest
+go get github.com/kforbus3/Fleet-Terminal/sdk@latest
 ```
 
 ```go
@@ -104,7 +104,7 @@ hosts, err := c.ListHosts(ctx, fleet.ListOptions{Limit: 100})
 Non-2xx responses return an `*fleet.APIError` with the status and server message;
 `fleet.IsNotFound` and `fleet.IsUnauthorized` classify the common cases. The SDK
 depends only on the Go standard library. Full reference and examples are in the
-[SDK README](https://github.com/your-org/Fleet-Terminal/tree/main/sdk).
+[SDK README](https://github.com/kforbus3/Fleet-Terminal/tree/main/sdk).
 
 ---
 

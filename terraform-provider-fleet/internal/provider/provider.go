@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	fleet "github.com/your-org/Fleet-Terminal/sdk"
+	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
 )
 
 // Ensure the implementation satisfies the provider interface.

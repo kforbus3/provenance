@@ -1,10 +1,10 @@
-module github.com/your-org/Fleet-Terminal/terraform-provider-fleet
+module github.com/kforbus3/Fleet-Terminal/terraform-provider-fleet
 
 go 1.23.0
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.13.0
-	github.com/your-org/Fleet-Terminal/sdk v0.0.0
+	github.com/kforbus3/Fleet-Terminal/sdk v0.0.0
 )
 
 require (
@@ -33,4 +33,4 @@ require (
 )
 
 // The SDK is developed in the same repository; build against the local copy.
-replace github.com/your-org/Fleet-Terminal/sdk => ../sdk
+replace github.com/kforbus3/Fleet-Terminal/sdk => ../sdk

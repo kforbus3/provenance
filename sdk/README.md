@@ -18,13 +18,13 @@ tooling.
 ### SDK
 
 ```bash
-go get github.com/your-org/Fleet-Terminal/sdk@latest
+go get github.com/kforbus3/Fleet-Terminal/sdk@latest
 ```
 
 ### CLI
 
 ```bash
-go install github.com/your-org/Fleet-Terminal/sdk/cmd/fleet@latest
+go install github.com/kforbus3/Fleet-Terminal/sdk/cmd/fleet@latest
 ```
 
 This installs a `fleet` binary into `$(go env GOPATH)/bin`.
@@ -109,7 +109,7 @@ import (
 	"log"
 	"os"
 
-	fleet "github.com/your-org/Fleet-Terminal/sdk"
+	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
 )
 
 func main() {
