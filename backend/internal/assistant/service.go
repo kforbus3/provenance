@@ -355,6 +355,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.table = tbl
 			}
 			result = payload
+		case "fleet_insights":
+			tbl, payload := s.runFleetInsights(ctx, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
 		}
 		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil && strings.TrimSpace(final) != "" {
 			s.remember(convoID, who.UserID, question, final)

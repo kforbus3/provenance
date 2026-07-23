@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.58.3 — Ask: "any problems?" attaches the right data; insights fix
+
+- Open-ended health questions ("any problems?", "anything wrong?", "morning
+  report", "does anything need my attention?") now route to the fleet-insights
+  summary as a single grounded call. Previously the model would answer correctly
+  but sometimes tack on an unrelated tool call (e.g. the schedule list) whose table
+  clobbered the insights table shown beneath the answer — so a health question
+  could render an irrelevant grid.
+- **Fleet insights: report pending security updates even when a host has no
+  metrics yet.** Pending updates come from inventory, not metrics, but the insight
+  loop skipped any host whose metrics hadn't been collected — so a freshly enrolled
+  host (or one whose metric probe was lagging/failing) could hide pending security
+  updates from "what's wrong with the fleet". Updates are now evaluated
+  independently of metrics. Offline hosts are still summarized by their offline card.
+
 ## v0.58.2 — Ask: reliable schedule answers + better fallback
 
 - "What runs on a schedule / when does it fire next?" now routes deterministically

@@ -63,6 +63,12 @@ func TestFastPathTool(t *testing.T) {
 		// disk-provenance follow-up -> host_detail
 		{"on nas, which filesystem does the disk-free percentage refer to?", "host_detail", map[string]string{"hostname": "nas"}},
 
+		// open-ended health -> fleet_insights
+		{"any problems?", "fleet_insights", map[string]string{}},
+		{"anything wrong with the fleet?", "fleet_insights", map[string]string{}},
+		{"anything I should worry about this morning?", "fleet_insights", map[string]string{}},
+		{"does anything need my attention today?", "fleet_insights", map[string]string{}},
+
 		// schedules -> list_schedules
 		{"what runs on a schedule, and when does it fire next?", "list_schedules", map[string]string{}},
 		{"what is scheduled to run automatically?", "list_schedules", map[string]string{}},
@@ -80,7 +86,6 @@ func TestFastPathTool(t *testing.T) {
 		{"who logged into web-01 yesterday?", "", nil},
 		{"who has access to db-02?", "", nil},
 		{"how do I update Fleet?", "", nil},
-		{"anything wrong with the fleet?", "", nil},
 		{"what is the disk usage on web-01?", "", nil},
 		{"which hosts are offline?", "", nil}, // current state, not history -> model
 		{"are any hosts offline right now?", "", nil},

@@ -93,6 +93,13 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 			})
 			continue
 		}
+		// Pending security updates come from inventory, not metrics, so report them
+		// even for a host whose metrics haven't been collected yet — a fresh enrollment
+		// or a lagging/failed metric probe must not hide pending security fixes.
+		if h.Inventory != nil && h.Inventory.SecurityUpdates != nil && *h.Inventory.SecurityUpdates > 0 {
+			out = append(out, insight(SeverityWarning, "updates", h.ID, h.Hostname,
+				"Security updates pending", fmt.Sprintf("%d security update(s) available.", *h.Inventory.SecurityUpdates)))
+		}
 		m := h.Metrics
 		if m == nil {
 			continue
@@ -118,10 +125,6 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 		if m.LoadPerCore != nil && *m.LoadPerCore >= loadWarningPerCPU {
 			out = append(out, insight(SeverityWarning, "load", h.ID, h.Hostname,
 				"High CPU load", fmt.Sprintf("Load per core is %.2f (>= %.1f).", *m.LoadPerCore, loadWarningPerCPU)))
-		}
-		if h.Inventory != nil && h.Inventory.SecurityUpdates != nil && *h.Inventory.SecurityUpdates > 0 {
-			out = append(out, insight(SeverityWarning, "updates", h.ID, h.Hostname,
-				"Security updates pending", fmt.Sprintf("%d security update(s) available.", *h.Inventory.SecurityUpdates)))
 		}
 	}
 

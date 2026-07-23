@@ -144,7 +144,38 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "query_hosts", a, true
 	}
 
+	// 12) open-ended health questions ("any problems?", "anything wrong?", "morning
+	// report") -> fleet_insights alone. The model tends to answer these correctly but
+	// then tack on an extra, unrelated tool call (e.g. list_schedules) whose table
+	// clobbers the insights table shown to the user. Routing to a single grounded call
+	// keeps the right data attached. Kept last so any specific intent wins first.
+	if healthIntent(lq) {
+		return "fleet_insights", nil, true
+	}
+
 	return "", nil, false
+}
+
+// healthIntent matches open-ended "is anything wrong / needs attention" questions
+// that the fleet-insights aggregate is meant to answer.
+func healthIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false
+	}
+	for _, t := range []string{
+		"any problem", "anything wrong", "what's wrong", "whats wrong", "what is wrong",
+		"any issue", "anything broken", "is anything broken", "anything to worry", "anything i should worry",
+		"anything i need to worry", "any critical", "anything urgent", "any urgent", "anything need attention",
+		"need attention", "needs attention", "my attention", "require attention", "requires attention",
+		"morning report", "fleet health", "health check", "how's the fleet", "how is the fleet",
+		"everything ok", "everything okay", "all good", "anything i should know", "status of the fleet",
+		"anything concerning", "anything alarming", "any warnings", "any alerts",
+	} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
 }
 
 // schedulesIntent matches questions about the recurring schedule definitions and
