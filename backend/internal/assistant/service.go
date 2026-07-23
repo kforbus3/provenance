@@ -168,17 +168,21 @@ type answerData struct {
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
 type Caller struct {
-	UserID           uuid.UUID
-	IsSuperAdmin     bool
-	Username         string
-	CanViewSessions  bool // Session.Replay — gates list_sessions + session_history
-	CanViewScans     bool // Host.Scan — gates the recent_scans tool
-	CanViewRuns      bool // Playbook.Run — gates the recent_playbook_runs tool
-	CanViewAudit     bool // Audit.View — gates the audit_log tool
-	CanViewSchedules bool // Schedule.Manage — gates the list_schedules tool
-	CanViewTransfers bool // File.Transfer — gates the recent_file_transfers tool
-	CanViewCommands  bool // Command.Run — gates the recent_commands tool
-	CanAct           bool // Assistant.Act — gates the propose_* action tools
+	UserID            uuid.UUID
+	IsSuperAdmin      bool
+	Username          string
+	CanViewSessions   bool // Session.Replay — gates list_sessions + session_history
+	CanViewScans      bool // Host.Scan — gates the recent_scans tool
+	CanViewRuns       bool // Playbook.Run — gates the recent_playbook_runs tool
+	CanViewAudit      bool // Audit.View — gates the audit_log tool
+	CanViewSchedules  bool // Schedule.Manage — gates the list_schedules tool
+	CanViewTransfers  bool // File.Transfer — gates the recent_file_transfers tool
+	CanViewCommands   bool // Command.Run — gates the recent_commands tool
+	CanViewUsers      bool // User.Edit — gates the list_users tool
+	CanViewApprovals  bool // Approval.Request/Decide — gates the list_approvals tool
+	CanViewCluster    bool // System.Configure — gates the cluster section of platform_status
+	CanViewEnrollment bool // Host.Enroll — gates the enrollment section of platform_status
+	CanAct            bool // Assistant.Act — gates the propose_* action tools
 	// Perms is a snapshot of the caller's permission set, used to authorize a
 	// proposed action at propose time (execution re-checks the live principal).
 	Perms map[string]bool
@@ -290,6 +294,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.table = tbl
 			}
 			result = payload
+		case "host_availability":
+			tbl, payload := s.runHostAvailability(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
 		}
 		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil {
 			s.remember(convoID, who.UserID, question, final)
@@ -394,6 +404,38 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					data.table = tbl
 				}
 				result = payload
+			case "host_availability":
+				tbl, payload := s.runHostAvailability(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "vulnerabilities":
+				tbl, payload := s.runVulnerabilities(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "list_users":
+				tbl, payload := s.runListUsers(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "list_approvals":
+				tbl, payload := s.runListApprovals(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "windows_software":
+				tbl, payload := s.runWindowsSoftware(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "platform_status":
+				result = s.runPlatformStatus(ctx, who)
 			case "search_docs":
 				payload, sources := s.runSearchDocs(tc.Function.Arguments)
 				if len(sources) > 0 {
@@ -556,7 +598,56 @@ func (s *Service) hostDetail(ctx context.Context, raw json.RawMessage, who Calle
 			return nil, map[string]any{"error": "you do not have access to that host"}
 		}
 	}
-	return host, host
+	// The UI renders the raw host card; the model gets the host PLUS a disk breakdown
+	// that pre-computes each mount's free% and names the mount driving the headline
+	// "disk free %", so it can answer "which filesystem is that / where did 31% come
+	// from" without doing arithmetic (which a small model gets wrong).
+	payload := map[string]any{"host": host}
+	if ds := diskFreeSummary(host.Metrics); ds != nil {
+		payload["diskBreakdown"] = ds
+	}
+	return host, payload
+}
+
+// diskFreeSummary annotates a host's filesystems with the same numbers the fleet
+// "disk free %" headline is built from. That headline is the MINIMUM of
+// availBytes/sizeBytes across mounts (df Available / size). df's Available excludes
+// filesystem-reserved blocks, so a mount's usedPct (used/size) and freePct
+// (avail/size) do NOT sum to 100 — this makes that explicit so the assistant can
+// explain the discrepancy instead of the user wondering where the number came from.
+func diskFreeSummary(m *models.HostMetrics) map[string]any {
+	if m == nil || len(m.Disk) == 0 {
+		return nil
+	}
+	type fsRow struct {
+		Mount     string  `json:"mount"`
+		SizeBytes int64   `json:"sizeBytes"`
+		UsedPct   float64 `json:"usedPct"` // used/size, as shown on the host card
+		FreePct   float64 `json:"freePct"` // avail/size = what "disk free %" measures
+	}
+	rows := make([]fsRow, 0, len(m.Disk))
+	tightest := ""
+	minFree := 101.0
+	for _, d := range m.Disk {
+		if d.SizeBytes <= 0 {
+			continue
+		}
+		free := float64(d.AvailBytes) / float64(d.SizeBytes) * 100
+		rows = append(rows, fsRow{Mount: d.Mount, SizeBytes: d.SizeBytes, UsedPct: d.UsePct, FreePct: round1(free)})
+		if free < minFree {
+			minFree, tightest = free, d.Mount
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"filesystems":   rows,
+		"tightestMount": tightest,
+		"diskFreePct":   round1(minFree),
+		"note": "The host's 'disk free %' (" + fmt.Sprintf("%.0f", minFree) + "%) is the free% of the tightest filesystem (" + tightest +
+			"). free% is df Available / size; used% is used / size. They do not sum to 100 because df Available excludes filesystem-reserved blocks.",
+	}
 }
 
 // runRecentScans returns recent security scans (scoped to the caller's hosts).
@@ -822,6 +913,9 @@ func windowSince(hours, def int) time.Time {
 }
 
 func tableTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+// round1 rounds a non-negative percentage to one decimal place (no math import).
+func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }
 
 func tableTimePtr(t *time.Time) string {
 	if t == nil {

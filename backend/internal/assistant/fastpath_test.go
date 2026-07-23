@@ -24,12 +24,20 @@ func TestFastPathTool(t *testing.T) {
 		{"which packages need updating on hypervisor?", "host_updates", map[string]string{"hostname": "hypervisor"}},
 		{"what security updates are pending?", "host_updates", map[string]string{}},
 
+		// downtime / offline-history -> host_availability
+		{"did any host go offline today?", "host_availability", map[string]string{}},
+		{"were there any outages this week?", "host_availability", map[string]string{}},
+		{"was anything down overnight?", "host_availability", map[string]string{}},
+		{"has any host gone offline recently?", "host_availability", map[string]string{}},
+
 		// must NOT fast-path (defer to the model)
 		{"who logged into web-01 yesterday?", "", nil},
 		{"who has access to db-02?", "", nil},
 		{"how do I update Fleet?", "", nil},
 		{"anything wrong with the fleet?", "", nil},
 		{"what is the disk usage on web-01?", "", nil},
+		{"which hosts are offline?", "", nil}, // current state, not history -> model
+		{"are any hosts offline right now?", "", nil},
 	}
 	for _, c := range cases {
 		name, args, ok := fastPathTool(c.q)

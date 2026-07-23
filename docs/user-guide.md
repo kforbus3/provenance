@@ -195,6 +195,21 @@ action" below). You can ask about:
 - **Recent security scans and playbook runs**, including whether they were
   scheduled (e.g. *"when was the last scan on web-01"*, *"did any scheduled
   playbook runs fail"*).
+- **Availability / downtime history** — *"did any host go offline overnight?"*,
+  *"was web-01 down this week?"*, *"how much downtime has db-02 had?"*. This is the
+  record of hosts going offline and recovering, so it catches outages that already
+  cleared — something the current-status view can't show you.
+- **Vulnerabilities (CVEs)** — *"what critical vulnerabilities are on web-01?"* or
+  *"which hosts have the worst CVE exposure?"*, from the vulnerability scanner
+  (distinct from OpenSCAP compliance scans). Requires the `Host.Scan` permission.
+- **Users, roles, and MFA** — *"who are the administrators?"*, *"which accounts have
+  no MFA?"*, *"what role does bob have?"* (requires `User.Edit`).
+- **Approvals and just-in-time access** — *"what's waiting for approval?"*, *"who has
+  elevated access right now?"* (requires an approvals permission).
+- **Windows software inventory** — *"what's installed on the Windows host?"* for RDP
+  hosts.
+- **Platform health** — *"is the HA cluster healthy? who's the leader?"* and *"did
+  host X enroll successfully?"* (requires `System.Configure` / `Host.Enroll`).
 - **What needs attention across the fleet** — ask *"what's wrong with the
   fleet?"* or a capacity question like *"which hosts are about to run out of
   disk?"* and Ask draws on **fleet insights**: offline hosts, low or critically

@@ -10,6 +10,15 @@ Ground every answer in tool results — never invent host names, counts, times, 
 If no tool covers the question, or the question is not about the fleet or the Fleet
 Terminal product itself, say so.
 
+CRITICAL — the example names in these instructions (web-01, db-02, and commands like
+systemctl, df, rm -rf) are ILLUSTRATIVE PLACEHOLDERS, not real data. NEVER name a host,
+user, package, or command in your answer unless it appeared in a tool result for THIS
+question. In particular, never answer a question by describing an example — e.g. do not say
+"no systemctl was found on web-01" unless the user actually asked about systemctl and a tool
+returned that. Your answer must describe ONLY what the tools returned for the current
+question; if a tool returned nothing, say exactly that, naming the real subject the user
+asked about.
+
 CHOOSING TOOLS
 - query_hosts: the CURRENT state of many hosts — status, OS + kernel, arch, CPU/memory
   specs, uptime, IP, disk-free %, memory-used %, load per core, WireGuard health,
@@ -65,6 +74,29 @@ CHOOSING TOOLS
   open-ended HEALTH/CAPACITY questions ("anything wrong?", "morning report", "when will
   web-01 fill up?"). Do NOT use it for questions about who ran a command, a specific user
   action, or any "who did X" — those go to search_commands / recent_commands / audit_log.
+- host_availability: the host UP/DOWN history — recorded online<->offline transitions
+  with per-host downtime totals. The ONLY tool that can answer about PAST reachability:
+  "did any host go offline today", "was <host> down overnight", "any outages this week",
+  "<host> uptime/downtime". query_hosts / fleet_insights only know the CURRENT status and
+  cannot see a host that already recovered — never answer a downtime/outage question from
+  them, and NEVER from search_commands.
+- vulnerabilities: CVE / vulnerability scan results. With a hostname, that host's latest
+  scan findings (CVE, package, installed/fixed version, severity, CVSS); without one, the
+  fleet roll-up (counts + max CVSS per host). Use for "what CVEs/vulnerabilities are on
+  <host>", "which hosts have critical vulnerabilities". This is CVE exposure — distinct
+  from recent_scans (OpenSCAP compliance).
+- list_users: user ACCOUNTS with roles, auth source, MFA-enrolled, disabled, last login.
+  Use for "who are the admins", "what role does <user> have", "which accounts have no MFA",
+  "who is disabled".
+- list_approvals: pending access-approval requests plus the currently ACTIVE temporary
+  (just-in-time) grants. Use for "what is waiting for approval", "who has elevated access
+  right now".
+- windows_software: installed-software inventory for one Windows (RDP) host (name/version/
+  publisher). Use for "what software is installed on <windows host>". Linux packages ->
+  host_updates; CVEs -> vulnerabilities.
+- platform_status: Fleet's own control-plane health — the HA cluster roster + leader, and
+  recent host-enrollment jobs. Use for "is the cluster healthy", "who is the leader", "did
+  <host> enroll". This is the platform, not the managed hosts.
 - search_docs: the Fleet Terminal product documentation. Use it for HOW-TO and
   conceptual questions about using or configuring the product (SSO/SAML/SCIM setup, host
   enrollment, certificates, backups, the API/SDK, access reviews, deployment, hardening).
@@ -89,6 +121,15 @@ WORKING METHOD
   carries the runway estimate and its confidence. Only fall back to host_metric_history
   (extrapolating the recent rate linearly, stated as a rough estimate) if the host isn't
   in the insights list.
+- "Disk free %" (a host's diskFreePct / the disk-free trend) is the free space on the
+  host's TIGHTEST filesystem, computed as df Available / size. To say WHICH filesystem it
+  is, or to reconcile it with a mount's Used%, call host_detail and read its diskBreakdown
+  (it names the tightest mount and gives each mount's free% and used%). Note free% (avail/
+  size) and used% (used/size) do NOT sum to 100 — df Available excludes reserved blocks — so
+  a root fs at 64% used can still report ~31% free; explain that rather than calling it an
+  inconsistency.
+- Downtime / offline history / "did anything go down": ALWAYS use host_availability. Never
+  answer these from query_hosts, fleet_insights, or search_commands.
 - All percentages are 0-100. Timestamps are RFC 3339. If a tool returns an error or an
   empty result, say what you could not see instead of guessing; a permission error means
   this user is not allowed to see that data. Results are already limited to what the
@@ -211,7 +252,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_detail",
-		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use when the user asks about a specific host's FILESYSTEMS or NETWORK ('which filesystem is full on web-01', 'what subnet is db-02 on'). For pending package updates, use host_updates instead (this returns the whole host card, which is noisy for an updates question).",
+		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use when the user asks about a specific host's FILESYSTEMS or NETWORK ('which filesystem is full on web-01', 'what subnet is db-02 on'). It also returns a diskBreakdown that names the mount driving the host's headline 'disk free %' and gives each mount's free% and used% — use it to answer 'which filesystem is the disk-free % / where did that number come from'. For pending package updates, use host_updates instead (this returns the whole host card, which is noisy for an updates question).",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname"}},
@@ -372,6 +413,85 @@ var tools = []toolDef{{
 				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
 			},
 		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "host_availability",
+		Description: "The host UP/DOWN history — every recorded online<->offline transition, with per-host downtime totals. This is the ONLY way to answer questions about PAST reachability: 'did any host go offline today/overnight', 'was <host> down this morning', 'any outages this week', 'what is <host>'s uptime/downtime'. query_hosts and fleet_insights only know the CURRENT status and CANNOT see a host that already went down and recovered — always use host_availability for anything about downtime, outages, or reachability over a time range. Optionally narrow to one hostname; window defaults to the last 7 days.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname to filter to (optional; omit for the whole fleet)"},
+				"hours":    map[string]any{"type": "integer", "description": "how many hours back to look (default 168 = 7 days)"},
+				"limit":    map[string]any{"type": "integer", "description": "max transition rows (default 200)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "vulnerabilities",
+		Description: "CVE / vulnerability scan results (from the grype-based vulnerability scanner). With a hostname it returns that host's latest completed scan findings — each CVE with its package, installed vs fixed version, severity, and CVSS — optionally filtered by minimum severity or CVSS. WITHOUT a hostname it returns the fleet vulnerability roll-up: the latest scan per host with critical/high/medium/low counts and max CVSS, worst first. Use for 'what CVEs / vulnerabilities are on web-01', 'which hosts have critical vulnerabilities', 'how bad is db-02's vulnerability posture'. This is DISTINCT from recent_scans, which is OpenSCAP compliance/benchmark scanning — vulnerabilities is CVE/patch exposure. Requires the Host.Scan permission.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname":    map[string]any{"type": "string", "description": "exact hostname for per-CVE findings; omit for the fleet roll-up"},
+				"minSeverity": map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low"}, "description": "only findings at or above this severity"},
+				"minCvss":     map[string]any{"type": "number", "description": "only findings with CVSS >= this (0-10)"},
+				"limit":       map[string]any{"type": "integer", "description": "max finding rows for a single host (default 100)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "list_users",
+		Description: "List Fleet user ACCOUNTS with their roles, authentication source (local/oidc/ldap/saml), whether Fleet MFA is enrolled, disabled state, super-admin flag, and last login. Use for account/identity questions: 'who are the administrators', 'what role does bob have', 'which accounts have no MFA', 'who is disabled', 'who hasn't logged in'. Filters: usernameContains, role (exact role name), withoutMfa (only local accounts missing a confirmed factor), disabledOnly. Requires the User.Edit permission. NOTE: for who can ACCESS a specific host, this is not it — that is host access, not an account list.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"usernameContains": map[string]any{"type": "string", "description": "substring match on username or display name"},
+				"role":             map[string]any{"type": "string", "description": "exact role name to filter by, e.g. 'Administrator'"},
+				"withoutMfa":       map[string]any{"type": "boolean", "description": "true = only local accounts with no confirmed MFA factor"},
+				"disabledOnly":     map[string]any{"type": "boolean", "description": "true = only disabled accounts"},
+				"limit":            map[string]any{"type": "integer", "description": "max rows (default 200)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "list_approvals",
+		Description: "Access approvals and just-in-time grants. Returns pending (or, via status, approved/denied/all) access-request records — who requested access to which host/group, why, and the decision — PLUS the currently ACTIVE temporary permissions (who has time-boxed elevated access right now and when it expires). Use for 'what is waiting for approval', 'any pending access requests', 'who has elevated/temporary access right now', 'what JIT grants are active'. Requires the Approval.Request or Approval.Decide permission.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"status": map[string]any{"type": "string", "description": "pending (default), approved, denied, or all"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "windows_software",
+		Description: "The installed-software inventory for a single WINDOWS (RDP) host, collected from the registry over WinRM: application name, version, and publisher. Use for 'what software is installed on <windows host>', 'is <app> installed on <host>', 'what version of <app> is on <host>'. Requires the exact hostname and host access. For Linux package updates use host_updates; for CVEs use vulnerabilities.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact Windows hostname"},
+				"contains": map[string]any{"type": "string", "description": "substring match on the application name (optional)"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 500)"},
+			},
+			"required": []string{"hostname"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "platform_status",
+		Description: "Fleet control-plane health, NOT the managed hosts. Returns the high-availability CLUSTER roster (each backend instance, which one is the leader, and whether it is live) and recent host ENROLLMENT jobs (target + status). Use for 'is the cluster/HA healthy', 'who is the leader', 'how many backend instances are running', 'did the enrollment of <host> succeed', 'any failed enrollments'. The cluster section needs System.Configure; the enrollment section needs Host.Enroll. Takes no arguments.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 }}
 

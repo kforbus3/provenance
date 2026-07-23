@@ -47,6 +47,22 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gatewa
 	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, nfy: nfy, interval: 30 * time.Second}
 }
 
+// recordTransition persists an availability transition to the history table and
+// then emits the alert. Persisting is factual and happens even inside a
+// maintenance window (which only suppresses the alert), so downtime is always
+// answerable after the fact. The first observation (prev == "") is skipped, and
+// only definite online<->offline flips are recorded — "unknown" (a probe that
+// could not run, e.g. a signer error) is not a reachability change.
+func (m *Monitor) recordTransition(ctx context.Context, h models.Host, prev, now, lastErr string) {
+	if prev != "" && prev != now &&
+		(prev == "online" || prev == "offline") && (now == "online" || now == "offline") {
+		if err := m.store.RecordStatusEvent(ctx, h.ID, prev, now, lastErr, time.Now()); err != nil {
+			m.log.Warn("monitor record status event", "host", h.Hostname, "err", err)
+		}
+	}
+	m.notifyTransition(ctx, h, prev, now)
+}
+
 // notifyTransition emits an alert when a host crosses the online/offline
 // boundary. The first observation (no prior status) is skipped to avoid a burst
 // of spurious alerts on startup.
@@ -201,7 +217,7 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 			return
 		}
-		m.notifyTransition(ctx, h, prev, st.Status)
+		m.recordTransition(ctx, h, prev, st.Status, st.LastError)
 		if inv != nil {
 			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
@@ -226,7 +242,7 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 		return
 	}
-	m.notifyTransition(ctx, h, prev, st.Status)
+	m.recordTransition(ctx, h, prev, st.Status, st.LastError)
 	if inv != nil {
 		if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 			m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)

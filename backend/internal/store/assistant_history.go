@@ -60,6 +60,33 @@ func (s *Store) RecentScansForAssistant(ctx context.Context, userID uuid.UUID, i
 	return out, rows.Err()
 }
 
+// LatestVulnScansForAssistant returns the most recent completed vulnerability
+// scan for every accessible host that has one — the fleet CVE roll-up, ordered
+// worst-first. Mirrors LatestVulnScans but scoped to the caller's hosts.
+func (s *Store) LatestVulnScansForAssistant(ctx context.Context, userID uuid.UUID, isSuperAdmin bool) ([]models.VulnScan, error) {
+	args := []any{}
+	sub := accessibleHostsSubquery("vs.host_id", userID, isSuperAdmin, &args)
+	sql := `SELECT ` + vulnScanCols + `
+		FROM vuln_scans vs JOIN hosts h ON h.id=vs.host_id
+		WHERE vs.status='completed' AND vs.created_at = (
+			SELECT max(v2.created_at) FROM vuln_scans v2 WHERE v2.host_id=vs.host_id AND v2.status='completed')` + sub +
+		` ORDER BY vs.max_cvss DESC, vs.critical DESC, h.hostname`
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.VulnScan{}
+	for rows.Next() {
+		v, err := scanVulnScan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
+}
+
 // RecentSSHSessionsForAssistant returns past + active SSH sessions (scoped to
 // hosts the user can reach), optionally filtered to one hostname/username and
 // bounded to sessions that started after `since`.

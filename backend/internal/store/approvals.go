@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -162,6 +163,48 @@ func (s *Store) ListTemporaryPermissions(ctx context.Context, userID uuid.UUID) 
 			return nil, err
 		}
 		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+// ActiveGrant is a fleet-wide active temporary permission enriched with the
+// grantee and target names, for the assistant's "who has elevated access right
+// now" view.
+type ActiveGrant struct {
+	Username   string    `json:"username"`
+	UserID     uuid.UUID `json:"userId"`
+	TargetKind string    `json:"targetKind"` // host|group
+	TargetName string    `json:"targetName"`
+	GrantedAt  time.Time `json:"grantedAt"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
+// ActiveTemporaryPermissions returns every currently active (not revoked, not
+// expired) time-boxed grant across all users, soonest to expire first — the
+// fleet-wide just-in-time access view.
+func (s *Store) ActiveTemporaryPermissions(ctx context.Context) ([]ActiveGrant, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.username, tp.user_id,
+		       CASE WHEN tp.host_id IS NOT NULL THEN 'host' ELSE 'group' END,
+		       COALESCE(h.hostname, g.name, ''),
+		       tp.granted_at, tp.expires_at
+		FROM temporary_permissions tp
+		JOIN users u ON u.id = tp.user_id
+		LEFT JOIN hosts h ON h.id = tp.host_id
+		LEFT JOIN groups g ON g.id = tp.group_id
+		WHERE tp.revoked_at IS NULL AND tp.expires_at > now()
+		ORDER BY tp.expires_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ActiveGrant{}
+	for rows.Next() {
+		var a ActiveGrant
+		if err := rows.Scan(&a.Username, &a.UserID, &a.TargetKind, &a.TargetName, &a.GrantedAt, &a.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

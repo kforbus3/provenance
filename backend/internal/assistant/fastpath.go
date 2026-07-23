@@ -21,6 +21,9 @@ var (
 	commandSuffix = regexp.MustCompile(`(?i)\s+(?:command|commands|cmd)\s*$`)
 	trailingPunct = regexp.MustCompile(`[?.!\s]+$`)
 	updateWordRE  = regexp.MustCompile(`(?i)updat|upgrad|patch`)
+	// A reachability/downtime token: "offline", "outage(s)", "downtime",
+	// "unreachable", or "<aux> [subject] down" (went/was/is/... [nas] down).
+	downRE = regexp.MustCompile(`(?i)\b(?:offline|outages?|downtime|unreachable|(?:go(?:ne|es|ing)?|went|was|were|been|is|are)\s+(?:[a-z0-9._-]+\s+)?down)\b`)
 )
 
 // fastPathTool returns the tool + JSON args to run directly for an unambiguous
@@ -49,7 +52,62 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "host_updates", a, true
 	}
 
+	// 3) downtime / offline-history questions -> host_availability. This is the
+	// misroute the model made worst (answering "did anything go offline?" from
+	// typed-command search), so pin the clear phrasings deterministically.
+	if availabilityIntent(lq) {
+		host := ""
+		lqTrim := trailingPunct.ReplaceAllString(lq, "")
+		if hm := onHostRE.FindStringSubmatch(lqTrim); hm != nil {
+			host = hm[1]
+		}
+		a, _ := json.Marshal(hostAvailabilityArgs{Hostname: host, Hours: hoursFromText(lq)})
+		return "host_availability", a, true
+	}
+
 	return "", nil, false
+}
+
+// availabilityIntent reports whether a (lowercased) question is about PAST
+// reachability (a host going offline / downtime over a time range), as opposed to
+// the CURRENT offline set ("which hosts are offline right now" -> query_hosts).
+func availabilityIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") || strings.Contains(lq, "how can") {
+		return false
+	}
+	if !downRE.MatchString(lq) {
+		return false
+	}
+	// Require a past/history/time-range signal so "are any hosts offline" (present
+	// state) still falls through to the model.
+	for _, t := range []string{
+		"today", "yesterday", "overnight", "last night", "this morning", "tonight",
+		"this week", "past ", "recent", "history", "ever ", "gone ", "went ", "did ",
+		"have any", "has any", "were ", "was ", "been ", "outage", "downtime",
+	} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// hoursFromText maps a coarse time phrase to a lookback window (hours).
+func hoursFromText(lq string) int {
+	switch {
+	case strings.Contains(lq, "today"), strings.Contains(lq, "overnight"),
+		strings.Contains(lq, "last night"), strings.Contains(lq, "this morning"),
+		strings.Contains(lq, "tonight"), strings.Contains(lq, "24h"), strings.Contains(lq, "24 h"):
+		return 24
+	case strings.Contains(lq, "yesterday"):
+		return 48
+	case strings.Contains(lq, "month"):
+		return 720
+	case strings.Contains(lq, "week"):
+		return 168
+	default:
+		return 168
+	}
 }
 
 // updatesIntent reports whether a (lowercased) question is asking WHICH updates/packages

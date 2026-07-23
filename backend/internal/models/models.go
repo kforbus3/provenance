@@ -367,6 +367,19 @@ type HostStatus struct {
 	CheckedAt     *time.Time `json:"checkedAt,omitempty"`
 }
 
+// HostStatusEvent is one recorded online<->offline transition, the raw material
+// for availability/downtime history ("was anything down overnight?"). The monitor
+// appends one whenever a host crosses the reachability boundary.
+type HostStatusEvent struct {
+	ID         uuid.UUID `json:"id"`
+	HostID     uuid.UUID `json:"hostId"`
+	Hostname   string    `json:"hostname,omitempty"`
+	FromStatus string    `json:"fromStatus"`
+	ToStatus   string    `json:"toStatus"`
+	LastError  string    `json:"lastError,omitempty"`
+	At         time.Time `json:"at"`
+}
+
 // Session is a browser login session that owns an ephemeral SSH identity.
 type Session struct {
 	ID         uuid.UUID  `json:"id"`

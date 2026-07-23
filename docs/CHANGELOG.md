@@ -5,6 +5,50 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.56.0 — Ask assistant: six new answerable areas + accuracy fixes
+
+A coverage pass over the **Ask** assistant so it can answer the questions an IT
+admin / sysadmin actually asks day to day. Six data areas that previously had no
+tool are now answerable, and two accuracy problems are fixed.
+
+**New things Ask can answer**
+
+- **Availability / downtime history** — *"did any host go offline overnight?"*,
+  *"was web-01 down this week?"*, *"how much downtime has db-02 had?"*. Host
+  online↔offline transitions are now **recorded** (previously they were alerted and
+  then discarded), so Ask can report outages that already recovered — which the
+  live-status tools cannot see. Adds the `host_status_events` table (migration
+  0063, tenant-scoped) written by the monitor, pruned on the activity-retention
+  window.
+- **Vulnerabilities (CVEs)** — per-host findings (CVE, package, installed/fixed
+  version, severity, CVSS) and a fleet roll-up, from the vulnerability scanner
+  (distinct from OpenSCAP compliance). Requires `Host.Scan`.
+- **Users, roles, and MFA** — accounts with their roles, auth source, MFA-enrolled
+  state, disabled/super-admin flags, and last login. Requires `User.Edit`.
+- **Approvals and just-in-time access** — pending access requests plus the
+  currently active temporary grants. Requires an approvals permission.
+- **Windows software inventory** — installed apps on an RDP host (host-access
+  scoped).
+- **Platform health** — the HA cluster roster + current leader, and recent host
+  enrollment jobs. Cluster needs `System.Configure`; enrollment needs `Host.Enroll`.
+
+  Every new tool re-checks the caller's permissions and host access, exactly like
+  the existing ones.
+
+**Accuracy fixes**
+
+- **Disk-free %, explained.** A host's headline "disk free %" is the free space on
+  its *tightest* filesystem, measured as `df` Available / size — which does not sum
+  to 100 with a mount's Used % because `df` Available excludes filesystem-reserved
+  blocks. `host_detail` now returns a breakdown that names the driving mount and
+  gives each mount's free % and used %, and Ask explains the difference instead of
+  it looking like an inconsistency.
+- **No more echoed examples.** Hardened the assistant's grounding so it can no
+  longer answer a question by repeating a placeholder from its own instructions
+  (e.g. replying about "systemctl on web-01" to an unrelated question); downtime
+  questions are also pinned to the availability tool via the deterministic
+  fast-path so they can't be misrouted to command-history search.
+
 ## v0.55.5 — Revert module-path placeholder
 
 Reverts v0.55.4. The generic placeholder made the `git clone`, `go get`, and

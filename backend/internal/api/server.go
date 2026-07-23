@@ -713,6 +713,7 @@ func (s *Server) pruneActivity(ctx context.Context) {
 	// pending requests and any still holding a live grant — see the store methods).
 	prune("expired certificates", s.Store.PruneExpiredCertificatesBefore)
 	prune("approval requests", s.Store.PruneApprovalRequestsBefore)
+	prune("host status events", s.Store.PruneStatusEventsBefore)
 	s.Jobs.Record("activity-retention", nil)
 }
 

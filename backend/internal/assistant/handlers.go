@@ -65,15 +65,19 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	id, convoID, ok := h.svc.Ask(r.Context(), rq.Question, rq.ConversationID, Caller{
 		UserID: p.UserID, IsSuperAdmin: p.IsSuperAdmin, Username: p.Username,
-		CanViewSessions:  p.Has("Session.Replay"),
-		CanViewScans:     p.Has("Host.Scan"),
-		CanViewRuns:      p.Has("Playbook.Run"),
-		CanViewAudit:     p.Has("Audit.View"),
-		CanViewSchedules: p.Has("Schedule.Manage"),
-		CanViewTransfers: p.Has("File.Transfer"),
-		CanViewCommands:  p.Has("Command.Run"),
-		CanAct:           p.Has("Assistant.Act"),
-		Perms:            p.Permissions,
+		CanViewSessions:   p.Has("Session.Replay"),
+		CanViewScans:      p.Has("Host.Scan"),
+		CanViewRuns:       p.Has("Playbook.Run"),
+		CanViewAudit:      p.Has("Audit.View"),
+		CanViewSchedules:  p.Has("Schedule.Manage"),
+		CanViewTransfers:  p.Has("File.Transfer"),
+		CanViewCommands:   p.Has("Command.Run"),
+		CanViewUsers:      p.Has("User.Edit"),
+		CanViewApprovals:  p.Has("Approval.Request") || p.Has("Approval.Decide"),
+		CanViewCluster:    p.Has("System.Configure"),
+		CanViewEnrollment: p.Has("Host.Enroll"),
+		CanAct:            p.Has("Assistant.Act"),
+		Perms:             p.Permissions,
 	})
 	if !ok {
 		httpx.WriteError(w, http.StatusServiceUnavailable, "assistant is not enabled")
