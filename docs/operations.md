@@ -476,13 +476,31 @@ Click the **support bundle** (first-aid) icon on a host row to download a single
 to the host (super admins bypass). The backend connects over the jump host as the
 privileged `fleet` account and collects, into one archive:
 
-- **Command outputs** — uname/OS, uptime + load, CPU, memory, `top`, disk usage
-  (`df`, inodes, largest dirs), block devices/mounts, network (addresses, routes,
-  listening sockets, link stats, DNS), top processes by CPU/memory, systemd
-  failed/running units, pending package updates, recent logins, WireGuard, and
-  firewall rules.
+- **Command outputs** — each in its own numbered file that records the exact
+  command run, covering what a support agent usually asks for up front:
+  - *System* — uname/OS/virtualization, uptime + load, last boot and recent
+    reboots, CPU, memory + swap, `top`, `vmstat`, PSI pressure (`/proc/pressure`),
+    `ulimit`/open-file handles, loaded kernel modules.
+  - *Disk & storage* — `df` + inodes, `lsblk`, mounts, largest directories,
+    filesystems/`blkid`/`fstab`, **SMART** health, **RAID**/`mdstat`/`zpool`, and
+    I/O stats (`iostat`, `/proc/diskstats`).
+  - *Network* — addresses, routes, listening sockets, link + interface
+    error counters, socket summary, DNS config, and **time sync**
+    (`timedatectl`/chrony/ntp).
+  - *Services & jobs* — systemd failed/running units, **timers**, **cron**, boot
+    analysis (`systemd-analyze blame`), top processes by CPU/memory.
+  - *Updates & security* — pending updates, package-manager health (held packages,
+    repositories), **SELinux/AppArmor**, effective **sshd config** (`sshd -T`),
+    sudo/privileged groups + `NOPASSWD` rules, login-capable accounts + `lastlog`,
+    recent logins, WireGuard, and firewall rules.
+  - *Hardware & containers* — `dmidecode`, `sensors`, `lspci`, and Docker/Podman
+    containers/images when present.
+
+  Everything is best-effort: a tool that isn't installed simply leaves its file
+  empty rather than failing the bundle.
 - **Logs** (tail-bounded to keep the bundle small) — `syslog`/`messages`,
-  `auth.log`/`secure`, `kern.log`, the systemd journal (recent), and `dmesg`.
+  `auth.log`/`secure`, `kern.log`, `dpkg.log`, the systemd journal (recent, plus
+  an error-priority-this-boot extract and the boot list), and `dmesg`.
 
 Generation runs over SSH and takes a few seconds; the file downloads when ready.
 Nothing is stored on the server. Note the bundle includes auth/system logs, so

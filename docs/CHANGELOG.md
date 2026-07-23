@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.58.0 — Fuller host support bundle
+
+Expanded the per-host support bundle to cover what a support agent typically
+requests up front when troubleshooting, so the first download usually has what's
+needed. Added, alongside the existing diagnostics: PSI pressure, swap, ulimits/
+open-file handles and kernel modules; filesystem details (`blkid`/`fstab`), SMART
+health, RAID (`mdstat`/`zpool`), and I/O stats; interface error counters and time
+sync (`timedatectl`/chrony/ntp); systemd timers, cron, and boot analysis; package-
+manager health (held packages, repositories); SELinux/AppArmor, effective sshd
+config, sudo/privileged groups + `NOPASSWD` rules, and login-capable accounts;
+hardware (`dmidecode`/`sensors`/`lspci`) and Docker/Podman; plus an error-priority
+journal extract and the boot list. Every command is best-effort — a tool that
+isn't installed just leaves its file empty rather than failing the bundle — and
+each file records the exact command that produced it. Verified end-to-end that the
+collector runs cleanly and produces a valid archive.
+
 ## v0.57.0 — Ask assistant: capacity + login security, and reliable routing
 
 Follows v0.56.0 with two more answerable areas and a substantial reliability pass
