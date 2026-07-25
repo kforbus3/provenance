@@ -51,8 +51,8 @@ up-single: env ## Single-server production: (re)build & start the WHOLE stack in
 	@echo "hosts may show offline for a minute or two. For code-only updates use 'make redeploy-single'."
 
 .PHONY: redeploy-single
-redeploy-single: env ## Update app code (backend/frontend/scanner) in place, leaving the jump host + WireGuard overlay UP (no host-offline blip)
-	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner
+redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/updater) in place, leaving the jump host + WireGuard overlay UP (no host-offline blip)
+	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner fleet-updater
 	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
 
 # --- Release bundling (in-UI upgrade system) -------------------------------------
