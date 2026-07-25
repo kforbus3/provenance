@@ -228,16 +228,21 @@ def _inv_quote(v: str) -> str:
     return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _build_inventory(req: RunRequest, ssh_config_path: str) -> str:
-    # Identity/keys are driven entirely by the ssh_config (per-host IdentityFile / auth),
-    # so no global ansible_ssh_private_key_file is set — that would force the Fleet key
-    # onto vaulted hosts too. Password hosts carry their secret as a per-host var.
+def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dict) -> str:
+    # Identity/keys for the default ssh connection are driven by the ssh_config (per-host
+    # IdentityFile / auth), so no GLOBAL ansible_ssh_private_key_file is set — that would
+    # force the Fleet key onto vaulted hosts too. Password hosts carry their secret as a
+    # per-host var. A vaulted-key host ALSO gets an explicit per-host key file so the
+    # network_cli connection (community.routeros / paramiko), which doesn't read the
+    # ssh_config, can authenticate; it's the same key, so the raw/ssh path is unaffected.
     common = f"-F {ssh_config_path}"
     lines = ["[all]"]
     for h in req.hosts:
         entry = f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}"
         if h.auth_method == "vault_password" and h.password:
             entry += f" ansible_password={_inv_quote(h.password)}"
+        if h.auth_method == "vault_ssh_key" and h.address in vault_key_paths:
+            entry += f" ansible_ssh_private_key_file={vault_key_paths[h.address]}"
         # Privilege-escalation default is PER HOST: enrolled (fleet_cert) Linux hosts run
         # under sudo as before, but a vaulted host is typically an appliance / network
         # device (router, switch) with no sudo, where forcing become breaks every task
@@ -252,6 +257,11 @@ def _build_inventory(req: RunRequest, ssh_config_path: str) -> str:
         "",
         "[all:vars]",
         f"ansible_ssh_common_args={common}",
+        # The network_cli connection (community.routeros etc.) uses paramiko/libssh, which
+        # does NOT read the ssh_config ProxyJump — so give it an explicit ProxyCommand that
+        # tunnels through the Fleet jump host (authenticated by the Fleet cert in the config).
+        # Ignored by the default ssh connection, so raw/command tasks are unaffected.
+        f"ansible_paramiko_proxy_command=ssh -F {ssh_config_path} -W %h:%p fleet-jump",
     ]
     if req.become:
         lines += ["ansible_become_method=sudo"]
@@ -295,7 +305,7 @@ def _stream_run(req: RunRequest):
         with open(cfg_path, "w", encoding="utf-8") as fh:
             fh.write(_build_ssh_config(req, key_path, vault_key_paths))
         with open(inv_path, "w", encoding="utf-8") as fh:
-            fh.write(_build_inventory(req, cfg_path))
+            fh.write(_build_inventory(req, cfg_path, vault_key_paths))
 
         argv = ["ansible-playbook", "-i", inv_path]
         if req.check_mode:
@@ -313,6 +323,9 @@ def _stream_run(req: RunRequest):
             "ANSIBLE_HOST_KEY_CHECKING": "False",
             "ANSIBLE_RETRY_FILES_ENABLED": "0",
             "ANSIBLE_LOCAL_TEMP": workdir,
+            # Find the build-time installed collections (community.routeros etc.) even
+            # though HOME is the ephemeral workdir.
+            "ANSIBLE_COLLECTIONS_PATH": "/usr/share/ansible/collections",
             "ANSIBLE_FORCE_COLOR": "0",
             "PYTHONUNBUFFERED": "1",
         }

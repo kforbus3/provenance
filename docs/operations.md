@@ -370,7 +370,16 @@ host:** enrolled Linux hosts run under sudo as before, but vaulted hosts default
 false` — network devices (routers, switches) have no sudo, and forcing it breaks every task
 ("timeout waiting for privilege escalation prompt"). A playbook can still opt a host in with an
 explicit `become: true`. Note that network devices aren't POSIX shells, so shell modules won't
-work either — use the right `ansible_network_os` collection or `raw:` commands.
+work either — use `raw:` commands or the network modules below.
+
+**Network devices (MikroTik/RouterOS).** The runner ships the **community.routeros** collection, so
+a playbook can use `connection: network_cli` + `ansible_network_os: community.routeros.routeros`
+and the `community.routeros.command` module instead of `raw`. The runner tunnels network_cli
+through the jump host and injects the host's vaulted credential; verify it against your hardware,
+since network_cli's SSH stack differs from the default connection. The most robust way to reach
+RouterOS through Fleet today remains `ansible.builtin.raw` with an `until:` retry loop to survive
+the reboot — RouterOS can't run `wait_for_connection` (no Python), and `wait_for` from the runner
+can't reach a device that's only reachable through the jump host.
 
 > **`Playbook.Run` is effectively arbitrary root-level change on the selected hosts.** Keep it
 > admin-only, dry-run first, and test on non-critical hosts.

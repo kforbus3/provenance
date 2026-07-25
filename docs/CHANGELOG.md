@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.63.3 — Network-device playbooks (MikroTik / community.routeros)
+
+The ansible-runner now ships the **community.routeros** collection (and its
+ansible.netcommon dependency), so playbooks can drive MikroTik/RouterOS with the
+proper modules (`community.routeros.command`, `connection: network_cli`) instead of
+`raw` SSH commands.
+
+Because `network_cli` uses paramiko/libssh (which don't read the ssh_config the way
+the default ssh connection does), the runner now also wires network_cli connections to
+**tunnel through the Fleet jump host** (a paramiko `ProxyCommand`) and to authenticate
+vaulted hosts (a per-host key/password), so a jump-hosted network device is reachable.
+This path should be verified on real hardware; the `raw` + `until`-reconnect approach
+remains the proven way to reach RouterOS through Fleet. Requires rebuilding the
+ansible-runner sidecar (`make redeploy-single`).
+
 ## v0.63.2 — Playbooks: don't force sudo on vaulted (appliance) hosts
 
 Follow-up to vaulted-credential playbook auth (v0.62.0). The runner forced

@@ -14,6 +14,13 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Network-device support: the community.routeros collection (MikroTik) + its
+# ansible.netcommon dependency (the network_cli connection). Installed to the system
+# collections path so it's found regardless of HOME. Lets playbooks use the proper
+# RouterOS modules instead of raw SSH commands.
+RUN ansible-galaxy collection install --collections-path /usr/share/ansible/collections \
+      community.routeros ansible.netcommon
+
 COPY app.py /app/app.py
 
 # Run as an unprivileged user; the runner never needs root.
