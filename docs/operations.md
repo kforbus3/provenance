@@ -365,9 +365,12 @@ to the hosts/group you selected. The default new-playbook template is already se
 CA) are supported: the runner injects the host's **vaulted SSH key or password** for the final
 hop — the same credential the terminal uses — while the jump-host hop still uses the Fleet
 certificate. Cert-trusting and vaulted hosts can be mixed in one run. Only *open-policy* vaulted
-credentials are used (a check-out-gated secret is skipped). Note that network devices aren't
-POSIX shells, so `become: sudo` and shell modules won't work on them — set `become: false` and
-use the right `ansible_network_os` collection or `raw:` commands.
+credentials are used (a check-out-gated secret is skipped). **Privilege escalation defaults per
+host:** enrolled Linux hosts run under sudo as before, but vaulted hosts default to `become:
+false` — network devices (routers, switches) have no sudo, and forcing it breaks every task
+("timeout waiting for privilege escalation prompt"). A playbook can still opt a host in with an
+explicit `become: true`. Note that network devices aren't POSIX shells, so shell modules won't
+work either — use the right `ansible_network_os` collection or `raw:` commands.
 
 > **`Playbook.Run` is effectively arbitrary root-level change on the selected hosts.** Keep it
 > admin-only, dry-run first, and test on non-critical hosts.

@@ -238,6 +238,15 @@ def _build_inventory(req: RunRequest, ssh_config_path: str) -> str:
         entry = f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}"
         if h.auth_method == "vault_password" and h.password:
             entry += f" ansible_password={_inv_quote(h.password)}"
+        # Privilege-escalation default is PER HOST: enrolled (fleet_cert) Linux hosts run
+        # under sudo as before, but a vaulted host is typically an appliance / network
+        # device (router, switch) with no sudo, where forcing become breaks every task
+        # ("timeout waiting for privilege escalation prompt"). So become defaults OFF for
+        # vaulted hosts. A playbook can still opt a host in with an explicit `become: true`
+        # (a play/task keyword overrides this inventory default).
+        if req.become:
+            escalate = h.auth_method in ("", "fleet_cert")
+            entry += " ansible_become=true" if escalate else " ansible_become=false"
         lines.append(entry)
     lines += [
         "",
@@ -245,7 +254,7 @@ def _build_inventory(req: RunRequest, ssh_config_path: str) -> str:
         f"ansible_ssh_common_args={common}",
     ]
     if req.become:
-        lines += ["ansible_become=true", "ansible_become_method=sudo"]
+        lines += ["ansible_become_method=sudo"]
     return "\n".join(lines) + "\n"
 
 

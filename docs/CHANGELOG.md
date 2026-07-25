@@ -5,6 +5,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.63.2 — Playbooks: don't force sudo on vaulted (appliance) hosts
+
+Follow-up to vaulted-credential playbook auth (v0.62.0). The runner forced
+`become: true` (sudo) on every host, so a playbook against a MikroTik/RouterOS switch
+failed every task with `Timeout waiting for privilege escalation prompt` even after
+login succeeded — network gear has no sudo. Privilege escalation now defaults **per
+host**: enrolled Linux hosts still run under sudo, but **vaulted hosts default to
+`become: false`**. A playbook can still opt a host in with an explicit `become: true`.
+(Requires rebuilding the `ansible-runner` sidecar — `make redeploy-single` now does.)
+
 ## v0.63.0 — Check for updates (pull upgrades from a release channel)
 
 The Updates panel can now **pull** an upgrade instead of only accepting an upload. Set
