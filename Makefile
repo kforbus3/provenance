@@ -55,6 +55,30 @@ redeploy-single: env ## Update app code (backend/frontend/scanner) in place, lea
 	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner
 	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
 
+# --- Release bundling (in-UI upgrade system) -------------------------------------
+# Produce a single signed .fleetup file that operators upload (or later pull) to
+# upgrade in place through the UI. Requires a release private key from
+# `fleetctl release keygen` — keep it OFFLINE. Override BUNDLE_VERSION/BUNDLE_FROM.
+BUNDLE_VERSION ?= $(FLEET_VERSION)
+BUNDLE_FROM    ?= $(FLEET_VERSION)
+BUNDLE_KEY     ?= release.key
+BUNDLE_OUT     ?= fleet-$(BUNDLE_VERSION).fleetup
+BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner
+
+.PHONY: bundle
+bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
+	@test -f $(BUNDLE_KEY) || (echo "missing $(BUNDLE_KEY) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.24 go run ./cmd/fleetctl release keygen"; exit 1)
+	FLEET_VERSION=$(BUNDLE_VERSION) $(COMPOSE_SINGLE) build backend frontend grype-scanner
+	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
+	  docker tag $(PROJECT)-$$c $(PROJECT)-$$c:$(BUNDLE_VERSION); \
+	done
+	cd backend && go run ./cmd/fleetctl release build \
+	  --version $(BUNDLE_VERSION) --from $(BUNDLE_FROM) \
+	  --key ../$(BUNDLE_KEY) --out ../$(BUNDLE_OUT) --components $(BUNDLE_COMPONENTS)
+	@echo "Built $(BUNDLE_OUT). Upload it in the UI (Settings -> Updates) to upgrade in place."
+
+comma := ,
+
 .PHONY: ps-single
 ps-single: ## Single-server: show running services
 	$(COMPOSE_SINGLE) ps

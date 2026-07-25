@@ -56,6 +56,8 @@ Usage:
   fleetctl kms status                                    Report the configured external KMS/HSM backend and its health
   fleetctl kms wrap [value]                              Wrap a passphrase with the external KMS (reads stdin if no value)
   fleetctl kms unwrap <token>                            Unwrap a KMS blob to verify it (prints the plaintext)
+  fleetctl release keygen [--out release.key]            Generate an Ed25519 release signing keypair
+  fleetctl release build --version … --from … --key …   Build + sign a .fleetup upgrade bundle (see 'make bundle')
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)
@@ -64,6 +66,12 @@ Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the enviro
 func run(cmd string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Release tooling (keygen / bundle build+sign+verify) is an offline build-time
+	// operation that needs no config or database — dispatch it before loading either.
+	if cmd == "release" {
+		return runRelease(args)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
