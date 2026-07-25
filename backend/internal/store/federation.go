@@ -21,12 +21,16 @@ type FederationSite struct {
 	Status           string     `json:"status"`
 	HubKeyID         *uuid.UUID `json:"-"`
 	APIVersion       string     `json:"apiVersion"`
-	LastSeenAt       *time.Time `json:"lastSeenAt,omitempty"`
-	LinkState        string     `json:"linkState"`
-	LagSeconds       int        `json:"lagSeconds"`
-	TenantID         uuid.UUID  `json:"-"` // hub tenant this site belongs to (site-as-tenant)
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	// BuildVersion is the site's running fleetd version (refreshed on the heartbeat);
+	// ProtocolVersion is the federation wire protocol it negotiated at join.
+	BuildVersion    string     `json:"buildVersion"`
+	ProtocolVersion int        `json:"protocolVersion"`
+	LastSeenAt      *time.Time `json:"lastSeenAt,omitempty"`
+	LinkState       string     `json:"linkState"`
+	LagSeconds      int        `json:"lagSeconds"`
+	TenantID        uuid.UUID  `json:"-"` // hub tenant this site belongs to (site-as-tenant)
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
 // FederationJoinToken is a one-time pairing token (hub side).
@@ -68,12 +72,12 @@ type FederationHub struct {
 // ---------------------------------------------------------------------------
 
 const fedSiteCols = `id, name, public_key, pending_public_key, status, hub_key_id,
-	api_version, last_seen_at, link_state, lag_seconds, tenant_id, created_at, updated_at`
+	api_version, build_version, protocol_version, last_seen_at, link_state, lag_seconds, tenant_id, created_at, updated_at`
 
 func scanSite(row interface{ Scan(...any) error }) (*FederationSite, error) {
 	var s FederationSite
 	if err := row.Scan(&s.ID, &s.Name, &s.PublicKey, &s.PendingPublicKey, &s.Status,
-		&s.HubKeyID, &s.APIVersion, &s.LastSeenAt, &s.LinkState, &s.LagSeconds,
+		&s.HubKeyID, &s.APIVersion, &s.BuildVersion, &s.ProtocolVersion, &s.LastSeenAt, &s.LinkState, &s.LagSeconds,
 		&s.TenantID, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -85,10 +89,19 @@ func scanSite(row interface{ Scan(...any) error }) (*FederationSite, error) {
 // request context (see internal/federation handleJoin).
 func (s *Store) CreateSite(ctx context.Context, site *FederationSite, createdBy *uuid.UUID, tenantID uuid.UUID) (*FederationSite, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO federation_sites(id, name, public_key, status, hub_key_id, api_version, created_by, tenant_id)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+fedSiteCols,
-		site.ID, site.Name, site.PublicKey, nz(site.Status, "pending"), site.HubKeyID, site.APIVersion, createdBy, tenantID)
+		`INSERT INTO federation_sites(id, name, public_key, status, hub_key_id, api_version, build_version, protocol_version, created_by, tenant_id)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+fedSiteCols,
+		site.ID, site.Name, site.PublicKey, nz(site.Status, "pending"), site.HubKeyID, site.APIVersion, site.BuildVersion, site.ProtocolVersion, createdBy, tenantID)
 	return scanSite(row)
+}
+
+// SetSiteVersion refreshes a site's running build version (from its heartbeat). The
+// protocol version is fixed at join, so it isn't updated here.
+func (s *Store) SetSiteVersion(ctx context.Context, id uuid.UUID, buildVersion string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE federation_sites SET build_version=$2, updated_at=now() WHERE id=$1 AND build_version IS DISTINCT FROM $2`,
+		id, buildVersion)
+	return err
 }
 
 func (s *Store) GetSite(ctx context.Context, id uuid.UUID) (*FederationSite, error) {

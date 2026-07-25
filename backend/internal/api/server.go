@@ -303,7 +303,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// Shared module container, built once and reused by registerRoutes and (in
 	// hub/site mode) the federation service. This is the SAME container the route
 	// handlers use, so a hub-proxied request runs through identical logic.
-	s.deps = &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Auth: s.Auth, CA: s.Issuer,
+	s.deps = &app.Deps{Store: s.Store, Cfg: s.Cfg, Log: s.Log, Version: s.Version, Auth: s.Auth, CA: s.Issuer,
 		Gateway: s.Gateway, Live: s.Live, Watch: s.Watch, Events: s.Hub, Notify: s.Notify,
 		AccessPolicy: accesspolicy.NewEnforcer(s.Store, s.Log)}
 	s.deps.DistributeKRL = s.distributeKRL

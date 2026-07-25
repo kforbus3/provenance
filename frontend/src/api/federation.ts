@@ -10,6 +10,7 @@ export interface FederationSite {
   linkState: string; // up | down
   lagSeconds: number;
   apiVersion: string;
+  buildVersion: string; // the site's running fleetd version (from its heartbeat)
   lastSeenAt?: string;
   createdAt: string;
   updatedAt: string;

@@ -125,6 +125,16 @@ export function UpdatesCard() {
           </Alert>
         )}
 
+        {check?.sites && check.sites.length > 0 && (
+          <Alert severity={check.sitesBehind ? "warning" : "info"} sx={{ mb: 1.5 }}>
+            Federation hub — {check.sites.length} site{check.sites.length > 1 ? "s" : ""}.{" "}
+            {check.sites.map((s) => `${s.name} (${s.buildVersion || "unknown"})`).join(", ")}.
+            {check.sitesBehind
+              ? " Upgrade the sites to the target version before upgrading the hub — a hub must never run a newer federation protocol than a site it talks to."
+              : " All sites are on the target version — safe to upgrade the hub."}
+          </Alert>
+        )}
+
         {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError("")}>{error}</Alert>}
 
         {!active && status?.state === "success" && (

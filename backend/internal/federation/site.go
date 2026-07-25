@@ -87,10 +87,12 @@ func (s *Service) join(ctx context.Context) (*siteState, error) {
 		return nil, err
 	}
 	body, _ := json.Marshal(joinReq{
-		JoinToken:     s.deps.Cfg.HubJoinToken,
-		SitePublicKey: base64.StdEncoding.EncodeToString(id.Public),
-		SiteName:      s.deps.Cfg.PublicURL,
-		APIVersion:    "v1",
+		JoinToken:       s.deps.Cfg.HubJoinToken,
+		SitePublicKey:   base64.StdEncoding.EncodeToString(id.Public),
+		SiteName:        s.deps.Cfg.PublicURL,
+		APIVersion:      "v1", // legacy field, kept for old hubs
+		ProtocolVersion: ProtocolVersion,
+		BuildVersion:    s.deps.Version,
 	})
 	joinURL := httpBase(s.deps.Cfg.HubURL) + "/federation/join"
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, joinURL, bytes.NewReader(body))
@@ -111,6 +113,11 @@ func (s *Service) join(ctx context.Context) (*siteState, error) {
 	// Pin the hub key: if a fingerprint was configured, it must match (MITM defense).
 	if fp := s.deps.Cfg.HubKeyFingerprint; fp != "" && fp != jr.HubFingerprint {
 		return nil, fmt.Errorf("hub key fingerprint mismatch: pinned %q got %q", fp, jr.HubFingerprint)
+	}
+	// The hub speaks an older federation protocol than we require: refuse rather than
+	// pair into an incompatibility. (A hub reporting 0 is legacy/pre-versioning = v1.)
+	if hp := jr.ProtocolVersion; hp != 0 && hp < MinSupportedProtocol {
+		return nil, fmt.Errorf("hub federation protocol v%d is older than this site requires (>= v%d); upgrade the hub first", hp, MinSupportedProtocol)
 	}
 	hubPubBytes, err := base64.StdEncoding.DecodeString(jr.HubPublicKey)
 	if err != nil {
@@ -288,7 +295,10 @@ func (s *Service) pushLoop(ctx context.Context, sess *fedlink.Session) error {
 				return err
 			}
 		}
-		return enc.Encode(PushMsg{Type: "heartbeat", Data: json.RawMessage(`{}`)})
+		// The heartbeat carries the site's running build version so the hub can show
+		// version skew and enforce sites-first upgrade ordering.
+		hb, _ := json.Marshal(heartbeatMsg{BuildVersion: s.deps.Version})
+		return enc.Encode(PushMsg{Type: "heartbeat", Data: hb})
 	}
 
 	if err := send(); err != nil {

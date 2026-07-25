@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.67.0 — Upgrade system phase 5: federation upgrade ordering
+
+The in-UI upgrade system is now federation-aware, completing the upgrade epic:
+
+- **Federation protocol negotiation.** The site↔hub join handshake now carries a real
+  wire-protocol version. A hub rejects a site whose protocol is older than it supports
+  (and a site rejects a too-old hub), each with a message naming which side to upgrade
+  first. This build speaks protocol v1; legacy pre-versioning sites are treated as v1, so
+  existing federations keep working with no change.
+- **Site build-version visibility.** Each site reports its running `fleetd` version on
+  its read-model heartbeat. The hub stores it and surfaces it on the **Sites** page (new
+  Version column) and the hub's **Updates** panel.
+- **Sites-first ordering guard.** The hub's Updates panel compares each site's version
+  against the version the hub is about to install and warns when a site is behind —
+  upgrade the sites before the hub, so the hub never runs a newer federation protocol than
+  a site it must talk to. Upgrades stay per-stack (each site is upgraded from its own UI /
+  channel); there is no remote force-upgrade, by design.
+- Docs: new "Upgrading a federation" section in `docs/federation.md`.
+
+Schema: migration `0067` adds `build_version` / `protocol_version` to `federation_sites`
+(both default-backfilled; additive, no action required).
+
+---
+
 ## v0.66.0 — Upgrade system phase 4: HA rolling upgrades
 
 In-UI upgrades are now cluster-aware:

@@ -63,12 +63,21 @@ export interface ClusterMember {
   lastHeartbeat: string;
 }
 
+export interface SiteVersion {
+  name: string;
+  buildVersion: string;
+  status: string;
+  upToDate: boolean;
+}
+
 export interface CheckResult {
   currentVersion: string;
   channelEnabled: boolean;
   updateAvailable: boolean;
   release?: ChannelRelease;
   cluster?: ClusterMember[];
+  sites?: SiteVersion[];
+  sitesBehind?: boolean;
 }
 
 // checkForUpdate queries the configured release channel for an available upgrade.

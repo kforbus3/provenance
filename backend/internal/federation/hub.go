@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -67,17 +68,41 @@ func (s *Service) ensureHubKey(ctx context.Context) error {
 
 // --- site-facing: join ---
 
+// ProtocolVersion is this build's federation wire-protocol version, negotiated at
+// join. MinSupportedProtocol is the oldest a peer may speak. Bump ProtocolVersion when
+// the frame/token protocol changes; bump MinSupportedProtocol only on a hard break.
+// (A legacy site that sends apiVersion "v1" and no protocolVersion is treated as 1.)
+const (
+	ProtocolVersion      = 1
+	MinSupportedProtocol = 1
+)
+
 type joinReq struct {
-	JoinToken     string `json:"joinToken"`
-	SitePublicKey string `json:"sitePublicKey"` // base64 std
-	SiteName      string `json:"siteName"`
-	APIVersion    string `json:"apiVersion"`
+	JoinToken       string `json:"joinToken"`
+	SitePublicKey   string `json:"sitePublicKey"` // base64 std
+	SiteName        string `json:"siteName"`
+	APIVersion      string `json:"apiVersion"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	BuildVersion    string `json:"buildVersion"` // the site's running fleetd version
 }
 
 type joinResp struct {
-	SiteID         string `json:"siteId"`
-	HubPublicKey   string `json:"hubPublicKey"`
-	HubFingerprint string `json:"hubFingerprint"`
+	SiteID          string `json:"siteId"`
+	HubPublicKey    string `json:"hubPublicKey"`
+	HubFingerprint  string `json:"hubFingerprint"`
+	ProtocolVersion int    `json:"protocolVersion"` // the hub's protocol version
+}
+
+// effectiveProtocol maps a join request to a protocol version, treating a legacy site
+// (protocolVersion 0 but apiVersion "v1") as protocol 1.
+func effectiveProtocol(req joinReq) int {
+	if req.ProtocolVersion > 0 {
+		return req.ProtocolVersion
+	}
+	if req.APIVersion == "v1" || req.APIVersion == "" {
+		return 1
+	}
+	return 0
 }
 
 func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +114,12 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 	pub, err := base64.StdEncoding.DecodeString(req.SitePublicKey)
 	if err != nil || len(pub) == 0 {
 		writeErr(w, http.StatusBadRequest, "bad site public key")
+		return
+	}
+	// Reject a site speaking an incompatible federation wire protocol before pairing it.
+	proto := effectiveProtocol(req)
+	if proto < MinSupportedProtocol {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("site federation protocol v%d is too old for this hub (needs >= v%d); upgrade the site first", proto, MinSupportedProtocol))
 		return
 	}
 	siteID := uuid.New()
@@ -108,16 +139,18 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.deps.Store.CreateSite(bctx, &store.FederationSite{
 		ID: siteID, Name: name, PublicKey: pub, Status: "pending",
 		HubKeyID: &hubKeyID, APIVersion: req.APIVersion,
+		BuildVersion: req.BuildVersion, ProtocolVersion: proto,
 	}, nil, tok.TenantID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not register site")
 		return
 	}
 	s.audit(r.Context(), nil, "site:"+name, "federation.site_joined", siteID.String(),
-		map[string]any{"name": name})
+		map[string]any{"name": name, "buildVersion": req.BuildVersion, "protocolVersion": proto})
 	writeJSON(w, http.StatusOK, joinResp{
-		SiteID:         siteID.String(),
-		HubPublicKey:   base64.StdEncoding.EncodeToString(s.hubPub),
-		HubFingerprint: s.hubFinger,
+		SiteID:          siteID.String(),
+		HubPublicKey:    base64.StdEncoding.EncodeToString(s.hubPub),
+		HubFingerprint:  s.hubFinger,
+		ProtocolVersion: ProtocolVersion,
 	})
 }
 

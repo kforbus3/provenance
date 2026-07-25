@@ -76,6 +76,7 @@ export function SitesPage() {
               <TableCell>Site</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Link</TableCell>
+              <TableCell>Version</TableCell>
               <TableCell>Last seen</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -86,6 +87,9 @@ export function SitesPage() {
                 <TableCell>{s.name}</TableCell>
                 <TableCell><Chip size="small" label={s.status} color={STATUS_COLOR[s.status] ?? "default"} /></TableCell>
                 <TableCell><Chip size="small" label={s.linkState} color={LINK_COLOR[s.linkState] ?? "default"} /></TableCell>
+                <TableCell sx={{ color: "text.secondary", fontFamily: "monospace" }}>
+                  {s.buildVersion || "—"}
+                </TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>
                   {s.lastSeenAt ? formatDateTime(s.lastSeenAt) : "never"}
                 </TableCell>
@@ -100,7 +104,7 @@ export function SitesPage() {
               </TableRow>
             ))}
             {sites.length === 0 && (
-              <TableRow><TableCell colSpan={5} align="center" sx={{ color: "text.secondary", py: 4 }}>
+              <TableRow><TableCell colSpan={6} align="center" sx={{ color: "text.secondary", py: 4 }}>
                 No sites joined yet. Click “Add Site” to generate a join token.
               </TableCell></TableRow>
             )}

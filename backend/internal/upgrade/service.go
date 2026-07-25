@@ -216,6 +216,18 @@ type ClusterMember struct {
 	LastHeartbeat time.Time `json:"lastHeartbeat"`
 }
 
+// SiteVersion is a compact view of a federation site's running build, shown on the
+// hub's upgrade screen to enforce sites-first ordering (upgrade every site before the
+// hub, so the hub never runs a newer protocol than a site it must talk to).
+type SiteVersion struct {
+	Name         string `json:"name"`
+	BuildVersion string `json:"buildVersion"`
+	Status       string `json:"status"`
+	// UpToDate is true when the site already reports the version the hub is about to
+	// move to (or, with no update pending, the hub's current version).
+	UpToDate bool `json:"upToDate"`
+}
+
 // CheckResult is what the UI's "check for updates" returns.
 type CheckResult struct {
 	CurrentVersion  string                  `json:"currentVersion"`
@@ -224,6 +236,11 @@ type CheckResult struct {
 	Release         *release.ChannelRelease `json:"release,omitempty"`
 	// Cluster is the live instance roster (>1 = clustered). Empty/one on single-host.
 	Cluster []ClusterMember `json:"cluster,omitempty"`
+	// Sites is the federation site roster (populated in hub mode only).
+	Sites []SiteVersion `json:"sites,omitempty"`
+	// SitesBehind is set when at least one federation site is not yet on the target
+	// version — a signal to upgrade the sites before applying the hub upgrade.
+	SitesBehind bool `json:"sitesBehind,omitempty"`
 }
 
 // clusterRoster returns the live instance roster for the upgrade UI (best-effort).
@@ -253,7 +270,43 @@ func (s *Service) CheckForUpdate(ctx context.Context) (CheckResult, error) {
 	if up := idx.PickUpdate(s.version); up != nil {
 		res.UpdateAvailable, res.Release = true, up
 	}
+	// Sites-first ordering: in hub mode, surface each site's build version against the
+	// version this hub is about to move to, so an operator upgrades the sites first.
+	target := s.version
+	if res.Release != nil {
+		target = res.Release.Version
+	}
+	res.Sites, res.SitesBehind = s.federationSites(ctx, target)
 	return res, nil
+}
+
+// federationSites returns the site roster with an up-to-date flag against target, and
+// whether any site is behind it. Empty unless this instance is a federation hub.
+func (s *Service) federationSites(ctx context.Context, target string) ([]SiteVersion, bool) {
+	if s.cfg == nil || s.cfg.Mode != "hub" {
+		return nil, false
+	}
+	sites, err := s.store.ListSites(ctx)
+	if err != nil || len(sites) == 0 {
+		return nil, false
+	}
+	out := make([]SiteVersion, 0, len(sites))
+	behind := false
+	for _, site := range sites {
+		// A site that already reports the target version is up to date. A site that has
+		// never reported a version (empty) is treated as behind, since we can't confirm it.
+		upToDate := site.BuildVersion != "" && site.BuildVersion == target
+		if !upToDate {
+			behind = true
+		}
+		out = append(out, SiteVersion{
+			Name:         site.Name,
+			BuildVersion: site.BuildVersion,
+			Status:       site.Status,
+			UpToDate:     upToDate,
+		})
+	}
+	return out, behind
 }
 
 // PullAndApply downloads the channel release matching version (or the newest

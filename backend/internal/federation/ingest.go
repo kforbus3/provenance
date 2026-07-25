@@ -16,6 +16,13 @@ type hostPush struct {
 	Data   json.RawMessage `json:"data"`
 }
 
+// heartbeatMsg is the periodic liveness beat a site sends on its push stream. It
+// carries the site's running build version so the hub can surface version skew and
+// enforce sites-first upgrade ordering.
+type heartbeatMsg struct {
+	BuildVersion string `json:"buildVersion,omitempty"`
+}
+
 // ingestPush consumes a site→hub push stream, updating the hub read-model and
 // re-broadcasting live events (re-tagged with site_id) to hub dashboards. ctx runs
 // under bypass; siteTenant is the site's hub tenant, supplied to every cache write so
@@ -45,6 +52,12 @@ func (s *Service) ingestPush(ctx context.Context, siteID, siteTenant uuid.UUID, 
 			}
 		case "heartbeat":
 			_ = s.deps.Store.SetSiteLink(ctx, siteID, "up", 0, time.Now())
+			var hb heartbeatMsg
+			if err := json.Unmarshal(msg.Data, &hb); err == nil && hb.BuildVersion != "" {
+				if err := s.deps.Store.SetSiteVersion(ctx, siteID, hb.BuildVersion); err != nil {
+					s.log.Warn("ingest heartbeat version", "site", siteID, "err", err)
+				}
+			}
 		}
 		_ = s.deps.Store.SetSyncState(ctx, siteID, msg.Type, "", 0, time.Now(), siteTenant)
 	}

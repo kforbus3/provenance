@@ -108,6 +108,38 @@ the hub caches it (`fed_cache_*`) and re-broadcasts live events tagged with
 indicator) even while a site is briefly offline. Live actions (terminals, SFTP,
 management writes) go to the site on demand over the same channel.
 
+## Upgrading a federation
+
+Each stack — hub and every site — is a full Fleet deployment with its own database and
+migrations, upgraded through the normal in-UI updater (Settings → Updates). Federation
+adds one ordering rule and the visibility to follow it.
+
+**Protocol negotiation.** At join, a site advertises the federation wire-protocol
+version it speaks; the hub rejects a site whose protocol is older than it supports (and
+a site rejects a hub that is too old for it), with a message telling you which side to
+upgrade first. This build speaks protocol v1; a legacy pre-versioning site is treated as
+v1 for compatibility. Bumping the protocol is reserved for a real wire change.
+
+**Build-version visibility.** Every site reports its running `fleetd` version on its
+read-model heartbeat. The hub stores it and shows it on the **Sites** page (Version
+column) and on the hub's **Updates** panel, so you can see version skew across the
+federation at a glance.
+
+**Sites-first ordering.** Upgrade the **sites before the hub**. Because a newer hub may
+speak a newer federation protocol than an un-upgraded site, upgrading the hub first can
+break the link until the site catches up; upgrading sites first never does (an older hub
+always accepts a newer, still-backward-compatible site). The hub's Updates panel enforces
+this as guidance: when it is about to move to a target version, any site not yet on that
+version is flagged, and the panel warns you to upgrade the sites first. There is no
+remote "upgrade all sites" button by design — each site is upgraded from its own UI (or
+its own release channel) so an operator confirms each stack's maintenance window and
+migration compatibility locally. Within a single stack, HA rolling-upgrade rules
+(additive rolls per-replica; breaking needs a window) still apply — see
+[high-availability.md](high-availability.md).
+
+Rollback follows the same order in reverse: roll the hub back before rolling a site back
+below the hub's protocol.
+
 ## Security notes
 
 - Treat the hub federation key like the CA key: a compromise lets the hub assert
