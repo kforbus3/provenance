@@ -84,10 +84,11 @@ type toolFunction struct {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Tools    []toolDef     `json:"tools,omitempty"`
-	Stream   bool          `json:"stream"`
+	Model    string         `json:"model"`
+	Messages []chatMessage  `json:"messages"`
+	Tools    []toolDef      `json:"tools,omitempty"`
+	Stream   bool           `json:"stream"`
+	Options  map[string]any `json:"options,omitempty"` // Ollama sampling options (e.g. temperature); unset in production
 }
 
 type chatResponse struct {
