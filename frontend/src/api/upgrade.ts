@@ -25,7 +25,7 @@ export interface UpgradeStatus {
 export async function previewUpgrade(file: File): Promise<UpgradeManifest> {
   const form = new FormData();
   form.append("bundle", file);
-  const { data } = await api.post<{ manifest: UpgradeManifest }>("/system/upgrade/preview", form, {
+  const { data } = await api.post<{ manifest: UpgradeManifest }>("/api/v1/system/upgrade/preview", form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data.manifest;
@@ -34,16 +34,16 @@ export async function previewUpgrade(file: File): Promise<UpgradeManifest> {
 // applyUpgrade applies the currently-staged (previewed) bundle. version guards against
 // applying a different bundle than was reviewed.
 export async function applyUpgrade(version: string): Promise<void> {
-  await api.post("/system/upgrade/apply", { version });
+  await api.post("/api/v1/system/upgrade/apply", { version });
 }
 
 export async function getUpgradeStatus(): Promise<UpgradeStatus> {
-  const { data } = await api.get<UpgradeStatus>("/system/upgrade/status");
+  const { data } = await api.get<UpgradeStatus>("/api/v1/system/upgrade/status");
   return data;
 }
 
 export async function setDrain(draining: boolean): Promise<void> {
-  await api.post("/system/drain", { draining });
+  await api.post("/api/v1/system/drain", { draining });
 }
 
 export interface ChannelRelease {
@@ -82,11 +82,11 @@ export interface CheckResult {
 
 // checkForUpdate queries the configured release channel for an available upgrade.
 export async function checkForUpdate(): Promise<CheckResult> {
-  const { data } = await api.get<CheckResult>("/system/upgrade/check");
+  const { data } = await api.get<CheckResult>("/api/v1/system/upgrade/check");
   return data;
 }
 
 // pullUpdate downloads + installs a channel release (latest applicable if omitted).
 export async function pullUpdate(version?: string): Promise<void> {
-  await api.post("/system/upgrade/pull", { version: version || "" });
+  await api.post("/api/v1/system/upgrade/pull", { version: version || "" });
 }

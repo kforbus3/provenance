@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.67.1 — Fix: in-UI upgrade API calls missing `/api/v1` prefix
+
+The Settings → Updates screen called the upgrade endpoints at `/system/upgrade/*`
+instead of `/api/v1/system/upgrade/*` (every other API module includes the prefix; this
+one didn't). Behind a reverse proxy this meant the calls never matched the `/api/`
+proxy location: bundle **upload returned HTTP 413** (the request fell through to the SPA
+route, which enforces the default 1 MB body limit instead of the API location's
+unlimited `client_max_body_size`), and check/status/apply/pull/drain silently hit the
+SPA fallback rather than the backend. Corrected all six paths. No backend change.
+
+This was the first real end-to-end exercise of the in-UI upgrade UI through a proxied
+deployment — the unit/build tests never caught it because they don't traverse nginx.
+
+---
+
 ## v0.67.0 — Upgrade system phase 5: federation upgrade ordering
 
 The in-UI upgrade system is now federation-aware, completing the upgrade epic:
