@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.67.3 — Fix: 8 MiB global body cap truncated bundle uploads
+
+The global `bodyLimitMW` request-body cap (8 MiB) exempted the SFTP upload route but
+not the in-UI upgrade bundle upload (added later in v0.61.0). Its own 2 GiB limit was
+overridden by the outer 8 MiB wrap, so any real bundle was truncated mid-stream and the
+backend rejected the incomplete multipart with `400 "expected a multipart 'bundle' file"`.
+Added `/system/upgrade/preview` to the exemption. Backend-only.
+
+This was the third and final bug in the upload path found by the end-to-end smoke test
+(after the v0.67.1 `/api/v1` prefix and v0.67.2 multipart-boundary fixes).
+
+---
+
 ## v0.67.2 — Fix: bundle upload multipart boundary
 
 Following v0.67.1 (which let the upload request reach the backend at all), the bundle
