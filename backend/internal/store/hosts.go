@@ -14,20 +14,24 @@ import (
 const hostCols = `id, hostname, description, environment, owner,
 	COALESCE(address,''), COALESCE(host(wg_address),''), COALESCE(overlay,''), ssh_port, ssh_user,
 	tags, enrolled, auth_method, credential_id, protocol, rdp_port,
-	COALESCE(rdp_options, '{}'::jsonb), created_at, updated_at, maintenance_until`
+	COALESCE(rdp_options, '{}'::jsonb), COALESCE(host_options, '{}'::jsonb),
+	created_at, updated_at, maintenance_until`
 
 func scanHost(row pgx.Row) (*models.Host, error) {
 	var h models.Host
-	var rdpOpts []byte
+	var rdpOpts, hostOpts []byte
 	err := row.Scan(&h.ID, &h.Hostname, &h.Description, &h.Environment, &h.Owner,
 		&h.Address, &h.WGAddress, &h.Overlay, &h.SSHPort, &h.SSHUser, &h.Tags, &h.Enrolled,
-		&h.AuthMethod, &h.CredentialID, &h.Protocol, &h.RDPPort, &rdpOpts,
+		&h.AuthMethod, &h.CredentialID, &h.Protocol, &h.RDPPort, &rdpOpts, &hostOpts,
 		&h.CreatedAt, &h.UpdatedAt, &h.MaintenanceUntil)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
 	if len(rdpOpts) > 0 {
 		_ = json.Unmarshal(rdpOpts, &h.RDPOptions)
+	}
+	if len(hostOpts) > 0 {
+		_ = json.Unmarshal(hostOpts, &h.Options)
 	}
 	return &h, nil
 }
@@ -43,17 +47,27 @@ type HostInput struct {
 	SSHPort      int
 	SSHUser      string
 	Tags         []string
-	AuthMethod   string            // fleet_cert (default) | vault_password | vault_ssh_key
-	CredentialID *uuid.UUID        // vault secret when AuthMethod is vaulted
-	Protocol     string            // ssh (default) | rdp
-	RDPPort      int               // RDP port when Protocol is rdp (default 3389)
-	RDPOptions   models.RDPOptions // display/security/clipboard settings for rdp
+	AuthMethod   string             // fleet_cert (default) | vault_password | vault_ssh_key
+	CredentialID *uuid.UUID         // vault secret when AuthMethod is vaulted
+	Protocol     string             // ssh (default) | rdp
+	RDPPort      int                // RDP port when Protocol is rdp (default 3389)
+	RDPOptions   models.RDPOptions  // display/security/clipboard settings for rdp
+	Options      models.HostOptions // generic device options (e.g. RouterOS API)
 }
 
 // rdpOptionsJSON marshals the RDP options for the jsonb column; on error it falls
 // back to an empty object so a host write never fails on option encoding.
 func (in HostInput) rdpOptionsJSON() []byte {
 	b, err := json.Marshal(in.RDPOptions)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+// hostOptionsJSON marshals the generic host options for the jsonb column.
+func (in HostInput) hostOptionsJSON() []byte {
+	b, err := json.Marshal(in.Options)
 	if err != nil {
 		return []byte("{}")
 	}
@@ -97,11 +111,11 @@ func (s *Store) CreateHost(ctx context.Context, in HostInput) (*models.Host, err
 	var h *models.Host
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO hosts (hostname, description, environment, owner, address, wg_address, ssh_port, ssh_user, tags, auth_method, credential_id, protocol, rdp_port, rdp_options)
-			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::inet,$7,$8,$9,$10,$11,$12,$13,$14)
+			INSERT INTO hosts (hostname, description, environment, owner, address, wg_address, ssh_port, ssh_user, tags, auth_method, credential_id, protocol, rdp_port, rdp_options, host_options)
+			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::inet,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 			RETURNING `+hostCols,
 			in.Hostname, in.Description, in.Environment, in.Owner, in.Address, in.WGAddress,
-			in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID, in.protocol(), in.rdpPort(), in.rdpOptionsJSON())
+			in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID, in.protocol(), in.rdpPort(), in.rdpOptionsJSON(), in.hostOptionsJSON())
 		var err error
 		h, err = scanHost(row)
 		if err != nil {
@@ -340,10 +354,10 @@ func (s *Store) UpdateHost(ctx context.Context, id uuid.UUID, in HostInput) (*mo
 		UPDATE hosts SET hostname=$2, description=$3, environment=$4, owner=$5,
 			address=NULLIF($6,''), wg_address=NULLIF($7,'')::inet, ssh_port=$8, ssh_user=$9,
 			tags=$10, auth_method=$11, credential_id=$12, protocol=$13, rdp_port=$14,
-			rdp_options=$15, updated_at=now()
+			rdp_options=$15, host_options=$16, updated_at=now()
 		WHERE id=$1 RETURNING `+hostCols,
 		id, in.Hostname, in.Description, in.Environment, in.Owner, in.Address, in.WGAddress,
-		in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID, in.protocol(), in.rdpPort(), in.rdpOptionsJSON())
+		in.SSHPort, in.SSHUser, in.Tags, in.authMethod(), in.CredentialID, in.protocol(), in.rdpPort(), in.rdpOptionsJSON(), in.hostOptionsJSON())
 	return scanHost(row)
 }
 

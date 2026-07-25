@@ -132,6 +132,11 @@ class RunHost(BaseModel):
     auth_method: str = "fleet_cert"
     private_key: str = ""  # vault_ssh_key: this host's private key
     password: str = ""     # vault_password: this host's password
+    # RouterOS API device: open a local TCP forward to api_port on this host through the
+    # jump, so a community.routeros.api play (connection: local) can reach it — RouterOS's
+    # SSH exec channel is unusable for automation. Injects fleet_api_host/fleet_api_port.
+    api_tunnel: bool = False
+    api_port: int = 8728
 
 
 class RunRequest(BaseModel):
@@ -237,12 +242,17 @@ def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dic
     # ssh_config, can authenticate; it's the same key, so the raw/ssh path is unaffected.
     common = f"-F {ssh_config_path}"
     lines = ["[all]"]
-    for h in req.hosts:
+    for i, h in enumerate(req.hosts):
         entry = f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}"
         if h.auth_method == "vault_password" and h.password:
             entry += f" ansible_password={_inv_quote(h.password)}"
         if h.auth_method == "vault_ssh_key" and h.address in vault_key_paths:
             entry += f" ansible_ssh_private_key_file={vault_key_paths[h.address]}"
+        # RouterOS API host: expose the local port-forward endpoint the runner opens so a
+        # community.routeros.api task (connection: local) can `hostname: {{ fleet_api_host }}`
+        # port: {{ fleet_api_port }}` — reaching the device's API through the jump tunnel.
+        if h.api_tunnel:
+            entry += f" fleet_api_host=127.0.0.1 fleet_api_port={_api_local_port(i)}"
         # Privilege-escalation default is PER HOST: enrolled (fleet_cert) Linux hosts run
         # under sudo as before, but a vaulted host is typically an appliance / network
         # device (router, switch) with no sudo, where forcing become breaks every task
@@ -268,6 +278,47 @@ def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dic
     return "\n".join(lines) + "\n"
 
 
+def _api_local_port(index: int) -> int:
+    # Deterministic per-host local forward port. MUST match between the inventory var
+    # (fleet_api_port) and the ssh -L setup — both enumerate req.hosts in the same order.
+    return 18728 + index
+
+
+def _wait_port(port: int, timeout_s: float) -> bool:
+    import socket
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.3)
+    return False
+
+
+def _open_api_tunnels(req: RunRequest, ssh_config_path: str):
+    # For each RouterOS-API host, open `ssh -L 127.0.0.1:<lp>:<device>:<apiport> -N fleet-jump`
+    # (reusing the fleet-jump cert stanza) so a community.routeros.api play reaches the device's
+    # API through the jump. Waits (bounded) for each forward to accept so ansible doesn't race it.
+    # Returns (procs, notices).
+    procs, notices = [], []
+    for i, h in enumerate(req.hosts):
+        if not h.api_tunnel:
+            continue
+        lp = _api_local_port(i)
+        cmd = [
+            "ssh", "-F", ssh_config_path, "-o", "ExitOnForwardFailure=yes",
+            "-L", f"127.0.0.1:{lp}:{h.address}:{h.api_port}", "-N", "fleet-jump",
+        ]
+        procs.append(subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        if _wait_port(lp, 15):
+            notices.append(f"[api tunnel: {h.name} -> {h.address}:{h.api_port} via 127.0.0.1:{lp}]")
+        else:
+            notices.append(f"[WARNING: api tunnel to {h.name} ({h.address}:{h.api_port}) did not come up]")
+    return procs, notices
+
+
 def _stream_run(req: RunRequest):
     if not req.hosts:
         yield _ndjson({"done": True, "rc": 1, "error": "no target hosts"})
@@ -278,6 +329,7 @@ def _stream_run(req: RunRequest):
 
     workdir = tempfile.mkdtemp(prefix="fleet-run-")
     proc = None
+    tunnels = []
     try:
         pb_path = os.path.join(workdir, "playbook.yml")
         inv_path = os.path.join(workdir, "inventory.ini")
@@ -306,6 +358,11 @@ def _stream_run(req: RunRequest):
             fh.write(_build_ssh_config(req, key_path, vault_key_paths))
         with open(inv_path, "w", encoding="utf-8") as fh:
             fh.write(_build_inventory(req, cfg_path, vault_key_paths))
+
+        # Open API port-forwards through the jump for any RouterOS-API hosts before the play.
+        tunnels, tnotices = _open_api_tunnels(req, cfg_path)
+        for n in tnotices:
+            yield _ndjson({"line": n})
 
         argv = ["ansible-playbook", "-i", inv_path]
         if req.check_mode:
@@ -347,6 +404,9 @@ def _stream_run(req: RunRequest):
             proc.kill()
         yield _ndjson({"done": True, "rc": 1, "error": f"runner error: {exc}"})
     finally:
+        for tp in tunnels:
+            if tp.poll() is None:
+                tp.terminate()
         shutil.rmtree(workdir, ignore_errors=True)
 
 

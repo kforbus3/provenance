@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.64.0 — Manage & schedule MikroTik/RouterOS updates via the RouterOS API
+
+RouterOS 7's SSH doesn't cleanly close command sessions, so `raw`/`network_cli` playbooks hang
+(a long-standing Ansible↔RouterOS issue). Fleet now drives RouterOS over its **binary API**
+(port 8728) instead, **tunneled through the jump host** — and you can **schedule** it with the
+existing playbook scheduler.
+
+- **Mark a host "Manage via RouterOS API"** (Hosts → edit → RouterOS section, default port 8728),
+  stored in a new generic `host_options` JSONB column. The host stays a normal SSH host (terminal
+  still works); the flag just says "also reachable via its API".
+- **When a playbook runs against it**, the ansible-runner opens `ssh -L …:<device>:8728` through the
+  jump host and exposes it to the play as `fleet_api_host` / `fleet_api_port`, so a
+  `community.routeros.api` task (`connection: local`) reaches the device. Tunnels are set up before
+  the play and torn down after.
+- **Credential:** the RouterOS API needs a username+password, so an API host uses a `vault_password`
+  open-policy credential (an SSH key can't authenticate the API). It flows to the runner exactly like
+  the SSH vaulted password — no new secret plumbing.
+- **Scheduling reuses the existing playbook scheduler** — save a RouterOS-update playbook (see the
+  operations guide) and create a Playbook-kind schedule targeting the host. No new scheduling code.
+
+Requires rebuilding the ansible-runner sidecar (`make redeploy-single`). The `host_options` column
+is added automatically on startup.
+
 ## v0.63.4 — ansible-runner: add paramiko (network_cli SSH backend)
 
 The `network_cli` connection (community.routeros etc.) needs an SSH library, and the

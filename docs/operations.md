@@ -372,14 +372,56 @@ false` — network devices (routers, switches) have no sudo, and forcing it brea
 explicit `become: true`. Note that network devices aren't POSIX shells, so shell modules won't
 work either — use `raw:` commands or the network modules below.
 
-**Network devices (MikroTik/RouterOS).** The runner ships the **community.routeros** collection, so
-a playbook can use `connection: network_cli` + `ansible_network_os: community.routeros.routeros`
-and the `community.routeros.command` module instead of `raw`. The runner tunnels network_cli
-through the jump host and injects the host's vaulted credential; verify it against your hardware,
-since network_cli's SSH stack differs from the default connection. The most robust way to reach
-RouterOS through Fleet today remains `ansible.builtin.raw` with an `until:` retry loop to survive
-the reboot — RouterOS can't run `wait_for_connection` (no Python), and `wait_for` from the runner
-can't reach a device that's only reachable through the jump host.
+### MikroTik / RouterOS (API)
+
+RouterOS 7's SSH doesn't cleanly close command sessions, so `raw`/`network_cli` playbooks hang. The
+reliable path is the **RouterOS binary API** (port 8728), which Fleet tunnels through the jump host.
+
+Setup:
+1. On the router, enable the `api` service (`/ip service enable api`) and create/keep an admin
+   **user + password** (the API can't use SSH keys).
+2. In Fleet, add the router as a host, attach an **open-policy password credential**
+   (`Auth Method = vault_password`), and under **RouterOS (MikroTik)** turn on **Manage via
+   RouterOS API** (default port 8728).
+3. Save a RouterOS playbook (below) in the Playbooks library, then create a **playbook schedule**
+   (Schedules → Kind: Playbook) targeting the host — updates now run on your cadence.
+
+When a playbook runs against a RouterOS-API host, the runner opens a port-forward to the device's
+API through the jump host and exposes it to the play as `fleet_api_host` / `fleet_api_port`. A
+`community.routeros.api` task (`connection: local`) points at those:
+
+```yaml
+---
+- name: Update RouterOS
+  hosts: all
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Check for updates
+      community.routeros.api:
+        hostname: "{{ fleet_api_host }}"
+        port: "{{ fleet_api_port | int }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        path: system package update
+        cmd: check-for-updates
+      register: upd
+    - debug: { var: upd }
+    - name: Install if a new version is available
+      community.routeros.api:
+        hostname: "{{ fleet_api_host }}"
+        port: "{{ fleet_api_port | int }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        path: system package update
+        cmd: install
+      when: "'status' in (upd.msg | default([]) | join(' ')) and 'available' in (upd.msg | default([]) | join(' '))"
+```
+
+The exact RouterOS API command mapping varies by version — verify against your device and the
+[`community.routeros.api` docs](https://docs.ansible.com/projects/ansible/latest/collections/community/routeros/api_module.html).
+(Historical note: the SSH `raw`/`network_cli` routes are unreliable for RouterOS 7 — the API tunnel
+supersedes them.)
 
 > **`Playbook.Run` is effectively arbitrary root-level change on the selected hosts.** Keep it
 > admin-only, dry-run first, and test on non-critical hosts.

@@ -243,8 +243,11 @@ type Host struct {
 	Protocol   string     `json:"protocol"`
 	RDPPort    int        `json:"rdpPort"`
 	RDPOptions RDPOptions `json:"rdpOptions"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
+	// Options are generic per-host device options (JSONB). Currently: marking a host
+	// as a RouterOS API device so a playbook run tunnels its API port through the jump.
+	Options   HostOptions `json:"options"`
+	CreatedAt time.Time   `json:"createdAt"`
+	UpdatedAt time.Time   `json:"updatedAt"`
 	// MaintenanceUntil, when set to a future time, marks the host "in maintenance":
 	// offline/recovered alerts and dashboard attention items are suppressed.
 	MaintenanceUntil *time.Time `json:"maintenanceUntil,omitempty"`
@@ -259,6 +262,28 @@ type Host struct {
 // during which offline/recovered alerts and dashboard attention items are suppressed.
 func (h *Host) InMaintenance() bool {
 	return h.MaintenanceUntil != nil && h.MaintenanceUntil.After(time.Now())
+}
+
+// HostOptions are generic per-host device options stored as JSONB. RouterOSAPI marks a
+// host as a MikroTik RouterOS device managed over its binary API: a playbook run opens
+// an API tunnel to APIPort (default 8728) through the jump host so a
+// community.routeros.api play can reach it — RouterOS's SSH exec channel is unusable
+// for automation, so the API is the reliable path.
+type HostOptions struct {
+	RouterOSAPI bool `json:"routerOsApi,omitempty"`
+	APIPort     int  `json:"apiPort,omitempty"`
+}
+
+// RouterOSAPIPort returns the configured RouterOS API port, or the 8728 default when
+// the host is RouterOS-API-managed but no explicit port is set. Returns 0 otherwise.
+func (h *Host) RouterOSAPIPort() int {
+	if !h.Options.RouterOSAPI {
+		return 0
+	}
+	if h.Options.APIPort > 0 {
+		return h.Options.APIPort
+	}
+	return 8728
 }
 
 // RDPOptions are per-host display/security and clipboard settings applied when

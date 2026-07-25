@@ -86,6 +86,7 @@ export interface Host {
   protocol: string; // ssh | rdp
   rdpPort: number;
   rdpOptions?: RDPOptions;
+  options?: HostOptions;
   enrolled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -117,6 +118,14 @@ export interface HostInput {
   protocol?: string;
   rdpPort?: number;
   rdpOptions?: RDPOptions;
+  options?: HostOptions;
+}
+
+// HostOptions are generic per-host device options. RouterOS API marks a MikroTik host
+// managed over its binary API (a playbook run tunnels the API port through the jump).
+export interface HostOptions {
+  routerOsApi?: boolean;
+  apiPort?: number;
 }
 
 // RDPOptions are per-host display/security and clipboard settings for RDP hosts.

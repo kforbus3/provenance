@@ -59,7 +59,7 @@ const EMPTY_FORM: HostInput = {
   hostname: "", description: "", environment: "", owner: "",
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
   authMethod: "fleet_cert", credentialId: null,
-  protocol: "ssh", rdpPort: 3389, rdpOptions: {},
+  protocol: "ssh", rdpPort: 3389, rdpOptions: {}, options: {},
 };
 
 const fmtDate = (value?: string): string => formatDateTime(value);
@@ -161,6 +161,7 @@ const hostToForm = (h: Host): HostInput => ({
   sshPort: h.sshPort || 22, sshUser: h.sshUser ?? "", tags: h.tags ?? [],
   authMethod: h.authMethod ?? "fleet_cert", credentialId: h.credentialId ?? null,
   protocol: h.protocol ?? "ssh", rdpPort: h.rdpPort || 3389, rdpOptions: h.rdpOptions ?? {},
+  options: h.options ?? {},
 });
 
 // NewHostDialog collects the create/edit payload; tags are entered as a
@@ -372,6 +373,25 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
                     control={<Checkbox checked={form.rdpOptions?.driveDownload ?? false}
                       onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, driveDownload: e.target.checked } }))} />}
                     label="Allow download (desktop → browser)" />
+                </Stack>
+              )}
+            </>
+          )}
+          {form.protocol !== "rdp" && (
+            <>
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">RouterOS (MikroTik)</Typography></Divider>
+              <FormControlLabel
+                control={<Checkbox checked={form.options?.routerOsApi ?? false}
+                  onChange={(e) => setForm((f) => ({ ...f, options: { ...f.options, routerOsApi: e.target.checked } }))} />}
+                label="Manage via RouterOS API (a playbook run tunnels the API port through the jump host)" />
+              {form.options?.routerOsApi && (
+                <Stack direction="row" spacing={2} alignItems="center" sx={{ pl: 4 }}>
+                  <TextField label="API port" type="number" sx={{ width: 140 }}
+                    value={form.options?.apiPort || 8728}
+                    onChange={(e) => setForm((f) => ({ ...f, options: { ...f.options, apiPort: Number(e.target.value) || 8728 } }))} />
+                  <Typography variant="caption" color="text.secondary">
+                    Enable the <code>api</code> service on the device and attach a <b>password</b> credential — the RouterOS API can't use SSH keys.
+                  </Typography>
                 </Stack>
               )}
             </>

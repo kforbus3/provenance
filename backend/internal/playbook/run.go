@@ -89,6 +89,11 @@ type runHost struct {
 	AuthMethod string `json:"authMethod,omitempty"`
 	PrivateKey string `json:"privateKey,omitempty"` // vault_ssh_key: the host's vaulted private key
 	Password   string `json:"password,omitempty"`   // vault_password: the host's vaulted password
+	// APITunnel asks the runner to open a local TCP port-forward to APIPort on this host
+	// through the jump host (for RouterOS API management, where SSH exec is unusable). The
+	// runner injects fleet_api_host/fleet_api_port so a community.routeros.api play reaches it.
+	APITunnel bool `json:"apiTunnel,omitempty"`
+	APIPort   int  `json:"apiPort,omitempty"`
 }
 
 // runRequest is the body posted to the sidecar's /run endpoint. The credential
@@ -183,6 +188,10 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 	rhosts := make([]runHost, 0, len(hosts))
 	for _, h := range hosts {
 		rh := runHost{Name: h.Hostname, Address: hostAddress(h), User: h.SSHUser, Port: h.SSHPort, AuthMethod: "fleet_cert"}
+		// RouterOS API device: have the runner tunnel its API port through the jump.
+		if p := h.RouterOSAPIPort(); p > 0 {
+			rh.APITunnel, rh.APIPort = true, p
+		}
 		// A vaulted host doesn't trust the Fleet CA, so authenticate its final hop with
 		// the same injected credential the terminal uses. Open-policy secrets only; the
 		// key/password is sent to the runner scoped to this run (see the security note
