@@ -5,6 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.64.2 — Fix: playbook editor showed stale content after save
+
+Editing a saved playbook, saving, then re-opening the editor showed the *old* content
+— even though the save persisted (playbook runs used the new content correctly). The
+editor loads the playbook via a per-id query cache that the save flow never
+invalidated, so a re-open served the stale cache and the editor's load guard locked it
+in. The save now drops that per-playbook cache so re-opening refetches the just-saved
+content. Frontend-only.
+
 ## v0.64.1 — ansible-runner: add librouteros (RouterOS API client)
 
 Follow-up to v0.64.0. The `community.routeros.api` module requires the `librouteros`

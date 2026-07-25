@@ -401,6 +401,7 @@ function RunStatusChip({ status }: { status?: string }) {
 function PlaybookEditor({ id, onClose, onSaved }: { id: string | null; onClose: () => void; onSaved: () => void }) {
   const mode = useUIStore((s) => s.mode);
   const isNew = id === null;
+  const qc = useQueryClient();
 
   const { data: existing } = useQuery({
     queryKey: ["playbook", id],
@@ -428,7 +429,13 @@ function PlaybookEditor({ id, onClose, onSaved }: { id: string | null; onClose: 
       isNew
         ? createPlaybook({ name, description, content })
         : updatePlaybook(id as string, { name, description, content }),
-    onSuccess: onSaved,
+    onSuccess: () => {
+      // Drop the cached per-playbook query so re-opening the editor refetches the
+      // just-saved content instead of serving stale cache (the `loaded` guard would
+      // otherwise lock the old value in). Runs already read fresh content from the DB.
+      if (!isNew) qc.removeQueries({ queryKey: ["playbook", id] });
+      onSaved();
+    },
   });
   const validateMut = useMutation({
     mutationFn: () => validatePlaybook(content),
