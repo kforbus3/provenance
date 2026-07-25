@@ -26,9 +26,74 @@ func runRelease(args []string) error {
 		return releaseBuild(args[1:])
 	case "verify":
 		return releaseVerify(args[1:])
+	case "channel":
+		return releaseChannel(args[1:])
 	default:
-		return fmt.Errorf("unknown release subcommand %q (want keygen|build|verify)", args[0])
+		return fmt.Errorf("unknown release subcommand %q (want keygen|build|verify|channel)", args[0])
 	}
+}
+
+// releaseChannel builds and signs a release-channel index from one or more .fleetup
+// bundles, for hosting at FLEET_UPDATE_CHANNEL_URL so instances can "check for
+// updates". Each bundle's URL is base-url + its filename. Writes <out> and <out>.sig.
+func releaseChannel(args []string) error {
+	fs := flag.NewFlagSet("release channel", flag.ContinueOnError)
+	keyPath := fs.String("key", "", "base64 Ed25519 private key from `release keygen` (required)")
+	baseURL := fs.String("base-url", "", "URL prefix the bundles are hosted under, e.g. https://releases.example.com/ (required)")
+	out := fs.String("out", "channel.json", "output index path (also writes <out>.sig)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	bundles := fs.Args()
+	if *keyPath == "" || *baseURL == "" || len(bundles) == 0 {
+		return fmt.Errorf("usage: fleetctl release channel --key <priv> --base-url <url> [--out channel.json] <bundle.fleetup>...")
+	}
+	keyB, err := os.ReadFile(*keyPath)
+	if err != nil {
+		return err
+	}
+	priv, err := release.ParsePrivateKey(strings.TrimSpace(string(keyB)))
+	if err != nil {
+		return err
+	}
+	prefix := *baseURL
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	idx := release.ChannelIndex{SchemaVersion: release.ChannelSchema}
+	for _, b := range bundles {
+		m, err := release.ReadManifestUnverified(b)
+		if err != nil {
+			return fmt.Errorf("%s: %w", b, err)
+		}
+		fi, err := os.Stat(b)
+		if err != nil {
+			return err
+		}
+		idx.Releases = append(idx.Releases, release.ChannelRelease{
+			Version: m.Version, MinFromVersion: m.MinFromVersion,
+			BundleURL: prefix + filepath.Base(b), BundleSize: fi.Size(),
+			MigrationCompatibility: m.MigrationCompatibility, Notes: m.Notes, PublishedAt: m.BuildDate,
+		})
+		if idx.Latest == "" || release.NewerVersion(m.Version, idx.Latest) {
+			idx.Latest = m.Version
+		}
+	}
+
+	body, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, body, 0o644); err != nil {
+		return err
+	}
+	sig := release.Sign(body, priv)
+	if err := os.WriteFile(*out+".sig", []byte(release.EncodeSig(sig)+"\n"), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s (%d release(s), latest %s) + %s.sig\nHost both at %s\n", *out, len(idx.Releases), idx.Latest, *out, *baseURL)
+	return nil
 }
 
 // releaseVerify checks a bundle's signature + image digests against a trusted public

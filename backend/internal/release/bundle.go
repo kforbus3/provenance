@@ -63,6 +63,31 @@ func WriteBundle(out io.Writer, manifestJSON, sig []byte, imageFiles map[string]
 	return tw.Close()
 }
 
+// ReadManifestUnverified reads a bundle's manifest WITHOUT verifying its signature.
+// For PUBLISHER-side tooling only (building a channel index from your own bundles);
+// never use it to decide whether to apply a bundle — use Open for that.
+func ReadManifestUnverified(path string) (Manifest, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	hdr, err := tr.Next()
+	if err != nil || hdr.Name != manifestName {
+		return Manifest{}, fmt.Errorf("bundle: expected %s as the first entry", manifestName)
+	}
+	data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+	if err != nil {
+		return Manifest{}, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return Manifest{}, err
+	}
+	return m, nil
+}
+
 // Bundle is an opened, signature-verified bundle. Image payloads are NOT yet read;
 // call ExtractImages to stream and digest-verify them.
 type Bundle struct {

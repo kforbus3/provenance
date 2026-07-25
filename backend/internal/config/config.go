@@ -254,6 +254,10 @@ type Config struct {
 	UpdatesDir       string
 	UpdaterURL       string
 	UpdaterToken     string
+	// UpdateChannelURL, when set, is the signed release-channel index the UI's "check
+	// for updates" fetches (later the Fleet product site). Empty disables pull-based
+	// updates; manual bundle upload still works.
+	UpdateChannelURL string
 
 	// VaultPassphrase encrypts stored credentials (the secrets vault) at rest with
 	// secretbox. Must be set and distinct from the CA passphrase in production;
@@ -377,6 +381,7 @@ func Load() (*Config, error) {
 		UpdatesDir:             env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
 		UpdaterURL:             env("FLEET_UPDATER_URL", "http://fleet-updater:9000"),
 		UpdaterToken:           env("FLEET_UPDATER_TOKEN", ""),
+		UpdateChannelURL:       env("FLEET_UPDATE_CHANNEL_URL", ""),
 		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),
 		VaultPassphrase:        env("FLEET_VAULT_PASSPHRASE", ""),
 		GuacdAddr:              env("FLEET_GUACD_ADDR", "guacd:4822"),

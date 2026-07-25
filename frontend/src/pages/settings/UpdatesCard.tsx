@@ -4,9 +4,12 @@ import {
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 
+import CloudDownloadIcon from "@mui/icons-material/CloudDownload";
+
 import { getVersion } from "../../api/client";
 import {
-  applyUpgrade, getUpgradeStatus, previewUpgrade, UpgradeManifest, UpgradeStatus,
+  applyUpgrade, checkForUpdate, CheckResult, getUpgradeStatus, previewUpgrade, pullUpdate,
+  UpgradeManifest, UpgradeStatus,
 } from "../../api/upgrade";
 
 // UpdatesCard is the Settings -> Maintenance panel for the in-UI upgrade system:
@@ -19,13 +22,42 @@ export function UpdatesCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
   const [reconnecting, setReconnecting] = useState(false);
+  const [check, setCheck] = useState<CheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const polling = useRef<number | null>(null);
 
   useEffect(() => {
     getVersion().then((v) => setCurrent(v.version)).catch(() => {});
+    // Best-effort check on mount so an available update surfaces without a click.
+    checkForUpdate().then(setCheck).catch(() => {});
     return () => { if (polling.current) window.clearInterval(polling.current); };
   }, []);
+
+  async function onCheck() {
+    setError(""); setChecking(true);
+    try {
+      setCheck(await checkForUpdate());
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e?.message || "Could not reach the update channel.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function onPull() {
+    if (!check?.release) return;
+    setError(""); setBusy(true);
+    try {
+      await pullUpdate(check.release.version);
+      setStatus({ state: "running", targetVersion: check.release.version, step: "downloading…" });
+      startPolling();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e?.message || "Could not start the update.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const active = status && (status.state === "dispatched" || status.state === "running" || status.state === "backing_up");
 
@@ -114,6 +146,28 @@ export function UpdatesCard() {
           </Box>
         ) : (
           <>
+            {check?.channelEnabled && (
+              <Box sx={{ mb: 2 }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <Button variant="contained" onClick={onCheck} disabled={checking} startIcon={<CloudDownloadIcon />}>
+                    Check for updates
+                  </Button>
+                  {checking && <CircularProgress size={18} />}
+                  {check && !check.updateAvailable && !checking && (
+                    <Typography variant="body2" color="text.secondary">You're on the latest version.</Typography>
+                  )}
+                </Stack>
+                {check.updateAvailable && check.release && (
+                  <Alert severity="info" sx={{ mt: 1.5 }}
+                    action={<Button color="inherit" size="small" onClick={onPull} disabled={busy}>Download &amp; install</Button>}>
+                    <b>{check.release.version}</b> is available
+                    {check.release.migrationCompatibility === "breaking" ? " (breaking migrations)" : ""}.
+                    {check.release.notes ? ` ${check.release.notes}` : ""}
+                  </Alert>
+                )}
+                <Divider sx={{ mt: 2 }}>or upload a bundle</Divider>
+              </Box>
+            )}
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
               <Button variant="outlined" component="label" startIcon={<UploadFileIcon />} disabled={busy}>
                 Choose bundle

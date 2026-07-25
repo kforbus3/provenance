@@ -206,6 +206,98 @@ func (s *Service) Status(ctx context.Context) Status {
 	return st
 }
 
+// CheckResult is what the UI's "check for updates" returns.
+type CheckResult struct {
+	CurrentVersion  string                  `json:"currentVersion"`
+	ChannelEnabled  bool                    `json:"channelEnabled"`
+	UpdateAvailable bool                    `json:"updateAvailable"`
+	Release         *release.ChannelRelease `json:"release,omitempty"`
+}
+
+// CheckForUpdate fetches the configured release channel and reports the newest
+// applicable upgrade for the running version (nil if already current or no channel).
+func (s *Service) CheckForUpdate(ctx context.Context) (CheckResult, error) {
+	res := CheckResult{CurrentVersion: s.version, ChannelEnabled: s.cfg.UpdateChannelURL != ""}
+	if !res.ChannelEnabled {
+		return res, nil
+	}
+	idx, err := release.FetchChannel(ctx, s.client, s.cfg.UpdateChannelURL, s.trusted)
+	if err != nil {
+		return res, err
+	}
+	if up := idx.PickUpdate(s.version); up != nil {
+		res.UpdateAvailable, res.Release = true, up
+	}
+	return res, nil
+}
+
+// PullAndApply downloads the channel release matching version (or the newest
+// applicable one if version is empty), streams it to the staging area, and applies it
+// through the same pipeline as an uploaded bundle.
+func (s *Service) PullAndApply(ctx context.Context, version, actorName string) error {
+	if s.cfg.UpdateChannelURL == "" {
+		return fmt.Errorf("no update channel is configured")
+	}
+	idx, err := release.FetchChannel(ctx, s.client, s.cfg.UpdateChannelURL, s.trusted)
+	if err != nil {
+		return err
+	}
+	var rel *release.ChannelRelease
+	if version == "" {
+		rel = idx.PickUpdate(s.version)
+	} else {
+		for i := range idx.Releases {
+			if idx.Releases[i].Version == version {
+				rel = &idx.Releases[i]
+				break
+			}
+		}
+	}
+	if rel == nil {
+		return fmt.Errorf("no applicable release found in the channel")
+	}
+	path, err := s.download(ctx, rel.BundleURL)
+	if err != nil {
+		return fmt.Errorf("download bundle: %w", err)
+	}
+	// Apply verifies the downloaded bundle's own signature before doing anything.
+	return s.Apply(ctx, path, actorName)
+}
+
+// download streams a bundle from url into the staging path with a size cap.
+func (s *Service) download(ctx context.Context, url string) (string, error) {
+	if err := os.MkdirAll(s.cfg.UpdatesDir, 0o700); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	// The bundle download can be large; use a dedicated client without the short
+	// timeout the status/updater calls use.
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d fetching bundle", resp.StatusCode)
+	}
+	path := s.stagedPath()
+	f, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, maxBundleDownload)); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// maxBundleDownload caps a pulled bundle (image bundles are large but bounded).
+const maxBundleDownload = 4 << 30 // 4 GiB
+
 func (s *Service) updaterStatus(ctx context.Context) (Status, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.UpdaterURL+"/status", nil)
 	if err != nil {

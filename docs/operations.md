@@ -516,6 +516,15 @@ sign a bundle with `make bundle BUNDLE_VERSION=vX.Y.Z BUNDLE_FROM=<min-upgradabl
 builds+tags the images, `docker save`s them, and signs the manifest). Verify any bundle with
 `fleetctl release verify --bundle <file> --keys <pubkey>`.
 
+**Check for updates (pull).** Instead of uploading, you can point Fleet at a signed release
+channel: set **`FLEET_UPDATE_CHANNEL_URL`** to a hosted `channel.json`, and the Updates panel
+gains a **Check for updates** button that downloads + installs straight into the same verified
+pipeline. Publish the channel with `fleetctl release channel --key <priv> --base-url
+<https://your-host/> <bundle.fleetup>…` — it reads each bundle's manifest and writes a signed
+`channel.json` + `channel.json.sig` to host alongside the bundles. The index is signed by the
+same release key (no new trust root); each downloaded bundle is still verified independently
+before it's applied.
+
 ## Host support bundle
 
 Click the **support bundle** (first-aid) icon on a host row to download a single

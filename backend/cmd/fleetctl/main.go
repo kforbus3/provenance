@@ -58,6 +58,8 @@ Usage:
   fleetctl kms unwrap <token>                            Unwrap a KMS blob to verify it (prints the plaintext)
   fleetctl release keygen [--out release.key]            Generate an Ed25519 release signing keypair
   fleetctl release build --version … --from … --key …   Build + sign a .fleetup upgrade bundle (see 'make bundle')
+  fleetctl release verify --bundle <f> --keys <pub>      Verify a bundle's signature + image digests
+  fleetctl release channel --key … --base-url … <f>…    Build + sign a release-channel index from bundles
 
 Reads FLEET_DATABASE_URL (and FLEET_CA_PASSPHRASE for rotate-ca) from the environment.
 `)

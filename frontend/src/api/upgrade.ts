@@ -45,3 +45,31 @@ export async function getUpgradeStatus(): Promise<UpgradeStatus> {
 export async function setDrain(draining: boolean): Promise<void> {
   await api.post("/system/drain", { draining });
 }
+
+export interface ChannelRelease {
+  version: string;
+  minFromVersion?: string;
+  bundleUrl: string;
+  bundleSize?: number;
+  migrationCompatibility: string;
+  notes?: string;
+  publishedAt?: string;
+}
+
+export interface CheckResult {
+  currentVersion: string;
+  channelEnabled: boolean;
+  updateAvailable: boolean;
+  release?: ChannelRelease;
+}
+
+// checkForUpdate queries the configured release channel for an available upgrade.
+export async function checkForUpdate(): Promise<CheckResult> {
+  const { data } = await api.get<CheckResult>("/system/upgrade/check");
+  return data;
+}
+
+// pullUpdate downloads + installs a channel release (latest applicable if omitted).
+export async function pullUpdate(version?: string): Promise<void> {
+  await api.post("/system/upgrade/pull", { version: version || "" });
+}

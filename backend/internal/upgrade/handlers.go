@@ -31,6 +31,8 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(up).Post("/system/upgrade/preview", h.preview)
 		pr.With(up).Post("/system/upgrade/apply", h.apply)
 		pr.With(up).Get("/system/upgrade/status", h.status)
+		pr.With(up).Get("/system/upgrade/check", h.check)
+		pr.With(up).Post("/system/upgrade/pull", h.pull)
 		pr.With(up).Post("/system/drain", h.drain)
 	})
 }
@@ -94,6 +96,37 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, h.svc.Status(r.Context()))
+}
+
+// check queries the configured release channel for an available upgrade.
+func (h *handler) check(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.CheckForUpdate(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadGateway, "could not reach the update channel: "+err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
+}
+
+// pull downloads and applies a release from the channel (latest applicable if no
+// version is given).
+func (h *handler) pull(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Version string `json:"version"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	p := auth.MustPrincipal(r)
+	actor := ""
+	if p != nil {
+		actor = p.Username
+	}
+	h.audit(r, "system.upgrade_pull", map[string]any{"version": req.Version})
+	go func() {
+		if err := h.svc.PullAndApply(context.Background(), req.Version, actor); err != nil {
+			h.svc.log.Warn("upgrade pull failed", "err", err)
+		}
+	}()
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "pulling", "version": req.Version})
 }
 
 func (h *handler) drain(w http.ResponseWriter, r *http.Request) {

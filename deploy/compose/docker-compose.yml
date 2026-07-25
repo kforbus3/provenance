@@ -166,6 +166,8 @@ services:
       FLEET_UPDATER_URL: ${FLEET_UPDATER_URL:-http://fleet-updater:9000}
       FLEET_UPDATER_TOKEN: ${FLEET_UPDATER_TOKEN:-}
       FLEET_UPDATES_DIR: /var/lib/fleet/updates
+      # Optional signed release-channel index for the "check for updates" button.
+      FLEET_UPDATE_CHANNEL_URL: ${FLEET_UPDATE_CHANNEL_URL:-}
     volumes:
       - recordings:/var/lib/fleet/recordings
       - scans:/var/lib/fleet/scans

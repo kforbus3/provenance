@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.63.0 — Check for updates (pull upgrades from a release channel)
+
+The Updates panel can now **pull** an upgrade instead of only accepting an upload. Set
+`FLEET_UPDATE_CHANNEL_URL` to a signed release-channel index and Settings → Maintenance
+→ Updates gains a **Check for updates** button (and surfaces an available update on
+load). "Download & install" streams the bundle server-side straight into the same
+verified apply pipeline — no manual download.
+
+- The channel index is Ed25519-signed by the **same release key** as the bundles, so
+  there's no new trust root; the index signature is verified before it's read, and the
+  downloaded bundle is still verified independently before it's applied.
+- Publish a channel with `fleetctl release channel --key <priv> --base-url
+  <https://…/> <bundle.fleetup>…` — it reads each bundle's manifest and writes a signed
+  `channel.json` + `channel.json.sig` to host alongside the bundles.
+- Manual upload still works and needs no channel; leave `FLEET_UPDATE_CHANNEL_URL`
+  empty to hide the check button.
+
 ## v0.62.0 — Playbooks work against vaulted-credential hosts
 
 Ansible playbooks can now target hosts that authenticate with a **vaulted SSH key or

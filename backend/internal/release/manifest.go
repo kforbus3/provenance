@@ -100,6 +100,20 @@ func (m *Manifest) CheckUpgradeable(currentVersion string) error {
 	return nil
 }
 
+// NewerVersion reports whether release version a is strictly newer than b (both
+// "vX.Y.Z"). A non-semver value sorts as older.
+func NewerVersion(a, b string) bool {
+	av, aok := parseVersion(a)
+	bv, bok := parseVersion(b)
+	if !aok {
+		return false
+	}
+	if !bok {
+		return true
+	}
+	return compare(av, bv) > 0
+}
+
 // semver is a parsed major.minor.patch (pre-release/build metadata ignored).
 type semver struct{ major, minor, patch int }
 

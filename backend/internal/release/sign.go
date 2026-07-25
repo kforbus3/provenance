@@ -48,6 +48,12 @@ func EncodePrivateKey(priv ed25519.PrivateKey) string {
 	return base64.RawStdEncoding.EncodeToString(priv)
 }
 
+// EncodeSig renders a detached signature as base64 (raw std) for writing to a .sig
+// file. FetchChannel's decodeSig accepts this or the raw bytes.
+func EncodeSig(sig []byte) string {
+	return base64.RawStdEncoding.EncodeToString(sig)
+}
+
 // ParsePublicKeys parses a comma- or whitespace-separated list of base64 Ed25519
 // public keys (accepting both standard and raw/no-pad encodings). Blank entries are
 // skipped; an all-blank input yields an empty slice with no error.
