@@ -2,3 +2,7 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 ansible-core==2.18.1
 ansible-lint==24.12.2
+# SSH backend for the network_cli connection (community.routeros et al.). paramiko
+# specifically — the runner tunnels network_cli through the jump host with a paramiko
+# ProxyCommand (ansible_paramiko_proxy_command), which pylibssh would not honor.
+paramiko==3.5.0

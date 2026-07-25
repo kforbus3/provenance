@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.63.4 — ansible-runner: add paramiko (network_cli SSH backend)
+
+The `network_cli` connection (community.routeros etc.) needs an SSH library, and the
+runner image shipped with neither — so a network_cli play failed immediately with
+`paramiko is not installed`. Added **paramiko 3.5.0** to the runner. network_cli plays
+now initialize.
+
+Honest status on reaching a **jump-hosted** device via network_cli: paramiko doesn't
+read the ssh_config's ProxyJump, so a device only reachable through the Fleet jump host
+may still not connect. The correct mechanism (a ProxyCommand in
+`ansible_ssh_common_args`) is shared with the proven `raw` connection path, so it isn't
+changed by default to avoid regressing working `raw` upgrades. **For upgrading RouterOS
+through Fleet, the `raw` + `until`-reconnect playbook remains the supported path**;
+community.routeros/network_cli is best for directly-reachable network devices today.
+
 ## v0.63.3 — Network-device playbooks (MikroTik / community.routeros)
 
 The ansible-runner now ships the **community.routeros** collection (and its
