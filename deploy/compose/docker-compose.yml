@@ -260,7 +260,9 @@ services:
       FLEET_UPDATES_DIR: /var/lib/fleet/updates
       FLEET_UPDATER_PROJECT: fleet-terminal
       FLEET_UPDATER_COMPOSE_FILES: /compose/docker-compose.yml:/compose/docker-compose.jumphost.yml
-      FLEET_UPDATER_ENV_FILE: /compose/.env
+      # The root .env is mounted at its OWN path (not inside the read-only /compose
+      # mount — you can't create a mount target file inside a read-only bind mount).
+      FLEET_UPDATER_ENV_FILE: /fleet.env
       FLEET_UPDATER_BACKEND_URL: http://backend:8080
     volumes:
       # The Docker socket is what makes this component privileged — it is the whole
@@ -270,7 +272,7 @@ services:
       # The compose project files + root .env, so the updater runs compose against the
       # same project. Read-only; build contexts are unused (the updater passes --no-build).
       - ../compose:/compose:ro
-      - ../../.env:/compose/.env:ro
+      - ../../.env:/fleet.env:ro
     networks: [fleet]
 
   # Apache Guacamole daemon: brokers RDP (and VNC) desktop sessions for the
