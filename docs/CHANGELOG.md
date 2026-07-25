@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.59.0 — Monitor directly-managed (vaulted) hosts
+
+- **Hosts that authenticate with a vaulted credential are now health-monitored.**
+  A host added with a stored username/password or SSH key (`vault_password` /
+  `vault_ssh_key`) — a router, switch, or other appliance reached directly rather
+  than through WireGuard enrollment — is fully usable for terminal/SFTP but was
+  never probed by the monitor, so it sat permanently at **"unknown"** status even
+  though you could open a terminal to it. The monitor now probes these hosts too,
+  authenticating with the same vaulted credential injected in a system context, and
+  reports online/offline, latency, uptime, inventory, and metrics like any other
+  host. Offline/recovered alerts and availability history apply to them as well.
+- Only credentials with an **"open"** access policy are used for the unattended
+  probe; a check-out-gated credential is never resolved by the background monitor,
+  so such a host keeps its last-known status rather than being probed (unchanged).
+- No configuration or migration needed — existing vaulted hosts start reporting
+  status on the next monitor sweep after upgrade.
+
 ## v0.58.3 — Ask: "any problems?" attaches the right data; insights fix
 
 - Open-ended health questions ("any problems?", "anything wrong?", "morning

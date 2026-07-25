@@ -47,6 +47,25 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gatewa
 	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, nfy: nfy, interval: 30 * time.Second}
 }
 
+// hasVaultedCredential reports whether a host authenticates with a vaulted
+// username/password or SSH key rather than Fleet's ephemeral certificates. Such
+// hosts (routers, switches, appliances) are directly reachable but never "enrolled"
+// — the monitor probes them with the credential injected in a system context.
+func hasVaultedCredential(h *models.Host) bool {
+	return h.CredentialID != nil && (h.AuthMethod == "vault_password" || h.AuthMethod == "vault_ssh_key")
+}
+
+// systemInjection resolves a host's vaulted credential into an SSH auth method for
+// an unattended probe. It only succeeds for open-policy credentials (see
+// credinject.ForSystem).
+func (m *Monitor) systemInjection(ctx context.Context, h *models.Host) (*credinject.Injection, error) {
+	key, err := m.cfg.VaultKey()
+	if err != nil {
+		return nil, err
+	}
+	return credinject.ForSystem(ctx, m.store, key, m.cfg.ExtSecret(), h)
+}
+
 // recordTransition persists an availability transition to the history table and
 // then emits the alert. Persisting is factual and happens even inside a
 // maintenance window (which only suppresses the alert), so downtime is always
@@ -151,8 +170,12 @@ func (m *Monitor) sweep(ctx context.Context) {
 		h := hosts[i]
 		// SSH hosts are probed once enrolled; RDP hosts are never "enrolled" (Windows
 		// can't run the enrollment script) but are still reachable through the jump
-		// host, so probe them via a TCP check on the RDP port.
-		if !h.Enrolled && h.Protocol != "rdp" {
+		// host, so probe them via a TCP check on the RDP port. A host that
+		// authenticates with a vaulted credential is likewise never "enrolled" (no
+		// overlay, no Fleet CA trust) but is directly reachable and fully usable — an
+		// appliance like a router or switch — so probe it too, with that credential
+		// injected in a system context.
+		if !h.Enrolled && h.Protocol != "rdp" && !hasVaultedCredential(&h) {
 			continue
 		}
 		wg.Add(1)
@@ -237,7 +260,21 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		return
 	}
 
-	st, inv, metrics := m.probe(ctx, signer, &h)
+	// A vaulted host (no Fleet CA trust) is probed with its credential injected in a
+	// system context. If the credential can't be resolved unattended (missing, or
+	// check-out-gated), leave the host's status untouched rather than flapping it
+	// offline — mirrors the best-effort RDP/WinRM fact path.
+	var inj *credinject.Injection
+	if hasVaultedCredential(&h) {
+		resolved, ierr := m.systemInjection(ctx, &h)
+		if ierr != nil {
+			m.log.Debug("monitor: vaulted host not probeable", "host", h.Hostname, "err", ierr)
+			return
+		}
+		inj = resolved
+	}
+
+	st, inv, metrics := m.probe(ctx, signer, inj, &h)
 	if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 		m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 		return
@@ -430,16 +467,27 @@ func windowsPrimaryIP(ifaces []winrm.Iface, wgAddr string) string {
 // records latency, uptime, and SSH/WireGuard health. When the host is online and
 // its inventory is missing or stale, it also re-collects host facts (distro,
 // kernel, etc.) over the same connection and returns them for persistence.
-func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, h *models.Host) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
+func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.Injection, h *models.Host) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
 	now := time.Now()
 	st := models.HostStatus{Status: "unknown", CheckedAt: &now}
+
+	// The login user is the host's SSH user for a cert probe, or the vaulted
+	// credential's own username when a credential is injected.
+	loginUser := h.SSHUser
+	if inj != nil {
+		loginUser = inj.LoginUser
+	}
 
 	candidates := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
 	var conn *sshgw.Conn
 	var dialErr error
 	for _, addr := range candidates {
 		start := time.Now()
-		conn, dialErr = m.gw.DialWithSigner(ctx, signer, addr, h.SSHPort, h.SSHUser)
+		if inj != nil {
+			conn, dialErr = m.gw.DialSystemAuthViaJump(ctx, h.ID, addr, h.SSHPort, loginUser, inj.Auth)
+		} else {
+			conn, dialErr = m.gw.DialWithSigner(ctx, signer, addr, h.SSHPort, loginUser)
+		}
 		if dialErr == nil {
 			lat := int(time.Since(start).Milliseconds())
 			st.LatencyMS = &lat

@@ -104,9 +104,15 @@ WebSocket hub, so it updates as people connect and disconnect (needs `Session.Re
 
 ## Live monitoring
 
-The monitor runs authenticated SSH health checks (no ICMP) against enrolled hosts every 30s,
-updating status (online/offline/unknown), latency, uptime, and WireGuard handshake freshness.
-The dashboard subscribes to a WebSocket and updates in real time.
+The monitor runs authenticated SSH health checks (no ICMP) every 30s, updating status
+(online/offline/unknown), latency, uptime, and WireGuard handshake freshness. The dashboard
+subscribes to a WebSocket and updates in real time. Enrolled hosts are probed with Fleet's
+system certificate; **directly-managed hosts that authenticate with a vaulted credential**
+(`vault_password` / `vault_ssh_key` — routers, switches, appliances that skip WireGuard
+enrollment) are probed with that credential injected in a system context, so they report
+status like any other host instead of sitting at "unknown". Only credentials with an "open"
+access policy are used for the unattended probe; a check-out-gated credential is never resolved
+by the background monitor, so such a host keeps its last-known status.
 
 During the same check it also re-collects **host facts** — distro + version, kernel,
 architecture, CPU count, memory, and SSH version — but at most once an hour per host (over the

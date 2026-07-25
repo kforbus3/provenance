@@ -75,6 +75,56 @@ func For(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret
 	return inj, nil
 }
 
+// ForSystem returns the injected SSH auth for a host in a SYSTEM context — the
+// unattended monitor probing a non-enrolled, vault-authenticated host — or
+// (nil, nil) when the host uses Fleet's ephemeral certificates. Like For, but with
+// no connecting user: it only resolves credentials whose access policy is "open".
+// A check-out-gated secret is never used unattended, so the monitor simply cannot
+// probe such a host (it keeps its last-known status rather than being flapped
+// offline).
+func ForSystem(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host) (*Injection, error) {
+	switch host.AuthMethod {
+	case "", "fleet_cert":
+		return nil, nil
+	case "vault_password", "vault_ssh_key":
+		// handled below
+	default:
+		return nil, fmt.Errorf("unknown host auth method %q", host.AuthMethod)
+	}
+	if host.CredentialID == nil {
+		return nil, errors.New("host is set to use a vault credential but none is attached")
+	}
+	secret, err := st.GetVaultSecret(ctx, *host.CredentialID)
+	if err != nil {
+		return nil, errors.New("the attached credential no longer exists")
+	}
+	if secret.AccessPolicy != "open" {
+		return nil, errors.New("credential requires check-out; unattended probe skipped")
+	}
+	plaintext, err := credresolve.Open(ctx, st, secret, vaultKey, extCfg)
+	if err != nil {
+		return nil, errors.New("could not resolve the attached credential")
+	}
+	defer zero(plaintext)
+
+	loginUser := secret.Username
+	if loginUser == "" {
+		loginUser = host.SSHUser
+	}
+	inj := &Injection{LoginUser: loginUser, SecretID: *host.CredentialID}
+	switch host.AuthMethod {
+	case "vault_password":
+		inj.Auth = ssh.Password(string(plaintext))
+	case "vault_ssh_key":
+		signer, err := ssh.ParsePrivateKey(plaintext)
+		if err != nil {
+			return nil, errors.New("the attached credential is not a valid SSH private key")
+		}
+		inj.Auth = ssh.PublicKeys(signer)
+	}
+	return inj, nil
+}
+
 // PasswordForSystem resolves a host's attached vault credential to a raw username and
 // password for a SYSTEM operation (the background monitor collecting Windows facts over
 // WinRM — no user context). It only returns credentials whose access policy is "open":

@@ -275,6 +275,15 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 // with a password. It is the unattended counterpart of DialPasswordViaJump, used by
 // the scheduled credential-rotation loop to change a vaulted password on its host.
 func (g *Gateway) DialSystemPasswordViaJump(ctx context.Context, hostID uuid.UUID, host string, port int, user, password string) (*Conn, error) {
+	return g.DialSystemAuthViaJump(ctx, hostID, host, port, user, ssh.Password(password))
+}
+
+// DialSystemAuthViaJump opens a system-context connection to a host through the
+// jump host using an arbitrary auth method for the host (typically an injected
+// vault credential), while a short-lived system certificate authenticates to the
+// jump. No user session is involved — the background monitor and credential rotator
+// use this to reach directly-managed hosts that don't trust the Fleet CA.
+func (g *Gateway) DialSystemAuthViaJump(ctx context.Context, hostID uuid.UUID, host string, port int, user string, auth ssh.AuthMethod) (*Conn, error) {
 	if g.issuer == nil {
 		return nil, fmt.Errorf("gateway issuer unavailable")
 	}
@@ -294,14 +303,14 @@ func (g *Gateway) DialSystemPasswordViaJump(ctx context.Context, hostID uuid.UUI
 	}
 	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, g.pin(&ssh.ClientConfig{
 		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.Password(password)},
+		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: g.hostKeyCallback(),
 		Timeout:         15 * time.Second,
 	}))
 	if err != nil {
 		_ = tunnel.Close()
 		_ = jumpClient.Close()
-		return nil, fmt.Errorf("ssh password auth to %s via jump: %w", target, err)
+		return nil, fmt.Errorf("ssh auth to %s via jump: %w", target, err)
 	}
 	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
 }
