@@ -6,3 +6,6 @@ ansible-lint==24.12.2
 # specifically — the runner tunnels network_cli through the jump host with a paramiko
 # ProxyCommand (ansible_paramiko_proxy_command), which pylibssh would not honor.
 paramiko==3.5.0
+# RouterOS binary-API client required by the community.routeros.api module (used to
+# manage MikroTik devices through the jump-host API tunnel).
+librouteros==3.4.1

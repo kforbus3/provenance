@@ -5,6 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.64.1 — ansible-runner: add librouteros (RouterOS API client)
+
+Follow-up to v0.64.0. The `community.routeros.api` module requires the `librouteros`
+Python library, which wasn't in the runner image — so a RouterOS API play failed with
+`No module named 'librouteros'` even though the jump-host API tunnel came up fine.
+Added `librouteros`. (The tunnel itself was confirmed working — the play just couldn't
+import its API client.)
+
 ## v0.64.0 — Manage & schedule MikroTik/RouterOS updates via the RouterOS API
 
 RouterOS 7's SSH doesn't cleanly close command sessions, so `raw`/`network_cli` playbooks hang
