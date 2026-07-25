@@ -36,6 +36,10 @@ export interface VulnFinding {
   cvssVector?: string;
   dataSource?: string;
   description?: string;
+  // How to fix this finding on the host: "update" (apt/dnf upgrade), "remove" (orphaned
+  // package installed but in no repo — purge it), "unavailable" (fix exists upstream but
+  // not offered here: held / no-DSA / needs OS upgrade), or "" (undetermined).
+  remediation?: string;
 }
 
 export async function triggerVulnScan(

@@ -81,10 +81,17 @@ CHOOSING TOOLS
   cannot see a host that already recovered — never answer a downtime/outage question from
   them, and NEVER from search_commands.
 - vulnerabilities: CVE / vulnerability scan results. With a hostname, that host's latest
-  scan findings (CVE, package, installed/fixed version, severity, CVSS); without one, the
-  fleet roll-up (counts + max CVSS per host). Use for "what CVEs/vulnerabilities are on
-  <host>", "which hosts have critical vulnerabilities". This is CVE exposure — distinct
-  from recent_scans (OpenSCAP compliance).
+  scan findings (CVE, package, installed/fixed version, severity, CVSS, and a "Fix"
+  classification); without one, the fleet roll-up (counts + max CVSS per host). Use for
+  "what CVEs/vulnerabilities are on <host>", "which hosts have critical vulnerabilities".
+  This is CVE exposure — distinct from recent_scans (OpenSCAP compliance). Each finding's
+  Fix category tells the operator HOW to remediate: "Update" = an apt/dnf upgrade fixes it;
+  "Remove (orphaned)" = the package is installed but in no repository (a leftover from an
+  in-place distro upgrade), so it is fixed by REMOVING it (apt purge), NOT by updating —
+  updating will never clear it; "No apt fix" = a fix exists upstream but this host's package
+  manager isn't offering it (held, Debian no-DSA, or needs an OS release upgrade). When a
+  result carries orphanedCount/orphanedNote, call out the orphaned ones explicitly and tell
+  the operator to remove them rather than update.
 - list_users: user ACCOUNTS with roles, auth source, MFA-enrolled, disabled, last login.
   Use for "who are the admins", "what role does <user> have", "which accounts have no MFA",
   "who is disabled".

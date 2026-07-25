@@ -15,6 +15,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/msrc"
+	"github.com/fleet-terminal/backend/internal/store"
 )
 
 // Mount attaches vulnerability-scan routes. Running/viewing scans requires
@@ -215,7 +216,31 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not load findings")
 		return
 	}
+	classifyRemediation(r.Context(), h.d.Store, scan.HostID, findings)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"scan": scan, "findings": findings})
+}
+
+// classifyRemediation annotates each finding with how to fix it on the host —
+// distinguishing an orphaned/obsolete package (remove it) from one an update fixes —
+// by cross-referencing the host's obsolete-package and pending-update inventory.
+// Best-effort: if the host or its inventory can't be loaded, findings are left
+// unclassified rather than failing the request.
+func classifyRemediation(ctx context.Context, st *store.Store, hostID uuid.UUID, findings []models.VulnFinding) {
+	host, err := st.GetHost(ctx, hostID)
+	if err != nil || host.Inventory == nil {
+		return
+	}
+	obsolete, pending := map[string]bool{}, map[string]bool{}
+	for _, p := range host.Inventory.ObsoletePackages {
+		obsolete[p] = true
+	}
+	for _, u := range host.Inventory.UpdatePackages {
+		pending[u.Package] = true
+	}
+	updatesKnown := host.Inventory.UpdatesCheckedAt != nil
+	for i := range findings {
+		findings[i].Remediation = models.ClassifyRemediation(findings[i], obsolete, pending, updatesKnown)
+	}
 }
 
 func (h *handler) dbStatus(w http.ResponseWriter, r *http.Request) {

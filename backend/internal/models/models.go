@@ -345,6 +345,11 @@ type HostInventory struct {
 	// the assistant can answer "which packages need updating on host X", not just how
 	// many. Nil = not yet collected; empty = collected and up to date.
 	UpdatePackages []PendingUpdate `json:"updatePackages,omitempty"`
+	// ObsoletePackages are installed packages offered by no configured repository
+	// (apt's [installed,local] / dnf "extras") — orphaned leftovers from in-place
+	// distribution upgrades. Used to classify a vulnerability whose package can't be
+	// updated (the fix is to remove it). Nil = not yet collected; empty = none.
+	ObsoletePackages []string `json:"obsoletePackages,omitempty"`
 }
 
 // PendingUpdate is one upgradable package on a host.
@@ -706,6 +711,39 @@ type VulnFinding struct {
 	CVSSVector       string  `json:"cvssVector,omitempty"`
 	DataSource       string  `json:"dataSource,omitempty"`
 	Description      string  `json:"description,omitempty"`
+	// Remediation classifies HOW to fix this finding on the specific host, derived at
+	// read time by cross-referencing the host's pending-update and obsolete-package
+	// inventory. Not persisted with the scan. Empty when it can't be determined.
+	Remediation string `json:"remediation,omitempty"`
+}
+
+// Remediation categories for a vulnerability finding on a host.
+const (
+	RemediationUpdate      = "update"      // fix is available via the package manager (apt/dnf upgrade)
+	RemediationRemove      = "remove"      // package is orphaned/obsolete (no repo offers it) — purge it
+	RemediationUnavailable = "unavailable" // a fix exists upstream but this host's package manager isn't offering it (held / no-DSA / needs OS upgrade)
+)
+
+// ClassifyRemediation determines how a finding should be fixed on a host, given the
+// host's set of obsolete packages (installed but in no repo) and pending updates.
+// updatesKnown is true once the host has had at least one successful update check —
+// only then can absence from the pending list be read as "no fix offered". Returns
+// "" when it can't be determined (e.g. no fix version and not obsolete).
+func ClassifyRemediation(f VulnFinding, obsolete, pending map[string]bool, updatesKnown bool) string {
+	// Orphaned wins: if the package isn't offered by any repo, no update can fix it —
+	// regardless of what the scanner lists as the fixed version.
+	if obsolete[f.Package] {
+		return RemediationRemove
+	}
+	if pending[f.Package] {
+		return RemediationUpdate
+	}
+	// A fix exists upstream but the package manager isn't offering it, and we've
+	// actually checked for updates: it's held, marked no-DSA, or needs an OS upgrade.
+	if f.FixedVersion != "" && updatesKnown {
+		return RemediationUnavailable
+	}
+	return ""
 }
 
 // AssistantHostRow is a compact host record returned to the AI assistant's

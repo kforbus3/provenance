@@ -372,11 +372,27 @@ func (s *Service) runVulnerabilities(ctx context.Context, raw json.RawMessage, w
 	if limit <= 0 || limit > 300 {
 		limit = 100
 	}
+	// Build the host's obsolete/pending sets so each finding can be labelled with HOW
+	// to fix it — crucially distinguishing an orphaned package (remove it) from one an
+	// update will fix. host.Inventory is hydrated by GetHost above.
+	obsolete, pending := map[string]bool{}, map[string]bool{}
+	updatesKnown := false
+	if host.Inventory != nil {
+		for _, p := range host.Inventory.ObsoletePackages {
+			obsolete[p] = true
+		}
+		for _, u := range host.Inventory.UpdatePackages {
+			pending[u.Package] = true
+		}
+		updatesKnown = host.Inventory.UpdatesCheckedAt != nil
+	}
+
 	tbl := &AssistantTable{
 		Title:   "Vulnerabilities on " + hostname,
-		Columns: []TableColumn{{Label: "CVE"}, {Label: "Package"}, {Label: "Installed"}, {Label: "Fixed in"}, {Label: "Severity"}, {Label: "CVSS"}},
+		Columns: []TableColumn{{Label: "CVE"}, {Label: "Package"}, {Label: "Installed"}, {Label: "Fixed in"}, {Label: "Severity"}, {Label: "CVSS"}, {Label: "Fix"}},
 	}
 	kept := make([]models.VulnFinding, 0, len(findings))
+	var orphaned int
 	for _, f := range findings {
 		if minRank > 0 && severityRank[strings.ToLower(f.Severity)] < minRank {
 			continue
@@ -384,15 +400,38 @@ func (s *Service) runVulnerabilities(ctx context.Context, raw json.RawMessage, w
 		if a.MinCVSS > 0 && f.CVSSScore < a.MinCVSS {
 			continue
 		}
+		f.Remediation = models.ClassifyRemediation(f, obsolete, pending, updatesKnown)
+		if f.Remediation == models.RemediationRemove {
+			orphaned++
+		}
 		kept = append(kept, f)
 		if len(tbl.Rows) < limit {
-			tbl.Rows = append(tbl.Rows, []string{f.CVE, f.Package, f.InstalledVersion, f.FixedVersion, f.Severity, fmt.Sprintf("%.1f", f.CVSSScore)})
+			tbl.Rows = append(tbl.Rows, []string{f.CVE, f.Package, f.InstalledVersion, f.FixedVersion, f.Severity, fmt.Sprintf("%.1f", f.CVSSScore), remediationLabel(f.Remediation)})
 		}
 	}
 	if len(kept) == 0 {
 		return nil, map[string]any{"count": 0, "host": hostname, "scan": latest, "note": "no findings match that filter"}
 	}
-	return tbl, map[string]any{"host": hostname, "count": len(kept), "scan": latest, "findings": kept}
+	payload := map[string]any{"host": hostname, "count": len(kept), "scan": latest, "findings": kept}
+	if orphaned > 0 {
+		payload["orphanedCount"] = orphaned
+		payload["orphanedNote"] = fmt.Sprintf("%d finding(s) are on orphaned/obsolete packages (installed but in no repository) — these are fixed by REMOVING the package (apt purge), not by an update. They are usually leftovers from an in-place distribution upgrade.", orphaned)
+	}
+	return tbl, payload
+}
+
+// remediationLabel renders a remediation category for a table cell.
+func remediationLabel(r string) string {
+	switch r {
+	case models.RemediationUpdate:
+		return "Update"
+	case models.RemediationRemove:
+		return "Remove (orphaned)"
+	case models.RemediationUnavailable:
+		return "No apt fix"
+	default:
+		return ""
+	}
 }
 
 // ---------------------------------------------------------------------------

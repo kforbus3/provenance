@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.60.0 — Vulnerabilities: "fixable" now says how to fix it
+
+Vulnerability findings are now classified by **how to remediate them on the specific
+host**, so "fixable" stops being misleading when a package can't actually be updated:
+
+- **Remove (orphaned).** The vulnerable package is installed but offered by no
+  configured repository — a leftover from an in-place distribution upgrade (e.g. an
+  old `libdns-export1104` still in the dpkg database on a host that's since moved to a
+  newer Debian). An `apt`/`dnf` update will *never* clear it; the fix is to remove the
+  package. Previously these showed a fixed-in version from the scanner and looked
+  updatable, but `apt` offered nothing.
+- **Update.** The host's package manager has the fix — a normal upgrade resolves it.
+- **No apt fix.** A fix exists upstream but this host isn't being offered it (package
+  held, Debian marked it no-DSA, or it needs an OS release upgrade).
+
+To power this, the monitor's hourly fact collection now also records each host's
+**obsolete packages** (apt `[installed,local]` / dnf "extras"), cache-only and
+best-effort. The classification appears as a **Fix** column in the per-host findings
+view and in the Ask assistant's vulnerability answers (which now call out orphaned
+packages and tell you to remove rather than update them). The API's scan-findings
+response carries a `remediation` field per finding. No configuration needed; the
+`obsolete_packages` column is added automatically on startup.
+
 ## v0.59.0 — Monitor directly-managed (vaulted) hosts
 
 - **Hosts that authenticate with a vaulted credential are now health-monitored.**

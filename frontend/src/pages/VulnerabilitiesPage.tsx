@@ -304,6 +304,30 @@ const SEV_OPTIONS = ["Critical", "High", "Medium", "Low", "Negligible", "Unknown
 // Hide the noisiest, least-actionable buckets by default; they're one click away.
 const SEV_DEFAULT = ["Critical", "High", "Medium", "Low"];
 
+// RemediationChip renders HOW a finding is fixed on the host. "Remove (orphaned)" is
+// the important one: the package is installed but in no repository (a leftover from an
+// in-place distro upgrade), so an update will never clear it — it must be purged.
+function RemediationChip({ value }: { value?: string }) {
+  switch (value) {
+    case "update":
+      return <Chip size="small" color="info" variant="outlined" label="Update" />;
+    case "remove":
+      return (
+        <Tooltip title="This package is installed but offered by no repository — a leftover from an in-place distribution upgrade. An update can't fix it; remove it (e.g. apt purge).">
+          <Chip size="small" color="warning" label="Remove (orphaned)" />
+        </Tooltip>
+      );
+    case "unavailable":
+      return (
+        <Tooltip title="A fix exists upstream, but this host's package manager isn't offering it — the package is held, Debian marked it no-DSA, or it needs an OS release upgrade.">
+          <Chip size="small" variant="outlined" label="No apt fix" />
+        </Tooltip>
+      );
+    default:
+      return <Typography variant="caption" color="text.secondary">—</Typography>;
+  }
+}
+
 function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => void }) {
   const { data, isLoading } = useQuery({ queryKey: ["vuln-scan", scanId], queryFn: () => getVulnScan(scanId) });
   const scan = data?.scan;
@@ -358,6 +382,7 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                 <TableCell>Package</TableCell>
                 <TableCell>Installed</TableCell>
                 <TableCell>Fixed in</TableCell>
+                <TableCell>Fix</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -373,10 +398,11 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                   <TableCell>{f.package}</TableCell>
                   <TableCell><code>{f.installedVersion}</code></TableCell>
                   <TableCell>{f.fixedVersion ? <code>{f.fixedVersion}</code> : <Typography variant="caption" color="text.secondary">no fix</Typography>}</TableCell>
+                  <TableCell><RemediationChip value={f.remediation} /></TableCell>
                 </TableRow>
               ))}
               {!isLoading && shown.length === 0 && (
-                <TableRow><TableCell colSpan={6}>
+                <TableRow><TableCell colSpan={7}>
                   <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
                     {findings.length === 0 ? "No vulnerabilities found. 🎉" : "No findings match the current filters."}
                   </Typography>

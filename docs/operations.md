@@ -121,6 +121,16 @@ metrics**: disk usage per filesystem, memory used, load average, and network fac
 primary IP, default gateway). View them per host via the **Details** (ⓘ) button on the **Hosts**
 page (a "Resources" section), which fetches that single host on demand.
 
+The hourly fact collection also records two package sets used to make vulnerability findings
+actionable: **pending updates** (upgradable packages, with the security subset flagged) and
+**obsolete packages** — installed but offered by no configured repository (apt's
+`[installed,local]` / dnf "extras"), which are almost always orphaned leftovers from in-place
+distribution upgrades. A vulnerability whose package is obsolete cannot be fixed by an update, so
+the scan findings label it **Remove (orphaned)** — purge the package — instead of a misleading
+"fixable". Findings the package manager can patch are labelled **Update**, and a fix that exists
+upstream but isn't offered on this host (held, Debian no-DSA, or needs an OS release upgrade) is
+labelled **No apt fix**.
+
 ## Pending package updates
 
 During the hourly facts pass the monitor also collects each host's count of **available package

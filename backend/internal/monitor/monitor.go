@@ -595,7 +595,53 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 		inv.MemoryMB = kb / 1024
 	}
 	collectUpdates(conn, &inv)
+	collectObsolete(conn, &inv)
 	return inv, true
+}
+
+// obsoletePackagesCap bounds how many orphaned package names we store per host.
+const obsoletePackagesCap = 500
+
+// obsoleteScript lists the host's "obsolete" packages: installed but offered by no
+// configured repository (apt's [installed,local] tag / dnf-yum "extras"). These are
+// orphaned leftovers from in-place distribution upgrades. Cache-only (no network),
+// best-effort across apt/dnf/yum.
+const obsoleteScript = `
+if command -v apt >/dev/null 2>&1; then
+  apt list --installed 2>/dev/null | awk -F/ '/\[installed,local\]/ {print $1}'
+elif command -v dnf >/dev/null 2>&1; then
+  dnf -q -C repoquery --extras --qf '%{name}\n' 2>/dev/null
+elif command -v yum >/dev/null 2>&1; then
+  yum -q -C list extras 2>/dev/null | awk 'NR>1 && $1 ~ /\./ {sub(/\.[^.]+$/,"",$1); print $1}'
+fi`
+
+// collectObsolete populates inv.ObsoletePackages. A failed collection leaves the
+// field nil so the last-known list is preserved (UpsertInventory COALESCEs nil).
+func collectObsolete(conn *sshgw.Conn, inv *models.HostInventory) {
+	out, err := runCmd(conn, obsoleteScript)
+	if err != nil {
+		return
+	}
+	inv.ObsoletePackages = parseObsolete(out)
+}
+
+// parseObsolete extracts a bounded, de-duplicated package-name list from the
+// obsoleteScript output. Returns a non-nil (possibly empty) slice so a successful
+// check that found nothing is stored as "checked, none obsolete".
+func parseObsolete(out string) []string {
+	pkgs := []string{}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if len(pkgs) < obsoletePackagesCap {
+			pkgs = append(pkgs, name)
+		}
+	}
+	return pkgs
 }
 
 // updatePackagesCap bounds how many pending-update package rows we store per host, so
