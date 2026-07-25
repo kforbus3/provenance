@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.67.2 — Fix: bundle upload multipart boundary
+
+Following v0.67.1 (which let the upload request reach the backend at all), the bundle
+upload still failed with `400 "expected a multipart 'bundle' file"`. `previewUpgrade`
+hard-coded `Content-Type: multipart/form-data`, which omits the `boundary=…` parameter
+the browser generates automatically — without it the server can't parse the multipart
+body. Removed the manual header so the browser sets Content-Type (with boundary) itself.
+Frontend-only. Second bug in the upload path surfaced by the same end-to-end smoke test.
+
+---
+
 ## v0.67.1 — Fix: in-UI upgrade API calls missing `/api/v1` prefix
 
 The Settings → Updates screen called the upgrade endpoints at `/system/upgrade/*`
