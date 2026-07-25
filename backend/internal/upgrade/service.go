@@ -1,0 +1,230 @@
+// Package upgrade drives the in-UI upgrade flow from the backend's side: it accepts a
+// signed .fleetup bundle, verifies it against the trusted release keys, takes a
+// pre-upgrade database backup, then hands the staged bundle to the privileged
+// fleet-updater sidecar (which owns the Docker socket) to perform the container swap.
+// The backend never touches Docker itself. It also owns "drain" — a per-instance flag
+// that makes /ready fail so a load balancer ejects the instance and new sessions are
+// refused ahead of a restart.
+package upgrade
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/fleet-terminal/backend/internal/backup"
+	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/release"
+	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/fleet-terminal/backend/internal/ws"
+)
+
+// Service coordinates upgrades and drain state for one backend instance.
+type Service struct {
+	store   *store.Store
+	cfg     *config.Config
+	log     *slog.Logger
+	hub     *ws.Hub
+	backup  *backup.Service
+	version string
+	trusted []ed25519.PublicKey
+	client  *http.Client
+
+	mu       sync.Mutex
+	draining bool
+	local    Status // pre-dispatch/local status; the updater is source of truth once dispatched
+}
+
+// Status is the upgrade progress reported to the UI.
+type Status struct {
+	State         string     `json:"state"` // idle|verifying|backing_up|dispatched|running|success|failed
+	TargetVersion string     `json:"targetVersion,omitempty"`
+	Step          string     `json:"step,omitempty"`
+	Log           []string   `json:"log,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	Draining      bool       `json:"draining"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	UpdatedAt     *time.Time `json:"updatedAt,omitempty"`
+}
+
+// New builds the service. Trusted release keys come from the binary-embedded key(s)
+// plus cfg.ReleaseTrustKeys; a malformed FLEET_RELEASE_TRUST_KEYS is logged and
+// ignored (embedded keys still apply) rather than failing startup. With no valid keys
+// at all, verification fails closed and no upgrade can be applied.
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, hub *ws.Hub, bk *backup.Service, version string) *Service {
+	trusted, err := release.TrustedKeys(cfg.ReleaseTrustKeys)
+	if err != nil {
+		log.Warn("upgrade: FLEET_RELEASE_TRUST_KEYS is malformed; using only embedded release keys", "err", err)
+		trusted, _ = release.TrustedKeys("")
+	}
+	return &Service{
+		store: st, cfg: cfg, log: log, hub: hub, backup: bk, version: version, trusted: trusted,
+		client: &http.Client{Timeout: 30 * time.Second},
+		local:  Status{State: "idle"},
+	}
+}
+
+// IsDraining reports whether this instance is draining (checked by /ready).
+func (s *Service) IsDraining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
+}
+
+// SetDrain flips drain state and broadcasts a maintenance banner to connected UIs.
+// Draining makes /ready fail (LB ejects) and signals the UI that a restart is imminent.
+func (s *Service) SetDrain(on bool, message string) {
+	s.mu.Lock()
+	s.draining = on
+	s.mu.Unlock()
+	if s.hub != nil {
+		s.hub.Broadcast("system.maintenance", map[string]any{"draining": on, "message": message})
+	}
+	s.log.Info("upgrade: drain state changed", "draining", on)
+}
+
+// stagedPath is where an uploaded bundle is written for the updater to read (shared
+// volume, same path in both containers).
+func (s *Service) stagedPath() string {
+	return filepath.Join(s.cfg.UpdatesDir, "pending.fleetup")
+}
+
+// Stage streams an uploaded bundle to the updates volume, returns the on-disk path.
+func (s *Service) Stage(r io.Reader) (string, error) {
+	if err := os.MkdirAll(s.cfg.UpdatesDir, 0o700); err != nil {
+		return "", err
+	}
+	path := s.stagedPath()
+	f, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, r); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// Verify opens a staged bundle, checks its signature against the trusted release keys
+// and that it is a valid, newer upgrade for the running version. Returns the manifest.
+func (s *Service) Verify(path string) (release.Manifest, error) {
+	b, err := release.Open(path, s.trusted)
+	if err != nil {
+		return release.Manifest{}, err
+	}
+	defer b.Close()
+	if err := b.Manifest.CheckUpgradeable(s.version); err != nil {
+		return release.Manifest{}, err
+	}
+	return b.Manifest, nil
+}
+
+// Apply verifies the staged bundle, takes a pre-upgrade DB backup, and dispatches the
+// apply to the updater sidecar. It returns once dispatch succeeds; progress is then
+// polled via Status (which proxies the updater). Only one apply may be in flight.
+func (s *Service) Apply(ctx context.Context, path string, actorName string) error {
+	m, err := s.Verify(path)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.local.State == "verifying" || s.local.State == "backing_up" || s.local.State == "dispatched" {
+		s.mu.Unlock()
+		return fmt.Errorf("an upgrade is already in progress")
+	}
+	now := time.Now()
+	s.local = Status{State: "backing_up", TargetVersion: m.Version, StartedAt: &now, UpdatedAt: &now, Draining: s.draining, Step: "taking pre-upgrade database backup"}
+	s.mu.Unlock()
+
+	// Pre-upgrade snapshot (best effort but strongly preferred — surface failure).
+	if s.backup != nil {
+		if _, berr := s.backup.Create(ctx); berr != nil {
+			s.fail(fmt.Sprintf("pre-upgrade backup failed: %v", berr))
+			return fmt.Errorf("pre-upgrade backup failed: %w", berr)
+		}
+	}
+
+	// Drain THIS instance before the updater recreates it: refuse new sessions, eject
+	// from any load balancer (/ready fails), and banner connected UIs. The replacement
+	// process starts un-drained, so this state dies with the old container.
+	s.SetDrain(true, fmt.Sprintf("Upgrading to %s — reconnecting shortly.", m.Version))
+
+	// Dispatch to the updater sidecar.
+	body, _ := json.Marshal(map[string]string{"bundle": path, "currentVersion": s.version, "targetVersion": m.Version})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.UpdaterURL+"/apply", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if s.cfg.UpdaterToken != "" {
+		req.Header.Set("X-Updater-Token", s.cfg.UpdaterToken)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		s.fail(fmt.Sprintf("could not reach the updater service: %v", err))
+		return fmt.Errorf("updater unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		s.fail(fmt.Sprintf("updater rejected the upgrade (%d): %s", resp.StatusCode, string(msg)))
+		return fmt.Errorf("updater error %d", resp.StatusCode)
+	}
+	s.mu.Lock()
+	now2 := time.Now()
+	s.local.State, s.local.Step, s.local.UpdatedAt = "dispatched", "applying update", &now2
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) fail(msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	s.local.State, s.local.Error, s.local.UpdatedAt = "failed", msg, &now
+}
+
+// Status returns the current upgrade status. Once an apply is dispatched the updater
+// sidecar is the source of truth (it survives the backend restart), so this proxies
+// the updater's /status and falls back to local state if it's unreachable.
+func (s *Service) Status(ctx context.Context) Status {
+	if us, ok := s.updaterStatus(ctx); ok {
+		us.Draining = s.IsDraining()
+		return us
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.local
+	st.Draining = s.draining
+	return st
+}
+
+func (s *Service) updaterStatus(ctx context.Context) (Status, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.UpdaterURL+"/status", nil)
+	if err != nil {
+		return Status{}, false
+	}
+	if s.cfg.UpdaterToken != "" {
+		req.Header.Set("X-Updater-Token", s.cfg.UpdaterToken)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return Status{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Status{}, false
+	}
+	var us Status
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&us); err != nil {
+		return Status{}, false
+	}
+	return us, true
+}

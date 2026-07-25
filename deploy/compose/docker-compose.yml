@@ -41,6 +41,9 @@ services:
       dockerfile: Dockerfile
       args:
         VERSION: ${FLEET_VERSION:-dev}
+    # Stable image name so the in-UI updater can pin/roll back versioned images
+    # (fleet-terminal-backend:<version>) with `docker compose up --no-build`.
+    image: fleet-terminal-backend
     restart: unless-stopped
     # Give the backend time to shut down gracefully on a deploy/restart so it
     # releases its Postgres leader advisory lock (and drains connections) before
@@ -157,12 +160,19 @@ services:
       FLEET_OTLP_ENDPOINT: ${FLEET_OTLP_ENDPOINT:-}
       FLEET_DB_MAX_CONNS: ${FLEET_DB_MAX_CONNS:-}
       FLEET_DB_MIN_CONNS: ${FLEET_DB_MIN_CONNS:-}
+      # In-UI upgrade system: trusted release key(s), the updater sidecar address, a
+      # shared secret only the backend knows, and the staging dir on the shared volume.
+      FLEET_RELEASE_TRUST_KEYS: ${FLEET_RELEASE_TRUST_KEYS:-}
+      FLEET_UPDATER_URL: ${FLEET_UPDATER_URL:-http://fleet-updater:9000}
+      FLEET_UPDATER_TOKEN: ${FLEET_UPDATER_TOKEN:-}
+      FLEET_UPDATES_DIR: /var/lib/fleet/updates
     volumes:
       - recordings:/var/lib/fleet/recordings
       - scans:/var/lib/fleet/scans
       - scap-content:/var/lib/fleet/scap-content
       - backups:/var/lib/fleet/backups
       - rdp-drive:/var/lib/fleet/rdp-drive
+      - updates:/var/lib/fleet/updates
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,6 +193,7 @@ services:
       # docs/, which the in-app help bundle is generated from at build time.
       context: ../..
       dockerfile: frontend/Dockerfile
+    image: fleet-terminal-frontend
     restart: unless-stopped
     environment:
       VITE_API_BASE: ${FLEET_PUBLIC_URL:-http://localhost:8080}
@@ -210,6 +221,7 @@ services:
     build:
       context: ../grype-scanner
       dockerfile: Dockerfile
+    image: fleet-terminal-grype-scanner
     restart: unless-stopped
     environment:
       # How many grype scans run concurrently. grype is CPU/memory-heavy (it loads
@@ -226,6 +238,37 @@ services:
       GRYPE_DB_TIMEOUT: ${GRYPE_DB_TIMEOUT:-900}
     volumes:
       - grype-db:/home/scanner/.cache/grype
+    networks: [fleet]
+
+  # Privileged upgrade sidecar (in-UI upgrade system). It holds the Docker socket so
+  # it can swap the app images when an operator applies a signed .fleetup bundle. It
+  # independently re-verifies every bundle's signature, so it never trusts the
+  # backend. Not published on any host port — reachable only on the internal network.
+  # OMIT this service if you don't want in-UI upgrades (the Docker socket is a
+  # host-root-equivalent grant); upgrades then remain a `make redeploy-single` step.
+  fleet-updater:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile.updater
+    image: fleet-terminal-fleet-updater
+    restart: unless-stopped
+    environment:
+      FLEET_UPDATER_TOKEN: ${FLEET_UPDATER_TOKEN:-}
+      FLEET_RELEASE_TRUST_KEYS: ${FLEET_RELEASE_TRUST_KEYS:-}
+      FLEET_UPDATES_DIR: /var/lib/fleet/updates
+      FLEET_UPDATER_PROJECT: fleet-terminal
+      FLEET_UPDATER_COMPOSE_FILES: /compose/docker-compose.yml:/compose/docker-compose.jumphost.yml
+      FLEET_UPDATER_ENV_FILE: /compose/.env
+      FLEET_UPDATER_BACKEND_URL: http://backend:8080
+    volumes:
+      # The Docker socket is what makes this component privileged — it is the whole
+      # reason the backend delegates the container swap here instead of doing it itself.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - updates:/var/lib/fleet/updates
+      # The compose project files + root .env, so the updater runs compose against the
+      # same project. Read-only; build contexts are unused (the updater passes --no-build).
+      - ../compose:/compose:ro
+      - ../../.env:/compose/.env:ro
     networks: [fleet]
 
   # Apache Guacamole daemon: brokers RDP (and VNC) desktop sessions for the
@@ -262,6 +305,7 @@ volumes:
   backups:
   grype-db:
   rdp-drive:
+  updates: # staged upgrade bundles, shared between backend and fleet-updater
 
 networks:
   fleet:

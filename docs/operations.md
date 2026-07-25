@@ -485,6 +485,30 @@ the [Break-Glass & Recovery Runbook](./break-glass.md).
 > **`FLEET_BACKUP_PASSPHRASE`** **off the server** (password manager / sealed envelope). It is
 > deliberately *not* in the backup, so a stolen backup can't be decrypted.
 
+## Upgrades (in-UI)
+
+**Settings → Maintenance → Updates** (needs the **System.Upgrade** permission — super-admins
+only) upgrades Fleet in place from a single signed file. Choose a **`.fleetup`** bundle, review
+its manifest (target version, release notes, and whether its database migrations are *additive*
+or *breaking*), and **Install**. The frontend is swapped invisibly; the backend restarts for a
+few seconds and the page reconnects on its own. **The jump host and WireGuard overlay are never
+touched, so managed hosts stay online** — but active terminal/RDP sessions are dropped by the
+restart, so upgrade during a quiet window.
+
+**Safety.** Bundles are Ed25519-signed. The backend verifies the signature against a trusted
+release key (`FLEET_RELEASE_TRUST_KEYS`) before staging, and the privileged **`fleet-updater`**
+sidecar — the only component with Docker-socket access — re-verifies it independently before
+touching anything. A **pre-upgrade database backup** is taken automatically, the previous images
+are kept tagged `:rollback`, and a failed post-upgrade health check **rolls the app back**. Every
+step is audited. Leaving `FLEET_RELEASE_TRUST_KEYS` empty disables in-UI upgrades (fails closed);
+you can also omit the `fleet-updater` service if you'd rather not grant the Docker socket.
+
+**Publishing a bundle.** Generate an offline signing keypair once with `fleetctl release keygen`
+and put the printed **public** key in `FLEET_RELEASE_TRUST_KEYS`. After a code change, build and
+sign a bundle with `make bundle BUNDLE_VERSION=vX.Y.Z BUNDLE_FROM=<min-upgradable-from>` (it
+builds+tags the images, `docker save`s them, and signs the manifest). Verify any bundle with
+`fleetctl release verify --bundle <file> --keys <pubkey>`.
+
 ## Host support bundle
 
 Click the **support bundle** (first-aid) icon on a host row to download a single

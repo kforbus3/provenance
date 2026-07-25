@@ -245,6 +245,16 @@ type Config struct {
 	BackupDir        string
 	BackupPassphrase string
 
+	// In-UI upgrade system. ReleaseTrustKeys are extra base64 Ed25519 release public
+	// keys (comma/space-separated) trusted in addition to any baked into the binary —
+	// used for key rotation or a source build. UpdatesDir stages uploaded bundles for
+	// the updater sidecar to read. UpdaterURL/UpdaterToken address the privileged
+	// fleet-updater sidecar that performs the container swap over the Docker socket.
+	ReleaseTrustKeys string
+	UpdatesDir       string
+	UpdaterURL       string
+	UpdaterToken     string
+
 	// VaultPassphrase encrypts stored credentials (the secrets vault) at rest with
 	// secretbox. Must be set and distinct from the CA passphrase in production;
 	// falls back to the CA passphrase in development. Resolve it via VaultKey().
@@ -363,6 +373,10 @@ func Load() (*Config, error) {
 		MSRCMonths:             envInt("FLEET_MSRC_MONTHS", 12),
 		CARotateAfter:          envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
 		BackupDir:              env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
+		ReleaseTrustKeys:       env("FLEET_RELEASE_TRUST_KEYS", ""),
+		UpdatesDir:             env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
+		UpdaterURL:             env("FLEET_UPDATER_URL", "http://fleet-updater:9000"),
+		UpdaterToken:           env("FLEET_UPDATER_TOKEN", ""),
 		BackupPassphrase:       env("FLEET_BACKUP_PASSPHRASE", ""),
 		VaultPassphrase:        env("FLEET_VAULT_PASSPHRASE", ""),
 		GuacdAddr:              env("FLEET_GUACD_ADDR", "guacd:4822"),

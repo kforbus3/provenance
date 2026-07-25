@@ -89,6 +89,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/tenantapi"
 	"github.com/fleet-terminal/backend/internal/terminal"
 	"github.com/fleet-terminal/backend/internal/uebaapi"
+	"github.com/fleet-terminal/backend/internal/upgrade"
 	credvault "github.com/fleet-terminal/backend/internal/vault"
 	"github.com/fleet-terminal/backend/internal/vulnscan"
 	"github.com/fleet-terminal/backend/internal/winscript"
@@ -134,6 +135,7 @@ type Server struct {
 	commandSvc   *command.Service
 	scheduler    *scheduler.Engine
 	backups      *backup.Service
+	upgradeSvc   *upgrade.Service
 	auditFwd     *auditfwd.Forwarder
 	insights     *insights.Service
 	digest       *digest.Service
@@ -250,6 +252,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.commandSvc = command.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
+	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
 	s.auditFwd = auditfwd.New(st, log)
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
 	s.digest = digest.New(st, s.insights, s.Notify, log)
@@ -1015,6 +1018,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, s.scanSvc)
 	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
+	upgrade.Mount(r, deps, s.upgradeSvc)
 
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).
 	support.Mount(r, deps, support.New(s.Cfg, s.Log, s.Gateway, s.Issuer))
@@ -1084,6 +1088,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	// Draining: report NOT ready so a load balancer ejects this instance ahead of an
+	// upgrade restart (new sessions route elsewhere), even though the process is still
+	// serving in-flight work.
+	if s.upgradeSvc != nil && s.upgradeSvc.IsDraining() {
+		httpx.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "draining"})
+		return
+	}
 	ctx, cancel := contextWithTimeout(r, 2*time.Second)
 	defer cancel()
 	if err := s.DB.Ping(ctx); err != nil {

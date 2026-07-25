@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.61.0 — Upgrade Fleet from the UI (single-host)
+
+You can now upgrade Fleet Terminal by uploading one signed file in the UI instead of
+running `make redeploy-single` on the host. **Settings → Maintenance → Updates**:
+choose a `.fleetup` bundle, review its manifest (version, release notes,
+additive/breaking migrations), and install it in place.
+
+- **Minimal interruption.** The frontend is swapped invisibly; the backend restarts
+  for a few seconds and the page reconnects on its own. The jump host and WireGuard
+  overlay are never touched, so managed hosts stay online. Active terminal/RDP
+  sessions are dropped by the restart, so upgrade during a quiet window.
+- **Signed, verified, reversible.** Bundles are Ed25519-signed; the backend verifies
+  the signature against a trusted release key before staging, and the privileged
+  `fleet-updater` sidecar re-verifies it independently before touching Docker. A
+  pre-upgrade database backup is taken automatically, the previous images are kept
+  tagged `:rollback`, and a failed health check rolls the app back to the prior
+  version. Gated by a new **System.Upgrade** permission (super-admins only) and fully
+  audited.
+- **Publishing:** `fleetctl release keygen` makes your offline signing key; `make
+  bundle` builds + signs a `.fleetup`. See the operations guide.
+
+**Deploy notes:** a new `fleet-updater` sidecar (which mounts the Docker socket)
+and an `updates` volume are added to the single-host compose. Set
+`FLEET_RELEASE_TRUST_KEYS` (your release public key) and `FLEET_UPDATER_TOKEN` in
+`.env`; leave `FLEET_RELEASE_TRUST_KEYS` empty to disable in-UI upgrades entirely
+(they fail closed). The `System.Upgrade` permission is added automatically on startup.
+
 ## v0.60.0 — Vulnerabilities: "fixable" now says how to fix it
 
 Vulnerability findings are now classified by **how to remediate them on the specific

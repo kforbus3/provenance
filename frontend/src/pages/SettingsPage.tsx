@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
 import { assistantModels, getActionPolicy, saveActionPolicy } from "../api/assistant";
 import { downloadBackup } from "../api/system";
+import { UpdatesCard } from "./settings/UpdatesCard";
 import {
   getNotifications, listEventTypes, saveNotifications, testNotification,
   type NotificationConfig,
@@ -136,6 +137,7 @@ export function SettingsPage() {
           )}
           {tab === 4 && (
             <>
+              <UpdatesCard />
               <BackupCard />
               <Typography variant="h6" sx={{ mt: 1 }}>Advanced — raw settings</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>

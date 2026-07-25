@@ -1,0 +1,134 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// execDocker implements Docker by shelling out to the docker CLI (the sidecar image is
+// docker:cli with the compose plugin, and mounts /var/run/docker.sock).
+type execDocker struct {
+	project      string
+	composeFiles []string
+	envFile      string
+	log          *slog.Logger
+}
+
+func (d *execDocker) run(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return out.String(), fmt.Errorf("docker %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
+	}
+	return out.String(), nil
+}
+
+func (d *execDocker) Load(ctx context.Context, tarPath string) error {
+	_, err := d.run(ctx, "load", "-i", tarPath)
+	return err
+}
+
+func (d *execDocker) RunningImageID(ctx context.Context, container string) (string, error) {
+	out, err := d.run(ctx, "inspect", "-f", "{{.Image}}", container)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(out)
+	if id == "" {
+		return "", fmt.Errorf("no image id for container %s", container)
+	}
+	return id, nil
+}
+
+func (d *execDocker) Tag(ctx context.Context, src, dst string) error {
+	_, err := d.run(ctx, "tag", src, dst)
+	return err
+}
+
+// ComposeUp recreates the named services from already-loaded images (no build, no
+// pull), layering the upgrade/rollback override last so its image pins win.
+func (d *execDocker) ComposeUp(ctx context.Context, services []string, overrideFile string) error {
+	args := []string{"compose"}
+	if d.envFile != "" {
+		args = append(args, "--env-file", d.envFile)
+	}
+	for _, f := range d.composeFiles {
+		args = append(args, "-f", f)
+	}
+	args = append(args, "-f", overrideFile, "up", "-d", "--no-build", "--no-deps")
+	args = append(args, services...)
+	_, err := d.run(ctx, args...)
+	return err
+}
+
+// httpHealth polls the backend's /ready and /version until it's ready on the wanted
+// version (empty wantVersion = any version, used during rollback).
+type httpHealth struct {
+	baseURL string
+}
+
+func (h *httpHealth) WaitHealthy(ctx context.Context, wantVersion string, timeout time.Duration) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	// Small settle delay so we don't observe the OLD container as "ready" before the
+	// recreate has begun.
+	time.Sleep(3 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := h.check(client, wantVersion); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out after %s", timeout)
+	}
+	return lastErr
+}
+
+func (h *httpHealth) check(client *http.Client, wantVersion string) error {
+	// Readiness first.
+	rr, err := client.Get(h.baseURL + "/ready")
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, io.LimitReader(rr.Body, 4096))
+	rr.Body.Close()
+	if rr.StatusCode != http.StatusOK {
+		return fmt.Errorf("/ready returned %d", rr.StatusCode)
+	}
+	if wantVersion == "" {
+		return nil
+	}
+	vr, err := client.Get(h.baseURL + "/version")
+	if err != nil {
+		return err
+	}
+	defer vr.Body.Close()
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(io.LimitReader(vr.Body, 4096)).Decode(&v); err != nil {
+		return err
+	}
+	if v.Version != wantVersion {
+		return fmt.Errorf("running version %q, waiting for %q", v.Version, wantVersion)
+	}
+	return nil
+}
