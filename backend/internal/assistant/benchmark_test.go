@@ -44,9 +44,12 @@ var benchCases = []benchCase{
 	{"did any host go offline today?", []string{"host_availability"}},
 	{"were there any outages this week?", []string{"host_availability"}},
 	{"which hosts are offline right now?", []string{"query_hosts", "host_availability"}},
-	// capacity / runway
-	{"are any hosts about to run out of disk space?", []string{"capacity_outlook"}},
-	{"which hosts are low on disk?", []string{"capacity_outlook", "query_hosts"}},
+	// capacity / runway. NB: capacity_outlook is a fast-path-only route (not in the
+	// model-facing `tools` surface), so the correct MODEL answer for these is
+	// fleet_insights, which carries the disk-runway projection. query_hosts is an
+	// acceptable current-state fallback for the point-in-time "low on disk" phrasing.
+	{"are any hosts about to run out of disk space?", []string{"fleet_insights"}},
+	{"which hosts are low on disk?", []string{"fleet_insights", "query_hosts"}},
 	// security events
 	{"have there been any failed logins?", []string{"security_events"}},
 	{"is anyone brute-forcing ssh?", []string{"security_events"}},
