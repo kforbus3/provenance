@@ -264,20 +264,27 @@ func (h *Host) InMaintenance() bool {
 	return h.MaintenanceUntil != nil && h.MaintenanceUntil.After(time.Now())
 }
 
-// HostOptions are generic per-host device options stored as JSONB. RouterOSAPI marks a
-// host as a MikroTik RouterOS device managed over its binary API: a playbook run opens
-// an API tunnel to APIPort (default 8728) through the jump host so a
-// community.routeros.api play can reach it — RouterOS's SSH exec channel is unusable
-// for automation, so the API is the reliable path.
+// HostOptions are generic per-host device options stored as JSONB. DeviceType marks the
+// kind of device: "" (generic Linux/server) or "routeros" (MikroTik managed over its
+// binary API). For a RouterOS device a playbook run opens an API tunnel to APIPort
+// (default 8728) through the jump host so a community.routeros.api play can reach it —
+// RouterOS's SSH exec channel is unusable for automation, so the API is the reliable path.
 type HostOptions struct {
+	DeviceType string `json:"deviceType,omitempty"` // "" (generic) | "routeros"
+	APIPort    int    `json:"apiPort,omitempty"`
+	// RouterOSAPI is the legacy flag that predates DeviceType; still honored for hosts
+	// configured before the device-type selector so they keep API management.
 	RouterOSAPI bool `json:"routerOsApi,omitempty"`
-	APIPort     int  `json:"apiPort,omitempty"`
 }
 
-// RouterOSAPIPort returns the configured RouterOS API port, or the 8728 default when
-// the host is RouterOS-API-managed but no explicit port is set. Returns 0 otherwise.
+// IsRouterOS reports whether the host is a MikroTik RouterOS device managed over the API.
+func (h *Host) IsRouterOS() bool {
+	return h.Options.DeviceType == "routeros" || h.Options.RouterOSAPI
+}
+
+// RouterOSAPIPort returns the RouterOS API port (8728 default) for a RouterOS host, or 0.
 func (h *Host) RouterOSAPIPort() int {
-	if !h.Options.RouterOSAPI {
+	if !h.IsRouterOS() {
 		return 0
 	}
 	if h.Options.APIPort > 0 {

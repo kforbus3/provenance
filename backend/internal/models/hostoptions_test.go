@@ -8,10 +8,12 @@ func TestRouterOSAPIPort(t *testing.T) {
 		opts HostOptions
 		want int
 	}{
-		{"not a routeros host", HostOptions{}, 0},
-		{"routeros default port", HostOptions{RouterOSAPI: true}, 8728},
-		{"routeros explicit port", HostOptions{RouterOSAPI: true, APIPort: 8729}, 8729},
-		{"apiPort set but not routeros -> 0", HostOptions{APIPort: 8728}, 0},
+		{"generic host", HostOptions{}, 0},
+		{"deviceType routeros default port", HostOptions{DeviceType: "routeros"}, 8728},
+		{"deviceType routeros explicit port", HostOptions{DeviceType: "routeros", APIPort: 8729}, 8729},
+		{"legacy routerOsApi flag still honored", HostOptions{RouterOSAPI: true}, 8728},
+		{"legacy flag + explicit port", HostOptions{RouterOSAPI: true, APIPort: 8729}, 8729},
+		{"apiPort set but generic -> 0", HostOptions{APIPort: 8728}, 0},
 	}
 	for _, c := range cases {
 		h := Host{Options: c.opts}

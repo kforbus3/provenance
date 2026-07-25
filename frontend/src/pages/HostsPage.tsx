@@ -379,18 +379,24 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
           )}
           {form.protocol !== "rdp" && (
             <>
-              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">RouterOS (MikroTik)</Typography></Divider>
-              <FormControlLabel
-                control={<Checkbox checked={form.options?.routerOsApi ?? false}
-                  onChange={(e) => setForm((f) => ({ ...f, options: { ...f.options, routerOsApi: e.target.checked } }))} />}
-                label="Manage via RouterOS API (a playbook run tunnels the API port through the jump host)" />
-              {form.options?.routerOsApi && (
-                <Stack direction="row" spacing={2} alignItems="center" sx={{ pl: 4 }}>
+              <TextField select label="Device type" sx={{ width: 240 }}
+                value={form.options?.deviceType ?? (form.options?.routerOsApi ? "routeros" : "")}
+                onChange={(e) => setForm((f) => ({
+                  ...f,
+                  // Keep the legacy routerOsApi flag in sync so either signal works.
+                  options: { ...f.options, deviceType: e.target.value, routerOsApi: e.target.value === "routeros" },
+                }))}>
+                <MenuItem value="">Generic (Linux / server)</MenuItem>
+                <MenuItem value="routeros">MikroTik RouterOS (API)</MenuItem>
+              </TextField>
+              {(form.options?.deviceType === "routeros" || (form.options?.deviceType == null && form.options?.routerOsApi)) && (
+                <Stack direction="row" spacing={2} alignItems="center" sx={{ pl: 1 }}>
                   <TextField label="API port" type="number" sx={{ width: 140 }}
                     value={form.options?.apiPort || 8728}
                     onChange={(e) => setForm((f) => ({ ...f, options: { ...f.options, apiPort: Number(e.target.value) || 8728 } }))} />
                   <Typography variant="caption" color="text.secondary">
-                    Enable the <code>api</code> service on the device and attach a <b>password</b> credential — the RouterOS API can't use SSH keys.
+                    A playbook run tunnels the API port through the jump host. Enable the <code>api</code> service on the
+                    device and attach a <b>password</b> credential — the RouterOS API can't use SSH keys.
                   </Typography>
                 </Stack>
               )}

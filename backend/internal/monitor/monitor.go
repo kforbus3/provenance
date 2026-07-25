@@ -508,6 +508,14 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	st.Status = "online"
 	st.LastSuccessAt = &now
 
+	// RouterOS (and other non-POSIX network devices) aren't Linux hosts — the fact/metric
+	// commands below return a RouterOS "syntax error" that would land in the OS field. A
+	// successful SSH connect is enough to report the device online; set a clean OS label
+	// (overwriting any prior garbage) and skip Linux fact collection.
+	if h.IsRouterOS() {
+		return st, &models.HostInventory{OSName: "MikroTik RouterOS", CollectedAt: &now}, nil
+	}
+
 	if out, err := runCmd(conn, "cat /proc/uptime 2>/dev/null"); err == nil {
 		st.UptimeSeconds = parseUptime(out)
 	}

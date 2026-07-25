@@ -381,8 +381,9 @@ Setup:
 1. On the router, enable the `api` service (`/ip service enable api`) and create/keep an admin
    **user + password** (the API can't use SSH keys).
 2. In Fleet, add the router as a host, attach an **open-policy password credential**
-   (`Auth Method = vault_password`), and under **RouterOS (MikroTik)** turn on **Manage via
-   RouterOS API** (default port 8728).
+   (`Auth Method = vault_password`), and set **Device type = MikroTik RouterOS (API)** (default
+   port 8728). Marking it RouterOS also stops the monitor from running Linux fact commands
+   against it (which a RouterOS device rejects).
 3. Save a RouterOS playbook (below) in the Playbooks library, then create a **playbook schedule**
    (Schedules → Kind: Playbook) targeting the host — updates now run on your cadence.
 

@@ -121,11 +121,13 @@ export interface HostInput {
   options?: HostOptions;
 }
 
-// HostOptions are generic per-host device options. RouterOS API marks a MikroTik host
-// managed over its binary API (a playbook run tunnels the API port through the jump).
+// HostOptions are generic per-host device options. deviceType "routeros" marks a MikroTik
+// host managed over its binary API (a playbook run tunnels the API port through the jump).
+// routerOsApi is the legacy flag kept for hosts configured before the device-type selector.
 export interface HostOptions {
-  routerOsApi?: boolean;
+  deviceType?: string; // "" (generic) | "routeros"
   apiPort?: number;
+  routerOsApi?: boolean;
 }
 
 // RDPOptions are per-host display/security and clipboard settings for RDP hosts.

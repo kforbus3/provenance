@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.65.0 — Host "Device type" selector; RouterOS hosts skip Linux fact collection
+
+- **Device type on the host form.** RouterOS management is now behind a **Device type**
+  selector (`Generic` / `MikroTik RouterOS (API)`) instead of a checkbox shown on every
+  host — the API-port field only appears when you pick RouterOS. Stored as `deviceType` in
+  `host_options`; the previous `routerOsApi` flag is still honored for hosts already
+  configured, so nothing breaks.
+- **RouterOS hosts no longer show garbage facts.** The monitor was running Linux
+  fact/metric commands (`uname`, `/etc/os-release`, `df`, …) against RouterOS, which
+  returns a "syntax error" that landed in the host's OS field. A host marked
+  `MikroTik RouterOS` is now probed for reachability only and labeled "MikroTik RouterOS"
+  — no Linux commands, no garbage.
+
+Requires rebuilding backend + frontend (`make redeploy-single`).
+
 ## v0.64.2 — Fix: playbook editor showed stale content after save
 
 Editing a saved playbook, saving, then re-opening the editor showed the *old* content
