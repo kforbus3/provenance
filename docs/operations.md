@@ -357,10 +357,17 @@ if it's unreachable the dialog says so and Validate/Lint are unavailable. Every 
 change without applying anything; clear it to apply for real. Output **streams live**
 (auto-scrolling) and each playbook keeps its own **run history**.
 
-Runs go through the jump host as the privileged **`fleet`** account over certificate auth (the
-same path as scans) and execute under sudo, so your plays should target **`hosts: all`** — Fleet
-supplies the inventory and limits it to the hosts/group you selected. The default new-playbook
-template is already set up this way.
+Runs go through the jump host over certificate auth (the same path as scans) and execute under
+sudo, so your plays should target **`hosts: all`** — Fleet supplies the inventory and limits it
+to the hosts/group you selected. The default new-playbook template is already set up this way.
+
+**Hosts with a vaulted credential** (routers, switches, appliances that don't trust the Fleet
+CA) are supported: the runner injects the host's **vaulted SSH key or password** for the final
+hop — the same credential the terminal uses — while the jump-host hop still uses the Fleet
+certificate. Cert-trusting and vaulted hosts can be mixed in one run. Only *open-policy* vaulted
+credentials are used (a check-out-gated secret is skipped). Note that network devices aren't
+POSIX shells, so `become: sudo` and shell modules won't work on them — set `become: false` and
+use the right `ansible_network_os` collection or `raw:` commands.
 
 > **`Playbook.Run` is effectively arbitrary root-level change on the selected hosts.** Keep it
 > admin-only, dry-run first, and test on non-critical hosts.

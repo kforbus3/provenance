@@ -3,10 +3,11 @@
 # so Python + Ansible never bloat or run in the main API container.
 FROM python:3.12-slim
 
-# openssh-client is needed for Phase 2 execution (ProxyJump through the Fleet
-# jump host); harmless to include now.
+# openssh-client for ProxyJump through the Fleet jump host; sshpass so Ansible can
+# authenticate hosts that use a vaulted PASSWORD (network gear, appliances) — for
+# vaulted SSH-key and Fleet-cert hosts it is unused.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client \
+    && apt-get install -y --no-install-recommends openssh-client sshpass \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

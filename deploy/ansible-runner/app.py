@@ -120,10 +120,18 @@ def lint(req: ContentRequest):
 # --- execution -------------------------------------------------------------
 
 class RunHost(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     name: str
     address: str
     user: str = "fleet"
     port: int = 22
+    # How the FINAL hop to this host authenticates. "fleet_cert" (default) uses the
+    # run's Fleet certificate; "vault_ssh_key"/"vault_password" inject a per-host
+    # vaulted credential so appliances that don't trust the Fleet CA still work. The
+    # jump hop always uses the Fleet certificate.
+    auth_method: str = "fleet_cert"
+    private_key: str = ""  # vault_ssh_key: this host's private key
+    password: str = ""     # vault_password: this host's password
 
 
 class RunRequest(BaseModel):
@@ -156,45 +164,84 @@ def _split_host_port(hostport: str, default_port: int = 22):
     return hostport, default_port
 
 
-def _build_ssh_config(req: RunRequest, key_path: str) -> str:
-    # A real ssh_config so BOTH hops use the certificate and relaxed host-key
-    # handling. Command-line -i / -o options do NOT propagate to a ProxyJump's
-    # inner connection, so the jump hop must be configured explicitly here. The
-    # certificate (<key>-cert.pub) is loaded automatically alongside the key.
+_COMMON = [
+    "    IdentitiesOnly yes",
+    "    StrictHostKeyChecking no",
+    "    UserKnownHostsFile /dev/null",
+    "    ConnectTimeout 15",
+    "",
+]
+
+
+def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict) -> str:
+    # A real ssh_config so BOTH hops authenticate correctly and command-line options
+    # (which do NOT propagate to a ProxyJump's inner connection) aren't relied on. The
+    # jump hop ALWAYS uses the Fleet certificate; the final hop uses the Fleet cert for
+    # fleet_cert hosts, or a per-host vaulted key/password for vaulted hosts. ssh_config
+    # `Host` patterns match the ADDRESS ansible connects to (ansible_host), not the
+    # inventory alias — so per-host stanzas and the catch-all key on the address.
     jhost, jport = _split_host_port(req.jump_host)
-    return "\n".join([
+    lines = [
         "Host fleet-jump",
         f"    HostName {jhost}",
         f"    Port {jport}",
         f"    User {req.jump_user}",
         f"    IdentityFile {key_path}",
-        "    IdentitiesOnly yes",
-        "    StrictHostKeyChecking no",
-        "    UserKnownHostsFile /dev/null",
-        "    ConnectTimeout 15",
-        "",
-        # Every managed host (anything that is not the jump itself) is reached
-        # through the jump host.
-        "Host * !fleet-jump",
+    ] + _COMMON
+
+    vaulted_addrs = []
+    for h in req.hosts:
+        if h.auth_method == "vault_ssh_key":
+            vaulted_addrs.append(h.address)
+            lines += [
+                f"Host {h.address}",
+                "    ProxyJump fleet-jump",
+                f"    IdentityFile {vault_key_paths[h.address]}",
+            ] + _COMMON
+        elif h.auth_method == "vault_password":
+            vaulted_addrs.append(h.address)
+            lines += [
+                f"Host {h.address}",
+                "    ProxyJump fleet-jump",
+                "    PubkeyAuthentication no",
+                "    PreferredAuthentications password,keyboard-interactive",
+                "    NumberOfPasswordPrompts 1",
+                "    StrictHostKeyChecking no",
+                "    UserKnownHostsFile /dev/null",
+                "    ConnectTimeout 15",
+                "",
+            ]
+
+    # Catch-all for fleet_cert hosts — reached via the jump using the Fleet cert.
+    # Exclude the jump alias and every vaulted address so they keep their own stanza.
+    exclusions = " ".join(["!fleet-jump"] + [f"!{a}" for a in vaulted_addrs])
+    lines += [
+        f"Host * {exclusions}",
         "    ProxyJump fleet-jump",
         f"    IdentityFile {key_path}",
-        "    IdentitiesOnly yes",
-        "    StrictHostKeyChecking no",
-        "    UserKnownHostsFile /dev/null",
-        "    ConnectTimeout 15",
-        "",
-    ])
+    ] + _COMMON
+    return "\n".join(lines)
 
 
-def _build_inventory(req: RunRequest, key_path: str, ssh_config_path: str) -> str:
+def _inv_quote(v: str) -> str:
+    # Quote an inventory var value so passwords with spaces/specials parse safely.
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _build_inventory(req: RunRequest, ssh_config_path: str) -> str:
+    # Identity/keys are driven entirely by the ssh_config (per-host IdentityFile / auth),
+    # so no global ansible_ssh_private_key_file is set — that would force the Fleet key
+    # onto vaulted hosts too. Password hosts carry their secret as a per-host var.
     common = f"-F {ssh_config_path}"
     lines = ["[all]"]
     for h in req.hosts:
-        lines.append(f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}")
+        entry = f"{h.name} ansible_host={h.address} ansible_port={h.port} ansible_user={h.user}"
+        if h.auth_method == "vault_password" and h.password:
+            entry += f" ansible_password={_inv_quote(h.password)}"
+        lines.append(entry)
     lines += [
         "",
         "[all:vars]",
-        f"ansible_ssh_private_key_file={key_path}",
         f"ansible_ssh_common_args={common}",
     ]
     if req.become:
@@ -227,10 +274,19 @@ def _stream_run(req: RunRequest):
             fh.write(req.private_key if req.private_key.endswith("\n") else req.private_key + "\n")
         with open(cert_path, "w", encoding="utf-8") as fh:
             fh.write(req.certificate if req.certificate.endswith("\n") else req.certificate + "\n")
+        # Per-host vaulted private keys (0600), keyed by the address ansible connects to.
+        vault_key_paths = {}
+        for i, h in enumerate(req.hosts):
+            if h.auth_method == "vault_ssh_key" and h.private_key:
+                vp = os.path.join(workdir, f"key_{i}")
+                vfd = os.open(vp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(vfd, "w") as vfh:
+                    vfh.write(h.private_key if h.private_key.endswith("\n") else h.private_key + "\n")
+                vault_key_paths[h.address] = vp
         with open(cfg_path, "w", encoding="utf-8") as fh:
-            fh.write(_build_ssh_config(req, key_path))
+            fh.write(_build_ssh_config(req, key_path, vault_key_paths))
         with open(inv_path, "w", encoding="utf-8") as fh:
-            fh.write(_build_inventory(req, key_path, cfg_path))
+            fh.write(_build_inventory(req, cfg_path))
 
         argv = ["ansible-playbook", "-i", inv_path]
         if req.check_mode:

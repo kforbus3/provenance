@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.62.0 — Playbooks work against vaulted-credential hosts
+
+Ansible playbooks can now target hosts that authenticate with a **vaulted SSH key or
+password** (routers, switches, appliances) — not just hosts that trust the Fleet CA.
+
+Previously the playbook runner always authenticated with the run's ephemeral Fleet
+certificate. A host reached with a vaulted credential (e.g. a MikroTik switch you can
+open a terminal to) would fail every play with `Permission denied (publickey)`, even
+though the terminal logged in fine — because the terminal injects the vaulted
+credential and the runner didn't. Now the runner injects the **same per-host vaulted
+credential the terminal uses** for the final hop, while the jump-host hop still uses
+the Fleet certificate. Mixed target sets work: cert-trusting hosts and vaulted hosts
+in one run each authenticate their own way.
+
+- Only **open-policy** vaulted credentials are used (a check-out-gated secret is never
+  sent to the runner). As with the existing run credential, the injected key/password
+  is written to the runner filesystem for the run — a caveat to weigh for untrusted
+  playbook content. `sshpass` is added to the runner image for password auth.
+- Note: authentication is only half the story for network gear. RouterOS/EOS/etc. are
+  not POSIX shells, so `become: sudo` and shell modules won't work — use the
+  appropriate `ansible_network_os` collection or `raw:` commands in the playbook.
+
 ## v0.61.0 — Upgrade Fleet from the UI (single-host)
 
 You can now upgrade Fleet Terminal by uploading one signed file in the UI instead of

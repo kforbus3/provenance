@@ -125,6 +125,62 @@ func ForSystem(ctx context.Context, st *store.Store, vaultKey []byte, extCfg ext
 	return inj, nil
 }
 
+// SystemMaterial is a vaulted host's resolved credential in raw form, for a consumer
+// that must hand the actual key/password to a subprocess (the Ansible runner writes it
+// to drive ansible-playbook) rather than dial SSH itself. Open-policy secrets only.
+type SystemMaterial struct {
+	LoginUser     string // the account to log in as (credential username, else host user)
+	Method        string // "vault_password" | "vault_ssh_key"
+	Password      string // set when Method == vault_password
+	PrivateKeyPEM string // set when Method == vault_ssh_key
+	SecretID      uuid.UUID
+}
+
+// MaterialForSystem resolves a host's vaulted credential into raw material for an
+// unattended run, or (nil, nil) when the host uses Fleet's ephemeral certificates (the
+// caller then takes the certificate path). Like ForSystem, it only resolves
+// open-policy secrets — a check-out-gated credential is never used unattended.
+func MaterialForSystem(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host) (*SystemMaterial, error) {
+	switch host.AuthMethod {
+	case "", "fleet_cert":
+		return nil, nil
+	case "vault_password", "vault_ssh_key":
+		// handled below
+	default:
+		return nil, fmt.Errorf("unknown host auth method %q", host.AuthMethod)
+	}
+	if host.CredentialID == nil {
+		return nil, errors.New("host is set to use a vault credential but none is attached")
+	}
+	secret, err := st.GetVaultSecret(ctx, *host.CredentialID)
+	if err != nil {
+		return nil, errors.New("the attached credential no longer exists")
+	}
+	if secret.AccessPolicy != "open" {
+		return nil, errors.New("credential requires check-out; unattended run skipped")
+	}
+	plaintext, err := credresolve.Open(ctx, st, secret, vaultKey, extCfg)
+	if err != nil {
+		return nil, errors.New("could not resolve the attached credential")
+	}
+	defer zero(plaintext)
+	loginUser := secret.Username
+	if loginUser == "" {
+		loginUser = host.SSHUser
+	}
+	m := &SystemMaterial{LoginUser: loginUser, Method: host.AuthMethod, SecretID: *host.CredentialID}
+	switch host.AuthMethod {
+	case "vault_password":
+		m.Password = string(plaintext)
+	case "vault_ssh_key":
+		if _, err := ssh.ParsePrivateKey(plaintext); err != nil {
+			return nil, errors.New("the attached credential is not a valid SSH private key")
+		}
+		m.PrivateKeyPEM = string(plaintext)
+	}
+	return m, nil
+}
+
 // PasswordForSystem resolves a host's attached vault credential to a raw username and
 // password for a SYSTEM operation (the background monitor collecting Windows facts over
 // WinRM — no user context). It only returns credentials whose access policy is "open":

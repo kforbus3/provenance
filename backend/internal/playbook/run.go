@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fleet-terminal/backend/internal/credinject"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
 	princ "github.com/fleet-terminal/backend/internal/principals"
@@ -74,12 +75,20 @@ func (s *Service) LiveOutput(id uuid.UUID) (string, bool) {
 	return v.(*liveRun).snapshot(), true
 }
 
-// runHost is one inventory entry sent to the sidecar.
+// runHost is one inventory entry sent to the sidecar. AuthMethod selects how the
+// FINAL hop to this host authenticates: "fleet_cert" (default — the run's ephemeral
+// Fleet certificate, for hosts that trust the Fleet CA) or a vaulted credential
+// ("vault_ssh_key"/"vault_password") injected per-host, exactly as the terminal does,
+// so appliances that don't trust the CA (routers, switches) can still be targeted.
+// The jump-host hop always uses the Fleet certificate regardless.
 type runHost struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	User    string `json:"user"`
-	Port    int    `json:"port"`
+	Name       string `json:"name"`
+	Address    string `json:"address"`
+	User       string `json:"user"`
+	Port       int    `json:"port"`
+	AuthMethod string `json:"authMethod,omitempty"`
+	PrivateKey string `json:"privateKey,omitempty"` // vault_ssh_key: the host's vaulted private key
+	Password   string `json:"password,omitempty"`   // vault_password: the host's vaulted password
 }
 
 // runRequest is the body posted to the sidecar's /run endpoint. The credential
@@ -173,9 +182,27 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 
 	rhosts := make([]runHost, 0, len(hosts))
 	for _, h := range hosts {
-		rhosts = append(rhosts, runHost{
-			Name: h.Hostname, Address: hostAddress(h), User: h.SSHUser, Port: h.SSHPort,
-		})
+		rh := runHost{Name: h.Hostname, Address: hostAddress(h), User: h.SSHUser, Port: h.SSHPort, AuthMethod: "fleet_cert"}
+		// A vaulted host doesn't trust the Fleet CA, so authenticate its final hop with
+		// the same injected credential the terminal uses. Open-policy secrets only; the
+		// key/password is sent to the runner scoped to this run (see the security note
+		// on the run credential above — the same exfiltration caveat applies).
+		if h.AuthMethod == "vault_password" || h.AuthMethod == "vault_ssh_key" {
+			key, kerr := s.cfg.VaultKey()
+			if kerr != nil {
+				fail(fmt.Sprintf("host %s: %v", h.Hostname, kerr))
+				return
+			}
+			vmat, merr := credinject.MaterialForSystem(ctx, s.store, key, s.cfg.ExtSecret(), h)
+			if merr != nil {
+				fail(fmt.Sprintf("host %s: %v", h.Hostname, merr))
+				return
+			}
+			if vmat != nil {
+				rh.AuthMethod, rh.User, rh.PrivateKey, rh.Password = vmat.Method, vmat.LoginUser, vmat.PrivateKeyPEM, vmat.Password
+			}
+		}
+		rhosts = append(rhosts, rh)
 	}
 
 	reqBody := runRequest{
