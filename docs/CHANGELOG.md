@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.66.0 — Upgrade system phase 4: HA rolling upgrades
+
+In-UI upgrades are now cluster-aware:
+
+- **Rolling upgrade for additive releases.** On a multi-instance (HA) deployment, the
+  `fleet-updater` rolls the backend **one replica at a time**, health-gating each replica
+  (`/ready` + `/version`) before moving to the next — the others keep serving, migrations
+  apply once (Postgres advisory lock serializes them), and leadership handoff is automatic.
+  Configure the replica service names with `FLEET_UPDATER_BACKENDS` (e.g. `backend1,backend2`);
+  single-host is unchanged (one "backend").
+- **Breaking releases replace all replicas together** — a brief full-cluster outage — because a
+  mixed-version cluster would break against the just-migrated schema. The manifest's
+  `migrationCompatibility` drives the choice.
+- **Cluster visibility.** The Updates panel shows the live instance roster and their versions
+  (from the existing `cluster_instances` heartbeat), so you can see version skew during an
+  upgrade, and the breaking-migration warning is escalated for clustered deployments.
+- Kubernetes/Helm continue to use their native `RollingUpdate` (`maxUnavailable: 0`); the same
+  additive-only rolling rule applies.
+
 ## v0.65.0 — Host "Device type" selector; RouterOS hosts skip Linux fact collection
 
 - **Device type on the host form.** RouterOS management is now behind a **Device type**

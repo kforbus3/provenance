@@ -36,9 +36,10 @@ type Docker interface {
 	ComposeUp(ctx context.Context, services []string, overrideFile string) error
 }
 
-// Health waits for the backend to come back healthy on the wanted version.
+// Health waits for a backend instance (at baseURL) to come back healthy on the wanted
+// version. Per-URL so a rolling upgrade can health-gate each replica individually.
 type Health interface {
-	WaitHealthy(ctx context.Context, wantVersion string, timeout time.Duration) error
+	WaitHealthy(ctx context.Context, baseURL, wantVersion string, timeout time.Duration) error
 }
 
 // Updater orchestrates one bundle application over the Docker socket.
@@ -130,55 +131,106 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 	}
 
 	// 4. Tag the CURRENTLY-running images :rollback (by container image id, robust to
-	// whatever tag they currently carry) so a failed upgrade can be reverted.
+	// whatever tag they currently carry) so a failed upgrade can be reverted. Keyed by
+	// compose SERVICE — a component may map to several services (HA backend replicas).
 	rollbackTags := map[string]string{} // service -> rollback image ref
 	for _, im := range sortedImages(m.Images) {
-		container := fmt.Sprintf("%s-%s-1", u.cfg.Project, im.Component)
-		id, err := u.docker.RunningImageID(ctx, container)
-		if err != nil {
-			// If the container/image can't be inspected we can still upgrade, but we
-			// lose the rollback anchor for it — record and continue.
-			u.set("running", fmt.Sprintf("note: no rollback anchor for %s (%v)", im.Component, err))
-			continue
-		}
 		rb := fmt.Sprintf("%s:rollback", im.Image)
-		if err := u.docker.Tag(ctx, id, rb); err != nil {
-			u.fail(fmt.Sprintf("tag rollback %s: %v", im.Component, err))
-			return
+		for _, svc := range u.servicesFor(im.Component) {
+			container := fmt.Sprintf("%s-%s-1", u.cfg.Project, svc)
+			id, err := u.docker.RunningImageID(ctx, container)
+			if err != nil {
+				// If the container/image can't be inspected we can still upgrade, but we
+				// lose the rollback anchor for it — record and continue.
+				u.set("running", fmt.Sprintf("note: no rollback anchor for %s (%v)", svc, err))
+				continue
+			}
+			if err := u.docker.Tag(ctx, id, rb); err != nil {
+				u.fail(fmt.Sprintf("tag rollback %s: %v", svc, err))
+				return
+			}
+			rollbackTags[svc] = rb
 		}
-		rollbackTags[im.Component] = rb
 	}
 
-	// 5. Apply new images: frontend first (invisible), then backend + others. The
-	// backend has already drained itself; recreating it swaps in the new version.
-	newTags := map[string]string{}
+	// 5. Apply new images, keyed by compose SERVICE (a component may map to several
+	// services — HA backend replicas). Order: frontend first (invisible), sidecars, then
+	// the backend.
+	serviceImages := map[string]string{}
 	for _, im := range m.Images {
-		newTags[im.Component] = fmt.Sprintf("%s:%s", im.Image, im.Tag)
+		for _, svc := range u.servicesFor(im.Component) {
+			serviceImages[svc] = fmt.Sprintf("%s:%s", im.Image, im.Tag)
+		}
 	}
 	overridePath := filepath.Join(u.cfg.UpdatesDir, "docker-compose.upgrade.yml")
-	if err := writeOverride(overridePath, newTags); err != nil {
+	if err := writeOverride(overridePath, serviceImages); err != nil {
 		u.fail("write compose override: " + err.Error())
 		return
 	}
-	front, rest := splitFrontendFirst(m.Components)
-	if len(front) > 0 {
+	comps := map[string]bool{}
+	for _, c := range m.Components {
+		comps[c] = true
+	}
+
+	if comps["frontend"] {
 		u.set("running", "updating frontend")
-		if err := u.docker.ComposeUp(ctx, front, overridePath); err != nil {
+		if err := u.docker.ComposeUp(ctx, []string{"frontend"}, overridePath); err != nil {
 			u.rollback(ctx, rollbackTags, req, "frontend update failed: "+err.Error())
 			return
 		}
 	}
-	u.set("running", "updating backend")
-	if err := u.docker.ComposeUp(ctx, rest, overridePath); err != nil {
-		u.rollback(ctx, rollbackTags, req, "backend update failed: "+err.Error())
-		return
+	// Non-backend, non-frontend sidecars (e.g. grype-scanner): recreate together, no
+	// health gate (they're stateless helpers, not on the request path).
+	var sidecars []string
+	for _, c := range m.Components {
+		if c != "frontend" && c != "backend" {
+			sidecars = append(sidecars, c)
+		}
+	}
+	sort.Strings(sidecars)
+	if len(sidecars) > 0 {
+		u.set("running", "updating "+strings.Join(sidecars, ", "))
+		if err := u.docker.ComposeUp(ctx, sidecars, overridePath); err != nil {
+			u.rollback(ctx, rollbackTags, req, "sidecar update failed: "+err.Error())
+			return
+		}
 	}
 
-	// 6. Health-gate the new backend.
-	u.set("running", "waiting for the new version to become healthy")
-	if err := u.health.WaitHealthy(ctx, m.Version, u.cfg.HealthTimeout); err != nil {
-		u.rollback(ctx, rollbackTags, req, "new version did not become healthy: "+err.Error())
-		return
+	// 6. Backend. Roll one replica at a time for an ADDITIVE release (peers keep serving,
+	// mixed versions are safe), or recreate all replicas together for a BREAKING release
+	// (a brief outage, but mixed versions would break the just-migrated DB). Migrations
+	// apply on the first replica's boot; peers' migrate-on-boot then no-ops (advisory
+	// lock + schema_migrations). Leadership handoff is automatic.
+	if comps["backend"] {
+		backends := u.servicesFor("backend")
+		rolling := m.MigrationCompatibility == release.CompatAdditive && len(backends) > 1
+		if rolling {
+			for _, svc := range backends {
+				u.set("running", "rolling "+svc+" (additive)")
+				if err := u.docker.ComposeUp(ctx, []string{svc}, overridePath); err != nil {
+					u.rollback(ctx, rollbackTags, req, svc+" update failed: "+err.Error())
+					return
+				}
+				if err := u.health.WaitHealthy(ctx, u.backendHealthURL(svc), m.Version, u.cfg.HealthTimeout); err != nil {
+					u.rollback(ctx, rollbackTags, req, svc+" did not become healthy: "+err.Error())
+					return
+				}
+			}
+		} else {
+			if len(backends) > 1 {
+				u.set("running", "updating all backends together (breaking migrations — brief outage)")
+			} else {
+				u.set("running", "updating backend")
+			}
+			if err := u.docker.ComposeUp(ctx, backends, overridePath); err != nil {
+				u.rollback(ctx, rollbackTags, req, "backend update failed: "+err.Error())
+				return
+			}
+			if err := u.health.WaitHealthy(ctx, u.backendHealthURL(backends[0]), m.Version, u.cfg.HealthTimeout); err != nil {
+				u.rollback(ctx, rollbackTags, req, "new version did not become healthy: "+err.Error())
+				return
+			}
+		}
 	}
 
 	u.mu.Lock()
@@ -212,29 +264,33 @@ func (u *Updater) rollback(ctx context.Context, rollbackTags map[string]string, 
 	}
 	// Best-effort wait for the prior version; we don't know its exact string, so just
 	// wait for readiness (empty wantVersion = any healthy version).
-	_ = u.health.WaitHealthy(ctx, "", u.cfg.HealthTimeout)
+	_ = u.health.WaitHealthy(ctx, u.backendHealthURL(u.servicesFor("backend")[0]), "", u.cfg.HealthTimeout)
 	u.fail(reason + " (rolled back to the previous version)")
+}
+
+// servicesFor maps a manifest component to its compose service name(s). Only the
+// backend component fans out to multiple services (HA replicas via cfg.BackendServices).
+func (u *Updater) servicesFor(component string) []string {
+	if component == "backend" && len(u.cfg.BackendServices) > 0 {
+		return u.cfg.BackendServices
+	}
+	return []string{component}
+}
+
+// backendHealthURL returns the health base URL for a backend service. The default
+// single "backend" uses the configured URL; HA replicas derive from the service name
+// (compose gives each service its own DNS name; the backend always listens on 8080).
+func (u *Updater) backendHealthURL(service string) string {
+	if service == "backend" && u.cfg.BackendURL != "" {
+		return u.cfg.BackendURL
+	}
+	return "http://" + service + ":8080"
 }
 
 func sortedImages(imgs []release.ImageRef) []release.ImageRef {
 	out := append([]release.ImageRef(nil), imgs...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Component < out[j].Component })
 	return out
-}
-
-// splitFrontendFirst returns the frontend service(s) first and the rest after, so the
-// invisible static-asset swap happens before the backend restart.
-func splitFrontendFirst(components []string) (front, rest []string) {
-	for _, c := range components {
-		if c == "frontend" {
-			front = append(front, c)
-		} else {
-			rest = append(rest, c)
-		}
-	}
-	sort.Strings(front)
-	sort.Strings(rest)
-	return front, rest
 }
 
 // writeOverride writes a compose override that pins each service to a local image and

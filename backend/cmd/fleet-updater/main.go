@@ -20,26 +20,31 @@ import (
 
 // Config is resolved from the environment (set in the compose service definition).
 type Config struct {
-	Listen        string
-	Token         string
-	UpdatesDir    string
-	Project       string
-	ComposeFiles  []string
-	EnvFile       string
-	BackendURL    string
-	HealthTimeout time.Duration
+	Listen       string
+	Token        string
+	UpdatesDir   string
+	Project      string
+	ComposeFiles []string
+	EnvFile      string
+	BackendURL   string
+	// BackendServices are the compose service names for the backend component. One for
+	// single-host ("backend"); multiple for an HA stack (e.g. backend1,backend2), which
+	// the updater rolls one at a time for an additive release.
+	BackendServices []string
+	HealthTimeout   time.Duration
 }
 
 func loadConfig() Config {
 	return Config{
-		Listen:        env("FLEET_UPDATER_LISTEN", ":9000"),
-		Token:         os.Getenv("FLEET_UPDATER_TOKEN"),
-		UpdatesDir:    env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
-		Project:       env("FLEET_UPDATER_PROJECT", "fleet-terminal"),
-		ComposeFiles:  splitList(env("FLEET_UPDATER_COMPOSE_FILES", "/compose/docker-compose.yml:/compose/docker-compose.jumphost.yml")),
-		EnvFile:       env("FLEET_UPDATER_ENV_FILE", "/compose/.env"),
-		BackendURL:    env("FLEET_UPDATER_BACKEND_URL", "http://backend:8080"),
-		HealthTimeout: 4 * time.Minute,
+		Listen:          env("FLEET_UPDATER_LISTEN", ":9000"),
+		Token:           os.Getenv("FLEET_UPDATER_TOKEN"),
+		UpdatesDir:      env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
+		Project:         env("FLEET_UPDATER_PROJECT", "fleet-terminal"),
+		ComposeFiles:    splitList(env("FLEET_UPDATER_COMPOSE_FILES", "/compose/docker-compose.yml:/compose/docker-compose.jumphost.yml")),
+		EnvFile:         env("FLEET_UPDATER_ENV_FILE", "/compose/.env"),
+		BackendURL:      env("FLEET_UPDATER_BACKEND_URL", "http://backend:8080"),
+		BackendServices: splitList(env("FLEET_UPDATER_BACKENDS", "backend")),
+		HealthTimeout:   4 * time.Minute,
 	}
 }
 
@@ -61,7 +66,7 @@ func main() {
 	u := &Updater{
 		cfg:     cfg,
 		docker:  &execDocker{project: cfg.Project, composeFiles: cfg.ComposeFiles, envFile: cfg.EnvFile, log: log},
-		health:  &httpHealth{baseURL: cfg.BackendURL},
+		health:  &httpHealth{},
 		trusted: trusted,
 		status:  Status{State: "idle"},
 	}

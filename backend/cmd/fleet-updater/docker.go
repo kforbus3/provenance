@@ -70,13 +70,12 @@ func (d *execDocker) ComposeUp(ctx context.Context, services []string, overrideF
 	return err
 }
 
-// httpHealth polls the backend's /ready and /version until it's ready on the wanted
-// version (empty wantVersion = any version, used during rollback).
-type httpHealth struct {
-	baseURL string
-}
+// httpHealth polls a backend instance's /ready and /version until it's ready on the
+// wanted version (empty wantVersion = any version, used during rollback). The base URL
+// is passed per call so a rolling upgrade can gate each replica.
+type httpHealth struct{}
 
-func (h *httpHealth) WaitHealthy(ctx context.Context, wantVersion string, timeout time.Duration) error {
+func (h *httpHealth) WaitHealthy(ctx context.Context, baseURL, wantVersion string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 3 * time.Second}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -89,7 +88,7 @@ func (h *httpHealth) WaitHealthy(ctx context.Context, wantVersion string, timeou
 			return ctx.Err()
 		default:
 		}
-		if err := h.check(client, wantVersion); err == nil {
+		if err := h.check(client, baseURL, wantVersion); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -102,9 +101,9 @@ func (h *httpHealth) WaitHealthy(ctx context.Context, wantVersion string, timeou
 	return lastErr
 }
 
-func (h *httpHealth) check(client *http.Client, wantVersion string) error {
+func (h *httpHealth) check(client *http.Client, baseURL, wantVersion string) error {
 	// Readiness first.
-	rr, err := client.Get(h.baseURL + "/ready")
+	rr, err := client.Get(baseURL + "/ready")
 	if err != nil {
 		return err
 	}
@@ -116,7 +115,7 @@ func (h *httpHealth) check(client *http.Client, wantVersion string) error {
 	if wantVersion == "" {
 		return nil
 	}
-	vr, err := client.Get(h.baseURL + "/version")
+	vr, err := client.Get(baseURL + "/version")
 	if err != nil {
 		return err
 	}

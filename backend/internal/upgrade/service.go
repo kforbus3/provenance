@@ -206,18 +206,43 @@ func (s *Service) Status(ctx context.Context) Status {
 	return st
 }
 
+// ClusterMember is a compact view of a cluster instance for the upgrade UI, so an
+// operator can see version skew across a multi-instance (HA) deployment during a
+// rolling upgrade.
+type ClusterMember struct {
+	Hostname      string    `json:"hostname"`
+	Version       string    `json:"version"`
+	IsLeader      bool      `json:"isLeader"`
+	LastHeartbeat time.Time `json:"lastHeartbeat"`
+}
+
 // CheckResult is what the UI's "check for updates" returns.
 type CheckResult struct {
 	CurrentVersion  string                  `json:"currentVersion"`
 	ChannelEnabled  bool                    `json:"channelEnabled"`
 	UpdateAvailable bool                    `json:"updateAvailable"`
 	Release         *release.ChannelRelease `json:"release,omitempty"`
+	// Cluster is the live instance roster (>1 = clustered). Empty/one on single-host.
+	Cluster []ClusterMember `json:"cluster,omitempty"`
+}
+
+// clusterRoster returns the live instance roster for the upgrade UI (best-effort).
+func (s *Service) clusterRoster(ctx context.Context) []ClusterMember {
+	instances, err := s.store.ListClusterInstances(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]ClusterMember, 0, len(instances))
+	for _, in := range instances {
+		out = append(out, ClusterMember{Hostname: in.Hostname, Version: in.Version, IsLeader: in.IsLeader, LastHeartbeat: in.LastHeartbeat})
+	}
+	return out
 }
 
 // CheckForUpdate fetches the configured release channel and reports the newest
 // applicable upgrade for the running version (nil if already current or no channel).
 func (s *Service) CheckForUpdate(ctx context.Context) (CheckResult, error) {
-	res := CheckResult{CurrentVersion: s.version, ChannelEnabled: s.cfg.UpdateChannelURL != ""}
+	res := CheckResult{CurrentVersion: s.version, ChannelEnabled: s.cfg.UpdateChannelURL != "", Cluster: s.clusterRoster(ctx)}
 	if !res.ChannelEnabled {
 		return res, nil
 	}

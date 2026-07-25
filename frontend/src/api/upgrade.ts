@@ -56,11 +56,19 @@ export interface ChannelRelease {
   publishedAt?: string;
 }
 
+export interface ClusterMember {
+  hostname: string;
+  version: string;
+  isLeader: boolean;
+  lastHeartbeat: string;
+}
+
 export interface CheckResult {
   currentVersion: string;
   channelEnabled: boolean;
   updateAvailable: boolean;
   release?: ChannelRelease;
+  cluster?: ClusterMember[];
 }
 
 // checkForUpdate queries the configured release channel for an available upgrade.

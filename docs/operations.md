@@ -580,6 +580,22 @@ pipeline. Publish the channel with `fleetctl release channel --key <priv> --base
 same release key (no new trust root); each downloaded bundle is still verified independently
 before it's applied.
 
+**Clustered (HA) deployments.** The Updates panel shows the live instance roster and their
+versions, so you can see version skew during an upgrade. How the backend is replaced depends on
+the release's migration compatibility:
+- **Additive** (new tables / nullable columns): the updater rolls **one replica at a time**,
+  health-gating each before the next — the others keep serving, and migrations apply once (the
+  Postgres advisory lock serializes them; peers' migrate-on-boot no-ops). Leadership handoff is
+  automatic. Set **`FLEET_UPDATER_BACKENDS`** to your backend service names (e.g.
+  `backend1,backend2`) so the updater knows the replicas.
+- **Breaking** (column drop/rename, NOT-NULL add): the updater replaces **all** replicas together
+  — a brief full-cluster outage — because a mixed-version cluster would break against the migrated
+  schema. The UI flags this and asks you to schedule a maintenance window.
+
+On **Kubernetes/Helm**, the Deployment already does a native `RollingUpdate` (`maxUnavailable: 0`),
+so an upgrade there is updating the image tag and letting the rollout run; the same additive-only
+rule applies (use a maintenance window for breaking migrations).
+
 ## Host support bundle
 
 Click the **support bundle** (first-aid) icon on a host row to download a single

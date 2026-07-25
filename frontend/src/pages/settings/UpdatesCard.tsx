@@ -116,6 +116,15 @@ export function UpdatesCard() {
           terminal sessions are dropped, so upgrade during a quiet window.
         </Typography>
 
+        {check?.cluster && check.cluster.length > 1 && (
+          <Alert severity={new Set(check.cluster.map((c) => c.version)).size > 1 ? "warning" : "info"} sx={{ mb: 1.5 }}>
+            Clustered deployment — {check.cluster.length} instances.{" "}
+            {[...new Set(check.cluster.map((c) => c.version))].join(", ")}
+            {new Set(check.cluster.map((c) => c.version)).size > 1 ? " (version skew — a rolling upgrade is in progress or incomplete)" : ""}.
+            An additive release rolls one instance at a time; a breaking release needs a brief full-cluster maintenance window.
+          </Alert>
+        )}
+
         {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError("")}>{error}</Alert>}
 
         {!active && status?.state === "success" && (
@@ -194,9 +203,11 @@ export function UpdatesCard() {
                   </Typography>
                 )}
                 {manifest.migrationCompatibility === "breaking" && (
-                  <Alert severity="warning" sx={{ mb: 1 }}>
-                    This release has breaking database migrations. On a clustered deployment it
-                    requires a maintenance window rather than a rolling upgrade.
+                  <Alert severity={(check?.cluster?.length ?? 0) > 1 ? "error" : "warning"} sx={{ mb: 1 }}>
+                    This release has <b>breaking</b> database migrations.
+                    {(check?.cluster?.length ?? 0) > 1
+                      ? ` Your ${check!.cluster!.length}-instance cluster will be replaced together (a brief full outage), not rolled one at a time — schedule a maintenance window.`
+                      : " On a clustered deployment it requires a maintenance window rather than a rolling upgrade."}
                   </Alert>
                 )}
                 <Button variant="contained" color="primary" onClick={onApply} disabled={busy}>
