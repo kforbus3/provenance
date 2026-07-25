@@ -25,9 +25,11 @@ export interface UpgradeStatus {
 export async function previewUpgrade(file: File): Promise<UpgradeManifest> {
   const form = new FormData();
   form.append("bundle", file);
-  const { data } = await api.post<{ manifest: UpgradeManifest }>("/api/v1/system/upgrade/preview", form, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  // Do NOT set Content-Type manually: the browser must generate
+  // `multipart/form-data; boundary=…` itself. Hard-coding it without the boundary
+  // makes the body unparseable server-side (FormFile fails → "expected a multipart
+  // 'bundle' file").
+  const { data } = await api.post<{ manifest: UpgradeManifest }>("/api/v1/system/upgrade/preview", form);
   return data.manifest;
 }
 
