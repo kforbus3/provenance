@@ -68,7 +68,7 @@ BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner
 .PHONY: bundle
 bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
 	@test -f $(BUNDLE_KEY) || (echo "missing $(BUNDLE_KEY) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.24 go run ./cmd/fleetctl release keygen"; exit 1)
-	FLEET_VERSION=$(BUNDLE_VERSION) $(COMPOSE_SINGLE) build backend frontend grype-scanner
+	FLEET_VERSION=$(BUNDLE_VERSION) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
 	  docker tag $(PROJECT)-$$c $(PROJECT)-$$c:$(BUNDLE_VERSION); \
 	done

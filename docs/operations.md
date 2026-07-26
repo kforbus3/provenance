@@ -12,6 +12,51 @@ Day-to-day operator flows for Fleet Terminal. Assumes the stack is up via `make 
    trust issued certificates. In production this trust is established during enrollment over a
    bootstrap credential; in the local fabric we seed it directly. Re-run after any fresh `make up`.
 
+## Upgrading Fleet Terminal (in-UI)
+
+Fleet upgrades itself from a single signed **`.fleetup`** bundle — no SSH, no
+`docker compose` — under **Settings → Maintenance → Updates**. Upload a bundle (or, with a
+release channel configured, click **Check for updates**), review its manifest (version,
+additive vs. breaking migrations, components), and **Install**. A privileged
+`fleet-updater` sidecar — the only component with Docker-socket access — independently
+re-verifies the bundle's Ed25519 signature against the trusted release key, snapshots the
+DB, loads the images, recreates each component, health-gates the backend, and **rolls back
+automatically** if the new version doesn't come up. On a cluster, an additive release rolls
+one replica at a time; a breaking one replaces them together (a brief window).
+
+A bundle can update **every** component, including the two that used to need a host-side
+redeploy:
+
+- **The updater itself.** A bundle may include the `fleet-updater` component. Because the
+  updater can't recreate its own container inline (that would kill the in-flight upgrade),
+  it applies everything else first, records success, then hands its own replacement to a
+  short-lived detached helper. The upgrade is already "done" from your side; the updater
+  refreshes in the background.
+- **Config / `.env`.** A signed manifest can declare **additive** environment keys
+  (`configAdditions`) — new settings with defaults, or generated secrets like
+  `FLEET_UPDATER_TOKEN`. The updater merges them into your `.env` before recreating
+  containers. It is strictly additive: a key you already set is never overwritten.
+
+So in practice every release installs from a package. The only thing still done by hand is
+the **one-time bootstrap** of a brand-new deployment (first `make up`, seed the release
+trust key). See [CHANGELOG](CHANGELOG.md) for the in-UI upgrade epic (v0.61.0–v0.68.0).
+
+### Building a bundle (publisher side)
+
+```
+# one-time: generate an offline signing keypair; keep the private key secret
+fleetctl release keygen                     # prints the PUBLIC key -> FLEET_RELEASE_TRUST_KEYS
+
+# per release: build + sign. Include fleet-updater only when it changed; declare any new config.
+make bundle BUNDLE_VERSION=0.68.0 BUNDLE_FROM=0.67.0 \
+  BUNDLE_COMPONENTS=backend,frontend,fleet-updater \
+  BUNDLE_KEY=~/fleet-release/release.key
+# fleetctl release build … --config-secret FLEET_UPDATER_TOKEN --config-add FLEET_X=default
+```
+
+`BUNDLE_FROM` sets the minimum running version the bundle may upgrade from; migration
+compatibility (additive/breaking, `--breaking`) drives the cluster/federation ordering.
+
 ## Adding & enrolling a host
 
 1. **Hosts → New Host**. Provide:

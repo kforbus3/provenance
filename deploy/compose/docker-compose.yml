@@ -272,7 +272,10 @@ services:
       # The compose project files + root .env, so the updater runs compose against the
       # same project. Read-only; build contexts are unused (the updater passes --no-build).
       - ../compose:/compose:ro
-      - ../../.env:/fleet.env:ro
+      # Writable: the updater merges additive config keys (and generated secrets like
+      # FLEET_UPDATER_TOKEN) declared in a signed bundle's manifest into .env before it
+      # recreates containers. Strictly additive — operator-set values are never touched.
+      - ../../.env:/fleet.env:rw
     networks: [fleet]
 
   # Apache Guacamole daemon: brokers RDP (and VNC) desktop sessions for the

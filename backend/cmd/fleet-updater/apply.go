@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,12 @@ type Docker interface {
 	RunningImageID(ctx context.Context, container string) (string, error)
 	Tag(ctx context.Context, src, dst string) error
 	ComposeUp(ctx context.Context, services []string, overrideFile string) error
+	// InspectMount returns the host source path of a container's bind/volume mount at
+	// the given destination (used so the self-update helper mounts the real host paths).
+	InspectMount(ctx context.Context, container, destination string) (string, error)
+	// RunDetached launches a throwaway `docker run -d --rm` container from image with
+	// the given host binds, overriding the entrypoint to run shellCmd via /bin/sh -c.
+	RunDetached(ctx context.Context, image string, binds []string, shellCmd string) error
 }
 
 // Health waits for a backend instance (at baseURL) to come back healthy on the wanted
@@ -72,6 +79,7 @@ func (u *Updater) set(state, step string) {
 	now := time.Now()
 	u.status.State, u.status.Step, u.status.UpdatedAt = state, step, &now
 	u.status.Log = append(u.status.Log, fmt.Sprintf("%s: %s", now.UTC().Format("15:04:05"), step))
+	u.persistLocked()
 }
 
 func (u *Updater) fail(msg string) {
@@ -80,6 +88,37 @@ func (u *Updater) fail(msg string) {
 	now := time.Now()
 	u.status.State, u.status.Error, u.status.UpdatedAt = "failed", msg, &now
 	u.status.Log = append(u.status.Log, fmt.Sprintf("%s: FAILED: %s", now.UTC().Format("15:04:05"), msg))
+	u.persistLocked()
+}
+
+// statusPath is where the updater mirrors its status to disk (the shared updates
+// volume). This lets the status survive the updater's OWN replacement during a
+// self-update: the new updater loads it on boot and keeps reporting the final result.
+func (u *Updater) statusPath() string { return filepath.Join(u.cfg.UpdatesDir, "status.json") }
+
+// persistLocked writes the current status to disk. Caller must hold u.mu. Best-effort:
+// a write failure must never abort an in-flight upgrade, so the error is only logged.
+func (u *Updater) persistLocked() {
+	b, err := json.Marshal(u.status)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(u.statusPath(), b, 0o644)
+}
+
+// loadPersistedStatus restores the last persisted status at boot, so a self-update (or
+// any updater restart) doesn't lose the result the UI is polling for.
+func (u *Updater) loadPersistedStatus() {
+	b, err := os.ReadFile(u.statusPath())
+	if err != nil {
+		return
+	}
+	var s Status
+	if json.Unmarshal(b, &s) == nil && s.State != "" {
+		u.mu.Lock()
+		u.status = s
+		u.mu.Unlock()
+	}
 }
 
 // busy reports whether an apply is already running.
@@ -95,6 +134,7 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 	u.mu.Lock()
 	now := time.Now()
 	u.status = Status{State: "running", TargetVersion: req.TargetVersion, StartedAt: &now, UpdatedAt: &now}
+	u.persistLocked()
 	u.mu.Unlock()
 
 	// 1. Independently re-verify the bundle — the updater never trusts the backend.
@@ -110,6 +150,22 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 		return
 	}
 	m := b.Manifest
+
+	// 1b. Additive config migration. Merge any new .env keys this release needs (with
+	// generated secrets where flagged) BEFORE recreating containers, so the recreated
+	// services — and, last, the updater itself — come up already seeing them. Strictly
+	// additive: operator-set values are never overwritten.
+	if len(m.ConfigAdditions) > 0 {
+		u.set("running", "applying config additions")
+		added, cerr := applyConfigAdditions(u.cfg.EnvFile, m.ConfigAdditions)
+		if cerr != nil {
+			u.fail("config migration failed: " + cerr.Error())
+			return
+		}
+		if len(added) > 0 {
+			u.set("running", "added config keys: "+strings.Join(added, ", "))
+		}
+	}
 
 	// 2. Extract + digest-verify images to a temp dir under the updates volume.
 	u.set("running", "extracting images")
@@ -135,6 +191,11 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 	// compose SERVICE — a component may map to several services (HA backend replicas).
 	rollbackTags := map[string]string{} // service -> rollback image ref
 	for _, im := range sortedImages(m.Images) {
+		// The updater is swapped last, out of band, after success — it is never part of
+		// an inline rollback (rolling it back inline would kill this process).
+		if im.Component == updaterComponent {
+			continue
+		}
 		rb := fmt.Sprintf("%s:rollback", im.Image)
 		for _, svc := range u.servicesFor(im.Component) {
 			container := fmt.Sprintf("%s-%s-1", u.cfg.Project, svc)
@@ -183,7 +244,9 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 	// health gate (they're stateless helpers, not on the request path).
 	var sidecars []string
 	for _, c := range m.Components {
-		if c != "frontend" && c != "backend" {
+		// fleet-updater is handled last, via a detached helper — it cannot recreate its
+		// own container inline (that would kill this process mid-apply).
+		if c != "frontend" && c != "backend" && c != updaterComponent {
 			sidecars = append(sidecars, c)
 		}
 	}
@@ -237,7 +300,22 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 	now2 := time.Now()
 	u.status.State, u.status.Step, u.status.UpdatedAt = "success", "upgrade complete", &now2
 	u.status.Log = append(u.status.Log, fmt.Sprintf("%s: upgraded to %s", now2.UTC().Format("15:04:05"), m.Version))
+	u.persistLocked()
 	u.mu.Unlock()
+
+	// 7. Self-update LAST, only after everything else has succeeded and the success
+	// status is on disk. The updater can't recreate its own container inline, so it
+	// hands the swap to a detached helper (see selfUpdate). The upgrade is already
+	// "success" from the operator's view; this replaces the updater in the background.
+	if comps[updaterComponent] {
+		if err := u.selfUpdate(ctx, serviceImages[updaterComponent]); err != nil {
+			// Non-fatal: the app upgrade succeeded; only the updater's own refresh
+			// didn't start. Record it in the log rather than failing the upgrade.
+			u.set("success", "note: self-update handoff failed ("+err.Error()+") — updater still on previous version")
+		} else {
+			u.set("success", "handed off updater self-update to a detached helper")
+		}
+	}
 }
 
 // rollback reverts the app services to their :rollback images and waits for the old
@@ -266,6 +344,52 @@ func (u *Updater) rollback(ctx context.Context, rollbackTags map[string]string, 
 	// wait for readiness (empty wantVersion = any healthy version).
 	_ = u.health.WaitHealthy(ctx, u.backendHealthURL(u.servicesFor("backend")[0]), "", u.cfg.HealthTimeout)
 	u.fail(reason + " (rolled back to the previous version)")
+}
+
+// updaterComponent is the one component that upgrades the updater itself. It is a
+// compose service like any other, but recreating it can't be done inline (the updater
+// would kill the process running the upgrade), so it is handled via selfUpdate.
+const updaterComponent = "fleet-updater"
+
+// selfUpdate replaces the fleet-updater container with newImage, out of band. The
+// updater can't run `compose up fleet-updater` itself — that recreate would kill this
+// very process before it finished — so it launches a short-lived DETACHED helper
+// (watchtower-style) from the new image, which waits a moment, recreates the updater
+// via compose (pinned to the new image by the upgrade override), then exits. The
+// helper mounts the same compose files + .env as this updater, discovered by inspecting
+// this container's own mounts so we use the correct HOST paths.
+func (u *Updater) selfUpdate(ctx context.Context, newImage string) error {
+	if newImage == "" {
+		return fmt.Errorf("no image for %s in manifest", updaterComponent)
+	}
+	self := fmt.Sprintf("%s-%s-1", u.cfg.Project, updaterComponent)
+	composeSrc, err := u.docker.InspectMount(ctx, self, "/compose")
+	if err != nil || composeSrc == "" {
+		return fmt.Errorf("locate compose mount host path: %v", err)
+	}
+	envSrc, err := u.docker.InspectMount(ctx, self, u.cfg.EnvFile)
+	if err != nil || envSrc == "" {
+		return fmt.Errorf("locate env-file mount host path: %v", err)
+	}
+	overridePath := filepath.Join(u.cfg.UpdatesDir, "docker-compose.upgrade.yml")
+
+	// Build the compose invocation the helper runs (identical shape to ComposeUp).
+	args := []string{"compose", "--env-file", u.cfg.EnvFile}
+	for _, f := range u.cfg.ComposeFiles {
+		args = append(args, "-f", f)
+	}
+	args = append(args, "-f", overridePath, "up", "-d", "--no-build", "--no-deps", updaterComponent)
+	// A settle delay lets this /apply request finish and the updater mark success before
+	// its container is torn down and replaced.
+	script := "sleep 5; docker " + strings.Join(args, " ")
+
+	binds := []string{
+		"/var/run/docker.sock:/var/run/docker.sock",
+		composeSrc + ":/compose:ro",
+		envSrc + ":" + u.cfg.EnvFile + ":ro",
+		u.cfg.Project + "_updates:" + u.cfg.UpdatesDir,
+	}
+	return u.docker.RunDetached(ctx, newImage, binds, script)
 }
 
 // servicesFor maps a manifest component to its compose service name(s). Only the

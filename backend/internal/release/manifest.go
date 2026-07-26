@@ -9,6 +9,7 @@ package release
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -38,6 +39,40 @@ type Manifest struct {
 	Migrations             []string   `json:"migrations,omitempty"`   // migration filenames introduced (informational)
 	MigrationCompatibility string     `json:"migrationCompatibility"` // additive | breaking
 	Notes                  string     `json:"notes,omitempty"`
+	// ConfigAdditions declares NEW environment keys this release needs. The updater
+	// merges them into the deployment's .env before recreating containers — additive
+	// only (an existing key is never touched), so operator-set values are preserved.
+	// This is what lets a release that introduces a new setting (or a generated secret
+	// like FLEET_UPDATER_TOKEN) install from a bundle without hand-editing .env.
+	ConfigAdditions []ConfigAddition `json:"configAdditions,omitempty"`
+}
+
+// ConfigAddition is one env key a bundle adds to the deployment's .env if absent.
+type ConfigAddition struct {
+	Key      string `json:"key"`                // e.g. FLEET_UPDATER_TOKEN; must match ^[A-Z][A-Z0-9_]*$
+	Default  string `json:"default,omitempty"`  // literal value written when the key is absent
+	Generate string `json:"generate,omitempty"` // "" (use Default) or "secret" (generate 32 random bytes, hex)
+	Comment  string `json:"comment,omitempty"`  // written as a # comment line above the key
+}
+
+// configKeyRE bounds an env key to a safe shell/dotenv identifier.
+var configKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// Validate checks a config addition is well-formed.
+func (c ConfigAddition) Validate() error {
+	if !configKeyRE.MatchString(c.Key) {
+		return fmt.Errorf("config addition key %q is not a valid env identifier", c.Key)
+	}
+	switch c.Generate {
+	case "", "secret":
+	default:
+		return fmt.Errorf("config addition %q: generate must be empty or \"secret\", got %q", c.Key, c.Generate)
+	}
+	// A newline in a value would corrupt the .env; reject it.
+	if strings.ContainsAny(c.Default, "\n\r") {
+		return fmt.Errorf("config addition %q: default value must not contain newlines", c.Key)
+	}
+	return nil
 }
 
 // ImageRef pins one component's saved Docker image inside the bundle.
@@ -72,6 +107,11 @@ func (m *Manifest) Validate() error {
 		}
 		if !strings.HasPrefix(im.Digest, "sha256:") || len(im.Digest) != len("sha256:")+64 {
 			return fmt.Errorf("image[%d] (%s) has an invalid digest", i, im.Component)
+		}
+	}
+	for _, c := range m.ConfigAdditions {
+		if err := c.Validate(); err != nil {
+			return err
 		}
 	}
 	return nil

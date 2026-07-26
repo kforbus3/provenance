@@ -70,6 +70,30 @@ func (d *execDocker) ComposeUp(ctx context.Context, services []string, overrideF
 	return err
 }
 
+// InspectMount returns the host source path of the mount whose destination matches dest
+// inside the given container, or "" if there is no such mount.
+func (d *execDocker) InspectMount(ctx context.Context, container, dest string) (string, error) {
+	format := fmt.Sprintf(`{{range .Mounts}}{{if eq .Destination %q}}{{.Source}}{{end}}{{end}}`, dest)
+	out, err := d.run(ctx, "inspect", "-f", format, container)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// RunDetached launches a detached, auto-removing container from image with the given
+// host binds, running shellCmd via /bin/sh -c (entrypoint overridden). Used for the
+// updater's own out-of-band replacement, which must outlive this updater process.
+func (d *execDocker) RunDetached(ctx context.Context, image string, binds []string, shellCmd string) error {
+	args := []string{"run", "-d", "--rm", "--entrypoint", "/bin/sh"}
+	for _, b := range binds {
+		args = append(args, "-v", b)
+	}
+	args = append(args, image, "-c", shellCmd)
+	_, err := d.run(ctx, args...)
+	return err
+}
+
 // httpHealth polls a backend instance's /ready and /version until it's ready on the
 // wanted version (empty wantVersion = any version, used during rollback). The base URL
 // is passed per call so a rolling upgrade can gate each replica.

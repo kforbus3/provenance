@@ -79,6 +79,9 @@ func main() {
 		trusted: trusted,
 		status:  Status{State: "idle"},
 	}
+	// Restore the last status from disk so a self-update (this updater being replaced
+	// mid-apply) still reports the final result to the polling backend/UI.
+	u.loadPersistedStatus()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })

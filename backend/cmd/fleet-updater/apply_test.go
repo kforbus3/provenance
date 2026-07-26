@@ -16,10 +16,12 @@ import (
 
 // fakeDocker records calls and can be told to fail a given operation.
 type fakeDocker struct {
-	loaded      []string
-	composedUp  [][]string
-	overrides   []string
-	failCompose bool
+	loaded       []string
+	composedUp   [][]string
+	overrides    []string
+	failCompose  bool
+	detachedImgs []string // images passed to RunDetached (self-update handoff)
+	detachedCmds []string // shell commands passed to RunDetached
 }
 
 func (f *fakeDocker) Load(_ context.Context, tar string) error {
@@ -36,6 +38,14 @@ func (f *fakeDocker) ComposeUp(_ context.Context, services []string, override st
 	if f.failCompose {
 		return errors.New("simulated compose failure")
 	}
+	return nil
+}
+func (f *fakeDocker) InspectMount(_ context.Context, _, dest string) (string, error) {
+	return "/host" + dest, nil
+}
+func (f *fakeDocker) RunDetached(_ context.Context, image string, _ []string, shellCmd string) error {
+	f.detachedImgs = append(f.detachedImgs, image)
+	f.detachedCmds = append(f.detachedCmds, shellCmd)
 	return nil
 }
 
@@ -186,6 +196,95 @@ func TestApplyRejectsUntrustedBundle(t *testing.T) {
 	u.Apply(context.Background(), ApplyReq{Bundle: path, CurrentVersion: "v1.1.0", TargetVersion: "v1.2.3"})
 	if s := u.getStatus(); s.State != "failed" {
 		t.Fatalf("expected failed on untrusted bundle, got %s", s.State)
+	}
+}
+
+// makeBundleWith builds a signed additive bundle from the given component names and
+// config additions.
+func makeBundleWith(t *testing.T, components []string, adds []release.ConfigAddition) (string, ed25519.PublicKey) {
+	t.Helper()
+	pub, priv, _ := release.GenerateKey()
+	dir := t.TempDir()
+	var imgs []release.ImageRef
+	files := map[string]string{}
+	for _, c := range components {
+		p := filepath.Join(dir, c+".tar")
+		os.WriteFile(p, []byte(c+"-image"), 0o600)
+		dg, sz, _ := release.HashFile(p)
+		imgs = append(imgs, release.ImageRef{Component: c, Image: "fleet-terminal-" + c, Tag: "v1.2.3", File: "images/" + c + ".tar", Digest: dg, Bytes: sz})
+		files["images/"+c+".tar"] = p
+	}
+	m := release.Manifest{
+		SchemaVersion: release.ManifestSchema, Version: "v1.2.3", MinFromVersion: "v1.0.0",
+		Components: components, Images: imgs, MigrationCompatibility: release.CompatAdditive,
+		ConfigAdditions: adds,
+	}
+	mj, _ := json.Marshal(m)
+	sig := release.Sign(mj, priv)
+	path := filepath.Join(dir, "b.fleetup")
+	f, _ := os.Create(path)
+	release.WriteBundle(f, mj, sig, files)
+	f.Close()
+	return path, pub
+}
+
+func TestApplySelfUpdate(t *testing.T) {
+	// A bundle that includes the fleet-updater component must NOT recreate the updater
+	// inline (that would kill the apply mid-flight) — it hands off to a detached helper.
+	path, pub := makeBundleWith(t, []string{"backend", "fleet-updater"}, nil)
+	fd := &fakeDocker{}
+	u := newUpdater(t, pub, fd, &fakeHealth{})
+	u.Apply(context.Background(), ApplyReq{Bundle: path, CurrentVersion: "v1.1.0", TargetVersion: "v1.2.3"})
+
+	if s := u.getStatus(); s.State != "success" {
+		t.Fatalf("state=%s err=%s log=%v", s.State, s.Error, s.Log)
+	}
+	for _, svcs := range fd.composedUp {
+		for _, s := range svcs {
+			if s == "fleet-updater" {
+				t.Fatalf("fleet-updater must not be recreated inline: %v", fd.composedUp)
+			}
+		}
+	}
+	if len(fd.detachedImgs) != 1 || fd.detachedImgs[0] != "fleet-terminal-fleet-updater:v1.2.3" {
+		t.Fatalf("self-update handoff image wrong: %v", fd.detachedImgs)
+	}
+	if len(fd.detachedCmds) != 1 || !strings.Contains(fd.detachedCmds[0], "up -d --no-build --no-deps fleet-updater") {
+		t.Fatalf("self-update command wrong: %v", fd.detachedCmds)
+	}
+	// Status was persisted to disk (so the replaced updater can report success).
+	if _, err := os.Stat(u.statusPath()); err != nil {
+		t.Fatalf("status.json not persisted: %v", err)
+	}
+}
+
+func TestMergeConfigAdditions(t *testing.T) {
+	env := "FLEET_A=1\n# a comment\nFLEET_B=2\n"
+	adds := []release.ConfigAddition{
+		{Key: "FLEET_A", Default: "overwrite-me"}, // exists -> skipped
+		{Key: "FLEET_C", Default: "new", Comment: "the c setting"},
+		{Key: "FLEET_TOK", Generate: "secret"},
+	}
+	out, added, err := mergeConfigAdditions(env, adds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 2 || added[0] != "FLEET_C" || added[1] != "FLEET_TOK" {
+		t.Fatalf("added wrong: %v", added)
+	}
+	if !strings.Contains(out, "FLEET_A=1") || strings.Contains(out, "overwrite-me") {
+		t.Errorf("existing key changed:\n%s", out)
+	}
+	if !strings.Contains(out, "# the c setting\nFLEET_C=new") {
+		t.Errorf("comment+key not written:\n%s", out)
+	}
+	idx := strings.Index(out, "FLEET_TOK=")
+	if idx < 0 {
+		t.Fatalf("secret not written:\n%s", out)
+	}
+	val := strings.SplitN(strings.TrimSpace(out[idx+len("FLEET_TOK="):]), "\n", 2)[0]
+	if len(val) != 64 {
+		t.Errorf("generated secret len=%d want 64: %q", len(val), val)
 	}
 }
 

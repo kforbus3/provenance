@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.0 — Self-updating upgrades: the updater upgrades itself + config migration
+
+Closes the last gaps that made some releases need a host-side `make redeploy-single`, so
+**every** update can now install from a signed `.fleetup` bundle in the UI.
+
+- **The updater upgrades itself.** A bundle may now include the `fleet-updater`
+  component. Since the updater cannot recreate its own container inline (that would kill
+  the in-flight upgrade), it applies everything else first, persists `success` to disk,
+  then hands its own replacement to a short-lived **detached helper** (watchtower-style)
+  launched from the new image. The helper mounts the same compose files + `.env` (host
+  paths discovered by self-inspection) and recreates the updater against the upgrade
+  override. The new updater loads the persisted status on boot, so the UI still sees the
+  final result across the blip.
+- **Additive config migration.** A signed manifest can declare `configAdditions` — new
+  env keys with defaults, or generated secrets (`generate: secret`, e.g.
+  `FLEET_UPDATER_TOKEN`). The updater merges any that are absent into `.env` before
+  recreating containers. Strictly additive: an operator-set key is never overwritten. The
+  updater's `.env` mount is now read-write for this (it already holds the Docker socket,
+  so this is no new trust boundary).
+- `fleetctl release build` gains `--config-add KEY=VALUE` and `--config-secret KEY`;
+  `make bundle` builds whatever `BUNDLE_COMPONENTS` lists (so `fleet-updater` can ride
+  along). Docs: new "Upgrading Fleet Terminal (in-UI)" section in operations.md.
+
+The only step still done by hand is the one-time bootstrap of a brand-new deployment.
+
+---
+
 ## v0.67.5 — Hardening: updater token required in prod + no-cache index.html
 
 Two hardening items surfaced by the end-to-end upgrade smoke test:

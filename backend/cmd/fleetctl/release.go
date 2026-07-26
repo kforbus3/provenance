@@ -134,6 +134,15 @@ func releaseVerify(args []string) error {
 	return nil
 }
 
+// sliceFlag collects a repeatable string flag (e.g. --config-add A=1 --config-add B=2).
+type sliceFlag []string
+
+func (s *sliceFlag) String() string { return strings.Join(*s, ",") }
+func (s *sliceFlag) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 // releaseKeygen generates an Ed25519 release keypair. The PRIVATE key is written to a
 // file (default release.key, mode 0600) and kept offline by the publisher; the PUBLIC
 // key is printed for baking into release builds (ldflags -X ...embeddedTrustKeys) or
@@ -171,8 +180,22 @@ func releaseBuild(args []string) error {
 	migrations := fs.String("migrations", "", "comma-separated migration filenames introduced (informational)")
 	breaking := fs.Bool("breaking", false, "mark migrations as breaking (requires a quiesced maintenance window; default additive)")
 	buildDate := fs.String("build-date", "", "RFC3339 build date (default: now)")
+	var configAdd, configSecret sliceFlag
+	fs.Var(&configAdd, "config-add", "add an env key if absent: KEY=VALUE (repeatable; merged into .env by the updater)")
+	fs.Var(&configSecret, "config-secret", "add an env key with a generated 32-byte hex secret if absent: KEY (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	var configAdditions []release.ConfigAddition
+	for _, kv := range configAdd {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return fmt.Errorf("--config-add %q must be KEY=VALUE", kv)
+		}
+		configAdditions = append(configAdditions, release.ConfigAddition{Key: k, Default: v})
+	}
+	for _, k := range configSecret {
+		configAdditions = append(configAdditions, release.ConfigAddition{Key: k, Generate: "secret"})
 	}
 	if *version == "" || *from == "" || *keyPath == "" || *out == "" {
 		return fmt.Errorf("release build requires --version, --from, --key and --out")
@@ -225,6 +248,7 @@ func releaseBuild(args []string) error {
 		SchemaVersion: release.ManifestSchema, Version: *version, BuildDate: date,
 		MinFromVersion: *from, Components: splitCSV(*components), Images: images,
 		Migrations: splitCSV(*migrations), MigrationCompatibility: compat, Notes: *notes,
+		ConfigAdditions: configAdditions,
 	}
 	if err := m.Validate(); err != nil {
 		return err
