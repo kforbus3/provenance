@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.67.4 — Fix: updates volume not writable by the backend user
+
+The backend Dockerfile creates and chowns its data dirs (recordings, scans, backups,
+rdp-drive, scap-content) to the unprivileged `fleet` user in both the build step and
+the privilege-dropping entrypoint — but `/var/lib/fleet/updates` (added in v0.61.0 for
+the in-UI upgrade staging area) was in neither list. A named volume mounted there comes
+up root-owned, so the `fleet` process cannot write the staged bundle:
+`could not stage the bundle: open /var/lib/fleet/updates/pending.fleetup: permission denied`.
+Added `updates` to both mkdir/chown lists. Existing deployments: the entrypoint now
+chowns it on next start; or `chown` the volume once.
+
+Fourth and final bug in the in-UI upgrade path found by the end-to-end smoke test.
+
+---
+
 ## v0.67.3 — Fix: 8 MiB global body cap truncated bundle uploads
 
 The global `bodyLimitMW` request-body cap (8 MiB) exempted the SFTP upload route but
