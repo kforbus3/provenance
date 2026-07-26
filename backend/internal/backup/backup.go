@@ -3,10 +3,19 @@
 // a recurring schedule with retention. The standard openssl format means a
 // backup can be restored anywhere with a one-line command (see the break-glass /
 // disaster-recovery runbook) — no Fleet-specific tooling required.
+//
+// Because openssl's CBC mode is unauthenticated, each backup also gets a detached
+// HMAC-SHA256 tag (<file>.sql.enc.hmac) computed over the ciphertext as it streams —
+// an encrypt-then-MAC construction so a tampered or corrupted backup is detectable
+// before it is restored. The tag is reproducible with stock openssl (see the runbook),
+// preserving the "no Fleet-specific tooling" property.
 package backup
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +38,7 @@ const (
 	settingKey = "backup_policy"
 	filePrefix = "fleet-backup-"
 	fileSuffix = ".sql.enc"
+	hmacSuffix = ".hmac" // detached HMAC-SHA256 sidecar: <backup>.sql.enc.hmac
 )
 
 // Policy is the persisted scheduled-backup configuration.
@@ -167,7 +177,12 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	enc.Stdout = out
+	// Encrypt-then-MAC: HMAC-SHA256 the ciphertext as it streams to disk, so a tampered
+	// backup is detectable (openssl's CBC mode is unauthenticated on its own). The MAC is
+	// written to a detached <file>.hmac sidecar and verified before a restore. Computed
+	// over the same bytes the file receives via a MultiWriter — no re-read.
+	mac := hmac.New(sha256.New, backupHMACKey(pass))
+	enc.Stdout = io.MultiWriter(out, mac)
 	var encErr strings.Builder
 	enc.Stderr = &encErr
 
@@ -192,6 +207,11 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	if err := os.Rename(tmp, final); err != nil {
 		os.Remove(tmp)
 		return nil, err
+	}
+	// Detached authentication tag. Best-effort: a failure here doesn't invalidate the
+	// (still openssl-decryptable) backup, so log-and-continue rather than fail the run.
+	if werr := os.WriteFile(final+hmacSuffix, []byte(hex.EncodeToString(mac.Sum(nil))+"\n"), 0o600); werr != nil {
+		s.log.Warn("backup: could not write HMAC sidecar", "file", name, "err", werr)
 	}
 
 	s.applyRetention(ctx)
@@ -247,7 +267,17 @@ func (s *Service) applyRetention(ctx context.Context) {
 			continue
 		}
 		_ = os.Remove(filepath.Join(s.cfg.BackupDir, it.Name))
+		_ = os.Remove(filepath.Join(s.cfg.BackupDir, it.Name+hmacSuffix)) // drop the sidecar too
 	}
+}
+
+// backupHMACKey derives the detached-MAC key from the backup passphrase. Independent of
+// the openssl encryption key (openssl derives its own via PBKDF2+salt), so this is a
+// proper encrypt-then-MAC construction. Reproducible with stock tools for an offline
+// verify (see the disaster-recovery runbook).
+func backupHMACKey(pass string) []byte {
+	sum := sha256.Sum256([]byte("fleet-backup-hmac:" + pass))
+	return sum[:]
 }
 
 // Run drives the scheduled-backup loop until ctx is cancelled, checking hourly

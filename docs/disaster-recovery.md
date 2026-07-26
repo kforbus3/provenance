@@ -177,6 +177,20 @@ openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \
   -in fleet-backup-YYYYMMDD-HHMMSS.sql.enc | psql "$FLEET_DATABASE_URL"
 ```
 
+**Verify integrity first (recommended).** Each backup ships a detached
+`<file>.sql.enc.hmac` authentication tag (HMAC-SHA256 over the ciphertext). Confirm the
+file wasn't corrupted or tampered with *before* restoring it into your database:
+
+```bash
+F=fleet-backup-YYYYMMDD-HHMMSS.sql.enc
+KEY=$(printf 'fleet-backup-hmac:%s' "$FLEET_BACKUP_PASSPHRASE" | openssl dgst -sha256 -binary | xxd -p -c256)
+GOT=$(openssl dgst -sha256 -mac HMAC -macopt hexkey:"$KEY" -r "$F" | cut -d' ' -f1)
+[ "$GOT" = "$(cut -d' ' -f1 "$F.hmac")" ] && echo "OK: authentic" || echo "FAIL: do NOT restore"
+```
+
+(Backups created before v0.68.2 have no `.hmac` sidecar; the openssl decrypt above still
+works, just without the integrity check.)
+
 **Recovery when locked out** — use the bundled `fleetctl` CLI (ships in the backend image):
 
 ```bash

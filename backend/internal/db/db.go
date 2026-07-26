@@ -64,6 +64,13 @@ func Connect(ctx context.Context, url string, maxConns, minConns int32, multiTen
 			lastErr = pool.Ping(pingCtx)
 			cancel()
 			if lastErr == nil {
+				// Fail closed on a role that would silently defeat tenant isolation.
+				if multiTenancy {
+					if err := verifyRLSCapableRole(ctx, pool); err != nil {
+						pool.Close()
+						return nil, err
+					}
+				}
 				return pool, nil
 			}
 			pool.Close()
@@ -78,4 +85,32 @@ func Connect(ctx context.Context, url string, maxConns, minConns int32, multiTen
 		}
 	}
 	return nil, fmt.Errorf("database not reachable after retries: %w", lastErr)
+}
+
+// verifyRLSCapableRole refuses to start multi-tenant mode on a database role that would
+// silently bypass row-level security — a SUPERUSER or a role WITH BYPASSRLS ignores the
+// FORCE'd tenant policies, so one tenant could read another tenant's rows (including
+// sealed vault secrets) with no error. Fail closed: better to refuse to boot than to run
+// with silently-broken isolation.
+func verifyRLSCapableRole(ctx context.Context, pool *pgxpool.Pool) error {
+	var isSuper, bypassRLS bool
+	// current_setting('is_superuser') is 'on'/'off'; rolbypassrls is on the role row.
+	err := pool.QueryRow(ctx, `
+		SELECT current_setting('is_superuser') = 'on',
+		       COALESCE((SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user), false)
+	`).Scan(&isSuper, &bypassRLS)
+	if err != nil {
+		return fmt.Errorf("multi-tenancy: could not verify the database role's RLS enforcement: %w", err)
+	}
+	if isSuper || bypassRLS {
+		why := "is a SUPERUSER"
+		if !isSuper {
+			why = "has the BYPASSRLS attribute"
+		}
+		return fmt.Errorf("multi-tenancy is enabled but the database role %s, which BYPASSES row-level security and would break tenant isolation. "+
+			"Connect as a non-superuser role created WITH NOBYPASSRLS — e.g. "+
+			"`CREATE ROLE fleet_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '…'; GRANT ALL ON ALL TABLES IN SCHEMA public TO fleet_app;` "+
+			"— and point FLEET_DATABASE_URL at it", why)
+	}
+	return nil
 }

@@ -56,6 +56,11 @@ type Config struct {
 
 	// Auth / crypto
 	JWTSecret          []byte        // HMAC secret for access tokens
+	// MFAEncryptionKey, when set (FLEET_MFA_ENCRYPTION_KEY), is a dedicated key for
+	// encrypting TOTP secrets at rest, decoupled from JWTSecret. Empty = derive from
+	// JWTSecret (legacy). Setting it lets JWTSecret rotate without bricking stored MFA
+	// secrets; existing secrets still decrypt via the legacy fallback.
+	MFAEncryptionKey   []byte
 	AccessTokenTTL     time.Duration // short-lived
 	RefreshTokenTTL    time.Duration // long-lived rotating
 	SessionIdleTTL     time.Duration
@@ -404,6 +409,7 @@ func Load() (*Config, error) {
 	}
 
 	c.JWTSecret = []byte(env("FLEET_JWT_SECRET", ""))
+	c.MFAEncryptionKey = []byte(env("FLEET_MFA_ENCRYPTION_KEY", ""))
 	c.CSRFSecret = []byte(env("FLEET_CSRF_SECRET", ""))
 	c.CAKeyPassphrase = []byte(env("FLEET_CA_PASSPHRASE", ""))
 

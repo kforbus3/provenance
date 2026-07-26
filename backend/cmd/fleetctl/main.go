@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -53,6 +54,7 @@ Usage:
   fleetctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
   fleetctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
   fleetctl fips flag-stale-passwords                     Force non-FIPS local passwords to change (re-hash) on next login
+  fleetctl vault rekey --old … --new …                   Rotate the vault master passphrase (re-encrypt all vault secrets)
   fleetctl kms status                                    Report the configured external KMS/HSM backend and its health
   fleetctl kms wrap [value]                              Wrap a passphrase with the external KMS (reads stdin if no value)
   fleetctl kms unwrap <token>                            Unwrap a KMS blob to verify it (prints the plaintext)
@@ -220,6 +222,18 @@ func run(cmd string, args []string) error {
 			return nil
 		default:
 			return fmt.Errorf("usage: fleetctl fips check | reseal-secrets | flag-stale-passwords")
+		}
+
+	case "vault":
+		sub := ""
+		if len(args) > 0 {
+			sub = args[0]
+		}
+		switch sub {
+		case "rekey":
+			return vaultRekey(ctx, st, cfg, args[1:])
+		default:
+			return fmt.Errorf("usage: fleetctl vault rekey --old <passphrase> --new <passphrase>")
 		}
 
 	default:
@@ -442,6 +456,46 @@ func fipsReseal(st *store.Store, cfg *config.Config) error {
 	}
 
 	fmt.Printf("Done — %d secret(s) upgraded to PBKDF2. Run `fleetctl fips check` to confirm readiness.\n", total)
+	return nil
+}
+
+// vaultRekey rotates the vault master passphrase, re-encrypting every locally-sealed
+// vault secret from the old key to the new one. Remediation for a suspected
+// FLEET_VAULT_PASSPHRASE compromise. Run OFFLINE (app stopped); afterward set
+// FLEET_VAULT_PASSPHRASE to the new value and start the app.
+func vaultRekey(ctx context.Context, st *store.Store, cfg *config.Config, args []string) error {
+	fs := flag.NewFlagSet("vault rekey", flag.ContinueOnError)
+	oldPass := fs.String("old", "", "current vault passphrase (default: FLEET_VAULT_PASSPHRASE from the environment)")
+	newPass := fs.String("new", "", "new vault passphrase (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *newPass == "" {
+		return fmt.Errorf("fleetctl vault rekey requires --new <passphrase>")
+	}
+	oldKey := []byte(*oldPass)
+	if *oldPass == "" {
+		k, err := cfg.VaultKey() // the passphrase the app currently runs with
+		if err != nil {
+			return fmt.Errorf("no --old given and could not resolve the current vault key: %w", err)
+		}
+		oldKey = k
+	}
+	if cfg.IsProduction() && *newPass == string(cfg.CAKeyPassphrase) {
+		return fmt.Errorf("the new vault passphrase must differ from FLEET_CA_PASSPHRASE")
+	}
+	// Re-encrypting many secrets (argon2/PBKDF2 per row) can be slow; give it room.
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	fmt.Println("Re-encrypting vault secrets from the old key to the new key…")
+	res, err := vault.RekeySecrets(rctx, st, oldKey, []byte(*newPass))
+	if err != nil {
+		return fmt.Errorf("rekey aborted (no partial state is left inconsistent for un-migrated rows; re-run to resume): %w", err)
+	}
+	fmt.Printf("Done — %d re-encrypted, %d already on the new key, %d external (no local material).\n",
+		res.Rekeyed, res.AlreadyNew, res.External)
+	fmt.Println("Now set FLEET_VAULT_PASSPHRASE to the new value and restart the app.")
 	return nil
 }
 

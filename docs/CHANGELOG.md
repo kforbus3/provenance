@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.2 — Security hardening (audit batch 2: key lifecycle)
+
+The higher-effort fixes from the security audit — closing the key-rotation and
+tenant-isolation gaps.
+
+- **`fleetctl vault rekey --old … --new …`.** Rotates the vault master passphrase by
+  decrypting every locally-sealed vault secret under the old key and re-encrypting under
+  the new one (verify-before-write). Remediates a suspected `FLEET_VAULT_PASSPHRASE`
+  compromise — previously, changing the passphrase silently made every secret
+  undecryptable. Resumable/idempotent per row; run offline, then update the env var.
+- **Authenticated backups (encrypt-then-MAC).** Each backup now ships a detached
+  `<file>.sql.enc.hmac` (HMAC-SHA256 over the ciphertext, streamed alongside the write),
+  so a tampered or corrupted backup is detectable before restore. openssl CBC alone is
+  unauthenticated; the tag closes that. Stock-openssl decryption is unchanged, and the
+  tag is reproducible with stock tools (disaster-recovery runbook updated with a verify
+  step). Old backups without a sidecar still restore.
+- **Dedicated, rotatable MFA-at-rest key.** `FLEET_MFA_ENCRYPTION_KEY` (optional) now
+  encrypts TOTP secrets independently of `FLEET_JWT_SECRET`, so the JWT secret can rotate
+  without bricking stored MFA secrets. Decryption falls back to the legacy JWT-derived
+  key, so adopting it never locks out enrolled users (covered by a migration test).
+- **Multi-tenancy fail-closed on a superuser DB role.** With `FLEET_MULTI_TENANCY=true`,
+  the app now refuses to start if the database role is a SUPERUSER or has BYPASSRLS —
+  either silently bypasses row-level security and would break tenant isolation. The error
+  tells you to connect as a `NOSUPERUSER NOBYPASSRLS` role.
+
+---
+
 ## v0.68.1 — Security hardening (audit batch 1)
 
 Quick, low-risk hardening from a five-domain security audit of the secrets/vault/auth

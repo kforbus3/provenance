@@ -50,31 +50,44 @@ func ValidateTOTP(secret, code string) bool {
 
 // --- secret encryption at rest (AES-256-GCM, key derived from the JWT secret) ---
 
-// mfaKey derives the AES key that protects TOTP secrets at rest. In FIPS mode it
-// uses HKDF-SHA256 (an approved KDF); otherwise it keeps the original bare-SHA-256
-// derivation so existing non-FIPS secrets keep decrypting. A fresh FIPS deploy has
-// no prior secrets, so there is nothing to migrate.
-func (s *Service) mfaKey() [32]byte {
-	var out [32]byte
-	if s.cfg.FIPSMode {
-		k, err := hkdf.Key(sha256.New, s.cfg.JWTSecret, []byte("fleet-mfa"), "totp-at-rest-v1", 32)
-		if err == nil {
+// mfaKeys returns the AES-256 keys that protect TOTP secrets at rest, ordered
+// primary-first. EncryptSecret always uses the primary; DecryptSecret tries each in
+// turn so that adopting a dedicated key (or migrating FIPS derivations) never strands an
+// existing secret.
+//
+//   - If FLEET_MFA_ENCRYPTION_KEY is set, the primary is HKDF(that key) — decoupled from
+//     JWTSecret, so the JWT secret can rotate without bricking stored MFA secrets. The
+//     JWT-derived key(s) are kept as fallbacks so pre-existing secrets still decrypt.
+//   - Otherwise the primary is the JWT-derived key (HKDF in FIPS, else legacy SHA-256),
+//     preserving the previous behavior exactly.
+func (s *Service) mfaKeys() [][32]byte {
+	var keys [][32]byte
+	add := func(k [32]byte) { keys = append(keys, k) }
+
+	// Dedicated key first, when configured.
+	if len(s.cfg.MFAEncryptionKey) > 0 {
+		if k, err := hkdf.Key(sha256.New, s.cfg.MFAEncryptionKey, []byte("fleet-mfa"), "totp-at-rest-v2", 32); err == nil {
+			var out [32]byte
 			copy(out[:], k)
-			return out
+			add(out)
 		}
-		// Fall through to the legacy derivation only if HKDF somehow fails.
 	}
-	return sha256.Sum256(append([]byte("mfa:"), s.cfg.JWTSecret...))
+	// JWT-derived HKDF key (FIPS primary / non-FIPS fallback after a dedicated key).
+	if k, err := hkdf.Key(sha256.New, s.cfg.JWTSecret, []byte("fleet-mfa"), "totp-at-rest-v1", 32); err == nil {
+		var out [32]byte
+		copy(out[:], k)
+		add(out)
+	}
+	// Legacy bare-SHA-256 JWT derivation (original non-FIPS scheme) — kept last so
+	// secrets written before HKDF still decrypt.
+	add(sha256.Sum256(append([]byte("mfa:"), s.cfg.JWTSecret...)))
+	return keys
 }
 
-// EncryptSecret encrypts a TOTP secret for storage.
+// EncryptSecret encrypts a TOTP secret for storage using the primary MFA key.
 func (s *Service) EncryptSecret(plain string) ([]byte, error) {
-	key := s.mfaKey()
-	blk, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(blk)
+	key := s.mfaKeys()[0]
+	gcm, err := newGCM(key)
 	if err != nil {
 		return nil, err
 	}
@@ -85,26 +98,35 @@ func (s *Service) EncryptSecret(plain string) ([]byte, error) {
 	return gcm.Seal(nonce, nonce, []byte(plain), nil), nil
 }
 
-// DecryptSecret reverses EncryptSecret.
+// DecryptSecret reverses EncryptSecret, trying each candidate key so a key migration
+// (JWT-derived → dedicated) doesn't strand previously-encrypted secrets.
 func (s *Service) DecryptSecret(enc []byte) (string, error) {
-	key := s.mfaKey()
+	var lastErr error = errors.New("no mfa key available")
+	for _, key := range s.mfaKeys() {
+		gcm, err := newGCM(key)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(enc) < gcm.NonceSize() {
+			return "", errors.New("ciphertext too short")
+		}
+		nonce, ct := enc[:gcm.NonceSize()], enc[gcm.NonceSize():]
+		plain, err := gcm.Open(nil, nonce, ct, nil)
+		if err == nil {
+			return string(plain), nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+func newGCM(key [32]byte) (cipher.AEAD, error) {
 	blk, err := aes.NewCipher(key[:])
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	gcm, err := cipher.NewGCM(blk)
-	if err != nil {
-		return "", err
-	}
-	if len(enc) < gcm.NonceSize() {
-		return "", errors.New("ciphertext too short")
-	}
-	nonce, ct := enc[:gcm.NonceSize()], enc[gcm.NonceSize():]
-	plain, err := gcm.Open(nil, nonce, ct, nil)
-	if err != nil {
-		return "", err
-	}
-	return string(plain), nil
+	return cipher.NewGCM(blk)
 }
 
 // --- MFA challenge token (issued after password step, before session) ---
