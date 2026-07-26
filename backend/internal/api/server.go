@@ -163,7 +163,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	caMgr := ca.New(st, cfg)
 	vault := identity.NewVault()
 	issuer := identity.NewIssuer(st, caMgr, cfg, log, vault)
-	gateway := sshgw.New(cfg, log, vault, issuer)
+	gateway := sshgw.New(cfg, log, vault, issuer, st)
 
 	// The certificate-authenticated overlay (OpenVPN) shares the X.509 overlay PKI. It is
 	// always constructed so a host can be enrolled onto it per-host, but the overlay CA

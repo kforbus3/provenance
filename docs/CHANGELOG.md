@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.3 — Security hardening (audit batch 3: persistent host-key pins)
+
+- **SSH host-key pins now persist across restarts.** The gateway's trust-on-first-use
+  verifier previously kept pins only in process memory, so after a backend restart the
+  first connection to any host was re-pinned blindly — a MITM during that window (or a
+  silent host rebuild) would be accepted as the new pin. Pins are now stored in the
+  database (`ssh_host_keys`, migration 0068) and cached in memory, so a key mismatch is
+  detected for the life of the host, not just the process. A pin-store lookup error now
+  fails **closed** (refuses the connection) rather than re-pinning. The schema also
+  supports an operator-set `pinned` source, so a future enrollment flow can pre-seed the
+  expected key and verify even the first connect.
+
+  Fixed in review: a nil-logger code path that would have accepted a connection on a
+  lookup error instead of failing closed (caught by a new test).
+
+Migration 0068 is additive (a new table; no action required).
+
+---
+
 ## v0.68.2 — Security hardening (audit batch 2: key lifecycle)
 
 The higher-effort fixes from the security audit — closing the key-rotation and

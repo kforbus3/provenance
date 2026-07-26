@@ -29,11 +29,12 @@ type Gateway struct {
 	profile  cryptoprofile.Profile
 }
 
-// New constructs a Gateway.
-func New(cfg *config.Config, log *slog.Logger, vault *identity.Vault, issuer *identity.Issuer) *Gateway {
+// New constructs a Gateway. st backs the persistent SSH host-key pin store (survives
+// restarts); pass nil for a memory-only verifier (tests).
+func New(cfg *config.Config, log *slog.Logger, vault *identity.Vault, issuer *identity.Issuer, st hostKeyPinStore) *Gateway {
 	return &Gateway{
 		cfg: cfg, log: log, vault: vault, issuer: issuer,
-		hostKeys: newHostKeyVerifier(log),
+		hostKeys: newHostKeyVerifier(st, log),
 		profile:  cryptoprofile.For(cfg.FIPSMode),
 	}
 }
