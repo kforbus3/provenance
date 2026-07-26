@@ -90,10 +90,23 @@ type Tokens struct {
 
 // Authenticate verifies credentials and returns the user on success, applying
 // lockout policy. It does not create a session (the handler does, after MFA).
-// dummyVerify runs an argon2id verify against a fixed dummy hash so that failed
-// logins take the same time whether or not the account exists (anti-enumeration).
+// dummyHashArgon2 / dummyHashPBKDF2 are fixed hashes with the SAME parameters real
+// hashes use in each mode, so a dummy verify costs the same as a real one.
+const (
+	dummyHashArgon2 = "$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	dummyHashPBKDF2 = "$pbkdf2-sha256$i=600000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+)
+
+// dummyVerify runs a password verify against a fixed dummy hash so that failed logins
+// take the same time whether or not the account exists (anti-enumeration). It MUST use
+// the same KDF real accounts use — otherwise, in FIPS mode (real accounts = PBKDF2), an
+// Argon2id dummy would take measurably different time and reopen the enumeration oracle.
 func dummyVerify(password string) {
-	_, _ = VerifyPassword(password, "$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if passwordFIPS {
+		_, _ = VerifyPassword(password, dummyHashPBKDF2)
+		return
+	}
+	_, _ = VerifyPassword(password, dummyHashArgon2)
 }
 
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*models.User, error) {

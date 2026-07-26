@@ -494,6 +494,13 @@ func (c *Config) validate() error {
 		if c.KMSVaultTLSSkipVerify {
 			return fmt.Errorf("FLEET_KMS_VAULT_SKIP_VERIFY must not be enabled outside development")
 		}
+		// Warn (don't fail) on an unencrypted Postgres connection. Acceptable when the
+		// DB is co-located on the same Docker host (loopback/bridge), but on any
+		// networked or managed Postgres this sends the DB password and every
+		// at-rest-decrypted row in cleartext. Not fatal so single-host deploys still boot.
+		if pgSSLDisabled(c.DatabaseURL) {
+			slog.Warn("FLEET_DATABASE_URL uses sslmode=disable — the Postgres connection is UNENCRYPTED. This is only safe when the database is on the same host; for any networked/managed Postgres set sslmode=verify-full with a CA.")
+		}
 	} else {
 		// Development-only fallbacks so the local stack boots without configured
 		// secrets. Never reached in production/staging (secrets required above).
@@ -594,6 +601,13 @@ func randomSecret(n int) []byte {
 		panic("config: cannot generate development secret: " + err.Error())
 	}
 	return b
+}
+
+// pgSSLDisabled reports whether a Postgres connection string explicitly disables TLS
+// (sslmode=disable). Absent an sslmode, libpq/pgx negotiate TLS if the server offers
+// it, so only an explicit disable is flagged.
+func pgSSLDisabled(dbURL string) bool {
+	return strings.Contains(strings.ToLower(dbURL), "sslmode=disable")
 }
 
 // IsProduction reports whether the app runs in production mode.

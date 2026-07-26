@@ -354,9 +354,14 @@ def _stream_run(req: RunRequest):
                 with os.fdopen(vfd, "w") as vfh:
                     vfh.write(h.private_key if h.private_key.endswith("\n") else h.private_key + "\n")
                 vault_key_paths[h.address] = vp
-        with open(cfg_path, "w", encoding="utf-8") as fh:
+        # ssh_config and inventory are 0600: the inventory embeds vaulted ansible_password
+        # values and the ssh_config references the private-key paths. Match the 0600 the
+        # key files themselves use, rather than the default (world-readable) umask.
+        icfd = os.open(cfg_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(icfd, "w", encoding="utf-8") as fh:
             fh.write(_build_ssh_config(req, key_path, vault_key_paths))
-        with open(inv_path, "w", encoding="utf-8") as fh:
+        ivfd = os.open(inv_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(ivfd, "w", encoding="utf-8") as fh:
             fh.write(_build_inventory(req, cfg_path, vault_key_paths))
 
         # Open API port-forwards through the jump for any RouterOS-API hosts before the play.

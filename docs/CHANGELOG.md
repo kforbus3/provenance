@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.1 — Security hardening (audit batch 1)
+
+Quick, low-risk hardening from a five-domain security audit of the secrets/vault/auth
+surface. No behavior change for normal operation.
+
+- **Ansible inventory + ssh_config written 0600.** The runner's `inventory.ini` (which
+  embeds vaulted `ansible_password` values) and `ssh_config` were created with the
+  default umask (world-readable) while sibling key files were already 0600. Now all
+  credential-bearing run artifacts are 0600.
+- **FIPS-mode login timing oracle closed.** The anti-enumeration dummy password-verify
+  always used Argon2id, but real accounts verify with PBKDF2 under FIPS — so failed
+  logins for nonexistent vs. real users took measurably different time, reopening user
+  enumeration in exactly the strict mode. The dummy verify now uses the active KDF.
+- **Unencrypted-Postgres boot warning + docs.** The backend now logs a warning when
+  `FLEET_DATABASE_URL` uses `sslmode=disable` (fine on a co-located DB, a cleartext-on-
+  the-wire risk for any networked/managed Postgres). The production env example documents
+  `sslmode=verify-full` and now also reminds operators to `chmod 600 .env`.
+- **`.env` created 0600.** `make env` now creates (and re-tightens) `.env` as mode 0600
+  so the file holding every master secret isn't readable by other local users.
+
+(Deferred to later batches with the operator: backup AEAD re-key, `fleetctl vault rekey`,
+dedicated rotatable MFA key, multi-tenant superuser-role guard, persisted host-key pins,
+and CSRF double-submit enforcement — the last requires coordinated frontend changes.)
+
+---
+
 ## v0.68.0 — Self-updating upgrades: the updater upgrades itself + config migration
 
 Closes the last gaps that made some releases need a host-side `make redeploy-single`, so

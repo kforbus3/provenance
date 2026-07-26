@@ -32,7 +32,9 @@ help: ## Show this help
 
 .PHONY: env
 env: ## Create .env from .env.example if missing
-	@test -f .env || (cp .env.example .env && echo "created .env")
+	@test -f .env || (cp .env.example .env && chmod 600 .env && echo "created .env (mode 0600)")
+	@# .env holds every master secret — keep it unreadable by other local users.
+	@chmod 600 .env 2>/dev/null || true
 
 .PHONY: up
 up: env ## Build & start the full stack + test fabric
