@@ -374,7 +374,11 @@ func (u *Updater) selfUpdate(ctx context.Context, newImage string) error {
 	overridePath := filepath.Join(u.cfg.UpdatesDir, "docker-compose.upgrade.yml")
 
 	// Build the compose invocation the helper runs (identical shape to ComposeUp).
-	args := []string{"compose", "--env-file", u.cfg.EnvFile}
+	// --project-directory is the REAL host compose dir so the fleet-updater service's
+	// relative bind sources (e.g. ../../.env) resolve to real host files. Without it,
+	// compose resolves them against /compose → /.env, creating a stray directory and
+	// binding the recreated updater's .env to it — the bug this fixes.
+	args := []string{"compose", "--project-directory", composeSrc, "--env-file", u.cfg.EnvFile}
 	for _, f := range u.cfg.ComposeFiles {
 		args = append(args, "-f", f)
 	}

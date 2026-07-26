@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,33 @@ type execDocker struct {
 	composeFiles []string
 	envFile      string
 	log          *slog.Logger
+
+	projectDirOnce sync.Once
+	projectDir     string // cached host path of the compose dir (for --project-directory)
+}
+
+// hostProjectDir returns the HOST path of the compose directory (the /compose mount's
+// source), used as compose's --project-directory. This is essential: the compose files
+// contain RELATIVE bind sources like `../../.env`, and Docker Compose resolves them
+// against the project directory. Running inside the updater the compose files sit at
+// `/compose`, so without this compose would resolve `../../.env` to `/.env` and the
+// daemon would create a stray directory there and bind it — the exact bug that broke the
+// fleet-updater's own .env mount during a self-update. Pointing --project-directory at
+// the real host compose dir makes those relative paths resolve to the real host files.
+// Best-effort: on discovery failure it returns "" and callers omit the flag.
+func (d *execDocker) hostProjectDir(ctx context.Context) string {
+	d.projectDirOnce.Do(func() {
+		self := fmt.Sprintf("%s-fleet-updater-1", d.project)
+		src, err := d.InspectMount(ctx, self, "/compose")
+		if err != nil || src == "" {
+			if d.log != nil {
+				d.log.Warn("could not resolve host compose dir; compose relative paths may misresolve", "err", err)
+			}
+			return
+		}
+		d.projectDir = src
+	})
+	return d.projectDir
 }
 
 func (d *execDocker) run(ctx context.Context, args ...string) (string, error) {
@@ -58,6 +86,9 @@ func (d *execDocker) Tag(ctx context.Context, src, dst string) error {
 // pull), layering the upgrade/rollback override last so its image pins win.
 func (d *execDocker) ComposeUp(ctx context.Context, services []string, overrideFile string) error {
 	args := []string{"compose"}
+	if pd := d.hostProjectDir(ctx); pd != "" {
+		args = append(args, "--project-directory", pd)
+	}
 	if d.envFile != "" {
 		args = append(args, "--env-file", d.envFile)
 	}
