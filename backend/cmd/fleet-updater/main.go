@@ -22,6 +22,7 @@ import (
 type Config struct {
 	Listen       string
 	Token        string
+	Env          string
 	UpdatesDir   string
 	Project      string
 	ComposeFiles []string
@@ -38,6 +39,7 @@ func loadConfig() Config {
 	return Config{
 		Listen:          env("FLEET_UPDATER_LISTEN", ":9000"),
 		Token:           os.Getenv("FLEET_UPDATER_TOKEN"),
+		Env:             env("FLEET_ENV", "development"),
 		UpdatesDir:      env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
 		Project:         env("FLEET_UPDATER_PROJECT", "fleet-terminal"),
 		ComposeFiles:    splitList(env("FLEET_UPDATER_COMPOSE_FILES", "/compose/docker-compose.yml:/compose/docker-compose.jumphost.yml")),
@@ -60,6 +62,13 @@ func main() {
 		log.Warn("fleet-updater: no trusted release keys configured — every upgrade will be rejected until a key is set")
 	}
 	if cfg.Token == "" {
+		// An empty token means unauthenticated /apply — anything on the internal
+		// network could drive the Docker socket. Tolerable only in development; fail
+		// closed everywhere else rather than run an open remote-code-execution surface.
+		if cfg.Env != "development" {
+			log.Error("fleet-updater: FLEET_UPDATER_TOKEN is required outside development — refusing to start (set it so only the backend can trigger upgrades)", "env", cfg.Env)
+			os.Exit(1)
+		}
 		log.Warn("fleet-updater: FLEET_UPDATER_TOKEN is empty — set it so only the backend can trigger upgrades")
 	}
 

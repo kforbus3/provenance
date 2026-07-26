@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.67.5 — Hardening: updater token required in prod + no-cache index.html
+
+Two hardening items surfaced by the end-to-end upgrade smoke test:
+
+- **fleet-updater fails closed without a token in production.** The updater drives the
+  Docker socket, so an empty `FLEET_UPDATER_TOKEN` is an unauthenticated RCE surface for
+  anything on the internal network. It previously only warned; now, with `FLEET_ENV` set
+  to anything other than `development`, it refuses to start until the token is set. The
+  backend already sends `X-Updater-Token`, and compose already wires the shared value to
+  both services — set `FLEET_UPDATER_TOKEN` (openssl rand -hex 32) in your `.env`.
+- **index.html is served no-cache; hashed assets cache for a year.** After an in-UI
+  upgrade the build emits new content-hashed asset names; a browser-cached `index.html`
+  kept pointing at the old chunks, so users ran stale UI until a manual hard-refresh.
+  nginx now revalidates `index.html` every load (via `expires -1`, preserving the
+  inherited security headers) and caches `/assets/*` immutably.
+
+(A third candidate — pinning the session secret — was already handled: production
+requires persistent `FLEET_JWT_SECRET` + `FLEET_CSRF_SECRET` and fails closed without
+them, so auth sessions already survive the backend restart during an upgrade.)
+
+---
+
 ## v0.67.4 — Fix: updates volume not writable by the backend user
 
 The backend Dockerfile creates and chowns its data dirs (recordings, scans, backups,
