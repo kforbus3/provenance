@@ -7,6 +7,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.19 — Ask Fleet: broaden session-history routing
+
+Two "who connected" phrasings mis-routed: "has anyone connected to <host> recently?"
+fell to the model and used a too-narrow 24h window ("no one" when there were sessions
+2 days back), and "has anyone logged into <host>?" was answered from Fleet SIGN-IN auth
+events instead of SSH sessions to that host. The session-history fast path now recognizes
+"has anyone / did anyone / anyone connected/logged into/accessed <host>" (including
+"logged into"/"onto"), with "recently" mapping to a 30-day window. Guarded so "who has
+access to <host>" (a permissions question) still defers to the model.
+
+
+---
+
 ## v0.68.18 — Ask Fleet: systematic reliability overhaul
 
 A ground-up pass over the assistant, validated by an end-to-end harness that runs the

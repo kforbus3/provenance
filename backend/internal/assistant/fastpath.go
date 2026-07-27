@@ -439,8 +439,9 @@ var (
 	diskFreeLessRE = regexp.MustCompile(`(?:less than|under|below|lower than|no more than|at most|<=?)\s*(\d+(?:\.\d+)?)\s*%`)
 	diskFreeMoreRE = regexp.MustCompile(`(?:more than|greater than|over|above|higher than|at least|>=?)\s*(\d+(?:\.\d+)?)\s*%`)
 
-	// "...connected/logged in/logged into/signed in/accessed to <host>"
-	sessionConnectRE = regexp.MustCompile(`(?:connect(?:ed)?|logged? ?in|logged into|signed? ?in|accessed?)\s+(?:in ?)?to\s+([a-z0-9][a-z0-9._-]*)`)
+	// "...connected/logged into/logged in to/logged onto/signed into/accessed <host>".
+	// Longer verb variants first so "logged into" wins over "logged in".
+	sessionConnectRE = regexp.MustCompile(`(?:connect(?:ed)?|logged? into|logged? onto|logged? in|logged? on|signed? into|signed? in|accessed)\s+(?:(?:to|into|onto|on|in)\s+)*([a-z0-9][a-z0-9._-]*)`)
 )
 
 // metricTrendIntent recognizes "disk/memory/load usage/trend on <host> over <window>" and
@@ -501,9 +502,18 @@ func auditChangesIntent(lq string) bool {
 // question uses ~1 year so it finds the most recent session regardless of age; an
 // explicit window is parsed; otherwise a generous 30-day default.
 func sessionHistoryIntent(lq string) (host string, hours, limit int, ok bool) {
+	// "who/anyone/anybody connected/logged in/accessed <host>" — including "has anyone",
+	// "did anyone", "anyone logged into". These are host-session questions and must NOT
+	// fall through to the model (which mis-routes "logged into <host>" to Fleet sign-in
+	// auth events, and "recently" to a too-narrow 24h window — both false results).
 	isWho := strings.Contains(lq, "who connected") || strings.Contains(lq, "who logged") ||
 		strings.Contains(lq, "who accessed") || strings.Contains(lq, "who signed") ||
-		strings.Contains(lq, "who has ") || strings.Contains(lq, "who last")
+		strings.Contains(lq, "who has ") || strings.Contains(lq, "who last") ||
+		strings.Contains(lq, "anyone connect") || strings.Contains(lq, "anyone log") ||
+		strings.Contains(lq, "anyone access") || strings.Contains(lq, "anyone sign") ||
+		strings.Contains(lq, "anybody connect") || strings.Contains(lq, "anybody log") ||
+		strings.Contains(lq, "has anyone") || strings.Contains(lq, "did anyone") ||
+		strings.Contains(lq, "has anybody") || strings.Contains(lq, "did anybody")
 	isLast := strings.Contains(lq, "last person to") || strings.Contains(lq, "last to connect") ||
 		strings.Contains(lq, "who was the last") || strings.Contains(lq, "most recent") ||
 		strings.Contains(lq, "last person who") || strings.Contains(lq, "who last connected") ||

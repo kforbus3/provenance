@@ -80,10 +80,10 @@ func TestFastPathTool(t *testing.T) {
 		// action-y scan request must NOT hit the vulnerabilities READ fast-path
 		{"run a vulnerability scan on web-01", "", nil},
 		// session-style "who logged into X" must NOT hit list_users
-		{"who logged into nas today?", "", nil},
+		{"who logged into nas today?", "session_history", nil}, // host-session question
 
 		// must NOT fast-path (defer to the model)
-		{"who logged into web-01 yesterday?", "", nil},
+		{"who logged into web-01 yesterday?", "session_history", nil},
 		{"who has access to db-02?", "", nil},
 		{"how do I update Fleet?", "", nil},
 		{"what is the disk usage on web-01?", "", nil},
