@@ -376,6 +376,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 		toolset = append(append(make([]toolDef, 0, len(tools)+len(actionTools)), tools...), actionTools...)
 	}
 
+	toolsUsed := false
 	for i := 0; i < maxToolIterations; i++ {
 		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset, Options: deterministicOptions()})
 		if err != nil {
@@ -384,6 +385,16 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 		msg := resp.Message
 		if len(msg.ToolCalls) == 0 {
 			final := strings.TrimSpace(msg.Content)
+			// If tools gathered data, regenerate the answer with a short scope reminder
+			// placed right before generation. Small models follow a late, focused
+			// instruction far more reliably than the same rules buried in the long system
+			// prompt — without this they enumerate every row and append recommendations
+			// even when told not to.
+			if toolsUsed && final != "" {
+				if refined := s.refineFinalAnswer(ctx, client, cfg, messages); refined != "" {
+					final = refined
+				}
+			}
 			if final == "" {
 				// The model returned an empty message (observed with small models when
 				// they can't map a question to a tool). Give a useful fallback rather
@@ -398,6 +409,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			s.remember(convoID, who.UserID, question, final)
 			return final, data, nil
 		}
+		toolsUsed = true
 		messages = append(messages, msg)
 		for _, tc := range msg.ToolCalls {
 			var result any
@@ -569,6 +581,32 @@ func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg
 		return "", err
 	}
 	return strings.TrimSpace(resp.Message.Content), nil
+}
+
+// refineFinalAnswer regenerates the final answer from the accumulated tool results with
+// a short, focused scope reminder appended as the LAST message — a position small models
+// obey far more reliably than the same rules in the long system prompt. base already
+// contains the system prompt, the question, and every tool result; tools are disabled so
+// the model must WRITE an answer. Returns "" on failure so the caller keeps the model's
+// original answer.
+func (s *Service) refineFinalAnswer(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage) string {
+	msgs := append(append([]chatMessage(nil), base...), chatMessage{
+		Role: "system",
+		Content: "Now write the final answer to the user's question. Follow these rules strictly:\n" +
+			"- Answer ONLY what was asked. If the question has a qualifier (failed, offline, critical, " +
+			"pending, this/last week), include ONLY items matching it.\n" +
+			"- SUMMARIZE — do NOT list every row. The full rows are shown to the user separately as a " +
+			"table, so group similar items and give counts (e.g. \"RouterOS Upgrade failed ~20 times, " +
+			"almost all on coreswitch\") instead of enumerating each one. List individual items only when " +
+			"there are just a few.\n" +
+			"- No recommendations, next steps, or \"you may want to…\" unless the user asked what to do.\n" +
+			"- No preamble, no headings, no restating the question. A few sentences at most.",
+	})
+	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions()})
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(resp.Message.Content)
 }
 
 // priorMessages returns the carried conversation history for convoID, but only if

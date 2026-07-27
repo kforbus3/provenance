@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.8 — Ask Fleet: focused final-answer pass
+
+The scope/qualifier rules in the (long) system prompt were being ignored by the local
+model when a tool returned a large result — it would enumerate every row and append a
+summary and recommendations despite the instructions. Now, once tools have gathered the
+data, the final answer is regenerated with a short scope reminder placed as the LAST
+message, right before generation — a position small models follow far more reliably.
+The refined answer summarizes and groups (e.g. "RouterOS Upgrade failed ~19 times,
+almost all on coreswitch") instead of listing every row, drops unrequested
+recommendations, and honors the question's qualifier. The full rows still appear in the
+table beneath the answer.
+
+---
+
 ## v0.68.7 — Ask Fleet: time-window fix + qualifier discipline
 
 Follow-ups from real usage:
