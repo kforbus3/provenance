@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.9 — Ask Fleet: unified answer discipline across both paths
+
+The scope/summarize reminder from v0.68.8 (LLM-tool-loop path) is now also applied to
+the fast-path narration, so questions that route deterministically (schedules, pending
+updates, downtime, security events, etc.) get the same discipline: summarize with counts
+instead of enumerating, honor the qualifier, no unrequested recommendations, terse empty
+answers. Extracted the reminder into a single shared instruction used by both paths.
+
+Validated on real fleet data: "hosts under 20%% disk free" (none) -> one-line "no hosts...";
+"what changed in the audit log today" -> a grouped count summary, not a dump; "what runs on
+a schedule" -> the 8 schedules ordered by next fire.
+
+---
+
 ## v0.68.8 — Ask Fleet: focused final-answer pass
 
 The scope/qualifier rules in the (long) system prompt were being ignored by the local

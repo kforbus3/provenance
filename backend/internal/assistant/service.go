@@ -571,11 +571,11 @@ func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg
 	raw, _ := json.Marshal(result)
 	msgs := append(append([]chatMessage(nil), base...), chatMessage{
 		Role: "system",
-		Content: fmt.Sprintf("The %s tool was already run for this question and returned this data:\n%s\n\n"+
-			"Answer the user's question using ONLY this data. If it has no rows or is empty, say plainly "+
-			"that nothing matched. Be concise and summarize — the full structured data is shown to the user "+
-			"separately, so do not dump every row.", toolName, string(raw)),
+		Content: fmt.Sprintf("The %s tool was already run for this question and returned this data:\n%s",
+			toolName, string(raw)),
 	})
+	// Same strong answer discipline as the LLM-loop refine pass (appended LAST).
+	msgs = append(msgs, chatMessage{Role: "system", Content: scopeReminder})
 	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions()})
 	if err != nil {
 		return "", err
@@ -583,25 +583,29 @@ func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg
 	return strings.TrimSpace(resp.Message.Content), nil
 }
 
+// scopeReminder is the short, focused answer-discipline instruction appended as the LAST
+// message right before the final answer is generated. A late, concise reminder is obeyed
+// by small models far more reliably than the same rules buried in the long system prompt
+// — without it they enumerate every row and append recommendations. Used by BOTH the
+// fast-path narration and the LLM-loop refine pass so every final answer is consistent.
+const scopeReminder = "Now write the final answer to the user's question. Follow these rules strictly:\n" +
+	"- Answer ONLY what was asked. If the question has a qualifier (failed, offline, critical, " +
+	"pending, this/last week), include ONLY items matching it.\n" +
+	"- SUMMARIZE — do NOT list every row. The full rows are shown to the user separately as a " +
+	"table, so group similar items and give counts (e.g. \"RouterOS Upgrade failed ~20 times, " +
+	"almost all on coreswitch\") instead of enumerating each one. List individual items only when " +
+	"there are just a few.\n" +
+	"- No recommendations, next steps, or \"you may want to…\" unless the user asked what to do.\n" +
+	"- No preamble, no headings, no restating the question. A few sentences at most.\n" +
+	"- If the data is empty, say in one sentence that nothing matched — do not fill the gap with " +
+	"related data."
+
 // refineFinalAnswer regenerates the final answer from the accumulated tool results with
-// a short, focused scope reminder appended as the LAST message — a position small models
-// obey far more reliably than the same rules in the long system prompt. base already
-// contains the system prompt, the question, and every tool result; tools are disabled so
-// the model must WRITE an answer. Returns "" on failure so the caller keeps the model's
-// original answer.
+// the scopeReminder appended as the LAST message. base already contains the system
+// prompt, the question, and every tool result; tools are disabled so the model must WRITE
+// an answer. Returns "" on failure so the caller keeps the model's original answer.
 func (s *Service) refineFinalAnswer(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage) string {
-	msgs := append(append([]chatMessage(nil), base...), chatMessage{
-		Role: "system",
-		Content: "Now write the final answer to the user's question. Follow these rules strictly:\n" +
-			"- Answer ONLY what was asked. If the question has a qualifier (failed, offline, critical, " +
-			"pending, this/last week), include ONLY items matching it.\n" +
-			"- SUMMARIZE — do NOT list every row. The full rows are shown to the user separately as a " +
-			"table, so group similar items and give counts (e.g. \"RouterOS Upgrade failed ~20 times, " +
-			"almost all on coreswitch\") instead of enumerating each one. List individual items only when " +
-			"there are just a few.\n" +
-			"- No recommendations, next steps, or \"you may want to…\" unless the user asked what to do.\n" +
-			"- No preamble, no headings, no restating the question. A few sentences at most.",
-	})
+	msgs := append(append([]chatMessage(nil), base...), chatMessage{Role: "system", Content: scopeReminder})
 	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions()})
 	if err != nil {
 		return ""
