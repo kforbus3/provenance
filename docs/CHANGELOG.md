@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.10 — Ask Fleet: de-prioritize automated audit noise
+
+"What changed in the audit log today?" led with automated background events (the
+assistant's own queries, per-session certificate issuance) that dominate the log by
+volume but are not operator changes. The audit_log tool now splits its result into
+changesByAction (operator-initiated changes) and routineByAction (automated noise:
+assistant queries, certificate issue/renew/revoke, KRL housekeeping), and the prompt
+tells the assistant to lead with the changes and treat the routine as a background count
+or omit it. On real data the summary now leads with upgrades applied, group/credential
+changes, and logins, and drops the 30 assistant-query / 14 cert-issuance noise entirely.
+
+---
+
 ## v0.68.9 — Ask Fleet: unified answer discipline across both paths
 
 The scope/summarize reminder from v0.68.8 (LLM-tool-loop path) is now also applied to

@@ -1110,14 +1110,41 @@ func (s *Service) runAuditLog(ctx context.Context, raw json.RawMessage, who Call
 		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "Actor"}, {Label: "Action"},
 			{Label: "Target"}, {Label: "IP"}, {Label: "Detail"}},
 	}
+	// Separate operator-initiated CHANGES from high-volume automated/background noise
+	// (the assistant's own queries, per-session certificate issuance, KRL housekeeping).
+	// "What changed today" should lead with the former; the latter is at most a count.
+	changesByAction := map[string]int{}
+	routineByAction := map[string]int{}
+	changeCount := 0
 	for _, r := range rows {
 		tbl.Rows = append(tbl.Rows, []string{tableTime(r.Time), r.Actor, r.Action,
 			r.TargetKind, r.IP, r.Detail})
+		if isRoutineAuditAction(r.Action) {
+			routineByAction[r.Action]++
+		} else {
+			changesByAction[r.Action]++
+			changeCount++
+		}
 	}
 	if len(rows) == 0 {
 		tbl = nil
 	}
-	return tbl, map[string]any{"count": len(rows), "events": rows}
+	return tbl, map[string]any{
+		"count": len(rows), "changeCount": changeCount,
+		"changesByAction": changesByAction, "routineByAction": routineByAction,
+		"events": rows,
+	}
+}
+
+// isRoutineAuditAction reports whether an audit action is high-volume automated/background
+// activity rather than an operator-initiated change — so a "what changed" summary can lead
+// with real changes and treat these as background noise.
+func isRoutineAuditAction(action string) bool {
+	switch action {
+	case "assistant.query", "certificate.issue", "certificate.renew", "certificate.revoke":
+		return true
+	}
+	return strings.HasPrefix(action, "krl.")
 }
 
 // runListSchedules returns the recurring scan/playbook schedules (gated by

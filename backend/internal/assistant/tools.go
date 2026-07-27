@@ -368,7 +368,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "audit_log",
-		Description: "List recent events from the platform audit trail, newest first: logins and failed logins, terminal/SFTP activity, session terminations, host/user/group/role/schedule changes, setting changes, and so on. Each event has a time, actor, action (dotted, e.g. 'auth.login', 'host.delete'), target, IP, and a short detail. Use for 'what changed today', 'who deleted host X', 'any failed logins this week'.",
+		Description: "List recent events from the platform audit trail, newest first: logins and failed logins, terminal/SFTP activity, session terminations, host/user/group/role/schedule changes, setting changes, and so on. Each event has a time, actor, action (dotted, e.g. 'auth.login', 'host.delete'), target, IP, and a short detail. Use for 'what changed today', 'who deleted host X', 'any failed logins this week'. The result splits actions into changesByAction (operator-initiated changes) and routineByAction (high-volume automated noise: the assistant's own queries, per-session certificate issuance/renewal, KRL housekeeping). For a 'what changed' summary, LEAD with changesByAction and treat routineByAction as background — mention it only as a brief count, or omit it if the user asked specifically about changes.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
