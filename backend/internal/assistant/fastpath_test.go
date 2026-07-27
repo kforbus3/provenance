@@ -111,3 +111,25 @@ func TestFastPathTool(t *testing.T) {
 		}
 	}
 }
+
+// TestSecurityEventsWindowRouting locks the fix for the reported false negative: the
+// time window in the question must reach the tool via the Hours arg, not a fixed 24h.
+func TestSecurityEventsWindowRouting(t *testing.T) {
+	cases := []struct{ q string; wantHours float64 }{
+		{"any failed logins in the last 48 hrs?", 48},
+		{"any failed logins in the last 72 hours?", 72},
+		{"have there been any failed logins in the past week?", 24 * 7},
+	}
+	for _, c := range cases {
+		name, args, ok := fastPathTool(c.q)
+		if !ok || name != "security_events" {
+			t.Errorf("%q: got (%q, ok=%v), want security_events", c.q, name, ok)
+			continue
+		}
+		var got map[string]any
+		_ = json.Unmarshal(args, &got)
+		if h, _ := got["hours"].(float64); h != c.wantHours {
+			t.Errorf("%q: hours = %v, want %v (args=%s)", c.q, got["hours"], c.wantHours, string(args))
+		}
+	}
+}

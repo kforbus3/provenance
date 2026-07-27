@@ -3,6 +3,7 @@ package assistant
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -82,8 +83,11 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 
 	// 5) failed-login / brute-force / lockout questions -> security_events. (Kept
 	// distinct from "security updates", which is a package-update question above.)
+	// Honor the time window in the question ("last 48 hours", "past week") instead of a
+	// fixed 24h — otherwise a longer window silently misses older failures and reports
+	// none, while the answer parrots back the user's window (a false negative).
 	if securityEventsIntent(lq) {
-		a, _ := json.Marshal(securityEventsArgs{FailedOnly: true, Hours: 24})
+		a, _ := json.Marshal(securityEventsArgs{FailedOnly: true, Hours: hoursFromText(lq)})
 		return "security_events", a, true
 	}
 
@@ -384,8 +388,34 @@ func availabilityIntent(lq string) bool {
 	return false
 }
 
-// hoursFromText maps a coarse time phrase to a lookback window (hours).
+var (
+	numHoursRE = regexp.MustCompile(`(\d+)\s*(?:hour|hr)s?\b`)
+	numDaysRE  = regexp.MustCompile(`(\d+)\s*days?\b`)
+	numWeeksRE = regexp.MustCompile(`(\d+)\s*weeks?\b`)
+)
+
+// hoursFromText maps a time phrase to a lookback window (hours). An EXPLICIT number wins
+// ("last 48 hours", "past 3 days", "2 weeks") — previously these were ignored, so a
+// question like "failed logins in the last 72 hours" silently used the default window
+// and could report none while the answer parroted back the user's window (a false
+// negative). Falls back to coarse phrases, then a 1-week default for a bare history
+// question.
 func hoursFromText(lq string) int {
+	if m := numHoursRE.FindStringSubmatch(lq); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n
+		}
+	}
+	if m := numWeeksRE.FindStringSubmatch(lq); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n * 24 * 7
+		}
+	}
+	if m := numDaysRE.FindStringSubmatch(lq); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n * 24
+		}
+	}
 	switch {
 	case strings.Contains(lq, "today"), strings.Contains(lq, "overnight"),
 		strings.Contains(lq, "last night"), strings.Contains(lq, "this morning"),

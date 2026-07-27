@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.7 — Ask Fleet: time-window fix + qualifier discipline
+
+Follow-ups from real usage:
+
+- **Time-window false negative fixed.** "Any failed logins in the last 48 hours / 72
+  hours / past week" was silently windowed to a fixed 24h, so it reported none while the
+  answer parroted back the user's window — missing older failures. The fast path now
+  parses the actual window from the question ("48 hours", "3 days", "2 weeks") and passes
+  it through; a bare failed-login/downtime question now defaults to a week, not a day.
+- **Qualifier discipline.** The assistant is now told to honor filter words: "FAILED
+  playbook runs" lists only the failures (not a full run history, a success summary, and a
+  multi-point action plan), "OFFLINE hosts" only offline, "CRITICAL vulns" only critical.
+
+Builds on v0.68.6's deterministic sampling + answer-scope discipline.
+
+---
+
 ## v0.68.6 — Ask Fleet: consistent, scoped answers
 
 Two changes make the AI assistant behave like a precise sysadmin tool instead of a
