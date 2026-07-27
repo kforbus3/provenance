@@ -138,9 +138,24 @@ func (s *Service) Apply(ctx context.Context, path string, actorName string) erro
 		return err
 	}
 	s.mu.Lock()
-	if s.local.State == "verifying" || s.local.State == "backing_up" || s.local.State == "dispatched" {
-		s.mu.Unlock()
-		return fmt.Errorf("an upgrade is already in progress")
+	inProgress := s.local.State == "verifying" || s.local.State == "backing_up" || s.local.State == "dispatched"
+	dispatched := s.local.State == "dispatched"
+	s.mu.Unlock()
+	if inProgress {
+		// A local "dispatched" state persists after we hand off to the updater. If a
+		// prior apply then failed (or finished) on the updater, that local state is
+		// STALE and would otherwise block every future apply forever. Self-heal: if we
+		// dispatched but the updater is no longer running, allow a new apply. Only a
+		// genuinely-running updater (or an in-flight local verify/backup) blocks.
+		blocked := true
+		if dispatched {
+			if us, ok := s.updaterStatus(ctx); ok && us.State != "running" {
+				blocked = false // stale dispatched state; the updater is done/idle
+			}
+		}
+		if blocked {
+			return fmt.Errorf("an upgrade is already in progress")
+		}
 	}
 	now := time.Now()
 	s.local = Status{State: "backing_up", TargetVersion: m.Version, StartedAt: &now, UpdatedAt: &now, Draining: s.draining, Step: "taking pre-upgrade database backup"}
