@@ -5,6 +5,48 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.6 — Ask Fleet: consistent, scoped answers
+
+Two changes make the AI assistant behave like a precise sysadmin tool instead of a
+chatbot, addressing answers that varied by phrasing and volunteered unrequested detail.
+
+- **Deterministic sampling.** Every assistant model call now runs at low temperature
+  (0.1), low-ish top_p, and a fixed seed, instead of the model's chat default (~0.8).
+  This stabilizes both tool selection (fewer mis-routes / false positives) and the final
+  answer, so the same — or a reworded — question yields the same result run to run.
+- **Answer-scope discipline.** The system prompt now instructs the assistant to answer
+  ONLY what was asked: no volunteering adjacent metrics, background, or "you may also
+  want to…" recommendations unless requested; no preamble; and to answer a question the
+  same way regardless of how it is phrased. When the tools return nothing, it says so in
+  one sentence rather than filling the gap with related data.
+
+Backend-only; no config or schema change. The configured model (e.g.
+qwen2.5:14b-instruct) is unchanged.
+
+---
+
+## v0.68.5 — Self-healing upgrade state
+
+Fixes a loop where, after an in-UI upgrade failed on the `fleet-updater` sidecar, the
+backend stayed wedged reporting "an upgrade is already in progress" while the UI showed
+"ready" — so every Install click silently reverted. The backend's busy-check now consults
+the updater's actual state and clears a stale dispatch, so upgrades recover on their own
+instead of needing a backend restart.
+
+---
+
+## v0.68.4 — Fix updater compose path resolution
+
+Fixes an in-UI upgrade failing with `/fleet.env is a directory`. When the updater runs
+`docker compose -f /compose/docker-compose.yml`, Compose resolved the compose file's
+relative `../../.env` bind against `/compose` → a stray `/.env` directory that then got
+bound as the updater's env file. The updater now passes `--project-directory <real host
+compose dir>` (discovered by inspecting its own mounts) so relative paths resolve to real
+host files. Deploy this updater fix host-side (`make redeploy-single`), not via an in-UI
+self-update — the old updater's self-update carries the very bug being fixed.
+
+---
+
 ## v0.68.3 — Security hardening (audit batch 3: persistent host-key pins)
 
 - **SSH host-key pins now persist across restarts.** The gateway's trust-on-first-use

@@ -377,7 +377,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	}
 
 	for i := 0; i < maxToolIterations; i++ {
-		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset})
+		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset, Options: deterministicOptions()})
 		if err != nil {
 			return "", data, err
 		}
@@ -538,7 +538,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	// Ran out of tool iterations. The tool results are already in `messages`, so make
 	// one final pass with tools DISABLED — the model must now WRITE an answer from what
 	// it has instead of calling yet another tool. This turns a loop into a real answer.
-	if resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages}); err == nil {
+	if resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Options: deterministicOptions()}); err == nil {
 		if final := strings.TrimSpace(resp.Message.Content); final != "" {
 			s.remember(convoID, who.UserID, question, final)
 			return final, data, nil
@@ -564,7 +564,7 @@ func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg
 			"that nothing matched. Be concise and summarize — the full structured data is shown to the user "+
 			"separately, so do not dump every row.", toolName, string(raw)),
 	})
-	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs})
+	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions()})
 	if err != nil {
 		return "", err
 	}

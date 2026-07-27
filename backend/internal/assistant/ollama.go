@@ -88,7 +88,22 @@ type chatRequest struct {
 	Messages []chatMessage  `json:"messages"`
 	Tools    []toolDef      `json:"tools,omitempty"`
 	Stream   bool           `json:"stream"`
-	Options  map[string]any `json:"options,omitempty"` // Ollama sampling options (e.g. temperature); unset in production
+	Options  map[string]any `json:"options,omitempty"` // Ollama sampling options (see deterministicOptions)
+}
+
+// deterministicOptions makes the assistant behave like a precise sysadmin tool rather
+// than a chatbot: a low temperature + low top_p keep tool selection and answers STABLE
+// (the same or a reworded question routes to the same tool and yields the same answer),
+// and curb the creative expansion that adds facts the user didn't ask for. A fixed seed
+// makes a given request reproducible. Ollama's default (temp 0.8) is tuned for open-ended
+// chat and is the main cause of phrasing-dependent, over-eager answers. Not exactly 0:
+// some local models degrade into repetition at 0, so a small epsilon is safer.
+func deterministicOptions() map[string]any {
+	return map[string]any{
+		"temperature": 0.1,
+		"top_p":       0.9,
+		"seed":        42,
+	}
 }
 
 type chatResponse struct {
