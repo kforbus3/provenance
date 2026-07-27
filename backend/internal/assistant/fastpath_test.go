@@ -133,3 +133,40 @@ func TestSecurityEventsWindowRouting(t *testing.T) {
 		}
 	}
 }
+
+func TestDiskFreeFastPath(t *testing.T) {
+	cases := []struct {
+		q       string
+		wantMax float64
+		wantMin float64 // -1 = expect nil
+	}{
+		{"Which hosts have less than 20% disk free?", 20, -1},
+		{"Which hosts have less than 80% disk free?", 80, -1},
+		{"which hosts are under 15% disk free", 15, -1},
+		{"hosts with more than 90% disk free", -1, 90},
+		{"which hosts have over 50% disk free", -1, 50},
+	}
+	for _, c := range cases {
+		name, args, ok := fastPathTool(c.q)
+		if !ok || name != "query_hosts" {
+			t.Errorf("%q: got (%q, ok=%v), want query_hosts", c.q, name, ok)
+			continue
+		}
+		var got map[string]any
+		_ = json.Unmarshal(args, &got)
+		if c.wantMax >= 0 {
+			if v, _ := got["diskFreePctMax"].(float64); v != c.wantMax {
+				t.Errorf("%q: diskFreePctMax=%v want %v", c.q, got["diskFreePctMax"], c.wantMax)
+			}
+		}
+		if c.wantMin >= 0 {
+			if v, _ := got["diskFreePctMin"].(float64); v != c.wantMin {
+				t.Errorf("%q: diskFreePctMin=%v want %v", c.q, got["diskFreePctMin"], c.wantMin)
+			}
+		}
+	}
+	// "disk used" must NOT hijack the disk-free fast path.
+	if _, _, ok := diskFreeIntent("which hosts have more than 80% disk used"); ok {
+		t.Error("disk-used question should not match diskFreeIntent")
+	}
+}

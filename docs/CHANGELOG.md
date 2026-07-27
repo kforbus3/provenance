@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.11 — Ask Fleet: deterministic disk + session-history routing
+
+Two false negatives found in real-usage testing, both from time/threshold arguments the
+local model got wrong or a too-narrow default window:
+
+- **Disk-free filter** — "which hosts have less than 80%% / 90%% disk free" returned "no
+  hosts" even though ~10 qualify. The threshold now routes through the fast path and is
+  parsed deterministically (diskFreePctMax/Min) instead of relying on generated JSON args,
+  which small models sometimes invert or mis-set.
+- **"Last person to connect to <host>"** — session_history defaulted to a 48-hour window,
+  so a host whose last login was >48h ago wrongly returned "no one has connected". These
+  questions now route through the fast path with a ~1-year window (find the most recent
+  session regardless of age); an explicit window ("yesterday", "this week") is still honored.
+
+---
+
 ## v0.68.10 — Ask Fleet: de-prioritize automated audit noise
 
 "What changed in the audit log today?" led with automated background events (the

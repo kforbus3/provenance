@@ -73,6 +73,24 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "host_availability", a, true
 	}
 
+	// 3b) "hosts with less/more than N% disk free" -> query_hosts with the disk filter,
+	// parsed DETERMINISTICALLY. The threshold is well-defined but small models sometimes
+	// invert it (min vs max) or mis-set it, so pin it rather than trust generated args.
+	if maxPct, minPct, ok := diskFreeIntent(lq); ok {
+		a, _ := json.Marshal(queryHostsArgs{DiskFreePctMax: maxPct, DiskFreePctMin: minPct})
+		return "query_hosts", a, true
+	}
+
+	// 3c) "who connected to <host>" / "who was the last person to connect to <host>" ->
+	// session_history. Crucial: a "last person to connect" question wants the MOST RECENT
+	// session regardless of age, so it uses a ~1-year window instead of the tool's 48h
+	// default (which returns "no one" if the last connection was >48h ago — a false
+	// negative). An explicit window ("yesterday", "this week") is honored.
+	if host, hrs, ok := sessionHistoryIntent(lq); ok {
+		a, _ := json.Marshal(sessionHistoryArgs{Hostname: host, Hours: hrs})
+		return "session_history", a, true
+	}
+
 	// 4) capacity / runway questions -> capacity_outlook. Routes "will any host run
 	// out of disk/memory" to a capacity-FILTERED insights view that answers plainly
 	// when nothing is at risk, instead of dumping unrelated insight rows.
@@ -392,7 +410,82 @@ var (
 	numHoursRE = regexp.MustCompile(`(\d+)\s*(?:hour|hr)s?\b`)
 	numDaysRE  = regexp.MustCompile(`(\d+)\s*days?\b`)
 	numWeeksRE = regexp.MustCompile(`(\d+)\s*weeks?\b`)
+
+	diskFreeLessRE = regexp.MustCompile(`(?:less than|under|below|lower than|no more than|at most|<=?)\s*(\d+(?:\.\d+)?)\s*%`)
+	diskFreeMoreRE = regexp.MustCompile(`(?:more than|greater than|over|above|higher than|at least|>=?)\s*(\d+(?:\.\d+)?)\s*%`)
+
+	// "...connected/logged in/logged into/signed in/accessed to <host>"
+	sessionConnectRE = regexp.MustCompile(`(?:connect(?:ed)?|logged? ?in|logged into|signed? ?in|accessed?)\s+(?:in ?)?to\s+([a-z0-9][a-z0-9._-]*)`)
 )
+
+// sessionHistoryIntent recognizes "who connected to <host>" / "who was the last person to
+// connect to <host>" and returns the host + lookback window. A "last / most recent"
+// question uses ~1 year so it finds the most recent session regardless of age; an
+// explicit window is parsed; otherwise a generous 30-day default.
+func sessionHistoryIntent(lq string) (host string, hours int, ok bool) {
+	isWho := strings.Contains(lq, "who connected") || strings.Contains(lq, "who logged") ||
+		strings.Contains(lq, "who accessed") || strings.Contains(lq, "who signed") ||
+		strings.Contains(lq, "who has ") || strings.Contains(lq, "who last")
+	isLast := strings.Contains(lq, "last person to") || strings.Contains(lq, "last to connect") ||
+		strings.Contains(lq, "who was the last") || strings.Contains(lq, "most recent") ||
+		strings.Contains(lq, "last person who")
+	if !isWho && !isLast {
+		return "", 0, false
+	}
+	m := sessionConnectRE.FindStringSubmatch(lq)
+	if m == nil {
+		return "", 0, false
+	}
+	host = strings.TrimRight(m[1], ".?!,")
+	switch {
+	case isLast || strings.Contains(lq, "latest") || strings.Contains(lq, "ever"):
+		hours = 24 * 365 // unbounded in practice: find the most recent session
+	case hasExplicitTimeWindow(lq):
+		hours = hoursFromText(lq)
+	default:
+		hours = 24 * 30 // "who connected to X" with no window: last month
+	}
+	return host, hours, true
+}
+
+// hasExplicitTimeWindow reports whether the question names a concrete time window, so a
+// session-history question without one can fall back to a sensible default instead of
+// hoursFromText's generic 1-week.
+func hasExplicitTimeWindow(lq string) bool {
+	if numHoursRE.MatchString(lq) || numDaysRE.MatchString(lq) || numWeeksRE.MatchString(lq) {
+		return true
+	}
+	for _, w := range []string{"today", "yesterday", "overnight", "this week", "last week",
+		"past week", "this month", "last month", "past month", "tonight", "last night"} {
+		if strings.Contains(lq, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// diskFreeIntent recognizes "hosts with less/more than N% disk free" and returns the
+// query_hosts disk-filter bounds. Requires the question to be about DISK FREE space (not
+// used, not memory) so it doesn't hijack other percentage questions.
+func diskFreeIntent(lq string) (maxPct, minPct *float64, ok bool) {
+	if !strings.Contains(lq, "disk") && !strings.Contains(lq, "filesystem") && !strings.Contains(lq, "storage") {
+		return nil, nil, false
+	}
+	if !strings.Contains(lq, "free") || strings.Contains(lq, "used") || strings.Contains(lq, "usage") {
+		return nil, nil, false // "disk used/usage" is a different filter; defer to the model
+	}
+	if m := diskFreeLessRE.FindStringSubmatch(lq); m != nil {
+		if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+			return &v, nil, true
+		}
+	}
+	if m := diskFreeMoreRE.FindStringSubmatch(lq); m != nil {
+		if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+			return nil, &v, true
+		}
+	}
+	return nil, nil, false
+}
 
 // hoursFromText maps a time phrase to a lookback window (hours). An EXPLICIT number wins
 // ("last 48 hours", "past 3 days", "2 weeks") — previously these were ignored, so a
