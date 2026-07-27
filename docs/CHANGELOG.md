@@ -7,6 +7,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.22 — Ask Fleet: "recently" is a week, not a month
+
+- **"recently"/"lately" now scopes host-connection questions to the past week** (was 30
+  days). "Has anyone connected to <host> recently?" no longer sweeps in a month of
+  sessions. An explicit window ("this month", "last 30 days") still honors what you ask,
+  "who last connected" is still unbounded-to-most-recent, and this matches how "recently"
+  already behaved for audit/security/failed-run questions.
+
+
+---
+
 ## v0.68.20–0.68.21 — Ask Fleet: calendar-day "today" + follow-up context
 
 - **"today" now means the calendar day**, not a rolling 24 hours — "who connected today"
