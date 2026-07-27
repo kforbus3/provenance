@@ -5,6 +5,50 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+---
+
+## v0.68.18 — Ask Fleet: systematic reliability overhaul
+
+A ground-up pass over the assistant, validated by an end-to-end harness that runs the
+full question battery through the live API against real fleet data (no more one-off
+checks). Every fix below was confirmed by that harness, and the deterministic builders
+are covered by unit tests.
+
+**Correctness (false negatives / hallucinations)**
+- **Deterministic answers for list/aggregate questions.** "Which hosts have <N% disk
+  free", "who (last) connected to <host>", "what changed in the audit log", and
+  "disk/memory/load trend on <host>" are now built in code from the tool data — the model
+  is unreliable at enumerating, counting, and computing trends, so it no longer narrates
+  those. Result: complete host lists with correct counts, the actual most-recent session,
+  a real trend sentence ("disk-free fell from 31.8% to 29.1%"), and an accurate change
+  breakdown.
+- **No more example-name hallucinations.** The system prompt's illustrative hostnames
+  were replaced with unmistakable placeholders, so an empty/mis-routed tool result can no
+  longer make the model invent a fake host.
+- **Deterministic routing for more shapes**: disk-free filters, metric trends, session
+  history, "failed scans OR playbook runs" (combined + failure-filtered), and audit
+  "what changed" now take the fast path with parsed arguments instead of depending on the
+  model to emit correct JSON (which it sometimes inverted).
+- **Time windows honored everywhere.** "past day/48 hours/this week/last week" now map to
+  the right lookback for security events, session history, audit, and metric trends
+  (previously several silently used a fixed default — a false negative).
+- **Audit counts are window-wide**, not derived from the display row cap, so real changes
+  aren't crowded out by high-volume routine rows.
+
+**Scope / no fluff**
+- Answers stay tight: de-noised audit summaries (automated events shown only as a count,
+  capped to the top change types), session answers reduced to who + counts, no unrequested
+  recommendations, no preamble.
+
+**Robustness**
+- A fast-path tool that is routed but has no dispatch handler now falls through to the
+  model instead of returning an empty "nothing found" — plus a coverage test that fails
+  the build if routing and dispatch ever drift apart (the bug class behind two earlier
+  regressions).
+
+Backend-only; the configured model (e.g. qwen2.5:14b-instruct) is unchanged.
+
+
 ## v0.68.11 — Ask Fleet: deterministic disk + session-history routing
 
 Two false negatives found in real-usage testing, both from time/threshold arguments the

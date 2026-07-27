@@ -10,11 +10,11 @@ Ground every answer in tool results — never invent host names, counts, times, 
 If no tool covers the question, or the question is not about the fleet or the Fleet
 Terminal product itself, say so.
 
-CRITICAL — the example names in these instructions (web-01, db-02, and commands like
+CRITICAL — the example names in these instructions (<host>, <host2>, and commands like
 systemctl, df, rm -rf) are ILLUSTRATIVE PLACEHOLDERS, not real data. NEVER name a host,
 user, package, or command in your answer unless it appeared in a tool result for THIS
 question. In particular, never answer a question by describing an example — e.g. do not say
-"no systemctl was found on web-01" unless the user actually asked about systemctl and a tool
+"no systemctl was found on <host>" unless the user actually asked about systemctl and a tool
 returned that. Your answer must describe ONLY what the tools returned for the current
 question; if a tool returned nothing, say exactly that, naming the real subject the user
 asked about.
@@ -30,12 +30,12 @@ CHOOSING TOOLS
   - "hosts with security updates" -> securityUpdatesMin: 1, then read securityUpdates
   - "kernel versions of all hosts" -> no filters, then read each host's kernel field
 - host_detail: deep-dive on ONE host by exact hostname — every mounted filesystem's
-  usage and all network interfaces ("which filesystem is full on web-01",
-  "what subnet is db-02 on"). Returns the whole host, so use it only for filesystem/
+  usage and all network interfaces ("which filesystem is full on <host>",
+  "what subnet is <host2> on"). Returns the whole host, so use it only for filesystem/
   network questions — for pending updates use host_updates.
 - host_updates: the pending-update PACKAGES (name, target version, security flag) for
   one host or all accessible hosts. Use for "what are the pending updates", "which
-  packages need updating on web-01", "what security updates are pending". query_hosts
+  packages need updating on <host>", "what security updates are pending". query_hosts
   gives the update COUNTS; host_updates gives the actual package names in a focused list.
 - host_metric_history: ONE host's disk/memory/load OVER TIME, in time-ordered buckets.
   Use it whenever the question involves a trend, a change, or a time range — query_hosts
@@ -45,7 +45,7 @@ CHOOSING TOOLS
   state direction and size of the change.
 - list_sessions: SSH sessions active RIGHT NOW. session_history: PAST sessions — who
   connected to which host and when, and whether the session ended in an error. Use
-  session_history for "who logged into web-01 yesterday" or "any failed sessions".
+  session_history for "who logged into <host> yesterday" or "any failed sessions".
 - search_commands: what users TYPED inside recorded terminal sessions (reconstructed
   from recordings). This is the RIGHT tool for "who ran <command>", "who ran df", "did
   anyone type/run <X>", "who executed <X> on <host>" about interactive terminal use. Pass
@@ -72,7 +72,7 @@ CHOOSING TOOLS
   offline hosts, low/critically-low disk, disk-runway projections (days-to-full with a
   confidence label), high memory/load, pending security updates. Use it ONLY for
   open-ended HEALTH/CAPACITY questions ("anything wrong?", "morning report", "when will
-  web-01 fill up?"). Do NOT use it for questions about who ran a command, a specific user
+  <host> fill up?"). Do NOT use it for questions about who ran a command, a specific user
   action, or any "who did X" — those go to search_commands / recent_commands / audit_log.
 - host_availability: the host UP/DOWN history — recorded online<->offline transitions
   with per-host downtime totals. The ONLY tool that can answer about PAST reachability:
@@ -128,7 +128,7 @@ WORKING METHOD
 - Fleet health checks ("anything wrong?", "morning report"): start with fleet_insights;
   it already aggregates offline hosts, low disk, capacity runway, high memory/load, and
   pending updates. Add recent_scans / recent_playbook_runs failures if relevant.
-- Capacity questions ("when will web-01 run out of disk?", "will any host run out of disk
+- Capacity questions ("when will <host> run out of disk?", "will any host run out of disk
   or memory this week?"): fleet_insights carries the disk-runway projection. Cite ONLY the
   capacity categories (disk, disk-runway, memory) — if none are present, the correct answer
   is that NO host is projected to run out in that window; say so plainly and do NOT cite
@@ -153,7 +153,7 @@ TAKING ACTION
 - Some tools begin with "propose_" (e.g. propose_vulnerability_scan, propose_host_tag).
   They do NOT perform the action — they PREPARE it, and the user must explicitly CONFIRM
   it before anything runs. Only call a propose_ tool when the user clearly asks you to DO
-  that thing ("scan web-01 for vulnerabilities", "tag db-02 as legacy") — never on your
+  that thing ("scan <host> for vulnerabilities", "tag <host2> as legacy") — never on your
   own initiative, and never merely to answer a question.
 - After proposing, briefly state what you have prepared and that the user can confirm or
   dismiss it. NEVER say an action has been done, started, or completed — it only runs
@@ -287,7 +287,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_detail",
-		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use when the user asks about a specific host's FILESYSTEMS or NETWORK ('which filesystem is full on web-01', 'what subnet is db-02 on'). It also returns a diskBreakdown that names the mount driving the host's headline 'disk free %' and gives each mount's free% and used% — use it to answer 'which filesystem is the disk-free % / where did that number come from'. For pending package updates, use host_updates instead (this returns the whole host card, which is noisy for an updates question).",
+		Description: "Get full detail for a single host by its exact hostname: complete inventory, status, every mounted filesystem's usage, and all network interfaces with their addresses. Use when the user asks about a specific host's FILESYSTEMS or NETWORK ('which filesystem is full on <host>', 'what subnet is <host2> on'). It also returns a diskBreakdown that names the mount driving the host's headline 'disk free %' and gives each mount's free% and used% — use it to answer 'which filesystem is the disk-free % / where did that number come from'. For pending package updates, use host_updates instead (this returns the whole host card, which is noisy for an updates question).",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname"}},
@@ -298,7 +298,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_updates",
-		Description: "List the pending package updates as a focused table: for one host (by hostname) or across all accessible hosts with updates. Each row has the host, the package name, its target version, and whether it's a security update (security fixes are listed first). This is the RIGHT tool for 'what are the pending updates', 'which packages need updating on web-01', 'what security updates are pending' — it returns just the packages, unlike host_detail which returns the whole host. (query_hosts still gives just the COUNTS; host_updates gives the actual package names.)",
+		Description: "List the pending package updates as a focused table: for one host (by hostname) or across all accessible hosts with updates. Each row has the host, the package name, its target version, and whether it's a security update (security fixes are listed first). This is the RIGHT tool for 'what are the pending updates', 'which packages need updating on <host>', 'what security updates are pending' — it returns just the packages, unlike host_detail which returns the whole host. (query_hosts still gives just the COUNTS; host_updates gives the actual package names.)",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -311,7 +311,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_scans",
-		Description: "List recent OpenSCAP security scans, most recent first. Each entry has hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), and when it ran (createdAt/finishedAt). Use for questions like 'when was the last security scan on web-01' or 'which hosts were scanned recently'; for 'scheduled scans' specifically, keep entries where scheduled is true. Optionally filter by hostname.",
+		Description: "List recent OpenSCAP security scans, most recent first. Each entry has hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), and when it ran (createdAt/finishedAt). Use for questions like 'when was the last security scan on <host>' or 'which hosts were scanned recently'; for 'scheduled scans' specifically, keep entries where scheduled is true. Optionally filter by hostname.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -334,7 +334,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_metric_history",
-		Description: "Return a single host's resource-usage history over a time window, as time-ordered buckets, for TREND questions (e.g. 'disk usage trend on web-01 over the past 48 hours', 'has memory been climbing on db-02'). Each bucket has a timestamp (t), a sample count, and for that interval: average and minimum free-disk % (diskFreePctAvg / diskFreePctMin), average and peak memory-used % (memUsedPctAvg / memUsedPctMax), and average and peak load per core (loadPerCoreAvg / loadPerCoreMax). Compare the earliest and latest buckets to describe the trend. Requires the exact hostname; the window defaults to the last 48 hours and is capped to the server's retention.",
+		Description: "Return a single host's resource-usage history over a time window, as time-ordered buckets, for TREND questions (e.g. 'disk usage trend on <host> over the past 48 hours', 'has memory been climbing on <host2>'). Each bucket has a timestamp (t), a sample count, and for that interval: average and minimum free-disk % (diskFreePctAvg / diskFreePctMin), average and peak memory-used % (memUsedPctAvg / memUsedPctMax), and average and peak load per core (loadPerCoreAvg / loadPerCoreMax). Compare the earliest and latest buckets to describe the trend. Requires the exact hostname; the window defaults to the last 48 hours and is capped to the server's retention.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -353,7 +353,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "session_history",
-		Description: "List PAST and active SSH sessions, newest first: who connected to which host, from which client IP, when it started/ended, and its status (active, closed, or error). Use for questions about past logins/connections ('who connected to web-01 yesterday', 'any sessions that ended in an error'). For sessions active right now, prefer list_sessions.",
+		Description: "List PAST and active SSH sessions, newest first: who connected to which host, from which client IP, when it started/ended, and its status (active, closed, or error). Use for questions about past logins/connections ('who connected to <host> yesterday', 'any sessions that ended in an error'). For sessions active right now, prefer list_sessions.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -383,14 +383,14 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "list_schedules",
-		Description: "List the recurring scan/playbook schedules: name, kind (scan or playbook), enabled, target (host or group), a human-readable recurrence ('every 30m', 'daily at 02:00'), last run time + status, next run time, and whether it is running right now. Use for 'what runs automatically', 'when is the next scan of web-01', 'did the nightly playbook succeed'. Takes no arguments.",
+		Description: "List the recurring scan/playbook schedules: name, kind (scan or playbook), enabled, target (host or group), a human-readable recurrence ('every 30m', 'daily at 02:00'), last run time + status, next run time, and whether it is running right now. Use for 'what runs automatically', 'when is the next scan of <host>', 'did the nightly playbook succeed'. Takes no arguments.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 }, {
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_file_transfers",
-		Description: "List recent SFTP file transfers, newest first: who uploaded/downloaded which file to/from which host, the size in bytes, status, and when. Use for 'what files were uploaded to web-01 this week' or 'who downloaded anything recently'.",
+		Description: "List recent SFTP file transfers, newest first: who uploaded/downloaded which file to/from which host, the size in bytes, status, and when. Use for 'what files were uploaded to <host> this week' or 'who downloaded anything recently'.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -404,7 +404,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "fleet_insights",
-		Description: "Return the current computed fleet-health issues across the hosts the user can access: offline hosts, low/critically-low disk, disk-runway projections (how many days until a filesystem fills, with a confidence label), high memory, high CPU load, and pending security updates. Each item has a severity (critical/warning), category, hostname, title, and a plain-English detail. This is the tool for TWO kinds of question: (1) open-ended health — 'what's wrong with the fleet', 'anything I should worry about this morning', 'any problems'; and (2) forward-looking CAPACITY / RUNWAY of disk or memory — 'which hosts are low on disk', 'is any host about to run out of disk space or memory', 'which hosts are running out of disk', 'when will web-01 fill up', 'how much runway is left'. It ALREADY contains the disk-runway projection, so it is the correct and complete answer for capacity questions — never fall back to host_metric_history or query_hosts to estimate when something will fill up. Takes no arguments.",
+		Description: "Return the current computed fleet-health issues across the hosts the user can access: offline hosts, low/critically-low disk, disk-runway projections (how many days until a filesystem fills, with a confidence label), high memory, high CPU load, and pending security updates. Each item has a severity (critical/warning), category, hostname, title, and a plain-English detail. This is the tool for TWO kinds of question: (1) open-ended health — 'what's wrong with the fleet', 'anything I should worry about this morning', 'any problems'; and (2) forward-looking CAPACITY / RUNWAY of disk or memory — 'which hosts are low on disk', 'is any host about to run out of disk space or memory', 'which hosts are running out of disk', 'when will <host> fill up', 'how much runway is left'. It ALREADY contains the disk-runway projection, so it is the correct and complete answer for capacity questions — never fall back to host_metric_history or query_hosts to estimate when something will fill up. Takes no arguments.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 }, {
@@ -424,7 +424,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "search_commands",
-		Description: "Search the commands users TYPED in recorded interactive SSH terminal sessions, reconstructed from the session recordings — the way to answer 'who ran <command> in a terminal', 'did anyone type rm -rf', 'who ran systemctl on web-01'. Each match returns the reconstructed command line, the user, the host, and when. IMPORTANT CAVEATS to convey: this is a BEST-EFFORT reconstruction from keystrokes (tab-completion and up-arrow history recall may be missing or partial), so present results as what was 'typed', not a guaranteed executed-command log; and it only covers sessions that were RECORDED. For commands run via Fleet's Run-Command feature (not a terminal), use recent_commands instead. Provide a `query` (a word or substring to search for); optionally narrow by hostname.",
+		Description: "Search the commands users TYPED in recorded interactive SSH terminal sessions, reconstructed from the session recordings — the way to answer 'who ran <command> in a terminal', 'did anyone type rm -rf', 'who ran systemctl on <host>'. Each match returns the reconstructed command line, the user, the host, and when. IMPORTANT CAVEATS to convey: this is a BEST-EFFORT reconstruction from keystrokes (tab-completion and up-arrow history recall may be missing or partial), so present results as what was 'typed', not a guaranteed executed-command log; and it only covers sessions that were RECORDED. For commands run via Fleet's Run-Command feature (not a terminal), use recent_commands instead. Provide a `query` (a word or substring to search for); optionally narrow by hostname.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -439,7 +439,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_commands",
-		Description: "List ad-hoc commands run through Fleet's Run-Command feature, most recent first — the authoritative 'who ran which command' record. Each entry has the exact command text, who requested it, the target (a host or a group + host count), status (completed/failed), exit code, and when it ran. Use for questions like 'who ran systemctl restart on web-01', 'what commands were run today', or 'did anyone run a reboot recently'. NOTE: this covers commands issued via Fleet's Run-Command feature, NOT commands typed inside an interactive SSH terminal session (those live only in the session recordings). Optionally filter by a command substring (contains) or target hostname.",
+		Description: "List ad-hoc commands run through Fleet's Run-Command feature, most recent first — the authoritative 'who ran which command' record. Each entry has the exact command text, who requested it, the target (a host or a group + host count), status (completed/failed), exit code, and when it ran. Use for questions like 'who ran systemctl restart on <host>', 'what commands were run today', or 'did anyone run a reboot recently'. NOTE: this covers commands issued via Fleet's Run-Command feature, NOT commands typed inside an interactive SSH terminal session (those live only in the session recordings). Optionally filter by a command substring (contains) or target hostname.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -467,7 +467,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "vulnerabilities",
-		Description: "CVE / vulnerability scan results (from the grype-based vulnerability scanner). With a hostname it returns that host's latest completed scan findings — each CVE with its package, installed vs fixed version, severity, and CVSS — optionally filtered by minimum severity or CVSS. WITHOUT a hostname it returns the fleet vulnerability roll-up: the latest scan per host with critical/high/medium/low counts and max CVSS, worst first. Use for 'what CVEs / vulnerabilities are on web-01', 'which hosts have critical vulnerabilities', 'how bad is db-02's vulnerability posture'. This is DISTINCT from recent_scans, which is OpenSCAP compliance/benchmark scanning — vulnerabilities is CVE/patch exposure. Requires the Host.Scan permission.",
+		Description: "CVE / vulnerability scan results (from the grype-based vulnerability scanner). With a hostname it returns that host's latest completed scan findings — each CVE with its package, installed vs fixed version, severity, and CVSS — optionally filtered by minimum severity or CVSS. WITHOUT a hostname it returns the fleet vulnerability roll-up: the latest scan per host with critical/high/medium/low counts and max CVSS, worst first. Use for 'what CVEs / vulnerabilities are on <host>', 'which hosts have critical vulnerabilities', 'how bad is <host2>'s vulnerability posture'. This is DISTINCT from recent_scans, which is OpenSCAP compliance/benchmark scanning — vulnerabilities is CVE/patch exposure. Requires the Host.Scan permission.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

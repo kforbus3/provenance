@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -296,6 +299,10 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	// falls through to the normal model-driven loop below.
 	if name, fargs, ok := fastPathTool(question); ok {
 		var result any
+		var directAnswer string // when set, returned verbatim (the tool KNOWS the exact
+		// answer, e.g. a host list or a change breakdown — the LLM is unreliable at
+		// enumerating/counting, so we build the answer in code and skip narration).
+		handled := true
 		switch name {
 		case "host_updates":
 			tbl, payload := s.runHostUpdates(ctx, fargs, who)
@@ -341,8 +348,24 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			result = payload
 		case "query_hosts":
 			rows := s.runQueryHosts(ctx, fargs, who)
-			data.hosts = rows
-			result = map[string]any{"count": len(rows), "hosts": rows}
+			data.hosts = rows // full rows still drive the UI host list
+			// A disk-free filter question ("which hosts have less than N% disk free") is a
+			// pure list — the tool knows exactly which hosts match. Build the answer
+			// deterministically (count + EVERY host with its %), because the model
+			// truncates and miscounts long lists even from a compact projection.
+			if da := diskFreeDirectAnswer(question, fargs, rows); da != "" {
+				directAnswer = da
+			} else {
+				compact := make([]map[string]any, len(rows))
+				for i, r := range rows {
+					compact[i] = map[string]any{
+						"hostname": r.Hostname, "status": r.Status,
+						"diskFreePct": r.MinDiskFreePct, "memUsedPct": r.MemUsedPct,
+						"updatesAvailable": r.UpdatesAvailable, "securityUpdates": r.SecurityUpdates,
+					}
+				}
+				result = map[string]any{"count": len(rows), "hosts": compact}
+			}
 		case "host_detail":
 			host, payload := s.hostDetail(ctx, fargs, who)
 			if host != nil {
@@ -361,12 +384,50 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.table = tbl
 			}
 			result = payload
+		case "session_history":
+			tbl, payload := s.runSessionHistory(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			directAnswer = s.sessionDirectAnswer(ctx, fargs, payload)
+			result = payload
+		case "recent_activity_failures":
+			result = s.runActivityFailures(ctx, who)
+		case "audit_log":
+			tbl, payload := s.runAuditLog(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			// "What changed" is a breakdown the tool already computed (changesByAction,
+			// de-noised). Build it deterministically so the model can't re-introduce the
+			// routine noise or drop changes.
+			directAnswer = auditChangesDirectAnswer(question, payload)
+			result = payload
+		case "host_metric_history":
+			hist, payload := s.runMetricHistory(ctx, fargs, who)
+			if hist != nil {
+				data.history = hist
+				directAnswer = metricTrendDirectAnswer(hist) // deterministic trend sentence
+			}
+			result = payload
+		default:
+			// fastPathTool routed to a tool with no dispatch here — a wiring bug that
+			// would otherwise narrate empty data (a false "nothing found"). Fall through
+			// to the model-driven loop, which handles every tool, instead.
+			handled = false
+			s.log.Warn("assistant fast-path tool has no dispatch handler; deferring to model", "tool", name)
 		}
-		if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil && strings.TrimSpace(final) != "" {
-			s.remember(convoID, who.UserID, question, final)
-			return final, data, nil
+		if directAnswer != "" {
+			s.remember(convoID, who.UserID, question, directAnswer)
+			return directAnswer, data, nil
 		}
-		// On a narration failure, fall through to the normal loop rather than error out.
+		if handled {
+			if final, err := s.narrateFromData(ctx, client, cfg, messages, name, result); err == nil && strings.TrimSpace(final) != "" {
+				s.remember(convoID, who.UserID, question, final)
+				return final, data, nil
+			}
+		}
+		// Not handled, or narration failed/empty: fall through to the normal loop.
 	}
 
 	// Offer the action (propose_*) tools only to callers permitted to act and only
@@ -588,17 +649,20 @@ func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg
 // by small models far more reliably than the same rules buried in the long system prompt
 // — without it they enumerate every row and append recommendations. Used by BOTH the
 // fast-path narration and the LLM-loop refine pass so every final answer is consistent.
-const scopeReminder = "Now write the final answer to the user's question. Follow these rules strictly:\n" +
+const scopeReminder = "Now write the final answer to the user's question using ONLY the tool data " +
+	"above. NEVER invent host names, counts, times, or values that are not in the data. Rules:\n" +
 	"- Answer ONLY what was asked. If the question has a qualifier (failed, offline, critical, " +
 	"pending, this/last week), include ONLY items matching it.\n" +
-	"- SUMMARIZE — do NOT list every row. The full rows are shown to the user separately as a " +
-	"table, so group similar items and give counts (e.g. \"RouterOS Upgrade failed ~20 times, " +
-	"almost all on coreswitch\") instead of enumerating each one. List individual items only when " +
-	"there are just a few.\n" +
+	"- For a \"which/list\" question (which hosts, which users, list X): NAME EVERY matching item with " +
+	"its key value (e.g. each host with its disk-free %). Do not drop any or truncate to a few; if there " +
+	"are many, give the count first, then still list them all.\n" +
+	"- For a large EVENT/ACTIVITY log (dozens of similar rows — playbook runs, audit events): group " +
+	"similar items and give counts (e.g. \"RouterOS Upgrade failed ~20 times, almost all on coreswitch\") " +
+	"instead of enumerating each row.\n" +
 	"- No recommendations, next steps, or \"you may want to…\" unless the user asked what to do.\n" +
-	"- No preamble, no headings, no restating the question. A few sentences at most.\n" +
-	"- If the data is empty, say in one sentence that nothing matched — do not fill the gap with " +
-	"related data."
+	"- No preamble, no headings, no restating the question. Keep it tight.\n" +
+	"- If the data is empty, say in one sentence that nothing matched — do NOT fill the gap with " +
+	"related or invented data."
 
 // refineFinalAnswer regenerates the final answer from the accumulated tool results with
 // the scopeReminder appended as the LAST message. base already contains the system
@@ -797,6 +861,283 @@ func (s *Service) runRecentScans(ctx context.Context, raw json.RawMessage, who C
 }
 
 // runRecentPlaybookRuns returns recent playbook runs (gated by Playbook.Run).
+// runActivityFailures answers "any failed scans or playbook runs" by pulling both
+// histories and returning ONLY the entries that actually FAILED (status), not the full
+// history or scan compliance scores. This keeps the answer grounded and on-topic (the
+// model otherwise reported scan pass/fail check counts and dropped the failed runs).
+// diskFreeDirectAnswer builds the exact answer for a "which hosts have less/more than N%
+// disk free" question from the already-filtered rows — count + EVERY matching host with
+// its %. Returns "" if fargs isn't a disk-filter query. The store already applied the
+// threshold, so every row matches.
+func diskFreeDirectAnswer(question string, fargs json.RawMessage, rows []models.AssistantHostRow) string {
+	var a queryHostsArgs
+	_ = json.Unmarshal(fargs, &a)
+	var threshold float64
+	var dir string
+	switch {
+	case a.DiskFreePctMax != nil:
+		threshold, dir = *a.DiskFreePctMax, "less"
+	case a.DiskFreePctMin != nil:
+		threshold, dir = *a.DiskFreePctMin, "more"
+	default:
+		return ""
+	}
+	thr := strconv.FormatFloat(threshold, 'f', -1, 64)
+	if len(rows) == 0 {
+		return fmt.Sprintf("No hosts have %s than %s%% disk free.", dir, thr)
+	}
+	sort.Slice(rows, func(i, j int) bool { return ptrF(rows[i].MinDiskFreePct) < ptrF(rows[j].MinDiskFreePct) })
+	parts := make([]string, len(rows))
+	for i, r := range rows {
+		parts[i] = fmt.Sprintf("%s (%s%%)", r.Hostname, strconv.FormatFloat(ptrF(r.MinDiskFreePct), 'f', 1, 64))
+	}
+	noun := "hosts"
+	if len(rows) == 1 {
+		noun = "host"
+	}
+	return fmt.Sprintf("%d %s have %s than %s%% disk free: %s.", len(rows), noun, dir, thr, strings.Join(parts, ", "))
+}
+
+func ptrF(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// sessionDirectAnswer builds a concise answer for "who connected to <host>" questions:
+// the single most recent for a "last connected" query (Limit==1), else distinct users
+// with session counts — instead of the model dumping every session timestamp. Returns ""
+// on empty so the narration handles the "no one connected" case.
+func (s *Service) sessionDirectAnswer(ctx context.Context, fargs json.RawMessage, payload any) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	sessions, ok := m["sessions"].([]models.AssistantSSHSessionRow)
+	if !ok || len(sessions) == 0 {
+		return ""
+	}
+	var a sessionHistoryArgs
+	_ = json.Unmarshal(fargs, &a)
+	loc := s.displayLoc(ctx)
+	when := func(t time.Time) string { return t.In(loc).Format("2006-01-02 15:04 MST") }
+
+	if a.Limit == 1 { // "who last connected to <host>"
+		r := sessions[0]
+		return fmt.Sprintf("%s last connected to %s on %s.", r.Username, a.Hostname, when(r.StartedAt))
+	}
+	// "who connected to <host> [window]": distinct users with counts.
+	counts := map[string]int{}
+	order := []string{}
+	for _, r := range sessions {
+		if _, seen := counts[r.Username]; !seen {
+			order = append(order, r.Username)
+		}
+		counts[r.Username]++
+	}
+	parts := make([]string, len(order))
+	for i, u := range order {
+		parts[i] = fmt.Sprintf("%s (%d session%s)", u, counts[u], plural(counts[u]))
+	}
+	return fmt.Sprintf("Connections to %s: %s.", a.Hostname, strings.Join(parts, ", "))
+}
+
+// metricTrendDirectAnswer builds a proper trend sentence from bucketed history — earliest
+// vs latest value, direction, and range per metric — instead of letting the model narrate
+// raw bucket fields (observed: "diskFreePctMin was 24.1 ... occurring once", raw floats).
+func metricTrendDirectAnswer(hist *MetricHistory) string {
+	if hist == nil || len(hist.Points) == 0 {
+		return ""
+	}
+	pts := append([]store.MetricHistoryPoint(nil), hist.Points...)
+	sort.Slice(pts, func(i, j int) bool { return pts[i].Time.Before(pts[j].Time) })
+	metrics := hist.Metrics
+	if len(metrics) == 0 {
+		metrics = []string{"disk", "memory", "load"}
+	}
+	var clauses []string
+	for _, mname := range metrics {
+		var get func(store.MetricHistoryPoint) *float64
+		var label, unit string
+		switch mname {
+		case "disk":
+			get, label, unit = func(p store.MetricHistoryPoint) *float64 { return p.DiskFreePctAvg }, "disk-free", "%"
+		case "memory":
+			get, label, unit = func(p store.MetricHistoryPoint) *float64 { return p.MemUsedPctAvg }, "memory-used", "%"
+		case "load":
+			get, label, unit = func(p store.MetricHistoryPoint) *float64 { return p.LoadPerCoreAvg }, "load-per-core", ""
+		default:
+			continue
+		}
+		var first, last *float64
+		mn, mx := math.Inf(1), math.Inf(-1)
+		for _, p := range pts {
+			v := get(p)
+			if v == nil {
+				continue
+			}
+			if first == nil {
+				first = v
+			}
+			last = v
+			mn, mx = math.Min(mn, *v), math.Max(mx, *v)
+		}
+		if first == nil {
+			continue
+		}
+		dir := "held steady"
+		if d := *last - *first; d <= -1 {
+			dir = "fell"
+		} else if d >= 1 {
+			dir = "rose"
+		}
+		clauses = append(clauses, fmt.Sprintf("%s %s from %.1f%s to %.1f%s (min %.1f%s, max %.1f%s)",
+			label, dir, *first, unit, *last, unit, mn, unit, mx, unit))
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("On %s %s, %s.", hist.Hostname, windowPhrase(hist.WindowHours), strings.Join(clauses, "; "))
+}
+
+func windowPhrase(h int) string {
+	switch {
+	case h <= 24:
+		return "over the past day"
+	case h <= 49:
+		return "over the past 2 days"
+	case h <= 168:
+		return "over the past week"
+	case h <= 744:
+		return "over the past month"
+	default:
+		return "recently"
+	}
+}
+
+// auditChangesDirectAnswer builds a de-noised "what changed" summary from the audit tool's
+// pre-computed changesByAction (operator changes), so the model can't re-introduce the
+// routine automated noise (certificate issuance, assistant queries) or drop changes.
+func auditChangesDirectAnswer(question string, payload any) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	changes, ok := m["changesByAction"].(map[string]int)
+	if !ok {
+		return ""
+	}
+	type kv struct {
+		k string
+		n int
+	}
+	var items []kv
+	total := 0
+	for k, n := range changes {
+		items = append(items, kv{k, n})
+		total += n
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].n != items[j].n {
+			return items[i].n > items[j].n
+		}
+		return items[i].k < items[j].k
+	})
+	period := auditPeriodPhrase(strings.ToLower(question))
+	if total == 0 {
+		return "No operator changes were recorded in the audit log " + period + "."
+	}
+	// Cap to the top action types so a busy window doesn't produce a 40-item wall; the
+	// full breakdown is in the table beneath.
+	const topN = 8
+	shown := items
+	extra := 0
+	if len(items) > topN {
+		shown = items[:topN]
+		extra = len(items) - topN
+	}
+	parts := make([]string, len(shown))
+	for i, it := range shown {
+		parts[i] = fmt.Sprintf("%d %s", it.n, it.k)
+	}
+	ans := fmt.Sprintf("%d change%s %s: %s", total, plural(total), period, strings.Join(parts, ", "))
+	if extra > 0 {
+		ans += fmt.Sprintf(", and %d other change type%s", extra, plural(extra))
+	}
+	ans += "."
+	if routine, ok := m["routineByAction"].(map[string]int); ok {
+		rc := 0
+		for _, n := range routine {
+			rc += n
+		}
+		if rc > 0 {
+			ans += fmt.Sprintf(" (Plus %d routine automated events not shown.)", rc)
+		}
+	}
+	return ans
+}
+
+func auditPeriodPhrase(lq string) string {
+	switch {
+	case strings.Contains(lq, "today"):
+		return "today"
+	case strings.Contains(lq, "yesterday"):
+		return "yesterday"
+	case strings.Contains(lq, "this week"), strings.Contains(lq, "past week"), strings.Contains(lq, "last week"):
+		return "this week"
+	case strings.Contains(lq, "month"):
+		return "this month"
+	default:
+		return "recently"
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func (s *Service) runActivityFailures(ctx context.Context, who Caller) any {
+	out := map[string]any{}
+	if who.CanViewRuns || who.IsSuperAdmin {
+		runs, err := s.store.RecentPlaybookRunsForAssistant(ctx, 100)
+		if err == nil {
+			failed := []models.AssistantPlaybookRunRow{}
+			for _, r := range runs {
+				if isFailedStatus(r.Status) {
+					failed = append(failed, r)
+				}
+			}
+			out["failedPlaybookRuns"] = failed
+			out["failedPlaybookRunCount"] = len(failed)
+		}
+	}
+	if who.CanViewScans || who.IsSuperAdmin {
+		scans, err := s.store.RecentScansForAssistant(ctx, who.UserID, who.IsSuperAdmin, "", 100)
+		if err == nil {
+			// A "failed scan" is one that failed to RUN (status), not a completed scan
+			// with a low compliance score — so filter by status, not pass/fail counts.
+			failed := []models.AssistantScanRow{}
+			for _, r := range scans {
+				if isFailedStatus(r.Status) {
+					failed = append(failed, r)
+				}
+			}
+			out["failedScans"] = failed
+			out["failedScanCount"] = len(failed)
+		}
+	}
+	return out
+}
+
+func isFailedStatus(status string) bool {
+	s := strings.ToLower(strings.TrimSpace(status))
+	return s == "failed" || s == "error" || s == "errored" || s == "failure"
+}
+
 func (s *Service) runRecentPlaybookRuns(ctx context.Context, who Caller) any {
 	if !who.CanViewRuns && !who.IsSuperAdmin {
 		return map[string]any{"error": "you do not have permission to view playbook runs"}
@@ -1110,20 +1451,27 @@ func (s *Service) runAuditLog(ctx context.Context, raw json.RawMessage, who Call
 		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "Actor"}, {Label: "Action"},
 			{Label: "Target"}, {Label: "IP"}, {Label: "Detail"}},
 	}
-	// Separate operator-initiated CHANGES from high-volume automated/background noise
-	// (the assistant's own queries, per-session certificate issuance, KRL housekeeping).
-	// "What changed today" should lead with the former; the latter is at most a count.
-	changesByAction := map[string]int{}
-	routineByAction := map[string]int{}
-	changeCount := 0
 	for _, r := range rows {
 		tbl.Rows = append(tbl.Rows, []string{tableTime(r.Time), r.Actor, r.Action,
 			r.TargetKind, r.IP, r.Detail})
-		if isRoutineAuditAction(r.Action) {
-			routineByAction[r.Action]++
+	}
+	// Separate operator-initiated CHANGES from high-volume automated/background noise
+	// (the assistant's own queries, per-session certificate issuance, KRL housekeeping).
+	// Counts come from a window-wide aggregate (NOT the display-limited rows), so real
+	// changes aren't crowded out of the summary by routine volume.
+	changesByAction := map[string]int{}
+	routineByAction := map[string]int{}
+	changeCount := 0
+	counts, cerr := s.store.AuditActionCountsForAssistant(ctx, windowSince(a.Hours, 24))
+	if cerr != nil {
+		counts = map[string]int{} // fall back to empty rather than fail the whole answer
+	}
+	for action, n := range counts {
+		if isRoutineAuditAction(action) {
+			routineByAction[action] += n
 		} else {
-			changesByAction[r.Action]++
-			changeCount++
+			changesByAction[action] += n
+			changeCount += n
 		}
 	}
 	if len(rows) == 0 {

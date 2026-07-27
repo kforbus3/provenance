@@ -81,13 +81,21 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "query_hosts", a, true
 	}
 
+	// 3b2) "disk/memory/load usage TREND on <host> over the past <window>" ->
+	// host_metric_history. Pin it so an empty/mis-routed history call can't make the model
+	// invent a host (observed: hallucinating a fake host from a prompt example).
+	if host, metrics, ok := metricTrendIntent(lq); ok {
+		a, _ := json.Marshal(metricHistoryArgs{Hostname: host, Metrics: metrics, Hours: hoursFromText(lq)})
+		return "host_metric_history", a, true
+	}
+
 	// 3c) "who connected to <host>" / "who was the last person to connect to <host>" ->
 	// session_history. Crucial: a "last person to connect" question wants the MOST RECENT
 	// session regardless of age, so it uses a ~1-year window instead of the tool's 48h
 	// default (which returns "no one" if the last connection was >48h ago — a false
 	// negative). An explicit window ("yesterday", "this week") is honored.
-	if host, hrs, ok := sessionHistoryIntent(lq); ok {
-		a, _ := json.Marshal(sessionHistoryArgs{Hostname: host, Hours: hrs})
+	if host, hrs, limit, ok := sessionHistoryIntent(lq); ok {
+		a, _ := json.Marshal(sessionHistoryArgs{Hostname: host, Hours: hrs, Limit: limit})
 		return "session_history", a, true
 	}
 
@@ -107,6 +115,23 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	if securityEventsIntent(lq) {
 		a, _ := json.Marshal(securityEventsArgs{FailedOnly: true, Hours: hoursFromText(lq)})
 		return "security_events", a, true
+	}
+
+	// 5b) "failed scans / playbook runs / jobs" -> deterministically pull BOTH the scan
+	// and playbook-run history (a synthetic combined tool). The model otherwise
+	// mis-routes this (observed: hallucinating a disk answer from a prompt example, or
+	// giving up), because no single tool covers "scans OR runs".
+	if failedActivityIntent(lq) {
+		return "recent_activity_failures", json.RawMessage(`{}`), true
+	}
+
+	// 5c) "what changed (in the audit log)" -> audit_log with the window parsed from the
+	// question, so "this week" isn't silently capped at the 24h default.
+	if auditChangesIntent(lq) {
+		// High limit so operator changes aren't crowded out of the window by high-volume
+		// routine rows (assistant queries, certificate issuance).
+		a, _ := json.Marshal(auditLogArgs{Hours: hoursFromText(lq), Limit: 500})
+		return "audit_log", a, true
 	}
 
 	// 6) CVE / vulnerability READ questions -> vulnerabilities (not a "run a scan"
@@ -418,34 +443,89 @@ var (
 	sessionConnectRE = regexp.MustCompile(`(?:connect(?:ed)?|logged? ?in|logged into|signed? ?in|accessed?)\s+(?:in ?)?to\s+([a-z0-9][a-z0-9._-]*)`)
 )
 
+// metricTrendIntent recognizes "disk/memory/load usage/trend on <host> over <window>" and
+// returns the host + which metric(s). Requires a trend/history/over-time phrasing AND a
+// named metric AND a host, so it doesn't hijack current-state questions.
+func metricTrendIntent(lq string) (host string, metrics []string, ok bool) {
+	if !strings.Contains(lq, "trend") && !strings.Contains(lq, "over time") &&
+		!strings.Contains(lq, "over the past") && !strings.Contains(lq, "over the last") &&
+		!strings.Contains(lq, "history") && !strings.Contains(lq, "history of") {
+		return "", nil, false
+	}
+	if strings.Contains(lq, "disk") || strings.Contains(lq, "storage") || strings.Contains(lq, "filesystem") {
+		metrics = append(metrics, "disk")
+	}
+	if strings.Contains(lq, "memory") || strings.Contains(lq, "ram") {
+		metrics = append(metrics, "memory")
+	}
+	if strings.Contains(lq, "load") || strings.Contains(lq, "cpu") {
+		metrics = append(metrics, "load")
+	}
+	if len(metrics) == 0 {
+		return "", nil, false // "trend of what?" — defer to the model
+	}
+	m := hostAnywhereRE.FindStringSubmatch(lq)
+	if m == nil {
+		return "", nil, false
+	}
+	return strings.TrimRight(m[1], ".?!,"), metrics, true
+}
+
+// failedActivityIntent recognizes "any failed scans / playbook runs / jobs" (not failed
+// logins, which securityEventsIntent handles earlier). Routes to the combined
+// scan+playbook-run history so the answer is grounded rather than hallucinated.
+func failedActivityIntent(lq string) bool {
+	if !strings.Contains(lq, "fail") && !strings.Contains(lq, "error") &&
+		!strings.Contains(lq, "unsuccessful") && !strings.Contains(lq, "did not complete") {
+		return false
+	}
+	if strings.Contains(lq, "login") || strings.Contains(lq, "log in") || strings.Contains(lq, "sign") {
+		return false // that's security_events
+	}
+	return strings.Contains(lq, "scan") || strings.Contains(lq, "playbook") ||
+		strings.Contains(lq, "job") || strings.Contains(lq, "automation") || strings.Contains(lq, "run")
+}
+
+// auditChangesIntent recognizes "what changed / what happened in the audit log".
+func auditChangesIntent(lq string) bool {
+	if strings.Contains(lq, "audit log") || strings.Contains(lq, "audit trail") {
+		return true
+	}
+	return strings.Contains(lq, "what changed") || strings.Contains(lq, "what has changed") ||
+		strings.Contains(lq, "what was changed") || strings.Contains(lq, "any changes") ||
+		strings.Contains(lq, "what changes were")
+}
+
 // sessionHistoryIntent recognizes "who connected to <host>" / "who was the last person to
 // connect to <host>" and returns the host + lookback window. A "last / most recent"
 // question uses ~1 year so it finds the most recent session regardless of age; an
 // explicit window is parsed; otherwise a generous 30-day default.
-func sessionHistoryIntent(lq string) (host string, hours int, ok bool) {
+func sessionHistoryIntent(lq string) (host string, hours, limit int, ok bool) {
 	isWho := strings.Contains(lq, "who connected") || strings.Contains(lq, "who logged") ||
 		strings.Contains(lq, "who accessed") || strings.Contains(lq, "who signed") ||
 		strings.Contains(lq, "who has ") || strings.Contains(lq, "who last")
 	isLast := strings.Contains(lq, "last person to") || strings.Contains(lq, "last to connect") ||
 		strings.Contains(lq, "who was the last") || strings.Contains(lq, "most recent") ||
-		strings.Contains(lq, "last person who")
+		strings.Contains(lq, "last person who") || strings.Contains(lq, "who last connected") ||
+		strings.Contains(lq, "last connected") || strings.Contains(lq, "latest")
 	if !isWho && !isLast {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	m := sessionConnectRE.FindStringSubmatch(lq)
 	if m == nil {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	host = strings.TrimRight(m[1], ".?!,")
 	switch {
-	case isLast || strings.Contains(lq, "latest") || strings.Contains(lq, "ever"):
-		hours = 24 * 365 // unbounded in practice: find the most recent session
+	case isLast || strings.Contains(lq, "ever"):
+		// "the LAST person to connect" wants exactly the most recent session, over an
+		// unbounded window. Limit=1 so the model can't pick an older row by mistake.
+		return host, 24 * 365, 1, true
 	case hasExplicitTimeWindow(lq):
-		hours = hoursFromText(lq)
+		return host, hoursFromText(lq), 0, true
 	default:
-		hours = 24 * 30 // "who connected to X" with no window: last month
+		return host, 24 * 30, 0, true // "who connected to X" with no window: last month
 	}
-	return host, hours, true
 }
 
 // hasExplicitTimeWindow reports whether the question names a concrete time window, so a
@@ -512,7 +592,9 @@ func hoursFromText(lq string) int {
 	switch {
 	case strings.Contains(lq, "today"), strings.Contains(lq, "overnight"),
 		strings.Contains(lq, "last night"), strings.Contains(lq, "this morning"),
-		strings.Contains(lq, "tonight"), strings.Contains(lq, "24h"), strings.Contains(lq, "24 h"):
+		strings.Contains(lq, "tonight"), strings.Contains(lq, "24h"), strings.Contains(lq, "24 h"),
+		strings.Contains(lq, "past day"), strings.Contains(lq, "last day"),
+		strings.Contains(lq, "a day"), strings.Contains(lq, "one day"), strings.Contains(lq, "last 24"):
 		return 24
 	case strings.Contains(lq, "yesterday"):
 		return 48

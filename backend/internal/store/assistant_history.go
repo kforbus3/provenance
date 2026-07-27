@@ -130,6 +130,29 @@ func (s *Store) RecentSSHSessionsForAssistant(ctx context.Context, userID uuid.U
 // trail is not host-scoped; the caller gates access by the Audit.View
 // permission (mirroring the audit page). Detail JSON is truncated so one noisy
 // event cannot blow up the model context.
+// AuditActionCountsForAssistant returns a count per action over the whole window (no row
+// limit), so a "what changed" summary reflects every change in the period rather than only
+// what fits in the display row cap — where high-volume routine rows (assistant queries,
+// certificate issuance) would otherwise crowd real changes out.
+func (s *Store) AuditActionCountsForAssistant(ctx context.Context, since time.Time) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT action, count(*) FROM audit_events WHERE created_at >= $1 GROUP BY action`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var action string
+		var n int
+		if err := rows.Scan(&action, &n); err != nil {
+			return nil, err
+		}
+		out[action] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) RecentAuditForAssistant(ctx context.Context, actionContains, actorContains string, since time.Time, limit int) ([]models.AssistantAuditRow, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50

@@ -74,7 +74,7 @@ func TestFastPathTool(t *testing.T) {
 		{"what is scheduled to run automatically?", "list_schedules", map[string]string{}},
 		{"when is the next scheduled scan?", "list_schedules", map[string]string{}},
 		// but scheduled-run FAILURE/history stays with the model
-		{"did any scheduled scan fail last night?", "", nil},
+		{"did any scheduled scan fail last night?", "recent_activity_failures", nil}, // failed-scan question -> combined scan+run history
 		{"when did the nightly playbook last run?", "", nil},
 
 		// action-y scan request must NOT hit the vulnerabilities READ fast-path
