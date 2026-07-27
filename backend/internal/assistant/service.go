@@ -385,6 +385,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			}
 			result = payload
 		case "session_history":
+			fargs = s.calendarAdjustHours(ctx, question, fargs)
 			tbl, payload := s.runSessionHistory(ctx, fargs, who)
 			if tbl != nil {
 				data.table = tbl
@@ -903,6 +904,30 @@ func ptrF(p *float64) float64 {
 		return 0
 	}
 	return *p
+}
+
+// calendarAdjustHours corrects a "today" session window from a 24h-rolling lookback to
+// "since local midnight", so "who connected today" doesn't leak yesterday-evening
+// sessions. Only touches session args with a "today" question and a non-"last" (Limit!=1)
+// query; everything else passes through unchanged.
+func (s *Service) calendarAdjustHours(ctx context.Context, question string, fargs json.RawMessage) json.RawMessage {
+	if !strings.Contains(strings.ToLower(question), "today") {
+		return fargs
+	}
+	var a sessionHistoryArgs
+	if err := json.Unmarshal(fargs, &a); err != nil || a.Limit == 1 {
+		return fargs
+	}
+	loc := s.displayLoc(ctx)
+	now := time.Now().In(loc)
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	h := int(now.Sub(midnight).Hours()) // floor: window starts just after midnight, excludes yesterday
+	if h < 1 {
+		h = 1
+	}
+	a.Hours = h
+	out, _ := json.Marshal(a)
+	return out
 }
 
 // sessionDirectAnswer builds a concise answer for "who connected to <host>" questions:

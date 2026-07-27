@@ -7,6 +7,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.20–0.68.21 — Ask Fleet: calendar-day "today" + follow-up context
+
+- **"today" now means the calendar day**, not a rolling 24 hours — "who connected today"
+  no longer includes yesterday-evening sessions (window starts at local midnight).
+- **Follow-up questions use conversation context.** The assistant carries the prior
+  subject forward ("tell me about them", "which host had the most?", "what about <host>")
+  and re-runs the relevant tool instead of asking the user to repeat themselves. (A
+  genuinely vague reference over a mixed prior context — e.g. "when did the failures
+  happen?" after discussing both failed scans and failed runs — can still draw a
+  clarifying question from the local model; naming the subject resolves it.)
+
+
+---
+
 ## v0.68.19 — Ask Fleet: broaden session-history routing
 
 Two "who connected" phrasings mis-routed: "has anyone connected to <host> recently?"
