@@ -533,12 +533,12 @@ func sessionHistoryIntent(lq string) (host string, hours, limit int, ok bool) {
 		return host, 24 * 365, 1, true
 	case hasExplicitTimeWindow(lq):
 		return host, hoursFromText(lq), 0, true
-	case strings.Contains(lq, "recently") || strings.Contains(lq, "lately"):
-		// "recently" reads as the past week, not a whole month — and this matches how
-		// hoursFromText already treats "recently" for audit/security/failed-run questions.
-		return host, 168, 0, true
 	default:
-		return host, 24 * 30, 0, true // bare "who connected to X" with no cue: last month
+		// "recently"/"lately" and a bare "who connected to X" with no time cue all read as
+		// the past week — not a whole month — matching how hoursFromText already scopes
+		// "recently" for audit/security/failed-run questions. An explicit window (handled
+		// above) and "who last connected" (Limit=1, unbounded) are unaffected.
+		return host, 168, 0, true
 	}
 }
 

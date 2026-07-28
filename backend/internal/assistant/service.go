@@ -298,6 +298,9 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	// question). The structured result still populates the UI. Anything not recognized
 	// falls through to the normal model-driven loop below.
 	if name, fargs, ok := fastPathTool(question); ok {
+		// A "today" question scopes to the calendar day (since local midnight), not a
+		// rolling 24h; safe on every tool (no-op unless the args carry an "hours" field).
+		fargs = s.calendarAdjustHours(ctx, question, fargs)
 		var result any
 		var directAnswer string // when set, returned verbatim (the tool KNOWS the exact
 		// answer, e.g. a host list or a change breakdown — the LLM is unreliable at
@@ -385,7 +388,6 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			}
 			result = payload
 		case "session_history":
-			fargs = s.calendarAdjustHours(ctx, question, fargs)
 			tbl, payload := s.runSessionHistory(ctx, fargs, who)
 			if tbl != nil {
 				data.table = tbl
@@ -515,19 +517,19 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				}
 				result = payload
 			case "host_metric_history":
-				hist, payload := s.runMetricHistory(ctx, tc.Function.Arguments, who)
+				hist, payload := s.runMetricHistory(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
 				if hist != nil {
 					data.history = hist
 				}
 				result = payload
 			case "session_history":
-				tbl, payload := s.runSessionHistory(ctx, tc.Function.Arguments, who)
+				tbl, payload := s.runSessionHistory(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
 				result = payload
 			case "audit_log":
-				tbl, payload := s.runAuditLog(ctx, tc.Function.Arguments, who)
+				tbl, payload := s.runAuditLog(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
@@ -551,7 +553,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				}
 				result = payload
 			case "host_availability":
-				tbl, payload := s.runHostAvailability(ctx, tc.Function.Arguments, who)
+				tbl, payload := s.runHostAvailability(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
@@ -581,7 +583,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				}
 				result = payload
 			case "security_events":
-				tbl, payload := s.runSecurityEvents(ctx, tc.Function.Arguments, who)
+				tbl, payload := s.runSecurityEvents(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
@@ -906,17 +908,30 @@ func ptrF(p *float64) float64 {
 	return *p
 }
 
-// calendarAdjustHours corrects a "today" session window from a 24h-rolling lookback to
-// "since local midnight", so "who connected today" doesn't leak yesterday-evening
-// sessions. Only touches session args with a "today" question and a non-"last" (Limit!=1)
-// query; everything else passes through unchanged.
+// calendarAdjustHours corrects a "today" time window from a 24h-rolling lookback to
+// "since local midnight", so "which hosts were accessed today" / "what changed today"
+// don't leak yesterday-evening rows. It rewrites the "hours" arg of any time-windowed
+// tool (session_history, audit_log, security_events, host_metric_history,
+// host_availability) to the hours elapsed since local midnight. It only acts when the
+// question says "today", the args already carry an "hours" field, and the query is not a
+// single-row "last …" lookup (Limit==1, which wants an unbounded window). All other
+// fields are preserved and everything else passes through unchanged.
 func (s *Service) calendarAdjustHours(ctx context.Context, question string, fargs json.RawMessage) json.RawMessage {
 	if !strings.Contains(strings.ToLower(question), "today") {
 		return fargs
 	}
-	var a sessionHistoryArgs
-	if err := json.Unmarshal(fargs, &a); err != nil || a.Limit == 1 {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(fargs, &m); err != nil {
 		return fargs
+	}
+	if _, ok := m["hours"]; !ok {
+		return fargs // not a time-windowed call; nothing to scope
+	}
+	if raw, ok := m["limit"]; ok { // "who last connected" wants the most recent row, unbounded
+		var l int
+		if json.Unmarshal(raw, &l) == nil && l == 1 {
+			return fargs
+		}
 	}
 	loc := s.displayLoc(ctx)
 	now := time.Now().In(loc)
@@ -925,8 +940,12 @@ func (s *Service) calendarAdjustHours(ctx context.Context, question string, farg
 	if h < 1 {
 		h = 1
 	}
-	a.Hours = h
-	out, _ := json.Marshal(a)
+	hb, _ := json.Marshal(h)
+	m["hours"] = hb
+	out, err := json.Marshal(m)
+	if err != nil {
+		return fargs
+	}
 	return out
 }
 

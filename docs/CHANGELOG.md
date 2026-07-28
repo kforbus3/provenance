@@ -7,6 +7,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.68.23 — Ask Fleet: "today" is the calendar day; bare connection questions scope to a week
+
+- **"today" now means since local midnight for every time-windowed question**, not a
+  rolling 24 hours — "which hosts were accessed today?", "who connected today?", "what
+  changed in the audit log today?", and "any failed logins today?" no longer include
+  yesterday-evening rows. Applied on both the fast path and the model tool-loop for
+  session, audit, security-event, metric-history, and availability questions.
+- **A bare "who connected to <host>?" with no time cue now scopes to the past week**
+  (was 30 days), matching "recently"/"lately". Explicit windows ("this month", "last 30
+  days") and "who last connected" are unchanged.
+
+
+---
+
 ## v0.68.22 — Ask Fleet: "recently" is a week, not a month
 
 - **"recently"/"lately" now scopes host-connection questions to the past week** (was 30
