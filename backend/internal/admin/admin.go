@@ -30,6 +30,7 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("User.Edit")).Put("/users/{id}", h.updateUser)
 		pr.With(d.Auth.RequirePermission("User.Delete")).Delete("/users/{id}", h.deleteUser)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Post("/users/{id}/disable", h.disableUser)
+		pr.With(d.Auth.RequirePermission("User.Edit")).Put("/users/{id}/super-admin", h.setSuperAdmin)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Post("/users/{id}/unlock", h.unlockUser)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Post("/users/{id}/require-mfa", h.setRequireMFA)
 		pr.With(d.Auth.RequirePermission("User.ResetPassword")).Post("/users/{id}/reset-password", h.resetPassword)
@@ -146,6 +147,27 @@ func (h *handler) guardSuperTarget(w http.ResponseWriter, r *http.Request, targe
 	}
 	if t, err := h.d.Store.GetUserByID(r.Context(), targetID); err == nil && t.IsSuperAdmin {
 		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may modify a super-administrator account")
+		return true
+	}
+	return false
+}
+
+// superAdminRoleName is the seeded built-in role that mirrors real super-admin
+// status (the users.is_super_admin column). Assigning/removing it goes through
+// promote/demote so the role and the column cannot drift apart.
+const superAdminRoleName = "Super Administrator"
+
+// guardLastSuper refuses an operation that would leave the platform without any
+// enabled super administrator: deleting, disabling, or demoting the last active
+// one. Returns true — and writes 400 — when the request must not proceed.
+func (h *handler) guardLastSuper(w http.ResponseWriter, r *http.Request, targetID uuid.UUID, verb string) bool {
+	t, err := h.d.Store.GetUserByID(r.Context(), targetID)
+	if err != nil || !t.IsSuperAdmin || t.IsDisabled {
+		return false
+	}
+	if n, err := h.d.Store.CountActiveSuperAdmins(r.Context()); err == nil && n <= 1 {
+		httpx.WriteError(w, http.StatusBadRequest,
+			"cannot "+verb+" the last active super administrator — promote another account first")
 		return true
 	}
 	return false

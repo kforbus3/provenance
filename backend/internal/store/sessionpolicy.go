@@ -22,13 +22,16 @@ type SessionPolicy struct {
 }
 
 // SessionPolicy returns the global policy (unrestricted when unset or malformed).
+// IPAllowlist is always non-nil so the policy marshals with an array, never null.
 func (s *Store) SessionPolicy(ctx context.Context) SessionPolicy {
-	var p SessionPolicy
+	p := SessionPolicy{IPAllowlist: []string{}}
 	raw, err := s.GetSetting(ctx, sessionPolicyKey)
-	if err != nil || len(raw) == 0 {
-		return p
+	if err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &p)
 	}
-	_ = json.Unmarshal(raw, &p)
+	if p.IPAllowlist == nil {
+		p.IPAllowlist = []string{}
+	}
 	return p
 }
 

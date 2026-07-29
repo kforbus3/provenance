@@ -90,6 +90,10 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create user")
 		return
 	}
+	if rq.IsSuperAdmin {
+		// Keep the built-in role in step with the flag (same as bootstrap).
+		_ = h.d.Store.AssignRoleByName(r.Context(), u.ID, superAdminRoleName)
+	}
 	h.audit(r, "user.create", "user", u.ID.String(), map[string]any{"username": u.Username})
 	httpx.WriteJSON(w, http.StatusCreated, u)
 }
@@ -114,6 +118,9 @@ func (h *handler) updateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if rq.IsDisabled && h.guardLastSuper(w, r, id, "disable") {
+		return
+	}
 	if err := h.d.Store.UpdateUser(r.Context(), id, store.UpdateUserParams{
 		Email: rq.Email, DisplayName: rq.DisplayName, IsDisabled: rq.IsDisabled,
 	}); err != nil {
@@ -130,7 +137,7 @@ func (h *handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	if h.guardSuperTarget(w, r, id) {
+	if h.guardSuperTarget(w, r, id) || h.guardLastSuper(w, r, id, "delete") {
 		return
 	}
 	// Destroy live sessions first (zeroize in-RAM private keys + revoke certs)
@@ -159,6 +166,9 @@ func (h *handler) disableUser(w http.ResponseWriter, r *http.Request) {
 	}
 	rq := disableReq{Disabled: true}
 	_ = json.NewDecoder(r.Body).Decode(&rq)
+	if rq.Disabled && h.guardLastSuper(w, r, id, "disable") {
+		return
+	}
 	if err := h.d.Store.SetDisabled(r.Context(), id, rq.Disabled); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not update user")
 		return
@@ -169,6 +179,45 @@ func (h *handler) disableUser(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "user.set_disabled", "user", id.String(), map[string]any{"disabled": rq.Disabled})
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"status": "updated", "disabled": rq.Disabled})
+}
+
+type superAdminReq struct {
+	IsSuperAdmin bool `json:"isSuperAdmin"`
+}
+
+// setSuperAdmin promotes or demotes an existing account's real super-admin
+// status (the is_super_admin column). Only a super administrator may change it,
+// and the last active super admin cannot be demoted. The built-in "Super
+// Administrator" role is kept in step so the role list reflects reality.
+func (h *handler) setSuperAdmin(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if !actorSuper(r) {
+		httpx.WriteError(w, http.StatusForbidden, "only a super administrator may grant or revoke super-administrator status")
+		return
+	}
+	var rq superAdminReq
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !rq.IsSuperAdmin && h.guardLastSuper(w, r, id, "demote") {
+		return
+	}
+	if err := h.d.Store.SetSuperAdmin(r.Context(), id, rq.IsSuperAdmin); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not update user")
+		return
+	}
+	if rq.IsSuperAdmin {
+		_ = h.d.Store.AssignRoleByName(r.Context(), id, superAdminRoleName)
+	} else {
+		_ = h.d.Store.RemoveRoleByName(r.Context(), id, superAdminRoleName)
+	}
+	h.audit(r, "user.set_super_admin", "user", id.String(), map[string]any{"isSuperAdmin": rq.IsSuperAdmin})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"status": "updated", "isSuperAdmin": rq.IsSuperAdmin})
 }
 
 func (h *handler) unlockUser(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +395,20 @@ func (h *handler) assignRole(w http.ResponseWriter, r *http.Request) {
 	if perms, _ := h.d.Store.RolePermissions(r.Context(), roleID); h.guardGrantable(w, r, perms) {
 		return
 	}
+	// The built-in Super Administrator role is a mirror of real super-admin
+	// status: assigning it IS a promotion, so it takes the promote rules and
+	// sets the is_super_admin flag alongside the role row.
+	name, _ := h.d.Store.RoleName(r.Context(), roleID)
+	if name == superAdminRoleName {
+		if !actorSuper(r) {
+			httpx.WriteError(w, http.StatusForbidden, "only a super administrator may grant or revoke super-administrator status")
+			return
+		}
+		if err := h.d.Store.SetSuperAdmin(r.Context(), userID, true); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not assign role")
+			return
+		}
+	}
 	if err := h.d.Store.AssignRole(r.Context(), userID, roleID); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not assign role")
 		return
@@ -360,6 +423,22 @@ func (h *handler) removeRole(w http.ResponseWriter, r *http.Request) {
 	if err1 != nil || err2 != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
 		return
+	}
+	// Removing the built-in Super Administrator role IS a demotion: same rules
+	// as promote/demote, and the is_super_admin flag is cleared alongside it.
+	name, _ := h.d.Store.RoleName(r.Context(), roleID)
+	if name == superAdminRoleName {
+		if !actorSuper(r) {
+			httpx.WriteError(w, http.StatusForbidden, "only a super administrator may grant or revoke super-administrator status")
+			return
+		}
+		if h.guardLastSuper(w, r, userID, "demote") {
+			return
+		}
+		if err := h.d.Store.SetSuperAdmin(r.Context(), userID, false); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not remove role")
+			return
+		}
 	}
 	if err := h.d.Store.RemoveRole(r.Context(), userID, roleID); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not remove role")

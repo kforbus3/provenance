@@ -88,6 +88,10 @@ export async function setUserDisabled(id: string, disabled: boolean): Promise<vo
   await api.post(`/api/v1/users/${id}/disable`, { disabled });
 }
 
+export async function setUserSuperAdmin(id: string, isSuperAdmin: boolean): Promise<void> {
+  await api.put(`/api/v1/users/${id}/super-admin`, { isSuperAdmin });
+}
+
 export async function unlockUser(id: string): Promise<void> {
   await api.post(`/api/v1/users/${id}/unlock`);
 }

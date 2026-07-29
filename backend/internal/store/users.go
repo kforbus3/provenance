@@ -255,6 +255,24 @@ func (s *Store) SetDisabled(ctx context.Context, id uuid.UUID, disabled bool) er
 	return err
 }
 
+// SetSuperAdmin grants or revokes real super-administrator status (the
+// is_super_admin column — what guardSuperTarget and policy exemptions key on,
+// as opposed to the built-in "Super Administrator" RBAC role).
+func (s *Store) SetSuperAdmin(ctx context.Context, id uuid.UUID, super bool) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET is_super_admin=$2, updated_at=now() WHERE id=$1`, id, super)
+	return err
+}
+
+// CountActiveSuperAdmins counts enabled super administrators. Callers use it to
+// refuse removing/disabling/demoting the last one, which would leave no account
+// able to manage super-admin-gated resources.
+func (s *Store) CountActiveSuperAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE is_super_admin AND NOT is_disabled`).Scan(&n)
+	return n, err
+}
+
 // SetMustChangePassword toggles the forced-password-change flag.
 func (s *Store) SetMustChangePassword(ctx context.Context, id uuid.UUID, must bool) error {
 	_, err := s.pool.Exec(ctx, `UPDATE users SET must_change_pw=$2, updated_at=now() WHERE id=$1`, id, must)

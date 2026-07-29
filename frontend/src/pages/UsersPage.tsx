@@ -19,9 +19,15 @@ import {
   removeUserRole, resetUserMFA, resetUserPassword, restoreUserHostAccess,
   revokeUserHostAccess, setGlobalRequireMFA, setUserDisabled, setUserRequireMFA,
   terminateUserSessions, unlockUser, updateUser, userHostAccess, userLoginHistory,
-  getUserSessionPolicy, setUserSessionPolicy, clearUserSessionPolicy,
+  getUserSessionPolicy, setUserSessionPolicy, clearUserSessionPolicy, setUserSuperAdmin,
   type AuthEvent, type CreateUserInput, type User,
 } from "../api/admin";
+import { useAuthStore } from "../store/auth";
+
+// The server's error body, when present, explains guard refusals ("cannot
+// demote the last active super administrator") — show it over a generic snack.
+const errMsg = (e: unknown, fallback: string) =>
+  (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 
 const EMPTY_CREATE: CreateUserInput = {
   username: "", email: "", displayName: "", password: "",
@@ -32,6 +38,7 @@ const EMPTY_CREATE: CreateUserInput = {
 // API. Mutations invalidate the cached user list on success.
 export function UsersPage() {
   const qc = useQueryClient();
+  const actorSuper = useAuthStore((s) => s.isSuperAdmin);
   const { data: users = [], isLoading } = useQuery({ queryKey: ["users"], queryFn: listUsers });
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -103,12 +110,18 @@ export function UsersPage() {
     mutationFn: async (u: User) => {
       await updateUser(u.id, { email: u.email ?? "", displayName: u.displayName, isDisabled: u.isDisabled });
       await setUserRequireMFA(u.id, u.requireMfa);
+      const before = users.find((x) => x.id === u.id);
+      if (before && before.isSuperAdmin !== u.isSuperAdmin) {
+        await setUserSuperAdmin(u.id, u.isSuperAdmin);
+      }
     },
     onSuccess: () => { setEditing(null); invalidate(); },
+    onError: (e) => setSnack(errMsg(e, "Failed to update user")),
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteUser(id),
     onSuccess: invalidate,
+    onError: (e) => setSnack(errMsg(e, "Failed to delete user")),
   });
 
   return (
@@ -237,6 +250,12 @@ export function UsersPage() {
                 <Switch checked={editing.requireMfa}
                   onChange={(e) => setEditing({ ...editing, requireMfa: e.target.checked })} />
               } label="Require MFA (force enrollment at next sign-in)" />
+              <Tooltip title={actorSuper ? "" : "Only a super administrator can change this"}>
+                <FormControlLabel control={
+                  <Switch checked={editing.isSuperAdmin} disabled={!actorSuper}
+                    onChange={(e) => setEditing({ ...editing, isSuperAdmin: e.target.checked })} />
+                } label="Super admin" />
+              </Tooltip>
             </Stack>
           )}
         </DialogContent>
@@ -467,7 +486,7 @@ function SessionPolicyDialog({
               />
             ) : (
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
-                Inherits global: {g && g.ipAllowlist.length > 0 ? g.ipAllowlist.join(", ") : "no IP restriction"}
+                Inherits global: {g && (g.ipAllowlist ?? []).length > 0 ? (g.ipAllowlist ?? []).join(", ") : "no IP restriction"}
               </Typography>
             )}
           </Box>

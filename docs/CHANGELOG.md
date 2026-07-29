@@ -7,6 +7,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.70.0 — Super-admin promote/demote; role/flag unification; Users-page fixes
+
+- **Promote or demote an existing account to super administrator** — new **Super
+  admin** switch in the user edit dialog (and `PUT /api/v1/users/{id}/super-admin`).
+  Previously the flag could only be set when creating a user, so the only path to
+  a second super admin was a new account or direct SQL. Super admins only.
+- **The built-in "Super Administrator" role now IS super-admin status.** Assigning
+  the role promotes the account (sets the real `is_super_admin` flag); removing it
+  demotes. Before, the role granted the `Admin.All` permission wildcard but not
+  true super-admin status, so a role-holder still could not modify, disable, or
+  delete super-admin accounts — the role and the flag could silently drift apart.
+- **Last-super-admin lockout guard** — deleting, disabling, or demoting the last
+  active super administrator is refused with a clear error, so an instance can
+  never be left without one.
+- **Fixed: opening "Access policy…" on the Users page blanked the whole app** when
+  no fleet-wide session policy had ever been saved (the unset global policy
+  serialized its IP allowlist as `null` and the dialog crashed rendering it). The
+  API now always returns an array and the dialog is defensive regardless.
+- Users-page edit/delete failures now surface the server's reason (e.g. the
+  last-super-admin refusal) instead of failing silently.
+
+---
+
 ## v0.69.0 — Ask Fleet: calendar ranges, feedback, follow-up chips, and a regression harness
 
 - **True calendar ranges for "yesterday", "this week", and "last week"** — "who connected

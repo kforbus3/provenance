@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -118,9 +119,27 @@ func (s *Store) AssignRoleByName(ctx context.Context, userID uuid.UUID, roleName
 	return err
 }
 
+// RoleName returns a role's name by id ("" when the role does not exist).
+func (s *Store) RoleName(ctx context.Context, roleID uuid.UUID) (string, error) {
+	var name string
+	err := s.pool.QueryRow(ctx, `SELECT name FROM roles WHERE id=$1`, roleID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}
+
 // RemoveRole revokes a role from a user.
 func (s *Store) RemoveRole(ctx context.Context, userID, roleID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM user_roles WHERE user_id=$1 AND role_id=$2`, userID, roleID)
+	return err
+}
+
+// RemoveRoleByName revokes a role from a user by role name.
+func (s *Store) RemoveRoleByName(ctx context.Context, userID uuid.UUID, roleName string) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM user_roles WHERE user_id=$1
+		AND role_id IN (SELECT id FROM roles WHERE name=$2)`, userID, roleName)
 	return err
 }
 

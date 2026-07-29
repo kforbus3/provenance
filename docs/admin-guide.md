@@ -81,6 +81,15 @@ RBAC is backend-authoritative. The following roles are seeded:
 The full permission catalog is in [database.md](./database.md#permissions). You
 can create custom roles and assign any subset of permissions.
 
+> **Super Administrator is more than a role.** Real super-admin status is a flag
+> on the account itself; it exempts the account from ABAC access policies and
+> host-access grants, and only super admins may modify other super-admin
+> accounts. The built-in **Super Administrator** role mirrors that flag:
+> assigning or removing the role promotes or demotes the account (super admins
+> only), as does the **Super admin** switch when creating or editing a user.
+> Fleet refuses to delete, disable, or demote the **last active super
+> administrator** so the platform can never be left without one.
+
 > `Host.Connect`, `Host.Scan`, `Host.Remediate`, and `File.Transfer` are **also**
 > gated by host access — the permission lets a user *attempt* the action, but they
 > still need a group / direct / temporary grant to the specific host (super admins
