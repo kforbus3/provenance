@@ -34,6 +34,9 @@ jobs:
         with:
           node-version: "22"
       - run: npm install
+      # help-content.ts is generated from repo-root docs/ and git-ignored;
+      # it must exist before the standalone typecheck below.
+      - run: npm run build-help && npm run build-guac-player
       - run: npx tsc -b
       - run: npm run build
 
@@ -45,4 +48,6 @@ jobs:
       - name: Build backend image
         run: docker build -t fleet-backend:ci ./backend
       - name: Build frontend image
-        run: docker build -t fleet-frontend:ci ./frontend
+        # The frontend Dockerfile requires the repo root as build context
+        # (it COPYs frontend/ and docs/ — see the note in frontend/Dockerfile).
+        run: docker build -t fleet-frontend:ci -f frontend/Dockerfile .
