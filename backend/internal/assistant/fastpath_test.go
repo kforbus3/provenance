@@ -82,6 +82,10 @@ func TestFastPathTool(t *testing.T) {
 		// session-style "who logged into X" must NOT hit list_users
 		{"who logged into nas today?", "session_history", nil}, // host-session question
 
+		// fleet-wide "which hosts were accessed" -> session_history with no hostname
+		{"which hosts have been accessed today?", "session_history", map[string]string{}},
+		{"what hosts were connected to this week?", "session_history", map[string]string{}},
+
 		// must NOT fast-path (defer to the model)
 		{"who logged into web-01 yesterday?", "session_history", nil},
 		{"who has access to db-02?", "", nil},

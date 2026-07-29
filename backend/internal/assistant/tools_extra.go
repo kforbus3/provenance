@@ -26,6 +26,8 @@ type hostAvailabilityArgs struct {
 	Hostname string `json:"hostname"`
 	Hours    int    `json:"hours"`
 	Limit    int    `json:"limit"`
+	Since    string `json:"since,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
+	Until    string `json:"until,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
 }
 
 // availabilityRoll is a per-host downtime summary reconstructed from the events.
@@ -49,6 +51,16 @@ func (s *Service) runHostAvailability(ctx context.Context, raw json.RawMessage, 
 	if err != nil {
 		s.log.Warn("assistant host_availability", "err", err)
 		return nil, map[string]any{"error": "could not read availability history"}
+	}
+	// Calendar bounds ("yesterday", "last week") narrow the hour-based fetch exactly.
+	if since, until := parseWindowBound(a.Since), parseWindowBound(a.Until); !since.IsZero() || !until.IsZero() {
+		kept := events[:0]
+		for _, e := range events {
+			if inWindow(e.At, since, until) {
+				kept = append(kept, e)
+			}
+		}
+		events = kept
 	}
 	hours := a.Hours
 	if hours <= 0 {
@@ -190,6 +202,8 @@ type securityEventsArgs struct {
 	FailedOnly bool   `json:"failedOnly"`
 	Hours      int    `json:"hours"`
 	Limit      int    `json:"limit"`
+	Since      string `json:"since,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
+	Until      string `json:"until,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
 }
 
 // looksLikeAuthFailure reports whether an auth_events event type is a failure/
@@ -220,6 +234,10 @@ func (s *Service) runSecurityEvents(ctx context.Context, raw json.RawMessage, wh
 		hours = 24
 	}
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+	if since := parseWindowBound(a.Since); !since.IsZero() {
+		cutoff = since // exact calendar bound ("today", "yesterday")
+	}
+	until := parseWindowBound(a.Until)
 	evs, err := s.store.ListAuthEvents(ctx, nil, 1000)
 	if err != nil {
 		s.log.Warn("assistant security_events", "err", err)
@@ -235,17 +253,14 @@ func (s *Service) runSecurityEvents(ctx context.Context, raw json.RawMessage, wh
 		Title:   "Authentication events",
 		Columns: []TableColumn{{Label: "Time", Kind: "time"}, {Label: "Event"}, {Label: "User"}, {Label: "IP"}},
 	}
-	type evRow struct {
-		Time     time.Time `json:"time"`
-		Event    string    `json:"event"`
-		Username string    `json:"username,omitempty"`
-		IP       string    `json:"ip,omitempty"`
-	}
-	out := []evRow{}
+	out := []authEvRow{}
 	failures := 0
 	failByIP := map[string]int{}
 	for _, e := range evs {
 		if e.CreatedAt.Before(cutoff) {
+			continue
+		}
+		if !until.IsZero() && !e.CreatedAt.Before(until) {
 			continue
 		}
 		if evFilter != "" && !strings.Contains(strings.ToLower(e.Event), evFilter) {
@@ -264,7 +279,7 @@ func (s *Service) runSecurityEvents(ctx context.Context, raw json.RawMessage, wh
 				failByIP[e.IP]++
 			}
 		}
-		out = append(out, evRow{Time: e.CreatedAt, Event: e.Event, Username: e.Username, IP: e.IP})
+		out = append(out, authEvRow{Time: e.CreatedAt, Event: e.Event, Username: e.Username, IP: e.IP})
 		if len(tbl.Rows) < limit {
 			tbl.Rows = append(tbl.Rows, []string{tableTime(e.CreatedAt), e.Event, e.Username, e.IP})
 		}
@@ -284,6 +299,88 @@ func (s *Service) runSecurityEvents(ctx context.Context, raw json.RawMessage, wh
 		"distinctFailingIPs": len(failByIP), "topFailingIP": topIP, "topFailingIPCount": topCount,
 		"bruteForceSuspected": topCount >= 5, "events": out,
 	}
+}
+
+// authEvRow is one authentication event in the security_events payload.
+type authEvRow struct {
+	Time     time.Time `json:"time"`
+	Event    string    `json:"event"`
+	Username string    `json:"username,omitempty"`
+	IP       string    `json:"ip,omitempty"`
+}
+
+// securityEventsDirectAnswer builds a deterministic answer for failed-login questions so
+// counts and timestamps come from code, not the model — times render in the operator's
+// display timezone in 12-hour format (the model would otherwise produce oddities like
+// "13:41 PM (UTC)"). Only fires for failed-only queries; general auth-event questions
+// keep model narration. Returns "" to fall back.
+func (s *Service) securityEventsDirectAnswer(ctx context.Context, question string, fargs json.RawMessage, payload any) string {
+	var a securityEventsArgs
+	if err := json.Unmarshal(fargs, &a); err != nil || !a.FailedOnly {
+		return ""
+	}
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	events, ok := m["events"].([]authEvRow)
+	if !ok {
+		return ""
+	}
+	phrase := auditPeriodPhrase(strings.ToLower(question))
+	if len(events) == 0 {
+		return "No failed logins " + phrase + "."
+	}
+	loc := s.displayLoc(ctx)
+	n := len(events)
+	head := fmt.Sprintf("%d failed login%s %s", n, plural(n), phrase)
+	if n <= 5 {
+		// Few enough to name each attempt with an exact local-time stamp.
+		parts := make([]string, n)
+		for i, e := range events {
+			who := e.Username
+			if who == "" {
+				who = "unknown user"
+			}
+			from := ""
+			if e.IP != "" {
+				from = " from " + e.IP
+			}
+			parts[i] = fmt.Sprintf("%s%s at %s", who, from, e.Time.In(loc).Format("3:04 PM MST on Jan 2"))
+		}
+		return head + ": " + strings.Join(parts, "; ") + "."
+	}
+	// Many: summarize by top source and targeted users instead of a wall of rows.
+	byUser := map[string]int{}
+	for _, e := range events {
+		u := e.Username
+		if u == "" {
+			u = "unknown"
+		}
+		byUser[u]++
+	}
+	users := make([]string, 0, len(byUser))
+	for u := range byUser {
+		users = append(users, u)
+	}
+	sort.Slice(users, func(i, j int) bool { return byUser[users[i]] > byUser[users[j]] })
+	if len(users) > 4 {
+		users = users[:4]
+	}
+	uparts := make([]string, len(users))
+	for i, u := range users {
+		uparts[i] = fmt.Sprintf("%s (%d)", u, byUser[u])
+	}
+	ans := fmt.Sprintf("%s. Users targeted: %s.", head, strings.Join(uparts, ", "))
+	if ip, _ := m["topFailingIP"].(string); ip != "" {
+		if c, _ := m["topFailingIPCount"].(int); c > 1 {
+			ans += fmt.Sprintf(" Top source: %s (%d attempts).", ip, c)
+		}
+	}
+	if bf, _ := m["bruteForceSuspected"].(bool); bf {
+		ans += " This volume from one source looks like a brute-force attempt."
+	}
+	return ans
 }
 
 // ---------------------------------------------------------------------------

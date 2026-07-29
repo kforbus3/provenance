@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
-  Alert, Box, Button, Chip, CircularProgress, Link, Paper, Stack, Table, TableBody,
-  TableCell, TableHead, TableRow, TextField, Typography, useTheme,
+  Alert, Box, Button, Chip, CircularProgress, IconButton, Link, Paper, Stack, Table, TableBody,
+  TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useTheme,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import BoltIcon from "@mui/icons-material/Bolt";
+import ThumbUpOffAltIcon from "@mui/icons-material/ThumbUpOffAlt";
+import ThumbDownOffAltIcon from "@mui/icons-material/ThumbDownOffAlt";
+import ThumbUpAltIcon from "@mui/icons-material/ThumbUpAlt";
+import ThumbDownAltIcon from "@mui/icons-material/ThumbDownAlt";
 import { Link as RouterLink } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import {
   assistantStatus, askAssistant, askResult, executeAssistantAction, cancelAssistantAction,
   requestApprovalAssistantAction, listAssistantApprovals, approveAssistantAction, denyAssistantAction,
-  listAssistantActions,
+  listAssistantActions, sendAssistantFeedback,
   type AskResult, type AssistantAction, type AssistantHost, type AssistantSession, type AssistantTable,
   type DocSource, type MetricHistory, type MetricHistoryPoint,
 } from "../api/assistant";
@@ -23,6 +27,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Turn {
   q: string;
+  askId?: string; // correlates feedback with the server-side ask
   result?: AskResult;
 }
 
@@ -66,10 +71,8 @@ export function AssistantPage() {
     try { sessionStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
   }
 
-  async function submit() {
-    const q = input.trim();
+  async function ask(q: string) {
     if (!q || busy) return;
-    setInput("");
     setBusy(true);
     const idx = turns.length;
     setTurns((t) => [...t, { q }]);
@@ -81,7 +84,7 @@ export function AssistantPage() {
         if (!mounted.current) return; // page left — stop polling
         const r = await askResult(id);
         if (r.status !== "pending") {
-          setTurns((t) => t.map((x, j) => (j === idx ? { ...x, result: r } : x)));
+          setTurns((t) => t.map((x, j) => (j === idx ? { ...x, askId: id, result: r } : x)));
           break;
         }
       }
@@ -91,6 +94,13 @@ export function AssistantPage() {
     } finally {
       if (mounted.current) setBusy(false);
     }
+  }
+
+  async function submit() {
+    const q = input.trim();
+    if (!q || busy) return;
+    setInput("");
+    await ask(q);
   }
 
   return (
@@ -132,7 +142,10 @@ export function AssistantPage() {
             </Box>
           </Box>
         )}
-        {turns.map((t, i) => <TurnView key={i} turn={t} />)}
+        {turns.map((t, i) => (
+          <TurnView key={i} turn={t} isLast={i === turns.length - 1} busy={busy}
+            onAsk={(q) => { void ask(q); }} />
+        ))}
       </Stack>
 
       <Paper variant="outlined" sx={{ p: 1.5 }}>
@@ -163,7 +176,9 @@ export function AssistantPage() {
   );
 }
 
-function TurnView({ turn }: { turn: Turn }) {
+function TurnView({ turn, isLast, busy, onAsk }: {
+  turn: Turn; isLast: boolean; busy: boolean; onAsk: (q: string) => void;
+}) {
   const r = turn.result;
   return (
     <Box>
@@ -186,9 +201,55 @@ function TurnView({ turn }: { turn: Turn }) {
           {r.history && r.history.points.length > 0 && <MetricHistoryPanel history={r.history} />}
           {r.table && r.table.rows.length > 0 && <TablePanel table={r.table} />}
           {r.sources && r.sources.length > 0 && <SourcesPanel sources={r.sources} />}
+          {r.answer && <FeedbackRow turn={turn} />}
+          {isLast && !busy && r.suggestions && r.suggestions.length > 0 && (
+            <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap", rowGap: 1 }}>
+              {r.suggestions.map((s) => (
+                <Chip key={s} label={s} size="small" variant="outlined" clickable
+                  onClick={() => onAsk(s)} />
+              ))}
+            </Stack>
+          )}
         </Box>
       )}
     </Box>
+  );
+}
+
+// FeedbackRow: one-shot thumbs up/down on an answer. Echoes the question/answer/tool back
+// to the server (ask results are one-shot), so each row is self-contained telemetry.
+function FeedbackRow({ turn }: { turn: Turn }) {
+  const [sent, setSent] = useState<"up" | "down" | null>(null);
+  const r = turn.result;
+  if (!r?.answer) return null;
+  async function send(helpful: boolean) {
+    if (sent) return;
+    setSent(helpful ? "up" : "down");
+    try {
+      await sendAssistantFeedback({
+        askId: turn.askId ?? "", question: turn.q, answer: r?.answer ?? "",
+        answeredBy: r?.answeredBy, helpful,
+      });
+    } catch { /* telemetry only — never disturb the conversation */ }
+  }
+  return (
+    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5 }}>
+      <Tooltip title="Helpful">
+        <span>
+          <IconButton size="small" disabled={sent === "down"} onClick={() => void send(true)}>
+            {sent === "up" ? <ThumbUpAltIcon fontSize="inherit" color="success" /> : <ThumbUpOffAltIcon fontSize="inherit" />}
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Not helpful">
+        <span>
+          <IconButton size="small" disabled={sent === "up"} onClick={() => void send(false)}>
+            {sent === "down" ? <ThumbDownAltIcon fontSize="inherit" color="error" /> : <ThumbDownOffAltIcon fontSize="inherit" />}
+          </IconButton>
+        </span>
+      </Tooltip>
+      {sent && <Typography variant="caption" color="text.secondary">Thanks — recorded.</Typography>}
+    </Stack>
   );
 }
 

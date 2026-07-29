@@ -561,6 +561,8 @@ type metricHistoryArgs struct {
 	Hostname string   `json:"hostname"`
 	Hours    int      `json:"hours"`
 	Metrics  []string `json:"metrics"`
+	Since    string   `json:"since,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
+	Until    string   `json:"until,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
 }
 
 type sessionHistoryArgs struct {
@@ -568,6 +570,8 @@ type sessionHistoryArgs struct {
 	Username string `json:"username"`
 	Hours    int    `json:"hours"`
 	Limit    int    `json:"limit"`
+	Since    string `json:"since,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
+	Until    string `json:"until,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
 }
 
 type auditLogArgs struct {
@@ -575,6 +579,8 @@ type auditLogArgs struct {
 	ActorContains  string `json:"actorContains"`
 	Hours          int    `json:"hours"`
 	Limit          int    `json:"limit"`
+	Since          string `json:"since,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
+	Until          string `json:"until,omitempty"` // RFC3339; internal, set by calendarAdjustWindow
 }
 
 type fileTransfersArgs struct {

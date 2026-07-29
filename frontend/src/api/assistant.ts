@@ -92,6 +92,8 @@ export interface AskResult {
   table?: AssistantTable;
   sources?: DocSource[];
   actions?: AssistantAction[];
+  answeredBy?: string; // which tool produced the answer (echoed back with feedback)
+  suggestions?: string[]; // deterministic follow-up questions shown as chips
   error?: string;
 }
 
@@ -190,4 +192,17 @@ export async function askAssistant(question: string, conversationId?: string): P
 export async function askResult(id: string): Promise<AskResult> {
   const { data } = await api.get<AskResult>(`/api/v1/assistant/ask/${id}`);
   return data;
+}
+
+// sendAssistantFeedback records a thumbs up/down on an answer. The question/answer/tool
+// are echoed back because results are one-shot on the server.
+export async function sendAssistantFeedback(fb: {
+  askId: string;
+  question: string;
+  answer: string;
+  answeredBy?: string;
+  helpful: boolean;
+  comment?: string;
+}): Promise<void> {
+  await api.post("/api/v1/assistant/feedback", fb);
 }

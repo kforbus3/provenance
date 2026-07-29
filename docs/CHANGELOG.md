@@ -7,6 +7,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.69.0 — Ask Fleet: calendar ranges, feedback, follow-up chips, and a regression harness
+
+- **True calendar ranges for "yesterday", "this week", and "last week"** — "who connected
+  yesterday?" now means midnight-to-midnight of the prior day (display timezone), "this
+  week" starts Monday, and "last week" is the prior Mon–Sun, across sessions, audit log,
+  auth events, metric history, and availability. Rolling phrases ("past week", "last 7
+  days") are unchanged.
+- **Deterministic failed-login answers** — counts and timestamps come from code, rendered
+  in the display timezone in 12-hour format; large sets summarize by targeted user and
+  top source IP with a brute-force note.
+- **"Which hosts have been accessed today?"** is now a deterministic fast path that
+  groups sessions by host.
+- **Follow-ups no longer bounce back "what do you mean?"** — if the model answers a
+  follow-up with a clarifying question while the conversation already named the subject,
+  it is retried once with the recent subject assumed.
+- **Thumbs up/down on every answer** (new `assistant_feedback` table +
+  `POST /api/v1/assistant/feedback`) so unhelpful or misrouted answers can be found and
+  fixed from data instead of live debugging.
+- **One-click follow-up chips** under the latest answer — deterministic suggestions
+  chosen by which tool answered, never model-generated.
+- **`tools/ask-harness/`** — the Ask acceptance battery (the 7 canonical questions plus
+  every variant that has regressed before, and a multi-turn thread) now lives in the
+  repo and runs against a live instance with one command.
+
+
+---
+
 ## v0.68.23 — Ask Fleet: "today" is the calendar day; bare connection questions scope to a week
 
 - **"today" now means since local midnight for every time-windowed question**, not a

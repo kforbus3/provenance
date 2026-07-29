@@ -30,23 +30,23 @@ func TestSessionHistoryIntentDefaultWindow(t *testing.T) {
 	}
 }
 
-// calendarAdjustHours leaves args alone when the question is not about "today", when the
-// args carry no "hours" field, and for single-row "last …" lookups (Limit==1). These
-// guard paths return before any store/timezone lookup. (The actual today->midnight
-// rewrite is exercised end-to-end by the live harness.)
-func TestCalendarAdjustHoursGuards(t *testing.T) {
+// calendarAdjustWindow leaves args alone when the question uses a rolling phrase (not a
+// calendar one), when the args carry no "hours" field, and for single-row "last …"
+// lookups (Limit==1). These guard paths return before any store/timezone lookup. (The
+// actual calendar rewrites are exercised end-to-end by the live harness.)
+func TestCalendarAdjustWindowGuards(t *testing.T) {
 	s := &Service{}
 	cases := []struct {
 		name string
 		q    string
 		in   string
 	}{
-		{"non-today passes through", "who connected to nas this week?", `{"hostname":"nas","hours":24}`},
+		{"rolling phrase passes through", "who connected to nas in the past week?", `{"hostname":"nas","hours":168}`},
 		{"no hours field passes through", "which hosts have low disk today?", `{"maxDiskFreePct":20}`},
 		{"limit==1 passes through", "who last connected to nas today?", `{"hostname":"nas","hours":24,"limit":1}`},
 	}
 	for _, c := range cases {
-		if out := string(s.calendarAdjustHours(nil, c.q, []byte(c.in))); out != c.in {
+		if out := string(s.calendarAdjustWindow(nil, c.q, []byte(c.in))); out != c.in {
 			t.Errorf("%s: got %s; want unchanged %s", c.name, out, c.in)
 		}
 	}

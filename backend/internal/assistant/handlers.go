@@ -22,6 +22,7 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/assistant/models", h.models)
 		pr.With(d.Auth.RequirePermission("Assistant.Use")).Post("/assistant/ask", h.ask)
 		pr.With(d.Auth.RequirePermission("Assistant.Use")).Get("/assistant/ask/{id}", h.result)
+		pr.With(d.Auth.RequirePermission("Assistant.Use")).Post("/assistant/feedback", h.feedback)
 	})
 }
 
@@ -94,6 +95,41 @@ func (h *handler) result(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)
+}
+
+type feedbackReq struct {
+	AskID      string `json:"askId"`
+	Question   string `json:"question"`
+	Answer     string `json:"answer"`
+	AnsweredBy string `json:"answeredBy"`
+	Helpful    *bool  `json:"helpful"`
+	Comment    string `json:"comment"`
+}
+
+// feedback records a thumbs up/down on an answer. The client echoes the question/answer/
+// tool back (results are one-shot server-side), so the row is self-contained telemetry
+// from the authenticated user.
+func (h *handler) feedback(w http.ResponseWriter, r *http.Request) {
+	var rq feedbackReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&rq); err != nil || rq.Helpful == nil || rq.Question == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "helpful and question are required")
+		return
+	}
+	clamp := func(s string, n int) string {
+		if len(s) > n {
+			return s[:n]
+		}
+		return s
+	}
+	p := auth.MustPrincipal(r)
+	err := h.d.Store.RecordAssistantFeedback(r.Context(), p.UserID, clamp(rq.AskID, 64),
+		clamp(rq.Question, 2000), clamp(rq.Answer, 8000), clamp(rq.AnsweredBy, 64),
+		*rq.Helpful, clamp(rq.Comment, 2000))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not record feedback")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *handler) audit(r *http.Request, action string, detail map[string]any) {

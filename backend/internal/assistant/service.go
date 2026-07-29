@@ -154,9 +154,15 @@ type AskResult struct {
 	Table    *AssistantTable           `json:"table,omitempty"`
 	Sources  []DocSource               `json:"sources,omitempty"`
 	Actions  []models.AssistantAction  `json:"actions,omitempty"`
-	Error    string                    `json:"error,omitempty"`
-	created  time.Time
-	owner    uuid.UUID // the user who asked; only they may read the result
+	// AnsweredBy is the (last) tool that produced the answer — echoed back with
+	// feedback so misrouted answers can be traced without live debugging.
+	AnsweredBy string `json:"answeredBy,omitempty"`
+	// Suggestions are deterministic follow-up questions the UI offers as one-click
+	// chips, chosen by which tool answered (never model-generated).
+	Suggestions []string `json:"suggestions,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	created     time.Time
+	owner       uuid.UUID // the user who asked; only they may read the result
 }
 
 // answerData bundles structured tool output collected during a conversation.
@@ -168,6 +174,7 @@ type answerData struct {
 	table           *AssistantTable
 	docSources      []DocSource
 	proposedActions []models.AssistantAction
+	lastTool        string // last tool dispatched — drives AnsweredBy + follow-up chips
 }
 
 // Caller identity captured for RBAC-scoped tool execution in the background.
@@ -265,6 +272,7 @@ func (s *Service) run(id, convoID, question string, who Caller, cfg Settings, te
 		Status: "done", Answer: answer,
 		Hosts: data.hosts, Sessions: data.sessions, Host: data.host, History: data.history,
 		Table: data.table, Sources: data.docSources, Actions: data.proposedActions,
+		AnsweredBy: data.lastTool, Suggestions: suggestionsFor(data.lastTool),
 		created: time.Now(), owner: who.UserID,
 	})
 }
@@ -298,14 +306,16 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	// question). The structured result still populates the UI. Anything not recognized
 	// falls through to the normal model-driven loop below.
 	if name, fargs, ok := fastPathTool(question); ok {
-		// A "today" question scopes to the calendar day (since local midnight), not a
-		// rolling 24h; safe on every tool (no-op unless the args carry an "hours" field).
-		fargs = s.calendarAdjustHours(ctx, question, fargs)
+		// Calendar phrases ("today", "yesterday", "this/last week") scope to true
+		// calendar ranges, not rolling lookbacks; safe on every tool (no-op unless the
+		// args carry an "hours" field).
+		fargs = s.calendarAdjustWindow(ctx, question, fargs)
 		var result any
 		var directAnswer string // when set, returned verbatim (the tool KNOWS the exact
 		// answer, e.g. a host list or a change breakdown — the LLM is unreliable at
 		// enumerating/counting, so we build the answer in code and skip narration).
 		handled := true
+		data.lastTool = name
 		switch name {
 		case "host_updates":
 			tbl, payload := s.runHostUpdates(ctx, fargs, who)
@@ -336,6 +346,9 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			if tbl != nil {
 				data.table = tbl
 			}
+			// Failed-login answers are built in code so counts and timestamps (display
+			// timezone, 12-hour) are exact.
+			directAnswer = s.securityEventsDirectAnswer(ctx, question, fargs, payload)
 			result = payload
 		case "vulnerabilities":
 			tbl, payload := s.runVulnerabilities(ctx, fargs, who)
@@ -392,7 +405,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			if tbl != nil {
 				data.table = tbl
 			}
-			directAnswer = s.sessionDirectAnswer(ctx, fargs, payload)
+			directAnswer = s.sessionDirectAnswer(ctx, question, fargs, payload)
 			result = payload
 		case "recent_activity_failures":
 			result = s.runActivityFailures(ctx, who)
@@ -441,6 +454,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	}
 
 	toolsUsed := false
+	retriedClarify := false
 	for i := 0; i < maxToolIterations; i++ {
 		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset, Options: deterministicOptions()})
 		if err != nil {
@@ -449,6 +463,29 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 		msg := resp.Message
 		if len(msg.ToolCalls) == 0 {
 			final := strings.TrimSpace(msg.Content)
+			// A follow-up in an ongoing conversation must not bounce back a "what do you
+			// mean?" when the prior turns named the subject (observed: "when did the
+			// failures happen?" after listing failed scans drew "what kind of failures?").
+			// Retry ONCE with the previous answer quoted inline as the referent and NO
+			// tools offered — the details a vague follow-up asks about are almost always
+			// already in the prior answer, and letting the model re-enter the tool loop
+			// here made it wander into unrelated tools and hallucinate (observed). If the
+			// tool-less retry still can't answer, keep the honest clarification.
+			if final != "" && !retriedClarify && looksLikeClarification(final) && countUserTurns(messages) > 1 {
+				retriedClarify = true
+				inst := "Do not ask me to clarify. My question is a follow-up about your previous answer"
+				if prior := lastAssistantContent(messages); prior != "" {
+					inst += ": \"" + truncateForPrompt(prior, 500) + "\""
+				}
+				inst += ". Answer the question directly about those items using only the details already in this conversation. If the conversation does not contain the answer, say so plainly."
+				retryMsgs := append(append(make([]chatMessage, 0, len(messages)+2), messages...), msg,
+					chatMessage{Role: "user", Content: inst})
+				if resp2, err2 := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: retryMsgs, Options: deterministicOptions()}); err2 == nil {
+					if retry := strings.TrimSpace(resp2.Message.Content); retry != "" && !looksLikeClarification(retry) {
+						final = retry
+					}
+				}
+			}
 			// If tools gathered data, regenerate the answer with a short scope reminder
 			// placed right before generation. Small models follow a late, focused
 			// instruction far more reliably than the same rules buried in the long system
@@ -477,6 +514,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 		messages = append(messages, msg)
 		for _, tc := range msg.ToolCalls {
 			var result any
+			data.lastTool = tc.Function.Name
 			switch tc.Function.Name {
 			case "query_hosts":
 				rows := s.runQueryHosts(ctx, tc.Function.Arguments, who)
@@ -517,19 +555,19 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				}
 				result = payload
 			case "host_metric_history":
-				hist, payload := s.runMetricHistory(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
+				hist, payload := s.runMetricHistory(ctx, s.calendarAdjustWindow(ctx, question, tc.Function.Arguments), who)
 				if hist != nil {
 					data.history = hist
 				}
 				result = payload
 			case "session_history":
-				tbl, payload := s.runSessionHistory(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
+				tbl, payload := s.runSessionHistory(ctx, s.calendarAdjustWindow(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
 				result = payload
 			case "audit_log":
-				tbl, payload := s.runAuditLog(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
+				tbl, payload := s.runAuditLog(ctx, s.calendarAdjustWindow(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
@@ -553,7 +591,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				}
 				result = payload
 			case "host_availability":
-				tbl, payload := s.runHostAvailability(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
+				tbl, payload := s.runHostAvailability(ctx, s.calendarAdjustWindow(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
@@ -583,7 +621,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				}
 				result = payload
 			case "security_events":
-				tbl, payload := s.runSecurityEvents(ctx, s.calendarAdjustHours(ctx, question, tc.Function.Arguments), who)
+				tbl, payload := s.runSecurityEvents(ctx, s.calendarAdjustWindow(ctx, question, tc.Function.Arguments), who)
 				if tbl != nil {
 					data.table = tbl
 				}
@@ -695,6 +733,93 @@ func (s *Service) priorMessages(convoID string, owner uuid.UUID) []chatMessage {
 		return nil
 	}
 	return append([]chatMessage(nil), c.history...)
+}
+
+// suggestionsFor returns deterministic follow-up questions for the UI to offer as
+// one-click chips, chosen by which tool answered. Never model-generated: every
+// suggestion is a question the fast paths/tools are known to answer well, so a chip
+// click can't land on a weak path.
+func suggestionsFor(tool string) []string {
+	switch tool {
+	case "session_history":
+		return []string{"Which hosts have been accessed today?", "What changed in the audit log today?", "Any failed logins today?"}
+	case "query_hosts":
+		return []string{"Will any host run out of disk soon?", "Which hosts have security updates pending?"}
+	case "host_metric_history":
+		return []string{"Which hosts have less than 20% disk free?", "Will any host run out of disk soon?"}
+	case "audit_log":
+		return []string{"Any failed logins today?", "Which hosts have been accessed today?"}
+	case "security_events":
+		return []string{"What changed in the audit log today?", "Which hosts have been accessed this week?"}
+	case "recent_activity_failures":
+		return []string{"What runs on a schedule, and when does it fire next?", "Any failed logins today?"}
+	case "vulnerabilities":
+		return []string{"Which hosts have security updates pending?", "Any failed scans or playbook runs recently?"}
+	case "host_updates":
+		return []string{"Which hosts have critical vulnerabilities?", "Any failed scans or playbook runs recently?"}
+	case "list_schedules":
+		return []string{"Any failed scans or playbook runs recently?", "What changed in the audit log today?"}
+	case "host_availability":
+		return []string{"Which hosts have less than 20% disk free?", "Any failed scans or playbook runs recently?"}
+	case "":
+		return nil // no tool involved (small talk / docs) — no chips
+	default:
+		return []string{"Which hosts have less than 20% disk free?", "Any failed scans or playbook runs recently?"}
+	}
+}
+
+// looksLikeClarification reports whether an answer is a clarifying question back to the
+// user rather than an actual answer — the trigger for the one-shot follow-up retry.
+// Conservative on purpose: requires a question mark plus a known clarify phrasing, so a
+// real answer that happens to contain a question is not re-generated.
+func looksLikeClarification(answer string) bool {
+	la := strings.ToLower(answer)
+	if !strings.Contains(la, "?") {
+		return false
+	}
+	for _, p := range []string{
+		"could you specify", "could you please specify", "could you clarify",
+		"can you clarify", "please specify", "please clarify", "what kind of",
+		"which one do you mean", "are you referring to", "you are referring to",
+		"provide more context", "more context will help", "what do you mean",
+		"could you provide more",
+	} {
+		if strings.Contains(la, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// countUserTurns counts user messages in the chat transcript — >1 means this is a
+// follow-up in an ongoing conversation (history turns + the current question).
+func countUserTurns(messages []chatMessage) int {
+	n := 0
+	for _, m := range messages {
+		if m.Role == "user" {
+			n++
+		}
+	}
+	return n
+}
+
+// lastAssistantContent returns the most recent non-empty assistant text in the
+// transcript — the referent a vague follow-up ("the failures", "them") points at.
+func lastAssistantContent(messages []chatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && strings.TrimSpace(messages[i].Content) != "" {
+			return strings.TrimSpace(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+// truncateForPrompt caps quoted context injected into a prompt.
+func truncateForPrompt(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // remember appends this exchange to the conversation memory, creating it on first
@@ -908,16 +1033,36 @@ func ptrF(p *float64) float64 {
 	return *p
 }
 
-// calendarAdjustHours corrects a "today" time window from a 24h-rolling lookback to
-// "since local midnight", so "which hosts were accessed today" / "what changed today"
-// don't leak yesterday-evening rows. It rewrites the "hours" arg of any time-windowed
-// tool (session_history, audit_log, security_events, host_metric_history,
-// host_availability) to the hours elapsed since local midnight. It only acts when the
-// question says "today", the args already carry an "hours" field, and the query is not a
-// single-row "last …" lookup (Limit==1, which wants an unbounded window). All other
-// fields are preserved and everything else passes through unchanged.
-func (s *Service) calendarAdjustHours(ctx context.Context, question string, fargs json.RawMessage) json.RawMessage {
-	if !strings.Contains(strings.ToLower(question), "today") {
+// calendarAdjustWindow corrects calendar-phrase time windows from rolling lookbacks to
+// true calendar ranges in the operator's display timezone, so "which hosts were accessed
+// today" / "who connected yesterday" / "what changed last week" don't leak neighboring
+// days:
+//
+//	"today"     -> [local midnight, now)
+//	"yesterday" -> [midnight of the prior day, local midnight)
+//	"this week" -> [Monday midnight, now)
+//	"last week" -> [prior Monday midnight, this Monday midnight)
+//
+// It injects exact "since"/"until" RFC3339 bounds into the args of any time-windowed tool
+// (session_history, audit_log, security_events, host_metric_history, host_availability)
+// and rewrites "hours" to cover the range (for store queries that only take a lookback;
+// the runners then filter to the exact bounds). It only acts when the args already carry
+// an "hours" field and the query is not a single-row "last …" lookup (Limit==1, which
+// wants an unbounded window). Rolling phrases ("past week", "last 7 days") pass through
+// unchanged.
+func (s *Service) calendarAdjustWindow(ctx context.Context, question string, fargs json.RawMessage) json.RawMessage {
+	lq := strings.ToLower(question)
+	var kind string
+	switch {
+	case strings.Contains(lq, "yesterday"):
+		kind = "yesterday"
+	case strings.Contains(lq, "today"):
+		kind = "today"
+	case strings.Contains(lq, "last week"):
+		kind = "lastweek"
+	case strings.Contains(lq, "this week"):
+		kind = "thisweek"
+	default:
 		return fargs
 	}
 	var m map[string]json.RawMessage
@@ -936,7 +1081,27 @@ func (s *Service) calendarAdjustHours(ctx context.Context, question string, farg
 	loc := s.displayLoc(ctx)
 	now := time.Now().In(loc)
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	h := int(now.Sub(midnight).Hours()) // floor: window starts just after midnight, excludes yesterday
+	weekStart := midnight.AddDate(0, 0, -((int(now.Weekday()) + 6) % 7)) // Monday 00:00
+	var since, until time.Time
+	switch kind {
+	case "today":
+		since = midnight
+	case "yesterday":
+		since, until = midnight.AddDate(0, 0, -1), midnight
+	case "thisweek":
+		since = weekStart
+	case "lastweek":
+		since, until = weekStart.AddDate(0, 0, -7), weekStart
+	}
+	sb, _ := json.Marshal(since.Format(time.RFC3339))
+	m["since"] = sb
+	if !until.IsZero() {
+		ub, _ := json.Marshal(until.Format(time.RFC3339))
+		m["until"] = ub
+	}
+	// Widen "hours" to cover the range for store queries that only take a lookback (the
+	// runners narrow to the exact bounds afterwards).
+	h := int(math.Ceil(now.Sub(since).Hours()))
 	if h < 1 {
 		h = 1
 	}
@@ -949,11 +1114,36 @@ func (s *Service) calendarAdjustHours(ctx context.Context, question string, farg
 	return out
 }
 
+// parseWindowBound parses an internal RFC3339 window bound injected by
+// calendarAdjustWindow; returns the zero time when absent or invalid.
+func parseWindowBound(v string) time.Time {
+	if v == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// inWindow reports whether t falls inside [since, until), treating zero bounds as open.
+func inWindow(t, since, until time.Time) bool {
+	if !since.IsZero() && t.Before(since) {
+		return false
+	}
+	if !until.IsZero() && !t.Before(until) {
+		return false
+	}
+	return true
+}
+
 // sessionDirectAnswer builds a concise answer for "who connected to <host>" questions:
 // the single most recent for a "last connected" query (Limit==1), else distinct users
-// with session counts — instead of the model dumping every session timestamp. Returns ""
-// on empty so the narration handles the "no one connected" case.
-func (s *Service) sessionDirectAnswer(ctx context.Context, fargs json.RawMessage, payload any) string {
+// with session counts — instead of the model dumping every session timestamp. With no
+// hostname filter ("which hosts were accessed today") it groups by HOST instead. Returns
+// "" on empty so the narration handles the "no one connected" case.
+func (s *Service) sessionDirectAnswer(ctx context.Context, question string, fargs json.RawMessage, payload any) string {
 	m, ok := payload.(map[string]any)
 	if !ok {
 		return ""
@@ -971,20 +1161,30 @@ func (s *Service) sessionDirectAnswer(ctx context.Context, fargs json.RawMessage
 		r := sessions[0]
 		return fmt.Sprintf("%s last connected to %s on %s.", r.Username, a.Hostname, when(r.StartedAt))
 	}
-	// "who connected to <host> [window]": distinct users with counts.
-	counts := map[string]int{}
-	order := []string{}
-	for _, r := range sessions {
-		if _, seen := counts[r.Username]; !seen {
-			order = append(order, r.Username)
+	groupBy := func(key func(models.AssistantSSHSessionRow) string) string {
+		counts := map[string]int{}
+		order := []string{}
+		for _, r := range sessions {
+			k := key(r)
+			if _, seen := counts[k]; !seen {
+				order = append(order, k)
+			}
+			counts[k]++
 		}
-		counts[r.Username]++
+		parts := make([]string, len(order))
+		for i, k := range order {
+			parts[i] = fmt.Sprintf("%s (%d session%s)", k, counts[k], plural(counts[k]))
+		}
+		return strings.Join(parts, ", ")
 	}
-	parts := make([]string, len(order))
-	for i, u := range order {
-		parts[i] = fmt.Sprintf("%s (%d session%s)", u, counts[u], plural(counts[u]))
+	if a.Hostname == "" {
+		// "which hosts were accessed [window]": distinct hosts with counts.
+		return fmt.Sprintf("Hosts accessed %s: %s.", auditPeriodPhrase(strings.ToLower(question)),
+			groupBy(func(r models.AssistantSSHSessionRow) string { return r.Hostname }))
 	}
-	return fmt.Sprintf("Connections to %s: %s.", a.Hostname, strings.Join(parts, ", "))
+	// "who connected to <host> [window]": distinct users with counts.
+	return fmt.Sprintf("Connections to %s: %s.", a.Hostname,
+		groupBy(func(r models.AssistantSSHSessionRow) string { return r.Username }))
 }
 
 // metricTrendDirectAnswer builds a proper trend sentence from bucketed history — earliest
@@ -1128,7 +1328,9 @@ func auditPeriodPhrase(lq string) string {
 		return "today"
 	case strings.Contains(lq, "yesterday"):
 		return "yesterday"
-	case strings.Contains(lq, "this week"), strings.Contains(lq, "past week"), strings.Contains(lq, "last week"):
+	case strings.Contains(lq, "last week"):
+		return "last week"
+	case strings.Contains(lq, "this week"), strings.Contains(lq, "past week"):
 		return "this week"
 	case strings.Contains(lq, "month"):
 		return "this month"
@@ -1328,16 +1530,30 @@ func (s *Service) runMetricHistory(ctx context.Context, raw json.RawMessage, who
 	if window < time.Hour {
 		window = time.Hour
 	}
+	start := time.Now().Add(-window)
+	if since := parseWindowBound(a.Since); !since.IsZero() && since.After(time.Now().Add(-s.metricRetention)) {
+		start = since // exact calendar bound ("yesterday", "this week")
+		window = time.Since(start)
+	}
 	// Aim for <= ~72 buckets so the series stays compact enough to feed the model.
 	const targetBuckets = 72
 	bucket := window / targetBuckets
 	if bucket < time.Minute {
 		bucket = time.Minute
 	}
-	points, err := s.store.MetricHistory(ctx, host.ID, time.Now().Add(-window), bucket)
+	points, err := s.store.MetricHistory(ctx, host.ID, start, bucket)
 	if err != nil {
 		s.log.Warn("assistant metric history", "err", err)
 		return nil, map[string]any{"error": "could not load metric history"}
+	}
+	if until := parseWindowBound(a.Until); !until.IsZero() {
+		kept := points[:0]
+		for _, p := range points {
+			if p.Time.Before(until) {
+				kept = append(kept, p)
+			}
+		}
+		points = kept
 	}
 	metrics := normalizeMetrics(a.Metrics)
 	hist := &MetricHistory{
@@ -1455,11 +1671,24 @@ func (s *Service) runSessionHistory(ctx context.Context, raw json.RawMessage, wh
 	}
 	var a sessionHistoryArgs
 	_ = json.Unmarshal(raw, &a)
+	since := parseWindowBound(a.Since)
+	if since.IsZero() {
+		since = windowSince(a.Hours, 48)
+	}
 	rows, err := s.store.RecentSSHSessionsForAssistant(ctx, who.UserID, who.IsSuperAdmin,
-		a.Hostname, a.Username, windowSince(a.Hours, 48), a.Limit)
+		a.Hostname, a.Username, since, a.Limit)
 	if err != nil {
 		s.log.Warn("assistant session_history", "err", err)
 		return nil, map[string]any{"error": "could not list session history"}
+	}
+	if until := parseWindowBound(a.Until); !until.IsZero() {
+		kept := rows[:0]
+		for _, r := range rows {
+			if r.StartedAt.Before(until) {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
 	}
 	tbl := &AssistantTable{
 		Title: "SSH sessions",
@@ -1484,11 +1713,25 @@ func (s *Service) runAuditLog(ctx context.Context, raw json.RawMessage, who Call
 	}
 	var a auditLogArgs
 	_ = json.Unmarshal(raw, &a)
+	since := parseWindowBound(a.Since)
+	if since.IsZero() {
+		since = windowSince(a.Hours, 24)
+	}
+	until := parseWindowBound(a.Until)
 	rows, err := s.store.RecentAuditForAssistant(ctx, a.ActionContains, a.ActorContains,
-		windowSince(a.Hours, 24), a.Limit)
+		since, a.Limit)
 	if err != nil {
 		s.log.Warn("assistant audit_log", "err", err)
 		return nil, map[string]any{"error": "could not list audit events"}
+	}
+	if !until.IsZero() {
+		kept := rows[:0]
+		for _, r := range rows {
+			if r.Time.Before(until) {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
 	}
 	tbl := &AssistantTable{
 		Title: "Audit events",
@@ -1506,7 +1749,7 @@ func (s *Service) runAuditLog(ctx context.Context, raw json.RawMessage, who Call
 	changesByAction := map[string]int{}
 	routineByAction := map[string]int{}
 	changeCount := 0
-	counts, cerr := s.store.AuditActionCountsForAssistant(ctx, windowSince(a.Hours, 24))
+	counts, cerr := s.store.AuditActionCountsForAssistant(ctx, since, until)
 	if cerr != nil {
 		counts = map[string]int{} // fall back to empty rather than fail the whole answer
 	}

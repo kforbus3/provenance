@@ -133,10 +133,17 @@ func (s *Store) RecentSSHSessionsForAssistant(ctx context.Context, userID uuid.U
 // AuditActionCountsForAssistant returns a count per action over the whole window (no row
 // limit), so a "what changed" summary reflects every change in the period rather than only
 // what fits in the display row cap — where high-volume routine rows (assistant queries,
-// certificate issuance) would otherwise crowd real changes out.
-func (s *Store) AuditActionCountsForAssistant(ctx context.Context, since time.Time) (map[string]int, error) {
+// certificate issuance) would otherwise crowd real changes out. A zero `until` leaves the
+// window open-ended; a non-zero one bounds it (calendar ranges like "yesterday").
+func (s *Store) AuditActionCountsForAssistant(ctx context.Context, since, until time.Time) (map[string]int, error) {
+	var up *time.Time
+	if !until.IsZero() {
+		up = &until
+	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT action, count(*) FROM audit_events WHERE created_at >= $1 GROUP BY action`, since)
+		`SELECT action, count(*) FROM audit_events
+		 WHERE created_at >= $1 AND ($2::timestamptz IS NULL OR created_at < $2)
+		 GROUP BY action`, since, up)
 	if err != nil {
 		return nil, err
 	}
@@ -245,4 +252,15 @@ func (s *Store) RecentPlaybookRunsForAssistant(ctx context.Context, limit int) (
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// RecordAssistantFeedback stores an operator's thumbs up/down on an Ask answer, with the
+// question/answer as shown and which tool produced it — the raw material for finding
+// misrouted or unhelpful answers later.
+func (s *Store) RecordAssistantFeedback(ctx context.Context, userID uuid.UUID, askID, question, answer, answeredBy string, helpful bool, comment string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO assistant_feedback (user_id, ask_id, question, answer, answered_by, helpful, comment)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		userID, askID, question, answer, answeredBy, helpful, comment)
+	return err
 }

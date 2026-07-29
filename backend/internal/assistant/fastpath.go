@@ -99,6 +99,14 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "session_history", a, true
 	}
 
+	// 3d) "which hosts have been accessed [today]" -> session_history with NO hostname
+	// filter; the direct answer groups sessions by host. Without this the model-driven
+	// loop narrates the raw session rows (and, pre-calendar-fix, leaked yesterday).
+	if hrs, ok := hostsAccessedIntent(lq); ok {
+		a, _ := json.Marshal(sessionHistoryArgs{Hours: hrs})
+		return "session_history", a, true
+	}
+
 	// 4) capacity / runway questions -> capacity_outlook. Routes "will any host run
 	// out of disk/memory" to a capacity-FILTERED insights view that answers plainly
 	// when nothing is at risk, instead of dumping unrelated insight rows.
@@ -540,6 +548,29 @@ func sessionHistoryIntent(lq string) (host string, hours, limit int, ok bool) {
 		// above) and "who last connected" (Limit=1, unbounded) are unaffected.
 		return host, 168, 0, true
 	}
+}
+
+// hostsAccessedIntent recognizes fleet-wide "which/what/any hosts have been
+// accessed/connected to/logged into [window]" questions -> session_history with no
+// hostname filter (the direct answer then groups by host). Requires hosts-plural
+// phrasing so per-host "who connected to X" (sessionHistoryIntent, checked first) and
+// non-session host questions don't match.
+func hostsAccessedIntent(lq string) (hours int, ok bool) {
+	if !strings.Contains(lq, "host") && !strings.Contains(lq, "machine") && !strings.Contains(lq, "server") {
+		return 0, false
+	}
+	if !strings.Contains(lq, "accessed") && !strings.Contains(lq, "connected to") &&
+		!strings.Contains(lq, "logged into") && !strings.Contains(lq, "logged in to") {
+		return 0, false
+	}
+	for _, lead := range []string{"which hosts", "what hosts", "any hosts", "which machines",
+		"what machines", "which servers", "what servers", "hosts have been", "hosts were",
+		"machines have been", "machines were", "servers have been", "servers were"} {
+		if strings.Contains(lq, lead) {
+			return hoursFromText(lq), true
+		}
+	}
+	return 0, false
 }
 
 // hasExplicitTimeWindow reports whether the question names a concrete time window, so a
