@@ -7,6 +7,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.70.1 — Fix in-UI upgrades crashing the backend; truthful upgrade status & cluster roster
+
+- **Fixed: applying an in-UI upgrade crashed the backend** (`sync: unlock of unlocked
+  mutex` in the upgrade service) before the updater was ever dispatched. Introduced by
+  the v0.67.x stale-dispatch self-heal; every UI-driven upgrade attempt since then hit
+  it — the backend restarted, the update never applied, and the UI then showed the
+  **previous** upgrade's persisted result (e.g. "Upgraded to 0.68.5") as if it were
+  this run's outcome.
+- **Upgrade status no longer reports a prior run's outcome as current** — a terminal
+  updater status (success/failed) older than the running backend process is treated as
+  history, not live progress.
+- **A single-instance deployment no longer presents as a multi-node cluster** after
+  crashes or container swaps: the upgrade UI's instance roster now counts only
+  lease-live instances, ignoring dead rows awaiting the leader's prune sweep.
+
+---
+
 ## v0.70.0 — Super-admin promote/demote; role/flag unification; Users-page fixes
 
 - **Promote or demote an existing account to super administrator** — new **Super

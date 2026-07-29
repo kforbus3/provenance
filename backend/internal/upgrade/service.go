@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fleet-terminal/backend/internal/backup"
+	"github.com/fleet-terminal/backend/internal/cluster"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/release"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -38,6 +39,7 @@ type Service struct {
 	version string
 	trusted []ed25519.PublicKey
 	client  *http.Client
+	bootAt  time.Time // process start; updater statuses older than this are history
 
 	mu       sync.Mutex
 	draining bool
@@ -70,6 +72,7 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, hub *ws.Hub, bk 
 		store: st, cfg: cfg, log: log, hub: hub, backup: bk, version: version, trusted: trusted,
 		client: &http.Client{Timeout: 30 * time.Second},
 		local:  Status{State: "idle"},
+		bootAt: time.Now(),
 	}
 }
 
@@ -158,6 +161,7 @@ func (s *Service) Apply(ctx context.Context, path string, actorName string) erro
 		}
 	}
 	now := time.Now()
+	s.mu.Lock()
 	s.local = Status{State: "backing_up", TargetVersion: m.Version, StartedAt: &now, UpdatedAt: &now, Draining: s.draining, Step: "taking pre-upgrade database backup"}
 	s.mu.Unlock()
 
@@ -209,10 +213,19 @@ func (s *Service) fail(msg string) {
 // Status returns the current upgrade status. Once an apply is dispatched the updater
 // sidecar is the source of truth (it survives the backend restart), so this proxies
 // the updater's /status and falls back to local state if it's unreachable.
+//
+// A TERMINAL updater status (success/failed) that predates this backend process is
+// a previous upgrade's outcome, not ours: the updater persists its last run
+// indefinitely, and without this check a fresh apply briefly shows the prior run's
+// "Upgraded to <old version>" before (or instead of) the real progress.
 func (s *Service) Status(ctx context.Context) Status {
 	if us, ok := s.updaterStatus(ctx); ok {
-		us.Draining = s.IsDraining()
-		return us
+		terminal := us.State == "success" || us.State == "failed"
+		stale := terminal && (us.UpdatedAt == nil || us.UpdatedAt.Before(s.bootAt))
+		if !stale {
+			us.Draining = s.IsDraining()
+			return us
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -259,6 +272,10 @@ type CheckResult struct {
 }
 
 // clusterRoster returns the live instance roster for the upgrade UI (best-effort).
+// Only instances with a heartbeat inside the lease window count: every unclean
+// backend stop (crash, container swap) leaves its row behind until the leader's
+// prune sweep, and counting those ghosts makes a single-instance deployment
+// present itself as a multi-node cluster.
 func (s *Service) clusterRoster(ctx context.Context) []ClusterMember {
 	instances, err := s.store.ListClusterInstances(ctx)
 	if err != nil {
@@ -266,6 +283,9 @@ func (s *Service) clusterRoster(ctx context.Context) []ClusterMember {
 	}
 	out := make([]ClusterMember, 0, len(instances))
 	for _, in := range instances {
+		if time.Since(in.LastHeartbeat) > cluster.Lease {
+			continue
+		}
 		out = append(out, ClusterMember{Hostname: in.Hostname, Version: in.Version, IsLeader: in.IsLeader, LastHeartbeat: in.LastHeartbeat})
 	}
 	return out
