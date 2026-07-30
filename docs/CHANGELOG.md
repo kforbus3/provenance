@@ -7,6 +7,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.70.2 — Full-stack upgrade bundle; bundles pin linux/amd64
+
+- **The release bundle now carries every app component** — backend, frontend,
+  grype-scanner, **ansible-runner**, and the **fleet-updater** itself (self-updated
+  last via its detached helper) — so one in-UI install brings the whole stack to the
+  same version instead of leaving sidecars behind.
+- **`make bundle` pins images to `linux/amd64` by default** (`BUNDLE_PLATFORM`
+  overrides). Building on an Apple Silicon host otherwise produces arm64 images that
+  crash-loop with `exec format error` on an amd64 server and get health-gated back —
+  correct behavior, but a confusing failure. No code changes beyond v0.70.1.
+
+---
+
 ## v0.70.1 — Fix in-UI upgrades crashing the backend; truthful upgrade status & cluster roster
 
 - **Fixed: applying an in-UI upgrade crashed the backend** (`sync: unlock of unlocked
