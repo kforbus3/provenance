@@ -18,6 +18,10 @@ schema migrations apply automatically on startup; deploy notes call out anything
   that are genuinely down aren't re-probed extra times every sweep.
 - Tunable via `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` (set `1` to restore the old
   single-check behavior) and `FLEET_MONITOR_CONFIRM_DELAY`.
+- **Release policy from here on: every bundle is full-stack and installable from
+  any older version** — no stepping-stone installs; the latest bundle always
+  carries all previous fixes. `make bundle` now defaults `BUNDLE_FROM` to `0.0.0`
+  and `BUNDLE_COMPONENTS` to all five app components.
 
 ---
 

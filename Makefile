@@ -61,11 +61,16 @@ redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/update
 # Produce a single signed .fleetup file that operators upload (or later pull) to
 # upgrade in place through the UI. Requires a release private key from
 # `fleetctl release keygen` — keep it OFFLINE. Override BUNDLE_VERSION/BUNDLE_FROM.
+# BUNDLE_FROM defaults to 0.0.0 — policy: every bundle is full-stack and
+# installable from ANY older version (no stepping-stone installs); downgrades are
+# still refused by the version check itself. Raise it only for a release that
+# genuinely cannot upgrade an old install in one hop (e.g. a destructive
+# migration that requires an intermediate version).
 BUNDLE_VERSION ?= $(FLEET_VERSION)
-BUNDLE_FROM    ?= $(FLEET_VERSION)
+BUNDLE_FROM    ?= 0.0.0
 BUNDLE_KEY     ?= release.key
 BUNDLE_OUT     ?= fleet-$(BUNDLE_VERSION).fleetup
-BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner
+BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,fleet-updater
 # Bundles deploy to servers, so pin the image platform regardless of the build
 # host's architecture (an Apple Silicon Mac otherwise emits arm64 images that
 # crash-loop with 'exec format error' on an amd64 host and get rolled back).
