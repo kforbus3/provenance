@@ -66,11 +66,16 @@ BUNDLE_FROM    ?= $(FLEET_VERSION)
 BUNDLE_KEY     ?= release.key
 BUNDLE_OUT     ?= fleet-$(BUNDLE_VERSION).fleetup
 BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner
+# Bundles deploy to servers, so pin the image platform regardless of the build
+# host's architecture (an Apple Silicon Mac otherwise emits arm64 images that
+# crash-loop with 'exec format error' on an amd64 host and get rolled back).
+# Override for arm64 deployment targets.
+BUNDLE_PLATFORM ?= linux/amd64
 
 .PHONY: bundle
 bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
 	@test -f $(BUNDLE_KEY) || (echo "missing $(BUNDLE_KEY) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.24 go run ./cmd/fleetctl release keygen"; exit 1)
-	FLEET_VERSION=$(BUNDLE_VERSION) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
+	FLEET_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
 	  docker tag $(PROJECT)-$$c $(PROJECT)-$$c:$(BUNDLE_VERSION); \
 	done
