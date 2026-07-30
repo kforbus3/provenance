@@ -211,16 +211,18 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 	// collect Windows facts over WinRM instead of the SSH inventory path. Both use a
 	// single jump-host connection per probe — same jump-connection cost as an SSH host,
 	// so RDP hosts scale under the shared worker pool identically.
+	var run func() (models.HostStatus, *models.HostInventory, *models.HostMetrics)
 	if h.Protocol == "rdp" {
-		var st models.HostStatus
-		var inv *models.HostInventory
-		var metrics *models.HostMetrics
-		jump, jerr := m.gw.DialJumpWithSigner(ctx, signer)
-		if jerr != nil {
-			now := time.Now()
-			st = models.HostStatus{Status: "offline", CheckedAt: &now, LastError: trunc(errStr(jerr), 240), LastFailureAt: &now}
-		} else {
-			st = m.probeRDPOver(ctx, jump, &h)
+		run = func() (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
+			jump, jerr := m.gw.DialJumpWithSigner(ctx, signer)
+			if jerr != nil {
+				now := time.Now()
+				return models.HostStatus{Status: "offline", CheckedAt: &now, LastError: trunc(errStr(jerr), 240), LastFailureAt: &now}, nil, nil
+			}
+			defer jump.Close()
+			st := m.probeRDPOver(ctx, jump, &h)
+			var inv *models.HostInventory
+			var metrics *models.HostMetrics
 			// Collect over WinRM every sweep while online: inventory changes rarely but
 			// resource metrics (disk, memory, network) are live, and it's a single call
 			// reusing the jump connection we already opened.
@@ -234,47 +236,28 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 					}
 				}
 			}
-			jump.Close()
+			return st, inv, metrics
 		}
-		if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
-			m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
-			return
-		}
-		m.recordTransition(ctx, h, prev, st.Status, st.LastError)
-		if inv != nil {
-			if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
-				m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
+	} else {
+		// A vaulted host (no Fleet CA trust) is probed with its credential injected in a
+		// system context. If the credential can't be resolved unattended (missing, or
+		// check-out-gated), leave the host's status untouched rather than flapping it
+		// offline — mirrors the best-effort RDP/WinRM fact path.
+		var inj *credinject.Injection
+		if hasVaultedCredential(&h) {
+			resolved, ierr := m.systemInjection(ctx, &h)
+			if ierr != nil {
+				m.log.Debug("monitor: vaulted host not probeable", "host", h.Hostname, "err", ierr)
+				return
 			}
+			inj = resolved
 		}
-		if metrics != nil {
-			if err := m.store.UpsertMetrics(ctx, h.ID, *metrics); err != nil {
-				m.log.Warn("monitor update metrics", "host", h.Hostname, "err", err)
-			}
-			if m.cfg.MetricHistoryRetention > 0 {
-				if err := m.store.RecordMetricHistory(ctx, h.ID, *metrics, m.cfg.MetricHistorySample); err != nil {
-					m.log.Warn("monitor record metric history", "host", h.Hostname, "err", err)
-				}
-			}
+		run = func() (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
+			return m.probe(ctx, signer, inj, &h)
 		}
-		m.broadcastStatus(h, st)
-		return
 	}
 
-	// A vaulted host (no Fleet CA trust) is probed with its credential injected in a
-	// system context. If the credential can't be resolved unattended (missing, or
-	// check-out-gated), leave the host's status untouched rather than flapping it
-	// offline — mirrors the best-effort RDP/WinRM fact path.
-	var inj *credinject.Injection
-	if hasVaultedCredential(&h) {
-		resolved, ierr := m.systemInjection(ctx, &h)
-		if ierr != nil {
-			m.log.Debug("monitor: vaulted host not probeable", "host", h.Hostname, "err", ierr)
-			return
-		}
-		inj = resolved
-	}
-
-	st, inv, metrics := m.probe(ctx, signer, inj, &h)
+	st, inv, metrics := m.probeConfirmed(ctx, &h, prev, run)
 	if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 		m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 		return
@@ -298,6 +281,43 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		}
 	}
 	m.broadcastStatus(h, st)
+}
+
+// probeConfirmed runs a probe, and when a previously-online host comes back
+// offline, re-probes up to offlineConfirmations() total attempts (spaced
+// MonitorConfirmDelay apart) before letting the offline result stand — so a
+// transient hiccup (a jump-host sshd connection reset, a DNS blip) doesn't flap
+// the host and fire an alert. Any non-offline result returns immediately. Hosts
+// that were already offline are not re-probed, so a real outage costs the extra
+// attempts exactly once.
+func (m *Monitor) probeConfirmed(ctx context.Context, h *models.Host, prev string, run func() (models.HostStatus, *models.HostInventory, *models.HostMetrics)) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
+	st, inv, metrics := run()
+	if st.Status != "offline" || prev != "online" {
+		return st, inv, metrics
+	}
+	for attempt := 2; attempt <= m.offlineConfirmations(); attempt++ {
+		m.log.Info("monitor: probe failed, re-checking before marking offline",
+			"host", h.Hostname, "attempt", attempt, "of", m.offlineConfirmations(), "err", st.LastError)
+		select {
+		case <-ctx.Done():
+			return st, inv, metrics
+		case <-time.After(m.cfg.MonitorConfirmDelay):
+		}
+		st, inv, metrics = run()
+		if st.Status != "offline" {
+			return st, inv, metrics
+		}
+	}
+	return st, inv, metrics
+}
+
+// offlineConfirmations is the total consecutive failed probes required to flip an
+// online host offline (minimum 1 = the old single-check behavior).
+func (m *Monitor) offlineConfirmations() int {
+	if n := m.cfg.MonitorOfflineConfirmations; n >= 1 {
+		return n
+	}
+	return 3
 }
 
 // broadcastStatus pushes a host's freshly-probed status to connected dashboards.

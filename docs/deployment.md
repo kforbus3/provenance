@@ -103,6 +103,8 @@ Key variables (full list in `.env.example`):
 | `FLEET_GRYPE_SCANNER_URL` | Base URL of the `grype-scanner` sidecar for CVE scans (default `http://grype-scanner:8000`) |
 | `FLEET_ACTIVITY_RETENTION` / `FLEET_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
 | `FLEET_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
+| `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted (default `3`; `1` = flip on a single failure) |
+| `FLEET_MONITOR_CONFIRM_DELAY` | Wait between the confirming re-probes (default `10s`) |
 | `FLEET_METRIC_HISTORY_SAMPLE` / `FLEET_METRIC_HISTORY_RETENTION` | Host-metric time-series sample interval / retention (default `5m` / `720h`) |
 | `TZ` | *(optional)* server timezone for the backend; schedules compute next-run in this zone (default `UTC`) |
 

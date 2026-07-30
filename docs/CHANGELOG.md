@@ -7,6 +7,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.70.3 — Confirm host-offline before alerting
+
+- **A host must now fail multiple consecutive probes before it is marked offline
+  and alerted** (default 3 attempts, 10s apart, within the same sweep). Previously a
+  single failed check — often a transient jump-host hiccup such as an sshd
+  connection reset or a DNS blip — flipped the host offline for one 30s interval,
+  fired an offline alert, and immediately recovered. Only previously-online hosts
+  get the confirming re-probes, so steady-state sweep cost is unchanged and hosts
+  that are genuinely down aren't re-probed extra times every sweep.
+- Tunable via `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` (set `1` to restore the old
+  single-check behavior) and `FLEET_MONITOR_CONFIRM_DELAY`.
+
+---
+
 ## v0.70.2 — Full-stack upgrade bundle; bundles pin linux/amd64
 
 - **The release bundle now carries every app component** — backend, frontend,
