@@ -150,7 +150,7 @@ export function PlaybooksPage() {
   );
 }
 
-const TERMINAL = new Set(["completed", "failed"]);
+const TERMINAL = new Set(["completed", "failed", "interrupted"]);
 
 // Run a playbook against one or more accessible hosts, or every host in a group.
 // Pre-run: choose targets + dry-run. After launch: poll the run and stream its
@@ -392,10 +392,15 @@ function PlaybookRunsDialog({ playbook, onClose }: { playbook: Playbook; onClose
 }
 
 function RunStatusChip({ status }: { status?: string }) {
+  // "interrupted" (amber) = Fleet restarted mid-run and the result was never
+  // collected (e.g. the playbook rebooted the machine hosting Fleet) — the
+  // target hosts may still have completed their tasks. Distinct from a red
+  // "failed", where ansible itself reported failure.
   const color =
     status === "completed" ? "success" : status === "failed" ? "error" :
+    status === "interrupted" ? "warning" :
     status === "running" ? "info" : "default";
-  return <Chip size="small" color={color as "success" | "error" | "info" | "default"} label={status ?? "…"} />;
+  return <Chip size="small" color={color as "success" | "error" | "warning" | "info" | "default"} label={status ?? "…"} />;
 }
 
 function PlaybookEditor({ id, onClose, onSaved }: { id: string | null; onClose: () => void; onSaved: () => void }) {

@@ -121,10 +121,10 @@ func (s *Store) PruneRDPRecordingsBefore(ctx context.Context, before time.Time) 
 // on startup: no RDP session survives a backend restart, so any still marked active
 // are stale. (In a future multi-instance HA setup this must be scoped per instance so
 // it never finalizes another node's live recording.)
-func (s *Store) CloseStaleRDPRecordings(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) CloseStaleRDPRecordings(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE rdp_recordings SET status='ended', ended_at=COALESCE(ended_at, now())
-		 WHERE status='active' AND `+deadOwnerPredicate("rdp_recordings"), lease.String())
+		 WHERE status='active' AND `+deadOwnerPredicate("rdp_recordings"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

@@ -47,7 +47,7 @@ func (s *Store) PruneSFTPTransfersBefore(ctx context.Context, cutoff time.Time) 
 // alone.
 func (s *Store) PrunePlaybookRunsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM playbook_runs WHERE created_at < $1 AND status IN ('completed','failed')`, cutoff)
+		`DELETE FROM playbook_runs WHERE created_at < $1 AND status IN ('completed','failed','interrupted')`, cutoff)
 	if err != nil {
 		return 0, err
 	}

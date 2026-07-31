@@ -57,10 +57,10 @@ func (s *Store) FailRemediation(ctx context.Context, id uuid.UUID, msg string) e
 
 // FailStaleRemediations marks remediations still pending/running as failed
 // (their in-memory worker did not survive a restart).
-func (s *Store) FailStaleRemediations(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) FailStaleRemediations(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE host_remediations SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("host_remediations"), lease.String())
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("host_remediations"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

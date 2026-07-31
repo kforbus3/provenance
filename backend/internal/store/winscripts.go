@@ -242,10 +242,10 @@ func (s *Store) ListWinScriptRuns(ctx context.Context, scriptID uuid.UUID, limit
 
 // FailStaleWinScriptRuns marks any pending/running runs owned by a dead instance as
 // failed on startup, since their in-memory goroutines did not survive the restart.
-func (s *Store) FailStaleWinScriptRuns(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) FailStaleWinScriptRuns(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE winscript_runs SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("winscript_runs"), lease.String())
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("winscript_runs"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

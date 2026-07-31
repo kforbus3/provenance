@@ -84,15 +84,20 @@ func (s *Store) LiveInstanceIDs(ctx context.Context, lease time.Duration) (map[u
 	return out, rows.Err()
 }
 
-// deadOwnerPredicate is a SQL fragment (using bind parameter $1 = lease interval as
-// text) that matches rows whose owning instance is unknown (legacy/NULL) or no longer
-// alive. Reconciliation ANDs this so it only fails work abandoned by a dead instance,
-// never a live peer's. The table name qualifies instance_id in the correlated
-// subquery.
+// deadOwnerPredicate is a SQL fragment (bind parameters: $1 = lease interval as
+// text, $2 = the reconciling instance's own id) that matches rows whose owning
+// instance is unknown (legacy/NULL) or no longer alive. Reconciliation ANDs this
+// so it only fails work abandoned by a dead instance — never a live peer's, and
+// never the caller's own: the caller is alive by definition, so its rows are
+// excluded outright rather than trusting its heartbeat row. (Without that guard,
+// a starved host that stalls the caller's heartbeat goroutine past the lease made
+// the caller declare its own in-flight work orphaned — seen in prod when the
+// hypervisor under the Fleet VM was itself mid-upgrade.) The table name qualifies
+// instance_id in the correlated subquery.
 func deadOwnerPredicate(table string) string {
-	return "(" + table + ".instance_id IS NULL OR NOT EXISTS (" +
+	return "(" + table + ".instance_id IS NULL OR (" + table + ".instance_id <> $2 AND NOT EXISTS (" +
 		"SELECT 1 FROM cluster_instances ci WHERE ci.id = " + table + ".instance_id " +
-		"AND ci.last_heartbeat > now() - $1::interval))"
+		"AND ci.last_heartbeat > now() - $1::interval)))"
 }
 
 // HasLiveLeader reports whether some OTHER instance is currently a leader with a

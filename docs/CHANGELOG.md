@@ -7,6 +7,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.70.5 — Reconciler can't fail its own live work; "interrupted" run status
+
+- **A live instance can no longer mark its own in-flight work as orphaned.** The
+  ownership reconciler (sessions, scans, playbook/script/command runs, enrollment
+  jobs, dead-instance certificate revocation) now always excludes rows owned by
+  the instance running the sweep — it is alive by definition. Previously a
+  host-level stall (observed in prod: the hypervisor under the Fleet VM was
+  itself mid-upgrade, starving the VM for minutes) froze the heartbeat goroutine
+  past its 30s lease, and the next reconcile sweep declared the instance's own
+  running playbook "orphaned" and failed it — while ansible was still running and
+  went on to finish the job.
+- **Runs cut off by a Fleet restart are now "interrupted" (amber), not "failed"
+  (red).** A playbook that reboots the machine hosting Fleet itself can never
+  report completion — the ansible process dies with the host. Such runs now end
+  as `interrupted` with the explanation "Fleet restarted mid-run — the run was
+  cut off and its result was not collected; the target hosts may still have
+  completed their tasks", and Ask explains the status the same way. Retention
+  prunes interrupted runs like completed/failed ones.
+- Migrations: none.
+
+---
+
 ## v0.70.4 — Overlay-tunnel health is surfaced; stale jump peers can't steal overlay IPs
 
 - **A down WireGuard tunnel on an otherwise-reachable host is no longer silent.**

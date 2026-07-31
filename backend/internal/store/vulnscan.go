@@ -175,10 +175,10 @@ func (s *Store) LatestVulnScans(ctx context.Context) ([]models.VulnScan, error) 
 }
 
 // FailStaleVulnScans fails any scan left running across a restart.
-func (s *Store) FailStaleVulnScans(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) FailStaleVulnScans(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE vuln_scans SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("vuln_scans"), lease.String())
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("vuln_scans"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

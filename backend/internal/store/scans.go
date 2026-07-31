@@ -68,10 +68,10 @@ func (s *Store) CompleteHostScan(ctx context.Context, id uuid.UUID, sum ScanSumm
 
 // FailStaleScans marks scans still pending/running as failed. A scan's worker
 // runs in memory, so any such row at startup was orphaned by a restart.
-func (s *Store) FailStaleScans(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) FailStaleScans(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE host_scans SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("host_scans"), lease.String())
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("host_scans"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

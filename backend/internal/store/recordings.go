@@ -79,10 +79,10 @@ func (s *Store) RecordingSessionIDs(ctx context.Context) (map[uuid.UUID]bool, er
 // instance is no longer alive (heartbeat older than lease, or unknown/legacy owner).
 // A live PTY exists only in its owning instance's RAM, so once that instance dies the
 // row is stale — but sessions owned by a still-live peer are deliberately spared.
-func (s *Store) CloseStaleSessions(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) CloseStaleSessions(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE ssh_sessions SET status='closed', ended_at=COALESCE(ended_at, now())
-		 WHERE status='active' AND `+deadOwnerPredicate("ssh_sessions"), lease.String())
+		 WHERE status='active' AND `+deadOwnerPredicate("ssh_sessions"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

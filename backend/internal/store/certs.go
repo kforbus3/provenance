@@ -219,18 +219,21 @@ func (s *Store) RevokeSessionCertificates(ctx context.Context, sessionID uuid.UU
 // keyless — their private key died with the instance's RAM — so revoking them is safe
 // hygiene and never touches a live instance's own cert for the same session. Only
 // rows with a known (non-NULL) dead issuer are revoked; legacy NULL-issuer certs are
-// left alone. Returns the number revoked so the caller can refresh the KRL.
-func (s *Store) RevokeDeadInstanceCertificates(ctx context.Context, lease time.Duration) (int64, error) {
+// left alone, as are the caller's own certs — the caller is alive by definition even
+// when a stall has let its heartbeat row go stale (same self-guard as
+// deadOwnerPredicate). Returns the number revoked so the caller can refresh the KRL.
+func (s *Store) RevokeDeadInstanceCertificates(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	var count int64
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			UPDATE ssh_certificates SET revoked_at=now(), revoke_reason='issuing instance died'
 			WHERE revoked_at IS NULL AND expires_at > now() AND instance_id IS NOT NULL
+			  AND instance_id <> $2
 			  AND NOT EXISTS (
 			    SELECT 1 FROM cluster_instances ci
 			    WHERE ci.id = ssh_certificates.instance_id
 			      AND ci.last_heartbeat > now() - $1::interval)
-			RETURNING serial`, lease.String())
+			RETURNING serial`, lease.String(), self)
 		if err != nil {
 			return err
 		}

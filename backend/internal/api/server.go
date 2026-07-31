@@ -403,37 +403,40 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	// instance; close any stale "active"/"running" rows owned by dead instances so
 	// they don't appear stuck forever (while sparing live peers' work).
 	lease := cluster.Lease
-	if n, err := s.Store.CloseStaleSessions(ctx, lease); err == nil && n > 0 {
+	// This instance's own id: its rows are never reconciled — it is alive by
+	// definition, even when a host-level stall has let its heartbeat go stale.
+	self := s.Cluster.ID()
+	if n, err := s.Store.CloseStaleSessions(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("closed orphaned ssh sessions", "count", n)
 	}
-	if n, err := s.Store.CloseStaleRDPRecordings(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.CloseStaleRDPRecordings(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("closed orphaned rdp recordings", "count", n)
 	}
-	if n, err := s.Store.FailStaleScans(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.FailStaleScans(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("failed orphaned scans", "count", n)
 	}
-	if n, err := s.Store.FailStaleVulnScans(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.FailStaleVulnScans(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("failed orphaned vuln scans", "count", n)
 	}
-	if n, err := s.Store.FailStaleRemediations(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.FailStaleRemediations(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("failed orphaned remediations", "count", n)
 	}
-	if n, err := s.Store.FailStalePlaybookRuns(ctx, lease); err == nil && n > 0 {
-		s.Log.Info("failed orphaned playbook runs", "count", n)
+	if n, err := s.Store.FailStalePlaybookRuns(ctx, lease, self); err == nil && n > 0 {
+		s.Log.Info("marked orphaned playbook runs interrupted", "count", n)
 	}
-	if n, err := s.Store.FailStaleCommandRuns(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.FailStaleCommandRuns(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("reconciled stale command runs", "count", n)
 	}
-	if n, err := s.Store.FailStaleWinScriptRuns(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.FailStaleWinScriptRuns(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("failed orphaned script runs", "count", n)
 	}
-	if n, err := s.Store.FailStaleEnrollmentJobs(ctx, lease); err == nil && n > 0 {
+	if n, err := s.Store.FailStaleEnrollmentJobs(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("failed orphaned enrollment jobs", "count", n)
 	}
 	// Revoke certificates issued by instances that have died (keyless now). Leader
 	// only, since it mutates the shared KRL and pushes it to hosts.
 	if s.isLeader() {
-		if n, err := s.Store.RevokeDeadInstanceCertificates(ctx, lease); err == nil && n > 0 {
+		if n, err := s.Store.RevokeDeadInstanceCertificates(ctx, lease, self); err == nil && n > 0 {
 			s.Log.Info("revoked certificates of dead instances", "count", n)
 			if _, derr := s.distributeKRL(ctx); derr != nil {
 				s.Log.Warn("distribute KRL after dead-instance revoke", "err", derr)

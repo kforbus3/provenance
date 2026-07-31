@@ -94,10 +94,10 @@ func (s *Store) ListCommandRuns(ctx context.Context, limit int) ([]*CommandRun, 
 }
 
 // FailStaleCommandRuns fails pending/running runs abandoned by a dead instance.
-func (s *Store) FailStaleCommandRuns(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) FailStaleCommandRuns(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE command_runs SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		WHERE status IN ('pending','running') AND `+deadOwnerPredicate("command_runs"), lease.String())
+		WHERE status IN ('pending','running') AND `+deadOwnerPredicate("command_runs"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

@@ -335,7 +335,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_playbook_runs",
-		Description: "List recent Ansible playbook runs, most recent first. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), status (completed/failed), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'; for 'scheduled' runs specifically, keep entries where scheduled is true.",
+		Description: "List recent Ansible playbook runs, most recent first. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), status (completed/failed/interrupted — interrupted means Fleet itself restarted mid-run and never collected the result, e.g. the playbook rebooted the machine hosting Fleet, so the target hosts may still have completed their tasks), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'; for 'scheduled' runs specifically, keep entries where scheduled is true.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "max rows (default 50)"}},

@@ -255,12 +255,16 @@ func (s *Store) ListPlaybookRuns(ctx context.Context, playbookID uuid.UUID, limi
 	return out, rows.Err()
 }
 
-// FailStalePlaybookRuns marks any pending/running runs as failed on startup,
-// since their in-memory goroutines did not survive the restart.
-func (s *Store) FailStalePlaybookRuns(ctx context.Context, lease time.Duration) (int64, error) {
+// FailStalePlaybookRuns marks any pending/running runs whose owning instance died
+// as interrupted, since their in-memory goroutines did not survive the restart.
+// "interrupted" is deliberately distinct from "failed": ansible was cut off (or
+// Fleet itself restarted mid-run — e.g. a playbook that reboots the hypervisor
+// hosting Fleet), so the run's result was never collected and the target hosts
+// may well have completed their tasks.
+func (s *Store) FailStalePlaybookRuns(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE playbook_runs SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("playbook_runs"), lease.String())
+		`UPDATE playbook_runs SET status='interrupted', error='Fleet restarted mid-run — the run was cut off and its result was not collected; the target hosts may still have completed their tasks', finished_at=now()
+		 WHERE status IN ('pending','running') AND `+deadOwnerPredicate("playbook_runs"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}

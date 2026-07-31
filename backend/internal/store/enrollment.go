@@ -58,10 +58,10 @@ func (s *Store) DeleteFinishedEnrollmentJobs(ctx context.Context) (int64, error)
 // FailStaleEnrollmentJobs marks any still-"running" jobs as failed on startup: an
 // enrollment runs inside a request goroutine that does not survive a restart, so a
 // job left "running" was interrupted and would otherwise appear stuck forever.
-func (s *Store) FailStaleEnrollmentJobs(ctx context.Context, lease time.Duration) (int64, error) {
+func (s *Store) FailStaleEnrollmentJobs(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE enrollment_jobs SET status='failed', error='interrupted (owning instance stopped)', finished_at=now()
-		 WHERE status='running' AND `+deadOwnerPredicate("enrollment_jobs"), lease.String())
+		 WHERE status='running' AND `+deadOwnerPredicate("enrollment_jobs"), lease.String(), self)
 	if err != nil {
 		return 0, err
 	}
