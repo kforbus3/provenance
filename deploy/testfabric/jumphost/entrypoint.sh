@@ -49,8 +49,19 @@ ip link set "$WG_IFACE" up
 # restart. When /etc/wireguard is on a volume (production), this keeps every
 # enrolled host reachable across jump-host restarts/upgrades — no re-enrollment.
 if [ -d /etc/wireguard/peers ]; then
+  claimed=""
   for f in /etc/wireguard/peers/*.conf; do
     [ -f "$f" ] || continue
+    # Guard against duplicate AllowedIPs claims: in WireGuard the LAST peer
+    # assigned an allowed-ip silently steals it from an earlier one, so a stale
+    # fragment (leftover from a deleted host whose overlay IP was reused) would
+    # dead-end the live host's tunnel. First file wins; later claimants are
+    # skipped loudly so the operator can delete the stale fragment.
+    ips=$(sed -n 's/^[[:space:]]*AllowedIPs[[:space:]]*=[[:space:]]*//p' "$f" | head -1)
+    if [ -n "$ips" ] && printf '%s' "$claimed" | grep -qFx "$ips"; then
+      echo "[jumphost] WARN skipping $(basename "$f"): AllowedIPs $ips already claimed by an earlier peer file (stale leftover from a removed host? delete it)"
+      continue
+    fi
     # Restore the peer WITHOUT its Endpoint: a hub must never depend on
     # resolving member hostnames at rebuild time (a host may be legitimately
     # offline, and DNS may not even be answering this early in boot — either
@@ -61,6 +72,8 @@ if [ -d /etc/wireguard/peers ]; then
     grep -vi '^[[:space:]]*Endpoint' "$f" > "$tmp"
     if wg addconf "$WG_IFACE" "$tmp" 2>/dev/null; then
       echo "[jumphost] restored peer from $(basename "$f")"
+      if [ -n "$ips" ]; then claimed="${claimed}${ips}
+"; fi
     else
       echo "[jumphost] WARN could not restore peer from $(basename "$f")"
     fi

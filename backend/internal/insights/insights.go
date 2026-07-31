@@ -41,7 +41,7 @@ const (
 // Insight is one surfaced observation about a host.
 type Insight struct {
 	Severity string `json:"severity"` // critical|warning|info
-	Category string `json:"category"` // offline|disk|disk-runway|memory|load|updates
+	Category string `json:"category"` // offline|overlay|disk|disk-runway|memory|load|updates
 	HostID   string `json:"hostId"`
 	Hostname string `json:"hostname"`
 	Title    string `json:"title"`
@@ -92,6 +92,14 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 				Title: "Host offline", Detail: detail,
 			})
 			continue
+		}
+		// An overlay-enrolled host that is only reachable because the monitor fell
+		// back to its direct address: the host looks "online" but its WireGuard
+		// tunnel is down, which would otherwise go completely unnoticed.
+		if h.WGAddress != "" && h.Status != nil && h.Status.Status == "online" && !h.Status.WGOK {
+			out = append(out, insight(SeverityWarning, "overlay", h.ID, h.Hostname,
+				"Overlay tunnel down",
+				fmt.Sprintf("The WireGuard tunnel (%s) is down; Fleet is reaching this host over its direct address. Check the WireGuard service on the host and the peer entry on the jump host.", h.WGAddress)))
 		}
 		// Pending security updates come from inventory, not metrics, so report them
 		// even for a host whose metrics haven't been collected yet — a fresh enrollment

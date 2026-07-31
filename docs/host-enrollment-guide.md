@@ -223,5 +223,9 @@ changes, an administrator must clear/refresh the stored fingerprint.
 
 `DELETE /api/v1/hosts/{id}` (requires `Host.Delete`) removes the host and, via
 `ON DELETE CASCADE`, its group links, inventory, fingerprints, and status. The
-deletion is audited. Optionally remove the `TrustedUserCAKeys` line on the host
-if it is leaving the fleet entirely.
+deletion is audited. For an overlay-enrolled host, Fleet also retires its
+WireGuard peer on the jump host (the live kernel entry and the persisted
+`/etc/wireguard/peers/<host>.conf` fragment) — best-effort: if the jump host is
+unreachable at that moment, the stale entry is cleaned up automatically the next
+time its overlay address is reused by an enrollment. Optionally remove the
+`TrustedUserCAKeys` line on the host if it is leaving the fleet entirely.

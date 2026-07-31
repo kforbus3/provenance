@@ -223,5 +223,5 @@ load: ## Run the k6 load smoke test against the running stack (override USER/PAS
 
 .PHONY: assistant-docs
 assistant-docs: ## Regenerate the assistant's embedded documentation index from docs/
-	docker run --rm -v $(PWD):/repo -w /repo/backend/internal/assistant golang:1.23-alpine \
+	docker run --rm -v $(PWD):/repo -w /repo/backend/internal/assistant golang:1.24-alpine \
 	  go run gendocs.go -docs /repo/docs -out docs_generated.go

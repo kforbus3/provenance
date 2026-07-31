@@ -728,17 +728,75 @@ func (s *Service) jumpPeerScript(hostname, hostPub, hostEndpoint, wgIP string) s
 	// the endpoint: on a jump-host rebuild the hub must not have to resolve member
 	// hostnames (a host may be offline, and DNS may be unavailable that early in
 	// boot). The hub relearns each peer's endpoint from its keepalive handshake.
+	//
+	// Before adding the peer, retire every stale persisted claim on this overlay
+	// IP — this host's own previous key (re-enrollment rotates it) or a removed
+	// host's leftover fragment after the IP was reused. In WireGuard the LAST peer
+	// assigned an allowed-ip silently steals it, so a stale fragment restored
+	// after this host's own would take the IP back on the next hub rebuild and
+	// dead-end the tunnel.
 	return fmt.Sprintf(`set -e
 IF=%s
-wg set $IF peer '%s' endpoint '%s' allowed-ips %s/32 persistent-keepalive 25
+NEW='%s'
+WGIP=%s
+NAME=%s
 mkdir -p /etc/wireguard/peers
-cat > /etc/wireguard/peers/%s.conf <<'EOF'
+for f in /etc/wireguard/peers/*.conf; do
+  [ -f "$f" ] || continue
+  if grep -qF "AllowedIPs = ${WGIP}/32" "$f" || [ "$f" = "/etc/wireguard/peers/${NAME}.conf" ]; then
+    OLD=$(awk '/^PublicKey/{print $3; exit}' "$f")
+    if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ]; then
+      wg set $IF peer "$OLD" remove 2>/dev/null || true
+      echo "retired stale peer $(basename "$f") ($OLD)"
+    fi
+    if [ "$f" != "/etc/wireguard/peers/${NAME}.conf" ]; then rm -f "$f"; fi
+  fi
+done
+wg set $IF peer "$NEW" endpoint '%s' allowed-ips ${WGIP}/32 persistent-keepalive 25
+cat > /etc/wireguard/peers/${NAME}.conf <<'EOF'
 [Peer]
 PublicKey = %s
 AllowedIPs = %s/32
 EOF
 echo OK`,
-		iface, hostPub, hostEndpoint, wgIP, sanitize(hostname), hostPub, wgIP)
+		iface, hostPub, wgIP, sanitize(hostname), hostEndpoint, hostPub, wgIP)
+}
+
+// jumpPeerCleanupScript renders the script that removes a host's WireGuard peer
+// from the jump host — both the live kernel peer (key read from the persisted
+// fragment) and the fragment itself — so a deleted host can't linger as a peer
+// or, worse, steal its reassigned overlay IP back on a later hub rebuild.
+func (s *Service) jumpPeerCleanupScript(hostname string) string {
+	return fmt.Sprintf(`IF=%s
+F=/etc/wireguard/peers/%s.conf
+if [ -f "$F" ]; then
+  KEY=$(awk '/^PublicKey/{print $3; exit}' "$F")
+  if [ -n "$KEY" ]; then wg set $IF peer "$KEY" remove 2>/dev/null || true; fi
+  rm -f "$F"
+  echo REMOVED
+else
+  echo ABSENT
+fi`, s.cfg.WGInterface, sanitize(hostname))
+}
+
+// CleanupJumpPeer removes a host's WireGuard peer (kernel entry + persisted
+// fragment) from the jump host. Called best-effort when a host is deleted;
+// enrollment itself retires stale claims inline (see jumpPeerScript), so a
+// failure here (jump unreachable) self-heals on the next enrollment that reuses
+// the overlay IP.
+func (s *Service) CleanupJumpPeer(ctx context.Context, hostname string) error {
+	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
+	jumpClient, err := s.gw.DialDirect(ctx, uuid.New().String(), jumpAddr, jumpPort, s.cfg.JumpUser)
+	if err != nil {
+		return fmt.Errorf("connect jump host: %w", err)
+	}
+	defer jumpClient.Close()
+	out, err := run(jumpClient, "sudo sh -c "+shellQuote(s.jumpPeerCleanupScript(hostname)))
+	if err != nil {
+		return fmt.Errorf("remove jump peer: %w (%s)", err, strings.TrimSpace(out))
+	}
+	s.log.Info("removed jump-host wireguard peer", "host", hostname, "result", strings.TrimSpace(out))
+	return nil
 }
 
 // caTrustScript installs the Fleet user CA, creates the login user with sudo and

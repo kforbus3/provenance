@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -293,8 +294,20 @@ func deleteHostAction() ActionDef {
 					return "", errors.New("you no longer have access to that host")
 				}
 			}
+			// Read the host before the row is gone: retiring its jump-host WireGuard
+			// peer needs to know whether it was overlay-enrolled.
+			host, _ := r.store.GetHost(ctx, p.HostID)
 			if err := r.store.DeleteHost(ctx, p.HostID); err != nil {
 				return "", errors.New("could not delete the host")
+			}
+			if r.cleanupJumpPeer != nil && host != nil && host.WGAddress != "" {
+				go func(hostname string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := r.cleanupJumpPeer(ctx, hostname); err != nil {
+						r.log.Warn("cleanup jump wireguard peer after host delete", "host", hostname, "err", err)
+					}
+				}(host.Hostname)
 			}
 			return fmt.Sprintf("Deleted host %s from Fleet.", p.Hostname), nil
 		},

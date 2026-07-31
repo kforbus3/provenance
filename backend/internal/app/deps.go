@@ -48,6 +48,12 @@ type Deps struct {
 	// DistributeKRL pushes the current certificate revocation list to all enrolled
 	// hosts immediately (set by the server). Returns the number of hosts updated.
 	DistributeKRL func(ctx context.Context) (int, error)
+
+	// CleanupJumpPeer removes a deleted host's WireGuard peer (kernel entry +
+	// persisted fragment) from the jump host (set by the server; nil in tests).
+	// Best-effort: deletion succeeds even when the jump host is unreachable —
+	// enrollment retires stale claims inline when the overlay IP is reused.
+	CleanupJumpPeer func(ctx context.Context, hostname string) error
 }
 
 // Broadcaster pushes a typed real-time event to connected clients. The concrete

@@ -4,6 +4,7 @@
 package hosts
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -528,11 +529,25 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
+	// Read the host before the row is gone: retiring its WireGuard peer on the
+	// jump host needs the hostname (the persisted fragment is keyed by it).
+	host, _ := h.d.Store.GetHost(r.Context(), id)
 	if err := h.d.Store.DeleteHost(r.Context(), id); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not delete host")
 		return
 	}
 	h.audit(r, "host.delete", id.String(), nil)
+	// Retire the jump-host peer in the background: best-effort (a stale entry
+	// self-heals when the overlay IP is reused), and never blocks the response.
+	if h.d.CleanupJumpPeer != nil && host != nil && host.WGAddress != "" {
+		go func(hostname string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := h.d.CleanupJumpPeer(ctx, hostname); err != nil {
+				h.d.Log.Warn("cleanup jump wireguard peer after host delete", "host", hostname, "err", err)
+			}
+		}(host.Hostname)
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

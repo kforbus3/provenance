@@ -103,7 +103,7 @@ Key variables (full list in `.env.example`):
 | `FLEET_GRYPE_SCANNER_URL` | Base URL of the `grype-scanner` sidecar for CVE scans (default `http://grype-scanner:8000`) |
 | `FLEET_ACTIVITY_RETENTION` / `FLEET_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
 | `FLEET_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
-| `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted (default `3`; `1` = flip on a single failure) |
+| `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted — also applies to marking an online host's overlay tunnel down (default `3`; `1` = flip on a single failure) |
 | `FLEET_MONITOR_CONFIRM_DELAY` | Wait between the confirming re-probes (default `10s`) |
 | `FLEET_METRIC_HISTORY_SAMPLE` / `FLEET_METRIC_HISTORY_RETENTION` | Host-metric time-series sample interval / retention (default `5m` / `720h`) |
 | `TZ` | *(optional)* server timezone for the backend; schedules compute next-run in this zone (default `UTC`) |
@@ -237,9 +237,11 @@ The jump host is the single egress point. It must:
 - be reachable from managed hosts at `FLEET_WG_JUMP_ENDPOINT` (UDP).
 
 Enrollment adds each managed host as a WireGuard **peer** on the jump host
-automatically. The container uses userspace `wireguard-go`, so it needs no kernel
-module — it runs on any Linux Docker host with `NET_ADMIN` + `/dev/net/tun`
-(already set in the overlay).
+automatically, retiring any stale peer that still claims the same overlay
+address (a re-enrollment's previous key, or a deleted host's leftover); host
+deletion removes the peer again. The container uses userspace `wireguard-go`,
+so it needs no kernel module — it runs on any Linux Docker host with
+`NET_ADMIN` + `/dev/net/tun` (already set in the overlay).
 
 The **co-located** jump host (§5a) satisfies all three requirements automatically:
 it self-trusts the CA on boot, generates and persists its WireGuard keypair, and

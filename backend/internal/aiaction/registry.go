@@ -73,6 +73,9 @@ type Registry struct {
 	destroyUserSessions func(ctx context.Context, userID uuid.UUID)
 	// notifyApproval, if set, alerts approvers that a guarded action is pending.
 	notifyApproval func(ctx context.Context, action *models.AssistantAction)
+	// cleanupJumpPeer, if set, retires a deleted host's WireGuard peer on the
+	// jump host (best-effort, mirrors the REST delete handler).
+	cleanupJumpPeer func(ctx context.Context, hostname string) error
 }
 
 // New builds the registry with its runner hooks and registers the actions.
@@ -80,10 +83,12 @@ func New(st *store.Store, log *slog.Logger,
 	runVulnScan func(uuid.UUID, *models.Host),
 	destroyUserSessions func(context.Context, uuid.UUID),
 	notifyApproval func(context.Context, *models.AssistantAction),
+	cleanupJumpPeer func(context.Context, string) error,
 ) *Registry {
 	r := &Registry{
 		store: st, log: log, defs: map[string]ActionDef{},
 		runVulnScan: runVulnScan, destroyUserSessions: destroyUserSessions, notifyApproval: notifyApproval,
+		cleanupJumpPeer: cleanupJumpPeer,
 	}
 	// Safe actions (executed on the user's own confirm).
 	r.register(vulnScanAction())

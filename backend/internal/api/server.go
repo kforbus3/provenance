@@ -246,7 +246,16 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 			Body:  a.Preview + " Review it in Approvals.",
 		})
 	}
-	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify)
+	// The jump-peer cleanup hook resolves lazily: deps.CleanupJumpPeer is wired
+	// later (when the enrollment service is built in registerRoutes), but actions
+	// only execute at request time, long after both exist.
+	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify,
+		func(ctx context.Context, hostname string) error {
+			if s.deps == nil || s.deps.CleanupJumpPeer == nil {
+				return nil
+			}
+			return s.deps.CleanupJumpPeer(ctx, hostname)
+		})
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.winscriptSvc = winscript.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.commandSvc = command.New(st, cfg, log, gateway, issuer, s.Notify)
@@ -1010,7 +1019,12 @@ func (s *Server) registerRoutes(r chi.Router) {
 	terminal.Mount(r, deps, s.Gateway)
 
 	// M8 — host enrollment (WireGuard provisioning + trust).
-	enrollment.Mount(r, deps, enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway, s.overlays))
+	enroll := enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway, s.overlays)
+	enrollment.Mount(r, deps, enroll)
+	// Host deletion (REST handler and AI action alike) uses this to retire the
+	// deleted host's WireGuard peer on the jump host, so a stale peer can't
+	// steal the overlay IP back when it is later reassigned.
+	deps.CleanupJumpPeer = enroll.CleanupJumpPeer
 
 	// M7 — live status WebSocket.
 	ws.Mount(r, deps, s.Hub)

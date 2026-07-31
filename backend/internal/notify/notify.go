@@ -22,6 +22,8 @@ import (
 const (
 	EventHostOffline            = "host.offline"
 	EventHostRecovered          = "host.recovered"
+	EventHostOverlayDown        = "host.overlay_down"
+	EventHostOverlayRestored    = "host.overlay_restored"
 	EventApprovalPending        = "approval.pending"
 	EventApprovalResolved       = "approval.resolved"
 	EventAccessExpired          = "access.expired"
@@ -45,6 +47,8 @@ const (
 var AllEventTypes = []struct{ Key, Label string }{
 	{EventHostOffline, "Host went offline"},
 	{EventHostRecovered, "Host recovered"},
+	{EventHostOverlayDown, "Host overlay tunnel down (reachable via fallback)"},
+	{EventHostOverlayRestored, "Host overlay tunnel restored"},
 	{EventApprovalPending, "Access request pending approval"},
 	{EventApprovalResolved, "Access request approved or denied"},
 	{EventAccessExpired, "Just-in-time access expired"},

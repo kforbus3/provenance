@@ -7,6 +7,34 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.70.4 — Overlay-tunnel health is surfaced; stale jump peers can't steal overlay IPs
+
+- **A down WireGuard tunnel on an otherwise-reachable host is no longer silent.**
+  The monitor already fell back to the host's direct address, so the host stayed
+  "online" and nothing flagged the dead overlay. Now an overlay-enrolled host
+  whose tunnel probes down (while the host itself stays up) appears as a warning
+  card under **Needs attention**, is included in Ask's fleet-health answers
+  ("anything wrong?"), and fires the new **Host overlay tunnel down / restored**
+  notification events (enable routes for them under Settings → Notifications).
+  Tunnel-down is confirmed with the same multi-probe logic as offline
+  (`FLEET_MONITOR_OFFLINE_CONFIRMATIONS` / `FLEET_MONITOR_CONFIRM_DELAY`), so one
+  lost keepalive doesn't page. Offline hosts don't double-alert.
+- **Stale jump-host peers can no longer steal a reused overlay IP.** Deleting or
+  re-enrolling a host never removed its WireGuard peer fragment from the jump
+  host; when the overlay IP was later reassigned, the stale fragment silently
+  took the IP back on the next jump-host restart (WireGuard gives an allowed-ip
+  to the last peer that claims it), dead-ending the live host's tunnel. Now:
+  enrollment retires every stale claimant of the assigned IP (kernel peer +
+  fragment), host deletion removes the host's peer from the jump host
+  (best-effort), and the jump-host restore loop skips duplicate AllowedIPs
+  claims with a loud warning instead of letting the last file win.
+- Bundle note: the jump-host restore guard lands with the next deliberate
+  jumphost image rebuild (bundles intentionally exclude the jumphost container);
+  the enrollment/deletion cleanup makes it a belt-and-braces backstop.
+- Migrations: none.
+
+---
+
 ## v0.70.3 — Confirm host-offline before alerting
 
 - **A host must now fail multiple consecutive probes before it is marked offline

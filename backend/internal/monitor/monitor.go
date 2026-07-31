@@ -203,8 +203,10 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		return
 	}
 	prev := ""
+	prevWG := false
 	if h.Status != nil {
 		prev = h.Status.Status
+		prevWG = h.Status.WGOK
 	}
 
 	// RDP hosts have no SSH: probe TCP reachability of the RDP port, and (best-effort)
@@ -257,12 +259,13 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 		}
 	}
 
-	st, inv, metrics := m.probeConfirmed(ctx, &h, prev, run)
+	st, inv, metrics := m.probeConfirmed(ctx, &h, prev, prevWG, run)
 	if err := m.store.UpdateStatus(ctx, h.ID, st); err != nil {
 		m.log.Warn("monitor update status", "host", h.Hostname, "err", err)
 		return
 	}
 	m.recordTransition(ctx, h, prev, st.Status, st.LastError)
+	m.notifyOverlayTransition(ctx, h, prev, prevWG, st)
 	if inv != nil {
 		if err := m.store.UpsertInventory(ctx, h.ID, *inv); err != nil {
 			m.log.Warn("monitor update inventory", "host", h.Hostname, "err", err)
@@ -283,20 +286,23 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 	m.broadcastStatus(h, st)
 }
 
-// probeConfirmed runs a probe, and when a previously-online host comes back
-// offline, re-probes up to offlineConfirmations() total attempts (spaced
-// MonitorConfirmDelay apart) before letting the offline result stand — so a
-// transient hiccup (a jump-host sshd connection reset, a DNS blip) doesn't flap
-// the host and fire an alert. Any non-offline result returns immediately. Hosts
-// that were already offline are not re-probed, so a real outage costs the extra
-// attempts exactly once.
-func (m *Monitor) probeConfirmed(ctx context.Context, h *models.Host, prev string, run func() (models.HostStatus, *models.HostInventory, *models.HostMetrics)) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
+// probeConfirmed runs a probe, and when the result is an alert-worthy
+// degradation from the previous sweep (host was online and now probes offline,
+// or its overlay tunnel was up and now probes down), re-probes up to
+// offlineConfirmations() total attempts (spaced MonitorConfirmDelay apart)
+// before letting the result stand — so a transient hiccup (a jump-host sshd
+// connection reset, a DNS blip, one lost keepalive) doesn't flap the host and
+// fire an alert. A non-degraded result returns immediately, and hosts that were
+// already offline / overlay-down are not re-probed, so a real outage costs the
+// extra attempts exactly once.
+func (m *Monitor) probeConfirmed(ctx context.Context, h *models.Host, prev string, prevWG bool, run func() (models.HostStatus, *models.HostInventory, *models.HostMetrics)) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
 	st, inv, metrics := run()
-	if st.Status != "offline" || prev != "online" {
+	reason := confirmNeeded(h, prev, prevWG, &st)
+	if reason == "" {
 		return st, inv, metrics
 	}
 	for attempt := 2; attempt <= m.offlineConfirmations(); attempt++ {
-		m.log.Info("monitor: probe failed, re-checking before marking offline",
+		m.log.Info("monitor: probe degraded ("+reason+"), re-checking before recording it",
 			"host", h.Hostname, "attempt", attempt, "of", m.offlineConfirmations(), "err", st.LastError)
 		select {
 		case <-ctx.Done():
@@ -304,11 +310,54 @@ func (m *Monitor) probeConfirmed(ctx context.Context, h *models.Host, prev strin
 		case <-time.After(m.cfg.MonitorConfirmDelay):
 		}
 		st, inv, metrics = run()
-		if st.Status != "offline" {
+		if reason = confirmNeeded(h, prev, prevWG, &st); reason == "" {
 			return st, inv, metrics
 		}
 	}
 	return st, inv, metrics
+}
+
+// confirmNeeded reports why a fresh probe result is an alert-worthy degradation
+// from the previous sweep and therefore worth re-checking before it is recorded
+// ("" when it isn't): the host was online and now probes offline, or the host is
+// still online but its previously-up overlay tunnel now probes down.
+func confirmNeeded(h *models.Host, prev string, prevWG bool, st *models.HostStatus) string {
+	if prev == "online" && st.Status == "offline" {
+		return "offline"
+	}
+	if h.WGAddress != "" && prevWG && st.Status == "online" && !st.WGOK {
+		return "overlay down"
+	}
+	return ""
+}
+
+// notifyOverlayTransition alerts when an online host's overlay (WireGuard)
+// tunnel changes state — down (still reachable via the direct address) or
+// restored. Offline hosts are excluded: the tunnel is trivially down then and
+// the offline alert already covers it. The first observation is skipped, and
+// maintenance windows suppress it, both matching the offline alerts.
+func (m *Monitor) notifyOverlayTransition(ctx context.Context, h models.Host, prev string, prevWG bool, st models.HostStatus) {
+	if m.nfy == nil || h.WGAddress == "" || prev != "online" || st.Status != "online" ||
+		prevWG == st.WGOK || h.InMaintenance() {
+		return
+	}
+	if prevWG {
+		m.nfy.Notify(ctx, notify.Event{
+			Type: notify.EventHostOverlayDown, Severity: notify.SeverityWarning,
+			Title: "Overlay tunnel down: " + h.Hostname,
+			Body: fmt.Sprintf("%s (%s) is still reachable, but its WireGuard tunnel (%s) is down — Fleet is falling back to the direct address. Check the WireGuard service on the host and the peer entry on the jump host.",
+				h.Hostname, h.Environment, h.WGAddress),
+			DedupeKey: h.ID.String() + ":overlay",
+		})
+		return
+	}
+	m.nfy.Notify(ctx, notify.Event{
+		Type: notify.EventHostOverlayRestored, Severity: notify.SeverityInfo,
+		Title: "Overlay tunnel restored: " + h.Hostname,
+		Body: fmt.Sprintf("%s (%s) is reachable over its WireGuard tunnel (%s) again.",
+			h.Hostname, h.Environment, h.WGAddress),
+		DedupeKey: h.ID.String() + ":overlay",
+	})
 }
 
 // offlineConfirmations is the total consecutive failed probes required to flip an
