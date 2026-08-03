@@ -15,6 +15,7 @@ import { listGroups } from "../api/admin";
 import {
   triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan, clearFailedVulnScans,
   vulnDbStatus, vulnDbUpdate, vulnDbImport, msrcStatus, msrcUpdate, msrcImport, type VulnFinding,
+  type FixState,
 } from "../api/vulnscan";
 
 const SEV_COLOR: Record<string, "error" | "warning" | "info" | "default"> = {
@@ -103,11 +104,20 @@ export function VulnerabilitiesPage() {
               <TableCell align="right">High</TableCell>
               <TableCell align="right">Medium</TableCell>
               <TableCell align="right">
-                <Tooltip title="Findings with an available fix — the actionable subset you can patch now">
+                <Tooltip title="CVEs with an available fix — the actionable subset you can patch right now. Zero means this host is fully patched and everything below is upstream-unfixed.">
                   <span>Fixable</span>
                 </Tooltip>
               </TableCell>
-              <TableCell align="right">Total</TableCell>
+              <TableCell align="right">
+                <Tooltip title="CVEs the distro assessed and decided not to fix (e.g. Debian no-DSA). No upgrade will ever clear these — they inflate the total but are not work.">
+                  <span>Won't fix</span>
+                </Tooltip>
+              </TableCell>
+              <TableCell align="right">
+                <Tooltip title="Distinct CVEs affecting this host. A CVE spanning several binary packages counts once.">
+                  <span>Total</span>
+                </Tooltip>
+              </TableCell>
               <TableCell>Scanned</TableCell>
             </TableRow>
           </TableHead>
@@ -121,13 +131,20 @@ export function VulnerabilitiesPage() {
                 <TableCell align="right">{s.critical > 0 ? <Chip size="small" color="error" label={s.critical} /> : "—"}</TableCell>
                 <TableCell align="right">{s.high > 0 ? <Chip size="small" color="error" variant="outlined" label={s.high} /> : "—"}</TableCell>
                 <TableCell align="right">{s.medium > 0 ? <Chip size="small" color="warning" label={s.medium} /> : "—"}</TableCell>
-                <TableCell align="right">{s.fixable > 0 ? <Chip size="small" color="info" variant="outlined" label={s.fixable} /> : "—"}</TableCell>
+                <TableCell align="right">
+                  {s.fixable > 0
+                    ? <Chip size="small" color="info" label={s.fixable} />
+                    : <Chip size="small" color="success" variant="outlined" label="0" />}
+                </TableCell>
+                <TableCell align="right">
+                  <Typography variant="body2" color="text.secondary">{s.wontFix > 0 ? s.wontFix : "—"}</Typography>
+                </TableCell>
                 <TableCell align="right">{s.total}</TableCell>
                 <TableCell>{formatDateTime(s.createdAt)}</TableCell>
               </TableRow>
             ))}
             {rollup.length === 0 && (
-              <TableRow><TableCell colSpan={8}>
+              <TableRow><TableCell colSpan={9}>
                 <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
                   No completed scans yet. Update the CVE database, then scan a host.
                 </Typography>
@@ -328,22 +345,58 @@ function RemediationChip({ value }: { value?: string }) {
   }
 }
 
+// Scans recorded before fix_state existed carry no state; an explicit fixed version
+// is a fix regardless.
+function fixStateOf(f: VulnFinding): FixState {
+  if (f.fixState) return f.fixState;
+  return f.fixedVersion ? "fixed" : "unknown";
+}
+
+// Distinguishes "acknowledged, no fix yet" from "assessed and deliberately not
+// fixed" — both arrive with an empty fixed version but mean different things when
+// you are deciding whether there is any work to do.
+function FixStateChip({ value }: { value: FixState }) {
+  switch (value) {
+    case "wont-fix":
+      return (
+        <Tooltip title="The distro assessed this and decided not to fix it (Debian no-DSA / minor issue). No upgrade will ever clear it.">
+          <Chip size="small" variant="outlined" label="Won't fix" />
+        </Tooltip>
+      );
+    case "not-fixed":
+      return (
+        <Tooltip title="Acknowledged upstream, but no fixed version has shipped yet. Nothing to patch today — recheck after the next CVE DB update.">
+          <Chip size="small" variant="outlined" color="warning" label="Not fixed yet" />
+        </Tooltip>
+      );
+    default:
+      return <Typography variant="caption" color="text.secondary">unknown</Typography>;
+  }
+}
+
 function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => void }) {
   const { data, isLoading } = useQuery({ queryKey: ["vuln-scan", scanId], queryFn: () => getVulnScan(scanId) });
   const scan = data?.scan;
   const findings = data?.findings ?? [];
 
   const [fixableOnly, setFixableOnly] = useState(false);
+  const [hideWontFix, setHideWontFix] = useState(false);
   const [sevs, setSevs] = useState<string[]>(SEV_DEFAULT);
   const sevSet = new Set(sevs.map((s) => s.toLowerCase()));
   const shown = findings.filter(
-    (f) => sevSet.has((f.severity || "unknown").toLowerCase()) && (!fixableOnly || !!f.fixedVersion),
+    (f) =>
+      sevSet.has((f.severity || "unknown").toLowerCase()) &&
+      (!fixableOnly || fixStateOf(f) === "fixed") &&
+      (!hideWontFix || fixStateOf(f) !== "wont-fix"),
   );
+  // The findings list is per CVE-on-package; the scan's total counts CVEs. Show both
+  // so "72 CVEs / 154 rows" doesn't read as an inconsistency.
+  const distinctShown = new Set(shown.map((f) => f.cve)).size;
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="lg">
       <DialogTitle>
-        {scan ? `${scan.hostname} — ${scan.total} findings (max CVSS ${scan.maxCvss.toFixed(1)})` : "Findings"}
+        {scan ? `${scan.hostname} — ${scan.total} CVEs, ${scan.fixable} fixable` : "Findings"}
       </DialogTitle>
       <DialogContent>
         {isLoading && <CircularProgress size={20} />}
@@ -351,13 +404,21 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
           <Typography variant="caption" color="text.secondary">
             Scanned {formatDateTime(scan.createdAt)}
             {scan.dbBuiltAt ? ` · CVE DB built ${formatDateTime(scan.dbBuiltAt)}` : ""}
-            {" · "}{scan.fixable} of {scan.total} have an available fix
+            {" · "}{scan.fixable} of {scan.total} CVEs have an available fix
+            {scan.wontFix > 0 ? ` · ${scan.wontFix} marked won't-fix upstream` : ""}
+            {scan.fixable === 0 && scan.total > 0
+              ? " — nothing outstanding: every remaining CVE is unfixed upstream, not a missed patch."
+              : ""}
           </Typography>
         )}
         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" sx={{ mt: 1 }}>
           <FormControlLabel
             control={<Switch size="small" checked={fixableOnly} onChange={(e) => setFixableOnly(e.target.checked)} />}
             label="Fixable only"
+          />
+          <FormControlLabel
+            control={<Switch size="small" checked={hideWontFix} onChange={(e) => setHideWontFix(e.target.checked)} />}
+            label="Hide won't-fix"
           />
           <ToggleButtonGroup
             size="small" value={sevs} onChange={(_, v) => setSevs(v as string[])}
@@ -368,7 +429,7 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
             ))}
           </ToggleButtonGroup>
           <Typography variant="caption" color="text.secondary">
-            showing {shown.length} of {findings.length}
+            showing {shown.length} of {findings.length} package findings ({distinctShown} distinct CVEs)
           </Typography>
         </Stack>
         <Divider sx={{ my: 1 }} />
@@ -397,7 +458,7 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                   </TableCell>
                   <TableCell>{f.package}</TableCell>
                   <TableCell><code>{f.installedVersion}</code></TableCell>
-                  <TableCell>{f.fixedVersion ? <code>{f.fixedVersion}</code> : <Typography variant="caption" color="text.secondary">no fix</Typography>}</TableCell>
+                  <TableCell>{f.fixedVersion ? <code>{f.fixedVersion}</code> : <FixStateChip value={fixStateOf(f)} />}</TableCell>
                   <TableCell><RemediationChip value={f.remediation} /></TableCell>
                 </TableRow>
               ))}

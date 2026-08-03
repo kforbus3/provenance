@@ -5,6 +5,7 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -685,7 +686,9 @@ type AccessReviewItem struct {
 }
 
 // VulnScan is one vulnerability scan of a host (package CVE matching via Grype),
-// with a per-severity finding breakdown.
+// with a per-severity breakdown. The counts are DISTINCT CVEs, not finding rows: one
+// source package fans out across many binary packages, so counting rows inflated
+// every total. VulnFinding rows stay per CVE-on-package for the drill-down.
 type VulnScan struct {
 	ID         uuid.UUID  `json:"id"`
 	HostID     uuid.UUID  `json:"hostId"`
@@ -703,6 +706,7 @@ type VulnScan struct {
 	Negligible int        `json:"negligible"`
 	Unknown    int        `json:"unknown"`
 	Fixable    int        `json:"fixable"`
+	WontFix    int        `json:"wontFix"`
 	MaxCVSS    float64    `json:"maxCvss"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
@@ -734,19 +738,73 @@ type MSRCEntry struct {
 }
 
 type VulnFinding struct {
-	CVE              string  `json:"cve"`
-	Package          string  `json:"package"`
-	InstalledVersion string  `json:"installedVersion"`
-	FixedVersion     string  `json:"fixedVersion,omitempty"`
-	Severity         string  `json:"severity"`
-	CVSSScore        float64 `json:"cvssScore"`
-	CVSSVector       string  `json:"cvssVector,omitempty"`
-	DataSource       string  `json:"dataSource,omitempty"`
-	Description      string  `json:"description,omitempty"`
+	CVE              string `json:"cve"`
+	Package          string `json:"package"`
+	InstalledVersion string `json:"installedVersion"`
+	FixedVersion     string `json:"fixedVersion,omitempty"`
+	// FixState is the scanner's verdict on whether a fix exists at all — one of the
+	// FixState* constants. An empty FixedVersion is ambiguous on its own: it covers
+	// both "not fixed yet" and "will never be fixed", which triage treats differently.
+	FixState    string  `json:"fixState,omitempty"`
+	Severity    string  `json:"severity"`
+	CVSSScore   float64 `json:"cvssScore"`
+	CVSSVector  string  `json:"cvssVector,omitempty"`
+	DataSource  string  `json:"dataSource,omitempty"`
+	Description string  `json:"description,omitempty"`
 	// Remediation classifies HOW to fix this finding on the specific host, derived at
 	// read time by cross-referencing the host's pending-update and obsolete-package
 	// inventory. Not persisted with the scan. Empty when it can't be determined.
 	Remediation string `json:"remediation,omitempty"`
+}
+
+// Fix states reported by the scanner, in order of how actionable they are.
+// FixStateFixed is the only one an upgrade can resolve today; FixStateWontFix will
+// never become actionable, so it belongs outside the headline count rather than in it.
+const (
+	FixStateFixed    = "fixed"     // a fixed version exists and this host is behind it
+	FixStateNotFixed = "not-fixed" // acknowledged upstream, no fix shipped yet
+	FixStateWontFix  = "wont-fix"  // assessed upstream and deliberately not fixed
+	FixStateUnknown  = "unknown"   // no fix data
+)
+
+// fixStateRank orders states most-actionable first, so a CVE spanning several
+// packages takes the best (most actionable) state any of them reports.
+var fixStateRank = map[string]int{
+	FixStateFixed:    0,
+	FixStateNotFixed: 1,
+	FixStateWontFix:  2,
+	FixStateUnknown:  3,
+}
+
+// FixStateOf returns a finding's fix state, falling back to the fixed-version check
+// for findings recorded before fix_state existed (and for the Windows/MSRC path,
+// where the "fixed version" is the KB that remediates the CVE).
+func FixStateOf(f VulnFinding) string {
+	if s := strings.ToLower(strings.TrimSpace(f.FixState)); s != "" {
+		if _, ok := fixStateRank[s]; ok {
+			return s
+		}
+	}
+	if strings.TrimSpace(f.FixedVersion) != "" {
+		return FixStateFixed
+	}
+	return FixStateUnknown
+}
+
+// MoreActionableFixState returns whichever of two fix states is more actionable.
+func MoreActionableFixState(a, b string) string {
+	ra, ok := fixStateRank[a]
+	if !ok {
+		ra = fixStateRank[FixStateUnknown]
+	}
+	rb, ok := fixStateRank[b]
+	if !ok {
+		rb = fixStateRank[FixStateUnknown]
+	}
+	if rb < ra {
+		return b
+	}
+	return a
 }
 
 // Remediation categories for a vulnerability finding on a host.

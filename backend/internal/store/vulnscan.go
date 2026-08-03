@@ -11,10 +11,13 @@ import (
 	"github.com/fleet-terminal/backend/internal/models"
 )
 
-// VulnSummary is the per-severity finding breakdown recorded on a scan.
+// VulnSummary is the per-severity breakdown recorded on a scan. Every count is of
+// DISTINCT CVEs — a CVE affecting eight binary packages from one source package is
+// one vulnerability, not eight.
 type VulnSummary struct {
 	Total, Critical, High, Medium, Low, Negligible, Unknown int
-	Fixable                                                 int // findings with an available fix version
+	Fixable                                                 int // a fixed version exists — actionable now
+	WontFix                                                 int // assessed upstream as never-to-be-fixed
 	MaxCVSS                                                 float64
 }
 
@@ -47,17 +50,19 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 	return s.tx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			UPDATE vuln_scans SET status='completed', finished_at=now(), db_built_at=$2,
-			  total=$3, critical=$4, high=$5, medium=$6, low=$7, negligible=$8, unknown=$9, max_cvss=$10, fixable=$11
+			  total=$3, critical=$4, high=$5, medium=$6, low=$7, negligible=$8, unknown=$9, max_cvss=$10,
+			  fixable=$11, wont_fix=$12
 			WHERE id=$1`,
-			id, dbBuilt, sum.Total, sum.Critical, sum.High, sum.Medium, sum.Low, sum.Negligible, sum.Unknown, sum.MaxCVSS, sum.Fixable); err != nil {
+			id, dbBuilt, sum.Total, sum.Critical, sum.High, sum.Medium, sum.Low, sum.Negligible, sum.Unknown, sum.MaxCVSS,
+			sum.Fixable, sum.WontFix); err != nil {
 			return err
 		}
 		for _, f := range findings {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO vuln_findings
-				  (scan_id, cve, package, installed_version, fixed_version, severity, cvss_score, cvss_vector, data_source, description)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-				id, f.CVE, f.Package, f.InstalledVersion, f.FixedVersion, f.Severity, f.CVSSScore, f.CVSSVector, f.DataSource, f.Description); err != nil {
+				  (scan_id, cve, package, installed_version, fixed_version, fix_state, severity, cvss_score, cvss_vector, data_source, description)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+				id, f.CVE, f.Package, f.InstalledVersion, f.FixedVersion, models.FixStateOf(f), f.Severity, f.CVSSScore, f.CVSSVector, f.DataSource, f.Description); err != nil {
 				return err
 			}
 		}
@@ -67,13 +72,13 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 
 const vulnScanCols = `vs.id, vs.host_id, COALESCE(h.hostname,''), vs.requester, vs.scheduled, vs.status,
 	vs.error, vs.db_built_at, vs.total, vs.critical, vs.high, vs.medium, vs.low, vs.negligible, vs.unknown,
-	vs.fixable, vs.max_cvss, vs.started_at, vs.finished_at, vs.created_at`
+	vs.fixable, vs.wont_fix, vs.max_cvss, vs.started_at, vs.finished_at, vs.created_at`
 
 func scanVulnScan(row interface{ Scan(...any) error }) (*models.VulnScan, error) {
 	var v models.VulnScan
 	if err := row.Scan(&v.ID, &v.HostID, &v.Hostname, &v.Requester, &v.Scheduled, &v.Status,
 		&v.Error, &v.DBBuiltAt, &v.Total, &v.Critical, &v.High, &v.Medium, &v.Low, &v.Negligible, &v.Unknown,
-		&v.Fixable, &v.MaxCVSS, &v.StartedAt, &v.FinishedAt, &v.CreatedAt); err != nil {
+		&v.Fixable, &v.WontFix, &v.MaxCVSS, &v.StartedAt, &v.FinishedAt, &v.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -132,7 +137,7 @@ func (s *Store) GetVulnScan(ctx context.Context, id uuid.UUID) (*models.VulnScan
 // GetVulnFindings returns a scan's findings, highest CVSS first.
 func (s *Store) GetVulnFindings(ctx context.Context, scanID uuid.UUID) ([]models.VulnFinding, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT cve, package, installed_version, fixed_version, severity, cvss_score, cvss_vector, data_source, description
+		SELECT cve, package, installed_version, fixed_version, fix_state, severity, cvss_score, cvss_vector, data_source, description
 		FROM vuln_findings WHERE scan_id=$1 ORDER BY cvss_score DESC, cve`, scanID)
 	if err != nil {
 		return nil, err
@@ -141,7 +146,7 @@ func (s *Store) GetVulnFindings(ctx context.Context, scanID uuid.UUID) ([]models
 	out := []models.VulnFinding{}
 	for rows.Next() {
 		var f models.VulnFinding
-		if err := rows.Scan(&f.CVE, &f.Package, &f.InstalledVersion, &f.FixedVersion, &f.Severity,
+		if err := rows.Scan(&f.CVE, &f.Package, &f.InstalledVersion, &f.FixedVersion, &f.FixState, &f.Severity,
 			&f.CVSSScore, &f.CVSSVector, &f.DataSource, &f.Description); err != nil {
 			return nil, err
 		}
@@ -158,7 +163,9 @@ func (s *Store) LatestVulnScans(ctx context.Context) ([]models.VulnScan, error) 
 		FROM vuln_scans vs JOIN hosts h ON h.id=vs.host_id
 		WHERE vs.status='completed' AND vs.created_at = (
 			SELECT max(v2.created_at) FROM vuln_scans v2 WHERE v2.host_id=vs.host_id AND v2.status='completed')
-		ORDER BY vs.max_cvss DESC, vs.critical DESC, h.hostname`)
+		-- Actionable first. max_cvss is 10.0 on essentially every Linux host (it is the
+		-- worst NVD score of any CVE touching any installed package), so it sorts nothing.
+		ORDER BY vs.fixable DESC, vs.critical DESC, vs.high DESC, h.hostname`)
 	if err != nil {
 		return nil, err
 	}

@@ -469,17 +469,54 @@ func (s *Service) dbPost(ctx context.Context, path string, body io.Reader, conte
 
 // --- helpers ---
 
+// summarize rolls findings up into the per-scan summary. It counts each CVE ONCE,
+// not once per affected package: a single source package fans out across many binary
+// packages (glibc -> libc6, libc-bin, libc-dev-bin, ...), so counting finding rows
+// inflated every number — on a stock debian:12, 154 rows for 72 distinct CVEs.
+//
+// Where a CVE spans several packages, it takes the worst severity/CVSS seen and the
+// most actionable fix state seen: if any one package has a fix available, the CVE as
+// a whole is actionable. The findings slice is returned unchanged, so the drill-down
+// still lists every affected package.
 func summarize(findings []models.VulnFinding) (store.VulnSummary, []models.VulnFinding) {
-	var sum store.VulnSummary
-	sum.Total = len(findings)
+	type agg struct {
+		severity string
+		cvss     float64
+		fixState string
+	}
+	byCVE := map[string]*agg{}
+	var order []string
 	for _, f := range findings {
-		if f.CVSSScore > sum.MaxCVSS {
-			sum.MaxCVSS = f.CVSSScore
+		state := models.FixStateOf(f)
+		a, ok := byCVE[f.CVE]
+		if !ok {
+			byCVE[f.CVE] = &agg{severity: f.Severity, cvss: f.CVSSScore, fixState: state}
+			order = append(order, f.CVE)
+			continue
 		}
-		if strings.TrimSpace(f.FixedVersion) != "" {
+		if f.CVSSScore > a.cvss {
+			a.cvss = f.CVSSScore
+		}
+		if severityRank(f.Severity) < severityRank(a.severity) {
+			a.severity = f.Severity
+		}
+		a.fixState = models.MoreActionableFixState(a.fixState, state)
+	}
+
+	var sum store.VulnSummary
+	sum.Total = len(order)
+	for _, cve := range order {
+		a := byCVE[cve]
+		if a.cvss > sum.MaxCVSS {
+			sum.MaxCVSS = a.cvss
+		}
+		switch a.fixState {
+		case models.FixStateFixed:
 			sum.Fixable++
+		case models.FixStateWontFix:
+			sum.WontFix++
 		}
-		switch strings.ToLower(f.Severity) {
+		switch strings.ToLower(a.severity) {
 		case "critical":
 			sum.Critical++
 		case "high":
@@ -495,6 +532,25 @@ func summarize(findings []models.VulnFinding) (store.VulnSummary, []models.VulnF
 		}
 	}
 	return sum, findings
+}
+
+// severityRank orders severities worst-first, so merging a CVE's per-package rows
+// keeps the most severe rating. Unrecognized labels rank last.
+func severityRank(s string) int {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical":
+		return 0
+	case "high":
+		return 1
+	case "medium":
+		return 2
+	case "low":
+		return 3
+	case "negligible":
+		return 4
+	default:
+		return 5
+	}
 }
 
 func dedupe(in []string) []string {
