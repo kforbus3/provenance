@@ -423,12 +423,12 @@ func (s *Service) runVulnerabilities(ctx context.Context, raw json.RawMessage, w
 		}
 		tbl := &AssistantTable{
 			Title:   "Vulnerability posture",
-			Columns: []TableColumn{{Label: "Host"}, {Label: "Critical"}, {Label: "High"}, {Label: "Medium"}, {Label: "Low"}, {Label: "Max CVSS"}, {Label: "Scanned", Kind: "time"}},
+			Columns: []TableColumn{{Label: "Host"}, {Label: "Fixable"}, {Label: "Critical"}, {Label: "High"}, {Label: "Medium"}, {Label: "Won't fix"}, {Label: "Total CVEs"}, {Label: "Scanned", Kind: "time"}},
 		}
 		for _, v := range scans {
 			tbl.Rows = append(tbl.Rows, []string{
-				v.Hostname, fmt.Sprint(v.Critical), fmt.Sprint(v.High), fmt.Sprint(v.Medium),
-				fmt.Sprint(v.Low), fmt.Sprintf("%.1f", v.MaxCVSS), tableTimePtr(v.FinishedAt),
+				v.Hostname, fmt.Sprint(v.Fixable), fmt.Sprint(v.Critical), fmt.Sprint(v.High),
+				fmt.Sprint(v.Medium), fmt.Sprint(v.WontFix), fmt.Sprint(v.Total), tableTimePtr(v.FinishedAt),
 			})
 		}
 		return tbl, map[string]any{"count": len(scans), "scans": scans}

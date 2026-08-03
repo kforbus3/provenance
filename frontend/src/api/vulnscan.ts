@@ -2,6 +2,13 @@ import { api } from "./client";
 
 // Vulnerability scanning: match a host's installed packages against a CVE database
 // (Anchore Grype) and report findings with CVSS scores.
+//
+// Scan counts are DISTINCT CVEs; findings are per CVE-on-package, so a scan's
+// findings list is normally longer than its total.
+
+// Whether a fix exists at all — an absent fixedVersion covers both "not fixed yet"
+// and "will never be fixed", which triage treats very differently.
+export type FixState = "fixed" | "not-fixed" | "wont-fix" | "unknown";
 
 export interface VulnScan {
   id: string;
@@ -20,6 +27,7 @@ export interface VulnScan {
   negligible: number;
   unknown: number;
   fixable: number;
+  wontFix: number;
   maxCvss: number;
   startedAt?: string;
   finishedAt?: string;
@@ -31,6 +39,7 @@ export interface VulnFinding {
   package: string;
   installedVersion: string;
   fixedVersion?: string;
+  fixState?: FixState;
   severity: string;
   cvssScore: number;
   cvssVector?: string;

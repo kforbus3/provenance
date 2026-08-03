@@ -70,7 +70,9 @@ func (s *Store) LatestVulnScansForAssistant(ctx context.Context, userID uuid.UUI
 		FROM vuln_scans vs JOIN hosts h ON h.id=vs.host_id
 		WHERE vs.status='completed' AND vs.created_at = (
 			SELECT max(v2.created_at) FROM vuln_scans v2 WHERE v2.host_id=vs.host_id AND v2.status='completed')` + sub +
-		` ORDER BY vs.max_cvss DESC, vs.critical DESC, h.hostname`
+		// Actionable first: max_cvss is 10.0 on essentially every Linux host (it is the
+		// worst NVD score of any CVE touching any installed package), so it sorts nothing.
+		` ORDER BY vs.fixable DESC, vs.critical DESC, vs.high DESC, h.hostname`
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err

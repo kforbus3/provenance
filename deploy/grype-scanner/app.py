@@ -104,13 +104,23 @@ def _normalize(g: dict) -> dict:
         for rel in m.get("relatedVulnerabilities") or []:
             cvss_all += rel.get("cvss") or []
         score, vector = _best_cvss(cvss_all)
-        fixed = ";".join((v.get("fix") or {}).get("versions") or [])
+        fix = v.get("fix") or {}
+        fixed = ";".join(fix.get("versions") or [])
+        # The distro trackers say a lot more than "is there a version": "wont-fix"
+        # (assessed, deliberately not fixed) and "not-fixed" (acknowledged, no fix
+        # yet) both arrive with an empty version list and mean entirely different
+        # things to whoever is triaging. Carry the state through instead of letting
+        # both collapse into an empty fixedVersion.
+        state = (fix.get("state") or "").strip().lower()
+        if fixed and state not in ("fixed", "wont-fix", "not-fixed"):
+            state = "fixed"  # a concrete version is a fix regardless of labelling
         findings.append({
             "cve": v.get("id", ""),
             "severity": v.get("severity") or "Unknown",
             "package": a.get("name", ""),
             "installedVersion": a.get("version", ""),
             "fixedVersion": fixed,
+            "fixState": state or "unknown",
             "cvssScore": score,
             "cvssVector": vector,
             "dataSource": v.get("dataSource", ""),
