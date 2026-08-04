@@ -723,11 +723,20 @@ echo KRL_OK`, b64)
 // jumpPeerScript renders the script that adds the host as a peer on the jump host.
 func (s *Service) jumpPeerScript(hostname, hostPub, hostEndpoint, wgIP string) string {
 	iface := s.cfg.WGInterface
-	// The runtime `wg set` carries the endpoint for immediate connectivity (the
-	// host is online during enrollment). The PERSISTED fragment deliberately omits
-	// the endpoint: on a jump-host rebuild the hub must not have to resolve member
-	// hostnames (a host may be offline, and DNS may be unavailable that early in
-	// boot). The hub relearns each peer's endpoint from its keepalive handshake.
+	// The persisted fragment carries the SAME endpoint + keepalive as the runtime
+	// `wg set`, so a jump-host rebuild restores the hub's ability to initiate to
+	// the host rather than only waiting to be called.
+	//
+	// This fragment used to omit the endpoint, on the reasoning that a hub rebuild
+	// must not depend on resolving member hostnames (a host may be offline, and DNS
+	// may be unavailable that early in boot) — `wg addconf` drops the whole peer if
+	// the endpoint will not resolve. That concern is real but the cure was too
+	// broad: it silently removed hub-initiated connectivity for EVERY peer on every
+	// restart. A host whose own configured Endpoint is unreachable was being carried
+	// entirely by the hub calling it, and went permanently dark after the first
+	// `make up-single` — with nothing to indicate why. The restore side now handles
+	// the resolve risk precisely, dropping the endpoint only when it actually fails
+	// to resolve (see deploy/testfabric/jumphost/entrypoint.sh).
 	//
 	// Before adding the peer, retire every stale persisted claim on this overlay
 	// IP — this host's own previous key (re-enrollment rotates it) or a removed
@@ -757,9 +766,11 @@ cat > /etc/wireguard/peers/${NAME}.conf <<'EOF'
 [Peer]
 PublicKey = %s
 AllowedIPs = %s/32
+Endpoint = %s
+PersistentKeepalive = 25
 EOF
 echo OK`,
-		iface, hostPub, wgIP, sanitize(hostname), hostEndpoint, hostPub, wgIP)
+		iface, hostPub, wgIP, sanitize(hostname), hostEndpoint, hostPub, wgIP, hostEndpoint)
 }
 
 // jumpPeerCleanupScript renders the script that removes a host's WireGuard peer
