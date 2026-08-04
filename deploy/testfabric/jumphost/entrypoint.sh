@@ -62,14 +62,36 @@ if [ -d /etc/wireguard/peers ]; then
       echo "[jumphost] WARN skipping $(basename "$f"): AllowedIPs $ips already claimed by an earlier peer file (stale leftover from a removed host? delete it)"
       continue
     fi
-    # Restore the peer WITHOUT its Endpoint: a hub must never depend on
-    # resolving member hostnames at rebuild time (a host may be legitimately
-    # offline, and DNS may not even be answering this early in boot — either
-    # silently drops the peer). Managed hosts initiate with persistent-keepalive,
-    # so the hub learns each peer's real endpoint from its incoming handshake
-    # (WireGuard roaming). We only need the public key + allowed IPs here.
+    # Keep the peer's Endpoint so the hub can initiate to the host immediately,
+    # instead of sitting mute until the host happens to call in. A host whose own
+    # configured Endpoint is unreachable is carried entirely by the hub calling it;
+    # dropping the endpoint here strands such a host permanently, and the symptom
+    # (two hosts offline after an unrelated redeploy, everything else fine) points
+    # nowhere near this line.
+    #
+    # The endpoint is dropped ONLY when it will not resolve: `wg addconf` fails the
+    # whole peer on an unresolvable endpoint, and a member host may legitimately be
+    # offline or DNS may not be answering this early in boot. Losing the endpoint is
+    # survivable (the host can still call in and the hub relearns it via roaming);
+    # losing the peer is not.
+    ep=$(sed -n 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*//p' "$f" | head -1)
+    ephost=$(printf '%s' "${ep%:*}" | tr -d '[]')   # strip :port and IPv6 brackets
+    keep_ep=yes
+    case "$ephost" in
+      "") ;;                                         # no endpoint recorded
+      *[!0-9.]*)                                     # not a bare IPv4 literal
+        case "$ephost" in
+          *:*) ;;                                    # IPv6 literal — no lookup needed
+          *) getent hosts "$ephost" >/dev/null 2>&1 || keep_ep=no ;;
+        esac ;;
+    esac
     tmp=$(mktemp)
-    grep -vi '^[[:space:]]*Endpoint' "$f" > "$tmp"
+    if [ "$keep_ep" = no ]; then
+      echo "[jumphost] WARN $(basename "$f"): endpoint '$ep' does not resolve; restoring peer without it (the hub cannot initiate to this host until it calls in)"
+      grep -vi '^[[:space:]]*Endpoint' "$f" > "$tmp"
+    else
+      cat "$f" > "$tmp"
+    fi
     if wg addconf "$WG_IFACE" "$tmp" 2>/dev/null; then
       echo "[jumphost] restored peer from $(basename "$f")"
       if [ -n "$ips" ]; then claimed="${claimed}${ips}
