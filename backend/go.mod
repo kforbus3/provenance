@@ -2,6 +2,12 @@ module github.com/fleet-terminal/backend
 
 go 1.25.0
 
+// Build with a current toolchain rather than the minimum the module needs.
+// The Go standard library gets security fixes like anything else, and building
+// on the floor version ships them: govulncheck found 29 reachable stdlib
+// vulnerabilities when CI honoured the `go` line alone.
+toolchain go1.26.5
+
 require (
 	github.com/coreos/go-oidc/v3 v3.11.0
 	github.com/go-chi/chi/v5 v5.1.0
