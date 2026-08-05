@@ -36,7 +36,7 @@ jobs:
       - run: go test -race -count=1 -timeout 25m ./...
 
   frontend:
-    name: Frontend (typecheck · build)
+    name: Frontend (typecheck · test · build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -51,6 +51,9 @@ jobs:
       # it must exist before the standalone typecheck below.
       - run: npm run build-help && npm run build-guac-player
       - run: npx tsc -b
+      # The suite existed and had never run here: the job typechecked and built,
+      # so a failing test could be merged without anything noticing.
+      - run: npx vitest run
       - run: npm run build
 
   images:
