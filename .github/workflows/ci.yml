@@ -16,11 +16,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          # Read from go.mod rather than pinning: this said 1.23 while the
+          # module required 1.24, and only worked because Go silently downloads
+          # a newer toolchain — so the pin described nothing.
+          go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+      # The race detector earns its minutes here: Fleet runs session brokering,
+      # monitoring, scans, playbook runs and the reconciler on background
+      # goroutines, and a race between them is the kind of bug that surfaces
+      # once in production and never locally.
+      - run: go test -race -count=1 -timeout 25m ./...
 
   frontend:
     name: Frontend (typecheck · build)

@@ -87,7 +87,7 @@ func enrichApprovalEvents(r *http.Request, h *handler, events []models.AuditEven
 
 // enrichEntityEvents resolves user and host UUIDs — in an event's target and in
 // its detail values — to their usernames and hostnames, so the audit log reads
-// "user: keith · hostId: control01" instead of bare UUIDs. It sets TargetName for a
+// "user: alice · hostId: web-01" instead of bare UUIDs. It sets TargetName for a
 // user/host target and rewrites any detail value that is a UUID naming a known
 // user or host. Display-only: it mutates the response copy fetched for the UI,
 // never the hash-chained rows (and is not applied to the machine-readable export).

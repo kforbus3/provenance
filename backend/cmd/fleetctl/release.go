@@ -46,6 +46,7 @@ func releaseChannel(args []string) error {
 	}
 	bundles := fs.Args()
 	if *keyPath == "" || *baseURL == "" || len(bundles) == 0 {
+		//lint:ignore ST1005 a usage line ends in an ellipsis because the argument repeats
 		return fmt.Errorf("usage: fleetctl release channel --key <priv> --base-url <url> [--out channel.json] <bundle.fleetup>...")
 	}
 	keyB, err := os.ReadFile(*keyPath)

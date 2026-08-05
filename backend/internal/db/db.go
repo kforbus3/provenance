@@ -33,15 +33,24 @@ func Connect(ctx context.Context, url string, maxConns, minConns int32, multiTen
 	// both modes: with the flag off we set Bypass (RLS is satisfied for all rows, so the
 	// FORCE'd policies are a no-op and behavior is unchanged); with it on we set the
 	// context's tenant, or "" for an unmarked context — which RLS denies (fail closed).
-	cfg.BeforeAcquire = func(ctx context.Context, conn *pgx.Conn) bool {
+	//
+	// PrepareConn rather than the deprecated BeforeAcquire, and not only because
+	// the latter is deprecated: BeforeAcquire can only return false, which makes
+	// pgx destroy the connection and retry the query on a new one. A tenant GUC
+	// that keeps failing to set would then surface as "too many failed attempts
+	// acquiring connection" rather than the actual reason. Returning the error
+	// destroys the connection and fails the query with what went wrong, which is
+	// what a fail-closed control should do.
+	cfg.PrepareConn = func(ctx context.Context, conn *pgx.Conn) (bool, error) {
 		val := tenant.Bypass
 		if multiTenancy {
 			val = tenant.GUCValue(ctx)
 		}
 		if _, err := conn.Exec(ctx, "SELECT set_config($1, $2, false)", tenant.GUC, val); err != nil {
-			return false // don't hand out a connection we couldn't scope
+			// Never hand out a connection we could not scope.
+			return false, fmt.Errorf("scope connection to tenant: %w", err)
 		}
-		return true
+		return true, nil
 	}
 	cfg.MaxConnLifetime = time.Hour
 	cfg.HealthCheckPeriod = 30 * time.Second

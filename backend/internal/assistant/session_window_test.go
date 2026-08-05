@@ -1,6 +1,9 @@
 package assistant
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // "recently"/"lately" and a bare "who connected to X" (no time cue) all resolve to a
 // one-week window; explicit windows and "who last connected" are unaffected.
@@ -46,7 +49,7 @@ func TestCalendarAdjustWindowGuards(t *testing.T) {
 		{"limit==1 passes through", "who last connected to nas today?", `{"hostname":"nas","hours":24,"limit":1}`},
 	}
 	for _, c := range cases {
-		if out := string(s.calendarAdjustWindow(nil, c.q, []byte(c.in))); out != c.in {
+		if out := string(s.calendarAdjustWindow(context.TODO(), c.q, []byte(c.in))); out != c.in {
 			t.Errorf("%s: got %s; want unchanged %s", c.name, out, c.in)
 		}
 	}
