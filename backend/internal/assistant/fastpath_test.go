@@ -119,7 +119,10 @@ func TestFastPathTool(t *testing.T) {
 // TestSecurityEventsWindowRouting locks the fix for the reported false negative: the
 // time window in the question must reach the tool via the Hours arg, not a fixed 24h.
 func TestSecurityEventsWindowRouting(t *testing.T) {
-	cases := []struct{ q string; wantHours float64 }{
+	cases := []struct {
+		q         string
+		wantHours float64
+	}{
 		{"any failed logins in the last 48 hrs?", 48},
 		{"any failed logins in the last 72 hours?", 72},
 		{"have there been any failed logins in the past week?", 24 * 7},

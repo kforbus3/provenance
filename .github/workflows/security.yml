@@ -1,0 +1,188 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly. A dependency does not have to change for a new advisory to be
+    # published against the version already pinned here — which is exactly how
+    # the sixteen reachable vulnerabilities this workflow was added to catch
+    # accumulated in the first place.
+    - cron: '41 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: Known vulnerabilities (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every Go module in the repository, not just the server: the Terraform
+        # provider had four reachable vulnerabilities of its own, and nothing
+        # would have looked at them.
+        module: [backend, sdk, terraform-provider-fleet]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # Read the version from go.mod rather than pinning one here, so the
+          # toolchain cannot drift from what the module declares.
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      # govulncheck reports only vulnerabilities in code paths the binary
+      # actually reaches, so a finding is about Fleet rather than about
+      # something a dependency merely contains.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  staticcheck:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        if: matrix.language == 'go'
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  images:
+    name: Image scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            build: docker build -t fleet-scan:backend ./backend
+            image: fleet-scan:backend
+          - name: frontend
+            # The frontend Dockerfile needs the repository root as context.
+            build: docker build -t fleet-scan:frontend -f frontend/Dockerfile .
+            image: fleet-scan:frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build ${{ matrix.name }}
+        run: ${{ matrix.build }}
+
+      # The image is scanned as well as the source: the base image contributes
+      # packages this repository never names, and they ship all the same.
+      - name: Scan ${{ matrix.name }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: sarif
+          output: trivy-${{ matrix.name }}.sarif
+          severity: CRITICAL,HIGH
+          # An unfixed vulnerability is worth seeing but cannot be acted on by
+          # upgrading, so it is reported without failing the build.
+          ignore-unfixed: true
+
+      - name: Upload ${{ matrix.name }} findings
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-${{ matrix.name }}.sarif
+          category: trivy-${{ matrix.name }}
+
+  config:
+    name: Configuration scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Scan Dockerfiles and compose
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          severity: CRITICAL,HIGH
+      - name: Upload findings
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  npm:
+    name: Frontend dependencies
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      # Production dependencies are what ships; a vulnerable build-time package
+      # is worth knowing about but is not in the delivered bundle.
+      #
+      # The threshold is "high" rather than "moderate" for one specific reason:
+      # react-router 6.x carries two moderate advisories (an open redirect via
+      # backslash in <Link>/useNavigate, and constructor injection in SSR
+      # hydration) whose fix landed in 7.18.0. Every 6.x release including the
+      # latest is in the affected range, so clearing them means migrating the
+      # frontend from react-router 6 to 7 — a major-version change across the
+      # routing layer, tracked separately. Lower this to "moderate" once that
+      # migration lands.
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high

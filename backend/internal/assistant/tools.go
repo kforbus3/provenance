@@ -611,10 +611,6 @@ type recentScansArgs struct {
 	Limit    int    `json:"limit"`
 }
 
-type recentRunsArgs struct {
-	Limit int `json:"limit"`
-}
-
 type hostDetailArgs struct {
 	Hostname string `json:"hostname"`
 }

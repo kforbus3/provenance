@@ -1,0 +1,54 @@
+version: 2
+
+# Sixteen reachable vulnerabilities had accumulated across ten modules before
+# anything was watching — including SQL injection in the Postgres driver, an
+# unsigned-SAML-logout acceptance in the SSO path, and a FIDO/U2F
+# physical-interaction bypass. None of them needed a code change to appear; they
+# needed only time. This is what stops that recurring.
+
+updates:
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: gomod
+    directory: /sdk
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: gomod
+    directory: /terraform-provider-fleet
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /frontend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps"

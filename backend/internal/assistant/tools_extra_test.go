@@ -46,12 +46,12 @@ func TestHoursFromText(t *testing.T) {
 		"downtime over the past month":       720,
 		"has anything been offline recently": 168, // default
 		// Explicit numbers must win (regression: these used to fall to the default).
-		"any failed logins in the last 48 hrs?":       48,
-		"any failed logins in the last 72 hours?":      72,
-		"failed logins in the last 3 days":             72,
-		"failed logins over the past 2 weeks":          336,
-		"failed logins in the last 24 hours":           24,
-		"any failed logins in the past week?":          168,
+		"any failed logins in the last 48 hrs?":   48,
+		"any failed logins in the last 72 hours?": 72,
+		"failed logins in the last 3 days":        72,
+		"failed logins over the past 2 weeks":     336,
+		"failed logins in the last 24 hours":      24,
+		"any failed logins in the past week?":     168,
 	}
 	for q, want := range cases {
 		if got := hoursFromText(q); got != want {
