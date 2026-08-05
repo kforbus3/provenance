@@ -5,6 +5,37 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v0.71.1 — Jump-host rebuilds no longer leave the WireGuard hub mute
+
+- **A jump-host rebuild no longer strands hosts that cannot be called.**
+  Enrollment set each peer's endpoint at runtime, but only `PublicKey` and
+  `AllowedIPs` were persisted, and the jump-host entrypoint stripped any
+  `Endpoint` on restore. After a rebuild the hub could no longer initiate to any
+  peer and could only wait to be called. Hosts whose own `wgfleet.conf` carried a
+  reachable endpoint re-handshook within about two minutes, which hid the
+  problem entirely; a host whose configured endpoint was *not* reachable had
+  been carried by the hub calling it, and went dark indefinitely. Observed in
+  production as two hosts offline out of fifteen, with a healthy hub and nothing
+  pointing at the cause. The hub-side endpoint is now persisted and restored.
+- Migrations: none.
+
+---
+
+## v0.71.0 — Vulnerability roll-ups measure exposure, not package count
+
+- **The Fixable column is meaningful again.** The scan sidecar kept grype's
+  `fix.versions` but discarded `fix.state`, so "the distro assessed this and will
+  never fix it" and "a fix exists and you are behind" both arrived as an empty
+  `fixedVersion`. On a fully-patched `debian:12` that is 91 not-fixed, 63
+  won't-fix and 0 fixed — so Fixable rendered "—" everywhere, hiding the useful
+  fact (nothing outstanding) behind a four-figure total. Fix state is now carried
+  through, and won't-fix is counted separately.
+- **Counts are distinct CVEs, not CVE-on-package rows.** One source package fans
+  out across many binaries (`glibc` → `libc6`, `libc-bin`, …), inflating every
+  number. Against the same stock `debian:12` sample: total 154 → 72, critical
+  7 → 6, high 17 → 13, medium 50 → 18, with 31 now shown as won't-fix.
+- Migrations: `0070_vuln_fix_state.sql`.
+
 ---
 
 ## v0.70.5 — Reconciler can't fail its own live work; "interrupted" run status

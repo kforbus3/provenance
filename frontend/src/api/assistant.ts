@@ -3,11 +3,20 @@ import type { Host } from "./hosts";
 
 // AI assistant: read-only natural-language queries over fleet data via Ollama.
 
+export interface AssistantDestination {
+  host?: string;
+  /** True when the configured Ollama URL is a public address — i.e. asking a
+   *  question sends fleet data off the local network. */
+  external: boolean;
+  resolved?: string;
+}
+
 export interface AssistantStatus {
   enabled: boolean;
   model: string;
   reachable: boolean;
   ready: boolean;
+  destination?: AssistantDestination;
 }
 
 export interface AssistantHost {

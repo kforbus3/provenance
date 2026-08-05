@@ -62,11 +62,14 @@ A few essentials, covered in more detail in [`docs/security.md`](docs/security.m
 
 ## Supported versions
 
-This project is under active development. The current release is **v0.1.0**.
-Security fixes are applied to `main` and roll into the next tagged release; until
-the next tag, running a recent commit from `main` gets you the latest fixes.
+Which releases receive security fixes is set out in
+[Compatibility, versioning and support](docs/compatibility.md#supported-versions).
+In short: the latest minor of the current major receives fixes, the previous
+minor receives security fixes only for six months after its successor ships, and
+anything older is unsupported.
 
-| Version | Supported |
-| ------- | --------- |
-| v0.1.x  | ✅        |
-| < v0.1  | ❌        |
+A security fix is issued as a patch release on every supported line at once.
+
+Pre-1.0 (`0.x`) releases are unsupported. `0.x` made no compatibility promise,
+which is what 1.0 changes; if you are running one, upgrade rather than asking
+for a backport.

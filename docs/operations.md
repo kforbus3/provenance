@@ -208,12 +208,18 @@ The Groups page badges each group **Dynamic** or **Manual** and summarizes the r
 
 ## AI assistant (Ask Fleet)
 
-An optional, **local-only** assistant answers natural-language questions about the fleet —
+An optional assistant answers natural-language questions about the fleet —
 "which hosts have less than 20% disk free?", "offline debian hosts", "prod hosts under heavy
-load", "hosts with pending security updates". It's **read-only**: a local Ollama model
+load", "hosts with pending security updates". It's **read-only**: an Ollama model
 translates the question into a curated query, the backend runs it (scoped to data *you* can
-access) and shows the **actual matching results** beside the answer — no data leaves your
-network, and every question is audited. Beyond host data and active sessions, it can also report
+access) and shows the **actual matching results** beside the answer, and every question is
+audited.
+
+> **Where your data goes.** Answering a question sends what it reads — host inventory,
+> sessions, audit entries, whatever your permissions reach — to whichever Ollama instance is
+> configured. That is why the intended deployment is an Ollama on your own network, and why
+> Fleet checks: if the configured URL resolves to a public address, the settings page says so
+> plainly rather than claiming the data stayed home. Point it at a host you control. Beyond host data and active sessions, it can also report
 **pending package updates** and **recent security scans and playbook runs** — including whether
 each was **scheduled or run manually** (recent runs need `Playbook.Run`).
 
