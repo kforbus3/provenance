@@ -87,7 +87,7 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host) {
 	// Windows. Instead, a host's vulnerabilities are the CVEs remediated by its
 	// missing security updates — collected over WinRM from the Windows Update Agent.
 	if h.Protocol == "rdp" {
-		findings, err := s.collectWindows(ctx, h)
+		findings, err := s.collectWindows(ctx, scanID, h)
 		if err != nil {
 			fail("collect windows updates: " + err.Error())
 			return
@@ -103,7 +103,7 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host) {
 		return
 	}
 
-	tarball, err := s.collect(ctx, h)
+	tarball, inv, err := s.collect(ctx, h)
 	if err != nil {
 		fail("collect packages: " + err.Error())
 		return
@@ -123,16 +123,49 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host) {
 		fail("store findings: " + err.Error())
 		return
 	}
+	// After the findings are stored, so a failure here can never lose a scan.
+	if len(inv.Packages) > 0 {
+		sbom, n := buildLinuxSBOM(h.Hostname, inv)
+		s.saveSBOM(ctx, scanID, h, inv.Format, inv, sbom, n)
+	}
+
 	s.log.Info("vuln scan completed", "host", h.Hostname, "total", sum.Total,
 		"critical", sum.Critical, "high", sum.High, "maxCvss", sum.MaxCVSS)
 	s.notify(ctx, h, sum)
 }
 
-// collect opens a privileged connection and pulls the host's package databases.
-func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, error) {
+// saveSBOM persists a bill of materials for a completed scan.
+//
+// Every failure is logged and swallowed. The SBOM is a by-product: a scan that
+// found vulnerabilities has already done its job, and losing it to a storage
+// error should not turn a successful scan into a failed one.
+func (s *Service) saveSBOM(ctx context.Context, scanID uuid.UUID, h *models.Host,
+	format string, inv inventory, sbom []byte, components int) {
+	if len(sbom) == 0 || components == 0 {
+		return
+	}
+	if err := s.store.SaveVulnSBOM(ctx, scanID, h.ID, format,
+		inv.OSID, inv.OSVersion, components, sbom); err != nil {
+		s.log.Warn("vuln scan: persist sbom", "host", h.Hostname, "err", err)
+		return
+	}
+	s.log.Info("sbom stored", "host", h.Hostname, "format", format,
+		"components", components)
+}
+
+// collect opens a privileged connection and pulls the host's package databases,
+// plus a plain package inventory for the SBOM.
+//
+// Both come from one connection: a second dial per scan would double the SSH
+// load on every host in the fleet for a few kilobytes of text. The inventory is
+// best-effort — it is returned empty rather than failing the scan, because the
+// vulnerability findings are the primary job and an unusual host that cannot
+// answer `dpkg-query` should still get scanned.
+func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, inventory, error) {
+	var inv inventory
 	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
 	if err != nil {
-		return nil, fmt.Errorf("system signer: %w", err)
+		return nil, inv, fmt.Errorf("system signer: %w", err)
 	}
 	var conn *sshgw.Conn
 	var lastErr error
@@ -142,22 +175,31 @@ func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, error) {
 		}
 	}
 	if conn == nil {
-		return nil, fmt.Errorf("dial host: %w", lastErr)
+		return nil, inv, fmt.Errorf("dial host: %w", lastErr)
 	}
 	defer conn.Close()
 
 	b64, err := runCapture(ctx, conn, collectScript)
 	if err != nil {
-		return nil, err
+		return nil, inv, err
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil {
-		return nil, fmt.Errorf("decode package archive: %w", err)
+		return nil, inv, fmt.Errorf("decode package archive: %w", err)
 	}
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("no package data collected (unsupported OS?)")
+		return nil, inv, fmt.Errorf("no package data collected (unsupported OS?)")
 	}
-	return raw, nil
+
+	if out, ierr := runCapture(ctx, conn, inventoryScript); ierr != nil {
+		s.log.Debug("vuln scan: inventory collect", "host", h.Hostname, "err", ierr)
+	} else {
+		if len(out) > maxInventoryBytes {
+			out = out[:maxInventoryBytes]
+		}
+		inv = parseInventory(out)
+	}
+	return raw, inv, nil
 }
 
 // collectWindows scans a Windows host by enumerating its missing security updates
@@ -165,7 +207,7 @@ func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, error) {
 // remediates (the host is exposed to those CVEs until it's installed). Authenticated
 // with the host's open-policy vault credential (scans are unattended), tunneled
 // through the jump host.
-func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.VulnFinding, error) {
+func (s *Service) collectWindows(ctx context.Context, scanID uuid.UUID, h *models.Host) ([]models.VulnFinding, error) {
 	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("system signer: %w", err)
@@ -286,7 +328,11 @@ func (s *Service) collectWindows(ctx context.Context, h *models.Host) ([]models.
 		if perr := s.store.ReplaceWindowsSoftware(ctx, h.ID, items); perr != nil {
 			s.log.Warn("vuln scan: persist software", "host", h.Hostname, "err", perr)
 		}
-		if sbom, mapped := buildSBOM(sw); mapped > 0 {
+		if sbom, mapped := buildWindowsSBOM(sw); mapped > 0 {
+			// Persisted as well as scanned: the same document answers "what is
+			// installed" for an auditor, and discarding it after grype has read
+			// it would mean collecting the data twice.
+			s.saveSBOM(ctx, scanID, h, "windows", inventory{}, sbom, mapped)
 			if tp, terr := s.scanSBOM(ctx, sbom); terr == nil {
 				findings = append(findings, tp...)
 				s.log.Info("windows third-party scan", "host", h.Hostname,

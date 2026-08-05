@@ -3,8 +3,10 @@ package vulnscan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,7 +33,12 @@ func Mount(r chi.Router, d *app.Deps, svc *Service, msrcSvc *msrc.Service) {
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/latest", h.latest)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/db", h.dbStatus)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/msrc", h.msrcStatus)
+		// Literal segments are registered before the {id} pattern so
+		// /vuln-scans/latest/sbom resolves to the host lookup rather than being
+		// read as a scan whose id is "latest".
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/latest/sbom", h.latestSBOM)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/{id}", h.get)
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/{id}/sbom", h.scanSBOMDownload)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/db/update", h.dbUpdate)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/db/import", h.dbImport)
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/vuln-scans/msrc/update", h.msrcUpdate)
@@ -282,4 +289,86 @@ func (h *handler) audit(r *http.Request, action string, detail map[string]any) {
 	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: action, TargetKind: "vuln_scan", Detail: detail,
 	})
+}
+
+// --- SBOM download ------------------------------------------------------
+
+// writeSBOM serves a stored CycloneDX document as a download.
+//
+// The bytes are written back exactly as stored rather than re-marshalled: a
+// consumer may have recorded the document's digest, and reordering JSON keys
+// would break that for no benefit.
+func writeSBOM(w http.ResponseWriter, b *store.VulnSBOM) {
+	name := b.Hostname
+	if name == "" {
+		name = b.HostID.String()
+	}
+	filename := fmt.Sprintf("%s-%s-sbom.cdx.json",
+		sanitizeFilename(name), b.CreatedAt.UTC().Format("20060102T150405Z"))
+
+	w.Header().Set("Content-Type", "application/vnd.cyclonedx+json")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	// The component count is the one fact a caller may want without parsing the
+	// body — a monitoring check asking "did this host produce an inventory".
+	w.Header().Set("X-SBOM-Components", strconv.Itoa(b.Components))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b.Document)
+}
+
+// sanitizeFilename reduces a hostname to something safe in a Content-Disposition
+// header. Hostnames come from enrollment and are not guaranteed to be tame; an
+// unescaped quote or newline here would let a host name inject a header.
+func sanitizeFilename(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			out = append(out, r)
+		default:
+			out = append(out, '-')
+		}
+	}
+	if len(out) == 0 {
+		return "host"
+	}
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return string(out)
+}
+
+// scanSBOMDownload returns the bill of materials captured by one scan.
+func (h *handler) scanSBOMDownload(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid scan id")
+		return
+	}
+	b, err := h.d.Store.GetVulnSBOM(r.Context(), id)
+	if err != nil {
+		// A scan that predates SBOM capture, failed before collection, or ran
+		// against a host with neither dpkg nor rpm has no document. That is an
+		// ordinary absence, not an error worth a 500.
+		httpx.WriteError(w, http.StatusNotFound,
+			"no SBOM for this scan (it may predate inventory capture, or the host has no supported package manager)")
+		return
+	}
+	writeSBOM(w, b)
+}
+
+// latestSBOM returns a host's most recent bill of materials.
+func (h *handler) latestSBOM(w http.ResponseWriter, r *http.Request) {
+	hostID, err := uuid.Parse(r.URL.Query().Get("hostId"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "hostId query parameter is required")
+		return
+	}
+	b, err := h.d.Store.LatestVulnSBOMForHost(r.Context(), hostID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound,
+			"no SBOM for this host yet — run a vulnerability scan to collect one")
+		return
+	}
+	writeSBOM(w, b)
 }

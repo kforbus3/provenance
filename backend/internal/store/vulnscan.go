@@ -191,3 +191,77 @@ func (s *Store) FailStaleVulnScans(ctx context.Context, lease time.Duration, sel
 	}
 	return tag.RowsAffected(), nil
 }
+
+// --- SBOM ---------------------------------------------------------------
+
+// VulnSBOM is a stored bill of materials for one scan.
+type VulnSBOM struct {
+	ScanID     uuid.UUID `json:"scanId"`
+	HostID     uuid.UUID `json:"hostId"`
+	Hostname   string    `json:"hostname,omitempty"`
+	PkgFormat  string    `json:"pkgFormat"`
+	OSID       string    `json:"osId,omitempty"`
+	OSVersion  string    `json:"osVersion,omitempty"`
+	Components int       `json:"components"`
+	CreatedAt  time.Time `json:"createdAt"`
+	// Document is the raw CycloneDX JSON. Kept as bytes so it is served back
+	// byte-for-byte: re-marshalling would reorder keys and change a document a
+	// consumer may have hashed.
+	Document []byte `json:"-"`
+}
+
+// SaveVulnSBOM stores (or replaces) the bill of materials for a scan.
+func (s *Store) SaveVulnSBOM(ctx context.Context, scanID, hostID uuid.UUID,
+	pkgFormat, osID, osVersion string, components int, doc []byte) error {
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO vuln_sboms (scan_id, host_id, pkg_format, os_id, os_version, components, sbom)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (scan_id) DO UPDATE SET
+    pkg_format = EXCLUDED.pkg_format,
+    os_id      = EXCLUDED.os_id,
+    os_version = EXCLUDED.os_version,
+    components = EXCLUDED.components,
+    sbom       = EXCLUDED.sbom,
+    created_at = now()`,
+		scanID, hostID, pkgFormat, osID, osVersion, components, doc)
+	return err
+}
+
+// GetVulnSBOM returns the bill of materials for one scan.
+func (s *Store) GetVulnSBOM(ctx context.Context, scanID uuid.UUID) (*VulnSBOM, error) {
+	var b VulnSBOM
+	err := s.pool.QueryRow(ctx, `
+SELECT sb.scan_id, sb.host_id, COALESCE(h.hostname, ''), sb.pkg_format,
+       sb.os_id, sb.os_version, sb.components, sb.created_at, sb.sbom
+FROM vuln_sboms sb
+LEFT JOIN hosts h ON h.id = sb.host_id
+WHERE sb.scan_id = $1`, scanID).
+		Scan(&b.ScanID, &b.HostID, &b.Hostname, &b.PkgFormat,
+			&b.OSID, &b.OSVersion, &b.Components, &b.CreatedAt, &b.Document)
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// LatestVulnSBOMForHost returns a host's most recent bill of materials.
+//
+// The common question is "what is on this machine now", which is host-scoped and
+// time-ordered — asking for it by scan id would mean looking the scan up first.
+func (s *Store) LatestVulnSBOMForHost(ctx context.Context, hostID uuid.UUID) (*VulnSBOM, error) {
+	var b VulnSBOM
+	err := s.pool.QueryRow(ctx, `
+SELECT sb.scan_id, sb.host_id, COALESCE(h.hostname, ''), sb.pkg_format,
+       sb.os_id, sb.os_version, sb.components, sb.created_at, sb.sbom
+FROM vuln_sboms sb
+LEFT JOIN hosts h ON h.id = sb.host_id
+WHERE sb.host_id = $1
+ORDER BY sb.created_at DESC
+LIMIT 1`, hostID).
+		Scan(&b.ScanID, &b.HostID, &b.Hostname, &b.PkgFormat,
+			&b.OSID, &b.OSVersion, &b.Components, &b.CreatedAt, &b.Document)
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}

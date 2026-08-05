@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+- **Software bills of materials for every scanned host.** The vulnerability
+  scanner already pulled each host's package database over SSH, handed it to
+  grype and kept only the findings. The inventory itself is now retained and
+  downloadable as a CycloneDX 1.5 document:
+  `GET /api/v1/vuln-scans/latest/sbom?hostId=` for a host's current state, or
+  `GET /api/v1/vuln-scans/{id}/sbom` for what a specific scan saw.
+
+  "Give us a bill of materials for this system" is a compliance question — CMMC,
+  FedRAMP, EO 14028 — and answering it needed a second tool, an agent, or a
+  rebuild. Everything required was already being collected on the existing
+  schedule; it was being thrown away.
+
+  Linux components carry a **purl**, which names a distribution package
+  unambiguously; Windows keeps the CPE it needs for its curated mapping. The
+  Linux document lists **every** installed package rather than only the
+  scannable ones, because a bill of materials and a vulnerability report answer
+  different questions.
+
+  No new agent, no rebuild, and one extra command per scan on the connection
+  that was already open. Existing scans have no SBOM and return `404`; the next
+  scan of a host produces one.
+
+---
+
 ## v1.0.0 — A compatibility promise, and the dependency audit that had never run
 
 The feature set has been past 1.0 for a long time; what was missing was a

@@ -2,8 +2,8 @@ import { useRef, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, MenuItem, Paper, Stack, Switch, Table,
-  TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup,
-  Tooltip, Typography,
+  Snackbar, TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton,
+  ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
 import SecurityIcon from "@mui/icons-material/Security";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -14,6 +14,7 @@ import { listHosts } from "../api/hosts";
 import { listGroups } from "../api/admin";
 import {
   triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan, clearFailedVulnScans,
+  downloadScanSbom,
   vulnDbStatus, vulnDbUpdate, vulnDbImport, msrcStatus, msrcUpdate, msrcImport, type VulnFinding,
   type FixState,
 } from "../api/vulnscan";
@@ -376,6 +377,8 @@ function FixStateChip({ value }: { value: FixState }) {
 
 function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => void }) {
   const { data, isLoading } = useQuery({ queryKey: ["vuln-scan", scanId], queryFn: () => getVulnScan(scanId) });
+  const [sbomBusy, setSbomBusy] = useState(false);
+  const [sbomError, setSbomError] = useState(false);
   const scan = data?.scan;
   const findings = data?.findings ?? [];
 
@@ -473,7 +476,37 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
           </Table>
         </Paper>
       </DialogContent>
-      <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
+      <DialogActions>
+        {/* The SBOM is per scan rather than per host here: this dialog is
+            already showing one specific scan, and the inventory it collected is
+            the one that produced these findings. */}
+        <Button
+          disabled={!scan || sbomBusy}
+          onClick={async () => {
+            if (!scan) return;
+            setSbomBusy(true);
+            try {
+              await downloadScanSbom(scan.id);
+            } catch {
+              // A scan from before inventory capture, or a host with neither
+              // dpkg nor rpm, simply has no document. Saying so beats a silent
+              // no-op on a button the user just pressed.
+              setSbomError(true);
+            } finally {
+              setSbomBusy(false);
+            }
+          }}
+        >
+          Download SBOM
+        </Button>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+      <Snackbar
+        open={sbomError}
+        autoHideDuration={6000}
+        onClose={() => setSbomError(false)}
+        message="No SBOM for this scan — it may predate inventory capture, or the host has no supported package manager."
+      />
     </Dialog>
   );
 }

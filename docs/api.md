@@ -609,6 +609,8 @@ viewing scans require `Host.Scan`; CVE-database management requires
 | GET | `/api/v1/vuln-scans?hostId=` | `Host.Scan` |
 | GET | `/api/v1/vuln-scans/latest` | `Host.Scan` |
 | GET | `/api/v1/vuln-scans/{id}` | `Host.Scan` |
+| GET | `/api/v1/vuln-scans/{id}/sbom` | `Host.Scan` |
+| GET | `/api/v1/vuln-scans/latest/sbom?hostId=` | `Host.Scan` |
 | GET | `/api/v1/vuln-scans/db` | `Host.Scan` |
 | POST | `/api/v1/vuln-scans/db/update` | `System.Configure` |
 | POST | `/api/v1/vuln-scans/db/import` | `System.Configure` |
@@ -617,6 +619,12 @@ viewing scans require `Host.Scan`; CVE-database management requires
 - **`GET /vuln-scans?hostId=`** — recent scans for a host.
 - **`GET /vuln-scans/latest`** — fleet roll-up: latest completed scan per host (max CVSS + critical/high/medium counts).
 - **`GET /vuln-scans/{id}`** — one scan plus its findings. Each finding: CVE id, package, installed vs. fixed version, severity, CVSS score, vector, data source, description.
+- **`GET /vuln-scans/{id}/sbom`** — the software bill of materials that scan collected, as a CycloneDX 1.5 JSON download (`application/vnd.cyclonedx+json`). `404` when the scan predates inventory capture or the host has neither dpkg nor rpm.
+- **`GET /vuln-scans/latest/sbom?hostId=`** — the host's most recent SBOM, same format. This is the one to use for "give me a bill of materials for this system".
+
+  Linux components carry a **purl** (`pkg:deb/debian/curl@7.88.1-10?arch=amd64`), which names a distribution package unambiguously. Windows components carry a **CPE** instead, because Windows software names only become identifiers through the curated mapping. The document's `metadata.component` identifies the host, so several SBOMs can be ingested together without losing which machine each describes.
+
+  The Linux document lists **every** installed package, not only the ones a scanner can match — a bill of materials answers "what is on this machine", which is a different question from "what is vulnerable".
 - **`GET /vuln-scans/db`** — CVE database status (build date).
 - **`POST /vuln-scans/db/update`** — online update (needs backend/sidecar internet).
 - **`POST /vuln-scans/db/import`** — upload a pre-downloaded Grype DB archive (air-gapped).
