@@ -330,7 +330,7 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `session_policy` | idle 30 min, absolute 12 h | session lifetime |
 | `require_mfa` | `{"enabled": false}` | when on, **all** users must enroll a second factor (Users → *Require MFA for all*) |
 | `branding` | `{"app_name": "Fleet Terminal"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
-| `assistant` | `{"enabled": false, "ollamaUrl": "", "model": ""}` | local-Ollama AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant** |
+| `assistant` | `{"enabled": false, "ollamaUrl": "", "model": ""}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `ollamaUrl`, so run Ollama on your own network; a public URL raises a warning on the settings page |
 | `assistant_actions` | `{"requireApprovalForAll": false, "disabledKinds": []}` | assistant-action policy: force approval for every action, or disable specific action kinds; edit via **Settings → Assistant actions** |
 | `scan_policy` | `{"timeoutMinutes": …}` | scan / remediation timeout budget (overrides `FLEET_SCAN_TIMEOUT`, clamped to a sane range) |
 | `timezone` | browser-detected IANA zone | display zone for all timestamps + schedule clock-times (§9, Time zone) |

@@ -8,7 +8,7 @@ import {
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
-import { assistantModels, getActionPolicy, saveActionPolicy } from "../api/assistant";
+import { assistantModels, assistantStatus, getActionPolicy, saveActionPolicy } from "../api/assistant";
 import { downloadBackup } from "../api/system";
 import { UpdatesCard } from "./settings/UpdatesCard";
 import {
@@ -297,6 +297,9 @@ function BrandingCard({ current }: { current: unknown }) {
 // assistant: enable, endpoint URL, and model (listed live from Ollama).
 function AssistantCard({ current }: { current: unknown }) {
   const qc = useQueryClient();
+  // Reports where the configured URL actually points, so the card can say
+  // whether the data stays on this network rather than assuming it does.
+  const { data: status } = useQuery({ queryKey: ["assistant-status"], queryFn: assistantStatus });
   const cur = (current ?? {}) as { enabled?: boolean; ollamaUrl?: string; model?: string };
   const [enabled, setEnabled] = useState(Boolean(cur.enabled));
   const [url, setUrl] = useState(cur.ollamaUrl ?? "");
@@ -325,9 +328,21 @@ function AssistantCard({ current }: { current: unknown }) {
       <Typography variant="h6">AI assistant (local Ollama)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
         Point Fleet at a local Ollama instance to enable read-only natural-language queries over
-        your fleet (e.g. “hosts with less than 20% disk free”). Data never leaves your network;
-        queries are RBAC-scoped and audited.
+        your fleet (e.g. “hosts with less than 20% disk free”). Queries are RBAC-scoped and
+        audited, and answering one sends the data it reads — host inventory, sessions, audit
+        entries — to whichever Ollama instance you configure below.
       </Typography>
+      {/* The card used to state flatly that data never leaves your network. That
+          holds only for a local URL, and the field takes any URL at all, so the
+          claim is made conditional and the backend says which case applies. */}
+      {status?.destination?.external && (
+        <Alert severity="warning" sx={{ mb: 1.5 }}>
+          <strong>{status.destination.host}</strong>
+          {status.destination.resolved ? ` (${status.destination.resolved})` : ""} is a public
+          address, so fleet data leaves your network to be answered. Point this at an Ollama
+          instance on your own network if that is not what you intend.
+        </Alert>
+      )}
       {error && <Alert severity="warning" sx={{ mb: 1.5 }}>{error}</Alert>}
       <Stack spacing={2}>
         <FormControlLabel

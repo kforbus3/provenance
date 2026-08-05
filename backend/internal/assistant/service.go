@@ -87,11 +87,15 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 			reachable = true
 		}
 	}
+	dest := classifyDestination(ctx, cfg.OllamaURL)
 	return map[string]any{
 		"enabled":   cfg.Enabled,
 		"model":     cfg.Model,
 		"reachable": reachable,
 		"ready":     cfg.Enabled && cfg.Model != "" && reachable,
+		// Where the model runs, so the UI can stop claiming the data stayed on
+		// the operator's network when the configured URL says otherwise.
+		"destination": dest,
 	}
 }
 

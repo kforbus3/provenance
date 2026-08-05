@@ -28,6 +28,7 @@ the first Super Administrator. See the [Administrator Guide](./admin-guide.md).
 | [operations.md](./operations.md) | operators | Day-to-day flows: enroll, connect, transfer, approvals, MFA |
 | [architecture.md](./architecture.md) | everyone | Component diagram, data flows, security model |
 | [api.md](./api.md) | integrators | REST + WebSocket endpoint reference by module |
+| [compatibility.md](./compatibility.md) | integrators / operators | What a version number promises: API stability, deprecation, supported releases, upgrades |
 | [database.md](./database.md) | developers / DBAs | Table-by-table schema reference |
 | [admin-guide.md](./admin-guide.md) | administrators | Bootstrap, users/roles/groups, host access, settings |
 | [user-guide.md](./user-guide.md) | end users | Signing in, 2FA, connecting, files, approvals, replay |

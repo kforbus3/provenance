@@ -26,6 +26,11 @@ the root.
 - **Errors:** failures return `{"error": "<message>"}` with an appropriate HTTP
   status (`400`, `401`, `403`, `404`, `409`, `500`).
 - **Pagination:** list endpoints accept `?limit=&offset=` query parameters.
+- **Compatibility:** from 1.0 onward, what `v1` guarantees — and what may change
+  without a major release — is set out in
+  [Compatibility, versioning and support](compatibility.md). In short: paths,
+  methods, permissions and response shapes are stable; fields are added, never
+  removed or retyped; a client that ignores unknown fields keeps working.
 
 > Note on mounting: every module is wired in `registerRoutes` (`server.go`).
 > `bootstrap`, `auth`, `hosts`, and `certificates` are mounted there directly; the
