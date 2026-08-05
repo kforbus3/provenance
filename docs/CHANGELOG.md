@@ -5,6 +5,71 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.0.0 — A compatibility promise, and the dependency audit that had never run
+
+The feature set has been past 1.0 for a long time; what was missing was a
+commitment. From this release the version number is a statement about
+compatibility rather than a running count.
+
+- **[Compatibility, versioning and support](compatibility.md) is the contract.**
+  What `/api/v1` guarantees — paths, methods, permissions, response shapes,
+  authentication, permission names, environment variables, migration behaviour,
+  bundle compatibility, enrollment surviving upgrades, the SDK and the Terraform
+  provider. What is deliberately *not* covered: the UI, log-line text, unlisted
+  metrics, the database schema itself, `internal/` packages, and the assistant's
+  answers. Deprecation is announced in the changelog, kept working for at least
+  two minor releases, and removed only in a major — with a runtime warning naming
+  the replacement, so operators find out from their own logs.
+- **Twenty reachable vulnerabilities are closed.** Nothing had been scanning
+  dependencies. `govulncheck` reported sixteen reachable from Fleet's own code
+  across ten modules, and four more in the Terraform provider that nothing had
+  ever looked at. Among them: SQL injection via placeholder confusion in
+  `jackc/pgx`, the driver every query and audit row goes through; acceptance of
+  unsigned SAML `LogoutRequest`s and a signature bypass in the XML signing
+  library, both in the SSO path; and a FIDO/U2F physical-interaction bypass plus
+  five SSH issues in `x/crypto`, the library the gateway dials with.
+- **A further twenty-nine came from the Go standard library**, because the
+  toolchain was pinned to the module's floor version rather than a current
+  release. The toolchain that compiles the binary is as much a dependency as
+  anything in `go.sum`; every module now names a current one, and the images
+  build on `golang:1.26-alpine`.
+- **Tenant scoping reports why it failed.** The pgx upgrade deprecated
+  `BeforeAcquire`, which is the hook that scopes every connection to its tenant
+  for row-level security. It can only answer false, so a persistent failure to
+  set the tenant GUC surfaced as "too many failed attempts acquiring connection".
+  `PrepareConn` returns the error, so the query fails with the reason it could
+  not be scoped.
+- **The assistant no longer claims your data stayed home when it did not.** The
+  settings page stated flatly that data never leaves your network; the URL field
+  accepts any URL, so that held only by convention. Fleet now classifies where
+  the configured Ollama actually is and warns when it is a public address. It
+  classifies rather than blocks — a model server one rack over is legitimate.
+- **CI enforces all of it**: `govulncheck` over every Go module, `staticcheck`,
+  CodeQL over Go and TypeScript, Trivy over both images and the configuration,
+  and an npm audit that fails at moderate and above unless an advisory is
+  named in an allowlist with a reason and a review date. Weekly as well as per
+  change, because an advisory can be published against a version that never
+  changed. The build gained the race detector and a `gofmt` gate, and the
+  frontend suite — which had never run in CI at all — now runs.
+- **react-router 6 → 7**, closing an open redirect in `<Link>`/`useNavigate` and
+  constructor injection in SSR hydration.
+- `SECURITY.md` had claimed the current release was v0.1.0 and that v0.1.x was
+  supported. It named the wrong versions for a long time; it now points at the
+  support policy.
+- Migrations: none.
+
+### Upgrading
+
+No configuration change is required. Two things to know:
+
+- **Pre-1.0 releases are unsupported from here.** `0.x` made no compatibility
+  promise, which is what this release changes.
+- **If the assistant is enabled**, check Settings → AI assistant. A configured
+  Ollama URL on a public address now raises a warning naming the host. This
+  reports where your data is already going; it does not change where it goes.
+
+---
+
 ## v0.71.1 — Jump-host rebuilds no longer leave the WireGuard hub mute
 
 - **A jump-host rebuild no longer strands hosts that cannot be called.**

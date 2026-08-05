@@ -333,6 +333,10 @@ type Config struct {
 
 // Load reads configuration from the environment, applies defaults, and validates.
 func Load() (*Config, error) {
+	// Say so before anything reads them, so the warning appears above whatever
+	// the deprecated setting went on to affect.
+	warnDeprecated()
+
 	c := &Config{
 		HTTPAddr:                    env("FLEET_HTTP_ADDR", ":8080"),
 		PublicURL:                   env("FLEET_PUBLIC_URL", "https://localhost:8443"),
