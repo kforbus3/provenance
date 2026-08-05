@@ -1,0 +1,20 @@
+{
+  "$comment": [
+    "Advisories that npm audit reports but which do not apply to Fleet, with the",
+    "reason and a date to look again. Anything not listed here fails the build at",
+    "moderate or above.",
+    "",
+    "An entry is a claim that has to stay true. scripts/audit.mjs fails if an",
+    "entry stops matching anything (the advisory was fixed and the exception is",
+    "now noise) or if its review date has passed — so this file cannot quietly",
+    "become a list of things nobody looked at again."
+  ],
+  "allow": [
+    {
+      "id": "GHSA-qwww-vcr4-c8h2",
+      "package": "react-router",
+      "reason": "RSC Mode CSRF bypass. It applies to React Server Components — server-side actions executing before a 400 response. Fleet's frontend is a client-rendered SPA: it mounts BrowserRouter in main.tsx and uses the declarative Routes/Route API only, with no RSC, no server actions and no loaders. The affected code path is not reachable. Clearing the advisory outright needs react-router 8, which requires React >= 19.2.7 while Fleet is on React 18 — a framework upgrade rather than a dependency bump.",
+      "review": "2026-11-01"
+    }
+  ]
+}

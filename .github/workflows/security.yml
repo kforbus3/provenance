@@ -173,16 +173,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      # Production dependencies are what ships; a vulnerable build-time package
-      # is worth knowing about but is not in the delivered bundle.
-      #
-      # The threshold is "high" rather than "moderate" for one specific reason:
-      # react-router 6.x carries two moderate advisories (an open redirect via
-      # backslash in <Link>/useNavigate, and constructor injection in SSR
-      # hydration) whose fix landed in 7.18.0. Every 6.x release including the
-      # latest is in the affected range, so clearing them means migrating the
-      # frontend from react-router 6 to 7 — a major-version change across the
-      # routing layer, tracked separately. Lower this to "moderate" once that
-      # migration lands.
+      # Fails on any production advisory at moderate or above unless it is named
+      # in audit-allowlist.json with a reason and a review date. Blunting the
+      # threshold to "high" instead would hide every moderate that arrives
+      # later, including ones that do apply.
       - name: npm audit (production dependencies)
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run audit
