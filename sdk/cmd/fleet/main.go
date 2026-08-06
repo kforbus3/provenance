@@ -124,6 +124,7 @@ Commands:
   hosts add-group <hostId> <groupId>
   hosts rm-group  <hostId> <groupId>
   groups list                     list groups
+  groups hosts <groupId>          list a group's host members
   groups create --name <n> [--tag-all a,b] [--tag-any a,b] [--env e]
   groups delete <id>              remove a group
   users list                      list users

@@ -20,7 +20,83 @@ func (h *handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	if groups == nil {
 		groups = []models.Group{}
 	}
+	// Annotate with host-member counts so the Groups page can show membership at a
+	// glance. Best-effort: a count failure must not blank the whole listing.
+	if counts, cerr := h.d.Store.GroupHostCounts(r.Context()); cerr == nil {
+		for i := range groups {
+			n := counts[groups[i].ID]
+			groups[i].HostCount = &n
+		}
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": groups, "count": len(groups)})
+}
+
+// listGroupHosts returns the hosts that belong to a group, so membership can be
+// reviewed from the Groups page instead of opening every host's access dialog.
+// Identity fields only — connection details stay behind the host module.
+func (h *handler) listGroupHosts(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid group id")
+		return
+	}
+	g, err := h.d.Store.GetGroup(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such group")
+		return
+	}
+	hosts, err := h.d.Store.GroupHostMembers(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list group hosts")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"hosts": hosts, "count": len(hosts), "dynamic": g.Rule != nil,
+	})
+}
+
+// groupHostIDs parses the group and host ids and rejects the request when the
+// group's membership is rule-managed — a manual edit there would be silently
+// undone by the next reconcile. Mirrors the host-side guard.
+func (h *handler) groupHostIDs(w http.ResponseWriter, r *http.Request) (groupID, hostID uuid.UUID, ok bool) {
+	groupID, err1 := uuid.Parse(chi.URLParam(r, "id"))
+	hostID, err2 := uuid.Parse(chi.URLParam(r, "hostId"))
+	if err1 != nil || err2 != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return groupID, hostID, false
+	}
+	if dyn, _ := h.d.Store.GroupIsDynamic(r.Context(), groupID); dyn {
+		httpx.WriteError(w, http.StatusConflict, "group membership is rule-managed; edit the group's rule instead")
+		return groupID, hostID, false
+	}
+	return groupID, hostID, true
+}
+
+func (h *handler) addGroupHost(w http.ResponseWriter, r *http.Request) {
+	groupID, hostID, ok := h.groupHostIDs(w, r)
+	if !ok {
+		return
+	}
+	if err := h.d.Store.AddHostToGroup(r.Context(), hostID, groupID); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not add host to group")
+		return
+	}
+	// Same audit action as the host-side edit: one membership change, one shape.
+	h.audit(r, "host.group_add", "host", hostID.String(), map[string]any{"groupId": groupID.String()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "added"})
+}
+
+func (h *handler) removeGroupHost(w http.ResponseWriter, r *http.Request) {
+	groupID, hostID, ok := h.groupHostIDs(w, r)
+	if !ok {
+		return
+	}
+	if err := h.d.Store.RemoveHostFromGroup(r.Context(), hostID, groupID); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not remove host from group")
+		return
+	}
+	h.audit(r, "host.group_remove", "host", hostID.String(), map[string]any{"groupId": groupID.String()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 type createGroupReq struct {

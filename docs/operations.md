@@ -99,6 +99,10 @@ icon:
 - **Groups** — add the host to a group; any member of that group can reach it.
 - **Individual users** — grant a single user direct access to this host.
 
+The same host-to-group membership can be edited from the other side: **Groups →
+Manage hosts** lists a group's member hosts and adds or removes them there, which
+is the quicker path when you are setting up one group across many hosts.
+
 Access grants control *whether* a user can reach a host; the **`Host.Sudo`**
 permission (on their role) controls *what they get on it* — root via sudo, or a
 **login-only** shell with no sudo. See the Administrator Guide for the two-account

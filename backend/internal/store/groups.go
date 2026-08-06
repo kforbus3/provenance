@@ -136,6 +136,64 @@ func (s *Store) HostsInGroup(ctx context.Context, groupID uuid.UUID) ([]models.H
 	return out, rows.Err()
 }
 
+// GroupHostMember is a host as shown in group-membership administration: enough
+// to identify and triage the host, without the connection details (address,
+// overlay, credentials) that only the host module exposes.
+type GroupHostMember struct {
+	ID          uuid.UUID `json:"id"`
+	Hostname    string    `json:"hostname"`
+	Description string    `json:"description"`
+	Environment string    `json:"environment"`
+	Owner       string    `json:"owner"`
+	Tags        []string  `json:"tags"`
+	Enrolled    bool      `json:"enrolled"`
+}
+
+// GroupHostMembers lists a group's host members for the Groups-page membership
+// editor. Kept separate from HostsInGroup, which returns full connection details
+// for actually running against the hosts.
+func (s *Store) GroupHostMembers(ctx context.Context, groupID uuid.UUID) ([]GroupHostMember, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT h.id, h.hostname, h.description, h.environment, h.owner, h.tags, h.enrolled
+		FROM hosts h JOIN host_groups hg ON hg.host_id = h.id
+		WHERE hg.group_id = $1 ORDER BY h.hostname`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []GroupHostMember{}
+	for rows.Next() {
+		var m GroupHostMember
+		if err := rows.Scan(&m.ID, &m.Hostname, &m.Description, &m.Environment, &m.Owner, &m.Tags, &m.Enrolled); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GroupHostCounts returns each group's host-member count, keyed by group id.
+// Groups with no hosts are absent from the map. One query for the whole list, so
+// the Groups page does not fan out per row.
+func (s *Store) GroupHostCounts(ctx context.Context) (map[uuid.UUID]int, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT group_id, count(*) FROM host_groups GROUP BY group_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // CreateGroup creates a group.
 func (s *Store) CreateGroup(ctx context.Context, name, description string) (*models.Group, error) {
 	var g models.Group

@@ -193,10 +193,29 @@ settings, so admins never hold the codes:
 - **Permissions catalog:** `GET /permissions`.
 - **Groups:** `POST /groups`, `DELETE /groups/{id}`. Group membership is one way
   host access is granted — a user can connect to a host when they share a group
-  with it. Manage a group's **members** from **Groups → Manage members**; add the
-  group to **hosts** from a host's **Manage access** dialog (or
-  `POST /hosts/{id}/groups/{groupId}`). So: put users in a group, add the group to
-  hosts, and every member can reach every host in it.
+  with it. Manage a group's **user members** from **Groups → Manage members**, and
+  its **host members** from **Groups → Manage hosts** (or the host count in the
+  group's row). The same host membership can also be edited from a host's **Manage
+  access** dialog. So: put users in a group, add hosts to it, and every member can
+  reach every host in it.
+
+#### Host membership from the Groups page
+
+The Groups table shows each group's **host count**; opening **Manage hosts** lists
+the member hosts (hostname, environment, owner, tags, enrollment) and lets you add
+or remove them in place.
+
+| Action | Endpoint | Permission |
+|--------|----------|------------|
+| List a group's host members | `GET /groups/{id}/hosts` | `Group.Edit` |
+| Add a host to a group | `POST /groups/{id}/hosts/{hostId}` | `Host.Edit` |
+| Remove a host from a group | `DELETE /groups/{id}/hosts/{hostId}` | `Host.Edit` |
+
+The mutations carry the same `Host.Edit` gate as the host-side
+`/hosts/{id}/groups/{groupId}` routes — neither side is a cheaper path to changing
+host access — and they are refused (`409`) on a **dynamic** group, whose membership
+the rule owns. Viewing membership needs only `Group.Edit`, so the listing returns
+identity fields (no addresses, overlay, or credential references).
 
 ### Dynamic host groups
 
@@ -220,7 +239,9 @@ its members immediately gain access to those hosts. Rule fields:
 - On a rule-managed (**Dynamic**) group, **manual add/remove is refused** (`409`) —
   edit the rule instead. A rule-less group stays **static/manual** as before.
 - The **Groups** page shows a **Dynamic / Manual** badge plus a rule summary, with a
-  rule editor to create, edit, or **clear the rule back to manual**.
+  rule editor to create, edit, or **clear the rule back to manual**. **Manage hosts**
+  still shows a dynamic group's current members (read-only) so you can check what
+  the rule actually matched.
 
 | Action | Endpoint |
 |--------|----------|

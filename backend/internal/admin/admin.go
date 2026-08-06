@@ -61,6 +61,12 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Group.Create")).Post("/groups", h.createGroup)
 		pr.With(d.Auth.RequirePermission("Group.Edit")).Put("/groups/{id}", h.updateGroup)
 		pr.With(d.Auth.RequirePermission("Group.Delete")).Delete("/groups/{id}", h.deleteGroup)
+		// Host membership, viewed and edited from the group's side. The mutations
+		// carry the same Host.Edit gate as their /hosts/{id}/groups/{groupId}
+		// counterparts so neither side is a cheaper way to change host access.
+		pr.With(d.Auth.RequirePermission("Group.Edit")).Get("/groups/{id}/hosts", h.listGroupHosts)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/groups/{id}/hosts/{hostId}", h.addGroupHost)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Delete("/groups/{id}/hosts/{hostId}", h.removeGroupHost)
 
 		// System settings
 		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/settings", h.listSettings)
