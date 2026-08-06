@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.2.0 — Which hosts are in this group, answered where you ask it
 
 - **Host membership, from the group's side.** The Groups page could say whether a
   group was manual or dynamic, but not which hosts were actually in it — the only
