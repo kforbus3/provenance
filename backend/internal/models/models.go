@@ -197,6 +197,9 @@ type Group struct {
 	Description string     `json:"description"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	Rule        *GroupRule `json:"rule,omitempty"` // non-nil = dynamic (rule-managed) membership
+	// HostCount is the number of hosts in the group. Only the group listing
+	// computes it; a pointer so "not computed" is distinguishable from zero.
+	HostCount *int `json:"hostCount,omitempty"`
 }
 
 // GroupRule defines dynamic group membership over stable host attributes. Live

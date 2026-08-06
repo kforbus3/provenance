@@ -57,7 +57,7 @@ fleet <command> [subcommand] [flags]
   hosts list | get <id> | delete <id>
   hosts create --hostname <h> [--env prod] [--tags a,b] [--ssh-user fleet]
   hosts add-group <hostId> <groupId>   |  hosts rm-group <hostId> <groupId>
-  groups list | delete <id>
+  groups list | hosts <groupId> | delete <id>
   groups create --name <n> [--tag-all a,b] [--tag-any a,b] [--env e]   (dynamic if any rule flag set)
   users list
   roles list

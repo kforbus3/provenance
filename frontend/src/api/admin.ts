@@ -49,6 +49,7 @@ export interface Group {
   description: string;
   createdAt: string;
   rule?: GroupRule; // present = dynamic (rule-managed) membership
+  hostCount?: number; // host members; only the group listing computes it
 }
 
 export interface CreateUserInput {
@@ -255,6 +256,37 @@ export async function addUserToGroup(userId: string, groupId: string): Promise<v
 
 export async function removeUserFromGroup(userId: string, groupId: string): Promise<void> {
   await api.delete(`/api/v1/users/${userId}/groups/${groupId}`);
+}
+
+// GroupHost is a host member of a group: identity fields only (the connection
+// details live behind the host module).
+export interface GroupHost {
+  id: string;
+  hostname: string;
+  description: string;
+  environment: string;
+  owner: string;
+  tags: string[];
+  enrolled: boolean;
+}
+
+export interface GroupHostsResponse {
+  hosts: GroupHost[];
+  count: number;
+  dynamic: boolean; // membership is rule-managed; manual edits are refused
+}
+
+export async function listGroupHosts(groupId: string): Promise<GroupHostsResponse> {
+  const { data } = await api.get<GroupHostsResponse>(`/api/v1/groups/${groupId}/hosts`);
+  return { hosts: data.hosts ?? [], count: data.count ?? 0, dynamic: Boolean(data.dynamic) };
+}
+
+export async function addHostToGroup(groupId: string, hostId: string): Promise<void> {
+  await api.post(`/api/v1/groups/${groupId}/hosts/${hostId}`);
+}
+
+export async function removeHostFromGroup(groupId: string, hostId: string): Promise<void> {
+  await api.delete(`/api/v1/groups/${groupId}/hosts/${hostId}`);
 }
 
 export type Settings = Record<string, unknown>;

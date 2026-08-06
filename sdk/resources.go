@@ -166,6 +166,20 @@ func (c *Client) DeleteGroup(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/groups/"+url.PathEscape(id), nil, nil, nil)
 }
 
+// ListGroupHosts returns a group's host members and whether its membership is
+// rule-managed (requires Group.Edit). Edit that membership with AddHostToGroup /
+// RemoveHostFromGroup, which are refused on a dynamic group.
+func (c *Client) ListGroupHosts(ctx context.Context, groupID string) (hosts []GroupHost, dynamic bool, err error) {
+	var resp struct {
+		Hosts   []GroupHost `json:"hosts"`
+		Dynamic bool        `json:"dynamic"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/groups/"+url.PathEscape(groupID)+"/hosts", nil, nil, &resp); err != nil {
+		return nil, false, err
+	}
+	return resp.Hosts, resp.Dynamic, nil
+}
+
 // ---- Service accounts & tokens ---------------------------------------------
 
 // ListServiceAccounts returns all service accounts (requires ServiceAccount.Manage).

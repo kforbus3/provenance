@@ -1,18 +1,22 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, FormGroup, IconButton, Paper, Stack, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent,
+  DialogTitle, FormControlLabel, FormGroup, IconButton, Paper, Stack, Table, TableBody,
+  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DnsIcon from "@mui/icons-material/Dns";
 import PeopleIcon from "@mui/icons-material/People";
 import TuneIcon from "@mui/icons-material/Tune";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addUserToGroup, createGroup, deleteGroup, listGroups, listUsers, removeUserFromGroup,
-  updateGroupRule, type Group, type GroupRule,
+  addHostToGroup, addUserToGroup, createGroup, deleteGroup, listGroupHosts, listGroups,
+  listUsers, removeHostFromGroup, removeUserFromGroup, updateGroupRule,
+  type Group, type GroupRule,
 } from "../api/admin";
+import { listHosts } from "../api/hosts";
+import { useAuthStore } from "../store/auth";
 
 const emptyRule: GroupRule = {};
 
@@ -45,6 +49,7 @@ export function GroupsPage() {
   const [newRule, setNewRule] = useState<GroupRule>(emptyRule);
   const [membersGroup, setMembersGroup] = useState<Group | null>(null);
   const [ruleGroup, setRuleGroup] = useState<Group | null>(null);
+  const [hostsGroup, setHostsGroup] = useState<Group | null>(null);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["groups"] });
 
@@ -80,7 +85,8 @@ export function GroupsPage() {
             <TableRow>
               <TableCell>Name</TableCell>
               <TableCell>Description</TableCell>
-              <TableCell>Host membership</TableCell>
+              <TableCell>Membership</TableCell>
+              <TableCell>Hosts</TableCell>
               <TableCell>Users</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -99,22 +105,34 @@ export function GroupsPage() {
                     <Chip size="small" variant="outlined" label="Manual" />
                   )}
                 </TableCell>
+                <TableCell>
+                  <Tooltip title="View host members">
+                    <Chip
+                      size="small" clickable label={g.hostCount ?? 0}
+                      variant={g.hostCount ? "filled" : "outlined"}
+                      onClick={() => setHostsGroup(g)}
+                    />
+                  </Tooltip>
+                </TableCell>
                 <TableCell><Chip size="small" label={memberCount(g)} /></TableCell>
                 <TableCell align="right">
                   <Tooltip title="Membership rule">
-                    <IconButton size="small" onClick={() => setRuleGroup(g)}><TuneIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" aria-label={`Membership rule for ${g.name}`} onClick={() => setRuleGroup(g)}><TuneIcon fontSize="small" /></IconButton>
+                  </Tooltip>
+                  <Tooltip title="Manage hosts">
+                    <IconButton size="small" aria-label={`Manage hosts in ${g.name}`} onClick={() => setHostsGroup(g)}><DnsIcon fontSize="small" /></IconButton>
                   </Tooltip>
                   <Tooltip title="Manage users">
-                    <IconButton size="small" onClick={() => setMembersGroup(g)}><PeopleIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" aria-label={`Manage users in ${g.name}`} onClick={() => setMembersGroup(g)}><PeopleIcon fontSize="small" /></IconButton>
                   </Tooltip>
                   <Tooltip title="Delete">
-                    <IconButton size="small" onClick={() => deleteMut.mutate(g.id)}><DeleteIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" aria-label={`Delete ${g.name}`} onClick={() => deleteMut.mutate(g.id)}><DeleteIcon fontSize="small" /></IconButton>
                   </Tooltip>
                 </TableCell>
               </TableRow>
             ))}
             {!isLoading && groups.length === 0 && (
-              <TableRow><TableCell colSpan={5}>
+              <TableRow><TableCell colSpan={6}>
                 <Typography color="text.secondary">No groups yet.</Typography>
               </TableCell></TableRow>
             )}
@@ -149,6 +167,14 @@ export function GroupsPage() {
         />
       )}
 
+      {hostsGroup && (
+        <GroupHostsDialog
+          group={hostsGroup}
+          onClose={() => setHostsGroup(null)}
+          onChanged={invalidate}
+        />
+      )}
+
       <Dialog open={Boolean(membersGroup)} onClose={() => setMembersGroup(null)} fullWidth maxWidth="xs">
         <DialogTitle>Users — {membersGroup?.name}</DialogTitle>
         <DialogContent dividers>
@@ -174,6 +200,162 @@ export function GroupsPage() {
         <DialogActions><Button onClick={() => setMembersGroup(null)}>Close</Button></DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+// apiError pulls the backend's error string off a failed request.
+function apiError(e: unknown, fallback: string): string {
+  return (e as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback;
+}
+
+// GroupHostsDialog shows which hosts belong to a group and lets an administrator
+// add or remove them without leaving the Groups page. Editing needs Host.Edit
+// (the same gate as the host-side access dialog) and is refused outright on a
+// dynamic group, where the rule owns membership.
+function GroupHostsDialog({ group, onClose, onChanged }: {
+  group: Group;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const qc = useQueryClient();
+  const canEdit = useAuthStore((s) => s.has("Host.Edit"));
+  const [toAdd, setToAdd] = useState<{ id: string; hostname: string } | null>(null);
+  const [error, setError] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["group-hosts", group.id],
+    queryFn: () => listGroupHosts(group.id),
+  });
+  const members = data?.hosts ?? [];
+  const dynamic = data?.dynamic ?? Boolean(group.rule);
+  const editable = canEdit && !dynamic;
+
+  // Candidate hosts for the picker. Only fetched when adding is actually
+  // possible, so a read-only viewer never pulls the whole inventory.
+  const { data: allHosts } = useQuery({
+    queryKey: ["hosts"],
+    queryFn: listHosts,
+    enabled: editable,
+  });
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["group-hosts", group.id] });
+    void qc.invalidateQueries({ queryKey: ["hosts"] });
+    onChanged();
+  };
+
+  const addMut = useMutation({
+    mutationFn: (hostId: string) => addHostToGroup(group.id, hostId),
+    onSuccess: () => { setToAdd(null); setError(""); refresh(); },
+    onError: (e) => setError(apiError(e, "Could not add the host to this group.")),
+  });
+  const removeMut = useMutation({
+    mutationFn: (hostId: string) => removeHostFromGroup(group.id, hostId),
+    onSuccess: () => { setError(""); refresh(); },
+    onError: (e) => setError(apiError(e, "Could not remove the host from this group.")),
+  });
+
+  // Everything not already a member, as {id, hostname} options for the picker.
+  const candidates = useMemo(() => {
+    const inGroup = new Set((data?.hosts ?? []).map((h) => h.id));
+    return (allHosts?.hosts ?? [])
+      .filter((h) => !inGroup.has(h.id))
+      .map((h) => ({ id: h.id, hostname: h.hostname }));
+  }, [allHosts, data]);
+
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="md">
+      <DialogTitle>Hosts — {group.name}</DialogTitle>
+      <DialogContent dividers>
+        {dynamic && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Membership is rule-managed{group.rule ? ` — ${ruleSummary(group.rule)}` : ""}. Hosts
+            join and leave automatically; edit the group's rule to change who is in it.
+          </Alert>
+        )}
+        {!dynamic && !canEdit && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            You can view this group's hosts. Changing membership requires the Host.Edit permission.
+          </Alert>
+        )}
+        {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
+
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Hostname</TableCell>
+                <TableCell>Environment</TableCell>
+                <TableCell>Owner</TableCell>
+                <TableCell>Tags</TableCell>
+                {editable && <TableCell align="right">Remove</TableCell>}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {members.map((h) => (
+                <TableRow key={h.id} hover>
+                  <TableCell>
+                    {h.hostname}
+                    {!h.enrolled && (
+                      <Chip size="small" variant="outlined" label="not enrolled" sx={{ ml: 1 }} />
+                    )}
+                  </TableCell>
+                  <TableCell>{h.environment}</TableCell>
+                  <TableCell>{h.owner}</TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", gap: 0.5 }}>
+                      {(h.tags ?? []).map((t) => <Chip key={t} size="small" label={t} />)}
+                    </Stack>
+                  </TableCell>
+                  {editable && (
+                    <TableCell align="right">
+                      <Tooltip title="Remove from group">
+                        <span>
+                          <IconButton
+                            size="small" color="error" disabled={removeMut.isPending}
+                            aria-label={`Remove ${h.hostname} from ${group.name}`}
+                            onClick={() => removeMut.mutate(h.id)}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+              {!isLoading && members.length === 0 && (
+                <TableRow><TableCell colSpan={editable ? 5 : 4}>
+                  <Typography color="text.secondary">
+                    No hosts in this group{dynamic ? " — no host matches the rule." : " yet."}
+                  </Typography>
+                </TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+
+        {editable && (
+          <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+            <Autocomplete
+              size="small" sx={{ minWidth: 320 }} value={toAdd} options={candidates}
+              getOptionLabel={(o) => o.hostname}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              onChange={(_, v) => setToAdd(v)}
+              noOptionsText="Every host is already a member"
+              renderInput={(params) => <TextField {...params} label="Add host" />}
+            />
+            <Button
+              variant="outlined" disabled={!toAdd || addMut.isPending}
+              onClick={() => toAdd && addMut.mutate(toAdd.id)}
+            >
+              Add
+            </Button>
+          </Stack>
+        )}
+      </DialogContent>
+      <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
+    </Dialog>
   );
 }
 

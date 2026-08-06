@@ -163,7 +163,7 @@ func cmdHosts(ctx context.Context, args []string) error {
 
 func cmdGroups(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("groups: expected a subcommand (list|create|delete)")
+		return errors.New("groups: expected a subcommand (list|hosts|create|delete)")
 	}
 	c, err := client()
 	if err != nil {
@@ -226,6 +226,28 @@ func cmdGroups(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("created %s group %s (%s)\n", typ, g.Name, g.ID)
 		return nil
+	case "hosts":
+		if len(rest) == 0 {
+			return errors.New("groups hosts: <groupId> required")
+		}
+		j, _ := hasJSON(rest[1:])
+		hosts, dynamic, err := c.ListGroupHosts(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		if j {
+			return printJSON(hosts)
+		}
+		if dynamic {
+			fmt.Println("membership is rule-managed; edit the group's rule to change it")
+		}
+		tw := newTable()
+		fmt.Fprintln(tw, "ID\tHOSTNAME\tENVIRONMENT\tOWNER\tTAGS")
+		for _, h := range hosts {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", h.ID, h.Hostname, dash(h.Environment),
+				dash(h.Owner), dash(strings.Join(h.Tags, ",")))
+		}
+		return tw.Flush()
 	case "delete":
 		if len(rest) == 0 {
 			return errors.New("groups delete: <id> required")

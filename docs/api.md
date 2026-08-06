@@ -292,9 +292,21 @@ no-install flow uses `GET …/enroll/script` (pipe through your own ssh) then
 | POST | `/api/v1/groups` | `Group.Create` |
 | PUT | `/api/v1/groups/{id}` | `Group.Edit` |
 | DELETE | `/api/v1/groups/{id}` | `Group.Delete` |
+| GET | `/api/v1/groups/{id}/hosts` | `Group.Edit` |
+| POST | `/api/v1/groups/{id}/hosts/{hostId}` | `Host.Edit` |
+| DELETE | `/api/v1/groups/{id}/hosts/{hostId}` | `Host.Edit` |
 
 **`POST /groups`** → `{ "name": "web-team", "description": "Owns the web tier" }`.
 Optionally accepts a `rule` to create a **dynamic group** (see below).
+
+**`GET /groups`** annotates each group with `hostCount`.
+
+**`GET /groups/{id}/hosts`** → `{ "hosts": [ … ], "count": 2, "dynamic": false }` —
+the group's host members with identity fields only (`id`, `hostname`,
+`description`, `environment`, `owner`, `tags`, `enrolled`); connection details stay
+behind the host module. **`POST`/`DELETE /groups/{id}/hosts/{hostId}`** edit that
+membership; they require `Host.Edit` (the same gate as the equivalent
+`/hosts/{id}/groups/{groupId}` routes) and return `409` on a rule-managed group.
 
 **Dynamic host groups** — a group may carry a `rule` over stable host attributes;
 matching hosts join automatically (materialized into `host_groups`, recomputed on

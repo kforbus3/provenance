@@ -5,6 +5,31 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+- **Host membership, from the group's side.** The Groups page could say whether a
+  group was manual or dynamic, but not which hosts were actually in it — the only
+  way to find out was to open each host's **Manage access** dialog in turn and read
+  the answer backwards. Every group row now carries a **host count**, and **Manage
+  hosts** lists the members (hostname, environment, owner, tags, enrollment) with
+  add and remove in place.
+
+  New endpoints: `GET /api/v1/groups/{id}/hosts` (`Group.Edit`), and
+  `POST`/`DELETE /api/v1/groups/{id}/hosts/{hostId}` (`Host.Edit`). The mutations
+  carry the same `Host.Edit` gate as the existing
+  `/hosts/{id}/groups/{groupId}` routes, so neither direction is a cheaper way to
+  change host access, and they return `409` on a rule-managed group exactly as the
+  host-side routes do. Viewing needs only `Group.Edit`, so the listing returns
+  identity fields — no addresses, overlay, or credential references.
+
+  On a dynamic group the same dialog shows what the rule matched, read-only:
+  checking a rule no longer means guessing from the host list.
+
+  `GET /api/v1/groups` now includes `hostCount` per group. `fleet groups hosts
+  <groupId>` and `Client.ListGroupHosts` cover the same ground from the CLI and SDK.
+
+---
+
 ## v1.1.0 — Bills of materials, from data the scanner was already throwing away
 
 - **Software bills of materials for every scanned host.** The vulnerability

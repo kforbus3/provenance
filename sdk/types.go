@@ -84,6 +84,21 @@ type Group struct {
 	Description string     `json:"description"`
 	Rule        *GroupRule `json:"rule,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
+	// HostCount is the number of host members. Only the group listing computes it;
+	// nil means "not reported" rather than zero.
+	HostCount *int `json:"hostCount,omitempty"`
+}
+
+// GroupHost is a host member of a group: identity fields only. Use ListHosts for
+// full host records including connection details.
+type GroupHost struct {
+	ID          string   `json:"id"`
+	Hostname    string   `json:"hostname"`
+	Description string   `json:"description"`
+	Environment string   `json:"environment"`
+	Owner       string   `json:"owner"`
+	Tags        []string `json:"tags"`
+	Enrolled    bool     `json:"enrolled"`
 }
 
 // GroupInput is the create/update payload for a group.
