@@ -565,6 +565,37 @@ func (s *Service) validateCertLogin(ctx context.Context, hostID uuid.UUID, wgIP,
 	return "", fmt.Errorf("certificate login not reachable yet")
 }
 
+// hostAllowedIPs is what a managed host's tunnel config carries as AllowedIPs for
+// its single peer, the jump host. In WireGuard that one value does two jobs: it is
+// the set of destinations the host routes INTO the tunnel, and the only set of
+// source addresses it will ACCEPT back out of it.
+//
+// With peer isolation on it is the jump host alone (a /32), which makes the host
+// end of the overlay hub-and-spoke in its own right: the host cannot address a
+// sibling, and — the part that matters — it drops a decrypted packet claiming to
+// come from one. The jump host's forwarding deny already stops sibling traffic,
+// but that rule lives on a machine whose iptables Fleet does not always control,
+// and it fails open with a warning. This end does not depend on it.
+//
+// With isolation off it is the whole overlay subnet, the historical value, and
+// hosts can reach each other exactly as before.
+//
+// Already-enrolled hosts keep whatever they were given until they are re-enrolled
+// (or narrowed in place — see the security guide); a fleet mid-migration is a
+// mix, and the two settings interoperate fine.
+func (s *Service) hostAllowedIPs() string {
+	if !s.cfg.OverlayPeerIsolation {
+		return s.cfg.WGSubnet
+	}
+	// A jump IP that isn't a plain address would produce a config that WireGuard
+	// refuses to parse, taking the tunnel down entirely — much worse than the wide
+	// AllowedIPs this falls back to, which the hub-side deny still covers.
+	if net.ParseIP(strings.TrimSpace(s.cfg.WGJumpIP)) == nil {
+		return s.cfg.WGSubnet
+	}
+	return strings.TrimSpace(s.cfg.WGJumpIP) + "/32"
+}
+
 // hostWGScript renders the script that configures and STARTS WireGuard on the
 // managed host. It writes a wg-quick config and brings the interface up with
 // wg-quick (kernel module, with a userspace wireguard-go fallback), enables it
@@ -573,11 +604,15 @@ func (s *Service) validateCertLogin(ctx context.Context, hostID uuid.UUID, wgIP,
 func (s *Service) hostWGScript(wgIP, jumpPub, jumpEndpoint string) string {
 	iface := s.cfg.WGInterface
 	core := fmt.Sprintf(`set -e
-IF=%s; IP=%s; SUBNET=%s; JPUB='%s'; JEP=%s; PORT=%d
+IF=%s; IP=%s; ALLOWED=%s; JPUB='%s'; JEP=%s; PORT=%d
 mkdir -p /etc/wireguard; umask 077
 [ -f /etc/wireguard/$IF.key ] || wg genkey > /etc/wireguard/$IF.key
 PRIV=$(cat /etc/wireguard/$IF.key)
 PUB=$(printf '%%s' "$PRIV" | wg pubkey)
+# The interface address keeps its /24: the connected route it creates is harmless
+# (WireGuard drops a packet for an address no peer claims), and narrowing it would
+# change source-address selection on the host for no security gain. AllowedIPs is
+# what decides reachability, in both directions.
 cat > /etc/wireguard/$IF.conf <<EOF
 [Interface]
 Address = $IP/24
@@ -586,7 +621,7 @@ ListenPort = $PORT
 [Peer]
 PublicKey = $JPUB
 Endpoint = $JEP
-AllowedIPs = $SUBNET
+AllowedIPs = $ALLOWED
 PersistentKeepalive = 25
 EOF
 chmod 600 /etc/wireguard/$IF.conf
@@ -610,7 +645,7 @@ if [ "$UP" != yes ]; then
   fi
   ip link show $IF >/dev/null 2>&1 || { echo "ERROR no wireguard interface available"; exit 1; }
   printf '%%s' "$PRIV" | wg set $IF private-key /dev/stdin listen-port $PORT
-  wg set $IF peer "$JPUB" endpoint "$JEP" allowed-ips $SUBNET persistent-keepalive 25
+  wg set $IF peer "$JPUB" endpoint "$JEP" allowed-ips $ALLOWED persistent-keepalive 25
   ip address add $IP/24 dev $IF 2>/dev/null || true
   ip link set $IF up
 fi
@@ -623,7 +658,7 @@ WGADDR=$(ip -br addr show $IF 2>/dev/null | awk '{print $3}')
 echo "WGSTATE=$WGSTATE"
 echo "WGADDR=$WGADDR"
 echo "HOSTPUB=$PUB"`,
-		iface, wgIP, s.cfg.WGSubnet, jumpPub, jumpEndpoint, s.cfg.WGPort)
+		iface, wgIP, s.hostAllowedIPs(), jumpPub, jumpEndpoint, s.cfg.WGPort)
 	return core + "\n" + s.wgPersistScript(iface)
 }
 
