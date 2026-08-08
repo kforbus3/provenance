@@ -95,7 +95,8 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // enrollScript returns the host bootstrap script for the no-install flow as
-// text/plain, so it can be piped straight into `ssh user@host sudo bash`.
+// text/plain, so the operator can pipe it onto the host over their own ssh and
+// run it there with `sudo` (see EnrollScript for the exact two-connection form).
 func (h *handler) enrollScript(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))

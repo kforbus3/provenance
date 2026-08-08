@@ -84,4 +84,20 @@ describe("EnrollCredsDialog bootstrap commands", () => {
     expect(cmd).toContain("Bearer eyJ-session-token");
     expect(cmd).not.toContain("<YOUR_TOKEN>");
   });
+
+  it("runs the no-install script over a TTY so sudo can prompt for a password", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /No install/ }));
+    fireEvent.change(screen.getByLabelText(/Your SSH target/), {
+      target: { value: "opsadmin@web-01" },
+    });
+
+    const cmd = screen.getByText(/curl -fsSL/).textContent ?? "";
+    // Piping the script into sudo's stdin with no terminal is what produced
+    // "sudo: a terminal is required to read the password" on hosts without
+    // NOPASSWD, so the script must land first and run over a second `ssh -t`.
+    expect(cmd).not.toMatch(/\|\s*ssh \S+ sudo/);
+    expect(cmd).toContain("| ssh opsadmin@web-01 'cat > ~/fleet-enroll.sh'");
+    expect(cmd).toContain("&& ssh -t opsadmin@web-01 'sudo sh ~/fleet-enroll.sh");
+  });
 });

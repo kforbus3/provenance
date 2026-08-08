@@ -1612,10 +1612,17 @@ export function EnrollCredsDialog({
   const scriptUrl =
     `${window.location.origin}/api/v1/hosts/${host?.id ?? "<host-id>"}/enroll/script` +
     (wgEndpoint ? `?wgEndpoint=${encodeURIComponent(wgEndpoint)}` : "");
+  // Land the script on the host first, then run it over a SECOND ssh with a TTY
+  // (-t). Piping straight into `ssh host sudo sh` gives sudo the script on stdin
+  // and no terminal, so any host whose sudo asks for a password dies with
+  // "sudo: a terminal is required to read the password". The split costs one
+  // extra connection and works whether or not sudo prompts. The script is
+  // written to the login user's home, not /tmp — no symlink race on a shared host.
   const pipeCommand =
     `curl -fsSL -H "Authorization: Bearer ${token ?? "<YOUR_TOKEN>"}" \\\n` +
     `  "${scriptUrl}" \\\n` +
-    `  | ssh ${sshTarget || "<user@host>"} sudo bash`;
+    `  | ssh ${sshTarget || "<user@host>"} 'cat > ~/fleet-enroll.sh' \\\n` +
+    `  && ssh -t ${sshTarget || "<user@host>"} 'sudo sh ~/fleet-enroll.sh; rm -f ~/fleet-enroll.sh'`;
   // SSH-agent bridge command, filled in so it's copy-paste runnable. The bridge
   // authenticates the WebSocket with the live *session* token — a flt_
   // service-account token can't open that socket (it isn't a JWT).
@@ -1784,8 +1791,9 @@ export function EnrollCredsDialog({
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary">
               Nothing to install. <b>Step 1:</b> run this in your terminal — it
-              fetches a bootstrap script and pipes it through <i>your own</i> ssh.
-              Your key never leaves your machine.
+              fetches a bootstrap script and sends it over <i>your own</i> ssh,
+              then runs it on a second connection with a terminal so sudo can
+              prompt for your password. Your key never leaves your machine.
             </Typography>
             <TextField
               label="Your SSH target (user@host)" value={sshTarget}
