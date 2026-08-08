@@ -5,7 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.3.0 — The overlay is a management network, not a flat one — 2026-08-08
+
+**Deploy note.** Peer isolation is on by default and takes effect on upgrade. Read
+the second entry before installing if anything outside Fleet relies on managed
+hosts reaching each other over the overlay — `FLEET_OVERLAY_PEER_ISOLATION=0`
+preserves the old behaviour. Two further notes for existing deployments:
+
+- The jump-host half lives in the **jump-host image**, which upgrade bundles do
+  not manage (recreating it drops the overlay). It lands the next time the jump
+  host is deliberately rebuilt; until then the host-side half carries the
+  isolation on its own.
+- The host-side half reaches hosts **enrolled after** the upgrade. Existing hosts
+  keep their wider `AllowedIPs` and go on working; narrow them with
+  `deploy/playbooks/overlay-peer-isolation.yml` (no tunnel downtime) or by
+  re-enrolling.
 
 - **Peer isolation is now enforced at the host end too.** The jump host's
   forwarding deny (below) is one machine's `iptables` — and it fails open with a
@@ -54,6 +68,10 @@ schema migrations apply automatically on startup; deploy notes call out anything
   A jump host with no usable `iptables` backend logs the failure and keeps serving
   rather than refusing to start — confirm with `overlay peer isolation ON` in the
   jump host's log.
+
+- **Housekeeping.** Dropped a stale `react-router` advisory exception from the
+  frontend audit allowlist; the advisory is no longer reported and the entry had
+  become the kind of unaccounted-for noise that file exists to prevent.
 
 ---
 
