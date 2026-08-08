@@ -36,6 +36,9 @@ services:
       WG_INTERFACE: ${FLEET_WG_INTERFACE:-wg0}
       WG_PORT: ${FLEET_WG_PORT:-51820}
       WG_ADDRESS: ${FLEET_WG_JUMP_IP:-10.100.0.1}/24
+      # Strict hub-and-spoke: the jump host will not forward overlay traffic
+      # between two managed hosts. On by default; see .env.example.
+      FLEET_OVERLAY_PEER_ISOLATION: ${FLEET_OVERLAY_PEER_ISOLATION:-1}
     ports:
       # Public WireGuard ingress: managed hosts dial this (UDP). Match the host
       # part of FLEET_WG_JUMP_ENDPOINT and open it on the firewall.

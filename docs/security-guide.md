@@ -187,9 +187,33 @@ and operational recommendations.
 
 ## 9. Network isolation
 
-- Managed hosts are reachable only through the **jump host** and a **WireGuard**
-  tunnel mesh. The only inbound surface a managed host needs is the WireGuard
-  endpoint; SSH is not exposed publicly.
+- Managed hosts are reachable only through the **jump host** over a **WireGuard**
+  overlay (OpenVPN in FIPS mode). The only inbound surface a managed host needs is
+  the overlay endpoint; SSH is not exposed publicly.
+- **Peer isolation** (`FLEET_OVERLAY_PEER_ISOLATION`, on by default) makes that
+  overlay strict **hub-and-spoke, not a mesh**: the jump host refuses to forward
+  overlay traffic between two managed hosts, so each host can reach the jump host
+  and nothing else. Without it, a single compromised host has direct L3 reach to
+  every other host's SSH/RDP/WinRM port — an unbrokered, unaudited path around
+  every other control in this document, and the natural route for lateral
+  movement. It also keeps one tenant's or environment's hosts off another's at the
+  network layer, behind the row-level separation multi-tenancy enforces in the
+  database.
+  - Nothing in Fleet needs host-to-host reachability: terminal sessions, SFTP, the
+    health monitor, Ansible playbook runs (via `ProxyJump`), and the database and
+    Kubernetes brokers all dial **from** the jump host, so none of them is a
+    forwarded flow. Turn it off only for a deployment that genuinely needs managed
+    hosts to talk to each other over the overlay.
+  - Enforcement is a forwarding deny on the jump host, applied when the WireGuard
+    hub comes up and when the OpenVPN server is provisioned. A jump host with no
+    usable `iptables` backend logs the failure and keeps running — check for
+    `overlay peer isolation ON` in the jump host's log, or
+    `iptables -L FORWARD -v -n` for the rule and its drop counters.
+- Note that a managed host's own config carries `AllowedIPs = <overlay subnet>`,
+  so it will still *route* sibling traffic into the tunnel; the hub is what drops
+  it. The reverse direction is closed at both ends — each peer on the hub is
+  pinned to a single `/32`, so a host cannot forge another host's overlay source
+  address.
 - Host SSH host keys are pinned (`host_fingerprints`, `SHA256:…`) to detect MITM.
 
 ## 10. Secrets & configuration
@@ -360,5 +384,7 @@ control channel:
 - [ ] Service-account API tokens scoped tightly, given a bounded expiry, and rotated.
 - [ ] CA public key distributed; rotation and revocation procedures rehearsed.
 - [ ] Managed hosts reachable only via jump host + WireGuard.
+- [ ] Overlay peer isolation left on (`FLEET_OVERLAY_PEER_ISOLATION=1`); confirmed
+      with `overlay peer isolation ON` in the jump host's log.
 - [ ] `FLEET_HOST_SCOPED_ONLY=true`, then re-enroll each managed host (not the jump host).
 - [ ] Database and recordings backed up and restore-tested.

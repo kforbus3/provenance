@@ -13,26 +13,33 @@ func (o *OpenVPN) Name() string { return "openvpn" }
 
 // EnsureServer implements Overlay: provision + (idempotently) start the OpenVPN server
 // on the jump host, ensuring the overlay CA exists first.
-func (o *OpenVPN) EnsureServer(ctx context.Context, jumpRun RunFunc) error {
+func (o *OpenVPN) EnsureServer(ctx context.Context, jumpRun RunFunc) (string, error) {
 	if err := o.pki.EnsureCA(ctx); err != nil {
-		return fmt.Errorf("overlay PKI: %w", err)
+		return "", fmt.Errorf("overlay PKI: %w", err)
 	}
 	caPEM, srvCert, srvKey, err := o.EnsureJumpMaterial(ctx)
 	if err != nil {
-		return fmt.Errorf("issue jump server certificate: %w", err)
+		return "", fmt.Errorf("issue jump server certificate: %w", err)
 	}
 	srvConf, err := o.ServerConfig()
 	if err != nil {
-		return fmt.Errorf("build server config: %w", err)
+		return "", fmt.Errorf("build server config: %w", err)
 	}
 	out, err := jumpRun(o.JumpServerScript(caPEM, srvCert, srvKey, srvConf))
 	if err != nil {
-		return fmt.Errorf("start jump OpenVPN server: %v: %s", err, oneLine(out))
+		return "", fmt.Errorf("start jump OpenVPN server: %v: %s", err, oneLine(out))
 	}
 	if strings.Contains(out, "OVPN_SERVER_START_FAILED") {
-		return fmt.Errorf("jump OpenVPN server failed to start: %s", oneLine(out))
+		return "", fmt.Errorf("jump OpenVPN server failed to start: %s", oneLine(out))
 	}
-	return nil
+	detail := "openvpn server ready on jump host"
+	// Peer isolation is deliberately non-fatal (a jump host with no usable iptables
+	// still serves the overlay), so say so plainly rather than letting a security
+	// control fail into silence.
+	if strings.Contains(out, "OVPN_PEER_ISOLATION_FAILED") {
+		detail += " — WARNING: could not apply overlay peer isolation on the jump host; managed hosts can reach each other over the overlay"
+	}
+	return detail, nil
 }
 
 // ProvisionHost implements Overlay: issue the host client cert, pin its overlay IP on

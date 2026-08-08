@@ -188,13 +188,53 @@ cat > %[1]s/server.key <<'FLEOF'
 %[4]sFLEOF
 cat > %[1]s/server.conf <<'FLEOF'
 %[5]sFLEOF
-if pgrep -f 'openvpn .*%[1]s/server.conf' >/dev/null 2>&1; then
+%[6]sif pgrep -f 'openvpn .*%[1]s/server.conf' >/dev/null 2>&1; then
   echo OVPN_SERVER_ALREADY_RUNNING
 else
   openvpn --config %[1]s/server.conf --daemon fleet-overlay --writepid /run/fleet-ovpn.pid
   sleep 1
   pgrep -f 'openvpn .*%[1]s/server.conf' >/dev/null 2>&1 && echo OVPN_SERVER_STARTED || echo OVPN_SERVER_START_FAILED
-fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), serverConf)
+fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), serverConf, o.peerIsolationScript())
+}
+
+// peerIsolationScript renders the fragment of JumpServerScript that keeps the
+// OpenVPN overlay strict hub-and-spoke, or "" when isolation is turned off.
+//
+// OpenVPN's own `client-to-client` is already unset (the default), but that alone
+// does NOT isolate clients under `topology subnet`: a packet from one client for
+// another arrives on the server's tun, the kernel routes it straight back out the
+// same tun (ip_forward is on so the jump host can route), and OpenVPN then hands
+// it to the destination client. So the isolation has to be a forwarding rule, the
+// same as for the WireGuard hub in deploy/testfabric/jumphost/entrypoint.sh.
+//
+// The rule matches on the overlay subnet rather than the interface, because
+// OpenVPN picks its tun device number at runtime — the subnet is the one thing
+// known here. Nothing Fleet does is affected: every connection it makes to a
+// managed host is dialed FROM the jump host, so it leaves via OUTPUT and is not
+// a forwarded flow.
+//
+// Idempotent (-C before -I) so re-enrollment cannot stack duplicate rules, and
+// non-fatal under `set -e` so a jump host with no usable iptables still gets its
+// OpenVPN server — it just reports the isolation it could not apply.
+func (o *OpenVPN) peerIsolationScript() string {
+	if !o.cfg.OverlayPeerIsolation {
+		return ""
+	}
+	// Re-parse rather than interpolating the configured string: this value is going
+	// into a shell command line, and ParseCIDR's normalized form is the only shape
+	// that can come out. An unparseable subnet fails ServerConfig anyway, so
+	// provisioning never reaches here with one.
+	_, ipnet, err := net.ParseCIDR(o.cfg.WGSubnet)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(`if iptables -C FORWARD -s %[1]s -d %[1]s -j DROP >/dev/null 2>&1 \
+   || iptables -I FORWARD 1 -s %[1]s -d %[1]s -j DROP >/dev/null 2>&1; then
+  echo OVPN_PEER_ISOLATION_OK
+else
+  echo OVPN_PEER_ISOLATION_FAILED
+fi
+`, ipnet.String())
 }
 
 // JumpCCDScript pins a host's overlay address on the jump server by writing its ccd

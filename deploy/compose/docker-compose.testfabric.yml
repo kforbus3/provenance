@@ -28,6 +28,9 @@ services:
       context: ../testfabric/jumphost
       dockerfile: Dockerfile
     hostname: jumphost
+    environment:
+      # Match production: managed hosts cannot reach each other over the overlay.
+      FLEET_OVERLAY_PEER_ISOLATION: ${FLEET_OVERLAY_PEER_ISOLATION:-1}
     # Userspace WireGuard needs to manage the tun interface.
     cap_add:
       - NET_ADMIN
