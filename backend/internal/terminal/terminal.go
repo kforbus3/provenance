@@ -229,8 +229,18 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 		if err == nil {
 			err = fmt.Errorf("no reachable address for host")
 		}
+		// Report what actually failed. This used to assert "WireGuard is down"
+		// whenever strict overlay mode was on, without checking the tunnel and
+		// while discarding err — so an SSH-layer failure (a rebuilt host's changed
+		// host key, a rejected certificate) sent operators to debug a healthy
+		// tunnel. Strict mode is context for WHICH address was tried, not a
+		// diagnosis of why it failed.
 		if strictWG && host.WGAddress != "" {
-			sendErr("WireGuard is down for this host and strict overlay mode is enabled, so the connection was refused rather than falling back to the direct network. Restore the host's WireGuard tunnel, or disable strict overlay mode in Settings.")
+			sendErr(fmt.Sprintf(
+				"connection failed over the WireGuard address %s: %s — strict overlay mode is enabled, "+
+					"so the host's direct address was not tried. If the overlay tunnel is healthy, this is "+
+					"the host itself refusing the connection; check the host's status detail for the last error.",
+				host.WGAddress, err.Error()))
 			return
 		}
 		sendErr("connection failed: " + err.Error())

@@ -28,6 +28,7 @@ import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
   getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
   removeHostGroup, removeHostUser, updateHost, setHostMaintenance, clearHostMaintenance, maintenanceActive,
+  clearHostKeyPins, hostKeyMismatch,
   bulkRefreshHosts, bulkHostMaintenance, bulkHostTags,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
@@ -1281,7 +1282,7 @@ function ScanReportViewer({ scanId, token, onClose }: { scanId: string | null; t
 // memory) plus live status. It fetches the single host on demand — so the list
 // payload stays light at scale — and seeds from the row for an instant render,
 // then refreshes to the latest monitor-collected values.
-function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () => void }) {
+export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () => void }) {
   const { data } = useQuery({
     queryKey: ["host", host?.id],
     queryFn: () => getHost(host!.id),
@@ -1312,6 +1313,17 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["host", host?.id] }); qc.invalidateQueries({ queryKey: ["hosts"] }); },
   });
   const inMaint = h ? maintenanceActive(h) : false;
+  // A rebuilt host presents a new SSH host key, which the gateway refuses against
+  // the pin it recorded on first contact. Clearing the pin is the documented
+  // remedy, so offer it right where the error is shown.
+  const keyMismatch = hostKeyMismatch(st?.lastError);
+  const clearPins = useMutation({
+    mutationFn: () => clearHostKeyPins(host!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["host", host?.id] });
+      qc.invalidateQueries({ queryKey: ["hosts"] });
+    },
+  });
   return (
     <Dialog open={Boolean(host)} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>
@@ -1369,6 +1381,43 @@ function HostDetailsDialog({ host, onClose }: { host: Host | null; onClose: () =
           ...(isRDP ? [] : [["WireGuard", st ? (st.wgOk ? "healthy" : "—") : ""] as [string, string | undefined]]),
           ["Last checked", st?.checkedAt ? fmtDate(st.checkedAt) : ""],
         ]} />
+        {/* Why a host is offline was recorded all along but never shown, so the UI
+            said "offline" and nothing else. A host-key mismatch — what a rebuilt
+            host looks like — additionally gets its one-click remedy here. */}
+        {st?.lastError && st.status !== "online" && (
+          <Alert
+            severity={keyMismatch ? "warning" : "error"}
+            sx={{ mt: 1 }}
+            action={keyMismatch ? (
+              <Button
+                color="inherit" size="small"
+                disabled={clearPins.isPending}
+                onClick={() => clearPins.mutate()}
+              >
+                {clearPins.isPending ? "Clearing…" : "Trust new key"}
+              </Button>
+            ) : undefined}
+          >
+            <Typography variant="body2" sx={{ wordBreak: "break-word" }}>{st.lastError}</Typography>
+            {keyMismatch && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                Expected after a legitimate rebuild. Clearing the pin re-trusts whatever key the
+                host presents on the next connection — confirm it's really your host first
+                (<code>ssh-keyscan {h?.hostname} | ssh-keygen -lf -</code>).
+              </Typography>
+            )}
+            {clearPins.isSuccess && (
+              <Typography variant="caption" color="success.main" sx={{ display: "block", mt: 0.5 }}>
+                Cleared {clearPins.data} pin{clearPins.data === 1 ? "" : "s"} — the next check re-pins the host.
+              </Typography>
+            )}
+            {clearPins.isError && (
+              <Typography variant="caption" color="error.main" sx={{ display: "block", mt: 0.5 }}>
+                Could not clear the pin: {(clearPins.error as Error).message}
+              </Typography>
+            )}
+          </Alert>
+        )}
         {met && (
           <>
             <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>Resources</Typography>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -101,6 +102,46 @@ func (v *hostKeyVerifier) compare(id, pinned, presented string, key ssh.PublicKe
 			"host", id, "keyType", key.Type())
 	}
 	return fmt.Errorf("host key for %s does not match the pinned key (possible MITM, or the host was rebuilt — remove its pin to re-trust)", id)
+}
+
+// HostKeyID is the identity a host is pinned under: the dialed address,
+// normalized the way the verifier normalizes it. A host is reachable by several
+// addresses (overlay IP, management address, hostname) and each is pinned
+// separately, so clearing a host's trust means clearing every identity it can be
+// dialed as — miss one and the next dial still refuses on the stale pin.
+func HostKeyID(addr string, port int) string {
+	return knownhosts.Normalize(net.JoinHostPort(addr, strconv.Itoa(port)))
+}
+
+// PinFingerprint renders a stored pin's key line as the SHA256 fingerprint ssh
+// itself prints, so an operator can compare it against `ssh-keyscan | ssh-keygen
+// -lf -` on the host. Returns "" for a line that no longer parses.
+func PinFingerprint(keyLine string) string {
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyLine))
+	if err != nil {
+		return ""
+	}
+	return ssh.FingerprintSHA256(key)
+}
+
+// ForgetHostKeys drops the given identities from the in-memory pin cache. The
+// database row alone is not enough: a pin is cached per process on first use, so
+// a running backend keeps enforcing a deleted pin until it restarts. Callers that
+// delete pins MUST call this, or "trust the new key" appears to do nothing.
+func (v *hostKeyVerifier) ForgetHostKeys(ids ...string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, id := range ids {
+		delete(v.seen, id)
+	}
+}
+
+// ForgetHostKeys drops cached pins for the given identities (see the verifier's
+// method). Safe to call on a gateway whose verification is disabled.
+func (g *Gateway) ForgetHostKeys(ids ...string) {
+	if g.hostKeys != nil {
+		g.hostKeys.ForgetHostKeys(ids...)
+	}
 }
 
 // hostKeyCallback is used for every gateway dial. Verification is on by default;

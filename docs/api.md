@@ -211,6 +211,22 @@ Inventory CRUD. The list endpoint shows all hosts to holders of `Host.Enroll` /
 | GET | `/api/v1/hosts/{id}/enroll/script` | `Host.Enroll` |
 | POST | `/api/v1/hosts/{id}/enroll/finish` | `Host.Enroll` |
 | GET (WS) | `/api/v1/hosts/{id}/enroll/agent` | `Host.Enroll` (token) |
+| GET | `/api/v1/hosts/{id}/host-key` | `Host.View` |
+| DELETE | `/api/v1/hosts/{id}/host-key` | `Host.Enroll` |
+
+**`GET /hosts/{id}/host-key`** → the SSH host-key pins held for this host, one per
+address it is dialed as:
+```json
+{ "pins": [ { "host": "10.100.0.26", "keyType": "ecdsa-sha2-nistp256",
+             "source": "tofu", "fingerprint": "SHA256:…" } ] }
+```
+
+**`DELETE /hosts/{id}/host-key`** (`Host.Enroll`) → `{ "cleared": 2, "identities": [ … ] }`.
+Clears the pin for **every** identity the host can be dialed as (overlay address,
+management address, hostname) and drops the gateway's in-process pin cache, so the
+next connection re-pins the key the host now presents. This is the remedy after a
+legitimate rebuild — it re-opens the trust-on-first-use window for that host, and is
+audited as `host.host_key_cleared` with the fingerprints that were dropped.
 
 **Enrollment methods** — `POST /hosts/{id}/enroll` body selects `method`:
 `"password"` (`+ bootstrapUser, password`), `"key"` (`+ privateKey, keyPassphrase`),

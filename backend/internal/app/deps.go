@@ -49,6 +49,12 @@ type Deps struct {
 	// hosts immediately (set by the server). Returns the number of hosts updated.
 	DistributeKRL func(ctx context.Context) (int, error)
 
+	// ForgetHostKeys drops cached SSH host-key pins for the given dial identities
+	// (set by the server; nil in tests). Deleting the ssh_host_keys rows is not
+	// enough on its own — the gateway caches each pin per process, so a running
+	// backend keeps refusing the new key until this clears the cache too.
+	ForgetHostKeys func(ids ...string)
+
 	// CleanupJumpPeer removes a deleted host's WireGuard peer (kernel entry +
 	// persisted fragment) from the jump host (set by the server; nil in tests).
 	// Best-effort: deletion succeeds even when the jump host is unreachable —

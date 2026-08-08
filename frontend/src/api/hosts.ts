@@ -212,6 +212,33 @@ export async function clearHostMaintenance(id: string): Promise<void> {
   await api.delete(`/api/v1/hosts/${id}/maintenance`);
 }
 
+// SSH host-key pins. A host is pinned per address it is dialed as (overlay IP,
+// management address, hostname), so a rebuilt host holds several stale pins.
+export interface HostKeyPin {
+  host: string;
+  keyType: string;
+  source: string; // "tofu" | "pinned"
+  fingerprint: string;
+}
+
+export async function getHostKeyPins(id: string): Promise<HostKeyPin[]> {
+  const { data } = await api.get<{ pins: HostKeyPin[] }>(`/api/v1/hosts/${id}/host-key`);
+  return data.pins ?? [];
+}
+
+// clearHostKeyPins drops every pin for a host so the next connection re-pins the
+// key it now presents — the remedy after a legitimate rebuild.
+export async function clearHostKeyPins(id: string): Promise<number> {
+  const { data } = await api.delete<{ cleared: number }>(`/api/v1/hosts/${id}/host-key`);
+  return data.cleared;
+}
+
+// hostKeyMismatch reports whether a host's last probe failed on a host-key pin
+// mismatch — the one offline cause with a specific, one-click remedy.
+export function hostKeyMismatch(lastError?: string): boolean {
+  return !!lastError && /does not match the pinned key/i.test(lastError);
+}
+
 // maintenanceActive reports whether a host is currently in a maintenance window.
 export function maintenanceActive(h: { maintenanceUntil?: string }): boolean {
   return !!h.maintenanceUntil && new Date(h.maintenanceUntil).getTime() > Date.now();
