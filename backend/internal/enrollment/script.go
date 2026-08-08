@@ -16,10 +16,17 @@ import (
 )
 
 // EnrollScript generates a self-contained bootstrap script for the no-install
-// flow. The operator pipes it through their OWN ssh:
+// flow. The operator sends it over their OWN ssh, then runs it on a second
+// connection that has a TTY so sudo can prompt:
 //
 //	curl -H 'Authorization: Bearer <token>' \
-//	  https://fleet/api/v1/hosts/<id>/enroll/script | ssh user@host sudo bash
+//	  https://fleet/api/v1/hosts/<id>/enroll/script \
+//	  | ssh user@host 'cat > ~/fleet-enroll.sh' \
+//	  && ssh -t user@host 'sudo sh ~/fleet-enroll.sh; rm -f ~/fleet-enroll.sh'
+//
+// Piping straight into `ssh user@host sudo sh` occupies stdin with the script
+// and allocates no terminal, so sudo can't read a password ("a terminal is
+// required") on any host without NOPASSWD.
 //
 // The script installs the Fleet CA trust + WireGuard on the host and prints the
 // host's WireGuard public key, which the operator pastes back into the UI
@@ -381,9 +388,9 @@ F=$(mktemp)
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Fleet Terminal — host bootstrap (no-install enrollment).\n")
-	b.WriteString("# Run as root, e.g.:  curl ... | ssh USER@HOST sudo bash\n")
+	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/fleet-enroll.sh'\n")
 	b.WriteString("set -e\n")
-	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (pipe through: ssh USER@HOST sudo bash)'; exit 1; fi` + "\n\n")
+	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (run: ssh -t USER@HOST "sudo sh ~/fleet-enroll.sh")'; exit 1; fi` + "\n\n")
 
 	b.WriteString(phase("1/4", "installing SSH certificate trust",
 		s.caTrustScript(loginUser, caKeys, hostID), "CA_OK", "CA trust") + "\n")

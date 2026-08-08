@@ -89,8 +89,15 @@ back into the Finish step:
 
 ```sh
 curl -fsSL -H "Authorization: Bearer $TOKEN" \
-  "https://fleet.example.com/api/v1/hosts/<id>/enroll/script" | ssh opsadmin@web-01 sudo bash
+  "https://fleet.example.com/api/v1/hosts/<id>/enroll/script" \
+  | ssh opsadmin@web-01 'cat > ~/fleet-enroll.sh' \
+  && ssh -t opsadmin@web-01 'sudo sh ~/fleet-enroll.sh; rm -f ~/fleet-enroll.sh'
 ```
+
+The script lands on the host over the first connection and runs over a second
+one carrying a TTY (`-t`). Piping it straight into `ssh host sudo sh` instead
+hands sudo the script on stdin with no terminal, so any host whose sudo asks for
+a password fails with `sudo: a terminal is required to read the password`.
 
 **Where the token comes from.** For both no-install methods the dialog prints the
 command with your live session token already filled in — use its copy button and

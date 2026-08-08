@@ -72,8 +72,9 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
    - **SSH password** — brand-new/existing host with no prior setup (root or a sudoer + password).
    - **SSH private key** — host with password auth disabled; paste a key already in `authorized_keys`.
    - **SSH agent** — run the `fleet-enroll-agent` bridge from your laptop; the key never leaves it.
-   - **No install (ssh-pipe)** — run a one-liner in your own terminal (`curl … | ssh host sudo bash`),
-     then paste the printed host public key into the Finish step. No install, no key upload.
+   - **No install (ssh-pipe)** — run a copyable command in your own terminal (it sends the script
+     over your ssh, then runs it with `ssh -t … sudo sh` so sudo can prompt), then paste the printed
+     host public key into the Finish step. No install, no key upload.
    - **Already trusts the Fleet CA** — re-provision a previously-enrolled host with the session cert.
    The password / pasted key is used once and never stored.
 3. Enrollment, over SSH:
