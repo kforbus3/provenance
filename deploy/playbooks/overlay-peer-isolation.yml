@@ -1,0 +1,113 @@
+---
+# Narrow an already-enrolled host's WireGuard AllowedIPs to the jump host alone,
+# so it can neither address another managed host over the overlay nor accept a
+# packet claiming to come from one.
+#
+# Hosts enrolled AFTER Fleet gained overlay peer isolation already have this;
+# this playbook is the migration for the ones enrolled before, without the tunnel
+# downtime a re-enrollment would cost.
+#
+# Run it from Fleet's own playbook runner (Playbooks -> New, paste, select hosts),
+# which reaches every enrolled host through the jump host. It is idempotent, so
+# running it against the whole fleet — including hosts already narrowed — is safe.
+#
+# Do NOT run it against the jump host itself. The hub's peer entries are per-host
+# /32s managed by enrollment and are not this config; the jump host is excluded
+# below by the same check that skips anything unexpected.
+- name: Pin overlay AllowedIPs to the jump host
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    # Match the deployment: FLEET_WG_INTERFACE and FLEET_WG_JUMP_IP.
+    fleet_wg_interface: wgfleet
+    fleet_wg_jump_ip: 10.100.0.1
+
+  tasks:
+    - name: Locate the tunnel config
+      ansible.builtin.stat:
+        path: "/etc/wireguard/{{ fleet_wg_interface }}.conf"
+      register: wg_conf
+
+    - name: Skip hosts that are not on the WireGuard overlay
+      ansible.builtin.meta: end_host
+      when: not wg_conf.stat.exists
+
+    - name: Read the current tunnel config
+      ansible.builtin.slurp:
+        src: "/etc/wireguard/{{ fleet_wg_interface }}.conf"
+      register: wg_conf_raw
+
+    - name: Parse the peers out of it
+      ansible.builtin.set_fact:
+        wg_conf_text: "{{ wg_conf_raw.content | b64decode }}"
+        wg_peer_keys: "{{ wg_conf_raw.content | b64decode | regex_findall('(?m)^\\s*PublicKey\\s*=\\s*(\\S+)') }}"
+        wg_allowed_now: "{{ wg_conf_raw.content | b64decode | regex_findall('(?m)^\\s*AllowedIPs\\s*=\\s*(\\S+)') }}"
+
+    # A managed host has exactly one peer: the jump host. Anything else is a
+    # topology this playbook was not written for (a second tunnel, a hand-built
+    # config, or the jump host itself, which holds one peer per managed host) —
+    # leave it alone and say so rather than guessing.
+    - name: Refuse to touch a config that is not a single-peer spoke
+      ansible.builtin.fail:
+        msg: >-
+          /etc/wireguard/{{ fleet_wg_interface }}.conf has {{ wg_peer_keys | length }} peers
+          ({{ wg_allowed_now | join(', ') }}). Expected exactly one, the jump host.
+          Not a managed-host spoke config — skipping this host; narrow it by hand if it should be.
+      when: wg_peer_keys | length != 1
+
+    - name: Note hosts that are already narrowed
+      ansible.builtin.debug:
+        msg: "Already pinned to {{ fleet_wg_jump_ip }}/32 — nothing to do."
+      when: wg_allowed_now[0] == fleet_wg_jump_ip ~ '/32'
+
+    - name: Nothing further to do on those
+      ansible.builtin.meta: end_host
+      when: wg_allowed_now[0] == fleet_wg_jump_ip ~ '/32'
+
+    # Live interface FIRST. It takes effect with no new handshake, so the tunnel
+    # this play is running over never drops — and because nothing is on disk yet,
+    # a mistake is undone by `wg-quick down/up` or a reboot. Only once the jump
+    # host is confirmed still reachable does the change get made permanent.
+    - name: Narrow AllowedIPs on the live interface
+      ansible.builtin.command:
+        cmd: "wg set {{ fleet_wg_interface }} peer {{ wg_peer_keys[0] }} allowed-ips {{ fleet_wg_jump_ip }}/32"
+      changed_when: true
+
+    - name: Confirm the jump host is still reachable over the overlay
+      ansible.builtin.command:
+        cmd: "ping -c 2 -W 3 -I {{ fleet_wg_interface }} {{ fleet_wg_jump_ip }}"
+      register: wg_reach
+      changed_when: false
+      failed_when: false
+
+    - name: Put the old AllowedIPs back if the overlay broke
+      ansible.builtin.command:
+        cmd: "wg set {{ fleet_wg_interface }} peer {{ wg_peer_keys[0] }} allowed-ips {{ wg_allowed_now[0] }}"
+      when: wg_reach.rc != 0
+      changed_when: true
+
+    - name: Fail loudly rather than persist a config that lost the jump host
+      ansible.builtin.fail:
+        msg: >-
+          Jump host {{ fleet_wg_jump_ip }} stopped answering over {{ fleet_wg_interface }}
+          after narrowing; reverted to {{ wg_allowed_now[0] }} and left the on-disk config
+          untouched. Investigate before retrying.
+      when: wg_reach.rc != 0
+
+    # Safe to persist now. Rewrite only the AllowedIPs line, so any local edits to
+    # the rest of the config (MTU, a changed Endpoint) survive.
+    - name: Persist the narrowed AllowedIPs
+      ansible.builtin.lineinfile:
+        path: "/etc/wireguard/{{ fleet_wg_interface }}.conf"
+        regexp: '^\s*AllowedIPs\s*='
+        line: "AllowedIPs = {{ fleet_wg_jump_ip }}/32"
+        backup: true
+      register: wg_persist
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ wg_allowed_now[0] }} -> {{ fleet_wg_jump_ip }}/32 (live and on disk).
+          Backup: {{ wg_persist.backup | default('none') }}.

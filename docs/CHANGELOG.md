@@ -21,10 +21,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
   **Reaches hosts enrolled after the upgrade.** Already-enrolled hosts keep the
   wide `AllowedIPs` until re-enrolled, and a mixed fleet is fine — the two settings
-  interoperate and the jump-host deny covers everything meanwhile. The security
-  guide has a snippet to narrow an existing host in place with **no tunnel
-  downtime** (the live `wg set` needs no new handshake), for operators who would
-  rather not re-enroll a fleet.
+  interoperate and the jump-host deny covers everything meanwhile. For operators
+  who would rather not re-enroll a fleet,
+  `deploy/playbooks/overlay-peer-isolation.yml` makes the change in place with **no
+  tunnel downtime** (the live `wg set` needs no new handshake). It is idempotent,
+  reverts itself if the jump host stops answering, and skips any config that is not
+  a single-peer spoke, so it can be pointed at the whole inventory. The security
+  guide also has the equivalent shell snippet for a one-off.
 
 - **The overlay is hub-and-spoke now, not a flat network.** Managed hosts could
   reach each other over the overlay — ping, and just as easily each other's
