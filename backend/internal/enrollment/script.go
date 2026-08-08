@@ -140,18 +140,21 @@ func (s *Service) EnrollScriptWindows(ctx context.Context, sessionID uuid.UUID, 
 		Detail: map[string]any{"wgAddress": wgIP, "method": "windows"},
 	})
 
-	return windowsWGScript(wgIP, jumpPub, jumpEndpoint, s.cfg.WGSubnet, s.cfg.WGPort), nil
+	return windowsWGScript(wgIP, jumpPub, jumpEndpoint, s.hostAllowedIPs(), s.cfg.WGPort), nil
 }
 
 // windowsWGScript builds the PowerShell that installs WireGuard for Windows, generates
 // a keypair, writes a dial-out tunnel config, installs it as a persistent tunnel
 // service, and prints the public key for the operator to hand back to Fleet.
-func windowsWGScript(wgIP, jumpPub, jumpEndpoint, subnet string, listenPort int) string {
+//
+// allowed is the peer's AllowedIPs — the jump host alone under peer isolation, the
+// whole overlay subnet without it. See Service.hostAllowedIPs.
+func windowsWGScript(wgIP, jumpPub, jumpEndpoint, allowed string, listenPort int) string {
 	return strings.NewReplacer(
 		"__WGIP__", wgIP,
 		"__JUMPPUB__", jumpPub,
 		"__ENDPOINT__", jumpEndpoint,
-		"__SUBNET__", subnet,
+		"__ALLOWEDIPS__", allowed,
 		"__LISTENPORT__", strconv.Itoa(listenPort),
 	).Replace(windowsWGTemplate)
 }
@@ -182,6 +185,8 @@ $pub  = ($priv | & $wg pubkey).Trim()
 #    tunnel comes up even when the configured Endpoint isn't reachable from here
 #    (a LAN host can't hairpin to its own public address). When the host is remote,
 #    the outbound keepalive to Endpoint still establishes the tunnel.
+#    AllowedIPs is the jump host alone when overlay peer isolation is on, so this
+#    host neither addresses nor accepts traffic from another managed host.
 $conf = @"
 [Interface]
 PrivateKey = $priv
@@ -191,7 +196,7 @@ ListenPort = __LISTENPORT__
 [Peer]
 PublicKey = __JUMPPUB__
 Endpoint = __ENDPOINT__
-AllowedIPs = __SUBNET__
+AllowedIPs = __ALLOWEDIPS__
 PersistentKeepalive = 25
 "@
 # WireGuard for Windows' tunnel service reads this config file from its path on EVERY

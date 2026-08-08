@@ -7,6 +7,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **Peer isolation is now enforced at the host end too.** The jump host's
+  forwarding deny (below) is one machine's `iptables` — and it fails open with a
+  warning on a jump host whose filtering Fleet does not control. A managed host's
+  own WireGuard config now lists only the jump host in `AllowedIPs`, instead of the
+  whole overlay subnet. In WireGuard that one value does two jobs: the host cannot
+  *address* a sibling, and it **drops a decrypted packet claiming to come from
+  one** — so a host stays isolated even if the hub-side rule is gone.
+
+  WireGuard only; the OpenVPN client has no equivalent and relies on the jump host.
+  Follows the same `FLEET_OVERLAY_PEER_ISOLATION` switch, and applies to Linux and
+  Windows enrollment alike.
+
+  **Reaches hosts enrolled after the upgrade.** Already-enrolled hosts keep the
+  wide `AllowedIPs` until re-enrolled, and a mixed fleet is fine — the two settings
+  interoperate and the jump-host deny covers everything meanwhile. The security
+  guide has a snippet to narrow an existing host in place with **no tunnel
+  downtime** (the live `wg set` needs no new handshake), for operators who would
+  rather not re-enroll a fleet.
+
 - **The overlay is hub-and-spoke now, not a flat network.** Managed hosts could
   reach each other over the overlay — ping, and just as easily each other's
   sshd/RDP/WinRM port. Every other control Fleet has exists so that reaching a host

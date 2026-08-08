@@ -204,16 +204,40 @@ and operational recommendations.
     Kubernetes brokers all dial **from** the jump host, so none of them is a
     forwarded flow. Turn it off only for a deployment that genuinely needs managed
     hosts to talk to each other over the overlay.
-  - Enforcement is a forwarding deny on the jump host, applied when the WireGuard
-    hub comes up and when the OpenVPN server is provisioned. A jump host with no
-    usable `iptables` backend logs the failure and keeps running — check for
-    `overlay peer isolation ON` in the jump host's log, or
-    `iptables -L FORWARD -v -n` for the rule and its drop counters.
-- Note that a managed host's own config carries `AllowedIPs = <overlay subnet>`,
-  so it will still *route* sibling traffic into the tunnel; the hub is what drops
-  it. The reverse direction is closed at both ends — each peer on the hub is
-  pinned to a single `/32`, so a host cannot forge another host's overlay source
-  address.
+  - Enforced at **both ends**, so neither has to be trusted alone:
+    - **On the jump host**, a forwarding deny applied when the WireGuard hub comes
+      up and when the OpenVPN server is provisioned. A jump host with no usable
+      `iptables` backend logs the failure and keeps running — check for
+      `overlay peer isolation ON` in its log, or `iptables -L FORWARD -v -n` for
+      the rule and its drop counters.
+    - **On each managed host**, `AllowedIPs = <jump host>/32` in its WireGuard
+      config (WireGuard only; the OpenVPN client has no equivalent and relies on
+      the jump host). In WireGuard that one value does two jobs: the host cannot
+      *address* a sibling, and it **drops a decrypted packet claiming to come from
+      one**. So a host stays isolated even if the jump-host rule is removed, fails
+      to apply, or a jump host outside Fleet's control never had it.
+  - The hub's peer entries pin each host to a single `/32`, so a host also cannot
+    forge another host's overlay source address toward the hub.
+- **Migrating an existing fleet.** The host-side half only reaches hosts enrolled
+  after the change; already-enrolled hosts keep the wide `AllowedIPs` they were
+  given. A mixed fleet is fine — the two settings interoperate, and the jump-host
+  deny covers everything meanwhile. To close the gap, either **re-enroll** each
+  host (as with `FLEET_HOST_SCOPED_ONLY`), or narrow it **in place with no tunnel
+  downtime** — the live `wg set` takes effect without a new handshake, and the
+  `sed` makes it survive a reboot:
+
+  ```sh
+  IF=wgfleet                       # FLEET_WG_INTERFACE
+  JUMP=10.100.0.1                  # FLEET_WG_JUMP_IP
+  CONF=/etc/wireguard/$IF.conf
+  JPUB=$(awk '/^PublicKey/{print $3; exit}' "$CONF")
+  wg set "$IF" peer "$JPUB" allowed-ips "$JUMP/32"
+  sed -i "s|^AllowedIPs *=.*|AllowedIPs = $JUMP/32|" "$CONF"
+  ```
+
+  Run it across the fleet as a playbook (it is idempotent, and safe to re-run on a
+  host already narrowed). Do **not** run it on the jump host itself — the hub's
+  peer entries are per-host `/32`s and are not this config.
 - Host SSH host keys are pinned (`host_fingerprints`, `SHA256:…`) to detect MITM.
 
 ## 10. Secrets & configuration
