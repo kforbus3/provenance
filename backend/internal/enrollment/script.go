@@ -309,6 +309,16 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	defer jumpClient.Close()
 	step("connect_jump_host", "ok", "jump host reachable")
 
+	// The operator has just run the bootstrap script on the host over their own
+	// ssh, which is the out-of-band proof of access this trust decision rests on.
+	// If the host was rebuilt, its SSH host key changed and the pin from before the
+	// rebuild would refuse the verification dial below (and every later connection),
+	// leaving a host that enrolls "successfully" and can never be reached.
+	if n := s.clearStalePins(ctx, host); n > 0 {
+		step("clear_host_key_pin", "ok",
+			fmt.Sprintf("dropped %d stale SSH host-key pin(s) — the host re-pins on the next connection", n))
+	}
+
 	// The jump keeps a static endpoint (mgmtAddr:WGPort) so it can dial the host
 	// directly — for a host that shares the jump's LAN this brings the tunnel up
 	// even when the host's own configured Endpoint isn't reachable from where the
@@ -355,7 +365,13 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	} else if id, verr := s.validateCertLogin(ctx, host.ID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {
 		step("verify_certificate_login", "ok", "cert login via jump host: "+oneLine(id))
 	} else {
-		step("verify_certificate_login", "skipped", verr.Error())
+		// An enrollment nobody can log in through is not a success. This used to be
+		// recorded as "skipped" while the job still finished "succeeded", so a host
+		// that was provisioned but unreachable looked identical to a working one —
+		// and the operator only found out when the host sat offline. The host stays
+		// marked enrolled (the provisioning really did happen) and re-running is
+		// idempotent, so a false negative costs one more run.
+		return fail("verify_certificate_login", verr)
 	}
 
 	_ = s.store.FinishEnrollmentJob(ctx, job.ID, "succeeded", "")

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,6 +124,28 @@ func PinFingerprint(keyLine string) string {
 		return ""
 	}
 	return ssh.FingerprintSHA256(key)
+}
+
+// HostKeyIDs returns the pin identities for every address a host can be dialed
+// as, skipping blanks and duplicates. Callers that clear a host's trust must
+// clear all of them — a host pinned under both its overlay address and its
+// hostname still refuses on whichever one is left behind.
+func HostKeyIDs(port int, addrs ...string) []string {
+	if port <= 0 {
+		port = 22
+	}
+	var ids []string
+	for _, a := range addrs {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		id := HostKeyID(a, port)
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // ForgetHostKeys drops the given identities from the in-memory pin cache. The

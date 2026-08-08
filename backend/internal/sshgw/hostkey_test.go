@@ -106,6 +106,47 @@ func TestHostKeyIDMatchesWhatTheVerifierPins(t *testing.T) {
 	}
 }
 
+// Clearing a host's trust means clearing every address it is dialed as. The set
+// is built from the host record (overlay address, management address, hostname),
+// where blanks and duplicates are both normal — an unset management address, or a
+// hostname that is also the dialed address. Each identity produced must be one the
+// verifier would actually pin, or a clear silently leaves a live pin behind.
+func TestHostKeyIDsCoverEveryDialedAddress(t *testing.T) {
+	// The arrangement that stranded debian-ab-test: overlay address set, management
+	// address empty, hostname distinct — two pins, one of them easy to overlook.
+	ids := HostKeyIDs(22, "10.100.0.26", "", "debian-ab-test")
+	if len(ids) != 2 {
+		t.Fatalf("expected both dialed identities, got %v", ids)
+	}
+
+	pins := newMemPins()
+	v := newHostKeyVerifier(pins, nil)
+	for _, target := range []string{"10.100.0.26:22", "debian-ab-test:22"} {
+		if err := v.check(target, nil, testKey(t)); err != nil {
+			t.Fatalf("pin %s: %v", target, err)
+		}
+	}
+	for _, id := range ids {
+		if _, ok := pins.pins[id]; !ok {
+			t.Errorf("identity %q matches no pin the verifier recorded", id)
+		}
+	}
+	if len(pins.pins) != len(ids) {
+		t.Errorf("clearing %v would leave pins behind: verifier holds %d", ids, len(pins.pins))
+	}
+
+	// Duplicates collapse, and a non-default port is part of the identity.
+	if got := HostKeyIDs(22, "web-01", "web-01"); len(got) != 1 {
+		t.Errorf("duplicate addresses should collapse, got %v", got)
+	}
+	if got := HostKeyIDs(2222, "web-01"); got[0] == HostKeyIDs(22, "web-01")[0] {
+		t.Error("a non-default port must produce a distinct identity")
+	}
+	if got := HostKeyIDs(0, "web-01"); got[0] != HostKeyIDs(22, "web-01")[0] {
+		t.Error("an unset port should be treated as 22, matching the dial")
+	}
+}
+
 func TestPinFingerprintRendersSSHFormat(t *testing.T) {
 	key := testKey(t)
 	got := PinFingerprint(string(ssh.MarshalAuthorizedKey(key)))

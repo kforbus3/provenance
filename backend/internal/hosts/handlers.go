@@ -106,34 +106,10 @@ func (h *handler) refreshFacts(w http.ResponseWriter, r *http.Request) {
 }
 
 // hostKeyIdentities lists every identity a host's SSH host key can be pinned
-// under. The gateway pins per dialed address, and it dials the overlay address,
-// the management address and the hostname in turn, so a host that answers on more
-// than one of them holds more than one pin.
+// under — the gateway pins per dialed address, and it dials the overlay address,
+// the management address and the hostname in turn.
 func hostKeyIdentities(h *models.Host) []string {
-	port := h.SSHPort
-	if port <= 0 {
-		port = 22
-	}
-	var ids []string
-	for _, addr := range []string{h.WGAddress, h.Address, h.Hostname} {
-		if strings.TrimSpace(addr) == "" {
-			continue
-		}
-		id := sshgw.HostKeyID(strings.TrimSpace(addr), port)
-		if !containsStr(ids, id) {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
-func containsStr(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return sshgw.HostKeyIDs(h.SSHPort, h.WGAddress, h.Address, h.Hostname)
 }
 
 // hostKeyPins reports the SSH host-key pins currently held for a host, so an
