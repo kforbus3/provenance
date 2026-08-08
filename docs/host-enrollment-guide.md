@@ -238,6 +238,11 @@ with `host key for <host> does not match the pinned key`. The host reports
 **offline** with that text in its status detail, and a terminal attempt is
 refused. Clear the pins to re-trust:
 
+- **Re-enroll the host** with any bootstrapping method (SSH password / private key
+  / agent / no-install). Those methods carry an out-of-band credential proving you
+  can already reach the host, so enrollment drops the stale pins before it dials
+  and the host re-pins on that connection. A **`trusted`** re-provision deliberately
+  does *not* clear the pin — it authenticates with nothing but the existing trust.
 - **UI** — open the host's **details** dialog; the offline reason is shown with a
   **Trust new key** action.
 - **API** — `DELETE /api/v1/hosts/{id}/host-key` (`Host.Enroll`) clears the pins
@@ -258,6 +263,12 @@ the key you are about to trust is really the host's. The clear is audited
 - Enrollment jobs record an ordered **step log** and status in `enrollment_jobs`
   (`pending → running → succeeded | failed | rolled_back`). A failed run is rolled
   back so the inventory isn't left half-configured.
+- **`verify_certificate_login` failing fails the job** (in production). A host that
+  is provisioned but can't be logged into is not enrolled in any useful sense; the
+  step detail names the address and the underlying error. The host stays marked
+  enrolled and re-running enrollment is idempotent. Outside production this stays
+  non-fatal, because the local test fabric's userspace-WireGuard data plane can't
+  complete it.
 - **Can't connect / "not authorized for host":** verify the user shares a group
   with the host (or has an active grant) and holds `Host.Connect`.
 - **SSH refuses the certificate:** confirm `TrustedUserCAKeys` points at the

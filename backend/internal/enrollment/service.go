@@ -206,6 +206,18 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		step("connect_jump_host", "ok", "jump WG pubkey "+short(jumpPub))
 	}
 
+	// 1b) A rebuilt host presents a new SSH host key, and every dial below would be
+	//     refused by the pin taken before the rebuild — so re-enrolling, the obvious
+	//     remedy, could not fix the one situation that most needs it. Drop the pins
+	//     first; the connection re-pins whatever the host presents now. Bootstrapping
+	//     methods only (see clearStalePins).
+	if params.bootstrapping() {
+		if n := s.clearStalePins(ctx, host); n > 0 {
+			step("clear_host_key_pin", "ok",
+				fmt.Sprintf("dropped %d stale SSH host-key pin(s) — the host re-pins on this connection", n))
+		}
+	}
+
 	// 2) Connect to the host for bootstrap. With "password" we authenticate with a
 	//    bootstrap credential (the host need not trust the CA yet); with "trusted"
 	//    we use the session certificate. The connection is either direct from the
@@ -488,10 +500,16 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	//     certificate and run a command, proving cert auth + the tunnel path.
 	if id, verr := s.validateCertLogin(ctx, host.ID, wgIP, mgmtAddr, host.SSHPort, loginUser); verr == nil {
 		step("verify_certificate_login", "ok", "cert login via jump host: "+oneLine(id))
+	} else if s.cfg.IsProduction() {
+		// A host nobody can log in through is not enrolled in any useful sense, and
+		// recording this as "skipped" under a "succeeded" job is how an unreachable
+		// host passes for a working one. Configuration has been applied and the host
+		// stays marked enrolled; re-running is idempotent.
+		return fail("verify_certificate_login", verr)
 	} else {
-		// Non-fatal in the local userspace-WireGuard fabric where the overlay
-		// data plane is limited; configuration is applied either way.
-		step("verify_certificate_login", "skipped", verr.Error())
+		// Outside production this stays non-fatal: the local userspace-WireGuard
+		// fabric has a limited data plane and legitimately can't complete this.
+		step("verify_certificate_login", "failed", verr.Error()+" (non-fatal outside production)")
 	}
 
 	_ = s.store.FinishEnrollmentJob(ctx, job.ID, "succeeded", "")
@@ -542,27 +560,76 @@ func parseAfter(out, marker string) string {
 	return ""
 }
 
+// clearStalePins drops the host's SSH host-key pins so a REBUILT host can be
+// enrolled again. Without this, re-enrolling — the obvious thing to try when a
+// host stops answering — cannot work: every dial the backend makes is refused by
+// the pin recorded before the rebuild, and on the no-install path the failure
+// surfaces only as an unverifiable certificate login at the very end.
+//
+// This is only done for bootstrapping methods (password/key/agent/pipe), where
+// the operator supplies an out-of-band credential that proves they can already
+// reach the host — the same evidence the manual clear-pin endpoint is gated on.
+// A "trusted" re-provision deliberately keeps its pin: it authenticates with
+// nothing but the existing trust, so silently accepting a changed key there
+// would remove the MITM check with no operator act behind it.
+func (s *Service) clearStalePins(ctx context.Context, host *models.Host) int {
+	ids := sshgw.HostKeyIDs(host.SSHPort, host.WGAddress, host.Address, host.Hostname)
+	n, err := s.store.DeleteHostKeys(ctx, ids)
+	if err != nil {
+		s.log.Warn("could not clear host key pins", "host", host.Hostname, "err", err)
+		return 0
+	}
+	// The stored pin and the gateway's per-process cache have to go together.
+	if s.gw != nil {
+		s.gw.ForgetHostKeys(ids...)
+	}
+	return n
+}
+
 // validateCertLogin connects to the host through the jump host using a system
 // certificate carrying the host's accepted principals (host-scoped when locked
 // down) and runs `id`, proving CA trust, the principal mapping, and the tunnel all
 // work. It uses a system credential rather than the session-level one because the
 // latter does not carry the host-scoped principal a locked-down host requires.
+// A freshly-configured tunnel and a just-reloaded sshd can both take a moment,
+// so a single refusal is not proof of a broken enrollment. Retry briefly before
+// calling it: an enrollment that reports failure the operator can't reproduce is
+// as unhelpful as one that reports success it hasn't earned.
 func (s *Service) validateCertLogin(ctx context.Context, hostID uuid.UUID, wgIP, mgmtAddr string, port int, user string) (string, error) {
-	for _, addr := range []string{wgIP, mgmtAddr} {
-		if addr == "" {
-			continue
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
 		}
-		conn, err := s.gw.DialSystemForHost(ctx, hostID, addr, port, user)
-		if err != nil {
-			continue
-		}
-		out, rerr := run(conn.Client, "id")
-		conn.Close()
-		if rerr == nil {
-			return out, nil
+		for _, addr := range []string{wgIP, mgmtAddr} {
+			if addr == "" {
+				continue
+			}
+			conn, err := s.gw.DialSystemForHost(ctx, hostID, addr, port, user)
+			if err != nil {
+				// Keep the real reason. This used to be discarded and reported as
+				// "certificate login not reachable yet", which named neither the
+				// address that failed nor why — so a rejected host key, a refused
+				// certificate and an unreachable tunnel all looked identical.
+				lastErr = fmt.Errorf("%s:%d: %w", addr, port, err)
+				continue
+			}
+			out, rerr := run(conn.Client, "id")
+			conn.Close()
+			if rerr == nil {
+				return out, nil
+			}
+			lastErr = fmt.Errorf("%s:%d: connected but `id` failed: %w", addr, port, rerr)
 		}
 	}
-	return "", fmt.Errorf("certificate login not reachable yet")
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no address to try")
+	}
+	return "", fmt.Errorf("certificate login failed: %w", lastErr)
 }
 
 // hostAllowedIPs is what a managed host's tunnel config carries as AllowedIPs for
