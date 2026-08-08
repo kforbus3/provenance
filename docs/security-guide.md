@@ -235,9 +235,15 @@ and operational recommendations.
   sed -i "s|^AllowedIPs *=.*|AllowedIPs = $JUMP/32|" "$CONF"
   ```
 
-  Run it across the fleet as a playbook (it is idempotent, and safe to re-run on a
-  host already narrowed). Do **not** run it on the jump host itself — the hub's
-  peer entries are per-host `/32`s and are not this config.
+  To do it fleet-wide, `deploy/playbooks/overlay-peer-isolation.yml` is the same
+  change as a playbook — paste it into **Playbooks → New**, set
+  `fleet_wg_interface`/`fleet_wg_jump_ip` to match the deployment, and run it
+  against every enrolled host. It is idempotent (a host already narrowed reports
+  "nothing to do"), it changes the live interface before it touches disk and
+  reverts if the jump host stops answering, and it refuses any config that is not
+  a single-peer spoke — which is also what makes it safe to point at the whole
+  inventory. Do **not** run either form against the jump host: the hub's peer
+  entries are per-host `/32`s managed by enrollment, not this config.
 - Host SSH host keys are pinned (`host_fingerprints`, `SHA256:…`) to detect MITM.
 
 ## 10. Secrets & configuration
