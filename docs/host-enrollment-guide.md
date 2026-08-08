@@ -92,6 +92,15 @@ curl -fsSL -H "Authorization: Bearer $TOKEN" \
   "https://fleet.example.com/api/v1/hosts/<id>/enroll/script" | ssh opsadmin@web-01 sudo bash
 ```
 
+**Where the token comes from.** For both no-install methods the dialog prints the
+command with your live session token already filled in — use its copy button and
+run it as-is. The token is short-lived (`FLEET_ACCESS_TOKEN_TTL`, 15 min by
+default), so copy it again after a re-login rather than reusing an old command.
+The **ssh-pipe** REST calls also accept a service-account API token
+(`Authorization: Bearer flt_…`, see the [API reference](./api.md#service-accounts))
+for scripted enrollment; the **SSH agent** bridge does not — its WebSocket
+authenticates a session JWT only, so `-token` must be a session token.
+
 Each method streams its step log and shows the assigned overlay address.
 Enrollment installs `/etc/ssh/fleet_ca.pub`, `TrustedUserCAKeys`, the
 `AuthorizedPrincipalsFile` mapping, and **two login accounts** — the privileged
