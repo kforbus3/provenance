@@ -69,6 +69,12 @@ redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/update
 BUNDLE_VERSION ?= $(FLEET_VERSION)
 BUNDLE_FROM    ?= 0.0.0
 BUNDLE_KEY     ?= release.key
+# The signing step runs from backend/, so the key path has to be resolved before
+# the directory changes under it. abspath resolves a relative path against the
+# repo root and leaves an already-absolute one alone — the key normally lives
+# OUTSIDE the repo (~/fleet-release/release.key), which a bare ../ prefix
+# silently turned into a nonexistent path.
+BUNDLE_KEY_ABS := $(abspath $(BUNDLE_KEY))
 BUNDLE_OUT     ?= fleet-$(BUNDLE_VERSION).fleetup
 BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,fleet-updater
 # Bundles deploy to servers, so pin the image platform regardless of the build
@@ -79,14 +85,14 @@ BUNDLE_PLATFORM ?= linux/amd64
 
 .PHONY: bundle
 bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
-	@test -f $(BUNDLE_KEY) || (echo "missing $(BUNDLE_KEY) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.24 go run ./cmd/fleetctl release keygen"; exit 1)
+	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.24 go run ./cmd/fleetctl release keygen"; exit 1)
 	FLEET_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
 	  docker tag $(PROJECT)-$$c $(PROJECT)-$$c:$(BUNDLE_VERSION); \
 	done
 	cd backend && go run ./cmd/fleetctl release build \
 	  --version $(BUNDLE_VERSION) --from $(BUNDLE_FROM) \
-	  --key ../$(BUNDLE_KEY) --out ../$(BUNDLE_OUT) --components $(BUNDLE_COMPONENTS)
+	  --key $(BUNDLE_KEY_ABS) --out ../$(BUNDLE_OUT) --components $(BUNDLE_COMPONENTS)
 	@echo "Built $(BUNDLE_OUT). Upload it in the UI (Settings -> Updates) to upgrade in place."
 
 comma := ,
