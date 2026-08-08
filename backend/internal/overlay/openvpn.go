@@ -119,7 +119,68 @@ persist-key
 persist-tun
 keepalive 10 60
 verb 3
-`, host, port, fleetDir, fleetDir, fleetDir)
+%s`, host, port, fleetDir, fleetDir, fleetDir, o.clientIsolationDirectives())
+}
+
+// clientIsolationDirectives hooks the host-side peer-isolation script into the
+// client config, or returns "" when isolation is off.
+//
+// This is OpenVPN's stand-in for WireGuard's AllowedIPs. A WireGuard peer entry is
+// simultaneously a route table and an inbound source filter, so pinning it to the
+// jump host isolates the host at its own end. OpenVPN has no equivalent: a client
+// accepts whatever arrives down the tunnel. Without this, an OpenVPN deployment's
+// isolation rests entirely on one iptables rule on the jump host — which fails open
+// by design, and on a jump host Fleet does not own may never be applied at all.
+//
+// It runs on `up` rather than being written once at install because that is what
+// makes it survive a reboot (a plain iptables rule does not) and what gives it the
+// tunnel's actual device name, which OpenVPN assigns at runtime.
+func (o *OpenVPN) clientIsolationDirectives() string {
+	if !o.cfg.OverlayPeerIsolation {
+		return ""
+	}
+	// script-security 2 is the minimum that lets OpenVPN run a user script. The
+	// script is root-owned, 0700, and written by Fleet.
+	return fmt.Sprintf("script-security 2\nup %s/peer-isolation.sh\n", fleetDir)
+}
+
+// hostIsolationScript renders the managed host's `up` script: everything arriving on
+// or leaving via the tunnel that is not the jump host is dropped.
+//
+// The rules are scoped to $dev (the tun device OpenVPN just brought up) rather than
+// to the overlay subnet. That matters — a subnet-scoped rule would also match the
+// host talking to its OWN overlay address over loopback, breaking any local service
+// bound to it. Interface-scoped rules leave loopback alone and need no knowledge of
+// the device number.
+//
+// It always exits 0. With script-security 2 a failing `up` script aborts the tunnel,
+// and a host that cannot filter is still a host Fleet must be able to reach — so this
+// fails open like every other half of peer isolation, loudly, in the OpenVPN log.
+func (o *OpenVPN) hostIsolationScript() string {
+	if !o.cfg.OverlayPeerIsolation {
+		return ""
+	}
+	jump := strings.TrimSpace(o.cfg.WGJumpIP)
+	if net.ParseIP(jump) == nil {
+		return ""
+	}
+	return fmt.Sprintf(`#!/bin/sh
+# Fleet overlay peer isolation — managed-host side. Managed by Fleet; do not edit.
+# OpenVPN runs this as the tunnel comes up, with $dev set to the tun device.
+JUMP=%s
+[ -n "$dev" ] || { echo "fleet: no \$dev; peer isolation NOT applied" >&2; exit 0; }
+if ! command -v iptables >/dev/null 2>&1; then
+  echo "fleet: iptables unavailable; peer isolation NOT applied" >&2; exit 0
+fi
+# -C before -I: this runs on every reconnect, and must not stack duplicates.
+iptables -C INPUT  -i "$dev" ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
+  iptables -I INPUT  1 -i "$dev" ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
+  echo "fleet: could not apply inbound peer isolation on $dev" >&2
+iptables -C OUTPUT -o "$dev" ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
+  iptables -I OUTPUT 1 -o "$dev" ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
+  echo "fleet: could not apply outbound peer isolation on $dev" >&2
+exit 0
+`, jump)
 }
 
 // CCDEntry pins a client (by cert CN) to a static overlay address.
@@ -270,7 +331,7 @@ cat > %[1]s/client.key <<'FLEOF'
 %[4]sFLEOF
 cat > %[1]s/client.ovpn <<'FLEOF'
 %[5]sFLEOF
-if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
+%[6]sif command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
   cp %[1]s/client.ovpn /etc/openvpn/fleet-overlay.conf 2>/dev/null || cp %[1]s/client.ovpn /etc/openvpn/client/fleet-overlay.conf 2>/dev/null || true
   systemctl enable --now openvpn@fleet-overlay >/dev/null 2>&1 || systemctl enable --now openvpn-client@fleet-overlay >/dev/null 2>&1 || \
     openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid
@@ -279,7 +340,23 @@ else
 fi
 sleep 2
 (ip -4 addr show dev tun0 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}') | head -1 | sed 's/^/OVPN_HOST_IP=/'
-echo OVPN_HOST_CONFIGURED`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf)
+echo OVPN_HOST_CONFIGURED`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
+		o.hostIsolationInstall())
+}
+
+// hostIsolationInstall renders the fragment of HostInstallScript that lays down the
+// `up` script the client config references. Written before the tunnel is started, so
+// the very first connect is already isolated — there is no window in which the host
+// is up on the overlay without its filter.
+func (o *OpenVPN) hostIsolationInstall() string {
+	body := o.hostIsolationScript()
+	if body == "" {
+		return ""
+	}
+	return fmt.Sprintf(`cat > %[1]s/peer-isolation.sh <<'FLEOF'
+%[2]sFLEOF
+chmod 0700 %[1]s/peer-isolation.sh
+`, fleetDir, body)
 }
 
 // endpoint returns the OpenVPN endpoint managed hosts dial: the DB/settings value

@@ -210,12 +210,22 @@ and operational recommendations.
       `iptables` backend logs the failure and keeps running — check for
       `overlay peer isolation ON` in its log, or `iptables -L FORWARD -v -n` for
       the rule and its drop counters.
-    - **On each managed host**, `AllowedIPs = <jump host>/32` in its WireGuard
-      config (WireGuard only; the OpenVPN client has no equivalent and relies on
-      the jump host). In WireGuard that one value does two jobs: the host cannot
-      *address* a sibling, and it **drops a decrypted packet claiming to come from
-      one**. So a host stays isolated even if the jump-host rule is removed, fails
-      to apply, or a jump host outside Fleet's control never had it.
+    - **On each managed host**, so a host stays isolated even if the jump-host
+      rule is removed, fails to apply, or a jump host outside Fleet's control
+      never had it:
+      - **WireGuard** — `AllowedIPs = <jump host>/32`. That one value does two
+        jobs: the host cannot *address* a sibling, and it **drops a decrypted
+        packet claiming to come from one**.
+      - **OpenVPN** — the client protocol has no `AllowedIPs`, so enrollment
+        installs `/etc/openvpn/fleet/peer-isolation.sh` and hooks it as the
+        config's `up` script. It drops anything entering or leaving the tunnel
+        that is not the jump host. Running on `up` is what makes it survive a
+        reboot (a bare `iptables` rule does not) and what gives it the tun device
+        name, which OpenVPN assigns at runtime. The rules are scoped to that
+        device, not the overlay subnet — a subnet-scoped rule would also match
+        the host reaching its **own** overlay address over loopback and break any
+        local service bound to it. Requires `script-security 2`, which the
+        generated client config sets.
   - The hub's peer entries pin each host to a single `/32`, so a host also cannot
     forge another host's overlay source address toward the hub.
 - **Migrating an existing fleet.** The host-side half only reaches hosts enrolled

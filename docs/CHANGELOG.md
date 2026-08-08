@@ -5,6 +5,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+- **OpenVPN overlays get the host-side half of peer isolation too.** v1.3.0 gave
+  WireGuard hosts a second, independent layer (`AllowedIPs` pinned to the jump
+  host) but left OpenVPN with only the jump host's forwarding deny — a single rule,
+  on one machine, that fails open by design. Since OpenVPN exists here for FIPS,
+  that left the most compliance-sensitive deployments with the weakest version.
+
+  OpenVPN has no `AllowedIPs`, so enrollment now installs
+  `/etc/openvpn/fleet/peer-isolation.sh` and hooks it as the client config's `up`
+  script: anything entering or leaving the tunnel that is not the jump host is
+  dropped. Running on `up` is what makes it survive a reboot — a bare `iptables`
+  rule does not — and what hands it the tun device name, which OpenVPN assigns at
+  runtime.
+
+  The rules are scoped to that device rather than the overlay subnet, because a
+  subnet-scoped rule also matches the host reaching its **own** overlay address
+  over loopback, which would break any local service bound to it. The config gains
+  `script-security 2` (required for `up` to run at all); the script is root-owned,
+  mode 0700, written before the tunnel starts so the first connect is already
+  filtered, idempotent across reconnects, and always exits 0 — under
+  `script-security 2` a failing `up` script aborts the tunnel, and failing open is
+  the same choice made everywhere else in peer isolation.
+
+  Follows `FLEET_OVERLAY_PEER_ISOLATION`, and reaches hosts enrolled or re-enrolled
+  after the upgrade.
+
+---
+
 ## v1.3.0 — The overlay is a management network, not a flat one — 2026-08-08
 
 **Deploy note.** Peer isolation is on by default and takes effect on upgrade. Read
