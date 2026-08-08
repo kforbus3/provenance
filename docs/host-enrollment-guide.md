@@ -161,6 +161,14 @@ you can configure the missing piece by hand (see below).
 All of this traffic reaches the host **over the WireGuard interface** from the
 jump host — nothing needs to be exposed to the LAN or internet directly.
 
+The overlay carries jump-host↔host traffic only. By default the jump host will not
+forward traffic between two managed hosts, so an enrolled host can reach the jump
+host over the overlay and no other host (see *Network isolation* in the security
+guide). An enrolled host's config still lists the whole overlay subnet in its
+`AllowedIPs`, so pings to a sibling leave the host and are dropped at the hub —
+"the tunnel is up but I can't reach the other host" is the expected result, not a
+misconfiguration.
+
 | Port | Proto | Purpose | Opened by |
 |---|---|---|---|
 | 51820 (`FLEET_WG_PORT`) | UDP | WireGuard overlay | WireGuard for Windows |

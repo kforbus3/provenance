@@ -44,6 +44,59 @@ wg set "$WG_IFACE" listen-port "$WG_PORT" private-key /etc/wireguard/privatekey
 ip address add "$WG_ADDR" dev "$WG_IFACE" 2>/dev/null || true
 ip link set "$WG_IFACE" up
 
+# Peer isolation: make the overlay strict hub-and-spoke. A managed host's own
+# config carries AllowedIPs = <the whole overlay subnet>, so its packets for a
+# SIBLING host are encrypted to the hub and would be forwarded straight back out
+# the same interface — giving any compromised host direct L3 reach to every other
+# host's sshd/RDP/WinRM port, bypassing the brokering, RBAC and session audit that
+# is the entire point of Fleet. Drop those forwards.
+#
+# This costs nothing operationally: every path Fleet uses (terminal, SFTP, the
+# monitor probes, ansible via ProxyJump, the DB/Kubernetes brokers) is dialed
+# FROM this jump host, so it leaves via OUTPUT and is never a forwarded flow.
+#
+# Two independent rules, either of which is sufficient on its own:
+#   1. interface-scoped — covers the WireGuard hub;
+#   2. subnet-scoped    — also covers the OpenVPN overlay (FIPS mode), whose tun
+#      interface name is assigned at runtime and shares this same subnet.
+# ip_forward stays on: the jump host may legitimately route elsewhere, and the
+# narrow rules say what we actually mean.
+#
+# Failure here is loud but non-fatal — some kernels/hosts give the container no
+# usable iptables backend, and a jump host that cannot filter is still a working
+# jump host. Set FLEET_OVERLAY_PEER_ISOLATION=0 for a deployment that genuinely
+# needs managed hosts to reach each other over the overlay.
+if [ "${FLEET_OVERLAY_PEER_ISOLATION:-1}" = "1" ]; then
+  # The connected route the kernel installed for WG_ADDR is the overlay subnet,
+  # already in network form (10.100.0.1/24 -> 10.100.0.0/24) — no CIDR maths.
+  WG_SUBNET=$(ip -4 route show dev "$WG_IFACE" 2>/dev/null | awk '$1 ~ /\// {print $1; exit}')
+  applied=""
+  # -C tests for an existing identical rule, so a restart re-applying this (or the
+  # enrollment flow adding it too) cannot stack duplicates. Insert at the head
+  # rather than append: a deny this fundamental must not sit behind an ACCEPT an
+  # operator added earlier in the chain.
+  if iptables -C FORWARD -i "$WG_IFACE" -o "$WG_IFACE" -j DROP >/dev/null 2>&1 \
+     || iptables -I FORWARD 1 -i "$WG_IFACE" -o "$WG_IFACE" -j DROP >/dev/null 2>&1; then
+    applied="$WG_IFACE"
+  fi
+  if [ -n "$WG_SUBNET" ]; then
+    if iptables -C FORWARD -s "$WG_SUBNET" -d "$WG_SUBNET" -j DROP >/dev/null 2>&1 \
+       || iptables -I FORWARD 1 -s "$WG_SUBNET" -d "$WG_SUBNET" -j DROP >/dev/null 2>&1; then
+      applied="${applied:+$applied, }$WG_SUBNET"
+    fi
+  fi
+  # Report what actually went in, not what was attempted: either rule alone
+  # isolates the WireGuard hub, so a partial apply is still ON — but an operator
+  # reading this needs to know which one is carrying it.
+  if [ -n "$applied" ]; then
+    echo "[jumphost] overlay peer isolation ON (managed hosts cannot reach each other; enforced on $applied)"
+  else
+    echo "[jumphost] WARN could not apply overlay peer isolation (no usable iptables backend?); managed hosts CAN reach each other over the overlay"
+  fi
+else
+  echo "[jumphost] WARN overlay peer isolation DISABLED by FLEET_OVERLAY_PEER_ISOLATION; managed hosts can reach each other over the overlay"
+fi
+
 # Re-apply persisted peers. Enrollment writes each managed host to
 # /etc/wireguard/peers/<host>.conf; runtime `wg set` peers are otherwise lost on
 # restart. When /etc/wireguard is on a volume (production), this keeps every

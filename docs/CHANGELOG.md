@@ -5,6 +5,36 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+- **The overlay is hub-and-spoke now, not a flat network.** Managed hosts could
+  reach each other over the overlay — ping, and just as easily each other's
+  sshd/RDP/WinRM port. Every other control Fleet has exists so that reaching a host
+  is brokered, authorized and recorded; the overlay was an unmediated path around
+  all of it, handing the least-trusted component in the deployment (a managed host,
+  running whatever it runs) direct L3 reach to every other host. It also undid at
+  the network layer the separation multi-tenancy enforces in the database.
+
+  The jump host now refuses to forward overlay traffic between two managed hosts,
+  so a host can reach the jump host and nothing else. Applied when the WireGuard
+  hub comes up and when the OpenVPN server is provisioned (FIPS mode), so it holds
+  for both overlays. `FLEET_OVERLAY_PEER_ISOLATION=0` turns it off for a deployment
+  that genuinely needs hosts to talk to each other over the overlay.
+
+  **On by default, including for existing deployments** — nothing in Fleet uses
+  host-to-host reachability. Terminal sessions, SFTP, the health monitor, playbook
+  runs (via `ProxyJump`), and the database and Kubernetes brokers all dial *from*
+  the jump host, so none of them is a forwarded flow and none is affected. What
+  changes is only what a host can do on its own behalf. If you have built something
+  outside Fleet on top of host-to-host overlay reachability, set the variable to
+  `0` before upgrading.
+
+  A jump host with no usable `iptables` backend logs the failure and keeps serving
+  rather than refusing to start — confirm with `overlay peer isolation ON` in the
+  jump host's log.
+
+---
+
 ## v1.2.0 — Which hosts are in this group, answered where you ask it
 
 - **Host membership, from the group's side.** The Groups page could say whether a

@@ -28,8 +28,11 @@ type Overlay interface {
 
 	// EnsureServer idempotently provisions and starts the VPN server on the jump host
 	// (installing packages, writing CA/server material + config, starting the daemon
-	// only if not already running). Safe to call on every enrollment.
-	EnsureServer(ctx context.Context, jumpRun RunFunc) error
+	// only if not already running). Safe to call on every enrollment. Like
+	// ProvisionHost it returns a short human detail for the enrollment step log —
+	// which is how a peer-isolation rule that could not be applied reaches the
+	// operator instead of failing silently.
+	EnsureServer(ctx context.Context, jumpRun RunFunc) (detail string, err error)
 
 	// ProvisionHost issues the host's client certificate, pins its overlay address on
 	// the jump server (spoof-proof, keyed by the cert identity), and brings up the

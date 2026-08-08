@@ -95,6 +95,7 @@ Key variables (full list in `.env.example`):
 | `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` | Jump host `host:port` + login user |
 | `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` / `FLEET_WG_PORT` | WireGuard overlay |
 | `FLEET_WG_JUMP_ENDPOINT` | Public `host:port` managed hosts dial to reach the jump |
+| `FLEET_OVERLAY_PEER_ISOLATION` | Keep the overlay strict hub-and-spoke — the jump host will not forward traffic between two managed hosts (default `1`; **leave it on** unless the deployment genuinely needs host-to-host overlay traffic). Set on the jump host as well as the backend, so the WireGuard hub applies it at start-up |
 | `FLEET_ALLOW_BOOTSTRAP` | `false` after the first admin exists (also self-seals) |
 | `FLEET_BACKUP_DIR` | Where encrypted DB backups are written (default `/var/lib/fleet/backups`, the `backups` volume) |
 | `FLEET_BACKUP_PASSPHRASE` | Encrypts DB backups (`openssl` AES-256); falls back to `FLEET_CA_PASSPHRASE` if empty — in **production set a distinct value** (must differ from `FLEET_CA_PASSPHRASE`) and keep it **off-host** |

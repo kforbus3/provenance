@@ -19,6 +19,10 @@ func testCfg() *config.Config {
 		WGJumpEndpoint: "jump:1194",
 		OVPNPort:       1194,
 		Overlay:        "openvpn",
+		// Matches the production default (FLEET_OVERLAY_PEER_ISOLATION=1) rather
+		// than the bool zero value, so what the integration harness emits is what a
+		// real deployment provisions.
+		OverlayPeerIsolation: true,
 	}
 }
 

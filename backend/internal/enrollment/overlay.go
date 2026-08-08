@@ -52,10 +52,11 @@ func (s *Service) enrollCertOverlay(
 	}
 
 	// 1) Bring up the VPN server on the jump host (idempotent).
-	if err := ov.EnsureServer(ctx, jumpRun); err != nil {
+	serverDetail, err := ov.EnsureServer(ctx, jumpRun)
+	if err != nil {
 		return "", fmt.Errorf("provision %s server: %w", ov.Name(), err)
 	}
-	step("configure_jump_server", "ok", ov.Name()+" server ready on jump host")
+	step("configure_jump_server", "ok", serverDetail)
 
 	// 2) Provision the host onto the tunnel (issue cert, pin address, bring up). The
 	//    endpoint host follows the same precedence as WireGuard; the overlay applies its

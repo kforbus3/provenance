@@ -176,6 +176,17 @@ type Config struct {
 	// identically for dialing regardless of overlay type.
 	OVPNPort int
 
+	// OverlayPeerIsolation makes the overlay a strict hub-and-spoke management
+	// network: the jump host refuses to forward traffic between two managed hosts,
+	// so a host can reach the jump host and nothing else on the overlay. On by
+	// default — every path Fleet uses (terminal, SFTP, monitor, playbooks, the DB
+	// and Kubernetes brokers) originates ON the jump host, so none of them is a
+	// forwarded flow and none is affected. Turn it off only if a deployment
+	// genuinely needs managed hosts to talk to each other over the overlay;
+	// leaving it on keeps a single compromised host from reaching the rest of the
+	// fleet's SSH/RDP/WinRM ports directly, bypassing Fleet's brokering and audit.
+	OverlayPeerIsolation bool
+
 	// Host metric history (append-only time series behind trend queries). Sample
 	// bounds how often a per-host sample is recorded (independent of the 30s probe
 	// cadence, to keep the table small); Retention bounds how long samples are kept
@@ -375,6 +386,7 @@ func Load() (*Config, error) {
 		WGJumpEndpoint:              env("FLEET_WG_JUMP_ENDPOINT", "jumphost:51820"),
 		WGPort:                      envInt("FLEET_WG_PORT", 51820),
 		OVPNPort:                    envInt("FLEET_OVPN_PORT", 1194),
+		OverlayPeerIsolation:        envBool("FLEET_OVERLAY_PEER_ISOLATION", true),
 		VaultRotationCheck:          envDuration("FLEET_VAULT_ROTATION_CHECK", 30*time.Minute),
 		MetricHistorySample:         envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
 		MetricHistoryRetention:      envDuration("FLEET_METRIC_HISTORY_RETENTION", 720*time.Hour),
