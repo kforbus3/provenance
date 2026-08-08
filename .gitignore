@@ -33,3 +33,9 @@ recordings/
 # Python
 __pycache__/
 *.pyc
+
+# Release artifacts and signing keys. A .fleetup is ~300 MB of build output, and
+# a release key is the trust anchor for in-UI upgrades — neither belongs in git.
+*.fleetup
+release.key
+*.release.key
