@@ -85,7 +85,7 @@ BUNDLE_PLATFORM ?= linux/amd64
 
 .PHONY: bundle
 bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
-	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.24 go run ./cmd/fleetctl release keygen"; exit 1)
+	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.26 go run ./cmd/fleetctl release keygen"; exit 1)
 	FLEET_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
 	  docker tag $(PROJECT)-$$c $(PROJECT)-$$c:$(BUNDLE_VERSION); \
@@ -160,18 +160,18 @@ build: ## Build all images
 
 .PHONY: backend-build
 backend-build: ## Compile the backend in a throwaway Go container
-	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.23-alpine \
+	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
 	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go build ./..."
 
 .PHONY: enroll-agent
 enroll-agent: ## Build the SSH-agent enrollment bridge for this machine's platform
-	docker run --rm -v $(PWD)/backend:/src -w /src -e CGO_ENABLED=0 golang:1.23-alpine \
+	docker run --rm -v $(PWD)/backend:/src -w /src -e CGO_ENABLED=0 golang:1.26-alpine \
 	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go build -o /src/bin/fleet-enroll-agent ./cmd/fleet-enroll-agent"
 	@echo "Built backend/bin/fleet-enroll-agent — distribute to operators."
 
 .PHONY: enroll-agent-all
 enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators' laptops)
-	docker run --rm -v $(PWD)/backend:/src -w /src -e CGO_ENABLED=0 golang:1.23-alpine sh -c '\
+	docker run --rm -v $(PWD)/backend:/src -w /src -e CGO_ENABLED=0 golang:1.26-alpine sh -c '\
 	  apk add --no-cache git >/dev/null; \
 	  set -e; \
 	  for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
@@ -192,7 +192,7 @@ test: backend-test frontend-test ## Run all tests
 
 .PHONY: backend-test
 backend-test: ## Run Go unit + integration tests
-	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.23-alpine \
+	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
 	  sh -c "apk add --no-cache git gcc musl-dev openssh-client >/dev/null && GOFLAGS=-mod=mod go test ./..."
 
 .PHONY: frontend-test
@@ -202,12 +202,12 @@ frontend-test: ## Run frontend unit tests
 
 .PHONY: lint
 lint: ## Run Go vet
-	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.23-alpine \
+	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
 	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go vet ./..."
 
 .PHONY: tidy
 tidy: ## Run go mod tidy and write go.sum back to the repo
-	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.23-alpine \
+	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
 	  sh -c "apk add --no-cache git >/dev/null && go mod tidy"
 
 .PHONY: e2e
@@ -229,5 +229,5 @@ load: ## Run the k6 load smoke test against the running stack (override USER/PAS
 
 .PHONY: assistant-docs
 assistant-docs: ## Regenerate the assistant's embedded documentation index from docs/
-	docker run --rm -v $(PWD):/repo -w /repo/backend/internal/assistant golang:1.24-alpine \
+	docker run --rm -v $(PWD):/repo -w /repo/backend/internal/assistant golang:1.26-alpine \
 	  go run gendocs.go -docs /repo/docs -out docs_generated.go

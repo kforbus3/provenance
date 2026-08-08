@@ -1586,7 +1586,7 @@ function HostAccessDialog({ host, onClose }: { host: Host | null; onClose: () =>
 // EnrollCredsDialog collects how to reach the host for the initial bootstrap:
 // an SSH password (installs CA trust + WireGuard on a brand-new host), or the
 // session certificate when the host already trusts the Fleet CA.
-function EnrollCredsDialog({
+export function EnrollCredsDialog({
   host, onClose, onSubmit, onPipeFinish,
 }: {
   host: Host | null;
@@ -1616,6 +1616,16 @@ function EnrollCredsDialog({
     `curl -fsSL -H "Authorization: Bearer ${token ?? "<YOUR_TOKEN>"}" \\\n` +
     `  "${scriptUrl}" \\\n` +
     `  | ssh ${sshTarget || "<user@host>"} sudo bash`;
+  // SSH-agent bridge command, filled in so it's copy-paste runnable. The bridge
+  // authenticates the WebSocket with the live *session* token — a flt_
+  // service-account token can't open that socket (it isn't a JWT).
+  const agentCommand =
+    `fleet-enroll-agent \\\n` +
+    `  -url ${window.location.origin} \\\n` +
+    `  -host ${host?.id ?? "<host-id>"} \\\n` +
+    `  -token ${token ?? "<YOUR_TOKEN>"} \\\n` +
+    `  -bootstrap-user ${bootstrapUser || "<ssh-user>"}` +
+    (viaJump ? ` \\\n  -via-jump` : "");
 
   // Pre-fill the jump host's WireGuard endpoint with the configured default.
   const { data: nextWG } = useQuery({ queryKey: ["next-wg"], queryFn: nextWGAddress, enabled: Boolean(host) });
@@ -1737,23 +1747,38 @@ function EnrollCredsDialog({
           </Stack>
         )}
         {method === "agent" && (
-          <Alert severity="info" sx={{ mt: 1 }}>
-            The browser can't reach your SSH agent, so run the bridge from your
-            laptop — your key never leaves your machine (only signatures are
-            forwarded). With your key loaded (<code>ssh-add</code>), run:
-            <Box
-              component="pre"
-              sx={{ mt: 1, p: 1, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-all" }}
-            >
-{`fleet-enroll-agent \\
-  -url ${window.location.origin} \\
-  -host ${host?.id ?? "<host-id>"} \\
-  -token <YOUR_TOKEN> \\
-  -bootstrap-user <ssh-user>`}
-            </Box>
-            Pass <code>-via-jump</code> if the backend can't reach the host
-            directly. Build the bridge with <code>make enroll-agent</code>.
-          </Alert>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="SSH user on the host" value={bootstrapUser}
+              onChange={(e) => setBootstrapUser(e.target.value)}
+              size="small"
+              helperText="The account your loaded key authenticates as; needs sudo (or root)"
+            />
+            <Alert severity="info">
+              The browser can't reach your SSH agent, so run the bridge from your
+              laptop — your key never leaves your machine (only signatures are
+              forwarded). With your key loaded (<code>ssh-add</code>), run:
+              <Box sx={{ position: "relative" }}>
+                <Box
+                  component="pre"
+                  sx={{ mt: 1, p: 1, pr: 5, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-all" }}
+                >
+                  {agentCommand}
+                </Box>
+                <Tooltip title="Copy command">
+                  <IconButton
+                    size="small" sx={{ position: "absolute", top: 12, right: 4 }}
+                    onClick={() => navigator.clipboard?.writeText(agentCommand)}
+                  >
+                    <ContentCopyIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              The command carries your current session token, which is short-lived —
+              run it promptly, or copy it again after re-login. Build the bridge with{" "}
+              <code>make enroll-agent</code>.
+            </Alert>
+          </Stack>
         )}
         {method === "pipe" && (
           <Stack spacing={2} sx={{ mt: 1 }}>
