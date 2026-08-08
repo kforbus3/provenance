@@ -867,8 +867,19 @@ NOSUDO="${LOGIN}-login"
 # Two shared accounts that per-user certificates map to (unique cert per user):
 #   $LOGIN  -> privileged, NOPASSWD sudo  (Host.Sudo / super admin)
 #   $NOSUDO -> login-only, NO sudo        (users without Host.Sudo)
-id "$LOGIN" >/dev/null 2>&1 || useradd -m -s /bin/bash "$LOGIN" 2>/dev/null || adduser -D "$LOGIN" 2>/dev/null || true
-id "$NOSUDO" >/dev/null 2>&1 || useradd -m -s /bin/bash "$NOSUDO" 2>/dev/null || adduser -D "$NOSUDO" 2>/dev/null || true
+# Minimal hosts (Alpine, trimmed images) have no bash; an account pointed at a
+# missing shell can't take a session even once its certificate is accepted.
+FLEETSHELL=/bin/bash
+[ -x "$FLEETSHELL" ] || FLEETSHELL=/bin/sh
+for U in "$LOGIN" "$NOSUDO"; do
+  id "$U" >/dev/null 2>&1 && continue
+  # useradd on glibc distros, adduser on busybox. Keep whichever error came out:
+  # both failing must be fatal, not swallowed — a host that trusts the CA but has
+  # no account to map principals onto accepts no one, and the failure would
+  # otherwise surface much later as an unexplained login rejection.
+  useradd -m -s "$FLEETSHELL" "$U" 2>&1 || adduser -D -s "$FLEETSHELL" "$U" 2>&1 || true
+  id "$U" >/dev/null 2>&1 || { echo "[fleet] FAILED to create account $U"; exit 1; }
+done
 mkdir -p /etc/sudoers.d && printf '%%s ALL=(ALL) NOPASSWD:ALL\n' "$LOGIN" > /etc/sudoers.d/fleet && chmod 0440 /etc/sudoers.d/fleet
 # $NOSUDO deliberately has no sudoers entry.
 # Trust the Fleet user CA.

@@ -59,3 +59,40 @@ func (s *Store) DeleteHostKey(ctx context.Context, host string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM ssh_host_keys WHERE host=$1`, host)
 	return err
 }
+
+// DeleteHostKeys removes the pins for every identity a host can be dialed as and
+// reports how many rows went. A host is pinned per address — overlay IP, management
+// address, hostname — so clearing one identity leaves the others refusing.
+func (s *Store) DeleteHostKeys(ctx context.Context, hosts []string) (int, error) {
+	if len(hosts) == 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM ssh_host_keys WHERE host = ANY($1)`, hosts)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// ListHostKeys returns the pins for the given identities, for showing an operator
+// what they are about to stop trusting.
+func (s *Store) ListHostKeys(ctx context.Context, hosts []string) ([]HostKeyPin, error) {
+	if len(hosts) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT host, key_line, key_type, source FROM ssh_host_keys WHERE host = ANY($1)`, hosts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HostKeyPin
+	for rows.Next() {
+		var p HostKeyPin
+		if err := rows.Scan(&p.Host, &p.KeyLine, &p.KeyType, &p.Source); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

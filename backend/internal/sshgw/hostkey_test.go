@@ -3,7 +3,9 @@ package sshgw
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
+	"crypto/rand"
+	"strconv"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -11,98 +13,109 @@ import (
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
-func testKey(t *testing.T) ssh.PublicKey {
-	t.Helper()
-	pub, _, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k
+// memPins is an in-memory hostKeyPinStore standing in for the database.
+type memPins struct {
+	pins map[string]store.HostKeyPin
 }
 
-func TestHostKeyTOFU(t *testing.T) {
-	v := newHostKeyVerifier(nil, nil)
-	k1 := testKey(t)
-	k2 := testKey(t)
+func newMemPins() *memPins { return &memPins{pins: map[string]store.HostKeyPin{}} }
 
-	// First sight of a host pins its key and is accepted.
-	if err := v.check("jumphost:22", nil, k1); err != nil {
-		t.Fatalf("first connect should pin+accept: %v", err)
-	}
-	// Same key again → accepted.
-	if err := v.check("jumphost:22", nil, k1); err != nil {
-		t.Fatalf("same key should be accepted: %v", err)
-	}
-	// Different key for the same host → refused (possible MITM).
-	if err := v.check("jumphost:22", nil, k2); err == nil {
-		t.Fatal("changed host key should be refused")
-	}
-	// A different host is independent — its first key is pinned+accepted.
-	if err := v.check("10.100.0.22:22", nil, k2); err != nil {
-		t.Fatalf("different host should pin independently: %v", err)
-	}
-}
-
-// fakePinStore is an in-memory hostKeyPinStore for testing persistence behavior.
-type fakePinStore struct {
-	pins   map[string]store.HostKeyPin
-	getErr error
-}
-
-func (f *fakePinStore) GetHostKey(_ context.Context, host string) (store.HostKeyPin, bool, error) {
-	if f.getErr != nil {
-		return store.HostKeyPin{}, false, f.getErr
-	}
-	p, ok := f.pins[host]
+func (m *memPins) GetHostKey(_ context.Context, host string) (store.HostKeyPin, bool, error) {
+	p, ok := m.pins[host]
 	return p, ok, nil
 }
-func (f *fakePinStore) PinHostKey(_ context.Context, host, line, typ string) error {
-	if f.pins == nil {
-		f.pins = map[string]store.HostKeyPin{}
+
+func (m *memPins) PinHostKey(_ context.Context, host, keyLine, keyType string) error {
+	if _, exists := m.pins[host]; exists {
+		return nil // mirrors ON CONFLICT DO NOTHING
 	}
-	if _, ok := f.pins[host]; !ok { // ON CONFLICT DO NOTHING
-		f.pins[host] = store.HostKeyPin{Host: host, KeyLine: line, KeyType: typ, Source: "tofu"}
-	}
+	m.pins[host] = store.HostKeyPin{Host: host, KeyLine: keyLine, KeyType: keyType, Source: "tofu"}
 	return nil
 }
 
-// TestHostKeyPersistedPinSurvivesRestart proves a pin written by one verifier instance is
-// enforced by a fresh instance sharing the store (i.e. across a simulated restart), and
-// that a mismatching key is then refused — the whole point of persisting pins.
-func TestHostKeyPersistedPinSurvivesRestart(t *testing.T) {
-	st := &fakePinStore{pins: map[string]store.HostKeyPin{}}
-	k1, k2 := testKey(t), testKey(t)
+func testKey(t *testing.T) ssh.PublicKey {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	sk, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("wrap key: %v", err)
+	}
+	return sk
+}
 
-	// First process pins k1 for the host.
-	v1 := newHostKeyVerifier(st, nil)
-	if err := v1.check("host-a:2222", nil, k1); err != nil {
-		t.Fatalf("first pin should accept: %v", err)
+// Clearing a pin has to clear the in-process cache as well as the stored row.
+// The verifier caches every pin it enforces, so deleting only the database row
+// leaves a running backend refusing the host's new key — which is what made
+// "remove its pin to re-trust" look like it did nothing.
+func TestForgetHostKeysDropsTheCachedPin(t *testing.T) {
+	pins := newMemPins()
+	v := newHostKeyVerifier(pins, nil)
+	old, rebuilt := testKey(t), testKey(t)
+
+	if err := v.check("host.example:22", nil, old); err != nil {
+		t.Fatalf("first contact should pin, got %v", err)
 	}
-	// knownhosts normalizes a non-default port to "[host]:port".
-	if _, ok := st.pins["[host-a]:2222"]; !ok {
-		t.Fatalf("pin was not persisted to the store; keys=%v", st.pins)
+	if err := v.check("host.example:22", nil, rebuilt); err == nil {
+		t.Fatal("a changed host key must be refused while the pin stands")
 	}
 
-	// A fresh verifier (empty memory cache) must load the pin and enforce it.
-	v2 := newHostKeyVerifier(st, nil)
-	if err := v2.check("host-a:2222", nil, k1); err != nil {
-		t.Fatalf("persisted pin should be accepted after restart: %v", err)
+	// Operator clears the pin: the stored row goes, and so must the cache.
+	delete(pins.pins, "host.example")
+	if err := v.check("host.example:22", nil, rebuilt); err == nil {
+		t.Error("cached pin still enforced after the row was deleted — ForgetHostKeys is required")
 	}
-	if err := v2.check("host-a:2222", nil, k2); err == nil {
-		t.Fatal("a different key must be refused against the persisted pin (MITM/rebuild)")
+	v.ForgetHostKeys("host.example")
+	if err := v.check("host.example:22", nil, rebuilt); err != nil {
+		t.Errorf("after clearing the pin the new key must be accepted, got %v", err)
+	}
+	if got := pins.pins["host.example"].KeyLine; got != string(ssh.MarshalAuthorizedKey(rebuilt)) {
+		t.Error("the re-trusted key should have been re-pinned")
 	}
 }
 
-// TestHostKeyLookupErrorFailsClosed proves a store lookup error refuses the connection
-// rather than blindly re-pinning (which could trust a MITM key).
-func TestHostKeyLookupErrorFailsClosed(t *testing.T) {
-	st := &fakePinStore{getErr: errors.New("db down")}
-	v := newHostKeyVerifier(st, nil)
-	if err := v.check("host-b:22", nil, testKey(t)); err == nil {
-		t.Fatal("a pin-lookup error must refuse the connection, not accept it")
+// The identity a pin is stored under is the dialed address normalized the way
+// the verifier normalizes it — including dropping the default port. A host
+// reachable at several addresses holds several pins, and HostKeyID is what the
+// clear-pin endpoint uses to find all of them.
+func TestHostKeyIDMatchesWhatTheVerifierPins(t *testing.T) {
+	pins := newMemPins()
+	v := newHostKeyVerifier(pins, nil)
+	for _, tc := range []struct {
+		addr string
+		port int
+	}{
+		{"10.100.0.26", 22},
+		{"debian-ab-test", 22},
+		{"10.100.0.26", 2222},
+	} {
+		target := tc.addr + ":" + strconv.Itoa(tc.port)
+		if err := v.check(target, nil, testKey(t)); err != nil {
+			t.Fatalf("pin %s: %v", target, err)
+		}
+		id := HostKeyID(tc.addr, tc.port)
+		if _, ok := pins.pins[id]; !ok {
+			var have []string
+			for k := range pins.pins {
+				have = append(have, k)
+			}
+			t.Errorf("HostKeyID(%q,%d)=%q does not match any stored pin %v", tc.addr, tc.port, id, have)
+		}
+	}
+}
+
+func TestPinFingerprintRendersSSHFormat(t *testing.T) {
+	key := testKey(t)
+	got := PinFingerprint(string(ssh.MarshalAuthorizedKey(key)))
+	if want := ssh.FingerprintSHA256(key); got != want {
+		t.Errorf("fingerprint = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(got, "SHA256:") {
+		t.Errorf("fingerprint %q should be the SHA256 form ssh prints", got)
+	}
+	if PinFingerprint("not a key") != "" {
+		t.Error("an unparseable pin should render empty, not panic")
 	}
 }

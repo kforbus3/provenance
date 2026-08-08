@@ -18,6 +18,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/httpx"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 )
 
@@ -39,6 +40,10 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/maintenance", h.bulkMaintenance)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/tags", h.bulkTags)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
+		// SSH host-key pins for a rebuilt host: inspect what is trusted, and drop it
+		// so the next connection re-pins the host's current key.
+		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}/host-key", h.hostKeyPins)
+		pr.With(d.Auth.RequirePermission("Host.Enroll")).Delete("/hosts/{id}/host-key", h.clearHostKeyPins)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/wg/next", h.nextWG)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts", h.create)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Put("/hosts/{id}", h.update)
@@ -98,6 +103,110 @@ func (h *handler) refreshFacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"queued": true})
+}
+
+// hostKeyIdentities lists every identity a host's SSH host key can be pinned
+// under. The gateway pins per dialed address, and it dials the overlay address,
+// the management address and the hostname in turn, so a host that answers on more
+// than one of them holds more than one pin.
+func hostKeyIdentities(h *models.Host) []string {
+	port := h.SSHPort
+	if port <= 0 {
+		port = 22
+	}
+	var ids []string
+	for _, addr := range []string{h.WGAddress, h.Address, h.Hostname} {
+		if strings.TrimSpace(addr) == "" {
+			continue
+		}
+		id := sshgw.HostKeyID(strings.TrimSpace(addr), port)
+		if !containsStr(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func containsStr(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// hostKeyPins reports the SSH host-key pins currently held for a host, so an
+// operator can see what they are about to stop trusting before they clear it.
+func (h *handler) hostKeyPins(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	host, err := h.d.Store.GetHost(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	pins, err := h.d.Store.ListHostKeys(r.Context(), hostKeyIdentities(host))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read host key pins")
+		return
+	}
+	out := make([]map[string]any, 0, len(pins))
+	for _, p := range pins {
+		out = append(out, map[string]any{
+			"host": p.Host, "keyType": p.KeyType, "source": p.Source,
+			"fingerprint": sshgw.PinFingerprint(p.KeyLine),
+		})
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"pins": out})
+}
+
+// clearHostKeyPins forgets a host's pinned SSH host key so the next connection
+// re-pins whatever the host now presents. This is the documented remedy when a
+// host is legitimately rebuilt and its host key changes — until it existed, the
+// mismatch error told operators to remove a pin they had no way to remove.
+//
+// It is deliberately gated on Host.Enroll rather than Host.View: clearing a pin
+// re-opens the trust-on-first-use window for that host, which is the same trust
+// decision enrollment makes.
+func (h *handler) clearHostKeyPins(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	p := auth.MustPrincipal(r)
+	host, err := h.d.Store.GetHost(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	ids := hostKeyIdentities(host)
+	// Record what was trusted before dropping it, so the audit trail can answer
+	// "what key did we stop trusting, and when" after the host has re-pinned.
+	prior, _ := h.d.Store.ListHostKeys(r.Context(), ids)
+	cleared, err := h.d.Store.DeleteHostKeys(r.Context(), ids)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not clear host key pins")
+		return
+	}
+	// The stored pin and the gateway's per-process cache must go together; dropping
+	// only the row leaves the running backend refusing the new key.
+	if h.d.ForgetHostKeys != nil {
+		h.d.ForgetHostKeys(ids...)
+	}
+	fps := make([]string, 0, len(prior))
+	for _, pin := range prior {
+		fps = append(fps, pin.Host+"="+sshgw.PinFingerprint(pin.KeyLine))
+	}
+	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+		ActorID: &p.UserID, Action: "host.host_key_cleared", TargetKind: "host", TargetID: id.String(),
+		Detail: map[string]any{"identities": ids, "cleared": cleared, "priorKeys": fps},
+	})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"cleared": cleared, "identities": ids})
 }
 
 // setMaintenance puts a host into a maintenance window (default 60 min) so its

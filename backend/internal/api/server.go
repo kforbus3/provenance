@@ -1028,6 +1028,9 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// deleted host's WireGuard peer on the jump host, so a stale peer can't
 	// steal the overlay IP back when it is later reassigned.
 	deps.CleanupJumpPeer = enroll.CleanupJumpPeer
+	// Re-trusting a rebuilt host's key has to invalidate the gateway's in-process
+	// pin cache as well as the stored pin.
+	deps.ForgetHostKeys = s.Gateway.ForgetHostKeys
 
 	// M7 — live status WebSocket.
 	ws.Mount(r, deps, s.Hub)

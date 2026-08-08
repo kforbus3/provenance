@@ -228,10 +228,30 @@ remote UAC token filtering that restricts other local admins).
 
 ## Host key fingerprints
 
-On first contact the host's SSH host key fingerprint is recorded in
-`host_fingerprints` (`SHA256:…`) and pinned for subsequent connections, guarding
-against man-in-the-middle changes. If a host is rebuilt and its key legitimately
-changes, an administrator must clear/refresh the stored fingerprint.
+On first contact the host's SSH host key is pinned (`ssh_host_keys`, source
+`tofu`) and every later connection must present the same key, guarding against
+man-in-the-middle changes. A host is pinned **per address it is dialed as** —
+overlay address, management address, and hostname each hold their own pin.
+
+If a host is rebuilt its key legitimately changes, and every dial then fails
+with `host key for <host> does not match the pinned key`. The host reports
+**offline** with that text in its status detail, and a terminal attempt is
+refused. Clear the pins to re-trust:
+
+- **UI** — open the host's **details** dialog; the offline reason is shown with a
+  **Trust new key** action.
+- **API** — `DELETE /api/v1/hosts/{id}/host-key` (`Host.Enroll`) clears the pins
+  for every identity the host is dialed as and drops the gateway's in-process
+  cache; `GET` the same path (`Host.View`) lists what is currently pinned, with
+  fingerprints to compare against `ssh-keyscan <host> | ssh-keygen -lf -`.
+
+Clearing a pin re-opens the trust-on-first-use window for that host, so confirm
+the key you are about to trust is really the host's. The clear is audited
+(`host.host_key_cleared`) along with the fingerprints that were dropped.
+
+> Deleting the `ssh_host_keys` row directly in the database is **not** sufficient
+> on a running backend: pins are cached per process, so the gateway keeps
+> enforcing the old key until it restarts. Use the API or the UI action.
 
 ## Rollback & troubleshooting
 
@@ -243,7 +263,9 @@ changes, an administrator must clear/refresh the stored fingerprint.
 - **SSH refuses the certificate:** confirm `TrustedUserCAKeys` points at the
   current CA public key. If the CA was **rotated**, re-distribute the new public
   key (see [certificate-lifecycle.md](./certificate-lifecycle.md)).
-- **Host shows offline:** check the WireGuard tunnel and that the jump host can
+- **Host shows offline:** open the host's details — the monitor's recorded reason
+  is shown under Status. A rebuilt host's changed key has a **Trust new key**
+  action there; otherwise check the WireGuard tunnel and that the jump host can
   reach `wg_address:ssh_port`.
 
 ## Decommissioning a host
