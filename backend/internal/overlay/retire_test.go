@@ -35,6 +35,22 @@ func TestRetireHostScriptStopsAndDisablesTheClient(t *testing.T) {
 	if !strings.HasPrefix(hb.Script, "set +e") {
 		t.Error("retire script is not best-effort: a host with no client to stop is not a failure")
 	}
+	// The peer-isolation rules go with it. They are scoped to the tunnel device, so
+	// once that device is gone they match nothing — but tun0 is a name the kernel
+	// reuses, and the next VPN this host runs would inherit a DROP naming a jump host
+	// it has never heard of.
+	for _, want := range []string{
+		`iptables -D "$_chain" $_rule`,
+		`iptables -F "$_own"`,
+		`iptables -X "$_own"`,
+		"FLEET-OVPN-IN",
+		"FLEET-OVPN-OUT",
+	} {
+		if !strings.Contains(hb.Script, want) {
+			t.Errorf("retire script leaves the isolation rules behind (%q missing):\n%s", want, hb.Script)
+		}
+	}
+
 	// The client certificate stays valid — the host was moved, not revoked — but the
 	// config is set aside so nothing restarts it.
 	if !strings.Contains(hb.Script, "client.ovpn.fleet-disabled") {

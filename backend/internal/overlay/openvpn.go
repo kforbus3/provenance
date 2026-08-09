@@ -428,6 +428,28 @@ for f in /etc/openvpn/fleet-overlay.conf /etc/openvpn/client/fleet-overlay.conf;
   [ -f "$f" ] && mv -f "$f" "$f.fleet-disabled"
 done
 if [ -f %[1]s/client.ovpn ]; then mv -f %[1]s/client.ovpn %[1]s/client.ovpn.fleet-disabled; fi
+# Take the peer-isolation rules with it. They are scoped to the tunnel device, so
+# once that device is gone they match nothing — but they are not harmless: tun0 is a
+# name the kernel reuses, so the next VPN this host runs inherits a DROP naming a
+# jump host it has never heard of. Leaving them also means an operator auditing the
+# host finds Fleet rules for an overlay Fleet no longer uses.
+if command -v iptables >/dev/null 2>&1; then
+  for _pair in "INPUT FLEET-OVPN-IN" "OUTPUT FLEET-OVPN-OUT"; do
+    set -- $_pair
+    _chain=$1; _own=$2
+    # Delete every jump into our chain, whatever device it names. Bounded so a
+    # surprise from iptables can never spin here.
+    _n=0
+    while [ $_n -lt 20 ]; do
+      _rule=$(iptables -S "$_chain" 2>/dev/null | grep -m1 -- "-j $_own" | sed "s/^-A $_chain //")
+      [ -n "$_rule" ] || break
+      iptables -D "$_chain" $_rule 2>/dev/null || break
+      _n=$((_n+1))
+    done
+    iptables -F "$_own" 2>/dev/null
+    iptables -X "$_own" 2>/dev/null
+  done
+fi
 echo OVPN_RETIRED`, fleetDir),
 	}
 }

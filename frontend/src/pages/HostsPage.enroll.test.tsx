@@ -155,7 +155,9 @@ describe("EnrollCredsDialog no-install VPN overlay", () => {
     const finish = screen.getByRole("button", { name: /Finish enrollment/ });
     expect(finish).toBeEnabled();
     fireEvent.click(finish);
-    expect(onPipeFinish).toHaveBeenCalledWith("");
+    // No key, and the resolved transport travels with it so the progress dialog can
+    // name what is being provisioned rather than always saying WireGuard.
+    expect(onPipeFinish).toHaveBeenCalledWith("", "openvpn");
   });
 
   it("follows the deployment default when the operator leaves the dropdown alone", async () => {
@@ -252,6 +254,28 @@ describe("EnrollCredsDialog no-install VPN overlay", () => {
     // ...and back, so the field is never left describing the wrong transport.
     pickOverlay(/^WireGuard$/);
     await waitFor(() => expect(endpoint).toHaveValue("vpn.example.com:51820"));
+  });
+
+  it("hands the progress dialog the transport being provisioned", () => {
+    // "Provisioning WireGuard…" was hard-coded, so it was wrong for every OpenVPN
+    // enrollment — on screen, while the operator watched it happen.
+    const onSubmit = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <EnrollCredsDialog host={host} onClose={() => {}} onSubmit={onSubmit} onPipeFinish={() => {}} />
+      </QueryClientProvider>,
+    );
+    pickOverlay(/^OpenVPN/);
+    fireEvent.change(screen.getByLabelText(/^SSH password$/), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Enroll$/ }));
+
+    // The REQUEST still carries the explicit choice; the second argument is the
+    // resolved transport, for display only.
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ overlay: "openvpn" }),
+      "openvpn",
+    );
   });
 
   it("still requires the pasted key under WireGuard", () => {

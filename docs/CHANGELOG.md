@@ -7,6 +7,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+- **Retiring the OpenVPN overlay takes its firewall rules with it.** Switching a host
+  back to WireGuard stopped and disabled the client and set its configs aside, but left
+  the peer-isolation chains on the host. They are scoped to the tunnel device, so once
+  that device is gone they match nothing — but `tun0` is a name the kernel reuses, so
+  the next VPN the host runs would inherit a DROP naming a jump host it has never heard
+  of, and an operator auditing the host finds Fleet rules for an overlay Fleet no longer
+  uses. The retirement now removes the jumps out of INPUT/OUTPUT and deletes the chains.
+
+- **The enrollment progress dialog names the transport it is provisioning.** It said
+  "Provisioning WireGuard and trust over SSH…" for every enrollment, including the
+  OpenVPN ones — on screen, while the operator watched it happen — and the success
+  banner said nothing about which overlay the host had landed on. Both now name the
+  resolved transport, including what "deployment default" resolves to. The enrollment
+  request still sends `""` for the default, so the backend remains the one that decides.
+
+---
+
 ## v1.4.0 — One fleet, two VPNs, switchable per host — 2026-08-09
 
 **Deploy note.** The jump host publishes a new UDP port and mounts a new volume for
