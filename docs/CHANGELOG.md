@@ -7,6 +7,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **The overlay verification retries instead of deciding on one attempt.** Restarting
+  the jump host drops every client tunnel, and OpenVPN's `persist-tun` keeps the
+  device and its address on the host across that — so the host-side check passes on a
+  tunnel with no data plane, and this dial is what notices. A single 12-second attempt
+  in the reconnect window failed enrollments whose overlay was seconds from working
+  and, because the WireGuard teardown is gated here, left those hosts on both
+  transports. It now retries to a 90-second deadline, which covers the server's pushed
+  `ping-restart`, and the failure says which of the two causes it is.
+
+- **Host-side peer isolation is self-correcting when the jump address changes.** The
+  rules name the jump host by address and were inserted straight into INPUT/OUTPUT:
+  idempotent, but not self-cleaning. Moving the OpenVPN overlay onto its own subnet
+  changes that address, and the rule left over from the old one matches everything
+  from the new jump host — blackholing the tunnel with nothing logged anywhere. The
+  rules now live in Fleet's own `FLEET-OVPN-IN`/`FLEET-OVPN-OUT` chains, flushed and
+  refilled on every connect, so a stale address is retired as a side effect of writing
+  the current one.
+
 - **Enrollment no longer gives up on an OpenVPN tunnel that is still coming up.** The
   bring-up waited 20 seconds for the host's tunnel address, which is short: the first
   connect has to resolve DNS, hairpin through the router when the host shares the jump

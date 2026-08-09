@@ -88,20 +88,50 @@ func (s *Service) enrollCertOverlay(
 // verifyOverlayReachable dials the host's overlay address FROM the jump host, which is
 // the path every Fleet session takes. It is deliberately narrow: no management-address
 // fallback, no hostname, nothing that can succeed while the overlay is dead.
+//
+// It retries to a deadline rather than deciding on one attempt, because a tunnel that
+// is legitimately re-establishing looks exactly like a broken one for up to a minute.
+// Restarting the jump host drops every client, and OpenVPN's `persist-tun` keeps the
+// device and its address on the host across that — so the host-side check passes on a
+// tunnel with no data plane, and this is the check that notices. A single attempt in
+// that window failed enrollments whose overlay was seconds from working, and (because
+// the teardown is gated here) left hosts sitting on both transports.
+//
+// The window covers the server's pushed ping-restart, which is what bounds a client's
+// own reconnect.
 func (s *Service) verifyOverlayReachable(ctx context.Context, jumpClient *ssh.Client, overlayIP string, port int) error {
 	if port <= 0 {
 		port = 22
 	}
-	// Bounded: a black-holed overlay address does not refuse the connection, it hangs,
-	// and DialContext through the jump host would otherwise wait minutes.
-	dctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-	conn, err := jumpClient.DialContext(dctx, "tcp", net.JoinHostPort(overlayIP, strconv.Itoa(port)))
-	if err != nil {
-		return fmt.Errorf("no route from the jump host to %s:%d (%v)", overlayIP, port, err)
+	deadline := time.Now().Add(90 * time.Second)
+	var lastErr error
+	for {
+		// Bounded per attempt: a black-holed overlay address does not refuse the
+		// connection, it hangs, and DialContext through the jump host would otherwise
+		// wait minutes.
+		dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		conn, err := jumpClient.DialContext(dctx, "tcp", net.JoinHostPort(overlayIP, strconv.Itoa(port)))
+		cancel()
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
 	}
-	_ = conn.Close()
-	return nil
+	return fmt.Errorf(
+		"no route from the jump host to %s:%d after 90s (%v). The host holds the address but nothing "+
+			"answers on it: the client may still be re-connecting (restarting the jump host drops every "+
+			"tunnel, and the device keeps its address meanwhile), or the host's overlay firewall is "+
+			"dropping the jump host — check peer isolation rules on its tunnel device",
+		overlayIP, port, lastErr)
 }
 
 // overlayPlan is one transport's address plan: the subnet its hosts are numbered
