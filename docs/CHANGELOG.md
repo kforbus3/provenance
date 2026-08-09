@@ -7,7 +7,10 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.4.1 — 2026-08-09
+
+Follow-ups to v1.4.0, both found switching a real host between overlays.
+No deploy note: this one is a plain bundle install.
 
 - **Retiring the OpenVPN overlay takes its firewall rules with it.** Switching a host
   back to WireGuard stopped and disabled the client and set its configs aside, but left
