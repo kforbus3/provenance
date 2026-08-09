@@ -409,7 +409,7 @@ echo OVPN_RETIRED`, fleetDir),
 // HostInstallScript installs openvpn on a managed host, writes its client material +
 // config, and brings up the persistent tunnel (systemd where available, else a
 // backgrounded daemon).
-func (o *OpenVPN) HostInstallScript(caPEM, certPEM, keyPEM []byte, clientConf string) string {
+func (o *OpenVPN) HostInstallScript(caPEM, certPEM, keyPEM []byte, clientConf, overlayIP string) string {
 	return fmt.Sprintf(`set -e
 if ! command -v openvpn >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq openvpn >/dev/null 2>&1
@@ -444,23 +444,58 @@ fi
 # device and report what was actually observed. Reporting the address Fleet MEANT
 # to assign, off a script that printed success unconditionally, is what let a
 # never-configured overlay pass for a working one.
+#
+# The window is generous because the first connect legitimately takes time: DNS, a
+# NAT hairpin when the host sits on the jump host's LAN, and openvpn's own retry
+# backoff after any attempt that lands while the server is restarting. A 20s window
+# failed enrollments whose tunnel then came up seconds later and stayed up — the
+# worst outcome, since the operator is told it did not work while it did.
+#
+# It waits for the address the server was told to pin, not merely for any tun
+# device, so a bring-up on a pool address (the ccd entry not applying) is not
+# mistaken for success — but whatever was seen is reported either way.
+OVPN_WANT=%[8]s
 OVPN_IP=
 _i=0
-while [ $_i -lt 20 ]; do
-  OVPN_IP=$(ip -4 -br addr show 2>/dev/null | awk '$1 ~ /^(tun|tap)/ {print $3}' | cut -d/ -f1 | head -1)
-  if [ -n "$OVPN_IP" ]; then break; fi
+while [ $_i -lt 60 ]; do
+  for _a in $(ip -4 -br addr show 2>/dev/null | awk '$1 ~ /^(tun|tap)/ {print $3}' | cut -d/ -f1); do
+    if [ "$_a" = "$OVPN_WANT" ]; then OVPN_IP=$_a; break; fi
+    if [ -z "$OVPN_IP" ]; then OVPN_IP=$_a; fi
+  done
+  if [ -n "$OVPN_WANT" ] && [ "$OVPN_IP" = "$OVPN_WANT" ]; then break; fi
+  if [ -z "$OVPN_WANT" ] && [ -n "$OVPN_IP" ]; then break; fi
   sleep 1; _i=$((_i+1))
 done
+echo "OVPN_WAITED=${_i}s"
 if [ -n "$OVPN_IP" ]; then
   echo "OVPN_HOST_IP=$OVPN_IP"
   echo OVPN_HOST_CONFIGURED
 else
+  # Diagnostics only — nothing here may abort the script. "set -e" is still on, and
+  # journalctl/systemctl status exit non-zero for a unit that is merely inactive:
+  # that killed this block before it printed anything, so a failed enrollment showed
+  # an empty log and said nothing about why.
+  set +e
   echo OVPN_HOST_NO_TUNNEL
+  # The address the client was told to dial. When the tunnel never comes up this is
+  # almost always the answer — the server's UDP port is not reachable from here —
+  # and it is not otherwise visible to whoever reads the enrollment error.
+  echo "OVPN_REMOTE=$(awk '/^remote /{print $2\":\"$3; exit}' %[1]s/client.ovpn 2>/dev/null)"
   echo '--- openvpn client log ---'
-  tail -n 15 %[1]s/client.log 2>/dev/null
-  journalctl -u openvpn@fleet-overlay -u openvpn-client@fleet-overlay -n 15 --no-pager 2>/dev/null
+  if [ -s %[1]s/client.log ]; then
+    tail -n 20 %[1]s/client.log
+  else
+    echo '(no client.log: started under systemd — unit state follows)'
+    systemctl --no-pager --lines=20 status openvpn@fleet-overlay 2>/dev/null
+    systemctl --no-pager --lines=20 status openvpn-client@fleet-overlay 2>/dev/null
+    journalctl -u openvpn@fleet-overlay -u openvpn-client@fleet-overlay -n 20 --no-pager 2>/dev/null
+  fi
+  # The verdict is the marker, not the exit status: these diagnostics all exit
+  # non-zero for an inactive unit, and letting that become the script's status buried
+  # the report under a bare "Process exited with status 1".
+  true
 fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
-		o.hostIsolationInstall(), runningCheck("ovpn_client_running", fleetDir+"/client.ovpn"))
+		o.hostIsolationInstall(), runningCheck("ovpn_client_running", fleetDir+"/client.ovpn"), overlayIP)
 }
 
 // hostIsolationInstall renders the fragment of HostInstallScript that lays down the

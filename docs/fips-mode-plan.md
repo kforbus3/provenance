@@ -295,6 +295,13 @@ overlay selected — any method, including no-install. Fleet then:
 If the new tunnel does not answer, the enrollment leaves the old transport in place
 and says so — the host keeps working.
 
+**Applying this to a running deployment** needs `make up-single`, not
+`make redeploy-single`: the OpenVPN port publish, the `jump_ovpn` volume and the
+entrypoint's server restart all live on the jump host, which `redeploy-single`
+deliberately leaves running. A jump host that was never recreated runs the server
+inside the container on a port nothing publishes — the client dials and gets no
+answer, and enrollment fails with `OVPN_HOST_NO_TUNNEL`.
+
 **Firewall:** open **both** UDP ports on the jump host if any host uses either
 transport: `FLEET_WG_PORT` (51820) and `FLEET_OVPN_PORT` (1194). Managed hosts always
 dial `FLEET_OVPN_PORT` for OpenVPN regardless of the port in

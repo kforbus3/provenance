@@ -118,7 +118,7 @@ func TestOpenVPNHostIsolationScript(t *testing.T) {
 // The script must be on disk before the tunnel starts, or the first connect races it.
 func TestOpenVPNHostInstallWritesIsolationBeforeStart(t *testing.T) {
 	o := New(testCfg(), nil)
-	install := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), o.ClientConfig("j:1194"))
+	install := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), o.ClientConfig("j:1194"), "10.100.0.27")
 
 	wrote := strings.Index(install, "peer-isolation.sh <<")
 	started := strings.Index(install, "systemctl enable --now")
@@ -145,7 +145,7 @@ func TestOpenVPNHostIsolationOmittedWhenDisabled(t *testing.T) {
 	if strings.Contains(cli, "script-security") || strings.Contains(cli, "peer-isolation") {
 		t.Errorf("isolation disabled but the client config still hooks it:\n%s", cli)
 	}
-	install := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), cli)
+	install := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), cli, "10.100.0.27")
 	if strings.Contains(install, "peer-isolation") {
 		t.Error("isolation disabled but the install script still writes the script")
 	}

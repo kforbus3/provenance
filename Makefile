@@ -53,9 +53,26 @@ up-single: env ## Single-server production: (re)build & start the WHOLE stack in
 	@echo "hosts may show offline for a minute or two. For code-only updates use 'make redeploy-single'."
 
 .PHONY: redeploy-single
-redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/updater) in place, leaving the jump host + WireGuard overlay UP (no host-offline blip)
+redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/updater) in place, leaving the jump host + overlay UP (no host-offline blip)
 	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner fleet-updater
 	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
+	@# This target deliberately does not touch the jump host — which means a release
+	@# that changes its ports, volumes or entrypoint (e.g. publishing the OpenVPN port)
+	@# is NOT applied here, and the symptom is a feature that silently does not work
+	@# rather than an error. Say so when the compose file is newer than the running
+	@# container. Best-effort: any tool missing (non-GNU date, no docker) just skips.
+	@started=$$(docker inspect -f '{{.State.StartedAt}}' fleet-terminal-jumphost-1 2>/dev/null); \
+	 if [ -n "$$started" ]; then \
+	   s=$$(date -u -d "$$started" +%s 2>/dev/null || echo 0); \
+	   f=$$(stat -c %Y deploy/compose/docker-compose.jumphost.yml 2>/dev/null || echo 0); \
+	   if [ "$$s" -gt 0 ] && [ "$$f" -gt "$$s" ]; then \
+	     echo ""; \
+	     echo "WARNING: the jump host predates deploy/compose/docker-compose.jumphost.yml."; \
+	     echo "         Its ports, volumes and entrypoint are NOT updated by this target,"; \
+	     echo "         so changes there (e.g. the OpenVPN port) are not in effect."; \
+	     echo "         Run 'make up-single' to recreate it (brief overlay re-establish)."; \
+	   fi; \
+	 fi
 
 # --- Release bundling (in-UI upgrade system) -------------------------------------
 # Produce a single signed .fleetup file that operators upload (or later pull) to

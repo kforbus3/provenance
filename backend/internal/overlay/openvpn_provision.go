@@ -61,7 +61,7 @@ func (o *OpenVPN) PrepareHost(ctx context.Context, hostID uuid.UUID, overlayIP, 
 		return HostBringup{}, fmt.Errorf("pin overlay address on jump: %v: %s", jerr, oneLine(out))
 	}
 	return HostBringup{
-		Script: o.HostInstallScript(caPEM, cliCert, cliKey, o.ClientConfig(endpoint)),
+		Script: o.HostInstallScript(caPEM, cliCert, cliKey, o.ClientConfig(endpoint), overlayIP),
 		Marker: hostConfiguredMarker,
 	}, nil
 }
@@ -89,7 +89,8 @@ func checkHostBringup(out, overlayIP string) (string, error) {
 	got := hostIP(out)
 	switch {
 	case got == "":
-		return "", fmt.Errorf("OpenVPN reported no tunnel address on the host: %s", oneLine(out))
+		return "", fmt.Errorf("the host brought up no OpenVPN tunnel%s. %s: %s",
+			remoteSuffix(out), noTunnelHint, oneLine(out))
 	case got != overlayIP:
 		return "", fmt.Errorf(
 			"OpenVPN tunnel came up at %s, not the assigned %s — the ccd pin for this host is not being applied",
@@ -103,6 +104,30 @@ func hostIP(out string) string {
 	for _, line := range strings.Split(out, "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "OVPN_HOST_IP="); ok {
 			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+// noTunnelHint is what to check when a host's client starts but never receives an
+// address. Every cause is the same shape — the client's UDP packets are not reaching
+// the server — and none of them appear in the client's own log, which is why an
+// operator reading "no tunnel" otherwise has nowhere to start.
+const noTunnelHint = "the client could not reach the OpenVPN server, so it was never " +
+	"assigned an address. Check that the server's UDP port is published by the jump host " +
+	"(a jump-host compose change needs `make up-single`, not `make redeploy-single`), " +
+	"forwarded on the firewall/router, and reachable from this host — a host on the same LAN " +
+	"as the jump host may need the endpoint set to a LAN address, since many routers will not " +
+	"hairpin a public one"
+
+// remoteSuffix names the endpoint the client was told to dial, when the host reported
+// it. That address is the subject of every check in noTunnelHint.
+func remoteSuffix(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "OVPN_REMOTE="); ok {
+			if r := strings.TrimSpace(rest); r != "" && r != ":" {
+				return " at " + r
+			}
 		}
 	}
 	return ""

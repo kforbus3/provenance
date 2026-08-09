@@ -109,7 +109,7 @@ func TestEmitOverlayConfigs(t *testing.T) {
 	// host (self-contained: install openvpn, write material, start the daemon).
 	must(filepath.Join(out, "jump-server.sh"), []byte(o.JumpServerScript(caPEM, srvCert, srvKey, srvConf)))
 	must(filepath.Join(out, "jump-ccd.sh"), []byte(o.JumpCCDScript(ClientCN(hostID), ccd)))
-	must(filepath.Join(out, "host-install.sh"), []byte(o.HostInstallScript(caPEM, cliCert, cliKey, cliConf)))
+	must(filepath.Join(out, "host-install.sh"), []byte(o.HostInstallScript(caPEM, cliCert, cliKey, cliConf, "10.100.0.27")))
 	t.Logf("emitted overlay material + scripts (CN=%s, ip=%s) to %s", ClientCN(hostID), overlayIP, out)
 }
 
