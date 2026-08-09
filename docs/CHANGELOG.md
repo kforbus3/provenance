@@ -7,6 +7,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **OpenVPN enrollment installs iptables, on the host and on the jump host.** Peer
+  isolation on this overlay *is* iptables — OpenVPN has no `AllowedIPs`, so a filter on
+  the tunnel device is the only thing isolating a host at its own end, and a forwarding
+  deny is the only thing isolating them at the hub. Both fail open when iptables is
+  absent (a failing `up` script would abort the tunnel under `script-security 2`, and an
+  unreachable host is worse than an unfiltered one), so a host without it joined the
+  overlay silently unisolated with the only trace a line in its own OpenVPN log.
+
+  Enrollment now provides iptables the same way it provides openvpn itself
+  (apt/dnf/yum/apk), before the tunnel is started so the first connect is already
+  filtered. If it still cannot be installed the enrollment succeeds — but the step
+  carries a warning naming the host as unisolated, rather than reading identically to
+  a host that is.
+
 - **The overlay verification retries instead of deciding on one attempt.** Restarting
   the jump host drops every client tunnel, and OpenVPN's `persist-tun` keeps the
   device and its address on the host across that — so the host-side check passes on a

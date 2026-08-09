@@ -349,7 +349,18 @@ func (o *OpenVPN) peerIsolationScript() string {
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf(`if iptables -C FORWARD -s %[1]s -d %[1]s -j DROP >/dev/null 2>&1 \
+	// The deny IS iptables, so provide it the same way this script provides openvpn.
+	// Without it the jump host forwards freely between managed hosts and the only
+	// signal is the OVPN_PEER_ISOLATION_FAILED line below — a security control that
+	// goes missing quietly is the failure mode worth spending a package install on.
+	return fmt.Sprintf(`if ! command -v iptables >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then { apt-get update -qq && apt-get install -y -qq iptables; } >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y -q iptables >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then yum install -y -q iptables >/dev/null 2>&1 || true
+  elif command -v apk >/dev/null 2>&1; then apk add --no-cache iptables >/dev/null 2>&1 || true
+  fi
+fi
+if iptables -C FORWARD -s %[1]s -d %[1]s -j DROP >/dev/null 2>&1 \
    || iptables -I FORWARD 1 -s %[1]s -d %[1]s -j DROP >/dev/null 2>&1; then
   echo OVPN_PEER_ISOLATION_OK
 else
@@ -514,15 +525,33 @@ fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
 }
 
 // hostIsolationInstall renders the fragment of HostInstallScript that lays down the
-// `up` script the client config references. Written before the tunnel is started, so
-// the very first connect is already isolated — there is no window in which the host
-// is up on the overlay without its filter.
+// `up` script the client config references, and makes sure the host can actually run
+// it. Written before the tunnel is started, so the very first connect is already
+// isolated — there is no window in which the host is up on the overlay without its
+// filter.
+//
+// iptables is a REQUIREMENT of this overlay's isolation, not an assumption. OpenVPN
+// has no AllowedIPs: a filter on the tunnel device is the only thing isolating the
+// host at its own end, and the up script deliberately fails open when iptables is
+// missing (under script-security 2 a failing up script aborts the tunnel, and an
+// unreachable host is worse than an unfiltered one). The consequence is that a host
+// without iptables joins the overlay silently unisolated, with the only trace a line
+// in its own OpenVPN log. So install it the same way openvpn itself is installed, and
+// say so when that fails.
 func (o *OpenVPN) hostIsolationInstall() string {
 	body := o.hostIsolationScript()
 	if body == "" {
 		return ""
 	}
-	return fmt.Sprintf(`cat > %[1]s/peer-isolation.sh <<'FLEOF'
+	return fmt.Sprintf(`if ! command -v iptables >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then { apt-get update -qq && apt-get install -y -qq iptables; } >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y -q iptables >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then yum install -y -q iptables >/dev/null 2>&1 || true
+  elif command -v apk >/dev/null 2>&1; then apk add --no-cache iptables >/dev/null 2>&1 || true
+  fi
+fi
+command -v iptables >/dev/null 2>&1 || echo OVPN_IPTABLES_MISSING
+cat > %[1]s/peer-isolation.sh <<'FLEOF'
 %[2]sFLEOF
 chmod 0700 %[1]s/peer-isolation.sh
 `, fleetDir, body)

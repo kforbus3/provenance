@@ -196,3 +196,84 @@ func TestOpenVPNHostInstallScriptIsPOSIXSh(t *testing.T) {
 		t.Errorf("host install script is not valid POSIX sh: %v\n%s", err, out)
 	}
 }
+
+// Peer isolation on this overlay IS iptables — OpenVPN has no AllowedIPs, so a filter
+// on the tunnel device is the only thing isolating the host at its own end. The up
+// script fails open when iptables is missing (a failing up script would abort the
+// tunnel under script-security 2), so a host without it joins the overlay silently
+// unisolated. Enrollment therefore has to install it, and has to say so when it
+// cannot — an enrollment that succeeds identically either way hides the difference.
+func TestJumpServerProvidesIptablesForIsolation(t *testing.T) {
+	o := New(testCfg(), nil)
+	srv, err := o.ServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), srv)
+	if !strings.Contains(script, "apt-get install -y -qq iptables") {
+		t.Errorf("jump-server script does not provide iptables for its forwarding deny:\n%s", script)
+	}
+	// The install must precede the rule it exists for.
+	if strings.Index(script, "install -y -qq iptables") > strings.Index(script, "iptables -I FORWARD 1") {
+		t.Error("iptables is installed after the deny is attempted")
+	}
+	// Isolation off: no rule, so nothing to install for.
+	cfg := testCfg()
+	cfg.OverlayPeerIsolation = false
+	srvOff, err := New(cfg, nil).ServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := New(cfg, nil).JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), srvOff)
+	if strings.Contains(off, "install -y -qq iptables") {
+		t.Error("installs iptables for a deny that is disabled")
+	}
+}
+
+func TestHostInstallProvidesIptablesForIsolation(t *testing.T) {
+	o := New(testCfg(), nil)
+	script := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), o.ClientConfig("j:1194"), "10.100.0.27")
+
+	for _, want := range []string{
+		"apt-get install -y -qq iptables",
+		"dnf install -y -q iptables",
+		"yum install -y -q iptables",
+		"apk add --no-cache iptables",
+		"OVPN_IPTABLES_MISSING",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("install script does not provide iptables via %q:\n%s", want, script)
+		}
+	}
+	// It must be in place BEFORE the tunnel starts, like the up script itself: the
+	// first connect is otherwise unfiltered.
+	if strings.Index(script, "iptables") > strings.Index(script, "systemctl enable --now openvpn@fleet-overlay") {
+		t.Error("iptables is installed after the tunnel is started; the first connect would be unisolated")
+	}
+
+	// With isolation off there is nothing to filter with, so nothing to install.
+	cfg := testCfg()
+	cfg.OverlayPeerIsolation = false
+	off := New(cfg, nil).HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), cfg.WGSubnet, "10.100.0.27")
+	if strings.Contains(off, "iptables") {
+		t.Error("installs iptables even with peer isolation disabled")
+	}
+}
+
+// A host that ends up without iptables still enrolls — but the step has to carry the
+// warning, or an operator has no way to know this host is unisolated.
+func TestBringupWarnsWhenIsolationCouldNotBeApplied(t *testing.T) {
+	out := "OVPN_IPTABLES_MISSING\nOVPN_HOST_IP=10.101.0.27\nOVPN_HOST_CONFIGURED\n"
+	detail, err := checkHostBringup(out, "10.101.0.27")
+	if err != nil {
+		t.Fatalf("a missing filter must not fail the enrollment: %v", err)
+	}
+	if !strings.Contains(detail, "peer isolation is NOT applied") {
+		t.Errorf("detail does not report the unisolated host: %q", detail)
+	}
+
+	clean, err := checkHostBringup("OVPN_HOST_IP=10.101.0.27\nOVPN_HOST_CONFIGURED\n", "10.101.0.27")
+	if err != nil || strings.Contains(clean, "WARNING") {
+		t.Errorf("warned about isolation on a host that has it: %q (%v)", clean, err)
+	}
+}
