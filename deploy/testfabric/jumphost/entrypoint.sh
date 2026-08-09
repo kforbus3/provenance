@@ -57,8 +57,13 @@ ip link set "$WG_IFACE" up
 #
 # Two independent rules, either of which is sufficient on its own:
 #   1. interface-scoped — covers the WireGuard hub;
-#   2. subnet-scoped    — also covers the OpenVPN overlay (FIPS mode), whose tun
-#      interface name is assigned at runtime and shares this same subnet.
+#   2. subnet-scoped    — the same deny expressed on the WireGuard subnet.
+# The OpenVPN overlay has its OWN subnet (it must: two overlays sharing one subnet
+# on this host would give it two routes for one prefix). Its intra-subnet deny is
+# installed by enrollment when the server is provisioned; what only this script can
+# add is the CROSS-overlay deny, since a host on one transport reaching a host on the
+# other is a forwarded flow between two different interfaces that neither overlay's
+# own rule matches.
 # ip_forward stays on: the jump host may legitimately route elsewhere, and the
 # narrow rules say what we actually mean.
 #
@@ -84,6 +89,21 @@ if [ "${FLEET_OVERLAY_PEER_ISOLATION:-1}" = "1" ]; then
        || iptables -I FORWARD 1 -s "$WG_SUBNET" -d "$WG_SUBNET" -j DROP >/dev/null 2>&1; then
       applied="${applied:+$applied, }$WG_SUBNET"
     fi
+  fi
+  # Cross-overlay: a managed host on WireGuard must not reach one on OpenVPN, or the
+  # reverse. Each overlay's own rule only covers traffic that stays inside it, so
+  # without this a two-transport deployment has a hole exactly where the fleet is
+  # mixed. Skipped when the two subnets are the same (a single-overlay deployment),
+  # where the intra-subnet rule above already covers it.
+  OVPN_SUBNET="${FLEET_OVPN_SUBNET:-10.101.0.0/24}"
+  if [ -n "$WG_SUBNET" ] && [ "$OVPN_SUBNET" != "$WG_SUBNET" ]; then
+    for pair in "$WG_SUBNET $OVPN_SUBNET" "$OVPN_SUBNET $WG_SUBNET"; do
+      set -- $pair
+      if iptables -C FORWARD -s "$1" -d "$2" -j DROP >/dev/null 2>&1 \
+         || iptables -I FORWARD 1 -s "$1" -d "$2" -j DROP >/dev/null 2>&1; then
+        applied="${applied:+$applied, }$1->$2"
+      fi
+    done
   fi
   # Report what actually went in, not what was attempted: either rule alone
   # isolates the WireGuard hub, so a partial apply is still ON — but an operator

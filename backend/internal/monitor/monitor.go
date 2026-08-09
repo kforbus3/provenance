@@ -22,6 +22,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/metrics"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
+	"github.com/fleet-terminal/backend/internal/overlay"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
 	"github.com/fleet-terminal/backend/internal/winrm"
@@ -331,8 +332,7 @@ func confirmNeeded(h *models.Host, prev string, prevWG bool, st *models.HostStat
 	return ""
 }
 
-// notifyOverlayTransition alerts when an online host's overlay (WireGuard)
-// tunnel changes state — down (still reachable via the direct address) or
+// notifyOverlayTransition alerts when an online host's overlay tunnel changes state — down (still reachable via the direct address) or
 // restored. Offline hosts are excluded: the tunnel is trivially down then and
 // the offline alert already covers it. The first observation is skipped, and
 // maintenance windows suppress it, both matching the offline alerts.
@@ -345,8 +345,8 @@ func (m *Monitor) notifyOverlayTransition(ctx context.Context, h models.Host, pr
 		m.nfy.Notify(ctx, notify.Event{
 			Type: notify.EventHostOverlayDown, Severity: notify.SeverityWarning,
 			Title: "Overlay tunnel down: " + h.Hostname,
-			Body: fmt.Sprintf("%s (%s) is still reachable, but its WireGuard tunnel (%s) is down — Fleet is falling back to the direct address. Check the WireGuard service on the host and the peer entry on the jump host.",
-				h.Hostname, h.Environment, h.WGAddress),
+			Body: fmt.Sprintf("%s (%s) is still reachable, but its %s tunnel (%s) is down — Fleet is falling back to the direct address. %s",
+				h.Hostname, h.Environment, overlayLabel(h.Overlay), h.WGAddress, overlayWhereToLook(h.Overlay)),
 			DedupeKey: h.ID.String() + ":overlay",
 		})
 		return
@@ -354,8 +354,8 @@ func (m *Monitor) notifyOverlayTransition(ctx context.Context, h models.Host, pr
 	m.nfy.Notify(ctx, notify.Event{
 		Type: notify.EventHostOverlayRestored, Severity: notify.SeverityInfo,
 		Title: "Overlay tunnel restored: " + h.Hostname,
-		Body: fmt.Sprintf("%s (%s) is reachable over its WireGuard tunnel (%s) again.",
-			h.Hostname, h.Environment, h.WGAddress),
+		Body: fmt.Sprintf("%s (%s) is reachable over its %s tunnel (%s) again.",
+			h.Hostname, h.Environment, overlayLabel(h.Overlay), h.WGAddress),
 		DedupeKey: h.ID.String() + ":overlay",
 	})
 }
@@ -588,15 +588,13 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	if out, err := runCmd(conn, "cat /proc/uptime 2>/dev/null"); err == nil {
 		st.UptimeSeconds = parseUptime(out)
 	}
-	// WireGuard handshake freshness (best-effort; requires sudo on the host).
+	// Overlay tunnel health (best-effort; requires sudo on the host). WGOK is the
+	// generic "this host's overlay is up" flag whichever transport carries it — the
+	// name is the DB column's and the API's, kept for compatibility. Probing only
+	// WireGuard here reported every OpenVPN host as permanently degraded, which is
+	// how a transport nobody could see the health of got flagged as broken forever.
 	if !st.WGOK {
-		if out, err := runCmd(conn, "sudo wg show "+m.cfg.WGInterface+" latest-handshakes 2>/dev/null | awk '{print $2}' | sort -rn | head -1"); err == nil {
-			if hs := strings.TrimSpace(out); hs != "" && hs != "0" {
-				if v, perr := strconv.ParseInt(hs, 10, 64); perr == nil && time.Now().Unix()-v < 180 {
-					st.WGOK = true
-				}
-			}
-		}
+		st.WGOK = m.overlayUp(conn, h)
 	}
 
 	// Refresh host facts at most once per inventoryTTL — they change rarely
@@ -885,4 +883,62 @@ func parseUptime(s string) *int64 {
 	}
 	v := int64(f)
 	return &v
+}
+
+// overlayUp probes the host end of whichever overlay carries this host.
+//
+// The two transports expose health differently and there is no shared primitive:
+// WireGuard has a handshake timestamp per peer, which is a true liveness signal;
+// OpenVPN's client has no equivalent the host can be asked for cheaply, so the
+// closest honest question is whether the tunnel device still holds the address the
+// server assigned. Both are best-effort — a host that refuses sudo simply reports
+// nothing, exactly as before.
+func (m *Monitor) overlayUp(conn *sshgw.Conn, h *models.Host) bool {
+	if overlay.IsCertOverlay(strings.TrimSpace(h.Overlay)) {
+		addr := strings.TrimSpace(h.WGAddress)
+		if addr == "" {
+			return false
+		}
+		// The address has to be on a tun device, not merely configured somewhere: a
+		// stale entry in the client config proves nothing about a live tunnel.
+		out, err := runCmd(conn, "ip -4 -br addr show 2>/dev/null | awk '$1 ~ /^tun/ {print $3}'")
+		if err != nil {
+			return false
+		}
+		for _, line := range strings.Fields(out) {
+			if strings.SplitN(strings.TrimSpace(line), "/", 2)[0] == addr {
+				return true
+			}
+		}
+		return false
+	}
+	out, err := runCmd(conn, "sudo wg show "+m.cfg.WGInterface+" latest-handshakes 2>/dev/null | awk '{print $2}' | sort -rn | head -1")
+	if err != nil {
+		return false
+	}
+	hs := strings.TrimSpace(out)
+	if hs == "" || hs == "0" {
+		return false
+	}
+	v, perr := strconv.ParseInt(hs, 10, 64)
+	return perr == nil && time.Now().Unix()-v < 180
+}
+
+// overlayLabel names a host's transport for operator-facing text. An empty overlay
+// is WireGuard — what a host enrolled before per-host overlays existed looks like.
+func overlayLabel(name string) string {
+	if strings.TrimSpace(name) == "openvpn" {
+		return "OpenVPN"
+	}
+	return "WireGuard"
+}
+
+// overlayWhereToLook points at the two ends of the transport that is actually down.
+// Sending an operator to inspect WireGuard on an OpenVPN host costs them the whole
+// investigation before they discover the alert named the wrong thing.
+func overlayWhereToLook(name string) string {
+	if strings.TrimSpace(name) == "openvpn" {
+		return "Check the openvpn client on the host and the openvpn server on the jump host."
+	}
+	return "Check the WireGuard service on the host and the peer entry on the jump host."
 }

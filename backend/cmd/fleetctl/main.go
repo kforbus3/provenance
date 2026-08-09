@@ -333,6 +333,20 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 	fmt.Println("======================================")
 	fmt.Printf("  Config FLEET_FIPS_MODE : %v\n", cfg.FIPSMode)
 	fmt.Printf("  Config FLEET_OVERLAY   : %s   [%s]\n", cfg.Overlay, ok(cfg.Overlay != "wireguard"))
+	fmt.Printf("    wireguard pool       : %s (jump %s, udp %d)\n", cfg.WGSubnet, cfg.WGJumpIP, cfg.WGPort)
+	fmt.Printf("    openvpn pool         : %s (jump %s, udp %d)\n", cfg.OVPNSubnet, cfg.OVPNJumpIP, cfg.OVPNPort)
+	// A per-host overlay choice is only sound while the two pools are distinct, and
+	// a FIPS report that lists a compliant transport without saying every host on the
+	// other one is unreachable would be telling half the truth.
+	if cfg.OVPNSubnet == cfg.WGSubnet {
+		fmt.Println("    NOTE: both overlays share one subnet — this deployment can run ONE of them.")
+		fmt.Println("          Set FLEET_OVPN_SUBNET to a separate range to mix transports per host.")
+	}
+	// Hosts still on the non-FIPS transport are the actual migration work.
+	var wgHosts int
+	_ = pool.QueryRow(ctx,
+		`SELECT count(*) FROM hosts WHERE enrolled AND coalesce(overlay,'') <> 'openvpn' AND wg_address IS NOT NULL`).Scan(&wgHosts)
+	fmt.Printf("  Hosts on WireGuard     : %d   [%s]\n", wgHosts, ok(wgHosts == 0))
 	fmt.Printf("  Go FIPS module active  : %v   [%s]\n", cryptoprofile.ModuleActive(), ok(cryptoprofile.ModuleActive()))
 
 	var caAlgo string

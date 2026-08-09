@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -170,11 +171,21 @@ type Config struct {
 	WGJumpEndpoint string // endpoint managed hosts dial to reach the jump, host:port
 	WGPort         int    // WireGuard listen port on managed hosts
 
-	// OVPNPort is the OpenVPN server's UDP listen port on the jump host, used only
-	// when Overlay=openvpn (FIPS). The OpenVPN overlay reuses WGSubnet/WGJumpIP so a
-	// host's assigned overlay address (stored in the same wg_address column) works
-	// identically for dialing regardless of overlay type.
-	OVPNPort int
+	// OpenVPN overlay (the certificate-authenticated / FIPS transport).
+	//
+	// It has its OWN subnet, because both overlays terminate on the same jump host
+	// and both put the jump host's address on their interface: sharing one subnet
+	// gives that host two connected routes for the same /24, the kernel resolves it
+	// once rather than per destination, and whichever interface loses takes every
+	// host on it offline. Separate subnets are what make a per-host choice of
+	// transport — and switching a host between them — actually work.
+	//
+	// A host's assigned address still lives in the one wg_address column whichever
+	// overlay assigned it, so the gateway, monitor and every consumer stay
+	// transport-agnostic; only the pool it is drawn from differs.
+	OVPNPort   int    // UDP listen port on the jump host
+	OVPNSubnet string // CIDR of the OpenVPN overlay, e.g. "10.101.0.0/24"
+	OVPNJumpIP string // jump host's address on the OpenVPN overlay
 
 	// OverlayPeerIsolation makes the overlay a strict hub-and-spoke management
 	// network: the jump host refuses to forward traffic between two managed hosts,
@@ -386,6 +397,8 @@ func Load() (*Config, error) {
 		WGJumpEndpoint:              env("FLEET_WG_JUMP_ENDPOINT", "jumphost:51820"),
 		WGPort:                      envInt("FLEET_WG_PORT", 51820),
 		OVPNPort:                    envInt("FLEET_OVPN_PORT", 1194),
+		OVPNSubnet:                  env("FLEET_OVPN_SUBNET", ""),
+		OVPNJumpIP:                  env("FLEET_OVPN_JUMP_IP", ""),
 		OverlayPeerIsolation:        envBool("FLEET_OVERLAY_PEER_ISOLATION", true),
 		VaultRotationCheck:          envDuration("FLEET_VAULT_ROTATION_CHECK", 30*time.Minute),
 		MetricHistorySample:         envDuration("FLEET_METRIC_HISTORY_SAMPLE", 5*time.Minute),
@@ -491,10 +504,48 @@ func Load() (*Config, error) {
 		}
 	}
 
+	applyOverlayDefaults(c)
+
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// applyOverlayDefaults resolves the OpenVPN overlay's address plan.
+//
+// It must NOT share the WireGuard subnet on a deployment that runs both — one jump
+// host, two interfaces, one /24 means the kernel picks a single winner for the whole
+// subnet and every host behind the other interface goes dark.
+//
+// The exception is a deployment that only ever speaks OpenVPN: there is no WireGuard
+// hub to collide with, and its hosts already hold addresses out of FLEET_WG_SUBNET.
+// Moving that pool would invalidate every enrolled address at once, so an install
+// whose DEFAULT overlay is the cert overlay keeps the subnet it has unless told
+// otherwise.
+func applyOverlayDefaults(c *Config) {
+	if c.OVPNSubnet == "" {
+		if c.Overlay == "openvpn" {
+			c.OVPNSubnet, c.OVPNJumpIP = c.WGSubnet, c.WGJumpIP
+		} else {
+			c.OVPNSubnet = "10.101.0.0/24"
+		}
+	}
+	if c.OVPNJumpIP == "" {
+		c.OVPNJumpIP = firstHost(c.OVPNSubnet)
+	}
+}
+
+// firstHost returns the first usable address of an IPv4 CIDR ("10.101.0.0/24" →
+// "10.101.0.1"), which is the address the overlay's server takes on the jump host.
+// Empty when the CIDR does not parse — validate() reports that.
+func firstHost(cidr string) string {
+	_, ipnet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil || ipnet.IP.To4() == nil {
+		return ""
+	}
+	ip := ipnet.IP.To4()
+	return net.IPv4(ip[0], ip[1], ip[2], ip[3]+1).String()
 }
 
 func (c *Config) validate() error {
@@ -573,8 +624,48 @@ func (c *Config) validate() error {
 		return fmt.Errorf("FLEET_CERT_RENEW_BEFORE (%s) must be less than FLEET_USER_CERT_TTL (%s)",
 			c.CertRenewBefore, c.UserCertTTL)
 	}
+	if err := c.validateOverlays(); err != nil {
+		return err
+	}
 	if err := c.validateFederation(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateOverlays checks the two overlays' address plans. A malformed plan is
+// fatal; overlapping plans are only fatal when the deployment can actually run both
+// transports, because a single-overlay install legitimately has them equal (see the
+// defaulting in Load).
+func (c *Config) validateOverlays() error {
+	// Skipped for zero-value configs built directly in tests, which set no subnets.
+	if c.OVPNSubnet == "" && c.WGSubnet == "" {
+		return nil
+	}
+	_, ovpnNet, err := net.ParseCIDR(strings.TrimSpace(c.OVPNSubnet))
+	if err != nil {
+		return fmt.Errorf("FLEET_OVPN_SUBNET %q is not a valid CIDR: %w", c.OVPNSubnet, err)
+	}
+	if ip := net.ParseIP(strings.TrimSpace(c.OVPNJumpIP)); ip == nil || !ovpnNet.Contains(ip) {
+		return fmt.Errorf("FLEET_OVPN_JUMP_IP %q must be an address inside FLEET_OVPN_SUBNET %s",
+			c.OVPNJumpIP, c.OVPNSubnet)
+	}
+	_, wgNet, err := net.ParseCIDR(strings.TrimSpace(c.WGSubnet))
+	if err != nil {
+		return fmt.Errorf("FLEET_WG_SUBNET %q is not a valid CIDR: %w", c.WGSubnet, err)
+	}
+	// Equal plans mean "this deployment speaks one overlay" — the shape an existing
+	// OpenVPN-only install keeps. Partial overlap is never intentional and would
+	// hand out addresses from one pool that route into the other.
+	if c.OVPNSubnet == c.WGSubnet {
+		return nil
+	}
+	if wgNet.Contains(ovpnNet.IP) || ovpnNet.Contains(wgNet.IP) {
+		return fmt.Errorf(
+			"FLEET_OVPN_SUBNET %s overlaps FLEET_WG_SUBNET %s — the two overlays terminate on the same "+
+				"jump host and each puts its own address on its interface, so overlapping pools leave one "+
+				"transport's hosts unreachable. Give the OpenVPN overlay its own subnet",
+			c.OVPNSubnet, c.WGSubnet)
 	}
 	return nil
 }

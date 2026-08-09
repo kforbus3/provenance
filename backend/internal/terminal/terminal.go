@@ -169,7 +169,8 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	}
 
 	// Candidate addresses the gateway dials through the jump host, in order of
-	// preference: the WireGuard overlay address first, then the management
+	// preference: the overlay address first (WireGuard or OpenVPN — one column
+	// holds it either way), then the management
 	// address / hostname as a fallback (useful where the overlay data plane is
 	// unavailable, e.g. the local userspace-WireGuard test fabric).
 	var candidates []string
@@ -178,10 +179,10 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 			candidates = append(candidates, a)
 		}
 	}
-	// Strict overlay mode: when enabled and this host is on the WireGuard overlay,
+	// Strict overlay mode: when enabled and this host is on a VPN overlay,
 	// dial ONLY the overlay address. If the tunnel is down the connection is
 	// refused rather than silently falling back to the host's direct address.
-	strictWG := h.d.Store.RequireWireGuard(ctx)
+	strictWG := h.d.Store.RequireOverlay(ctx)
 	if strictWG && host.WGAddress != "" {
 		candidates = []string{host.WGAddress}
 	}

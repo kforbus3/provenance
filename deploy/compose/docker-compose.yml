@@ -134,6 +134,13 @@ services:
       FLEET_WG_JUMP_IP: ${FLEET_WG_JUMP_IP:-}
       FLEET_WG_JUMP_ENDPOINT: ${FLEET_WG_JUMP_ENDPOINT:-}
       FLEET_WG_PORT: ${FLEET_WG_PORT:-}
+      # OpenVPN overlay (the certificate/FIPS transport). It has its OWN subnet:
+      # both overlays terminate on the same jump host, and one shared subnet gives
+      # that host two routes for the same prefix. Empty falls back to the binary's
+      # defaults (10.101.0.0/24, or the WireGuard subnet on an OpenVPN-only install).
+      FLEET_OVPN_SUBNET: ${FLEET_OVPN_SUBNET:-}
+      FLEET_OVPN_JUMP_IP: ${FLEET_OVPN_JUMP_IP:-}
+      FLEET_OVPN_PORT: ${FLEET_OVPN_PORT:-}
       # Sessions, tokens, certificate lifetimes.
       FLEET_ACCESS_TOKEN_TTL: ${FLEET_ACCESS_TOKEN_TTL:-}
       FLEET_REFRESH_TOKEN_TTL: ${FLEET_REFRESH_TOKEN_TTL:-}

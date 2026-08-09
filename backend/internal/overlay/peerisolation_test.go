@@ -58,12 +58,14 @@ func TestJumpServerScriptOmitsPeerIsolationWhenDisabled(t *testing.T) {
 // and anything unparseable must produce no rule at all rather than a broken one.
 func TestPeerIsolationNormalizesSubnet(t *testing.T) {
 	cfg := testCfg()
-	cfg.WGSubnet = "10.100.0.7/24"
-	if got := New(cfg, nil).peerIsolationScript(); !strings.Contains(got, "-s 10.100.0.0/24 -d 10.100.0.0/24") {
+	// The jump-side deny is scoped to the OpenVPN overlay's OWN subnet — the two
+	// overlays are separate address plans, and each isolates the one it serves.
+	cfg.OVPNSubnet = "10.101.0.7/24"
+	if got := New(cfg, nil).peerIsolationScript(); !strings.Contains(got, "-s 10.101.0.0/24 -d 10.101.0.0/24") {
 		t.Errorf("subnet not normalized to network form: %q", got)
 	}
 
-	cfg.WGSubnet = "not a subnet; rm -rf /"
+	cfg.OVPNSubnet = "not a subnet; rm -rf /"
 	if got := New(cfg, nil).peerIsolationScript(); got != "" {
 		t.Errorf("unparseable subnet produced a rule: %q", got)
 	}

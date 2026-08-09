@@ -43,8 +43,9 @@ func isControlPlaneHost(host *models.Host, cfg *config.Config) bool {
 			return true
 		}
 	}
-	// The jump host (SSH gateway / WireGuard hub): breaking it breaks every host.
-	for _, jh := range []string{hostPart(cfg.JumpHost), cfg.WGJumpIP, hostPart(cfg.WGJumpEndpoint)} {
+	// The jump host (SSH gateway and overlay hub for BOTH transports): breaking it
+	// breaks every host. It answers on one address per overlay, so both count.
+	for _, jh := range []string{hostPart(cfg.JumpHost), cfg.WGJumpIP, cfg.OVPNJumpIP, hostPart(cfg.WGJumpEndpoint)} {
 		if jh = strings.ToLower(strings.TrimSpace(jh)); jh != "" && ids[jh] {
 			return true
 		}

@@ -1,9 +1,15 @@
 // Package overlay provisions Fleet's host-reachability transports. WireGuard is
 // handled inline by the enrollment package; the certificate-authenticated overlays
-// (OpenVPN) implement the Overlay interface here so enrollment can
-// treat them uniformly and select one per host. All cert overlays share the X.509
-// overlay PKI and the wg_address-based addressing, so the SSH gateway stays
-// overlay-agnostic.
+// (OpenVPN) implement the Overlay interface here so enrollment can treat them
+// uniformly and select one per host. All cert overlays share the X.509 overlay PKI.
+//
+// A host's assigned address lives in the one wg_address column whichever transport
+// assigned it, so the SSH gateway and every other consumer stay overlay-agnostic —
+// but the POOL it is drawn from is per-overlay (FLEET_OVPN_SUBNET vs
+// FLEET_WG_SUBNET). Both transports terminate on the same jump host and each claims
+// its own address on its own interface, so a shared subnet would give that host two
+// connected routes for one prefix and strand every host behind the losing one.
+// Switching a host between transports therefore renumbers it.
 package overlay
 
 import (
@@ -47,6 +53,22 @@ type Overlay interface {
 	// host at all — the operator pipes the script over their own ssh and runs it.
 	// ProvisionHost is PrepareHost plus hostRun.
 	PrepareHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, jumpRun RunFunc) (HostBringup, error)
+
+	// RetireJump removes the hub half of this host's membership — its pinned address,
+	// so the overlay stops answering for a host that has moved to another transport
+	// and the address can be reissued. Idempotent: a host that was never on this
+	// overlay is not an error.
+	RetireJump(ctx context.Context, hostID uuid.UUID, jumpRun RunFunc) (detail string, err error)
+
+	// RetireHostScript is the privileged script that takes this overlay down on the
+	// managed host: stop the client, keep it from coming back on boot, and set its
+	// config aside. Returned rather than run so the no-install flow can carry it in
+	// the bootstrap script, exactly as PrepareHost's is.
+	//
+	// Switching transports is only complete when the old one is gone from BOTH ends.
+	// Leaving a client running means two interfaces racing for the host's traffic and
+	// a tunnel that quietly reconnects to an overlay the host has left.
+	RetireHostScript() HostBringup
 }
 
 // HostBringup is the host-side half of overlay provisioning: a privileged script and

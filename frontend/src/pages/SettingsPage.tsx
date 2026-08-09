@@ -8,6 +8,7 @@ import {
 import EditIcon from "@mui/icons-material/Edit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listSettings, setSetting } from "../api/admin";
+import { nextWGAddress } from "../api/hosts";
 import { assistantModels, assistantStatus, getActionPolicy, saveActionPolicy } from "../api/assistant";
 import { downloadBackup } from "../api/system";
 import { UpdatesCard } from "./settings/UpdatesCard";
@@ -694,6 +695,50 @@ function ITSMCard() {
   );
 }
 
+// OverlayPlans shows both VPN transports' address plans and the ports they need
+// open. A deployment can run either or both, on separate subnets, and which one a
+// host uses is chosen per host at enrollment — so "which pool will this host land in
+// and which port must my firewall allow" is a question the settings page has to be
+// able to answer for both, not just for WireGuard.
+function OverlayPlans() {
+  const { data } = useQuery({ queryKey: ["next-wg"], queryFn: nextWGAddress });
+  const plans = data?.overlays ?? [];
+  if (plans.length === 0) return null;
+  return (
+    <Table size="small" sx={{ mb: 2, maxWidth: 560 }}>
+      <TableHead>
+        <TableRow>
+          <TableCell>Overlay</TableCell>
+          <TableCell>Subnet</TableCell>
+          <TableCell>Jump address</TableCell>
+          <TableCell>Port</TableCell>
+          <TableCell>Next free</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {plans.map((p) => (
+          <TableRow key={p.name}>
+            <TableCell>
+              {p.name === "openvpn" ? "OpenVPN" : "WireGuard"}
+              {data?.overlay === p.name && (
+                <Chip size="small" label="default" sx={{ ml: 1 }} variant="outlined" />
+              )}
+            </TableCell>
+            <TableCell><code>{p.subnet}</code></TableCell>
+            <TableCell><code>{p.jumpIp}</code></TableCell>
+            <TableCell><code>{p.port}/{p.protocol}</code></TableCell>
+            <TableCell>
+              {data?.exhaustedOverlays?.[p.name]
+                ? <Typography variant="caption" color="error">pool exhausted</Typography>
+                : <code>{data?.nextAddress?.[p.name] ?? "—"}</code>}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 function WGSettingsCard({ current }: { current: unknown }) {
   const qc = useQueryClient();
   const cur = (current ?? {}) as { jumpHost?: string; jumpPort?: number; requireOverlay?: boolean };
@@ -711,12 +756,12 @@ function WGSettingsCard({ current }: { current: unknown }) {
 
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-      <Typography variant="h6">VPN server (WireGuard)</Typography>
+      <Typography variant="h6">VPN server (jump host)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        Public address &amp; port that managed hosts use to reach the jump host over WireGuard.
-        Used as the default when enrolling hosts (overridable per host). Must be reachable from
-        the hosts on UDP.
+        Public address managed hosts use to reach the jump host. Used as the default when
+        enrolling hosts (overridable per host). Must be reachable from the hosts on UDP.
       </Typography>
+      <OverlayPlans />
       <Stack direction="row" spacing={2} alignItems="flex-start">
         <TextField
           label="Server name / IP" value={jumpHost}
@@ -724,9 +769,10 @@ function WGSettingsCard({ current }: { current: unknown }) {
           placeholder="vpn.example.com" sx={{ flexGrow: 1 }}
         />
         <TextField
-          label="Port" type="number" value={jumpPort}
+          label="WireGuard port" type="number" value={jumpPort}
           onChange={(e) => { setJumpPort(e.target.value); setSaved(false); }}
-          sx={{ width: 120 }}
+          sx={{ width: 150 }}
+          helperText="OpenVPN's port is set by FLEET_OVPN_PORT"
         />
         <Button variant="contained" sx={{ mt: 1 }} disabled={save.isPending || !jumpHost.trim()} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
@@ -740,13 +786,14 @@ function WGSettingsCard({ current }: { current: unknown }) {
             onChange={(e) => { setRequireOverlay(e.target.checked); setSaved(false); }}
           />
         }
-        label="Strict overlay — require WireGuard for connections"
+        label="Strict overlay — require the VPN overlay for connections"
       />
       <Typography variant="body2" color="text.secondary" sx={{ ml: 0.5 }}>
-        When on, an enrolled host that has a WireGuard address is reachable only over the overlay.
-        If its tunnel is down, connections are refused instead of quietly falling back to the host's
-        direct network address — this covers terminal and file transfer (Linux/SSH) as well as
-        desktop (Windows/RDP) sessions. Hosts with no WireGuard address are unaffected.
+        When on, an enrolled host that has an overlay address is reachable only over its overlay —
+        WireGuard or OpenVPN, whichever it was enrolled onto. If its tunnel is down, connections are
+        refused instead of quietly falling back to the host's direct network address; this covers
+        terminal and file transfer (Linux/SSH) as well as desktop (Windows/RDP) sessions. Hosts with
+        no overlay address are unaffected.
       </Typography>
     </Paper>
   );

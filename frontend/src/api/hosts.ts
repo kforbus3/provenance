@@ -175,14 +175,32 @@ export async function deleteHost(id: string): Promise<void> {
   await api.delete(`/api/v1/hosts/${id}`);
 }
 
+// One VPN transport's address plan. The two overlays are separate subnets on
+// purpose — they terminate on the same jump host, so a shared subnet would give it
+// two routes for one prefix and strand every host behind the losing interface.
+export interface OverlayPlan {
+  name: string;      // "wireguard" | "openvpn"
+  subnet: string;    // CIDR hosts are numbered from
+  jumpIp: string;    // jump host's address on this overlay
+  port: number;      // port managed hosts dial (must be open on the firewall)
+  protocol: string;  // "udp"
+}
+
 export interface NextWG {
+  // WireGuard's pool, kept at the top level for the create dialog that has always
+  // read these two fields.
   nextWgAddress: string;
   subnet: string;
   jumpEndpoint: string;
   // The deployment's default VPN overlay (FLEET_OVERLAY), already resolved —
   // what "Deployment default" in the enroll dialog means for this install.
   overlay?: string;
+  // Every transport this deployment can enroll a host onto, and what each pool
+  // would hand out next. Keyed by overlay name.
+  overlays?: OverlayPlan[];
+  nextAddress?: Record<string, string>;
   exhausted?: boolean;
+  exhaustedOverlays?: Record<string, boolean>;
 }
 
 // nextWGAddress returns what auto-assignment would pick from the overlay pool.

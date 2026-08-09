@@ -121,8 +121,8 @@ export function TerminalsPage() {
                     {h.hostname}
                   </Typography>
                   <Stack direction="row" spacing={0.5} alignItems="center">
-                    {wgDegraded(h) && <WgDownChip />}
-                    {wgHealthy(h) && <WgOnChip />}
+                    {wgDegraded(h) && <WgDownChip overlay={h.overlay} />}
+                    {wgHealthy(h) && <WgOnChip overlay={h.overlay} />}
                     <Chip size="small" label={status} color={STATUS_COLOR[status] ?? "default"} />
                   </Stack>
                 </Stack>
