@@ -137,11 +137,11 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 
 	// Tunnel to the host's RDP port through the jump host, and expose it to guacd
 	// via an ephemeral local listener (guacd reaches this backend, not the target).
-	// Only reach for the WireGuard overlay address once the host is actually
+	// Only reach for the overlay address once the host is actually
 	// enrolled (tunnel up); before that the overlay isn't routing and the direct
 	// management address is what works. Try candidates in order so a not-yet-live
-	// overlay falls back to the direct address (unless strict WireGuard is on).
-	strictWG := h.d.Store.RequireWireGuard(ctx)
+	// overlay falls back to the direct address (unless strict overlay mode is on).
+	strictWG := h.d.Store.RequireOverlay(ctx)
 	cands := rdpCandidates(host, strictWG)
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("host has no address")
@@ -362,9 +362,9 @@ func (h *handler) onDisconnect(connID string, _ *http.Request, _ guac.Tunnel) {
 }
 
 // rdpCandidates returns the addresses to try, in order, when tunnelling to a
-// host's RDP port. The WireGuard overlay address is preferred only once the host
+// host's RDP port. The overlay address is preferred only once the host
 // is enrolled (its tunnel is up); until then, or as a fallback, the direct
-// management address / hostname is used. Under strict WireGuard the overlay is
+// management address / hostname is used. Under strict overlay mode the overlay is
 // the only permitted path for an enrolled host.
 func rdpCandidates(h *models.Host, strictWG bool) []string {
 	var c []string

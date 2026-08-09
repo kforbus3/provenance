@@ -7,6 +7,63 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **A host can be moved between the WireGuard and OpenVPN overlays by re-enrolling
+  it, in either direction.** The per-host "VPN overlay" choice shipped before the
+  machinery behind it did: both transports drew addresses from one pool, only one
+  direction of teardown existed, and everything that reported overlay health asked
+  WireGuard. Picking OpenVPN got you a host that was renumbered nowhere, still
+  running WireGuard, and permanently reported as degraded. This is the rest of it.
+
+  **Separate address plans.** `FLEET_OVPN_SUBNET` / `FLEET_OVPN_JUMP_IP` (default
+  `10.101.0.0/24`, jump `.1`) now number the cert overlay's hosts. Both overlays
+  terminate on the same jump host and each claims its own address on its own
+  interface, so one shared subnet gave that host two connected routes for a single
+  prefix — resolved once by the kernel, for the whole prefix — and every host behind
+  the losing interface went dark. An install whose *default* overlay is already
+  `openvpn` keeps `FLEET_WG_SUBNET`, so an existing FIPS fleet is not renumbered
+  underneath itself. Overlapping (but unequal) subnets are refused at startup.
+
+  **Switching renumbers the host**, because its address cannot follow it across
+  subnets. Enrollment resolves the address against the pool it is *joining*, and
+  releases the SSH host-key pin held for the address it leaves — overlay addresses
+  are recycled, and the next host to be given one would otherwise inherit a pin for
+  the previous host's key and be refused every connection.
+
+  **Both directions of teardown, gated on the same proof.** One entry point now
+  retires whichever transport a host is leaving — WireGuard's interface and boot
+  units, or OpenVPN's client and its pinned address on the server — and it runs only
+  after a dial to the host's new overlay address **from the jump host** succeeds.
+  Every other check in enrollment can fall back to the management address and pass
+  over the LAN with no tunnel at all. Configs are renamed `*.fleet-disabled` rather
+  than deleted, and issued key material is left in place, so moving a host back does
+  not need new credentials. If the new tunnel does not answer, the old transport
+  stays and the step says so.
+
+  **Deleting a host** now retires whichever overlay it was on. Previously it always
+  removed a WireGuard peer, so an OpenVPN host left its pinned address behind on the
+  server — answering for an address the next host could be given.
+
+  **Everything that reported "WireGuard" now reports the host's actual transport.**
+  The monitor's health probe asks the tunnel device for OpenVPN hosts instead of
+  running `wg show` (which reported every one of them as permanently degraded); the
+  offline/degraded alerts, the insight, the strict-overlay connection error, the
+  status chips, the host-detail row and the enroll tooltips all name the transport
+  the host is on and point at the right daemon on each end. `fleetctl fips check`
+  prints both pools and counts the hosts still on the non-FIPS transport.
+
+  **The UI shows the plan before you commit to it.** `/hosts/wg/next` reports both
+  overlays' subnet, jump address, port and next free address; Settings lists them as
+  a table, and the enroll dialog says which pool a host will land in — and, when the
+  choice moves it, that it will be renumbered out of the address it has now.
+
+  **Peer isolation covers the gap between the overlays**, not just within each: the
+  jump host denies forwarding from either subnet to the other, so a host on one
+  transport cannot reach a host on the other.
+
+  Firewall: open **both** `FLEET_WG_PORT` (51820/udp) and `FLEET_OVPN_PORT`
+  (1194/udp) on the jump host if any host uses either transport. Managed hosts always
+  dial `FLEET_OVPN_PORT` for OpenVPN, whatever port `FLEET_WG_JUMP_ENDPOINT` names.
+
 - **The OpenVPN overlay server was never started, and enrollment reported it
   healthy anyway.** `JumpServerScript` guarded the launch with `pgrep -f 'openvpn
   .*server.conf'`. Fleet runs these scripts as `sh -c "<the whole script>"`, so the

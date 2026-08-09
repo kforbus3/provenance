@@ -435,11 +435,15 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, host)
 }
 
-// nextWG returns the next free overlay address so the create dialog can show
-// what auto-assignment would pick (and the overlay subnet), plus the deployment's
-// default VPN overlay — which the enroll dialog needs to know what "Deployment
-// default" will actually resolve to, since a certificate overlay produces a
-// different no-install flow (no key to paste back).
+// nextWG describes the overlay address plans so the create/enroll dialogs can show
+// what auto-assignment would pick, and so the enroll dialog can tell what
+// "Deployment default" resolves to.
+//
+// Both overlays are reported, each with its own subnet, jump address and the port
+// managed hosts dial. They are separate address plans on purpose (see
+// config.OVPNSubnet), and a UI that knew only WireGuard's could not show an operator
+// which pool a host would land in, nor which port has to be open for the transport
+// they picked.
 func (h *handler) nextWG(w http.ResponseWriter, r *http.Request) {
 	// Effective default endpoint: DB setting first, then the env config default.
 	endpoint := h.d.Store.WireGuardEndpoint(r.Context())
@@ -450,12 +454,49 @@ func (h *handler) nextWG(w http.ResponseWriter, r *http.Request) {
 	if defaultOverlay == "" {
 		defaultOverlay = "wireguard"
 	}
-	next, err := h.d.Store.NextFreeWGAddress(r.Context(), h.d.Cfg.WGJumpIP)
-	if err != nil {
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": "", "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "overlay": defaultOverlay, "exhausted": true})
-		return
+
+	type overlayPlan struct {
+		Name     string `json:"name"`
+		Subnet   string `json:"subnet"`
+		JumpIP   string `json:"jumpIp"`
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": next, "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "overlay": defaultOverlay})
+	plans := []overlayPlan{
+		{Name: "wireguard", Subnet: h.d.Cfg.WGSubnet, JumpIP: h.d.Cfg.WGJumpIP, Port: h.d.Cfg.WGPort, Protocol: "udp"},
+		{Name: "openvpn", Subnet: h.d.Cfg.OVPNSubnet, JumpIP: h.d.Cfg.OVPNJumpIP, Port: h.d.Cfg.OVPNPort, Protocol: "udp"},
+	}
+	// What each pool would hand out next. Reported per overlay because a host
+	// switching transports is renumbered into the other pool — one figure would
+	// misstate the address for half the enrollments.
+	next := map[string]string{}
+	exhausted := map[string]bool{}
+	for _, p := range plans {
+		addr, err := h.d.Store.NextFreeWGAddress(r.Context(), p.JumpIP)
+		if err != nil {
+			exhausted[p.Name] = true
+			continue
+		}
+		next[p.Name] = addr
+	}
+
+	resp := map[string]any{
+		// nextWgAddress/subnet stay at the top level for the WireGuard pool: they are
+		// the fields the create dialog has always read.
+		"nextWgAddress": next["wireguard"],
+		"subnet":        h.d.Cfg.WGSubnet,
+		"jumpEndpoint":  endpoint,
+		"overlay":       defaultOverlay,
+		"overlays":      plans,
+		"nextAddress":   next,
+	}
+	if exhausted["wireguard"] {
+		resp["exhausted"] = true
+	}
+	if len(exhausted) > 0 {
+		resp["exhaustedOverlays"] = exhausted
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) statusStats(w http.ResponseWriter, r *http.Request) {
@@ -621,24 +662,26 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
-	// Read the host before the row is gone: retiring its WireGuard peer on the
-	// jump host needs the hostname (the persisted fragment is keyed by it).
+	// Read the host before the row is gone: retiring its overlay membership needs
+	// the hostname (WireGuard's fragment is keyed by it), the id (a cert overlay's
+	// pin is keyed by it) and the overlay itself.
 	host, _ := h.d.Store.GetHost(r.Context(), id)
 	if err := h.d.Store.DeleteHost(r.Context(), id); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not delete host")
 		return
 	}
 	h.audit(r, "host.delete", id.String(), nil)
-	// Retire the jump-host peer in the background: best-effort (a stale entry
-	// self-heals when the overlay IP is reused), and never blocks the response.
-	if h.d.CleanupJumpPeer != nil && host != nil && host.WGAddress != "" {
-		go func(hostname string) {
+	// Retire the host's overlay membership in the background: best-effort (a stale
+	// entry self-heals when the address is reused), and never blocks the response.
+	if h.d.CleanupHostOverlay != nil && host != nil && host.WGAddress != "" {
+		go func(hst models.Host) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := h.d.CleanupJumpPeer(ctx, hostname); err != nil {
-				h.d.Log.Warn("cleanup jump wireguard peer after host delete", "host", hostname, "err", err)
+			if err := h.d.CleanupHostOverlay(ctx, &hst); err != nil {
+				h.d.Log.Warn("cleanup host overlay after host delete",
+					"host", hst.Hostname, "overlay", hst.Overlay, "err", err)
 			}
-		}(host.Hostname)
+		}(*host)
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

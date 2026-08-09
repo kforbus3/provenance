@@ -76,13 +76,14 @@ func (s *Store) MFAGloballyRequired(ctx context.Context) bool {
 	return v.Enabled
 }
 
-// RequireWireGuard reports whether strict overlay mode is enabled. When true, a
-// host that has a WireGuard address is reachable only over the overlay: the
-// terminal and SFTP refuse to fall back to the host's direct address if the
-// tunnel is down, so a connection never silently bypasses WireGuard. Stored on
-// the "wireguard" settings object as {"requireOverlay": bool}; absent/false
-// keeps the normal fallback behavior.
-func (s *Store) RequireWireGuard(ctx context.Context) bool {
+// RequireOverlay reports whether strict overlay mode is enabled. When true, a host
+// that has an overlay address is reachable only over its overlay — WireGuard or
+// OpenVPN, whichever it was enrolled onto: the terminal, SFTP and RDP refuse to fall
+// back to the host's direct address if the tunnel is down, so a connection never
+// silently bypasses the VPN. Stored on the "wireguard" settings object as
+// {"requireOverlay": bool} (the key predates per-host overlays and is kept for
+// compatibility); absent/false keeps the normal fallback behavior.
+func (s *Store) RequireOverlay(ctx context.Context) bool {
 	raw, err := s.GetSetting(ctx, "wireguard")
 	if err != nil {
 		return false

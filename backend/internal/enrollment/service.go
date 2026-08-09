@@ -372,6 +372,10 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	// 6) Determine the overlay address (operator-specified or auto-assigned).
 	//    Skipped for a directly-reachable host — it has no overlay address.
 	var wgIP, hostPub string
+	// The address a host holds before this run. Each overlay numbers hosts from its
+	// own pool, so a switch renumbers it and the pin held for the old address has to
+	// be released with it (see releaseOverlayAddress).
+	prevIP := strings.TrimSpace(host.WGAddress)
 	if overlay.IsCertOverlay(effOverlay) {
 		// Cert overlay (OpenVPN): provision the tunnel via X.509 mutual auth
 		// instead of WireGuard. The assigned address is stored in the same wg_address
@@ -388,32 +392,18 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 			if wgIP, oerr = s.enrollCertOverlay(ctx, ov, host, jumpClient, priv, params, step); oerr != nil {
 				return fail("configure_overlay", oerr)
 			}
-			// Both transports address the host at the SAME overlay IP, so a host moving
-			// off WireGuard has to give the address up before the new tunnel can be
-			// relied on. This is reached only when enrollCertOverlay has PROVEN the new
-			// tunnel carries traffic from the jump host — never on a step that merely
-			// reported ok. Retiring the working transport on the strength of a reported
-			// one is what took debian-ab-test2 offline.
-			if hadWireGuard(host) {
-				s.retireWireGuard(ctx, host, priv, jumpClient, step)
-			}
+			// Retire whichever transport this host is leaving. Gated inside on a
+			// dial to the new overlay address from the jump host: retiring a working
+			// transport on the strength of a step that merely reported ok is what took
+			// a host offline once already.
+			s.retirePreviousOverlay(ctx, effOverlay, host, wgIP, priv, jumpClient, step)
 		}
 	} else if !params.SkipWireGuard {
-		wgIP = strings.TrimSpace(host.WGAddress)
-		if wgIP != "" {
-			if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
-				return fail("assign_overlay_address",
-					fmt.Errorf("WireGuard address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet))
-			}
-			if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
-				return fail("assign_overlay_address",
-					fmt.Errorf("WireGuard address %s is already assigned to another host", wgIP))
-			}
-		} else {
-			wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
-			if err != nil {
-				return fail("assign_overlay_address", err)
-			}
+		// A host arriving from a certificate overlay is renumbered onto WireGuard's
+		// own pool here, the mirror of the cert-overlay branch above.
+		wgIP, err = s.assignOverlayAddress(ctx, host, s.plan("wireguard"))
+		if err != nil {
+			return fail("assign_overlay_address", err)
 		}
 
 		// 7) Bring up WireGuard on the host (kernel module preferred, userspace
@@ -461,6 +451,9 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		if perr := s.store.SetHostWGPublicKey(ctx, host.ID, hostPub); perr != nil {
 			s.log.Warn("persist host wg public key", "host", host.Hostname, "err", perr)
 		}
+		// Retire the certificate overlay this host is leaving, if any — the mirror of
+		// the cert branch above, and gated on the same proof.
+		s.retirePreviousOverlay(ctx, effOverlay, host, wgIP, priv, jumpClient, step)
 	} else {
 		step("configure_host_wireguard", "skipped",
 			"host is directly reachable from the jump host — reached at its management address, no overlay")
@@ -501,6 +494,9 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 
 	// 10) Persist the address/enrolled state now so the validation dial can use it.
 	//     Record the resolved overlay so re-enrollment/monitoring stays on the same one.
+	if prevIP != wgIP {
+		s.releaseOverlayAddress(ctx, host, prevIP)
+	}
 	_ = s.store.SetHostWGAddress(ctx, host.ID, wgIP)
 	_ = s.store.SetHostOverlay(ctx, host.ID, effOverlay)
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
@@ -885,6 +881,100 @@ func hasOverlayState(host *models.Host) bool {
 	return host.Enrolled || strings.TrimSpace(host.WGAddress) != ""
 }
 
+// retireCertOverlay is retireWireGuard's mirror: it takes a certificate overlay down
+// on both ends when a host moves back to WireGuard. Without it the host keeps an
+// openvpn client reconnecting to an overlay it has left, and the server keeps a pinned
+// address for a host that is no longer on it — two interfaces racing for the same
+// traffic, which is the failure the separate subnets exist to prevent.
+func (s *Service) retireCertOverlay(ctx context.Context, name string, host *models.Host, priv func(string) (string, error), jumpClient *ssh.Client, step func(name, status, detail string)) {
+	ov := s.overlays[name]
+	if ov == nil {
+		// The transport is recorded but not built into this deployment, so Fleet cannot
+		// speak for it. Say so rather than reporting a clean retirement.
+		step("retire_"+name, "warning",
+			fmt.Sprintf("this host is recorded on the %s overlay, which is not available on this deployment — "+
+				"its client may still be running; stop it on the host by hand", name))
+		return
+	}
+	var notes []string
+	degraded := false
+
+	hb := ov.RetireHostScript()
+	if out, err := priv(hb.Script); err != nil || !strings.Contains(out, hb.Marker) {
+		notes = append(notes, "could not stop the "+name+" client on the host: "+oneLine(orErr(err, out).Error()))
+		degraded = true
+	} else {
+		notes = append(notes, name+" client stopped and disabled on the host")
+	}
+
+	jumpRun := func(script string) (string, error) {
+		return run(jumpClient, "sudo sh -c "+shellQuote(script))
+	}
+	if detail, err := ov.RetireJump(ctx, host.ID, jumpRun); err != nil {
+		notes = append(notes, err.Error())
+		degraded = true
+	} else if detail != "" {
+		notes = append(notes, detail)
+	}
+
+	status := "ok"
+	if degraded {
+		status = "warning"
+	}
+	step("retire_"+name, status, strings.Join(notes, "; "))
+}
+
+// retirePreviousOverlay takes down whichever transport a host is LEAVING, in either
+// direction, once the one it is joining has been proven to carry traffic.
+//
+// One entry point for both directions on purpose: a switch is only complete when the
+// old transport is gone from both ends, and the two directions used to be neither
+// symmetric nor gated the same way. The proof is a dial to the host's new overlay
+// address from the jump host — the path every session takes — because every other
+// check in enrollment can fall back to the management address and pass over the LAN
+// with no tunnel at all.
+func (s *Service) retirePreviousOverlay(
+	ctx context.Context, joining string, host *models.Host, overlayIP string,
+	priv func(string) (string, error), jumpClient *ssh.Client, step func(name, status, detail string),
+) {
+	leaving := previousOverlay(host, joining)
+	if leaving == "" {
+		return
+	}
+	if err := s.verifyOverlayReachable(ctx, jumpClient, overlayIP, host.SSHPort); err != nil {
+		// Never trade a transport that might be working for one that demonstrably is
+		// not. The host keeps both until an operator can look at it; the duplicate is
+		// recoverable, an unreachable host is not.
+		step("retire_"+leaving, "warning", fmt.Sprintf(
+			"left the %s overlay in place: the new %s tunnel did not answer at %s (%v). "+
+				"Re-enroll once it does, or retire %s on the host by hand",
+			leaving, joining, overlayIP, err, leaving))
+		return
+	}
+	if overlay.IsCertOverlay(leaving) {
+		s.retireCertOverlay(ctx, leaving, host, priv, jumpClient, step)
+		return
+	}
+	s.retireWireGuard(ctx, host, priv, jumpClient, step)
+}
+
+// previousOverlay names the transport a host is leaving, or "" when it is not moving.
+// A host with no overlay state has nothing to leave; an empty recorded overlay means
+// WireGuard, which is what a host enrolled before per-host overlays looks like.
+func previousOverlay(host *models.Host, joining string) string {
+	if !hasOverlayState(host) {
+		return ""
+	}
+	was := strings.TrimSpace(host.Overlay)
+	if was == "" {
+		was = "wireguard"
+	}
+	if was == strings.TrimSpace(joining) {
+		return ""
+	}
+	return was
+}
+
 // hadWireGuard reports whether a host is carrying WireGuard state worth retiring
 // before it moves to a certificate overlay. An empty Overlay counts as WireGuard —
 // that is what a host enrolled before per-host overlays existed looks like.
@@ -988,23 +1078,48 @@ else
 fi`, s.cfg.WGInterface, sanitize(hostname))
 }
 
-// CleanupJumpPeer removes a host's WireGuard peer (kernel entry + persisted
-// fragment) from the jump host. Called best-effort when a host is deleted;
-// enrollment itself retires stale claims inline (see jumpPeerScript), so a
-// failure here (jump unreachable) self-heals on the next enrollment that reuses
-// the overlay IP.
-func (s *Service) CleanupJumpPeer(ctx context.Context, hostname string) error {
+// CleanupHostOverlay retires a deleted host's membership of whichever overlay it was
+// on, from the jump host: a WireGuard peer (kernel entry + persisted fragment) or a
+// certificate overlay's pinned address.
+//
+// It has to branch on the host's overlay because the two leave different things
+// behind, and a leftover from the wrong one is not harmless: both pin the host's
+// address, so whichever is left keeps answering for an address the next host may be
+// given. Best-effort — enrollment also retires stale claims inline (see
+// jumpPeerScript), so a failure here (jump unreachable) self-heals on the next
+// enrollment that reuses the address.
+func (s *Service) CleanupHostOverlay(ctx context.Context, host *models.Host) error {
+	if host == nil {
+		return nil
+	}
 	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
 	jumpClient, err := s.gw.DialDirect(ctx, uuid.New().String(), jumpAddr, jumpPort, s.cfg.JumpUser)
 	if err != nil {
 		return fmt.Errorf("connect jump host: %w", err)
 	}
 	defer jumpClient.Close()
-	out, err := run(jumpClient, "sudo sh -c "+shellQuote(s.jumpPeerCleanupScript(hostname)))
+
+	if name := strings.TrimSpace(host.Overlay); overlay.IsCertOverlay(name) {
+		ov := s.overlays[name]
+		if ov == nil {
+			return fmt.Errorf("overlay %q is not available on this deployment", name)
+		}
+		detail, rerr := ov.RetireJump(ctx, host.ID, func(script string) (string, error) {
+			return run(jumpClient, "sudo sh -c "+shellQuote(script))
+		})
+		if rerr != nil {
+			return rerr
+		}
+		s.log.Info("retired overlay membership on the jump host",
+			"host", host.Hostname, "overlay", name, "result", detail)
+		return nil
+	}
+
+	out, err := run(jumpClient, "sudo sh -c "+shellQuote(s.jumpPeerCleanupScript(host.Hostname)))
 	if err != nil {
 		return fmt.Errorf("remove jump peer: %w (%s)", err, strings.TrimSpace(out))
 	}
-	s.log.Info("removed jump-host wireguard peer", "host", hostname, "result", strings.TrimSpace(out))
+	s.log.Info("removed jump-host wireguard peer", "host", host.Hostname, "result", strings.TrimSpace(out))
 	return nil
 }
 

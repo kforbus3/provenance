@@ -13,6 +13,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/auth"
 	"github.com/fleet-terminal/backend/internal/config"
 	"github.com/fleet-terminal/backend/internal/livesessions"
+	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/notify"
 	"github.com/fleet-terminal/backend/internal/store"
 )
@@ -55,11 +56,12 @@ type Deps struct {
 	// backend keeps refusing the new key until this clears the cache too.
 	ForgetHostKeys func(ids ...string)
 
-	// CleanupJumpPeer removes a deleted host's WireGuard peer (kernel entry +
-	// persisted fragment) from the jump host (set by the server; nil in tests).
-	// Best-effort: deletion succeeds even when the jump host is unreachable —
-	// enrollment retires stale claims inline when the overlay IP is reused.
-	CleanupJumpPeer func(ctx context.Context, hostname string) error
+	// CleanupHostOverlay retires a deleted host's overlay membership on the jump
+	// host — a WireGuard peer or a certificate overlay's pinned address, whichever
+	// the host was on (set by the server; nil in tests). Best-effort: deletion
+	// succeeds even when the jump host is unreachable — enrollment retires stale
+	// claims inline when the address is reused.
+	CleanupHostOverlay func(ctx context.Context, host *models.Host) error
 }
 
 // Broadcaster pushes a typed real-time event to connected clients. The concrete

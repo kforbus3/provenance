@@ -3,8 +3,8 @@
 // (internal/enrollment): selected only when FLEET_OVERLAY=openvpn, so the default
 // WireGuard overlay is completely untouched.
 //
-// The overlay reuses the WireGuard subnet/jump-IP and the same hosts.wg_address
-// column for a host's assigned overlay address, so the SSH gateway's address
+// The overlay has its own subnet/jump-IP (FLEET_OVPN_SUBNET) but reuses the
+// hosts.wg_address column for a host's assigned address, so the SSH gateway's address
 // resolution needs no changes — a host is dialed at its overlay address whichever
 // overlay assigned it. All configs here are the exact shape validated end-to-end
 // against a real OpenVPN 2.6 / OpenSSL 3 server+client (ECDSA P-256 certs, TLS 1.2+,
@@ -41,12 +41,17 @@ func New(cfg *config.Config, pki *overlaypki.PKI) *OpenVPN {
 	return &OpenVPN{cfg: cfg, pki: pki}
 }
 
-// subnetParts splits WGSubnet ("10.100.0.0/24") into network + dotted netmask for
-// the OpenVPN `server` directive and ccd `ifconfig-push`.
+// subnetParts splits the OpenVPN overlay's own subnet ("10.101.0.0/24") into
+// network + dotted netmask for the `server` directive and ccd `ifconfig-push`.
+//
+// This is deliberately NOT the WireGuard subnet. Both overlays terminate on the same
+// jump host and each claims its jump address on its own interface, so sharing a
+// subnet gives that host two connected routes for one prefix — resolved once by the
+// kernel, for the whole prefix — and strands every host behind the losing interface.
 func (o *OpenVPN) subnetParts() (network, netmask string, err error) {
-	_, ipnet, err := net.ParseCIDR(o.cfg.WGSubnet)
+	_, ipnet, err := net.ParseCIDR(o.cfg.OVPNSubnet)
 	if err != nil {
-		return "", "", fmt.Errorf("bad FLEET_WG_SUBNET %q: %w", o.cfg.WGSubnet, err)
+		return "", "", fmt.Errorf("bad FLEET_OVPN_SUBNET %q: %w", o.cfg.OVPNSubnet, err)
 	}
 	mask := ipnet.Mask
 	if len(mask) != net.IPv4len {
@@ -62,7 +67,7 @@ func (o *OpenVPN) Netmask() (string, error) {
 }
 
 // ServerConfig returns the jump-host OpenVPN server.conf. The server takes the
-// first host of the subnet (WGJumpIP) as its own tun address and pins static
+// first host of the subnet (OVPNJumpIP) as its own tun address and pins static
 // per-host IPs from client-config-dir.
 func (o *OpenVPN) ServerConfig() (string, error) {
 	network, netmask, err := o.subnetParts()
@@ -160,7 +165,7 @@ func (o *OpenVPN) hostIsolationScript() string {
 	if !o.cfg.OverlayPeerIsolation {
 		return ""
 	}
-	jump := strings.TrimSpace(o.cfg.WGJumpIP)
+	jump := strings.TrimSpace(o.cfg.OVPNJumpIP)
 	if net.ParseIP(jump) == nil {
 		return ""
 	}
@@ -325,7 +330,7 @@ func (o *OpenVPN) peerIsolationScript() string {
 	// into a shell command line, and ParseCIDR's normalized form is the only shape
 	// that can come out. An unparseable subnet fails ServerConfig anyway, so
 	// provisioning never reaches here with one.
-	_, ipnet, err := net.ParseCIDR(o.cfg.WGSubnet)
+	_, ipnet, err := net.ParseCIDR(o.cfg.OVPNSubnet)
 	if err != nil {
 		return ""
 	}
@@ -346,6 +351,59 @@ mkdir -p %[1]s/ccd
 cat > %[1]s/ccd/%[2]s <<'FLEOF'
 %[3]sFLEOF
 echo OVPN_CCD_WRITTEN`, fleetDir, cn, ccdEntry)
+}
+
+// JumpCCDRemoveScript drops a host's pinned address from the server. The client
+// certificate is left valid — a host moving to another transport has not been
+// revoked, and re-enrolling it back onto this overlay should not need a new one —
+// but with no ccd entry the server no longer holds an address for it.
+func (o *OpenVPN) JumpCCDRemoveScript(cn string) string {
+	return fmt.Sprintf(`if [ -f %[1]s/ccd/%[2]s ]; then rm -f %[1]s/ccd/%[2]s; echo OVPN_CCD_REMOVED; else echo OVPN_CCD_ABSENT; fi`,
+		fleetDir, cn)
+}
+
+// RetireJump implements Overlay.
+func (o *OpenVPN) RetireJump(ctx context.Context, hostID uuid.UUID, jumpRun RunFunc) (string, error) {
+	out, err := jumpRun(o.JumpCCDRemoveScript(ClientCN(hostID.String())))
+	if err != nil {
+		return "", fmt.Errorf("remove the pinned address on the jump host: %v: %s", err, oneLine(out))
+	}
+	if strings.Contains(out, "OVPN_CCD_REMOVED") {
+		return "pinned overlay address removed from the openvpn server", nil
+	}
+	return "", nil
+}
+
+// RetireHostScript implements Overlay: stop the client, keep it from restarting on
+// boot, and set the config aside.
+//
+// The client material (ca/cert/key) is deliberately left in place — a host moved
+// back later re-uses the certificate Fleet already issued it, and the files are
+// root-only. The config is renamed rather than deleted so an operator can see what
+// was retired, matching how the WireGuard teardown treats wg-quick's config.
+func (o *OpenVPN) RetireHostScript() HostBringup {
+	return HostBringup{
+		Marker: "OVPN_RETIRED",
+		Script: fmt.Sprintf(`set +e
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now openvpn@fleet-overlay >/dev/null 2>&1
+  systemctl disable --now openvpn-client@fleet-overlay >/dev/null 2>&1
+fi
+# Whatever systemd did or did not manage, stop any daemon still running against
+# this config. Matched by process NAME plus /proc: a command-line match would also
+# hit this very script, whose own text contains the config path.
+for _p in $(pgrep -x openvpn 2>/dev/null); do
+  if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '%[1]s/client.ovpn'; then
+    kill "$_p" 2>/dev/null
+  fi
+done
+rm -f /run/fleet-ovpn-client.pid
+for f in /etc/openvpn/fleet-overlay.conf /etc/openvpn/client/fleet-overlay.conf; do
+  [ -f "$f" ] && mv -f "$f" "$f.fleet-disabled"
+done
+if [ -f %[1]s/client.ovpn ]; then mv -f %[1]s/client.ovpn %[1]s/client.ovpn.fleet-disabled; fi
+echo OVPN_RETIRED`, fleetDir),
+	}
 }
 
 // HostInstallScript installs openvpn on a managed host, writes its client material +

@@ -99,6 +99,21 @@ one carrying a TTY (`-t`). Piping it straight into `ssh host sudo sh` instead
 hands sudo the script on stdin with no terminal, so any host whose sudo asks for
 a password fails with `sudo: a terminal is required to read the password`.
 
+**Switching a host between VPN overlays.** Which transport a host uses is the
+enroll dialog's **VPN overlay** field, and changing it is just a re-enrollment — any
+method. The two overlays are separate subnets (`FLEET_WG_SUBNET` and
+`FLEET_OVPN_SUBNET`), so the host is **renumbered** into the pool it joins; the
+dialog shows the new pool and the address it will leave. Fleet proves the new tunnel
+by dialing the host at its new overlay address from the jump host, then retires the
+old transport on both ends — client stopped and disabled on the host (config renamed
+`*.fleet-disabled`, issued key material kept), peer or pinned address removed on the
+jump host. If the new tunnel does not answer, the old one stays and the enrollment
+step says so, so a failed switch never costs you the host.
+
+Both UDP ports must be open on the jump host for the transports you use:
+`FLEET_WG_PORT` (51820) and `FLEET_OVPN_PORT` (1194). OpenVPN clients always dial
+`FLEET_OVPN_PORT` regardless of the port in the endpoint field.
+
 **Choosing the VPN overlay.** The script is generated *for one overlay*, and the
 dialog's **VPN overlay** dropdown rides the URL (`?overlay=openvpn`) — so pick it
 before copying the command. Under a certificate overlay (OpenVPN) the script

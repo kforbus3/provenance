@@ -300,14 +300,15 @@ func deleteHostAction() ActionDef {
 			if err := r.store.DeleteHost(ctx, p.HostID); err != nil {
 				return "", errors.New("could not delete the host")
 			}
-			if r.cleanupJumpPeer != nil && host != nil && host.WGAddress != "" {
-				go func(hostname string) {
+			if r.cleanupHostOverlay != nil && host != nil && host.WGAddress != "" {
+				go func(h models.Host) {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					if err := r.cleanupJumpPeer(ctx, hostname); err != nil {
-						r.log.Warn("cleanup jump wireguard peer after host delete", "host", hostname, "err", err)
+					if err := r.cleanupHostOverlay(ctx, &h); err != nil {
+						r.log.Warn("cleanup host overlay after host delete",
+							"host", h.Hostname, "overlay", h.Overlay, "err", err)
 					}
-				}(host.Hostname)
+				}(*host)
 			}
 			return fmt.Sprintf("Deleted host %s from Fleet.", p.Hostname), nil
 		},

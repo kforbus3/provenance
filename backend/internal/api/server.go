@@ -250,11 +250,11 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// later (when the enrollment service is built in registerRoutes), but actions
 	// only execute at request time, long after both exist.
 	s.actionReg = aiaction.New(st, log, s.vulnScan.Run, authSvc.DestroyUserSessions, actionNotify,
-		func(ctx context.Context, hostname string) error {
-			if s.deps == nil || s.deps.CleanupJumpPeer == nil {
+		func(ctx context.Context, host *models.Host) error {
+			if s.deps == nil || s.deps.CleanupHostOverlay == nil {
 				return nil
 			}
-			return s.deps.CleanupJumpPeer(ctx, hostname)
+			return s.deps.CleanupHostOverlay(ctx, host)
 		})
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.winscriptSvc = winscript.New(st, cfg, log, gateway, issuer, s.Notify)
@@ -1027,7 +1027,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// Host deletion (REST handler and AI action alike) uses this to retire the
 	// deleted host's WireGuard peer on the jump host, so a stale peer can't
 	// steal the overlay IP back when it is later reassigned.
-	deps.CleanupJumpPeer = enroll.CleanupJumpPeer
+	deps.CleanupHostOverlay = enroll.CleanupHostOverlay
 	// Re-trusting a rebuilt host's key has to invalidate the gateway's in-process
 	// pin cache as well as the stored pin.
 	deps.ForgetHostKeys = s.Gateway.ForgetHostKeys

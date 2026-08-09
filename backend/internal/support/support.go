@@ -165,6 +165,7 @@ SH 60-pending-updates.txt 'apt list --upgradable 2>/dev/null || dnf -q check-upd
 SH 61-logins.txt 'echo "== last -n 30 =="; last -n 30 2>/dev/null; echo; echo "== who =="; w 2>/dev/null'
 SH 62-pkg-health.txt 'echo "== held packages =="; apt-mark showhold 2>/dev/null; echo; echo "== apt check =="; apt-get -s check 2>/dev/null | tail -5; echo; echo "== configured repositories =="; grep -rhE "^deb |^https?:" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | head -40; dnf repolist 2>/dev/null; yum repolist 2>/dev/null'
 SH 70-wireguard.txt 'wg show 2>/dev/null'
+SH 70b-openvpn.txt 'echo "== client status =="; systemctl status openvpn@fleet-overlay openvpn-client@fleet-overlay 2>/dev/null | head -30; echo; echo "== tunnel devices =="; ip -4 -br addr show 2>/dev/null | grep -E "^(tun|tap)" ; echo; echo "== recent client log =="; tail -n 40 /etc/openvpn/fleet/client.log 2>/dev/null'
 SH 71-firewall.txt 'nft list ruleset 2>/dev/null | head -140 || iptables -S 2>/dev/null'
 SH 72-selinux-apparmor.txt 'echo "== SELinux =="; getenforce 2>/dev/null; sestatus 2>/dev/null; echo; echo "== AppArmor =="; aa-status 2>/dev/null | head -30'
 SH 73-sshd-config.txt 'sshd -T 2>/dev/null | sort'

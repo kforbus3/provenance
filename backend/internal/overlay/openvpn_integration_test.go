@@ -13,11 +13,16 @@ import (
 )
 
 func testCfg() *config.Config {
+	// An OpenVPN-ONLY deployment: FLEET_OVERLAY=openvpn, so Load leaves the cert
+	// overlay on the WireGuard subnet rather than renumbering an existing fleet.
+	// See mixedCfg for the two-overlay shape.
 	return &config.Config{
 		WGSubnet:       "10.100.0.0/24",
 		WGJumpIP:       "10.100.0.1",
 		WGJumpEndpoint: "jump:1194",
 		OVPNPort:       1194,
+		OVPNSubnet:     "10.100.0.0/24",
+		OVPNJumpIP:     "10.100.0.1",
 		Overlay:        "openvpn",
 		// Matches the production default (FLEET_OVERLAY_PEER_ISOLATION=1) rather
 		// than the bool zero value, so what the integration harness emits is what a

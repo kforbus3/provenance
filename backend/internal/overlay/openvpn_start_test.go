@@ -12,7 +12,8 @@ import (
 
 func startTestOverlay() *OpenVPN {
 	return &OpenVPN{cfg: &config.Config{
-		WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1", OVPNPort: 1194,
+		WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1",
+		OVPNSubnet: "10.101.0.0/24", OVPNJumpIP: "10.101.0.1", OVPNPort: 1194,
 	}}
 }
 

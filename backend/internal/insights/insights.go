@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -94,12 +95,13 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 			continue
 		}
 		// An overlay-enrolled host that is only reachable because the monitor fell
-		// back to its direct address: the host looks "online" but its WireGuard
-		// tunnel is down, which would otherwise go completely unnoticed.
+		// back to its direct address: the host looks "online" but its overlay tunnel
+		// is down, which would otherwise go completely unnoticed. Name the transport
+		// the host actually uses — pointing an operator at WireGuard while an OpenVPN
+		// client is the thing that is down costs them the whole investigation.
 		if h.WGAddress != "" && h.Status != nil && h.Status.Status == "online" && !h.Status.WGOK {
 			out = append(out, insight(SeverityWarning, "overlay", h.ID, h.Hostname,
-				"Overlay tunnel down",
-				fmt.Sprintf("The WireGuard tunnel (%s) is down; Fleet is reaching this host over its direct address. Check the WireGuard service on the host and the peer entry on the jump host.", h.WGAddress)))
+				"Overlay tunnel down", overlayDownDetail(h.Overlay, h.WGAddress)))
 		}
 		// Pending security updates come from inventory, not metrics, so report them
 		// even for a host whose metrics haven't been collected yet — a fresh enrollment
@@ -258,4 +260,17 @@ func linreg(xs, ys []float64) (slope, intercept, r2 float64, ok bool) {
 		r2 = 1 // perfectly flat y that still passed the variance check
 	}
 	return slope, intercept, r2, true
+}
+
+// overlayDownDetail explains a down tunnel in terms of the transport that is
+// actually carrying the host, including where to look on each end.
+func overlayDownDetail(overlayName, addr string) string {
+	switch strings.TrimSpace(overlayName) {
+	case "openvpn":
+		return fmt.Sprintf("The OpenVPN tunnel (%s) is down; Fleet is reaching this host over its direct address. "+
+			"Check the openvpn client on the host and the openvpn server on the jump host.", addr)
+	default:
+		return fmt.Sprintf("The WireGuard tunnel (%s) is down; Fleet is reaching this host over its direct address. "+
+			"Check the WireGuard service on the host and the peer entry on the jump host.", addr)
+	}
 }

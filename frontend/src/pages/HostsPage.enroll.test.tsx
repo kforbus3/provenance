@@ -175,6 +175,59 @@ describe("EnrollCredsDialog no-install VPN overlay", () => {
     expect(screen.getByText(/curl -fsSL/).textContent ?? "").not.toContain("overlay=");
   });
 
+  it("says a host will be renumbered when the choice moves it to another overlay", async () => {
+    // The two overlays are separate pools, so a switch always changes the host's
+    // address. Discovering that after clicking Enroll — when the old address has
+    // already been released — is the wrong time to learn it.
+    vi.mocked(hostsApi.nextWGAddress).mockResolvedValue({
+      nextWgAddress: "10.100.0.9", subnet: "10.100.0.0/24",
+      jumpEndpoint: "vpn.example.com:51820", overlay: "wireguard",
+      overlays: [
+        { name: "wireguard", subnet: "10.100.0.0/24", jumpIp: "10.100.0.1", port: 51820, protocol: "udp" },
+        { name: "openvpn", subnet: "10.101.0.0/24", jumpIp: "10.101.0.1", port: 1194, protocol: "udp" },
+      ],
+      nextAddress: { wireguard: "10.100.0.9", openvpn: "10.101.0.4" },
+    } as unknown as Awaited<ReturnType<typeof hostsApi.nextWGAddress>>);
+
+    const enrolled = { ...host, enrolled: true, overlay: "wireguard", wgAddress: "10.100.0.27" } as hostsApi.Host;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <EnrollCredsDialog host={enrolled} onClose={() => {}} onSubmit={() => {}} onPipeFinish={() => {}} />
+      </QueryClientProvider>,
+    );
+    // Wait for the plans to arrive before switching, so the notice is rendered
+    // from real data rather than the pre-fetch fallback.
+    await screen.findByText(/must be open on the firewall/);
+    pickOverlay(/^OpenVPN/);
+
+    const notice = (await screen.findByText(/renumbered/)).textContent ?? "";
+    expect(notice).toContain("10.100.0.27");
+    expect(notice).toContain("10.101.0.0/24");
+    expect(notice).toContain("10.101.0.4");
+  });
+
+  it("shows which pool and port a fresh host will use", async () => {
+    vi.mocked(hostsApi.nextWGAddress).mockResolvedValue({
+      nextWgAddress: "10.100.0.9", subnet: "10.100.0.0/24",
+      jumpEndpoint: "vpn.example.com:51820", overlay: "wireguard",
+      overlays: [
+        { name: "wireguard", subnet: "10.100.0.0/24", jumpIp: "10.100.0.1", port: 51820, protocol: "udp" },
+        { name: "openvpn", subnet: "10.101.0.0/24", jumpIp: "10.101.0.1", port: 1194, protocol: "udp" },
+      ],
+      nextAddress: { wireguard: "10.100.0.9", openvpn: "10.101.0.4" },
+    } as unknown as Awaited<ReturnType<typeof hostsApi.nextWGAddress>>);
+    renderDialog();
+    pickOverlay(/^OpenVPN/);
+
+    // The port matters operationally: it has to be open on the firewall, and it is
+    // NOT the port in the endpoint field.
+    const notice = (await screen.findByText(/must be open on the firewall/)).textContent ?? "";
+    expect(notice).toContain("10.101.0.0/24");
+    expect(notice).toContain("1194/udp");
+    expect(notice).not.toContain("renumbered");
+  });
+
   it("still requires the pasted key under WireGuard", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("radio", { name: /No install/ }));

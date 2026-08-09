@@ -55,20 +55,17 @@ func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *m
 	defer jumpClient.Close()
 
 	// Assign + persist the overlay address so this and the finish step agree, and
-	// re-generating the script is idempotent.
-	wgIP := strings.TrimSpace(host.WGAddress)
-	if wgIP != "" {
-		if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
-			return "", fmt.Errorf("overlay address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet)
-		}
-		if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
-			return "", fmt.Errorf("overlay address %s is already assigned to another host", wgIP)
-		}
-	} else {
-		wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
-		if err != nil {
-			return "", err
-		}
+	// re-generating the script is idempotent. On a switch this renumbers the host onto
+	// the new overlay's pool, so the pin held for its old address has to go with it —
+	// the gateway would otherwise refuse the first connection to the new address only
+	// after the operator had already run the script.
+	oldIP := strings.TrimSpace(host.WGAddress)
+	wgIP, err := s.assignOverlayAddress(ctx, host, s.plan(effOverlay))
+	if err != nil {
+		return "", err
+	}
+	if oldIP != wgIP {
+		s.releaseOverlayAddress(ctx, host, oldIP)
 	}
 	_ = s.store.SetHostWGAddress(ctx, host.ID, wgIP)
 
@@ -177,20 +174,12 @@ func (s *Service) EnrollScriptWindows(ctx context.Context, sessionID uuid.UUID, 
 	}
 	jumpPub = strings.TrimSpace(jumpPub)
 
-	// Assign + persist the overlay address so this and the finish step agree.
-	wgIP := strings.TrimSpace(host.WGAddress)
-	if wgIP != "" {
-		if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
-			return "", fmt.Errorf("WireGuard address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet)
-		}
-		if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
-			return "", fmt.Errorf("WireGuard address %s is already assigned to another host", wgIP)
-		}
-	} else {
-		wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
-		if err != nil {
-			return "", err
-		}
+	// Assign + persist the overlay address so this and the finish step agree. Windows
+	// hosts are WireGuard-only (the PowerShell script has no OpenVPN equivalent), so
+	// this always draws from WireGuard's pool.
+	wgIP, err := s.assignOverlayAddress(ctx, host, s.plan("wireguard"))
+	if err != nil {
+		return "", err
 	}
 	_ = s.store.SetHostWGAddress(ctx, host.ID, wgIP)
 

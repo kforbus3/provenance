@@ -48,7 +48,7 @@ import { useUIStore } from "../store/ui";
 import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
 } from "@mui/material";
-import { WgDownChip, WgOnChip, wgDegraded, wgHealthy } from "../components/WgStatus";
+import { WgDownChip, WgOnChip, overlayLabel, wgDegraded, wgHealthy } from "../components/WgStatus";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -194,12 +194,17 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
     }
   }, [open, editHost]);
 
-  // Show what auto-assignment would pick from the overlay pool.
+  // Show what auto-assignment would pick from the overlay pool. Each transport has
+  // its own pool, so the figures shown belong to the deployment's default overlay —
+  // the one a host lands on unless the enroll dialog says otherwise.
   const { data: nextWG } = useQuery({
     queryKey: ["next-wg"],
     queryFn: nextWGAddress,
     enabled: open && !isEdit,
   });
+  const defaultPlan =
+    nextWG?.overlays?.find((p) => p.name === (nextWG?.overlay ?? "wireguard")) ?? nextWG?.overlays?.[0];
+  const defaultPlanNext = defaultPlan ? nextWG?.nextAddress?.[defaultPlan.name] : nextWG?.nextWgAddress;
 
   const set = (key: keyof HostInput) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [key]: e.target.value }));
@@ -233,13 +238,16 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
               helperText="Management address used to reach the host. Leave blank to auto-show the monitored primary IP."
             />
             <TextField
-              label="WireGuard Address" value={form.wgAddress} onChange={set("wgAddress")} fullWidth
-              placeholder={nextWG?.nextWgAddress ? `auto: ${nextWG.nextWgAddress}` : "auto-assign"}
+              label="Overlay address" value={form.wgAddress} onChange={set("wgAddress")} fullWidth
+              placeholder={defaultPlanNext ? `auto: ${defaultPlanNext}` : "auto-assign"}
               helperText={
-                nextWG?.exhausted
-                  ? `Overlay pool ${nextWG.subnet} exhausted`
-                  : nextWG?.nextWgAddress
-                    ? `Leave blank to auto-assign ${nextWG.nextWgAddress} from ${nextWG.subnet}`
+                // Each overlay has its own pool, so the figures shown here are the
+                // deployment default's — the transport a new host gets unless the
+                // enroll dialog is told otherwise.
+                nextWG?.exhaustedOverlays?.[defaultPlan?.name ?? "wireguard"]
+                  ? `Overlay pool ${defaultPlan?.subnet ?? nextWG?.subnet} exhausted`
+                  : defaultPlanNext
+                    ? `Leave blank to auto-assign ${defaultPlanNext} from ${defaultPlan?.subnet} (${overlayLabel(defaultPlan?.name)})`
                     : "Leave blank to auto-assign from the overlay pool"
               }
             />
@@ -556,8 +564,8 @@ export function HostsPage() {
       renderCell: (params) => (
         <Stack direction="row" spacing={0.5} alignItems="center">
           <span>{params.row.wgAddress || "—"}</span>
-          {wgDegraded(params.row) && <WgDownChip />}
-          {wgHealthy(params.row) && <WgOnChip />}
+          {wgDegraded(params.row) && <WgDownChip overlay={params.row.overlay} />}
+          {wgHealthy(params.row) && <WgOnChip overlay={params.row.overlay} />}
         </Stack>
       ),
     },
@@ -573,7 +581,7 @@ export function HostsPage() {
         return (
           <Stack direction="row" spacing={0.5} alignItems="center">
             <Chip size="small" label={s} color={STATUS_COLOR[s] ?? "default"} />
-            {wgDegraded(params.row) && <WgDownChip />}
+            {wgDegraded(params.row) && <WgDownChip overlay={params.row.overlay} />}
             {maintenanceActive(params.row) && (
               <Tooltip title="In maintenance — alerts silenced">
                 <Chip size="small" label="maint" color="warning" variant="outlined" />
@@ -675,12 +683,14 @@ export function HostsPage() {
             </IconButton>
           </Tooltip>
           {/* SSH hosts enroll via a bash script; RDP (Windows) hosts via a PowerShell
-              WireGuard script — both join the host to the overlay for remote reach. */}
+              WireGuard script — both join the host to the overlay for remote reach.
+              Which overlay an SSH host joins is a per-host choice in the dialog, so
+              these labels must not promise one. */}
           <Tooltip title={params.row.enrolled
-            ? "Re-enroll (provision WireGuard)"
+            ? `Re-enroll (${overlayLabel(params.row.overlay)}, or switch overlay)`
             : params.row.protocol === "rdp"
               ? "Enroll on the overlay (Windows / WireGuard)"
-              : "Enroll (provision WireGuard)"}>
+              : "Enroll (provision the VPN overlay)"}>
             <span>
               <IconButton
                 size="small"
@@ -1378,7 +1388,7 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
           ["State", st?.status],
           ["Uptime", fmtUptime(st?.uptimeSeconds)],
           ["Latency", st?.latencyMs != null ? `${st.latencyMs} ms` : ""],
-          ...(isRDP ? [] : [["WireGuard", st ? (st.wgOk ? "healthy" : "—") : ""] as [string, string | undefined]]),
+          ...(isRDP ? [] : [[overlayLabel(host?.overlay), st ? (st.wgOk ? "healthy" : "—") : ""] as [string, string | undefined]]),
           ["Last checked", st?.checkedAt ? fmtDate(st.checkedAt) : ""],
         ]} />
         {/* Why a host is offline was recorded all along but never shown, so the UI
@@ -1674,6 +1684,13 @@ export function EnrollCredsDialog({
   // demanding a key that is never printed, with no way to finish.
   const effectiveOverlay = overlay || host?.overlay || nextWG?.overlay || "wireguard";
   const certOverlay = effectiveOverlay === "openvpn";
+  // The address plan this enrollment will draw from, and whether it moves the host
+  // off the transport it is on. Each overlay has its own subnet, so a switch always
+  // renumbers the host — worth saying before the operator clicks Enroll rather than
+  // leaving them to discover the address changed.
+  const targetPlan = nextWG?.overlays?.find((p) => p.name === effectiveOverlay);
+  const switching =
+    Boolean(host?.enrolled) && Boolean(host?.overlay) && host?.overlay !== effectiveOverlay;
   // The script is generated per (endpoint, overlay): both have to ride the URL, since
   // the operator fetches it themselves and there is no other channel to the backend.
   const scriptParams = new URLSearchParams();
@@ -1959,7 +1976,7 @@ export function EnrollCredsDialog({
           label="VPN overlay" value={overlay}
           onChange={(e) => setOverlay(e.target.value as "" | "wireguard" | "openvpn")}
           disabled={skipWireGuard}
-          helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Leave on default unless this host needs a specific transport."
+          helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Switching an enrolled host between them is just a re-enrollment — Fleet renumbers it and retires the transport it leaves."
         >
           <MenuItem value="">
             Deployment default ({host?.overlay || nextWG?.overlay || "wireguard"})
@@ -1967,12 +1984,35 @@ export function EnrollCredsDialog({
           <MenuItem value="wireguard">WireGuard</MenuItem>
           <MenuItem value="openvpn">OpenVPN (FIPS)</MenuItem>
         </TextField>
+        {!skipWireGuard && targetPlan && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, ml: 1.5 }}>
+            {switching ? (
+              <>
+                Moves this host from <b>{overlayLabel(host?.overlay)}</b> to <b>{overlayLabel(effectiveOverlay)}</b>.
+                Each overlay numbers hosts from its own subnet, so it is renumbered from{" "}
+                <code>{host?.wgAddress}</code> into <code>{targetPlan.subnet}</code>
+                {nextWG?.nextAddress?.[effectiveOverlay] && <> (next free: <code>{nextWG.nextAddress[effectiveOverlay]}</code>)</>}.
+                The old transport is retired once the new tunnel is proven.
+              </>
+            ) : (
+              <>
+                Address comes from <code>{targetPlan.subnet}</code>
+                {!host?.wgAddress && nextWG?.nextAddress?.[effectiveOverlay] && <> (next free: <code>{nextWG.nextAddress[effectiveOverlay]}</code>)</>}.
+                Hosts dial the jump host on <code>{targetPlan.port}/{targetPlan.protocol}</code> — it must be open on the firewall.
+              </>
+            )}
+          </Typography>
+        )}
         <TextField
           fullWidth sx={{ mt: 2 }}
           label="Jump host VPN endpoint" value={wgEndpoint}
           onChange={(e) => setWgEndpoint(e.target.value)}
           disabled={skipWireGuard}
-          helperText="Public address:port the HOST uses to reach the VPN server (e.g. vpn.example.com:51820). Must be resolvable from the host — not an internal Docker name."
+          helperText={
+            targetPlan
+              ? `Public address the HOST uses to reach the VPN server. ${overlayLabel(effectiveOverlay)} always dials ${targetPlan.port}/${targetPlan.protocol}, whatever port is written here. Must be resolvable from the host — not an internal Docker name.`
+              : "Public address:port the HOST uses to reach the VPN server (e.g. vpn.example.com:51820). Must be resolvable from the host — not an internal Docker name."
+          }
         />
         <FormControlLabel
           sx={{ mt: 1 }}

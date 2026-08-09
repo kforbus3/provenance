@@ -39,6 +39,9 @@ services:
       # Strict hub-and-spoke: the jump host will not forward overlay traffic
       # between two managed hosts. On by default; see .env.example.
       FLEET_OVERLAY_PEER_ISOLATION: ${FLEET_OVERLAY_PEER_ISOLATION:-1}
+      # The OpenVPN overlay's own subnet, needed here for the cross-overlay
+      # forwarding deny. Must match the backend's FLEET_OVPN_SUBNET.
+      FLEET_OVPN_SUBNET: ${FLEET_OVPN_SUBNET:-10.101.0.0/24}
     ports:
       # Public WireGuard ingress: managed hosts dial this (UDP). Match the host
       # part of FLEET_WG_JUMP_ENDPOINT and open it on the firewall.
