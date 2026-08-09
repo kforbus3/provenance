@@ -157,6 +157,38 @@ if [ -d /etc/wireguard/peers ]; then
 fi
 echo "[jumphost] wg0 up at ${WG_ADDR}; peers added on demand by enrollment"
 
+# Restart the OpenVPN overlay server if one has been provisioned. Enrollment starts
+# it once, as a daemon inside this container; nothing else brings it back. WireGuard
+# survives a restart because its peers are restored above from a volume — the cert
+# overlay needs the same treatment or every upgrade silently drops every host that
+# uses it, with the hosts' own clients retrying into a closed port.
+#
+# Requires /etc/openvpn/fleet to be on a volume (see docker-compose.jumphost.yml);
+# without one the material is gone with the old container and this is a no-op.
+if [ -f /etc/openvpn/fleet/server.conf ] && command -v openvpn >/dev/null 2>&1; then
+  # Match on process NAME, then confirm the config from /proc: `pgrep -f` would also
+  # match this script, whose own text contains the command line below.
+  ovpn_running() {
+    for _p in $(pgrep -x openvpn 2>/dev/null); do
+      if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '/etc/openvpn/fleet/server.conf'; then return 0; fi
+    done
+    return 1
+  }
+  if ovpn_running; then
+    echo "[jumphost] openvpn overlay server already running"
+  elif openvpn --config /etc/openvpn/fleet/server.conf --daemon fleet-overlay \
+        --writepid /run/fleet-ovpn.pid --log-append /etc/openvpn/fleet/server.log; then
+    sleep 1
+    if ovpn_running; then
+      echo "[jumphost] openvpn overlay server restarted"
+    else
+      echo "[jumphost] WARN openvpn overlay server failed to start; see /etc/openvpn/fleet/server.log"
+    fi
+  else
+    echo "[jumphost] WARN could not launch the openvpn overlay server"
+  fi
+fi
+
 # Auto-trust the Fleet CA. When FLEET_BACKEND_URL is set (production single-server
 # deployment), poll the backend's public CA endpoint and keep
 # /etc/ssh/fleet_ca.pub current — this self-establishes trust on first boot and

@@ -7,6 +7,68 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **The OpenVPN overlay server was never started, and enrollment reported it
+  healthy anyway.** `JumpServerScript` guarded the launch with `pgrep -f 'openvpn
+  .*server.conf'`. Fleet runs these scripts as `sh -c "<the whole script>"`, so the
+  script's own shell carries that exact command line in its argv — and `pgrep -f`
+  matches command lines. The guard therefore always answered "already running", the
+  launch never ran, and `EnsureServer` reported `openvpn server ready on jump host`
+  for a server that did not exist. The Docker validation harness could not see this
+  because it runs the script from a file, where argv is only the filename.
+
+  Both guards (jump server and host client) now match on the process *name* and
+  confirm the config from `/proc/<pid>/cmdline`, which cannot match the caller. The
+  daemon also gets `--log-append`, and a failed start tails that log into the
+  enrollment step — previously `--daemon` detached before the tun/bind work and its
+  failures landed nowhere.
+
+- **Enrollment onto a certificate overlay now has to prove the tunnel carries
+  traffic.** Every check that should have caught the dead server passed:
+  `configure_host_overlay` built its "OpenVPN tunnel up (addr …)" detail from the
+  address Fleet *meant* to assign, off a host script that printed
+  `OVPN_HOST_CONFIGURED` unconditionally after a fixed `sleep 2`; and
+  `verify_certificate_login` falls back to the host's management address, so it
+  passed over the LAN with no tunnel at all.
+
+  The host script now waits for an address to actually appear on a tun device and
+  reports what it observed, or reports `OVPN_HOST_NO_TUNNEL` with the client log. A
+  bring-up at an address other than the assigned one is a failure too — that means
+  the ccd pin did not apply. And a new `verify_overlay_tunnel` step dials the host's
+  overlay address *from the jump host*, with no management-address fallback, because
+  a check that can succeed without the overlay proves nothing about it.
+
+- **The WireGuard teardown is gated on that proof.** Retiring the old transport on
+  the strength of a step that merely reported ok is what took a host offline: it was
+  moved onto an overlay that had never once come up, and lost the only tunnel that
+  worked. The over-SSH path now retires WireGuard only after `verify_overlay_tunnel`
+  passes; the no-install script joins the new overlay *before* retiring the old one
+  (a failed join aborts the script with WireGuard untouched); and the finish step
+  verifies the tunnel before removing the jump-host peer.
+
+  A host whose cert overlay cannot be brought up now gets a failed enrollment and
+  keeps the transport it had.
+
+- **Deployment fixes without which the overlay could not work at all.** The jump
+  host published only WireGuard's UDP port, so a host enrolled onto OpenVPN dialed a
+  port nothing forwarded; `${FLEET_OVPN_PORT:-1194}:1194/udp` is now published
+  unconditionally (harmless when unused). `/etc/openvpn/fleet` lived on the
+  container's writable layer, so the overlay CA, server certificate and every
+  per-host ccd pin would be destroyed by any upgrade — it is now on the `jump_ovpn`
+  volume, and the entrypoint restarts a provisioned server on boot the way persisted
+  WireGuard peers are already restored.
+
+  **Known limitation:** the cert overlay still derives its subnet from
+  `FLEET_WG_SUBNET` and draws from the same address pool, so its server takes the
+  address the WireGuard hub already holds on the same jump host. Running both
+  overlays on one deployment is not supported; a mixed fleet needs a separate subnet
+  for the cert overlay. With the verification above this now fails the enrollment
+  rather than stranding the host.
+
+- **Strict overlay mode named the wrong transport.** The connection error said
+  "WireGuard address" whichever overlay the host was on, sending an operator to
+  debug WireGuard while an OpenVPN server sat dead. It now names the host's actual
+  overlay.
+
 - **The no-install enrollment method honors the VPN overlay you picked.** Choosing
   **OpenVPN** in the enroll dialog and using **No install (ssh-pipe)** enrolled the
   host on **WireGuard** — silently, with no warning and nothing in the job log to

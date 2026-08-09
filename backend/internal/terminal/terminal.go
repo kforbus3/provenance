@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,11 +237,16 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 		// tunnel. Strict mode is context for WHICH address was tried, not a
 		// diagnosis of why it failed.
 		if strictWG && host.WGAddress != "" {
+			// Name the overlay this host is actually on. Saying "WireGuard address" for a
+			// host enrolled on OpenVPN sent an operator hunting a WireGuard fault while
+			// the real problem was an OpenVPN server that had never started — the message
+			// named the wrong transport, and the address is the same either way, so
+			// nothing else contradicted it.
 			sendErr(fmt.Sprintf(
-				"connection failed over the WireGuard address %s: %s — strict overlay mode is enabled, "+
+				"connection failed over the %s overlay address %s: %s — strict overlay mode is enabled, "+
 					"so the host's direct address was not tried. If the overlay tunnel is healthy, this is "+
 					"the host itself refusing the connection; check the host's status detail for the last error.",
-				host.WGAddress, err.Error()))
+				overlayName(host.Overlay), host.WGAddress, err.Error()))
 			return
 		}
 		sendErr("connection failed: " + err.Error())
@@ -615,4 +621,14 @@ func contains(xs []string, v string) bool {
 func mustJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// overlayName is a host's transport for operator-facing messages: the recorded
+// overlay, or WireGuard when nothing is recorded (which is what a host enrolled
+// before per-host overlays existed looks like).
+func overlayName(overlay string) string {
+	if o := strings.TrimSpace(overlay); o != "" {
+		return o
+	}
+	return "WireGuard"
 }

@@ -268,8 +268,23 @@ tunnel is up: the interface and its boot units on the host (the config is rename
 public key a standby jump host would rebuild that peer from. Moving the other way
 re-provisions WireGuard, but does not stop the OpenVPN client — take that down by hand.
 
+> **Not supported: a mixed WireGuard + OpenVPN fleet on one deployment.** The cert
+> overlay derives its `server <network> <netmask>` from `FLEET_WG_SUBNET` and draws
+> addresses from the same pool, so its server takes the address the WireGuard hub
+> already holds on the same jump host — two connected routes for one /24, resolved
+> once by the kernel rather than per host, so whichever interface wins the hosts on
+> the other go dark. Supporting a mix needs a separate subnet and pool for the cert
+> overlay (not built). Enrollment fails safe in the meantime: `verify_overlay_tunnel`
+> dials the host's overlay address from the jump host and fails the enrollment,
+> leaving the host on the transport it already had.
+
 **Jump host** needs `openvpn` (the test-fabric image installs it), a `/dev/net/tun`
-device, and `NET_ADMIN` (the enrollment scripts install openvpn on demand if missing).
+device, `NET_ADMIN`, **UDP `FLEET_OVPN_PORT` (default 1194) published and open on the
+firewall/router**, and `/etc/openvpn/fleet` on a volume — the jumphost compose overlay
+provides the last two. Without the published port a host enrolls and then dials a port
+nothing forwards; without the volume every upgrade destroys the overlay CA, the server
+certificate and every per-host ccd pin. The entrypoint restarts a provisioned server on
+boot (the enrollment scripts start it as a daemon, which nothing else brings back).
 The first host on the cert overlay provisions the jump-host OpenVPN server idempotently;
 the overlay CA is created on first use (or on boot when the default is a cert overlay).
 

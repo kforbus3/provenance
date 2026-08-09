@@ -230,6 +230,30 @@ func (o *OpenVPN) IssueHostMaterial(ctx context.Context, hostID uuid.UUID) (caPE
 // jump host: installs openvpn, writes the CA/server material + config + ccd dir, and
 // starts the daemon only if it isn't already running (so re-enrollment never drops
 // live tunnels).
+// runningCheck renders a shell function that reports whether an openvpn process is
+// running against confPath.
+//
+// It matches on the process NAME (pgrep -x openvpn) and then reads /proc/<pid>/cmdline
+// to confirm the config, and it must keep doing both. The obvious `pgrep -f 'openvpn
+// .*server.conf'` is what shipped, and it always answered yes: Fleet runs these
+// scripts as `sh -c "<the whole script>"`, so the script's own shell has that exact
+// command line in its argv and pgrep -f matches command lines. The server was
+// therefore reported "already running" on every enrollment and never actually
+// started — a whole overlay that had never once come up, with green steps behind it.
+// pgrep -x matches comm, which is "sh", so it cannot match the caller.
+//
+// (The Docker validation harness missed this because it runs the script from a FILE:
+// `sh jump-server.sh` puts nothing but the filename in argv.)
+func runningCheck(fn, confPath string) string {
+	return fmt.Sprintf(`%[1]s() {
+  for _p in $(pgrep -x openvpn 2>/dev/null); do
+    if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '%[2]s'; then return 0; fi
+  done
+  return 1
+}
+`, fn, confPath)
+}
+
 func (o *OpenVPN) JumpServerScript(caPEM, certPEM, keyPEM []byte, serverConf string) string {
 	return fmt.Sprintf(`set -e
 if ! command -v openvpn >/dev/null 2>&1; then
@@ -249,13 +273,29 @@ cat > %[1]s/server.key <<'FLEOF'
 %[4]sFLEOF
 cat > %[1]s/server.conf <<'FLEOF'
 %[5]sFLEOF
-%[6]sif pgrep -f 'openvpn .*%[1]s/server.conf' >/dev/null 2>&1; then
+%[6]s%[7]sif ovpn_server_running; then
   echo OVPN_SERVER_ALREADY_RUNNING
 else
-  openvpn --config %[1]s/server.conf --daemon fleet-overlay --writepid /run/fleet-ovpn.pid
-  sleep 1
-  pgrep -f 'openvpn .*%[1]s/server.conf' >/dev/null 2>&1 && echo OVPN_SERVER_STARTED || echo OVPN_SERVER_START_FAILED
-fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), serverConf, o.peerIsolationScript())
+  # --daemon detaches before the tun/bind work, so its failures land nowhere unless
+  # a log is named. That log is the only account of WHY a start failed, and it is
+  # tailed into the enrollment step below.
+  : > %[1]s/server.log
+  openvpn --config %[1]s/server.conf --daemon fleet-overlay \
+    --writepid /run/fleet-ovpn.pid --log-append %[1]s/server.log || true
+  _i=0
+  while [ $_i -lt 10 ]; do
+    if ovpn_server_running; then break; fi
+    sleep 1; _i=$((_i+1))
+  done
+  if ovpn_server_running; then
+    echo OVPN_SERVER_STARTED
+  else
+    echo OVPN_SERVER_START_FAILED
+    echo '--- openvpn server log ---'
+    tail -n 15 %[1]s/server.log 2>/dev/null
+  fi
+fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), serverConf,
+		o.peerIsolationScript(), runningCheck("ovpn_server_running", fleetDir+"/server.conf"))
 }
 
 // peerIsolationScript renders the fragment of JumpServerScript that keeps the
@@ -331,17 +371,38 @@ cat > %[1]s/client.key <<'FLEOF'
 %[4]sFLEOF
 cat > %[1]s/client.ovpn <<'FLEOF'
 %[5]sFLEOF
-%[6]sif command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
-  cp %[1]s/client.ovpn /etc/openvpn/fleet-overlay.conf 2>/dev/null || cp %[1]s/client.ovpn /etc/openvpn/client/fleet-overlay.conf 2>/dev/null || true
-  systemctl enable --now openvpn@fleet-overlay >/dev/null 2>&1 || systemctl enable --now openvpn-client@fleet-overlay >/dev/null 2>&1 || \
-    openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid
-else
-  pgrep -f 'openvpn .*%[1]s/client.ovpn' >/dev/null 2>&1 || openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid
+%[6]s%[7]sif ! ovpn_client_running; then
+  if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
+    cp %[1]s/client.ovpn /etc/openvpn/fleet-overlay.conf 2>/dev/null || cp %[1]s/client.ovpn /etc/openvpn/client/fleet-overlay.conf 2>/dev/null || true
+    systemctl enable --now openvpn@fleet-overlay >/dev/null 2>&1 || systemctl enable --now openvpn-client@fleet-overlay >/dev/null 2>&1 || \
+      openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid --log-append %[1]s/client.log || true
+  else
+    : > %[1]s/client.log
+    openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid --log-append %[1]s/client.log || true
+  fi
 fi
-sleep 2
-(ip -4 addr show dev tun0 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}') | head -1 | sed 's/^/OVPN_HOST_IP=/'
-echo OVPN_HOST_CONFIGURED`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
-		o.hostIsolationInstall())
+# The tunnel is not up because a process started — it is up when the server has
+# pushed this host its overlay address. Wait for that address to appear on a tun
+# device and report what was actually observed. Reporting the address Fleet MEANT
+# to assign, off a script that printed success unconditionally, is what let a
+# never-configured overlay pass for a working one.
+OVPN_IP=
+_i=0
+while [ $_i -lt 20 ]; do
+  OVPN_IP=$(ip -4 -br addr show 2>/dev/null | awk '$1 ~ /^(tun|tap)/ {print $3}' | cut -d/ -f1 | head -1)
+  if [ -n "$OVPN_IP" ]; then break; fi
+  sleep 1; _i=$((_i+1))
+done
+if [ -n "$OVPN_IP" ]; then
+  echo "OVPN_HOST_IP=$OVPN_IP"
+  echo OVPN_HOST_CONFIGURED
+else
+  echo OVPN_HOST_NO_TUNNEL
+  echo '--- openvpn client log ---'
+  tail -n 15 %[1]s/client.log 2>/dev/null
+  journalctl -u openvpn@fleet-overlay -u openvpn-client@fleet-overlay -n 15 --no-pager 2>/dev/null
+fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
+		o.hostIsolationInstall(), runningCheck("ovpn_client_running", fleetDir+"/client.ovpn"))
 }
 
 // hostIsolationInstall renders the fragment of HostInstallScript that lays down the

@@ -77,5 +77,33 @@ func (o *OpenVPN) ProvisionHost(ctx context.Context, hostID uuid.UUID, overlayIP
 	if herr != nil || strings.Contains(out, "OVPN_INSTALL_FAILED") || !strings.Contains(out, hb.Marker) {
 		return "", fmt.Errorf("install OpenVPN on host: %v: %s", herr, oneLine(out))
 	}
-	return fmt.Sprintf("OpenVPN tunnel up (addr %s)", overlayIP), nil
+	return checkHostBringup(out, overlayIP)
+}
+
+// checkHostBringup turns the host bring-up script's output into a step detail, or an
+// error. It reports the address the host ACTUALLY came up with rather than the one it
+// was meant to get: a mismatch means the ccd pin did not apply (the server handed out
+// a pool address instead), which leaves Fleet dialing an address nothing answers on,
+// and an empty one means there is no tunnel at all however cleanly the script exited.
+func checkHostBringup(out, overlayIP string) (string, error) {
+	got := hostIP(out)
+	switch {
+	case got == "":
+		return "", fmt.Errorf("OpenVPN reported no tunnel address on the host: %s", oneLine(out))
+	case got != overlayIP:
+		return "", fmt.Errorf(
+			"OpenVPN tunnel came up at %s, not the assigned %s — the ccd pin for this host is not being applied",
+			got, overlayIP)
+	}
+	return fmt.Sprintf("OpenVPN tunnel up (addr %s, observed on the host)", got), nil
+}
+
+// hostIP reads the OVPN_HOST_IP=<addr> line the host bring-up script prints.
+func hostIP(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "OVPN_HOST_IP="); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
