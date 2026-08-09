@@ -7,6 +7,48 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **Enrollment no longer gives up on an OpenVPN tunnel that is still coming up.** The
+  bring-up waited 20 seconds for the host's tunnel address, which is short: the first
+  connect has to resolve DNS, hairpin through the router when the host shares the jump
+  host's LAN, and survive openvpn's retry backoff after any attempt that lands while
+  the server is restarting. Enrollments failed while the tunnel came up seconds later
+  and stayed up — the worst outcome, since the operator is told it did not work when
+  it did, and the WireGuard teardown (gated on the proof) is skipped.
+
+  The window is now 60 seconds, and it waits for the address the server was told to
+  pin rather than for any tun device, so a bring-up on a pool address — the ccd entry
+  not applying — is still reported as the failure it is. The elapsed wait is reported
+  either way.
+
+- **The enroll dialog's endpoint port follows the VPN overlay you pick.** It was
+  pre-filled from the WireGuard setting and stayed on `:51820` for an OpenVPN
+  enrollment — while `ClientConfig` ignores that port entirely and always dials
+  `FLEET_OVPN_PORT`. So the field showed a port that was never used, and invited
+  operators to hand-edit it to no effect. Selecting an overlay now rewrites the port
+  to that transport's, keeping the host part; a port typed by hand survives
+  everything except changing transport.
+
+- **A host that cannot reach the OpenVPN server now says so.** The bring-up script's
+  failure diagnostics ran under `set -e` and ended with `journalctl` — which exits
+  non-zero for a unit that is merely inactive, killing the block before it printed
+  anything. A failed enrollment showed `OVPN_HOST_NO_TUNNEL`, an empty log, and
+  `Process exited with status 1`. The diagnostics are now insulated from their own
+  exit statuses (the marker is the verdict, not the exit code), fall back to
+  `systemctl status` when the client is managed by systemd and writes no log file,
+  and report the endpoint the client was told to dial.
+
+  The error explains the one thing that is never in the client's own log: its packets
+  are not reaching the server. It names the port publish on the jump host (**a
+  jump-host compose change needs `make up-single`, not `make redeploy-single`**), the
+  firewall/router forward, and the case where a host on the jump host's LAN needs a
+  LAN endpoint because the router will not hairpin a public one.
+
+- **`make redeploy-single` warns when the jump host predates its compose file.** The
+  target deliberately leaves the jump host running to avoid the overlay blip, so it
+  cannot apply changes to its ports, volumes or entrypoint — which is how a
+  deployment ends up running the OpenVPN server on a port the container never
+  published. It now says so instead of finishing silently.
+
 - **A host can be moved between the WireGuard and OpenVPN overlays by re-enrolling
   it, in either direction.** The per-host "VPN overlay" choice shipped before the
   machinery behind it did: both transports drew addresses from one pool, only one

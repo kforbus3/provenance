@@ -88,3 +88,30 @@ func TestRetireJumpRemovesThePinnedAddress(t *testing.T) {
 		t.Errorf("absent pin reported as detail=%q err=%v; want a silent no-op", detail, err)
 	}
 }
+
+// A host whose client starts but never gets an address produces no useful client
+// log — the packets are simply not arriving. The error therefore has to carry the
+// endpoint that was dialled and what to check, or the operator has nowhere to start.
+func TestNoTunnelErrorNamesTheEndpointAndWhatToCheck(t *testing.T) {
+	out := "OVPN_HOST_NO_TUNNEL\nOVPN_REMOTE=vpn.example.com:1194\n--- openvpn client log ---\n"
+	_, err := checkHostBringup(out, "10.101.0.27")
+	if err == nil {
+		t.Fatal("a host with no tunnel was accepted")
+	}
+	for _, want := range []string{
+		"vpn.example.com:1194", // the endpoint that did not answer
+		"published by the jump host",
+		"make up-single", // the reason a redeploy does not fix it
+		"hairpin",        // the LAN-host case
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%s", want, err)
+		}
+	}
+
+	// No endpoint reported: still an error, just without the "at <addr>" clause.
+	_, err = checkHostBringup("OVPN_HOST_NO_TUNNEL\nOVPN_REMOTE=\n", "10.101.0.27")
+	if err == nil || strings.Contains(err.Error(), " at ") {
+		t.Errorf("missing endpoint should be omitted, not rendered empty: %v", err)
+	}
+}

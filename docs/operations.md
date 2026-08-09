@@ -12,6 +12,13 @@ Day-to-day operator flows for Fleet Terminal. Assumes the stack is up via `make 
    trust issued certificates. In production this trust is established during enrollment over a
    bootstrap credential; in the local fabric we seed it directly. Re-run after any fresh `make up`.
 
+> **`make redeploy-single` does not touch the jump host.** That is deliberate — it
+> avoids the overlay re-establish that briefly shows hosts offline. But it also means
+> a change to the jump host's **ports, volumes or entrypoint** (for example publishing
+> the OpenVPN overlay's UDP port) is not applied, and the symptom is a feature that
+> silently does not work rather than an error. Use **`make up-single`** for those.
+> `redeploy-single` warns when the running jump host predates its compose file.
+
 ## Upgrading Fleet Terminal (in-UI)
 
 Fleet upgrades itself from a single signed **`.fleetup`** bundle — no SSH, no

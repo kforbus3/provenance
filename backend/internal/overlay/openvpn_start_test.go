@@ -102,7 +102,7 @@ func TestClientGuardDoesNotMatchItsOwnShell(t *testing.T) {
 		t.Skipf("no pgrep available: %v", err)
 	}
 	o := startTestOverlay()
-	script := o.HostInstallScript([]byte("ca"), []byte("crt"), []byte("key"), o.ClientConfig("vpn.example.com:1194"))
+	script := o.HostInstallScript([]byte("ca"), []byte("crt"), []byte("key"), o.ClientConfig("vpn.example.com:1194"), "10.101.0.27")
 
 	guard := section(t, script, "ovpn_client_running() {", "\n}\n")
 	launch := lineWith(t, script, "openvpn --config")
@@ -131,7 +131,10 @@ func stubBin(t *testing.T, ipOutput string) string {
 	}
 	write("ip", "cat <<'EOF'\n"+ipOutput+"\nEOF")
 	write("sleep", "exit 0")
-	write("journalctl", "exit 0")
+	// Both exit NON-zero for a unit that is merely inactive — the shape that used to
+	// abort the diagnostics block under `set -e` and print nothing at all.
+	write("journalctl", "exit 1")
+	write("systemctl", "exit 3")
 	write("tail", "exit 0")
 	return dir
 }
@@ -142,12 +145,19 @@ func stubBin(t *testing.T, ipOutput string) string {
 // that false success is what authorized tearing the working tunnel down.
 func TestHostScriptReportsTheObservedTunnelAddress(t *testing.T) {
 	o := startTestOverlay()
-	script := o.HostInstallScript([]byte("ca"), []byte("crt"), []byte("key"), o.ClientConfig("vpn.example.com:1194"))
-	wait := section(t, script, "OVPN_IP=", "OVPN_HOST_NO_TUNNEL")
-	wait += "\nfi\n" // close the if the section cuts through
+	script := o.HostInstallScript([]byte("ca"), []byte("crt"), []byte("key"), o.ClientConfig("vpn.example.com:1194"), "10.101.0.27")
+	// Everything from the wait loop to the end of the generated script: the loop, the
+	// success branch and the whole diagnostics branch, already balanced.
+	i := strings.Index(script, "OVPN_IP=")
+	if i < 0 {
+		t.Fatal("generated script no longer contains the tunnel-wait loop")
+	}
+	wait := script[i:]
 
 	run := func(ipOutput string) string {
-		cmd := exec.Command("sh", "-c", wait)
+		// `set -e` is on for the real script, so the harness runs the block the same
+		// way: a diagnostics command that exits non-zero must not swallow the report.
+		cmd := exec.Command("sh", "-ec", wait)
 		cmd.Env = append(os.Environ(), "PATH="+stubBin(t, ipOutput)+":"+os.Getenv("PATH"))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -156,15 +166,43 @@ func TestHostScriptReportsTheObservedTunnelAddress(t *testing.T) {
 		return string(out)
 	}
 
-	// No tun device: the tunnel is not up, and the script must say so.
-	if got := run(""); !strings.Contains(got, "OVPN_HOST_NO_TUNNEL") || strings.Contains(got, "OVPN_HOST_CONFIGURED") {
+	// No tun device: the tunnel is not up, and the script must say so — and must
+	// still say the rest, including the endpoint the client was told to dial. The
+	// diagnostics used to run under `set -e` with commands that exit non-zero for an
+	// inactive unit, so the block died before printing anything and a failed
+	// enrollment showed an empty log with no cause.
+	got := run("")
+	if !strings.Contains(got, "OVPN_HOST_NO_TUNNEL") || strings.Contains(got, "OVPN_HOST_CONFIGURED") {
 		t.Errorf("host with no tunnel reported %q — enrollment would treat this as success", strings.TrimSpace(got))
 	}
+	// The endpoint line is empty here (no client.ovpn on disk in a unit test), but it
+	// must be REACHED — everything after it is the diagnosis.
+	if !strings.Contains(got, "OVPN_REMOTE=") {
+		t.Errorf("failure report does not report the endpoint the client dialled:\n%s", got)
+	}
+	if !strings.Contains(got, "openvpn client log") {
+		t.Errorf("failure report was cut short before the log section:\n%s", got)
+	}
+	if !strings.Contains(got, "unit state follows") {
+		t.Errorf("failure report does not fall back to unit state when the log is empty:\n%s", got)
+	}
 
-	// Tunnel up: report the address actually on the device.
-	got := run("tun0             UNKNOWN        10.100.0.27/24")
-	if !strings.Contains(got, "OVPN_HOST_IP=10.100.0.27") || !strings.Contains(got, "OVPN_HOST_CONFIGURED") {
+	// Tunnel up at the address the server was told to pin: success.
+	got = run("tun0             UNKNOWN        10.101.0.27/24")
+	if !strings.Contains(got, "OVPN_HOST_IP=10.101.0.27") || !strings.Contains(got, "OVPN_HOST_CONFIGURED") {
 		t.Errorf("host with a live tunnel reported %q", strings.TrimSpace(got))
+	}
+
+	// A tunnel at some OTHER address is not success: it means the ccd pin did not
+	// apply and the server handed out a pool address, so Fleet would be dialing an
+	// address nothing answers on. The script reports what it saw and lets
+	// checkHostBringup call it — but it must not report the pinned address it wanted.
+	got = run("tun0             UNKNOWN        10.101.0.99/24")
+	if !strings.Contains(got, "OVPN_HOST_IP=10.101.0.99") {
+		t.Errorf("host on a pool address did not report the address it actually got:\n%s", got)
+	}
+	if strings.Contains(got, "OVPN_HOST_IP=10.101.0.27") {
+		t.Error("script reported the address it wanted rather than the one on the device")
 	}
 }
 
@@ -174,7 +212,7 @@ func TestCheckHostBringup(t *testing.T) {
 	for _, tc := range []struct {
 		name, out, wantErr string
 	}{
-		{"no address at all", "OVPN_HOST_CONFIGURED\n", "no tunnel address"},
+		{"no address at all", "OVPN_HOST_CONFIGURED\n", "no OpenVPN tunnel"},
 		{"tunnel up on a pool address", "OVPN_HOST_IP=10.100.0.99\nOVPN_HOST_CONFIGURED\n", "ccd pin"},
 		{"assigned address", "OVPN_HOST_IP=10.100.0.27\nOVPN_HOST_CONFIGURED\n", ""},
 	} {
