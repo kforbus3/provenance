@@ -93,6 +93,11 @@ BUNDLE_KEY     ?= release.key
 # silently turned into a nonexistent path.
 BUNDLE_KEY_ABS := $(abspath $(BUNDLE_KEY))
 BUNDLE_OUT     ?= fleet-$(BUNDLE_VERSION).fleetup
+# Same resolution as BUNDLE_KEY, and for the same reason: the build step runs from
+# backend/, so a bare ../ prefix turns an ABSOLUTE output path into ..//Users/... and
+# the whole build is thrown away at the final write. The signing key lives outside the
+# repo and so, usually, does the bundle.
+BUNDLE_OUT_ABS := $(abspath $(BUNDLE_OUT))
 BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,fleet-updater
 # Bundles deploy to servers, so pin the image platform regardless of the build
 # host's architecture (an Apple Silicon Mac otherwise emits arm64 images that
@@ -109,8 +114,8 @@ bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_
 	done
 	cd backend && go run ./cmd/fleetctl release build \
 	  --version $(BUNDLE_VERSION) --from $(BUNDLE_FROM) \
-	  --key $(BUNDLE_KEY_ABS) --out ../$(BUNDLE_OUT) --components $(BUNDLE_COMPONENTS)
-	@echo "Built $(BUNDLE_OUT). Upload it in the UI (Settings -> Updates) to upgrade in place."
+	  --key $(BUNDLE_KEY_ABS) --out $(BUNDLE_OUT_ABS) --components $(BUNDLE_COMPONENTS)
+	@echo "Built $(BUNDLE_OUT_ABS). Upload it in the UI (Settings -> Updates) to upgrade in place."
 
 comma := ,
 
