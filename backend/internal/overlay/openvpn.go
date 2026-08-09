@@ -177,12 +177,27 @@ JUMP=%s
 if ! command -v iptables >/dev/null 2>&1; then
   echo "fleet: iptables unavailable; peer isolation NOT applied" >&2; exit 0
 fi
-# -C before -I: this runs on every reconnect, and must not stack duplicates.
-iptables -C INPUT  -i "$dev" ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
-  iptables -I INPUT  1 -i "$dev" ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
+# The rules live in Fleet's own chains, flushed and refilled on every run. Inserting
+# them directly into INPUT/OUTPUT was idempotent but not self-correcting: the rule
+# names the jump host by address, so changing it (as moving the overlay onto its own
+# subnet did) left the previous DROP in place, matching everything from the NEW jump
+# host and blackholing the tunnel with no error anywhere. Flushing a chain we own
+# removes the stale rule as a side effect of writing the current one.
+for _c in FLEET-OVPN-IN FLEET-OVPN-OUT; do
+  iptables -N "$_c" 2>/dev/null
+  iptables -F "$_c" 2>/dev/null
+done
+# -C before -I on the jumps into those chains: this runs on every reconnect and must
+# not stack duplicates.
+iptables -C INPUT  -i "$dev" -j FLEET-OVPN-IN 2>/dev/null || \
+  iptables -I INPUT  1 -i "$dev" -j FLEET-OVPN-IN 2>/dev/null || \
+  echo "fleet: could not hook inbound peer isolation on $dev" >&2
+iptables -C OUTPUT -o "$dev" -j FLEET-OVPN-OUT 2>/dev/null || \
+  iptables -I OUTPUT 1 -o "$dev" -j FLEET-OVPN-OUT 2>/dev/null || \
+  echo "fleet: could not hook outbound peer isolation on $dev" >&2
+iptables -A FLEET-OVPN-IN  ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
   echo "fleet: could not apply inbound peer isolation on $dev" >&2
-iptables -C OUTPUT -o "$dev" ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
-  iptables -I OUTPUT 1 -o "$dev" ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
+iptables -A FLEET-OVPN-OUT ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
   echo "fleet: could not apply outbound peer isolation on $dev" >&2
 exit 0
 `, jump)

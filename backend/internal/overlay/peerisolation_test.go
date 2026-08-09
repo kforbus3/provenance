@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -94,8 +95,10 @@ func TestOpenVPNHostIsolationScript(t *testing.T) {
 	// Scoped to the tunnel device, NOT the overlay subnet: a subnet-scoped rule also
 	// matches the host reaching its own overlay address over loopback.
 	for _, want := range []string{
-		`iptables -I INPUT  1 -i "$dev" ! -s "$JUMP"/32 -j DROP`,
-		`iptables -I OUTPUT 1 -o "$dev" ! -d "$JUMP"/32 -j DROP`,
+		`iptables -I INPUT  1 -i "$dev" -j FLEET-OVPN-IN`,
+		`iptables -I OUTPUT 1 -o "$dev" -j FLEET-OVPN-OUT`,
+		`iptables -A FLEET-OVPN-IN  ! -s "$JUMP"/32 -j DROP`,
+		`iptables -A FLEET-OVPN-OUT ! -d "$JUMP"/32 -j DROP`,
 		`JUMP=10.100.0.1`,
 	} {
 		if !strings.Contains(script, want) {
@@ -105,13 +108,20 @@ func TestOpenVPNHostIsolationScript(t *testing.T) {
 	if strings.Contains(script, "10.100.0.0/24") {
 		t.Error("script filters on the subnet; that also catches loopback traffic to the host's own overlay IP")
 	}
+	// The rules name the jump host by ADDRESS, so they have to be self-correcting:
+	// moving the overlay to its own subnet changed that address, and a rule left over
+	// from the old one matches everything from the new jump host — blackholing the
+	// tunnel with no error anywhere. Flushing Fleet's own chains is what retires it.
+	if !strings.Contains(script, `iptables -F "$_c"`) {
+		t.Error("chains are not flushed; a changed jump address would leave a DROP that blackholes the overlay")
+	}
 	// Under script-security 2 a non-zero `up` aborts the tunnel. Failing open is the
 	// deliberate choice everywhere else in peer isolation; it must hold here too.
 	if !strings.Contains(script, "exit 0") {
 		t.Error("script can exit non-zero, which would abort the tunnel instead of failing open")
 	}
 	if !strings.Contains(script, `iptables -C INPUT`) || !strings.Contains(script, `iptables -C OUTPUT`) {
-		t.Error("rules are not idempotent; every reconnect would stack a duplicate")
+		t.Error("chain hooks are not idempotent; every reconnect would stack a duplicate")
 	}
 }
 
@@ -148,5 +158,41 @@ func TestOpenVPNHostIsolationOmittedWhenDisabled(t *testing.T) {
 	install := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), cli, "10.100.0.27")
 	if strings.Contains(install, "peer-isolation") {
 		t.Error("isolation disabled but the install script still writes the script")
+	}
+}
+
+// OpenVPN runs the isolation script itself, as the tunnel comes up, under
+// script-security 2 — where a non-zero exit ABORTS the tunnel. A syntax error here
+// would therefore not just skip the filter, it would take the host off the overlay,
+// and the only trace is a line in the client's log. Parse it.
+func TestOpenVPNHostIsolationScriptIsPOSIXSh(t *testing.T) {
+	script := New(testCfg(), nil).hostIsolationScript()
+	if script == "" {
+		t.Fatal("isolation script is empty with isolation enabled")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh available: %v", err)
+	}
+	cmd := exec.Command(sh, "-n") // parse only; never execute
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("isolation script is not valid POSIX sh: %v\n%s\n---\n%s", err, out, script)
+	}
+}
+
+// The same for the whole host bring-up script, which carries the isolation script
+// inside a heredoc: a quoting slip there breaks the install rather than the tunnel.
+func TestOpenVPNHostInstallScriptIsPOSIXSh(t *testing.T) {
+	o := New(testCfg(), nil)
+	script := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), o.ClientConfig("j:1194"), "10.100.0.27")
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh available: %v", err)
+	}
+	cmd := exec.Command(sh, "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("host install script is not valid POSIX sh: %v\n%s", err, out)
 	}
 }
