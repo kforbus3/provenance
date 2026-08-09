@@ -3,7 +3,10 @@ package enrollment
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -74,5 +77,38 @@ func (s *Service) enrollCertOverlay(
 	}
 	step("configure_host_overlay", "ok", detail)
 
+	// 3) Prove the tunnel end to end, from the jump host to the overlay address. Both
+	//    ends reporting healthy is not the same as a data plane: the host can hold a
+	//    tun device while the jump host has no route to it. This is also the check the
+	//    WireGuard teardown is gated on, and the reason it has to be specific to the
+	//    overlay address — every other verification in enrollment falls back to the
+	//    host's management address, so all of them pass over the LAN with no tunnel at
+	//    all, which is exactly how a never-started overlay collected a row of green
+	//    steps and then took its host offline.
+	if err := s.verifyOverlayReachable(ctx, jumpClient, overlayIP, host.SSHPort); err != nil {
+		return "", fmt.Errorf("%s tunnel is not carrying traffic: %w", ov.Name(), err)
+	}
+	step("verify_overlay_tunnel", "ok",
+		fmt.Sprintf("jump host reached %s:%d over the %s tunnel", overlayIP, host.SSHPort, ov.Name()))
+
 	return overlayIP, nil
+}
+
+// verifyOverlayReachable dials the host's overlay address FROM the jump host, which is
+// the path every Fleet session takes. It is deliberately narrow: no management-address
+// fallback, no hostname, nothing that can succeed while the overlay is dead.
+func (s *Service) verifyOverlayReachable(ctx context.Context, jumpClient *ssh.Client, overlayIP string, port int) error {
+	if port <= 0 {
+		port = 22
+	}
+	// Bounded: a black-holed overlay address does not refuse the connection, it hangs,
+	// and DialContext through the jump host would otherwise wait minutes.
+	dctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	conn, err := jumpClient.DialContext(dctx, "tcp", net.JoinHostPort(overlayIP, strconv.Itoa(port)))
+	if err != nil {
+		return fmt.Errorf("no route from the jump host to %s:%d (%v)", overlayIP, port, err)
+	}
+	_ = conn.Close()
+	return nil
 }

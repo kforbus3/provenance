@@ -43,8 +43,15 @@ services:
       # Public WireGuard ingress: managed hosts dial this (UDP). Match the host
       # part of FLEET_WG_JUMP_ENDPOINT and open it on the firewall.
       - "${FLEET_WG_PORT:-51820}:51820/udp"
+      # Public OpenVPN ingress for the certificate (FIPS) overlay. Published
+      # unconditionally because a host enrolled onto that overlay dials this port and
+      # nothing else tells the operator it is closed: the enrollment succeeds, the
+      # client retries forever, and the host simply never comes back. Harmless when
+      # the overlay is unused — nothing listens inside the container.
+      - "${FLEET_OVPN_PORT:-1194}:1194/udp"
     volumes:
       - jump_wg:/etc/wireguard      # WireGuard keypair + persisted peers
+      - jump_ovpn:/etc/openvpn/fleet # overlay CA/server certs + per-host ccd pins
       - jump_ssh:/etc/ssh/keys      # stable SSH host key (known_hosts pinning)
     depends_on:
       - backend
@@ -53,4 +60,5 @@ services:
 
 volumes:
   jump_wg:
+  jump_ovpn:
   jump_ssh:

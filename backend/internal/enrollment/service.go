@@ -390,8 +390,10 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 			}
 			// Both transports address the host at the SAME overlay IP, so a host moving
 			// off WireGuard has to give the address up before the new tunnel can be
-			// relied on. Done after the cert tunnel is up: if that failed, the host keeps
-			// the working transport it already had.
+			// relied on. This is reached only when enrollCertOverlay has PROVEN the new
+			// tunnel carries traffic from the jump host — never on a step that merely
+			// reported ok. Retiring the working transport on the strength of a reported
+			// one is what took debian-ab-test2 offline.
 			if hadWireGuard(host) {
 				s.retireWireGuard(ctx, host, priv, jumpClient, step)
 			}

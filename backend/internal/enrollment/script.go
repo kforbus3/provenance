@@ -400,10 +400,21 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 		step("configure_jump_peer", "skipped", fmt.Sprintf(
 			"%s pins %s to this host's certificate — the jump host was configured when the script was generated",
 			strings.TrimSpace(host.Overlay), wgIP))
-		// The cert tunnel is up now (the script has run), so this is the moment to give
-		// up the WireGuard claim on the same address: any peer the hub still holds for
-		// this host, and the stored key a standby jump host would rebuild it from.
-		// Idempotent — a host that was never on WireGuard reports nothing to remove.
+		// Prove the tunnel before touching WireGuard. The operator says the script ran;
+		// this is Fleet checking, over the overlay address specifically, that it worked.
+		if verr := s.verifyOverlayReachable(ctx, jumpClient, wgIP, host.SSHPort); verr != nil {
+			return fail("verify_overlay_tunnel", fmt.Errorf(
+				"%s tunnel is not carrying traffic: %w — the host keeps its existing transport; "+
+					"check the openvpn server on the jump host and the client on the host",
+				strings.TrimSpace(host.Overlay), verr))
+		}
+		step("verify_overlay_tunnel", "ok", fmt.Sprintf(
+			"jump host reached %s:%d over the %s tunnel", wgIP, host.SSHPort, strings.TrimSpace(host.Overlay)))
+
+		// Only now give up the WireGuard claim on the same address: any peer the hub
+		// still holds for this host, and the stored key a standby jump host would
+		// rebuild it from. Idempotent — a host that was never on WireGuard reports
+		// nothing to remove.
 		var notes []string
 		degraded := false
 		s.retireJumpPeer(ctx, host, jumpClient, &notes, &degraded)
@@ -570,12 +581,17 @@ func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 strin
 
 	b.WriteString(phase(num(), "installing SSH certificate trust",
 		s.caTrustScript(loginUser, caKeys, hostID), "CA_OK", "CA trust") + "\n")
+	// Join the new overlay BEFORE retiring the old one. The overlay phase aborts the
+	// script if the tunnel does not come up, so a failed join leaves WireGuard exactly
+	// as it was and the host stays reachable. The other order — which shipped first —
+	// hands the host's only working transport to a tunnel that may never arrive, with
+	// Fleet not in the loop to notice.
+	b.WriteString(phase(num(), "joining the "+overlayName+" overlay",
+		hb.Script, hb.Marker, overlayName+" tunnel") + "\n")
 	if retireWG {
 		b.WriteString(phase(num(), "retiring the WireGuard overlay",
 			s.wgTeardownScript(), "WG_RETIRED", "WireGuard teardown") + "\n")
 	}
-	b.WriteString(phase(num(), "joining the "+overlayName+" overlay",
-		hb.Script, hb.Marker, overlayName+" tunnel") + "\n")
 
 	if krlB64 != "" {
 		b.WriteString(fmt.Sprintf(`echo '[fleet] %s enabling certificate revocation'
