@@ -5,6 +5,8 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+---
+
 ## v1.4.0 — One fleet, two VPNs, switchable per host — 2026-08-09
 
 **Deploy note.** The jump host publishes a new UDP port and mounts a new volume for
@@ -13,6 +15,20 @@ on the deployment host after installing, and open `FLEET_OVPN_PORT` (1194/udp) o
 firewall — otherwise the OpenVPN overlay runs on a port nothing reaches. Only needed
 if you use, or intend to use, the certificate overlay; a WireGuard-only deployment is
 unaffected.
+
+- **Enrollment applies OpenVPN peer isolation instead of only writing it.** The `up`
+  script is what installs the rules, and openvpn runs it only when a tunnel comes
+  *up*. A re-enrollment almost never restarts the client — the unit is enabled and
+  active, so starting it is a no-op — so the script was rewritten on every enrollment
+  and applied on hardly any of them. A host that first connected without iptables, or
+  under a build whose rules named the wrong jump address, stayed unisolated through
+  every later enrollment with the script sitting unused on disk.
+
+  Enrollment now runs it directly once the tunnel is confirmed, with `dev` set to the
+  device holding the assigned address, and then reports what is actually in place —
+  the script fails open by design, so "it ran" and "this host is isolated" are not the
+  same claim.
+
 
 - **OpenVPN enrollment installs iptables, on the host and on the jump host.** Peer
   isolation on this overlay *is* iptables — OpenVPN has no `AllowedIPs`, so a filter on

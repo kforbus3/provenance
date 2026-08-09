@@ -495,7 +495,7 @@ done
 echo "OVPN_WAITED=${_i}s"
 if [ -n "$OVPN_IP" ]; then
   echo "OVPN_HOST_IP=$OVPN_IP"
-  echo OVPN_HOST_CONFIGURED
+%[9]s  echo OVPN_HOST_CONFIGURED
 else
   # Diagnostics only — nothing here may abort the script. "set -e" is still on, and
   # journalctl/systemctl status exit non-zero for a unit that is merely inactive:
@@ -521,7 +521,8 @@ else
   # the report under a bare "Process exited with status 1".
   true
 fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
-		o.hostIsolationInstall(), runningCheck("ovpn_client_running", fleetDir+"/client.ovpn"), overlayIP)
+		o.hostIsolationInstall(), runningCheck("ovpn_client_running", fleetDir+"/client.ovpn"), overlayIP,
+		o.hostIsolationApply())
 }
 
 // hostIsolationInstall renders the fragment of HostInstallScript that lays down the
@@ -555,6 +556,37 @@ cat > %[1]s/peer-isolation.sh <<'FLEOF'
 %[2]sFLEOF
 chmod 0700 %[1]s/peer-isolation.sh
 `, fleetDir, body)
+}
+
+// hostIsolationApply renders the fragment that APPLIES peer isolation once the tunnel
+// is confirmed up, or "" when isolation is off.
+//
+// Writing the `up` script is not the same as running it. On a re-enrollment the client
+// is usually already running — the unit is enabled and active, so `systemctl enable
+// --now` is a no-op — and openvpn only runs `up` when a tunnel comes up. So the script
+// was rewritten on every enrollment and applied on almost none of them: a host that
+// first connected without iptables, or under a build whose rules were wrong, stayed
+// unisolated indefinitely with nothing to show for it. Running it here makes
+// enrollment the thing that guarantees the filter, rather than a tunnel restart that
+// may never happen.
+func (o *OpenVPN) hostIsolationApply() string {
+	if o.hostIsolationScript() == "" {
+		return ""
+	}
+	return fmt.Sprintf(`  if [ -x %[1]s/peer-isolation.sh ]; then
+    OVPN_DEV=$(ip -4 -br addr show 2>/dev/null | awk -v ip="$OVPN_IP" '$1 ~ /^(tun|tap)/ && $3 ~ "^"ip"/" {print $1; exit}')
+    if [ -n "$OVPN_DEV" ]; then
+      dev="$OVPN_DEV" %[1]s/peer-isolation.sh >/dev/null 2>&1 || true
+    fi
+    # Report what is in place, not that the script ran: it fails open by design, so a
+    # clean run and an unisolated host look identical from here.
+    if iptables -S FLEET-OVPN-IN >/dev/null 2>&1; then
+      echo OVPN_ISOLATION_OK
+    else
+      echo OVPN_ISOLATION_MISSING
+    fi
+  fi
+`, fleetDir)
 }
 
 // endpoint returns the OpenVPN endpoint managed hosts dial: the DB/settings value

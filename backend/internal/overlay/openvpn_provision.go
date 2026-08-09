@@ -100,10 +100,17 @@ func checkHostBringup(out, overlayIP string) (string, error) {
 	// Peer isolation fails open by design, which is precisely why its absence has to
 	// be said out loud: the enrollment otherwise succeeds identically whether or not
 	// this host can be reached by every other host on the overlay.
-	if strings.Contains(out, "OVPN_IPTABLES_MISSING") {
+	switch {
+	case strings.Contains(out, "OVPN_IPTABLES_MISSING"):
 		detail += " — WARNING: iptables is not available on this host and could not be installed, " +
 			"so overlay peer isolation is NOT applied; this host can reach, and be reached by, " +
 			"other managed hosts over the overlay"
+	case strings.Contains(out, "OVPN_ISOLATION_MISSING"):
+		detail += " — WARNING: overlay peer isolation could not be applied on this host " +
+			"(iptables is present but the rules did not take); this host can reach, and be " +
+			"reached by, other managed hosts over the overlay"
+	case strings.Contains(out, "OVPN_ISOLATION_OK"):
+		detail += ", peer isolation applied"
 	}
 	return detail, nil
 }

@@ -277,3 +277,37 @@ func TestBringupWarnsWhenIsolationCouldNotBeApplied(t *testing.T) {
 		t.Errorf("warned about isolation on a host that has it: %q (%v)", clean, err)
 	}
 }
+
+// Writing the up script is not the same as running it. openvpn only runs it when a
+// tunnel comes UP, and a re-enrollment usually finds the client already running — the
+// unit is enabled and active, so starting it is a no-op. A host that first connected
+// without iptables therefore stayed unisolated through every later enrollment, with
+// the script sitting on disk unused. Enrollment has to apply it itself.
+func TestHostInstallAppliesIsolationRatherThanOnlyWritingIt(t *testing.T) {
+	o := New(testCfg(), nil)
+	script := o.HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), o.ClientConfig("j:1194"), "10.100.0.27")
+
+	// Run the up script directly, with $dev set to the device that actually holds the
+	// assigned address — openvpn's own contract for that variable.
+	if !strings.Contains(script, `dev="$OVPN_DEV" /etc/openvpn/fleet/peer-isolation.sh`) {
+		t.Errorf("install script never runs the isolation script itself:\n%s", script)
+	}
+	// And report what is in place afterwards, since the script fails open: a clean run
+	// and an unisolated host are otherwise indistinguishable.
+	for _, want := range []string{"OVPN_ISOLATION_OK", "OVPN_ISOLATION_MISSING", "iptables -S FLEET-OVPN-IN"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("install script does not verify isolation (%q missing)", want)
+		}
+	}
+	// It must come after the tunnel is confirmed, or there is no device to filter.
+	if strings.Index(script, "peer-isolation.sh >/dev/null") < strings.Index(script, "OVPN_HOST_IP=$OVPN_IP") {
+		t.Error("isolation is applied before the tunnel address is known")
+	}
+
+	cfg := testCfg()
+	cfg.OverlayPeerIsolation = false
+	off := New(cfg, nil).HostInstallScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), cfg.WGSubnet, "10.100.0.27")
+	if strings.Contains(off, "peer-isolation.sh") || strings.Contains(off, "OVPN_ISOLATION_") {
+		t.Error("applies isolation that is disabled")
+	}
+}
