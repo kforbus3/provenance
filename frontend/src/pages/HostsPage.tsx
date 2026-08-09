@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "../lib/datetime";
 import {
   Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -1691,6 +1691,24 @@ export function EnrollCredsDialog({
   const targetPlan = nextWG?.overlays?.find((p) => p.name === effectiveOverlay);
   const switching =
     Boolean(host?.enrolled) && Boolean(host?.overlay) && host?.overlay !== effectiveOverlay;
+  // Keep the endpoint's port in step with the selected overlay. The two transports
+  // listen on different ports, and OpenVPN IGNORES whatever port is typed here — it
+  // always dials the deployment's OpenVPN port — so leaving WireGuard's 51820 on
+  // screen for an OpenVPN enrollment invites an operator to "fix" a value that was
+  // never used. Only fires when the overlay actually changes, so a port typed by hand
+  // survives everything except picking a different transport.
+  const portedFor = useRef<string>("");
+  useEffect(() => {
+    if (!targetPlan || skipWireGuard) return;
+    if (portedFor.current === targetPlan.name) return;
+    portedFor.current = targetPlan.name;
+    setWgEndpoint((cur) => {
+      const base = cur || nextWG?.jumpEndpoint || "";
+      const hostPart = base.replace(/:\d+$/, "");
+      return hostPart ? `${hostPart}:${targetPlan.port}` : base;
+    });
+  }, [targetPlan, skipWireGuard, nextWG?.jumpEndpoint]);
+
   // The script is generated per (endpoint, overlay): both have to ride the URL, since
   // the operator fetches it themselves and there is no other channel to the backend.
   const scriptParams = new URLSearchParams();

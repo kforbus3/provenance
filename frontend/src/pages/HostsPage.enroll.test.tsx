@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EnrollCredsDialog } from "./HostsPage";
@@ -226,6 +226,32 @@ describe("EnrollCredsDialog no-install VPN overlay", () => {
     expect(notice).toContain("10.101.0.0/24");
     expect(notice).toContain("1194/udp");
     expect(notice).not.toContain("renumbered");
+  });
+
+  it("moves the endpoint port to the selected overlay's", async () => {
+    // OpenVPN ignores the port typed here and always dials the deployment's OpenVPN
+    // port, so showing WireGuard's invites an operator to hand-edit a value that was
+    // never used — which is exactly what happened.
+    vi.mocked(hostsApi.nextWGAddress).mockResolvedValue({
+      nextWgAddress: "10.100.0.9", subnet: "10.100.0.0/24",
+      jumpEndpoint: "vpn.example.com:51820", overlay: "wireguard",
+      overlays: [
+        { name: "wireguard", subnet: "10.100.0.0/24", jumpIp: "10.100.0.1", port: 51820, protocol: "udp" },
+        { name: "openvpn", subnet: "10.101.0.0/24", jumpIp: "10.101.0.1", port: 1194, protocol: "udp" },
+      ],
+      nextAddress: { wireguard: "10.100.0.9", openvpn: "10.101.0.4" },
+    } as unknown as Awaited<ReturnType<typeof hostsApi.nextWGAddress>>);
+    renderDialog();
+
+    const endpoint = await screen.findByLabelText(/Jump host VPN endpoint/);
+    await waitFor(() => expect(endpoint).toHaveValue("vpn.example.com:51820"));
+
+    pickOverlay(/^OpenVPN/);
+    await waitFor(() => expect(endpoint).toHaveValue("vpn.example.com:1194"));
+
+    // ...and back, so the field is never left describing the wrong transport.
+    pickOverlay(/^WireGuard$/);
+    await waitFor(() => expect(endpoint).toHaveValue("vpn.example.com:51820"));
   });
 
   it("still requires the pasted key under WireGuard", () => {

@@ -20,6 +20,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
   not applying — is still reported as the failure it is. The elapsed wait is reported
   either way.
 
+- **The enroll dialog's endpoint port follows the VPN overlay you pick.** It was
+  pre-filled from the WireGuard setting and stayed on `:51820` for an OpenVPN
+  enrollment — while `ClientConfig` ignores that port entirely and always dials
+  `FLEET_OVPN_PORT`. So the field showed a port that was never used, and invited
+  operators to hand-edit it to no effect. Selecting an overlay now rewrites the port
+  to that transport's, keeping the host part; a port typed by hand survives
+  everything except changing transport.
+
 - **A host that cannot reach the OpenVPN server now says so.** The bring-up script's
   failure diagnostics ran under `set -e` and ended with `journalctl` — which exits
   non-zero for a unit that is merely inactive, killing the block before it printed
