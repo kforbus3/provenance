@@ -96,7 +96,16 @@ func checkHostBringup(out, overlayIP string) (string, error) {
 			"OpenVPN tunnel came up at %s, not the assigned %s — the ccd pin for this host is not being applied",
 			got, overlayIP)
 	}
-	return fmt.Sprintf("OpenVPN tunnel up (addr %s, observed on the host)", got), nil
+	detail := fmt.Sprintf("OpenVPN tunnel up (addr %s, observed on the host)", got)
+	// Peer isolation fails open by design, which is precisely why its absence has to
+	// be said out loud: the enrollment otherwise succeeds identically whether or not
+	// this host can be reached by every other host on the overlay.
+	if strings.Contains(out, "OVPN_IPTABLES_MISSING") {
+		detail += " — WARNING: iptables is not available on this host and could not be installed, " +
+			"so overlay peer isolation is NOT applied; this host can reach, and be reached by, " +
+			"other managed hosts over the overlay"
+	}
+	return detail, nil
 }
 
 // hostIP reads the OVPN_HOST_IP=<addr> line the host bring-up script prints.
