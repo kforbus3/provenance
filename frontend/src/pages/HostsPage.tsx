@@ -449,6 +449,11 @@ export function HostsPage() {
   const [enrollError, setEnrollError] = useState<string | null>(null);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [enrollTarget, setEnrollTarget] = useState<Host | null>(null);
+  // The transport the in-flight enrollment is provisioning, so the progress dialog
+  // can name it. Resolved the same way the backend resolves it: the operator's
+  // choice, then what the host is already on. Held separately from enrollTarget
+  // because the dialog outlives the choice that started it.
+  const [enrollOverlay, setEnrollOverlay] = useState<string | undefined>(undefined);
   const [accessTarget, setAccessTarget] = useState<Host | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<Host | null>(null);
   const [scanTarget, setScanTarget] = useState<Host | null>(null);
@@ -790,14 +795,23 @@ export function HostsPage() {
         key={enrollTarget?.id ?? "enroll-none"}
         host={enrollTarget}
         onClose={() => setEnrollTarget(null)}
-        onSubmit={(params) => enrollTarget && enrollMut.mutate({ id: enrollTarget.id, params })}
-        onPipeFinish={(hostPublicKey) => enrollTarget && finishMut.mutate({ id: enrollTarget.id, hostPublicKey })}
+        onSubmit={(params, resolvedOverlay) => {
+          if (!enrollTarget) return;
+          setEnrollOverlay(resolvedOverlay);
+          enrollMut.mutate({ id: enrollTarget.id, params });
+        }}
+        onPipeFinish={(hostPublicKey, resolvedOverlay) => {
+          if (!enrollTarget) return;
+          setEnrollOverlay(resolvedOverlay);
+          finishMut.mutate({ id: enrollTarget.id, hostPublicKey });
+        }}
       />
       <EnrollDialog
         open={enrollOpen}
         pending={enrollMut.isPending || finishMut.isPending}
         result={enrollResult}
         error={enrollError}
+        overlay={enrollOverlay}
         onClose={() => setEnrollOpen(false)}
       />
       <HostAccessDialog key={accessTarget?.id ?? "access-none"} host={accessTarget} onClose={() => setAccessTarget(null)} />
@@ -1650,8 +1664,12 @@ export function EnrollCredsDialog({
 }: {
   host: Host | null;
   onClose: () => void;
-  onSubmit: (params: EnrollParams) => void;
-  onPipeFinish: (hostPublicKey: string) => void;
+  // Both carry the RESOLVED overlay alongside their payload, for display only. The
+  // request itself still sends "" for "deployment default" so the backend stays the
+  // one that decides — but the progress dialog has to name the transport, and only
+  // this component knows what the default resolves to.
+  onSubmit: (params: EnrollParams, resolvedOverlay: string) => void;
+  onPipeFinish: (hostPublicKey: string, resolvedOverlay: string) => void;
 }) {
   const [method, setMethod] = useState<"password" | "key" | "agent" | "pipe" | "trusted">("password");
   const [bootstrapUser, setBootstrapUser] = useState("root");
@@ -1793,7 +1811,7 @@ export function EnrollCredsDialog({
         <DialogActions>
           <Button onClick={onClose}>Close</Button>
           <Button variant="contained" disabled={hostPubKey.trim() === ""}
-            onClick={() => onPipeFinish(hostPubKey.trim())}>
+            onClick={() => onPipeFinish(hostPubKey.trim(), "wireguard")}>
             Finish enrollment
           </Button>
         </DialogActions>
@@ -2044,7 +2062,7 @@ export function EnrollCredsDialog({
           <Button
             variant="contained"
             disabled={!certOverlay && hostPubKey.trim() === ""}
-            onClick={() => onPipeFinish(certOverlay ? "" : hostPubKey.trim())}
+            onClick={() => onPipeFinish(certOverlay ? "" : hostPubKey.trim(), effectiveOverlay)}
           >
             Finish enrollment
           </Button>
@@ -2052,7 +2070,7 @@ export function EnrollCredsDialog({
           <Button
             variant="contained"
             disabled={method === "agent" || (method === "password" && password === "") || (method === "key" && privateKey.trim() === "")}
-            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump, skipWireGuard, overlay: overlay || undefined })}
+            onClick={() => onSubmit({ method, bootstrapUser, password, privateKey, keyPassphrase, sudoPassword, wgEndpoint, viaJump, skipWireGuard, overlay: overlay || undefined }, effectiveOverlay)}
           >
             Enroll
           </Button>
@@ -2069,10 +2087,14 @@ interface EnrollDialogProps {
   pending: boolean;
   result: EnrollmentResult | null;
   error: string | null;
+  // The transport this enrollment is provisioning. Which VPN a host uses is a
+  // per-host choice, so a progress line that always said "WireGuard" was simply
+  // wrong for every OpenVPN enrollment — and wrong while the operator watches it.
+  overlay?: string;
   onClose: () => void;
 }
 
-function EnrollDialog({ open, pending, result, error, onClose }: EnrollDialogProps) {
+function EnrollDialog({ open, pending, result, error, overlay, onClose }: EnrollDialogProps) {
   const stepColor = (s: string) =>
     s === "ok" ? "success.main" : s === "failed" ? "error.main" : s === "warning" ? "warning.main" : "text.secondary";
   const stepIcon = (s: string) =>
@@ -2086,14 +2108,14 @@ function EnrollDialog({ open, pending, result, error, onClose }: EnrollDialogPro
         {pending && (
           <Stack direction="row" spacing={2} alignItems="center" sx={{ py: 2 }}>
             <CircularProgress size={22} />
-            <Typography>Provisioning WireGuard and trust over SSH…</Typography>
+            <Typography>Provisioning {overlayLabel(overlay)} and trust over SSH…</Typography>
           </Stack>
         )}
         {error && <Alert severity="error">{error}</Alert>}
         {result && (
           <>
             <Alert severity={hasWarning ? "warning" : "success"} sx={{ mb: 2 }}>
-              Enrolled. Overlay address <b>{result.wgAddress}</b>; interface up on the host.
+              Enrolled on <b>{overlayLabel(overlay)}</b>. Overlay address <b>{result.wgAddress}</b>; interface up on the host.
               {hasWarning && " Connectivity warning — see steps below."}
             </Alert>
             <List dense>
