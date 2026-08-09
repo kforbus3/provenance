@@ -5,7 +5,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.4.0 — One fleet, two VPNs, switchable per host — 2026-08-09
+
+**Deploy note.** The jump host publishes a new UDP port and mounts a new volume for
+this release, and upgrade bundles do not manage the jump host. Run `make up-single`
+on the deployment host after installing, and open `FLEET_OVPN_PORT` (1194/udp) on the
+firewall — otherwise the OpenVPN overlay runs on a port nothing reaches. Only needed
+if you use, or intend to use, the certificate overlay; a WireGuard-only deployment is
+unaffected.
 
 - **OpenVPN enrollment installs iptables, on the host and on the jump host.** Peer
   isolation on this overlay *is* iptables — OpenVPN has no `AllowedIPs`, so a filter on
