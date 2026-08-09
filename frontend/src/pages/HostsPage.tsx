@@ -1658,9 +1658,31 @@ export function EnrollCredsDialog({
   const [sshTarget, setSshTarget] = useState("");
   const [hostPubKey, setHostPubKey] = useState("");
   const token = useAuthStore((s) => s.accessToken);
+  // Pre-fill the jump host's VPN endpoint with the configured default; the same call
+  // reports which overlay "Deployment default" resolves to on this install.
+  const { data: nextWG } = useQuery({ queryKey: ["next-wg"], queryFn: nextWGAddress, enabled: Boolean(host) });
+  useEffect(() => {
+    if (nextWG?.jumpEndpoint && wgEndpoint === "") setWgEndpoint(nextWG.jumpEndpoint);
+  }, [nextWG?.jumpEndpoint, wgEndpoint]);
+
+  // What the backend will actually resolve the overlay to — same precedence it uses:
+  // this dialog's choice, then the host's recorded overlay, then the deployment
+  // default. The dialog has to agree with it, because a certificate overlay
+  // authenticates the host with a client cert issued when the script is generated:
+  // the no-install flow then prints no public key and has none to hand back. Reading
+  // only the dropdown would leave "Deployment default" on an OpenVPN install
+  // demanding a key that is never printed, with no way to finish.
+  const effectiveOverlay = overlay || host?.overlay || nextWG?.overlay || "wireguard";
+  const certOverlay = effectiveOverlay === "openvpn";
+  // The script is generated per (endpoint, overlay): both have to ride the URL, since
+  // the operator fetches it themselves and there is no other channel to the backend.
+  const scriptParams = new URLSearchParams();
+  if (wgEndpoint) scriptParams.set("wgEndpoint", wgEndpoint);
+  if (overlay) scriptParams.set("overlay", overlay);
+  const scriptQuery = scriptParams.toString();
   const scriptUrl =
     `${window.location.origin}/api/v1/hosts/${host?.id ?? "<host-id>"}/enroll/script` +
-    (wgEndpoint ? `?wgEndpoint=${encodeURIComponent(wgEndpoint)}` : "");
+    (scriptQuery ? `?${scriptQuery}` : "");
   // Land the script on the host first, then run it over a SECOND ssh with a TTY
   // (-t). Piping straight into `ssh host sudo sh` gives sudo the script on stdin
   // and no terminal, so any host whose sudo asks for a password dies with
@@ -1682,12 +1704,6 @@ export function EnrollCredsDialog({
     `  -token ${token ?? "<YOUR_TOKEN>"} \\\n` +
     `  -bootstrap-user ${bootstrapUser || "<ssh-user>"}` +
     (viaJump ? ` \\\n  -via-jump` : "");
-
-  // Pre-fill the jump host's WireGuard endpoint with the configured default.
-  const { data: nextWG } = useQuery({ queryKey: ["next-wg"], queryFn: nextWGAddress, enabled: Boolean(host) });
-  useEffect(() => {
-    if (nextWG?.jumpEndpoint && wgEndpoint === "") setWgEndpoint(nextWG.jumpEndpoint);
-  }, [nextWG?.jumpEndpoint, wgEndpoint]);
 
   // Download the enrollment script (bash for SSH hosts, PowerShell for Windows).
   const downloadScript = async (ext: string) => {
@@ -1843,6 +1859,8 @@ export function EnrollCredsDialog({
               fetches a bootstrap script and sends it over <i>your own</i> ssh,
               then runs it on a second connection with a terminal so sudo can
               prompt for your password. Your key never leaves your machine.
+              The script is built for the <b>VPN overlay</b> selected below, so
+              pick that first — the command changes with it.
             </Typography>
             <TextField
               label="Your SSH target (user@host)" value={sshTarget}
@@ -1866,18 +1884,36 @@ export function EnrollCredsDialog({
                 </IconButton>
               </Tooltip>
             </Box>
-            <Typography variant="body2" color="text.secondary">
-              <b>Step 2:</b> the script prints a <b>host public key</b> at the end.
-              Paste it here and finish — Fleet adds the jump-host peer and verifies
-              certificate login.
-            </Typography>
-            <TextField
-              label="Host public key" value={hostPubKey}
-              onChange={(e) => setHostPubKey(e.target.value)}
-              fullWidth size="small"
-              placeholder="base64 key printed by the script"
-              inputProps={{ style: { fontFamily: "monospace", fontSize: 12 } }}
-            />
+            {certOverlay ? (
+              <>
+                <Alert severity="info">
+                  The script carries this host's OpenVPN client certificate and key —
+                  it is a credential. The command above deletes it from the host after
+                  the run; don't leave copies elsewhere.
+                </Alert>
+                <Typography variant="body2" color="text.secondary">
+                  <b>Step 2:</b> nothing to paste back — the tunnel authenticates with
+                  the certificate Fleet issued, and the jump host was configured when
+                  you fetched the script. Once it has run, finish here and Fleet
+                  verifies certificate login over the new tunnel.
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Typography variant="body2" color="text.secondary">
+                  <b>Step 2:</b> the script prints a <b>host public key</b> at the end.
+                  Paste it here and finish — Fleet adds the jump-host peer and verifies
+                  certificate login.
+                </Typography>
+                <TextField
+                  label="Host public key" value={hostPubKey}
+                  onChange={(e) => setHostPubKey(e.target.value)}
+                  fullWidth size="small"
+                  placeholder="base64 key printed by the script"
+                  inputProps={{ style: { fontFamily: "monospace", fontSize: 12 } }}
+                />
+              </>
+            )}
           </Stack>
         )}
         {method === "key" && (
@@ -1925,7 +1961,9 @@ export function EnrollCredsDialog({
           disabled={skipWireGuard}
           helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Leave on default unless this host needs a specific transport."
         >
-          <MenuItem value="">Deployment default</MenuItem>
+          <MenuItem value="">
+            Deployment default ({host?.overlay || nextWG?.overlay || "wireguard"})
+          </MenuItem>
           <MenuItem value="wireguard">WireGuard</MenuItem>
           <MenuItem value="openvpn">OpenVPN (FIPS)</MenuItem>
         </TextField>
@@ -1947,8 +1985,8 @@ export function EnrollCredsDialog({
         {method === "pipe" ? (
           <Button
             variant="contained"
-            disabled={hostPubKey.trim() === ""}
-            onClick={() => onPipeFinish(hostPubKey.trim())}
+            disabled={!certOverlay && hostPubKey.trim() === ""}
+            onClick={() => onPipeFinish(certOverlay ? "" : hostPubKey.trim())}
           >
             Finish enrollment
           </Button>

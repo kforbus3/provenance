@@ -255,7 +255,18 @@ self-check passes. Done — indistinguishable in workflow from a normal deploy.
 | `FLEET_WG_JUMP_ENDPOINT` | — | Address managed hosts dial; OpenVPN applies `FLEET_OVPN_PORT`. |
 
 Per host, the overlay is chosen in the **enroll dialog's "VPN overlay" dropdown** (or the
-`overlay` field of the enroll API) — "Deployment default" keeps `FLEET_OVERLAY`.
+`overlay` field of the enroll API) — "Deployment default" keeps `FLEET_OVERLAY`. The
+no-install (ssh-pipe) flow carries the same choice as `?overlay=` on
+`GET …/enroll/script`, which embeds the issued client certificate in the script; the
+Finish step then takes no host public key.
+
+**Switching an enrolled host between overlays** is a re-enrollment with the other
+overlay selected — any method, including no-install. Both transports address the host at
+the *same* overlay address, so moving to OpenVPN retires the WireGuard side once the new
+tunnel is up: the interface and its boot units on the host (the config is renamed to
+`<iface>.conf.fleet-disabled`, not deleted), the peer on the jump host, and the stored
+public key a standby jump host would rebuild that peer from. Moving the other way
+re-provisions WireGuard, but does not stop the OpenVPN client — take that down by hand.
 
 **Jump host** needs `openvpn` (the test-fabric image installs it), a `/dev/net/tun`
 device, and `NET_ADMIN` (the enrollment scripts install openvpn on demand if missing).

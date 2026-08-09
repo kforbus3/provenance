@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/overlay"
 )
 
 // EnrollScript generates a self-contained bootstrap script for the no-install
@@ -28,38 +30,39 @@ import (
 // and allocates no terminal, so sudo can't read a password ("a terminal is
 // required") on any host without NOPASSWD.
 //
-// The script installs the Fleet CA trust + WireGuard on the host and prints the
-// host's WireGuard public key, which the operator pastes back into the UI
-// (FinishScriptEnroll). No Fleet binary, password, or private key ever reaches
-// the backend — the operator's existing ssh handles host authentication.
-func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *models.Host, actor *uuid.UUID, wgEndpointOverride string) (string, error) {
+// The script installs the Fleet CA trust and joins the host to the overlay the host
+// is enrolling onto: WireGuard (the host generates a keypair and prints its public
+// key, which the operator pastes back into the UI) or a certificate overlay such as
+// OpenVPN (the client certificate is issued here and embedded in the script, so there
+// is nothing to paste back). Either way FinishScriptEnroll completes it. No Fleet
+// binary, password, or private key ever reaches the backend — the operator's existing
+// ssh handles host authentication.
+//
+// overlayOverride is the operator's per-host VPN choice from the enrollment dialog
+// (""/"wireguard"/"openvpn"); it follows the same precedence as the over-SSH flow.
+func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *models.Host, actor *uuid.UUID, wgEndpointOverride, overlayOverride string) (string, error) {
 	loginUser := host.SSHUser
 	if loginUser == "" {
 		loginUser = "fleet"
 	}
+	effOverlay := s.effectiveOverlay(EnrollParams{Overlay: overlayOverride}, host)
 
-	// The jump host's WireGuard public key — the managed host peers to it.
 	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
 	jumpClient, err := s.gw.DialDirect(ctx, sessionID.String(), jumpAddr, jumpPort, s.cfg.JumpUser)
 	if err != nil {
 		return "", fmt.Errorf("connect jump host: %w", err)
 	}
 	defer jumpClient.Close()
-	jumpPub, err := run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
-	if err != nil || strings.TrimSpace(jumpPub) == "" {
-		return "", orErr(err, "jump host has no WireGuard public key")
-	}
-	jumpPub = strings.TrimSpace(jumpPub)
 
 	// Assign + persist the overlay address so this and the finish step agree, and
 	// re-generating the script is idempotent.
 	wgIP := strings.TrimSpace(host.WGAddress)
 	if wgIP != "" {
 		if !isOverlayAddr(wgIP, s.cfg.WGJumpIP) {
-			return "", fmt.Errorf("WireGuard address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet)
+			return "", fmt.Errorf("overlay address %q is not in the overlay subnet %s", wgIP, s.cfg.WGSubnet)
 		}
 		if inUse, _ := s.store.WGAddressInUse(ctx, wgIP, host.ID); inUse {
-			return "", fmt.Errorf("WireGuard address %s is already assigned to another host", wgIP)
+			return "", fmt.Errorf("overlay address %s is already assigned to another host", wgIP)
 		}
 	} else {
 		wgIP, err = s.store.NextFreeWGAddress(ctx, s.cfg.WGJumpIP)
@@ -90,12 +93,69 @@ func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *m
 		}
 	}
 
+	// Record the transport BEFORE handing the script over: the finish step reads it
+	// back to decide what it is completing, and the operator may run the script minutes
+	// later from their own terminal, with no other channel to carry the choice.
+	_ = s.store.SetHostOverlay(ctx, host.ID, effOverlay)
+
 	_, _ = s.store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: actor, Action: "host.enroll_script", TargetKind: "host", TargetID: host.ID.String(),
-		Detail: map[string]any{"wgAddress": wgIP, "method": "pipe"},
+		Detail: map[string]any{"wgAddress": wgIP, "method": "pipe", "overlay": effOverlay},
 	})
 
-	return s.bootstrapScript(loginUser, strings.Join(caKeys, "\n"), wgIP, jumpPub, jumpEndpoint, krlB64, host.ID), nil
+	if overlay.IsCertOverlay(effOverlay) {
+		return s.certOverlayScript(ctx, effOverlay, host, jumpClient,
+			loginUser, strings.Join(caKeys, "\n"), wgIP, jumpEndpoint, krlB64)
+	}
+
+	// WireGuard: the managed host peers to the jump host's public key.
+	jumpPub, err := run(jumpClient, "sudo cat /etc/wireguard/publickey 2>/dev/null || cat /etc/wireguard/publickey")
+	if err != nil || strings.TrimSpace(jumpPub) == "" {
+		return "", orErr(err, "jump host has no WireGuard public key")
+	}
+	return s.bootstrapScript(loginUser, strings.Join(caKeys, "\n"), wgIP,
+		strings.TrimSpace(jumpPub), jumpEndpoint, krlB64, host.ID), nil
+}
+
+// certOverlayScript builds the no-install bootstrap script for a certificate overlay.
+// The jump-side work — starting the VPN server, pinning this host's address to its
+// certificate identity, and retiring any WireGuard peer it is moving off — happens
+// here, over Fleet's own connection to the jump host. Only the host half travels in
+// the script, so the client certificate and key are issued now and embedded in it.
+//
+// That embedding is why the script is a credential: it carries the host's overlay
+// private key. It is fetched over an authenticated HTTPS request and piped straight to
+// the host, and the bootstrap command deletes it after the run.
+func (s *Service) certOverlayScript(
+	ctx context.Context, name string, host *models.Host, jumpClient *ssh.Client,
+	loginUser, caKeys, overlayIP, jumpEndpoint, krlB64 string,
+) (string, error) {
+	ov := s.overlays[name]
+	if ov == nil {
+		return "", fmt.Errorf("overlay %q is not available on this deployment", name)
+	}
+	jumpRun := func(script string) (string, error) {
+		return run(jumpClient, "sudo sh -c "+shellQuote(script))
+	}
+	if _, err := ov.EnsureServer(ctx, jumpRun); err != nil {
+		return "", fmt.Errorf("provision %s server: %w", ov.Name(), err)
+	}
+	hb, err := ov.PrepareHost(ctx, host.ID, overlayIP, jumpEndpoint, jumpRun)
+	if err != nil {
+		return "", err
+	}
+	// The host half of retiring a WireGuard tunnel is a phase of the script below —
+	// this is the one flow where Fleet can't run it itself. The hub half waits for the
+	// finish step: the operator may not run this script for a while, and pulling the
+	// jump host's peer now would take a still-working host offline until they did.
+	//
+	// Whether there is anything to retire is judged on overlay state, NOT the recorded
+	// overlay: generating this script already stamped the host as openvpn, so a second
+	// generation would see a switch that has not happened yet and skip the teardown.
+	// The teardown is a no-op on a host with no WireGuard, so erring toward running it
+	// costs nothing.
+	return s.certBootstrapScript(loginUser, caKeys, overlayIP, krlB64, host.ID, ov.Name(),
+		hb, hasOverlayState(host)), nil
 }
 
 // EnrollScriptWindows generates a PowerShell script that joins a Windows host to the
@@ -266,12 +326,22 @@ Write-Host "=================================================="
 `
 
 // FinishScriptEnroll completes the no-install flow after the operator has run
-// the bootstrap script: it adds the host (identified by the public key the
-// operator pasted) as a peer on the jump host and verifies certificate login.
+// the bootstrap script. Under WireGuard that means adding the host — identified by the
+// public key the operator pasted — as a peer on the jump host; under a certificate
+// overlay the hub side was already provisioned when the script was generated (the host
+// is pinned to its certificate identity), so there is no key and nothing to add. Both
+// then verify certificate login end to end.
 func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, host *models.Host, actor *uuid.UUID, hostPub string) (*Result, error) {
+	certOverlay := overlay.IsCertOverlay(strings.TrimSpace(host.Overlay))
 	hostPub = strings.TrimSpace(hostPub)
-	if hostPub == "" {
+	if hostPub == "" && !certOverlay {
 		return nil, fmt.Errorf("host public key is required (copy it from the bootstrap script output)")
+	}
+	if certOverlay {
+		// Nothing identifies the host here but the certificate it holds; a pasted key
+		// would be meaningless and storing it would resurrect the retired WireGuard peer
+		// on a jump-host failover.
+		hostPub = ""
 	}
 	wgIP := strings.TrimSpace(host.WGAddress)
 	if wgIP == "" {
@@ -326,20 +396,40 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	// enroll with a matching fixed ListenPort so this works for them exactly as it
 	// does for Linux; when the host is remote, its outbound keepalive establishes
 	// the tunnel and WireGuard relearns the real endpoint from that handshake.
-	hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
-	if verr := validatePeerInputs(hostPub, hostEndpoint, wgIP); verr != nil {
-		return fail("configure_jump_peer", verr)
-	}
-	jumpScript := s.jumpPeerScript(host.Hostname, hostPub, hostEndpoint, wgIP)
-	if jout, jerr := run(jumpClient, "sudo sh -c "+shellQuote(jumpScript)); jerr != nil {
-		return fail("configure_jump_peer", orErr(jerr, jout))
-	}
-	step("configure_jump_peer", "ok", fmt.Sprintf("peer %s allowed-ips %s/32", short(hostPub), wgIP))
+	if certOverlay {
+		step("configure_jump_peer", "skipped", fmt.Sprintf(
+			"%s pins %s to this host's certificate — the jump host was configured when the script was generated",
+			strings.TrimSpace(host.Overlay), wgIP))
+		// The cert tunnel is up now (the script has run), so this is the moment to give
+		// up the WireGuard claim on the same address: any peer the hub still holds for
+		// this host, and the stored key a standby jump host would rebuild it from.
+		// Idempotent — a host that was never on WireGuard reports nothing to remove.
+		var notes []string
+		degraded := false
+		s.retireJumpPeer(ctx, host, jumpClient, &notes, &degraded)
+		if len(notes) > 0 {
+			status := "ok"
+			if degraded {
+				status = "warning"
+			}
+			step("retire_wireguard", status, strings.Join(notes, "; "))
+		}
+	} else {
+		hostEndpoint := fmt.Sprintf("%s:%d", mgmtAddr, s.cfg.WGPort)
+		if verr := validatePeerInputs(hostPub, hostEndpoint, wgIP); verr != nil {
+			return fail("configure_jump_peer", verr)
+		}
+		jumpScript := s.jumpPeerScript(host.Hostname, hostPub, hostEndpoint, wgIP)
+		if jout, jerr := run(jumpClient, "sudo sh -c "+shellQuote(jumpScript)); jerr != nil {
+			return fail("configure_jump_peer", orErr(jerr, jout))
+		}
+		step("configure_jump_peer", "ok", fmt.Sprintf("peer %s allowed-ips %s/32", short(hostPub), wgIP))
 
-	// Persist the overlay public key so a standby jump host can rebuild peers on
-	// failover (best-effort).
-	if perr := s.store.SetHostWGPublicKey(ctx, host.ID, hostPub); perr != nil {
-		s.log.Warn("persist host wg public key", "host", host.Hostname, "err", perr)
+		// Persist the overlay public key so a standby jump host can rebuild peers on
+		// failover (best-effort).
+		if perr := s.store.SetHostWGPublicKey(ctx, host.ID, hostPub); perr != nil {
+			s.log.Warn("persist host wg public key", "host", host.Hostname, "err", perr)
+		}
 	}
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
 
@@ -377,10 +467,27 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	_ = s.store.FinishEnrollmentJob(ctx, job.ID, "succeeded", "")
 	_, _ = s.store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: actor, Action: "host.enroll", TargetKind: "host", TargetID: host.ID.String(),
-		Detail: map[string]any{"wgAddress": wgIP, "hostPublicKey": hostPub, "method": "pipe", "jobId": job.ID},
+		Detail: map[string]any{"wgAddress": wgIP, "hostPublicKey": hostPub, "method": "pipe",
+			"overlay": strings.TrimSpace(host.Overlay), "jobId": job.ID},
 	})
 	final, _ := s.store.GetEnrollmentJob(ctx, job.ID)
 	return &Result{Job: final, WGAddr: wgIP, HostPub: hostPub}, nil
+}
+
+// phase renders one step of a bootstrap script: a labelled subshell (so its `set -e`
+// is scoped to the step), whose output is held back unless the step fails or fails to
+// print marker — a step that exits 0 without doing its job is still a failure.
+func phase(num, label, body, marker, failMsg string) string {
+	check := ""
+	if marker != "" {
+		check = fmt.Sprintf("grep -q %s \"$F\" || { sed 's/^/  /' \"$F\"; echo '[fleet] FAILED: %s'; exit 1; }\n", marker, failMsg)
+	}
+	return fmt.Sprintf(`echo '[fleet] %s %s'
+F=$(mktemp)
+(
+%s
+) >"$F" 2>&1 || { sed 's/^/  /' "$F"; echo '[fleet] FAILED: %s'; exit 1; }
+%s`, num, label, body, failMsg, check)
 }
 
 // bootstrapScript assembles the host-side script from the same building blocks
@@ -388,19 +495,6 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 // is scoped) and is checked for its success marker; the host's WireGuard public
 // key is surfaced at the end for the operator to paste back.
 func (s *Service) bootstrapScript(loginUser, caKeys, wgIP, jumpPub, jumpEndpoint, krlB64 string, hostID uuid.UUID) string {
-	phase := func(num, label, body, marker, failMsg string) string {
-		check := ""
-		if marker != "" {
-			check = fmt.Sprintf("grep -q %s \"$F\" || { sed 's/^/  /' \"$F\"; echo '[fleet] FAILED: %s'; exit 1; }\n", marker, failMsg)
-		}
-		return fmt.Sprintf(`echo '[fleet] %s %s'
-F=$(mktemp)
-(
-%s
-) >"$F" 2>&1 || { sed 's/^/  /' "$F"; echo '[fleet] FAILED: %s'; exit 1; }
-%s`, num, label, body, failMsg, check)
-	}
-
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Fleet Terminal — host bootstrap (no-install enrollment).\n")
@@ -443,5 +537,63 @@ echo "    $HOSTPUB"
 echo ''
 echo '======================================================='
 `)
+	return b.String()
+}
+
+// certBootstrapScript is bootstrapScript for a certificate overlay. The shape is the
+// same — CA trust, join the overlay, enforce revocation — but the overlay phase runs a
+// script that already carries the host's client certificate, so nothing has to be read
+// back out of it and the operator has no key to paste: the tunnel authenticates as the
+// identity Fleet just issued. When the host is moving off WireGuard, its interface and
+// boot units are retired first, because both transports claim the same overlay address.
+func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 string, hostID uuid.UUID, overlayName string, hb overlay.HostBringup, retireWG bool) string {
+	steps := 2 // CA trust + overlay
+	if retireWG {
+		steps++
+	}
+	if krlB64 != "" {
+		steps++
+	}
+	n := 0
+	num := func() string {
+		n++
+		return fmt.Sprintf("%d/%d", n, steps)
+	}
+
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("# Fleet Terminal — host bootstrap (no-install enrollment, " + overlayName + " overlay).\n")
+	b.WriteString("# Holds this host's overlay client key: run it, then delete it.\n")
+	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/fleet-enroll.sh'\n")
+	b.WriteString("set -e\n")
+	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (run: ssh -t USER@HOST "sudo sh ~/fleet-enroll.sh")'; exit 1; fi` + "\n\n")
+
+	b.WriteString(phase(num(), "installing SSH certificate trust",
+		s.caTrustScript(loginUser, caKeys, hostID), "CA_OK", "CA trust") + "\n")
+	if retireWG {
+		b.WriteString(phase(num(), "retiring the WireGuard overlay",
+			s.wgTeardownScript(), "WG_RETIRED", "WireGuard teardown") + "\n")
+	}
+	b.WriteString(phase(num(), "joining the "+overlayName+" overlay",
+		hb.Script, hb.Marker, overlayName+" tunnel") + "\n")
+
+	if krlB64 != "" {
+		b.WriteString(fmt.Sprintf(`echo '[fleet] %s enabling certificate revocation'
+(
+%s
+) >/dev/null 2>&1 && echo '[fleet] revocation enforced' || echo '[fleet] WARN: revocation not enforced (continuing)'
+`, num(), s.krlInstallScript(krlB64)))
+	}
+
+	b.WriteString(fmt.Sprintf(`
+echo ''
+echo '==================== FLEET TERMINAL ===================='
+echo 'Bootstrap complete. Overlay address: %s (%s)'
+echo ''
+echo 'Nothing to paste back — this tunnel authenticates with the'
+echo 'certificate Fleet issued. Click Finish in the UI to verify.'
+echo ''
+echo '======================================================='
+`, overlayIP, overlayName))
 	return b.String()
 }

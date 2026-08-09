@@ -436,19 +436,26 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 // nextWG returns the next free overlay address so the create dialog can show
-// what auto-assignment would pick (and the overlay subnet).
+// what auto-assignment would pick (and the overlay subnet), plus the deployment's
+// default VPN overlay — which the enroll dialog needs to know what "Deployment
+// default" will actually resolve to, since a certificate overlay produces a
+// different no-install flow (no key to paste back).
 func (h *handler) nextWG(w http.ResponseWriter, r *http.Request) {
 	// Effective default endpoint: DB setting first, then the env config default.
 	endpoint := h.d.Store.WireGuardEndpoint(r.Context())
 	if endpoint == "" {
 		endpoint = h.d.Cfg.WGJumpEndpoint
 	}
+	defaultOverlay := strings.TrimSpace(h.d.Cfg.Overlay)
+	if defaultOverlay == "" {
+		defaultOverlay = "wireguard"
+	}
 	next, err := h.d.Store.NextFreeWGAddress(r.Context(), h.d.Cfg.WGJumpIP)
 	if err != nil {
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": "", "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "exhausted": true})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": "", "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "overlay": defaultOverlay, "exhausted": true})
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": next, "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"nextWgAddress": next, "subnet": h.d.Cfg.WGSubnet, "jumpEndpoint": endpoint, "overlay": defaultOverlay})
 }
 
 func (h *handler) statusStats(w http.ResponseWriter, r *http.Request) {

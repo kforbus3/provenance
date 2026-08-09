@@ -42,23 +42,39 @@ func (o *OpenVPN) EnsureServer(ctx context.Context, jumpRun RunFunc) (string, er
 	return detail, nil
 }
 
-// ProvisionHost implements Overlay: issue the host client cert, pin its overlay IP on
-// the jump server by cert CN (ccd), and bring up the tunnel on the host.
-func (o *OpenVPN) ProvisionHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, hostRun, jumpRun RunFunc) (string, error) {
+// hostConfiguredMarker is printed by HostInstallScript once the client material is in
+// place and the tunnel has been started.
+const hostConfiguredMarker = "OVPN_HOST_CONFIGURED"
+
+// PrepareHost implements Overlay: issue the host client cert, pin its overlay IP on the
+// jump server by cert CN (ccd), and return the host-side bring-up script.
+func (o *OpenVPN) PrepareHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, jumpRun RunFunc) (HostBringup, error) {
 	caPEM, cliCert, cliKey, cn, err := o.IssueHostMaterial(ctx, hostID)
 	if err != nil {
-		return "", fmt.Errorf("issue host client certificate: %w", err)
+		return HostBringup{}, fmt.Errorf("issue host client certificate: %w", err)
 	}
 	ccdEntry, err := o.CCDEntry(overlayIP)
 	if err != nil {
-		return "", fmt.Errorf("build ccd entry: %w", err)
+		return HostBringup{}, fmt.Errorf("build ccd entry: %w", err)
 	}
 	if out, jerr := jumpRun(o.JumpCCDScript(cn, ccdEntry)); jerr != nil {
-		return "", fmt.Errorf("pin overlay address on jump: %v: %s", jerr, oneLine(out))
+		return HostBringup{}, fmt.Errorf("pin overlay address on jump: %v: %s", jerr, oneLine(out))
 	}
-	clientConf := o.ClientConfig(endpoint)
-	out, herr := hostRun(o.HostInstallScript(caPEM, cliCert, cliKey, clientConf))
-	if herr != nil || strings.Contains(out, "OVPN_INSTALL_FAILED") || !strings.Contains(out, "OVPN_HOST_CONFIGURED") {
+	return HostBringup{
+		Script: o.HostInstallScript(caPEM, cliCert, cliKey, o.ClientConfig(endpoint)),
+		Marker: hostConfiguredMarker,
+	}, nil
+}
+
+// ProvisionHost implements Overlay: prepare the host's certificate + address pin, then
+// run the bring-up script on the host.
+func (o *OpenVPN) ProvisionHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, hostRun, jumpRun RunFunc) (string, error) {
+	hb, err := o.PrepareHost(ctx, hostID, overlayIP, endpoint, jumpRun)
+	if err != nil {
+		return "", err
+	}
+	out, herr := hostRun(hb.Script)
+	if herr != nil || strings.Contains(out, "OVPN_INSTALL_FAILED") || !strings.Contains(out, hb.Marker) {
 		return "", fmt.Errorf("install OpenVPN on host: %v: %s", herr, oneLine(out))
 	}
 	return fmt.Sprintf("OpenVPN tunnel up (addr %s)", overlayIP), nil

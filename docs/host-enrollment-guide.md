@@ -99,6 +99,15 @@ one carrying a TTY (`-t`). Piping it straight into `ssh host sudo sh` instead
 hands sudo the script on stdin with no terminal, so any host whose sudo asks for
 a password fails with `sudo: a terminal is required to read the password`.
 
+**Choosing the VPN overlay.** The script is generated *for one overlay*, and the
+dialog's **VPN overlay** dropdown rides the URL (`?overlay=openvpn`) — so pick it
+before copying the command. Under a certificate overlay (OpenVPN) the script
+carries the host's client certificate and key: treat it as a credential (the
+command above deletes it after the run), and there is nothing to paste back —
+the Finish step verifies the tunnel instead of adding a peer. Windows/RDP hosts
+are WireGuard-only for now; asking for `overlay=openvpn` there is an error rather
+than a silent fallback.
+
 **Where the token comes from.** For both no-install methods the dialog prints the
 command with your live session token already filled in — use its copy button and
 run it as-is. The token is short-lived (`FLEET_ACCESS_TOKEN_TTL`, 15 min by

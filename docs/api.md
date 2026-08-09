@@ -232,12 +232,22 @@ audited as `host.host_key_cleared` with the fingerprints that were dropped.
 `"password"` (`+ bootstrapUser, password`), `"key"` (`+ privateKey, keyPassphrase`),
 `"trusted"`, or omit for trusted. The body also accepts `sudoPassword`,
 `wgEndpoint` (the jump host's public WireGuard endpoint), `viaJump` (route the
-bootstrap through the jump host), and `skipWireGuard` (boolean — enroll a host
+bootstrap through the jump host), `skipWireGuard` (boolean — enroll a host
 that is directly reachable from the jump host, skipping WireGuard tunnel
-provisioning). `agent` uses the WebSocket (`fleet-enroll-agent` bridge); the
+provisioning), and `overlay` (`""` for the deployment default, `"wireguard"`, or
+`"openvpn"` — the VPN transport this host uses to reach the jump host).
+`agent` uses the WebSocket (`fleet-enroll-agent` bridge); the
 no-install flow uses `GET …/enroll/script` (pipe through your own ssh) then
 `POST …/enroll/finish` `{ "hostPublicKey": "…" }`. See the
 [Host Enrollment Guide](./host-enrollment-guide.md).
+
+**`GET /hosts/{id}/enroll/script`** takes the same two choices as query parameters,
+because the operator fetches the script themselves and there is no request body to
+carry them: `?wgEndpoint=vpn.example.com:51820&overlay=openvpn`. The script is built
+for that overlay — under `openvpn` it embeds the host's client certificate and there
+is no key to paste back, so `POST …/enroll/finish` takes `{}` (an empty or omitted
+`hostPublicKey`). Under WireGuard the key is still required. `overlay=openvpn` is
+rejected for Windows/RDP hosts, whose enrollment script is WireGuard-only.
 
 **`GET /hosts/{id}/access`** → `{ "groups": ["ops"], "users": [ … ] }`
 

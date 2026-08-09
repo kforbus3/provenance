@@ -388,6 +388,13 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 			if wgIP, oerr = s.enrollCertOverlay(ctx, ov, host, jumpClient, priv, params, step); oerr != nil {
 				return fail("configure_overlay", oerr)
 			}
+			// Both transports address the host at the SAME overlay IP, so a host moving
+			// off WireGuard has to give the address up before the new tunnel can be
+			// relied on. Done after the cert tunnel is up: if that failed, the host keeps
+			// the working transport it already had.
+			if hadWireGuard(host) {
+				s.retireWireGuard(ctx, host, priv, jumpClient, step)
+			}
 		}
 	} else if !params.SkipWireGuard {
 		wgIP = strings.TrimSpace(host.WGAddress)
@@ -797,6 +804,93 @@ TIMER
 fi
 echo WG_PERSIST_OK`,
 		iface, iface, b64, iface, iface)
+}
+
+// wgTeardownScript retires WireGuard on a host that is moving to a certificate
+// overlay. Both transports assign the host the SAME overlay address (it lives in one
+// wg_address column so the gateway stays transport-agnostic), so leaving the old
+// interface up means two interfaces claiming one address: which one answers is down to
+// route metrics, and the jump host's stale peer keeps advertising the address on the
+// hub. The result is a host that enrolls "successfully" onto OpenVPN and is reached
+// intermittently, or not at all.
+//
+// The config is renamed rather than deleted (and the private key left in place), so a
+// host that is moved back to WireGuard has its old identity to fall back on and the
+// operator can see what was retired. Wholly best-effort: a host with no WireGuard to
+// retire runs this as a no-op, and a failure here must not fail an enrollment whose
+// real work — the new tunnel — succeeded.
+func (s *Service) wgTeardownScript() string {
+	iface := s.cfg.WGInterface
+	return fmt.Sprintf(`set +e
+IF=%s
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now wg-quick@$IF >/dev/null 2>&1
+  systemctl disable --now fleet-wg-reresolve.timer >/dev/null 2>&1
+fi
+if command -v wg-quick >/dev/null 2>&1; then wg-quick down $IF >/dev/null 2>&1; fi
+if ip link show $IF >/dev/null 2>&1; then ip link delete $IF >/dev/null 2>&1; fi
+if [ -f /etc/wireguard/$IF.conf ]; then mv -f /etc/wireguard/$IF.conf /etc/wireguard/$IF.conf.fleet-disabled; fi
+echo WG_RETIRED`, iface)
+}
+
+// retireWireGuard tears the WireGuard overlay down on both ends when a host moves to a
+// certificate overlay: the interface + boot units on the host, the peer on the jump
+// host, and the stored public key (which is what a standby jump host rebuilds its peer
+// list from — leaving it would restore the retired peer on the next failover). Every
+// part is best-effort and reported through step().
+func (s *Service) retireWireGuard(ctx context.Context, host *models.Host, priv func(string) (string, error), jumpClient *ssh.Client, step func(name, status, detail string)) {
+	var notes []string
+	degraded := false
+	if out, err := priv(s.wgTeardownScript()); err != nil || !strings.Contains(out, "WG_RETIRED") {
+		notes = append(notes, "could not retire "+s.cfg.WGInterface+" on the host: "+oneLine(orErr(err, out).Error()))
+		degraded = true
+	} else {
+		notes = append(notes, s.cfg.WGInterface+" down and disabled on the host")
+	}
+	s.retireJumpPeer(ctx, host, jumpClient, &notes, &degraded)
+	status := "ok"
+	if degraded {
+		status = "warning"
+	}
+	step("retire_wireguard", status, strings.Join(notes, "; "))
+}
+
+// retireJumpPeer removes the hub half of a retired WireGuard tunnel: the jump host's
+// peer entry and the stored public key a standby jump host would rebuild it from.
+// Split out because the no-install flow retires the two halves at different moments:
+// the host side is a phase of the script the operator runs themselves, the hub side
+// waits for the finish step (see FinishScriptEnroll).
+func (s *Service) retireJumpPeer(ctx context.Context, host *models.Host, jumpClient *ssh.Client, notes *[]string, degraded *bool) {
+	if out, err := run(jumpClient, "sudo sh -c "+shellQuote(s.jumpPeerCleanupScript(host.Hostname))); err != nil {
+		*notes = append(*notes, "could not remove the jump-host peer: "+oneLine(orErr(err, out).Error()))
+		*degraded = true
+	} else if strings.Contains(out, "REMOVED") {
+		*notes = append(*notes, "jump-host peer removed")
+	}
+	// The peer list a standby jump host restores on failover is built from this
+	// column; leaving the key would bring the retired peer back on the next failover.
+	if err := s.store.SetHostWGPublicKey(ctx, host.ID, ""); err != nil {
+		*notes = append(*notes, "could not clear the stored public key: "+err.Error())
+		*degraded = true
+	}
+}
+
+// hasOverlayState reports whether a host has been on the overlay before — a completed
+// enrollment or an assigned address. It says nothing about which transport: retiring
+// WireGuard is a no-op on a host that never had it, so this is the safe question to ask
+// when the recorded overlay can't be trusted (see certOverlayScript).
+func hasOverlayState(host *models.Host) bool {
+	return host.Enrolled || strings.TrimSpace(host.WGAddress) != ""
+}
+
+// hadWireGuard reports whether a host is carrying WireGuard state worth retiring
+// before it moves to a certificate overlay. An empty Overlay counts as WireGuard —
+// that is what a host enrolled before per-host overlays existed looks like.
+func hadWireGuard(host *models.Host) bool {
+	if overlay.IsCertOverlay(strings.TrimSpace(host.Overlay)) {
+		return false
+	}
+	return hasOverlayState(host)
 }
 
 // krlInstallScript writes the KRL and enables the RevokedKeys directive, rolling
