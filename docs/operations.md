@@ -74,7 +74,8 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
    - **SSH agent** — run the `fleet-enroll-agent` bridge from your laptop; the key never leaves it.
    - **No install (ssh-pipe)** — run a copyable command in your own terminal (it sends the script
      over your ssh, then runs it with `ssh -t … sudo sh` so sudo can prompt), then paste the printed
-     host public key into the Finish step. No install, no key upload.
+     host public key into the Finish step. No install, no key upload. Under a certificate overlay
+     (OpenVPN) the script carries the host's client certificate and prints no key — just Finish.
    - **Already trusts the Fleet CA** — re-provision a previously-enrolled host with the session cert.
    The password / pasted key is used once and never stored.
 3. Enrollment, over SSH:

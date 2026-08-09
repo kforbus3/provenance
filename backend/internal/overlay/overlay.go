@@ -39,6 +39,22 @@ type Overlay interface {
 	// tunnel on the host. endpoint is the jump address the host dials. It returns a
 	// short human detail for the enrollment step log.
 	ProvisionHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, hostRun, jumpRun RunFunc) (detail string, err error)
+
+	// PrepareHost is ProvisionHost without the host half: it issues the client
+	// certificate and pins the address on the jump server, then RETURNS the privileged
+	// script that brings the tunnel up on the host instead of running it. The
+	// no-install enrollment flow needs this, because there Fleet never connects to the
+	// host at all — the operator pipes the script over their own ssh and runs it.
+	// ProvisionHost is PrepareHost plus hostRun.
+	PrepareHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, jumpRun RunFunc) (HostBringup, error)
+}
+
+// HostBringup is the host-side half of overlay provisioning: a privileged script and
+// the marker its successful run prints. Callers that run the script themselves check
+// Marker to tell a real bring-up from a script that merely exited 0.
+type HostBringup struct {
+	Script string
+	Marker string
 }
 
 // IsCertOverlay reports whether name selects a certificate-authenticated overlay

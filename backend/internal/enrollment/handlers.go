@@ -109,13 +109,29 @@ func (h *handler) enrollScript(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "host not found")
 		return
 	}
+	// The VPN overlay the operator picked in the enrollment dialog, same values the
+	// over-SSH flow accepts. Empty means "use the deployment default".
+	ovl := r.URL.Query().Get("overlay")
+	switch ovl {
+	case "", "wireguard", "openvpn":
+		// ok
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "overlay must be one of: wireguard, openvpn")
+		return
+	}
 	// RDP (Windows) hosts get a PowerShell WireGuard-enrollment script; SSH hosts get
 	// the bash bootstrap script.
 	var script string
 	if host.Protocol == "rdp" {
+		// Say so rather than silently handing back a WireGuard script: the Windows
+		// enrollment script has no OpenVPN equivalent yet.
+		if ovl == "openvpn" {
+			httpx.WriteError(w, http.StatusBadRequest, "the OpenVPN overlay is not supported for Windows hosts yet")
+			return
+		}
 		script, err = h.svc.EnrollScriptWindows(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"))
 	} else {
-		script, err = h.svc.EnrollScript(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"))
+		script, err = h.svc.EnrollScript(r.Context(), p.SessionID, host, &p.UserID, r.URL.Query().Get("wgEndpoint"), ovl)
 	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadGateway, err.Error())

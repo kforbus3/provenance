@@ -78,6 +78,9 @@ export interface Host {
   owner: string;
   address?: string;
   wgAddress?: string;
+  // VPN overlay this host was last enrolled onto: "" / undefined = deployment
+  // default, otherwise wireguard | openvpn.
+  overlay?: "" | "wireguard" | "openvpn";
   sshPort: number;
   sshUser: string;
   tags: string[];
@@ -176,6 +179,9 @@ export interface NextWG {
   nextWgAddress: string;
   subnet: string;
   jumpEndpoint: string;
+  // The deployment's default VPN overlay (FLEET_OVERLAY), already resolved —
+  // what "Deployment default" in the enroll dialog means for this install.
+  overlay?: string;
   exhausted?: boolean;
 }
 

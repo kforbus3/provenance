@@ -7,6 +7,45 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+- **The no-install enrollment method honors the VPN overlay you picked.** Choosing
+  **OpenVPN** in the enroll dialog and using **No install (ssh-pipe)** enrolled the
+  host on **WireGuard** — silently, with no warning and nothing in the job log to
+  say the choice had been dropped. The overlay reached only the over-SSH enrollment
+  request body; the no-install flow fetches its script by URL, and that URL carried
+  the endpoint but not the overlay. The script generator had no OpenVPN path at all,
+  so it could only have produced WireGuard. A deployment whose *default* was
+  `FLEET_OVERLAY=openvpn` was affected the same way: every no-install enrollment
+  came out on WireGuard.
+
+  The overlay now rides the script URL (`?overlay=openvpn`), and the generator
+  builds for it: Fleet issues the host's client certificate and pins its address to
+  that certificate on the jump host while generating the script, then embeds the
+  host-side bring-up in it. Because the tunnel authenticates as the identity Fleet
+  just issued, there is no public key printed and nothing to paste back — the Finish
+  step verifies certificate login instead of adding a peer. **The script is
+  therefore a credential**: it holds the host's overlay private key. The copy-paste
+  command already deletes it from the host after the run.
+
+  Windows/RDP hosts are still WireGuard-only; `overlay=openvpn` is now rejected for
+  them rather than silently falling back.
+
+- **Switching a host from WireGuard to OpenVPN retires the WireGuard side.** Both
+  transports address a host at the *same* overlay address (one `wg_address` column,
+  so the gateway stays transport-agnostic), so a host re-enrolled onto OpenVPN ended
+  up with two interfaces claiming one address — which answered came down to route
+  metrics — while the jump host kept advertising the old peer for it. Re-enrolling
+  onto a certificate overlay now brings the WireGuard interface down and disables its
+  boot units on the host (the config is renamed to `<iface>.conf.fleet-disabled`, not
+  deleted, and the private key is left in place), removes the peer from the jump
+  host, and clears the stored public key — which is what a standby jump host rebuilds
+  its peer list from, so leaving it would restore the retired peer on the next
+  failover. This runs only **after** the new tunnel is up: if that fails, the host
+  keeps the transport it already had. Best-effort throughout, and reported as a
+  `retire_wireguard` step.
+
+  The reverse move (OpenVPN → WireGuard) re-provisions WireGuard but does not stop
+  the OpenVPN client; take that down by hand.
+
 - **OpenVPN overlays get the host-side half of peer isolation too.** v1.3.0 gave
   WireGuard hosts a second, independent layer (`AllowedIPs` pinned to the jump
   host) but left OpenVPN with only the jump host's forwarding deny — a single rule,

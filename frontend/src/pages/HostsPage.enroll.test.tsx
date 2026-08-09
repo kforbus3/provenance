@@ -101,3 +101,86 @@ describe("EnrollCredsDialog bootstrap commands", () => {
     expect(cmd).toContain("&& ssh -t opsadmin@web-01 'sudo sh ~/fleet-enroll.sh");
   });
 });
+
+// The VPN overlay choice used to reach only the over-SSH enrollment request: the
+// no-install flow fetches its script by URL, and that URL carried the endpoint but
+// not the overlay. Picking OpenVPN and getting a WireGuard host back is what that
+// looks like from the operator's side.
+describe("EnrollCredsDialog no-install VPN overlay", () => {
+  beforeEach(() => {
+    vi.mocked(hostsApi.nextWGAddress).mockResolvedValue({
+      address: "10.9.0.5", jumpEndpoint: "vpn.example.com:51820",
+    } as unknown as Awaited<ReturnType<typeof hostsApi.nextWGAddress>>);
+    useAuthStore.setState({ accessToken: "eyJ-session-token" });
+  });
+
+  function pickOverlay(label: RegExp) {
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: /VPN overlay/ }));
+    fireEvent.click(screen.getByRole("option", { name: label }));
+  }
+
+  it("builds the bootstrap command for the selected overlay", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /No install/ }));
+    pickOverlay(/^OpenVPN/);
+
+    const cmd = screen.getByText(/curl -fsSL/).textContent ?? "";
+    expect(cmd).toContain("overlay=openvpn");
+    expect(cmd).toContain(`/hosts/${host.id}/enroll/script`);
+  });
+
+  it("leaves the overlay out of the command when the deployment default is used", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /No install/ }));
+
+    const cmd = screen.getByText(/curl -fsSL/).textContent ?? "";
+    expect(cmd).not.toContain("overlay=");
+  });
+
+  it("asks for no host public key under a certificate overlay", () => {
+    const onPipeFinish = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <EnrollCredsDialog host={host} onClose={() => {}} onSubmit={() => {}} onPipeFinish={onPipeFinish} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /No install/ }));
+    pickOverlay(/^OpenVPN/);
+
+    // OpenVPN authenticates with the certificate embedded in the script, so there is
+    // no key printed to paste — a required field here can never be satisfied and the
+    // operator can never finish the enrollment.
+    expect(screen.queryByLabelText(/Host public key/)).not.toBeInTheDocument();
+    const finish = screen.getByRole("button", { name: /Finish enrollment/ });
+    expect(finish).toBeEnabled();
+    fireEvent.click(finish);
+    expect(onPipeFinish).toHaveBeenCalledWith("");
+  });
+
+  it("follows the deployment default when the operator leaves the dropdown alone", async () => {
+    // On an OpenVPN-by-default install, "Deployment default" IS a certificate
+    // overlay — the dialog has to resolve it the same way the backend does, or it
+    // sits there demanding a key the script never prints.
+    vi.mocked(hostsApi.nextWGAddress).mockResolvedValue({
+      address: "10.9.0.5", jumpEndpoint: "vpn.example.com:1194", overlay: "openvpn",
+    } as unknown as Awaited<ReturnType<typeof hostsApi.nextWGAddress>>);
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /No install/ }));
+
+    expect(await screen.findByText(/OpenVPN client certificate/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Host public key/)).not.toBeInTheDocument();
+    // The URL still omits the overlay: the backend resolves the default, including a
+    // per-host one this dialog can't see.
+    expect(screen.getByText(/curl -fsSL/).textContent ?? "").not.toContain("overlay=");
+  });
+
+  it("still requires the pasted key under WireGuard", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /No install/ }));
+    pickOverlay(/^WireGuard$/);
+
+    expect(screen.getByLabelText(/Host public key/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Finish enrollment/ })).toBeDisabled();
+  });
+});
