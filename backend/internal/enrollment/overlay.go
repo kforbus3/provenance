@@ -179,14 +179,3 @@ func (s *Service) releaseOverlayAddress(ctx context.Context, host *models.Host, 
 		s.gw.ForgetHostKeys(ids...)
 	}
 }
-
-// operatorAddressError explains a rejected operator-specified address. An address
-// pinned by hand for one overlay is simply out of range on the other, and the plain
-// "not in the overlay subnet" wording gave no hint that the subnet had changed
-// underneath the host.
-func (p overlayPlan) addressError(addr string) error {
-	return fmt.Errorf(
-		"overlay address %q is not in the %s overlay's subnet %s — each overlay numbers hosts from its "+
-			"own pool, so a host moving between them is renumbered; clear the address to have one assigned",
-		addr, p.Name, p.Subnet)
-}
