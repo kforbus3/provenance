@@ -60,6 +60,68 @@ func (s *Store) RecentScansForAssistant(ctx context.Context, userID uuid.UUID, i
 	return out, rows.Err()
 }
 
+// LatestComplianceScansForAssistant returns each accessible host's CURRENT
+// compliance posture: its most recent OpenSCAP scan, or a NeverScanned row when
+// the host has none.
+//
+// This is deliberately not RecentScansForAssistant with a limit. That returns the
+// newest N scans fleet-wide, so on a fleet with a nightly schedule the newest 50
+// rows can be a handful of hosts scanned repeatedly — "the latest result for each
+// host" cannot be answered from it, and a host that is silently missing looks
+// identical to a host that is fine. Rolling up per host, and keeping the hosts with
+// no scan at all, makes both cases visible. Worst-first (failed rules descending)
+// so the actionable hosts lead.
+func (s *Store) LatestComplianceScansForAssistant(ctx context.Context, userID uuid.UUID, isSuperAdmin bool) ([]models.AssistantComplianceRow, error) {
+	args := []any{}
+	sub := accessibleHostsSubquery("h.id", userID, isSuperAdmin, &args)
+	// DISTINCT ON picks the newest scan per host; the LEFT JOIN keeps hosts that have
+	// never been scanned. Scans still pending/running are included so "the scan is
+	// stuck" is answerable rather than looking like no scan at all.
+	sql := `SELECT h.hostname, sc.id, COALESCE(NULLIF(sc.profile_title,''), sc.profile, ''),
+			COALESCE(sc.benchmark,''), COALESCE(sc.status,''), sc.score,
+			COALESCE(sc.pass_count,0), COALESCE(sc.fail_count,0), COALESCE(sc.other_count,0),
+			COALESCE(sc.total_rules,0), COALESCE(sc.error,''), COALESCE(sc.scheduled,false),
+			sc.finished_at, sc.created_at
+		FROM hosts h
+		LEFT JOIN LATERAL (
+			SELECT * FROM host_scans s2 WHERE s2.host_id = h.id
+			ORDER BY s2.created_at DESC LIMIT 1
+		) sc ON true
+		WHERE 1=1` + sub + `
+		ORDER BY sc.fail_count DESC NULLS LAST, sc.score ASC NULLS FIRST, h.hostname`
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.AssistantComplianceRow{}
+	for rows.Next() {
+		var r models.AssistantComplianceRow
+		var id *uuid.UUID
+		if err := rows.Scan(&r.Hostname, &id, &r.Profile, &r.Benchmark, &r.Status, &r.Score,
+			&r.PassCount, &r.FailCount, &r.OtherCount, &r.TotalRules, &r.Error, &r.Scheduled,
+			&r.FinishedAt, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.ScanID = id
+		r.NeverScanned = id == nil
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// LatestScanIDForHost returns the id of a host's most recent COMPLETED compliance
+// scan, for pulling its failed rules. Access-scoped like every assistant query.
+func (s *Store) LatestScanIDForHost(ctx context.Context, userID uuid.UUID, isSuperAdmin bool, hostname string) (uuid.UUID, error) {
+	args := []any{hostname}
+	sub := accessibleHostsSubquery("sc.host_id", userID, isSuperAdmin, &args)
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT sc.id FROM host_scans sc JOIN hosts h ON h.id=sc.host_id
+		WHERE h.hostname=$1 AND sc.status='completed'`+sub+`
+		ORDER BY sc.created_at DESC LIMIT 1`, args...).Scan(&id)
+	return id, err
+}
+
 // LatestVulnScansForAssistant returns the most recent completed vulnerability
 // scan for every accessible host that has one — the fleet CVE roll-up, ordered
 // worst-first. Mirrors LatestVulnScans but scoped to the caller's hosts.

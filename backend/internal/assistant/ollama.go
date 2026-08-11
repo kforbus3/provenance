@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -43,12 +44,8 @@ func (c *ollamaClient) listModels(ctx context.Context) ([]string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ollama tags: HTTP %d", resp.StatusCode)
 	}
-	var body struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	body, err := decodeTags(resp.Body)
+	if err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(body.Models))
@@ -56,6 +53,54 @@ func (c *ollamaClient) listModels(ctx context.Context) ([]string, error) {
 		names = append(names, m.Name)
 	}
 	return names, nil
+}
+
+// tagsResponse is the subset of /api/tags we read. ContextLength is the model's
+// trained window; it bounds how much of our prompt can actually be attended to.
+type tagsResponse struct {
+	Models []struct {
+		Name    string `json:"name"`
+		Details struct {
+			ContextLength int `json:"context_length"`
+		} `json:"details"`
+	} `json:"models"`
+}
+
+func decodeTags(r io.Reader) (tagsResponse, error) {
+	var body tagsResponse
+	err := json.NewDecoder(r).Decode(&body)
+	return body, err
+}
+
+// modelContextLength returns the trained context length Ollama reports for a model,
+// or 0 when it is unknown (older Ollama builds omit it). Used to warn the operator
+// when the configured window exceeds what the model was trained for.
+func (c *ollamaClient) modelContextLength(ctx context.Context, model string) int {
+	if err := ssrf.ValidateURL(c.url); err != nil {
+		return 0
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/api/tags", nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	body, err := decodeTags(resp.Body)
+	if err != nil {
+		return 0
+	}
+	for _, m := range body.Models {
+		if m.Name == model {
+			return m.Details.ContextLength
+		}
+	}
+	return 0
 }
 
 type chatMessage struct {
@@ -91,6 +136,35 @@ type chatRequest struct {
 	Options  map[string]any `json:"options,omitempty"` // Ollama sampling options (see deterministicOptions)
 }
 
+const (
+	// defaultNumCtx is the context window requested from Ollama when the operator
+	// has not set one. It MUST be large enough to hold the system prompt + every
+	// tool schema (~9k tokens on its own) plus the conversation and the tool
+	// results, or Ollama silently drops the front of the prompt — see numCtx.
+	defaultNumCtx = 32768
+	// minNumCtx is the floor an operator-supplied value is raised to. Below this the
+	// system prompt cannot survive alongside the tool schemas.
+	minNumCtx = 16384
+)
+
+// numCtx resolves the context window to request. This is not a tuning knob — it is
+// a correctness fix. Ollama defaults num_ctx to 4096 and, when the rendered prompt
+// exceeds it, silently discards the OLDEST tokens: the system prompt goes first.
+// The assistant's system prompt plus its tool schemas are ~9k tokens before a single
+// row of data, so on the default window the model was answering with NO tool-choice
+// guidance, no answer-scope rules, and no follow-up rules at all — the cause of
+// "security scan" routing to CVEs, "active right now" routing to session history, and
+// the chatty "I'd be happy to help… which hostname?" preamble the rules forbid.
+func numCtx(configured int) int {
+	if configured <= 0 {
+		return defaultNumCtx
+	}
+	if configured < minNumCtx {
+		return minNumCtx
+	}
+	return configured
+}
+
 // deterministicOptions makes the assistant behave like a precise sysadmin tool rather
 // than a chatbot: a low temperature + low top_p keep tool selection and answers STABLE
 // (the same or a reworded question routes to the same tool and yields the same answer),
@@ -98,11 +172,14 @@ type chatRequest struct {
 // makes a given request reproducible. Ollama's default (temp 0.8) is tuned for open-ended
 // chat and is the main cause of phrasing-dependent, over-eager answers. Not exactly 0:
 // some local models degrade into repetition at 0, so a small epsilon is safer.
-func deterministicOptions() map[string]any {
+// ctx is the resolved context window (see numCtx); it is sent on EVERY call, because a
+// single request made without it loses the whole system prompt.
+func deterministicOptions(ctx int) map[string]any {
 	return map[string]any{
 		"temperature": 0.1,
 		"top_p":       0.9,
 		"seed":        42,
+		"num_ctx":     numCtx(ctx),
 	}
 }
 

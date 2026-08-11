@@ -7,6 +7,66 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.6.0 — Ask was answering with no instructions at all — 2026-08-11
+
+Asked for "the latest security scan result for each host", Ask replied with a chatty
+preamble, asked which host, and then produced *vulnerability* counts. Told "I want the
+security scans, not the vulnerability scans", it answered that it had no tool for
+OpenSCAP results — while `recent_scans` sat in its tool list.
+
+None of that was the model. Ollama defaults `num_ctx` to **4096** tokens and does not
+error when a prompt exceeds it — it silently discards the oldest tokens. Ask's system
+prompt plus its tool schemas are ~9,200 tokens, so on every single request the *entire*
+system prompt was thrown away before the model saw it: no tool-selection guidance, no
+"answer only what was asked", no follow-up rules. Measured against the live model, the
+same question routes to the CVE tool at 4096 and to the scan tool at 32768.
+
+- **Fleet now always sends an explicit `num_ctx`** (default 32768, floored at 16384,
+  configurable as `numCtx` in the `assistant` setting and in **Settings → AI
+  assistant**). `GET /assistant/status` reports the effective `contextWindow`, the
+  `promptFloorTokens` the instructions cost, and warns when the selected model's
+  trained context is shorter than what Fleet requests. A test fails the build if the
+  prompt and tool schemas grow past half the default window.
+- **Tool results are capped before they reach the model** (~24 KB, largest list
+  trimmed, with the true total and an explicit "N of M" note). `audit_log` alone asks
+  for 500 rows; an oversized result re-created the same truncation mid-conversation.
+  The table shown to the user still carries every row.
+
+With the instructions restored, the coverage gaps behind the rest of that exchange are
+closed:
+
+- **`compliance_scans`** — the latest OpenSCAP scan *per host*, with profile, score,
+  pass/fail counts, and an explicit marker for hosts that have **never been scanned**.
+  `recent_scans` is a recency-capped log and could omit hosts entirely; a host nobody
+  has scanned is a finding, not an absence. The fleet-wide answer is built in code, so
+  the list is never truncated or miscounted.
+- **`scan_findings`** — the individual benchmark rules a host is failing, worst first,
+  flagging rules whose remediation could sever Fleet's own access to that host.
+- **"Security scan" is disambiguated deterministically.** It routes to compliance, says
+  which kind it reported, and a correction ("not the vulnerability scans") now switches
+  datasets instead of repeating the mistake.
+- **`access_control`** — groups and their hosts, roles and their permissions, service
+  accounts and API tokens, and access reviews.
+- **`expiring_credentials`** — API tokens, vault credentials, passwords, CA keys and
+  SSH certificates that are expired, expiring, stale or overdue for rotation.
+- **`platform_status` gained** federation site link state and database replication
+  role/lag; **`security_events` gained** behavioural (UEBA) anomalies.
+- **"I have no tool for that" is now generated from the tool set**, not hand-written —
+  the old sentence had already drifted and omitted compliance scans, which is exactly
+  what got denied. A test fails if a tool has no catalogue entry, or is offered to the
+  model without a dispatch case (which returned `unknown tool`).
+- **Fixed a latent host-extraction bug**: "results for **the** security scans" parsed
+  `the` as a hostname, so the tool answered "nothing found for host 'the'" — a false
+  negative that reads exactly like a real empty result. Fleet-wide phrasings ("for each
+  host") no longer collapse to a single host.
+
+**Deploy note.** A 32k context window needs more VRAM for the KV cache than the 4096
+Ollama was quietly using. If your Ollama host is tight, set a smaller `numCtx` in
+**Settings → AI assistant** — but note that below ~16k the system prompt cannot fit
+alongside the tool schemas, which is why that is the floor.
+
+---
+
 ## v1.5.2 — A torn-down host cannot come back — 2026-08-11
 
 v1.5.1 brought the tunnel down but left a working way back onto it. On a certificate

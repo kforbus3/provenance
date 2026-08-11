@@ -882,6 +882,30 @@ type AssistantScanRow struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 }
 
+// AssistantComplianceRow is a host's CURRENT compliance posture: its most recent
+// OpenSCAP scan, or a NeverScanned marker when the host has none. Distinct from
+// AssistantScanRow, which is one entry of the flat recency list — this is the
+// per-host roll-up the "latest scan for each host" question actually needs, and a
+// host with no scan at all is a finding in its own right, so it is carried here
+// rather than silently omitted.
+type AssistantComplianceRow struct {
+	ScanID       *uuid.UUID `json:"scanId,omitempty"`
+	Hostname     string     `json:"hostname"`
+	NeverScanned bool       `json:"neverScanned,omitempty"`
+	Profile      string     `json:"profile,omitempty"`
+	Benchmark    string     `json:"benchmark,omitempty"`
+	Status       string     `json:"status,omitempty"`
+	Score        *float64   `json:"score,omitempty"`
+	PassCount    int        `json:"passCount"`
+	FailCount    int        `json:"failCount"`
+	OtherCount   int        `json:"otherCount"`
+	TotalRules   int        `json:"totalRules"`
+	Error        string     `json:"error,omitempty"`
+	Scheduled    bool       `json:"scheduled"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt    *time.Time `json:"createdAt,omitempty"`
+}
+
 // AssistantPlaybookRunRow is a recent playbook run surfaced to the AI assistant.
 type AssistantPlaybookRunRow struct {
 	Playbook   string     `json:"playbook"`

@@ -32,7 +32,55 @@ var (
 	// An imperative that means "run a scan", so a vulnerability READ fast-path stands
 	// down and lets the action/model path propose a scan instead.
 	scanVerbRE = regexp.MustCompile(`(?i)\b(?:run|start|kick|initiate|perform|launch|trigger|do)\b[^.?!]*\bscan\b`)
+	// A fleet-wide qualifier ("for each host", "per host", "every host", "all hosts",
+	// "across the fleet"). It vetoes the "on <host>" host extraction: in "the latest
+	// scan for each host", "each" is what follows "for", and narrowing to one host is
+	// the exact failure the user hit.
+	eachHostRE = regexp.MustCompile(`(?i)\b(?:each|every|per|all)\s+(?:host|machine|server|system|box|node)s?\b|\bacross\s+the\s+fleet\b|\bfleet-?wide\b`)
+	// "which/what hosts failed …" — the subject that FAILED is the hosts, not a job,
+	// so this is compliance posture rather than the failed-run history.
+	hostsFailedRE = regexp.MustCompile(`(?i)\b(?:which|what|any)\s+(?:host|machine|server|system|box|node)s?\b[^.?!]*\bfail`)
+	// "not the vulnerability scans" / "rather than CVEs" / "other than vulnerabilities"
+	// — the CVE word appears in order to EXCLUDE it. Kept tight (the negation has to
+	// be within a few words) so "no vulnerabilities were found" is not misread.
+	vulnNegatedRE = regexp.MustCompile(`(?i)\b(?:not|rather\s+than|instead\s+of|other\s+than|besides|except|excluding|aside\s+from)\b(?:\s+\w+){0,3}\s+(?:cves?|vulnerabilit\w*|vulnerable)\b`)
+	// The scan/run/job itself is the thing that failed ("any failed scans", "the scan
+	// failed") — job history, as opposed to "what failed ON <host>", which is its rules.
+	scanJobFailedRE = regexp.MustCompile(`(?i)\b(?:failed|unsuccessful)\s+(?:scans?|runs?|jobs?|playbooks?)\b|\b(?:scans?|runs?|jobs?|playbooks?)\s+(?:that\s+)?(?:have\s+|has\s+|had\s+)?(?:fail\w*|error\w*)`)
+	// The single token immediately before "group"/"role" — "the prod group",
+	// "Operator role", "group 'prod'". Deliberately ONE token: a looser pattern
+	// swallowed the whole question ("which hosts are in the prod") and searched for a
+	// group by that name, which finds nothing and reads as "there is no such group".
+	namedGroupRE = regexp.MustCompile(`(?i)["']?([a-z0-9][a-z0-9._-]*)["']?\s+(?:group|role)s?\b`)
+	// Words that follow "on"/"for" in ordinary English and are never hostnames. Without
+	// this, "results for the security scans" extracts a host named "the" and the tool
+	// answers "no data for host 'the'" — a false negative that reads like a real answer.
+	hostStopWords = map[string]bool{
+		"the": true, "a": true, "an": true, "all": true, "each": true, "every": true,
+		"any": true, "some": true, "my": true, "our": true, "this": true, "that": true,
+		"these": true, "those": true, "it": true, "them": true, "which": true, "what": true,
+		"host": true, "hosts": true, "server": true, "servers": true, "machine": true,
+		"machines": true, "node": true, "nodes": true, "system": true, "systems": true,
+		"fleet": true, "everything": true, "me": true, "us": true, "both": true, "either": true,
+	}
 )
+
+// hostFromClause pulls a hostname out of an "on <x>" / "for <x>" clause, rejecting
+// ordinary English words that merely follow those prepositions. Every fast path that
+// narrows a fleet-wide query to one host goes through here: a bogus host silently
+// turns a real answer into "nothing found for <word>", which reads exactly like a
+// legitimate empty result.
+func hostFromClause(re *regexp.Regexp, lq string) string {
+	m := re.FindStringSubmatch(lq)
+	if m == nil {
+		return ""
+	}
+	h := strings.ToLower(strings.Trim(m[1], ".,;:'\"?!"))
+	if h == "" || hostStopWords[h] {
+		return ""
+	}
+	return h
+}
 
 // fastPathTool returns the tool + JSON args to run directly for an unambiguous
 // question, or ok=false to defer to the model.
@@ -53,8 +101,8 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	if updatesIntent(lq) {
 		host := ""
 		lqTrim := trailingPunct.ReplaceAllString(lq, "")
-		if hm := onHostRE.FindStringSubmatch(lqTrim); hm != nil && !updateWordRE.MatchString(hm[1]) {
-			host = hm[1]
+		if h := hostFromClause(onHostRE, lqTrim); h != "" && !updateWordRE.MatchString(h) {
+			host = h
 		}
 		a, _ := json.Marshal(hostUpdatesArgs{Hostname: host})
 		return "host_updates", a, true
@@ -66,9 +114,7 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	if availabilityIntent(lq) {
 		host := ""
 		lqTrim := trailingPunct.ReplaceAllString(lq, "")
-		if hm := onHostRE.FindStringSubmatch(lqTrim); hm != nil {
-			host = hm[1]
-		}
+		host = hostFromClause(onHostRE, lqTrim)
 		a, _ := json.Marshal(hostAvailabilityArgs{Hostname: host, Hours: hoursFromText(lq)})
 		return "host_availability", a, true
 	}
@@ -125,6 +171,29 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "security_events", a, true
 	}
 
+	// 5a2) compliance / OpenSCAP benchmark questions -> compliance_scans or
+	// scan_findings. Pinned because "security scan" is the phrase operators actually
+	// use and it collides head-on with the CVE tool: on a small model it routed to
+	// `vulnerabilities` and then, when corrected, claimed Fleet had no compliance data
+	// at all. Ordered BEFORE the vulnerability intent so an explicitly compliance-
+	// flavoured question ("benchmark", "CIS", "failed rules") wins.
+	if !scanVerbRE.MatchString(lq) {
+		if host, sev, ok := scanFindingsIntent(lq); ok {
+			a, _ := json.Marshal(scanFindingsArgs{Hostname: host, Severity: sev})
+			return "scan_findings", a, true
+		}
+		if failedOnly, ok := complianceIntent(lq); ok {
+			host := ""
+			// A per-host history question names one host; "for each host" must NOT be
+			// narrowed to one, so the host is only taken from an explicit on/for clause.
+			if !eachHostRE.MatchString(lq) {
+				host = hostFromClause(onHostRE, trailingPunct.ReplaceAllString(lq, ""))
+			}
+			a, _ := json.Marshal(complianceArgs{Hostname: host, FailedOnly: failedOnly})
+			return "compliance_scans", a, true
+		}
+	}
+
 	// 5b) "failed scans / playbook runs / jobs" -> deterministically pull BOTH the scan
 	// and playbook-run history (a synthetic combined tool). The model otherwise
 	// mis-routes this (observed: hallucinating a disk answer from a prompt example, or
@@ -146,8 +215,8 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	// request, which the action path handles).
 	if !scanVerbRE.MatchString(lq) && vulnReadIntent(lq) {
 		host := ""
-		if hm := hostAnywhereRE.FindStringSubmatch(lq); hm != nil {
-			host = hm[1]
+		if !eachHostRE.MatchString(lq) {
+			host = hostFromClause(hostAnywhereRE, lq)
 		}
 		sev := ""
 		if strings.Contains(lq, "critical") {
@@ -157,6 +226,29 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		}
 		a, _ := json.Marshal(vulnArgs{Hostname: host, MinSeverity: sev})
 		return "vulnerabilities", a, true
+	}
+
+	// 6b) "what is expiring" -> expiring_credentials. Pinned because the words that
+	// carry this question (expire, rotate, stale) also appear in host-certificate and
+	// update questions, and the model split them inconsistently.
+	if expiringIntent(lq) {
+		// Only honour an EXPLICIT horizon; daysFromText's 7-day fallback is tuned for
+		// capacity questions and would silently hide next month's expiries.
+		days := 0
+		if mentionsPeriod(lq) {
+			days = daysFromText(lq)
+		}
+		a, _ := json.Marshal(expiringArgs{Days: days})
+		return "expiring_credentials", a, true
+	}
+
+	// 6c) groups / roles / service accounts / access reviews -> access_control with the
+	// topic pinned. The topic enum is exactly the kind of argument a small model fills
+	// in plausibly but wrongly ("topic": "hosts"), which returns an unknown-topic error
+	// the user reads as "Fleet has no groups".
+	if topic, name, ok := accessControlIntent(lq); ok {
+		a, _ := json.Marshal(accessControlArgs{Topic: topic, Name: name})
+		return "access_control", a, true
 	}
 
 	// 7) accounts / roles / MFA questions -> list_users (but not "who is connected").
@@ -175,8 +267,8 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	// from") -> host_detail, whose diskBreakdown names the driving mount. Only when a
 	// host is identifiable.
 	if diskProvenanceIntent(lq) {
-		if hm := hostAnywhereRE.FindStringSubmatch(lq); hm != nil {
-			a, _ := json.Marshal(hostDetailArgs{Hostname: hm[1]})
+		if h := hostFromClause(hostAnywhereRE, lq); h != "" {
+			a, _ := json.Marshal(hostDetailArgs{Hostname: h})
 			return "host_detail", a, true
 		}
 	}
@@ -319,7 +411,199 @@ func vulnReadIntent(lq string) bool {
 	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
 		return false
 	}
+	// "…not the vulnerability scans" names CVEs only to exclude them.
+	if vulnNegatedRE.MatchString(lq) {
+		return false
+	}
+	return mentionsVuln(lq)
+}
+
+// mentionsVuln reports whether a question uses CVE/vulnerability vocabulary at all.
+func mentionsVuln(lq string) bool {
 	return strings.Contains(lq, "cve") || strings.Contains(lq, "vulnerabilit") || strings.Contains(lq, "vulnerable")
+}
+
+// complianceIntent matches OpenSCAP compliance/benchmark questions and reports
+// whether the question asks only about hosts that are FAILING.
+//
+// The hard case is the bare phrase "security scan". Operators mean the OpenSCAP
+// benchmark by it, but the word "security" also appears in "security updates" (a
+// package question) and sits next to the CVE tool, so it is only accepted here when
+// paired with a scan/result/score word AND not claimed by a more specific intent.
+// Explicit compliance vocabulary (CIS, STIG, benchmark, SCAP, hardening, compliance)
+// matches on its own.
+func complianceIntent(lq string) (failedOnly, ok bool) {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false, false
+	}
+	// A CVE question is never a compliance question, even when it says "scan" — UNLESS
+	// the CVE word is being ruled OUT. "the security scans, not the vulnerability
+	// scans" is a correction of a wrong answer, and treating its "vulnerability" as a
+	// CVE request repeats the very mistake the user is objecting to.
+	if mentionsVuln(lq) && !vulnNegatedRE.MatchString(lq) {
+		return false, false
+	}
+	// "security updates"/"patches" are package questions handled by host_updates.
+	if updatesIntent(lq) {
+		return false, false
+	}
+	// "any failed scans", "did the scan fail" — the scan JOB failed, which is run
+	// history, not compliance posture. Explicit compliance vocabulary still wins, so
+	// "which hosts failed their compliance scan" stays here.
+	if scanJobFailedRE.MatchString(lq) && !explicitComplianceWord(lq) {
+		return false, false
+	}
+	// "which hosts have never been scanned" is a compliance COVERAGE question, and the
+	// per-host roll-up is the only tool that can see a host with no scan at all.
+	if strings.Contains(lq, "never been scanned") || strings.Contains(lq, "never scanned") ||
+		strings.Contains(lq, "not been scanned") || strings.Contains(lq, "unscanned") {
+		return false, true
+	}
+	explicit := explicitComplianceWord(lq)
+	// "security scan" / "scan result" / "scan score" — the operator's own phrasing.
+	scanWord := strings.Contains(lq, "scan")
+	resultWord := false
+	for _, t := range []string{"result", "score", "posture", "passed", "failed", "failing", "pass/fail", "rules"} {
+		if strings.Contains(lq, t) {
+			resultWord = true
+			break
+		}
+	}
+	securityScan := scanWord && (strings.Contains(lq, "security") || resultWord)
+	if !explicit && !securityScan {
+		return false, false
+	}
+	// "which hosts FAILED their scan" wants only the failing ones.
+	for _, t := range []string{"fail", "failing", "not compliant", "non-compliant", "noncompliant", "worst"} {
+		if strings.Contains(lq, t) {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// explicitComplianceWord reports whether the question uses unambiguous compliance /
+// benchmark vocabulary, as opposed to the bare word "scan" (which Fleet uses for
+// compliance scans, CVE scans and the scan job log alike).
+func explicitComplianceWord(lq string) bool {
+	for _, t := range []string{
+		"compliance", "openscap", "scap", "benchmark", "cis ", " cis", "stig",
+		"hardening", "harden", "xccdf",
+	} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanFindingsIntent matches "what/which rules failed on <host>" — the per-host
+// drill-down into a compliance scan — and requires an identifiable host, since the
+// failed-rule list only exists per host.
+func scanFindingsIntent(lq string) (host, severity string, ok bool) {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return "", "", false
+	}
+	if mentionsVuln(lq) && !vulnNegatedRE.MatchString(lq) {
+		return "", "", false
+	}
+	// "any failed scans", "did the scan fail" — the thing that failed is the scan JOB,
+	// which is run history (recent_activity_failures), not a list of failed rules.
+	if scanJobFailedRE.MatchString(lq) {
+		return "", "", false
+	}
+	ruleWord := strings.Contains(lq, "rule") || strings.Contains(lq, "check") || strings.Contains(lq, "control")
+	failWord := strings.Contains(lq, "fail")
+	scanWord := strings.Contains(lq, "scan") || strings.Contains(lq, "compliance") ||
+		strings.Contains(lq, "benchmark") || strings.Contains(lq, "stig") || strings.Contains(lq, "cis") ||
+		strings.Contains(lq, "scap")
+	// Both "which rules failed" and "what failed on <host>'s scan" should land here.
+	if !failWord || !(ruleWord || scanWord) {
+		return "", "", false
+	}
+	host = hostFromClause(hostAnywhereRE, lq)
+	if host == "" || eachHostRE.MatchString(lq) {
+		return "", "", false // fleet-wide -> compliance_scans, which covers every host
+	}
+	sev := ""
+	if strings.Contains(lq, "high severity") || strings.Contains(lq, "high-severity") {
+		sev = "high"
+	}
+	return host, sev, true
+}
+
+// expiringIntent matches "what is expiring / needs rotating" questions about Fleet's
+// own credentials. It stands down for host-level package and certificate-issuance
+// questions, which are different tools entirely.
+func expiringIntent(lq string) bool {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return false
+	}
+	if updatesIntent(lq) || mentionsVuln(lq) {
+		return false // package updates / CVEs, not credential lifecycle
+	}
+	subject := false
+	for _, t := range []string{
+		"token", "credential", "password", "certificate", "cert ", "certs",
+		"secret", "ca key", "ca-key", "key",
+	} {
+		if strings.Contains(lq, t) {
+			subject = true
+			break
+		}
+	}
+	verb := false
+	for _, t := range []string{"expir", "rotat", "stale", "aging", "ageing", "about to run out", "renew"} {
+		if strings.Contains(lq, t) {
+			verb = true
+			break
+		}
+	}
+	// "what's expiring" with no explicit subject is still this question — nothing else
+	// in Fleet expires — so the verb alone is enough when no other subject is named.
+	return verb && (subject || !strings.Contains(lq, "host"))
+}
+
+// accessControlIntent maps a question to an access_control topic (and an optional
+// group/role name). Returns ok=false when the question is not about these records.
+func accessControlIntent(lq string) (topic, name string, ok bool) {
+	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
+		return "", "", false
+	}
+	switch {
+	case strings.Contains(lq, "access review") || strings.Contains(lq, "access-review") ||
+		strings.Contains(lq, "certification campaign") || strings.Contains(lq, "recertif"):
+		return "access_reviews", "", true
+	case strings.Contains(lq, "service account") || strings.Contains(lq, "service-account") ||
+		strings.Contains(lq, "api token") || strings.Contains(lq, "api-token") ||
+		strings.Contains(lq, "machine account"):
+		return "service_accounts", "", true
+	case strings.Contains(lq, "role"):
+		// "what role does bob have" is an ACCOUNT question -> list_users.
+		if strings.Contains(lq, "does ") || strings.Contains(lq, "user") || strings.Contains(lq, "account") {
+			return "", "", false
+		}
+		return "roles", groupOrRoleName(lq), true
+	case strings.Contains(lq, "group"):
+		// Group MEMBERSHIP of users is an account question; host membership is ours.
+		if strings.Contains(lq, "which groups is") || strings.Contains(lq, "what groups is") {
+			return "", "", false
+		}
+		return "groups", groupOrRoleName(lq), true
+	}
+	return "", "", false
+}
+
+// groupOrRoleName pulls a quoted or "in the X group" name out of the question.
+// Empty means "list them all", which is the safe default.
+func groupOrRoleName(lq string) string {
+	if m := namedGroupRE.FindStringSubmatch(lq); m != nil {
+		n := strings.Trim(m[1], `"'`)
+		if !hostStopWords[n] {
+			return n
+		}
+	}
+	return ""
 }
 
 // usersIntent matches account/role/MFA questions and reports whether it asks
@@ -400,6 +684,18 @@ func capacityIntent(lq string) (disk, memory, ok bool) {
 }
 
 // daysFromText maps a coarse horizon phrase to a day window for capacity answers.
+// mentionsPeriod reports whether the question names a time horizon at all, so a
+// caller can distinguish "in the next week" from an unqualified question rather than
+// inheriting daysFromText's fallback.
+func mentionsPeriod(lq string) bool {
+	for _, t := range []string{"today", "tomorrow", "week", "month", "day", "year", "hour"} {
+		if strings.Contains(lq, t) {
+			return true
+		}
+	}
+	return false
+}
+
 func daysFromText(lq string) int {
 	switch {
 	case strings.Contains(lq, "today"), strings.Contains(lq, "tomorrow"), strings.Contains(lq, "24 h"), strings.Contains(lq, "24h"):
@@ -473,11 +769,11 @@ func metricTrendIntent(lq string) (host string, metrics []string, ok bool) {
 	if len(metrics) == 0 {
 		return "", nil, false // "trend of what?" — defer to the model
 	}
-	m := hostAnywhereRE.FindStringSubmatch(lq)
-	if m == nil {
+	host = hostFromClause(hostAnywhereRE, lq)
+	if host == "" {
 		return "", nil, false
 	}
-	return strings.TrimRight(m[1], ".?!,"), metrics, true
+	return strings.TrimRight(host, ".?!,"), metrics, true
 }
 
 // failedActivityIntent recognizes "any failed scans / playbook runs / jobs" (not failed
@@ -490,6 +786,17 @@ func failedActivityIntent(lq string) bool {
 	}
 	if strings.Contains(lq, "login") || strings.Contains(lq, "log in") || strings.Contains(lq, "sign") {
 		return false // that's security_events
+	}
+	// "Which HOSTS failed their scan" is about failing benchmark RULES, not about scan
+	// jobs that errored out. Same word, opposite dataset: this tool would answer "no
+	// failures" for a fleet where every host is failing dozens of compliance rules.
+	if hostsFailedRE.MatchString(lq) {
+		return false
+	}
+	for _, t := range []string{"compliance", "benchmark", "openscap", "scap", "stig", "hardening", "rule"} {
+		if strings.Contains(lq, t) {
+			return false // compliance posture -> compliance_scans / scan_findings
+		}
 	}
 	return strings.Contains(lq, "scan") || strings.Contains(lq, "playbook") ||
 		strings.Contains(lq, "job") || strings.Contains(lq, "automation") || strings.Contains(lq, "run")

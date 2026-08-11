@@ -14,12 +14,20 @@ func TestFastPathDispatchCoverage(t *testing.T) {
 		"any failed scans or playbook runs recently", "what changed in the audit log today",
 		"what CVEs are on nas", "which accounts have no MFA", "which hosts have less than 80% disk free",
 		"who last connected to nas", "what runs on a schedule", "disk usage trend on nas over the past week",
+		"give me the latest security scan result for each host", "which hosts failed their compliance scan",
+		"what is the CIS benchmark score for nas", "which rules failed on nas's scan",
+		"which hosts have never been scanned", "what groups are there",
+		"which hosts are in the prod group", "what can the Operator role do",
+		"what api tokens exist", "is there an access review open",
+		"what is about to expire", "which credentials need rotating",
 	}
 	handled := map[string]bool{
 		"host_updates": true, "search_commands": true, "host_availability": true,
 		"capacity_outlook": true, "security_events": true, "vulnerabilities": true, "list_users": true,
 		"query_hosts": true, "host_detail": true, "list_schedules": true, "fleet_insights": true,
 		"session_history": true, "recent_activity_failures": true, "audit_log": true, "host_metric_history": true,
+		"compliance_scans": true, "scan_findings": true,
+		"access_control": true, "expiring_credentials": true,
 	}
 	for _, q := range probes {
 		if name, _, ok := fastPathTool(q); ok && !handled[name] {

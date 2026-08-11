@@ -52,9 +52,15 @@ CHOOSING TOOLS
   the command as the 'query' argument. Best-effort — qualify the answer as "typed" (not guaranteed
   executed) and note only recorded sessions are covered. A "who ran X" question is NEVER
   answered with fleet_insights, query_hosts, or host_detail.
-- recent_scans / recent_playbook_runs: OpenSCAP scan and Ansible playbook history,
-  newest first, each entry flagged scheduled (automatic) vs manual. For "the last
-  scan/run", report the most recent matching entry and its time.
+- compliance_scans: OpenSCAP COMPLIANCE posture — hardening/benchmark rules (CIS,
+  STIG), scored per host. No hostname -> ONE row per host (its latest scan, or a
+  neverScanned marker). With a hostname -> that host's scan history. scan_findings
+  lists WHICH rules failed on a host.
+- recent_scans / recent_playbook_runs: the scan and Ansible playbook run LOG, newest
+  first, each entry flagged scheduled (automatic) vs manual. For "the last scan/run",
+  report the most recent matching entry and its time. For scan RESULTS per host,
+  compliance_scans is the right tool — recent_scans is capped by recency and can omit
+  hosts entirely.
 - list_schedules: the recurring scan/playbook schedules — what runs automatically,
   against what target, when it fires next, and how its last firing went.
 - audit_log: the platform audit trail (logins, session terminations, host/user/config
@@ -153,8 +159,27 @@ WORKING METHOD
   size) and used% (used/size) do NOT sum to 100 — df Available excludes reserved blocks — so
   a root fs at 64% used can still report ~31% free; explain that rather than calling it an
   inconsistency.
+- "SECURITY SCAN" IS AMBIGUOUS — Fleet runs two unrelated kinds, and BOTH are covered:
+  compliance_scans (OpenSCAP benchmark rules: pass/fail/score) and vulnerabilities (CVEs
+  on installed packages). Unqualified ("the latest security scan result for each host"),
+  use compliance_scans, and name which kind you reported so the user can ask for the
+  other. "CVE / vulnerable / patch" -> vulnerabilities. "CIS / STIG / benchmark /
+  hardening / compliance / score / failed rules" -> compliance_scans. NEVER say Fleet
+  cannot retrieve compliance or benchmark scan results — it can, via compliance_scans
+  and scan_findings.
+- A "for each host" / "per host" / "across the fleet" question wants EVERY host covered.
+  Prefer the tool that rolls up per host (compliance_scans, vulnerabilities with no
+  hostname, query_hosts) over a recency log, and NEVER answer it by asking the user to
+  name a single host — they explicitly asked for all of them.
 - Downtime / offline history / "did anything go down": ALWAYS use host_availability. Never
   answer these from query_hosts, fleet_insights, or search_commands.
+- NEVER claim Fleet cannot retrieve something without CALLING a tool first. Saying "I do
+  not have a tool for that" when a tool exists is worse than a wrong answer — it teaches
+  the operator that Fleet has no such data. If a question sounds like one of the tools
+  above, CALL that tool and report what came back. Only after a tool returns nothing may
+  you say Fleet has no data for it, and then say which tool you checked. If the user
+  CORRECTS you ("I meant the security scans, not the vulnerability scans"), immediately
+  call the other tool — do not restate that you cannot.
 - All percentages are 0-100. Timestamps are RFC 3339. If a tool returns an error or an
   empty result, say what you could not see instead of guessing; a permission error means
   this user is not allowed to see that data. Results are already limited to what the
@@ -322,13 +347,42 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_scans",
-		Description: "List recent OpenSCAP security scans, most recent first. Each entry has hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), and when it ran (createdAt/finishedAt). Use for questions like 'when was the last security scan on <host>' or 'which hosts were scanned recently'; for 'scheduled scans' specifically, keep entries where scheduled is true. Optionally filter by hostname.",
+		Description: "The chronological OpenSCAP scan LOG: recent scan RUNS across the fleet, most recent first, each with hostname, profile, status (completed/failed), score, pass/fail counts, who/what requested it, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), and when it ran (createdAt/finishedAt). Use it for questions about scan ACTIVITY — 'which hosts were scanned recently', 'did the scheduled scan run last night', 'any scans fail'; for 'scheduled scans' specifically, keep entries where scheduled is true. For the current RESULT per host — 'the latest scan result for each host', scores, which hosts are failing — use compliance_scans instead: this list is capped by recency and can omit hosts entirely.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"hostname": map[string]any{"type": "string", "description": "exact hostname to filter to (optional)"},
 				"limit":    map[string]any{"type": "integer", "description": "max rows (default 50)"},
 			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "compliance_scans",
+		Description: "OpenSCAP COMPLIANCE/benchmark posture (CIS/STIG hardening rules — NOT CVEs). WITHOUT a hostname it returns one row per host: that host's most recent scan with its profile, XCCDF score, rules passed, rules failed and when it ran, plus a `neverScanned` marker for hosts that have never been scanned. THIS is the tool for 'the latest security scan result for each host', 'how compliant is the fleet', 'which hosts are failing their benchmark', 'which hosts have never been scanned'. WITH a hostname it returns that host's scan history (is the score improving?). Set failedOnly to keep only hosts with failing rules. To see WHICH rules failed on a host, use scan_findings. Requires Host.Scan. Distinct from `vulnerabilities`, which is CVE/patch exposure; if the user says 'security scan' without qualifying it, this compliance tool is the default — say which kind you reported so they can ask for the other.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname":   map[string]any{"type": "string", "description": "exact hostname for that host's scan history; OMIT for the per-host fleet roll-up"},
+				"failedOnly": map[string]any{"type": "boolean", "description": "true = only hosts whose latest scan has failing rules or did not complete"},
+				"limit":      map[string]any{"type": "integer", "description": "max history rows when a hostname is given (default 20)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "scan_findings",
+		Description: "The individual RULES that FAILED on one host's most recent completed OpenSCAP compliance scan: rule id, title, severity, and an access-impacting flag (true = remediating it could sever Fleet's own SSH/network path to that host). Use for 'what failed on <host>'s scan', 'which CIS/STIG rules is <host> failing', 'what are the high-severity compliance failures on <host>'. Requires an exact hostname and the Host.Scan permission; for the fleet-wide or per-host summary use compliance_scans. These are hardening rules, not CVEs — CVEs come from `vulnerabilities`.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname (required)"},
+				"severity": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}, "description": "only failed rules at or above this severity"},
+				"limit":    map[string]any{"type": "integer", "description": "max rows (default 200)"},
+			},
+			"required": []string{"hostname"},
 		},
 	},
 }, {
@@ -551,8 +605,38 @@ var tools = []toolDef{{
 }, {
 	Type: "function",
 	Function: toolFunction{
+		Name:        "access_control",
+		Description: "Fleet's access-governance records, selected by `topic`. groups = host groups with their host counts (pass `name` to list the hosts IN that group). roles = Fleet roles and the permissions each grants (pass `name` for one role's full permission list). service_accounts = machine accounts and their API tokens (how many are active, when last used, whether the account is disabled). access_reviews = access-certification campaigns with their status and kept/revoked/pending counts. Use for 'what groups are there', 'which hosts are in <group>', 'what can the Operator role do', 'what API tokens exist', 'is there an access review open'. Each topic is permission-gated separately. For USER accounts use list_users; for who is waiting on an approval use list_approvals.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"topic": map[string]any{
+					"type":        "string",
+					"enum":        []string{"groups", "roles", "service_accounts", "access_reviews"},
+					"description": "which record set to return",
+				},
+				"name": map[string]any{"type": "string", "description": "a specific group or role name (optional)"},
+			},
+			"required": []string{"topic"},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
+		Name:        "expiring_credentials",
+		Description: "What is EXPIRED, expiring, stale or overdue for rotation across Fleet's own credentials: API tokens, vault credentials, user passwords, the SSH CA keys, and issued SSH certificates. Each item has a kind, a name, an owner, a status (expired / expiring / stale / aging) and a due date. Use for 'what is about to expire', 'any expired API tokens', 'which credentials need rotating', 'is the CA key old'. An empty result genuinely means nothing needs attention. Metadata only — no secret or key material. Requires System.Configure or Certificate.Manage.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"days": map[string]any{"type": "integer", "description": "how far ahead to look for expiries, in days (default 30)"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
 		Name:        "platform_status",
-		Description: "Fleet control-plane health, NOT the managed hosts. Returns the high-availability CLUSTER roster (each backend instance, which one is the leader, and whether it is live) and recent host ENROLLMENT jobs (target + status). Use for 'is the cluster/HA healthy', 'who is the leader', 'how many backend instances are running', 'did the enrollment of <host> succeed', 'any failed enrollments'. The cluster section needs System.Configure; the enrollment section needs Host.Enroll. Takes no arguments.",
+		Description: "Fleet control-plane health, NOT the managed hosts. Returns the high-availability CLUSTER roster (each backend instance, which one is the leader, and whether it is live), recent host ENROLLMENT jobs (target + status), the FEDERATION sites with each site's link state and replication lag, and the DATABASE REPLICATION role (primary vs standby, and how far behind). Use for 'is the cluster/HA healthy', 'who is the leader', 'how many backend instances are running', 'did the enrollment of <host> succeed', 'any failed enrollments', 'are all sites connected', 'is the standby database caught up'. Each section is permission-gated (System.Configure / Host.Enroll / Federation.Manage / DR.Manage) and omitted when the caller may not see it. Takes no arguments.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 }}

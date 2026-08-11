@@ -55,6 +55,32 @@ BATTERY = [
     ("security", "Any failed logins this week?"),
     ("schedules", "What runs on a schedule, and when does it fire next?"),
     ("updates", "Which hosts have security updates pending?"),
+    # Compliance (OpenSCAP). "Security scan" is the operator's own phrase for these and
+    # used to be answered from the CVE tool, then denied outright ("I do not have a tool
+    # to retrieve OpenSCAP results") — the answers below must be per-host benchmark
+    # results, and must say WHICH kind of scan they are.
+    ("compliance", "Give me the latest security scan result for each host"),
+    ("compliance", "I want the results for the security scans not for the vulnerability scans"),
+    ("compliance", "Which hosts failed their compliance scan?"),
+    ("compliance", "Which hosts have never been scanned?"),
+    ("compliance", "What rules is nas failing?"),
+    ("compliance", "What is the CIS benchmark score for nas?"),
+    # The CVE tool must stay distinct from compliance, not absorb it.
+    ("vulns", "Which hosts have critical vulnerabilities?"),
+    # Governance surfaces that previously had no tool at all.
+    ("governance", "What groups are there?"),
+    ("governance", "Which hosts are in the prod group?"),
+    ("governance", "What can the Operator role do?"),
+    ("governance", "What API tokens exist and when were they last used?"),
+    ("governance", "Is there an access review open?"),
+    ("governance", "What credentials or certificates are expiring soon?"),
+    # Platform: these sections were added to platform_status.
+    ("platform", "Is the cluster healthy?"),
+    ("platform", "Are all federation sites connected?"),
+    ("platform", "Any unusual access patterns lately?"),
+    # Answer discipline: the assistant must not ask for a hostname when the question
+    # explicitly says "each host", and must not open with a chatty preamble.
+    ("discipline", "What SSH sessions are active right now?"),
 ]
 
 # Multi-turn: follow-ups must resolve references from the conversation.
@@ -63,6 +89,16 @@ MULTI_TURN = [
     "tell me about the failed scans",
     "when did the failures happen?",
     "which host had the most?",
+]
+
+# The exact exchange that motivated the compliance work: a fleet-wide question, then a
+# correction. Turn 1 must not ask which host; turn 2 must switch datasets rather than
+# claiming Fleet cannot retrieve compliance results.
+MULTI_TURN_COMPLIANCE = [
+    "Give me the latest security scan result for each host",
+    "I want the results for the security scans not for the vulnerability scans",
+    "Which of those is worst?",
+    "What rules is it failing?",
 ]
 
 
@@ -123,12 +159,13 @@ def main():
             failures += 1
 
     if args.multi_turn:
-        print("=== multi-turn (one conversation) ===", flush=True)
-        convo = ""
-        for q in MULTI_TURN:
-            res, convo = ask(token, q, convo)
-            if not show(q, res):
-                failures += 1
+        for name, thread in (("failed activity", MULTI_TURN), ("compliance correction", MULTI_TURN_COMPLIANCE)):
+            print(f"=== multi-turn: {name} (one conversation) ===", flush=True)
+            convo = ""
+            for q in thread:
+                res, convo = ask(token, q, convo)
+                if not show(q, res):
+                    failures += 1
 
     if failures:
         sys.exit(f"{failures} question(s) returned an error/empty answer")

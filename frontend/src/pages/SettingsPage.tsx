@@ -301,10 +301,11 @@ function AssistantCard({ current }: { current: unknown }) {
   // Reports where the configured URL actually points, so the card can say
   // whether the data stays on this network rather than assuming it does.
   const { data: status } = useQuery({ queryKey: ["assistant-status"], queryFn: assistantStatus });
-  const cur = (current ?? {}) as { enabled?: boolean; ollamaUrl?: string; model?: string };
+  const cur = (current ?? {}) as { enabled?: boolean; ollamaUrl?: string; model?: string; numCtx?: number };
   const [enabled, setEnabled] = useState(Boolean(cur.enabled));
   const [url, setUrl] = useState(cur.ollamaUrl ?? "");
   const [model, setModel] = useState(cur.model ?? "");
+  const [numCtx, setNumCtx] = useState(cur.numCtx ? String(cur.numCtx) : "");
   const [models, setModels] = useState<string[]>(cur.model ? [cur.model] : []);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -316,7 +317,13 @@ function AssistantCard({ current }: { current: unknown }) {
   });
 
   const save = useMutation({
-    mutationFn: () => setSetting("assistant", { enabled, ollamaUrl: url.trim(), model }),
+    mutationFn: () => setSetting("assistant", {
+      enabled, ollamaUrl: url.trim(), model,
+      // Blank = let the backend use its default. The backend also floors whatever is
+      // sent, because a window too small to hold the prompt is not a slower assistant
+      // — it is one running with its instructions silently deleted.
+      numCtx: Number(numCtx.trim()) || 0,
+    }),
     onSuccess: () => {
       setSaved(true);
       void qc.invalidateQueries({ queryKey: ["settings"] });
@@ -344,6 +351,9 @@ function AssistantCard({ current }: { current: unknown }) {
           instance on your own network if that is not what you intend.
         </Alert>
       )}
+      {status?.contextWarning && (
+        <Alert severity="warning" sx={{ mb: 1.5 }}>{status.contextWarning}</Alert>
+      )}
       {error && <Alert severity="warning" sx={{ mb: 1.5 }}>{error}</Alert>}
       <Stack spacing={2}>
         <FormControlLabel
@@ -367,6 +377,17 @@ function AssistantCard({ current }: { current: unknown }) {
         >
           {models.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
         </TextField>
+        <TextField
+          size="small" type="number" label="Context window (tokens)" value={numCtx} sx={{ maxWidth: 360 }}
+          placeholder={String(status?.contextWindow ?? 32768)}
+          onChange={(e) => { setNumCtx(e.target.value); setSaved(false); }}
+          helperText={
+            `Leave blank for the default (${status?.contextWindow ?? 32768}). The assistant's instructions and tool ` +
+            `definitions alone cost about ${status?.promptFloorTokens ?? "9,000"} tokens; Ollama does not error when a ` +
+            `prompt exceeds the window — it drops the oldest tokens, i.e. the instructions. Raise this only if you have ` +
+            `the VRAM for it.`
+          }
+        />
         <Box>
           <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
             {saved ? "Saved" : "Save"}

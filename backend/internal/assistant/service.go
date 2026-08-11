@@ -43,9 +43,16 @@ type Service struct {
 	insights        *insights.Service  // grounds the fleet_insights tool (what's-wrong / capacity)
 	metricRetention time.Duration      // caps the host_metric_history window (0 = history disabled)
 	actions         *aiaction.Registry // proposes guarded actions (propose_* tools); nil disables them
-	asks            sync.Map           // id -> *AskResult (pointer replaced atomically on completion)
-	convos          sync.Map           // conversationID -> *conversation (multi-turn memory)
+	// findings reads a compliance scan's failed rules. Injected because the parsed
+	// rules live in the scan report on disk, not in the database — nil just makes
+	// scan_findings say the detail is unavailable.
+	findings ScanFindingsFunc
+	asks     sync.Map // id -> *AskResult (pointer replaced atomically on completion)
+	convos   sync.Map // conversationID -> *conversation (multi-turn memory)
 }
+
+// ScanFindingsFunc returns the failed rules of a compliance scan (scan.Service.Findings).
+type ScanFindingsFunc func(ctx context.Context, scanID uuid.UUID) ([]models.ScanFinding, error)
 
 // conversation is the trimmed running memory for one Ask thread: alternating
 // user/assistant messages (no system prompt, no per-turn tool traffic), so a
@@ -57,8 +64,8 @@ type conversation struct {
 	updated time.Time
 }
 
-func New(st *store.Store, log *slog.Logger, ins *insights.Service, metricRetention time.Duration, actions *aiaction.Registry) *Service {
-	return &Service{store: st, log: log, insights: ins, metricRetention: metricRetention, actions: actions}
+func New(st *store.Store, log *slog.Logger, ins *insights.Service, metricRetention time.Duration, actions *aiaction.Registry, findings ScanFindingsFunc) *Service {
+	return &Service{store: st, log: log, insights: ins, metricRetention: metricRetention, actions: actions, findings: findings}
 }
 
 // Settings is the persisted assistant configuration.
@@ -66,6 +73,12 @@ type Settings struct {
 	Enabled   bool   `json:"enabled"`
 	OllamaURL string `json:"ollamaUrl"`
 	Model     string `json:"model"`
+	// NumCtx is the context window requested from Ollama. 0 = defaultNumCtx. It is
+	// exposed because the window has to fit the whole system prompt + tool schemas
+	// + tool results, and the safe size depends on the model and available VRAM —
+	// but it is floored at minNumCtx, since a too-small window silently deletes the
+	// system prompt rather than erroring (see numCtx).
+	NumCtx int `json:"numCtx,omitempty"`
 }
 
 func (s *Service) settings(ctx context.Context) Settings {
@@ -80,15 +93,25 @@ func (s *Service) settings(ctx context.Context) Settings {
 func (s *Service) Status(ctx context.Context) map[string]any {
 	cfg := s.settings(ctx)
 	reachable := false
+	modelCtx := 0
 	if cfg.OllamaURL != "" {
 		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
-		if _, err := newOllama(cfg.OllamaURL).listModels(cctx); err == nil {
+		client := newOllama(cfg.OllamaURL)
+		if _, err := client.listModels(cctx); err == nil {
 			reachable = true
+			if cfg.Model != "" {
+				modelCtx = client.modelContextLength(cctx, cfg.Model)
+			}
 		}
 	}
 	dest := classifyDestination(ctx, cfg.OllamaURL)
-	return map[string]any{
+	window := numCtx(cfg.NumCtx)
+	// The prompt floor is the system prompt + every tool schema — what must fit before
+	// a single row of data is added. Reported so a too-small window is visible in the
+	// UI instead of silently deleting the instructions (Ollama truncates, never errors).
+	floor := promptFloorTokens()
+	out := map[string]any{
 		"enabled":   cfg.Enabled,
 		"model":     cfg.Model,
 		"reachable": reachable,
@@ -96,7 +119,33 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 		// Where the model runs, so the UI can stop claiming the data stayed on
 		// the operator's network when the configured URL says otherwise.
 		"destination": dest,
+		// The resolved Ollama context window and what the instructions alone cost.
+		"contextWindow":     window,
+		"promptFloorTokens": floor,
 	}
+	if modelCtx > 0 {
+		out["modelContextLimit"] = modelCtx
+		if modelCtx < window {
+			out["contextWarning"] = fmt.Sprintf(
+				"%s was trained for a %d-token context but Fleet requests %d. Ollama will not error — it will drop the oldest tokens, which are the assistant's instructions. Pick a longer-context model or expect degraded answers.",
+				cfg.Model, modelCtx, window)
+		}
+	}
+	return out
+}
+
+// promptFloorTokens estimates the tokens consumed by the system prompt and the full
+// tool schema — the fixed cost every request pays before any fleet data. Estimated at
+// ~4 bytes/token, which is close enough for a sizing warning.
+func promptFloorTokens() int {
+	n := len(systemPrompt)
+	for _, t := range tools {
+		n += len(t.Function.Name) + len(t.Function.Description) + 200
+	}
+	for _, t := range actionTools {
+		n += len(t.Function.Name) + len(t.Function.Description) + 200
+	}
+	return n / 4
 }
 
 // Models lists models from the configured (or overridden) Ollama URL.
@@ -360,6 +409,22 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.table = tbl
 			}
 			result = payload
+		case "compliance_scans":
+			tbl, payload := s.runComplianceScans(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			// The fleet-wide roll-up is an enumeration over every host, including the
+			// never-scanned ones. Build it in code — a small model truncates the list
+			// and silently drops exactly the rows that matter.
+			directAnswer = compliancePostureDirectAnswer(payload)
+			result = payload
+		case "scan_findings":
+			tbl, payload := s.runScanFindings(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
 		case "list_users":
 			tbl, payload := s.runListUsers(ctx, fargs, who)
 			if tbl != nil {
@@ -397,6 +462,21 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			if tbl != nil {
 				data.table = tbl
 			}
+			result = payload
+		case "access_control":
+			tbl, payload := s.runAccessControl(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
+		case "expiring_credentials":
+			tbl, payload := s.runExpiringCredentials(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			// "Nothing is expiring" is a definite negative the tool knows for certain;
+			// left to the model it becomes a hedge or an invented list.
+			directAnswer = expiringDirectAnswer(payload)
 			result = payload
 		case "fleet_insights":
 			tbl, payload := s.runFleetInsights(ctx, who)
@@ -460,7 +540,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	toolsUsed := false
 	retriedClarify := false
 	for i := 0; i < maxToolIterations; i++ {
-		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset, Options: deterministicOptions()})
+		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset, Options: deterministicOptions(cfg.NumCtx)})
 		if err != nil {
 			return "", data, err
 		}
@@ -484,7 +564,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				inst += ". Answer the question directly about those items using only the details already in this conversation. If the conversation does not contain the answer, say so plainly."
 				retryMsgs := append(append(make([]chatMessage, 0, len(messages)+2), messages...), msg,
 					chatMessage{Role: "user", Content: inst})
-				if resp2, err2 := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: retryMsgs, Options: deterministicOptions()}); err2 == nil {
+				if resp2, err2 := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: retryMsgs, Options: deterministicOptions(cfg.NumCtx)}); err2 == nil {
 					if retry := strings.TrimSpace(resp2.Message.Content); retry != "" && !looksLikeClarification(retry) {
 						final = retry
 					}
@@ -508,7 +588,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				if data.table != nil || data.host != nil || data.history != nil || len(data.hosts) > 0 {
 					final = "Here is what I found for that (see the details below)."
 				} else {
-					final = "I couldn't find anything in Fleet that answers that. Fleet may not collect that data — it tracks host status, inventory, metrics, updates, vulnerabilities, sessions, audit and auth events, scans, playbook runs, users, and approvals."
+					final = "I couldn't find anything in Fleet that answers that. " + capabilityStatement()
 				}
 			}
 			s.remember(convoID, who.UserID, question, final)
@@ -544,6 +624,18 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				result = payload
 			case "recent_scans":
 				result = s.runRecentScans(ctx, tc.Function.Arguments, who)
+			case "compliance_scans":
+				tbl, payload := s.runComplianceScans(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "scan_findings":
+				tbl, payload := s.runScanFindings(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			case "recent_playbook_runs":
 				result = s.runRecentPlaybookRuns(ctx, who)
 			case "recent_commands":
@@ -632,6 +724,18 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				result = payload
 			case "platform_status":
 				result = s.runPlatformStatus(ctx, who)
+			case "access_control":
+				tbl, payload := s.runAccessControl(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
+			case "expiring_credentials":
+				tbl, payload := s.runExpiringCredentials(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			case "search_docs":
 				payload, sources := s.runSearchDocs(tc.Function.Arguments)
 				if len(sources) > 0 {
@@ -649,14 +753,13 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					result = map[string]any{"error": "unknown tool"}
 				}
 			}
-			payload, _ := json.Marshal(result)
-			messages = append(messages, chatMessage{Role: "tool", Content: string(payload)})
+			messages = append(messages, chatMessage{Role: "tool", Content: encodeToolResult(result)})
 		}
 	}
 	// Ran out of tool iterations. The tool results are already in `messages`, so make
 	// one final pass with tools DISABLED — the model must now WRITE an answer from what
 	// it has instead of calling yet another tool. This turns a loop into a real answer.
-	if resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Options: deterministicOptions()}); err == nil {
+	if resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Options: deterministicOptions(cfg.NumCtx)}); err == nil {
 		if final := strings.TrimSpace(resp.Message.Content); final != "" {
 			s.remember(convoID, who.UserID, question, final)
 			return final, data, nil
@@ -674,15 +777,14 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 // with tools DISABLED so it can't mis-route to another tool. base is the built-up
 // message history (system prompt + prior turns + the user question).
 func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage, toolName string, result any) (string, error) {
-	raw, _ := json.Marshal(result)
 	msgs := append(append([]chatMessage(nil), base...), chatMessage{
 		Role: "system",
 		Content: fmt.Sprintf("The %s tool was already run for this question and returned this data:\n%s",
-			toolName, string(raw)),
+			toolName, encodeToolResult(result)),
 	})
 	// Same strong answer discipline as the LLM-loop refine pass (appended LAST).
 	msgs = append(msgs, chatMessage{Role: "system", Content: scopeReminder})
-	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions()})
+	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions(cfg.NumCtx)})
 	if err != nil {
 		return "", err
 	}
@@ -715,7 +817,7 @@ const scopeReminder = "Now write the final answer to the user's question using O
 // an answer. Returns "" on failure so the caller keeps the model's original answer.
 func (s *Service) refineFinalAnswer(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage) string {
 	msgs := append(append([]chatMessage(nil), base...), chatMessage{Role: "system", Content: scopeReminder})
-	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions()})
+	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions(cfg.NumCtx)})
 	if err != nil {
 		return ""
 	}
@@ -758,7 +860,11 @@ func suggestionsFor(tool string) []string {
 	case "recent_activity_failures":
 		return []string{"What runs on a schedule, and when does it fire next?", "Any failed logins today?"}
 	case "vulnerabilities":
-		return []string{"Which hosts have security updates pending?", "Any failed scans or playbook runs recently?"}
+		return []string{"Which hosts have security updates pending?", "Give me the latest compliance scan result for each host"}
+	case "compliance_scans":
+		return []string{"Which hosts failed their compliance scan?", "Which hosts have never been scanned?", "Which hosts have critical vulnerabilities?"}
+	case "scan_findings":
+		return []string{"Which hosts failed their compliance scan?", "What changed in the audit log today?"}
 	case "host_updates":
 		return []string{"Which hosts have critical vulnerabilities?", "Any failed scans or playbook runs recently?"}
 	case "list_schedules":

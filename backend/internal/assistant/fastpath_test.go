@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -44,6 +45,34 @@ func TestFastPathTool(t *testing.T) {
 		// CVE / vulnerability -> vulnerabilities
 		{"what critical vulnerabilities are on debian?", "vulnerabilities", map[string]string{"hostname": "debian", "minSeverity": "critical"}},
 		{"which hosts have CVEs?", "vulnerabilities", map[string]string{}},
+
+		// OpenSCAP compliance -> compliance_scans / scan_findings. "Security scan" is
+		// the operator's own phrase for the benchmark scan and used to land on the CVE
+		// tool; the fleet-wide forms must NOT be narrowed to a single host.
+		{"Give me the latest security scan result for each host", "compliance_scans", map[string]string{"hostname": ""}},
+		{"what is the compliance posture across the fleet?", "compliance_scans", map[string]string{"hostname": ""}},
+		{"which hosts failed their compliance scan?", "compliance_scans", map[string]string{"failedOnly": "true"}},
+		{"which hosts have never been scanned?", "compliance_scans", map[string]string{}},
+		{"what is the CIS benchmark score for nas?", "compliance_scans", map[string]string{"hostname": "nas"}},
+		{"which rules failed on nas?", "scan_findings", map[string]string{"hostname": "nas"}},
+		{"what failed on nas's scan?", "scan_findings", map[string]string{"hostname": "nas"}},
+		// A user CORRECTING a wrong CVE answer must reach compliance, not CVEs again.
+		{"I want the results for the security scans not for the vulnerability scans", "compliance_scans", map[string]string{"hostname": ""}},
+		// ...but a scan JOB that failed is still run history, not compliance posture.
+		{"any failed scans or playbook runs recently?", "recent_activity_failures", nil},
+		{"any failed scans today?", "recent_activity_failures", nil},
+		{"did the scan fail on nas?", "recent_activity_failures", nil},
+
+		// governance records -> access_control (topic pinned) / expiring_credentials
+		{"what groups are there?", "access_control", map[string]string{"topic": "groups"}},
+		{"which hosts are in the prod group?", "access_control", map[string]string{"topic": "groups", "name": "prod"}},
+		{"what can the Operator role do?", "access_control", map[string]string{"topic": "roles", "name": "operator"}},
+		{"what API tokens exist?", "access_control", map[string]string{"topic": "service_accounts"}},
+		{"is there an access review open?", "access_control", map[string]string{"topic": "access_reviews"}},
+		{"what is about to expire?", "expiring_credentials", map[string]string{}},
+		{"which credentials need rotating?", "expiring_credentials", map[string]string{}},
+		// "what role does bob have" is an ACCOUNT question, not the role catalogue.
+		{"what role does bob have?", "", nil},
 
 		// accounts / MFA -> list_users
 		{"who are the administrators?", "list_users", map[string]string{}},
@@ -109,7 +138,13 @@ func TestFastPathTool(t *testing.T) {
 		var got map[string]any
 		_ = json.Unmarshal(args, &got)
 		for k, want := range c.wantArgs {
-			if gv, _ := got[k].(string); gv != want {
+			// Compared as text so a case can pin a non-string arg (failedOnly: "true")
+			// without a second table.
+			gv := ""
+			if v, present := got[k]; present && v != nil {
+				gv = fmt.Sprint(v)
+			}
+			if gv != want {
 				t.Errorf("%q: arg %q = %q, want %q (args=%s)", c.q, k, gv, want, string(args))
 			}
 		}

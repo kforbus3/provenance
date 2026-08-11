@@ -1089,7 +1089,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 
 	// AI assistant: read-only NL queries over fleet data (local Ollama) plus guarded
 	// actions the user must confirm. The confirm/execute surface is mounted separately.
-	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.insights, s.Cfg.MetricHistoryRetention, s.actionReg))
+	assistant.Mount(r, deps, assistant.New(s.Store, s.Log, s.insights, s.Cfg.MetricHistoryRetention, s.actionReg, s.scanSvc.Findings))
 	aiaction.Mount(r, deps, s.actionReg)
 
 	insights.Mount(r, deps, s.insights)

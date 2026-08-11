@@ -10,9 +10,12 @@ FLEET_URL=http://127.0.0.1:8080 FLEET_USER=<admin> FLEET_PASS=<password> \
 ```
 
 - `--only sessions` — run one group (disk / trend / sessions / failures / audit /
-  security / schedules / updates).
-- `--multi-turn` — additionally runs a follow-up conversation ("tell me about the
-  failed scans" → "when did the failures happen?") in a single conversation thread.
+  security / schedules / updates / compliance / vulns / governance / platform /
+  discipline).
+- `--multi-turn` — additionally runs two follow-up conversations in single threads: a
+  failed-activity thread ("tell me about the failed scans" → "when did the failures
+  happen?") and the compliance-correction thread ("the latest security scan result for
+  each host" → "I meant the security scans, not the vulnerability scans").
 
 The harness exits non-zero if any question errors or returns an empty answer.
 **Correctness is judged by reading the answers against the instance's real data** —
@@ -33,3 +36,17 @@ What this battery guards (each was a real regression):
   times render in the display timezone (12-hour).
 - Audit answers separate operator changes from routine automated noise.
 - Follow-ups resolve references ("the failures") instead of asking to clarify.
+- "Security scan" reaches **compliance** (OpenSCAP benchmark) results, not CVEs, and a
+  "for each host" question is answered for every host — never by asking which host.
+- Correcting the assistant ("I meant the security scans, not the vulnerability scans")
+  switches datasets instead of claiming Fleet cannot retrieve compliance results.
+- Groups, roles, service accounts, access reviews and expiring credentials answer from
+  their own tools rather than "I have no tool for that".
+
+## Before you trust a run
+
+Check `contextWindow` and `promptFloorTokens` in `GET /api/v1/assistant/status`. Ollama
+defaults `num_ctx` to 4096 and does **not** error when the prompt exceeds it — it drops
+the oldest tokens, which are the system prompt. A run made with a too-small window
+looks like a model-quality problem (wrong tool, chatty preamble, "I have no tool for
+that") but is really the assistant answering with no instructions at all.

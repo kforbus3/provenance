@@ -10,6 +10,7 @@ import (
 
 	"github.com/fleet-terminal/backend/internal/insights"
 	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/ueba"
 )
 
 // This file holds the second wave of read-only assistant tools that closed the
@@ -294,11 +295,43 @@ func (s *Service) runSecurityEvents(ctx context.Context, raw json.RawMessage, wh
 	if len(out) == 0 {
 		tbl = nil
 	}
-	return tbl, map[string]any{
+	payload := map[string]any{
 		"windowHours": hours, "count": len(out), "failureCount": failures,
 		"distinctFailingIPs": len(failByIP), "topFailingIP": topIP, "topFailingIPCount": topCount,
 		"bruteForceSuspected": topCount >= 5, "events": out,
 	}
+	// Behaviour anomalies (the Behaviour page) ride along on the same permission and
+	// the same question: "anything suspicious?" means both failed sign-ins and access
+	// that deviates from a user's baseline. Carried as an extra section rather than a
+	// separate tool — a tool the model has to discover is a tool it will miss.
+	if anomalies := s.behaviorAnomalies(ctx); anomalies != nil {
+		payload["behaviorAnomalies"] = anomalies
+		payload["behaviorAnomaliesNote"] = "deviations from each user's established access baseline " +
+			"(off-hours, a host or source IP they have not used before, an activity spike). Advisory only — " +
+			"report them as patterns to verify, never as confirmed compromise."
+	}
+	return tbl, payload
+}
+
+// behaviorAnomalies runs the same UEBA analysis the Behaviour page shows: each user's
+// recent access compared against their own history. Returns nil (not an empty list) on
+// error, so a failure reads as "not reported" rather than "nothing found".
+func (s *Service) behaviorAnomalies(ctx context.Context) []ueba.Anomaly {
+	const (
+		lookback     = 30 * 24 * time.Hour
+		recentWindow = 24 * time.Hour
+		maxSessions  = 20000
+	)
+	sessions, err := s.store.SessionsForUEBA(ctx, time.Now().Add(-lookback), maxSessions)
+	if err != nil {
+		s.log.Warn("assistant security_events ueba", "err", err)
+		return nil
+	}
+	found := ueba.Analyze(sessions, time.Now(), recentWindow)
+	if found == nil {
+		return []ueba.Anomaly{}
+	}
+	return found
 }
 
 // authEvRow is one authentication event in the security_events payload.
@@ -815,6 +848,45 @@ func (s *Service) runPlatformStatus(ctx context.Context, who Caller) any {
 			res["enrollmentJobs"] = list
 		}
 	}
+	// Federation sites (multi-site deployments). A site whose link is down is a
+	// control-plane outage for everything behind it, so it belongs in the same answer
+	// as the cluster roster rather than in a tool of its own.
+	if who.CanViewCluster || who.Can("Federation.Manage") || who.IsSuperAdmin {
+		if sites, err := s.store.ListSites(ctx); err != nil {
+			s.log.Warn("assistant platform_status sites", "err", err)
+		} else if len(sites) > 0 {
+			type site struct {
+				Name       string     `json:"name"`
+				Status     string     `json:"status"`
+				LinkState  string     `json:"linkState"`
+				Version    string     `json:"version,omitempty"`
+				LagSeconds int        `json:"lagSeconds"`
+				LastSeenAt *time.Time `json:"lastSeenAt,omitempty"`
+			}
+			list := make([]site, 0, len(sites))
+			connected := 0
+			for _, st := range sites {
+				if st.LinkState == "connected" {
+					connected++
+				}
+				list = append(list, site{st.Name, st.Status, st.LinkState, st.BuildVersion, st.LagSeconds, st.LastSeenAt})
+			}
+			res["federationSites"] = map[string]any{
+				"total": len(list), "connected": connected, "sites": list,
+			}
+		}
+	}
+
+	// Database replication / disaster-recovery role. "Are we the primary?" and "is the
+	// standby caught up?" are control-plane questions with no other home.
+	if who.CanViewCluster || who.Can("DR.Manage") || who.IsSuperAdmin {
+		if rep, err := s.store.DBReplication(ctx); err == nil {
+			res["databaseReplication"] = rep
+		} else {
+			s.log.Warn("assistant platform_status replication", "err", err)
+		}
+	}
+
 	if len(res) == 0 {
 		return map[string]any{"note": "no platform status available"}
 	}

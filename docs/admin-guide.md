@@ -351,7 +351,7 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `session_policy` | idle 30 min, absolute 12 h | session lifetime |
 | `require_mfa` | `{"enabled": false}` | when on, **all** users must enroll a second factor (Users → *Require MFA for all*) |
 | `branding` | `{"app_name": "Fleet Terminal"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
-| `assistant` | `{"enabled": false, "ollamaUrl": "", "model": ""}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `ollamaUrl`, so run Ollama on your own network; a public URL raises a warning on the settings page |
+| `assistant` | `{"enabled": false, "ollamaUrl": "", "model": "", "numCtx": 0}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `ollamaUrl`, so run Ollama on your own network; a public URL raises a warning on the settings page. `numCtx` is the Ollama context window (0 = 32768, floored at 16384) — see below |
 | `assistant_actions` | `{"requireApprovalForAll": false, "disabledKinds": []}` | assistant-action policy: force approval for every action, or disable specific action kinds; edit via **Settings → Assistant actions** |
 | `scan_policy` | `{"timeoutMinutes": …}` | scan / remediation timeout budget (overrides `FLEET_SCAN_TIMEOUT`, clamped to a sane range) |
 | `timezone` | browser-detected IANA zone | display zone for all timestamps + schedule clock-times (§9, Time zone) |
@@ -360,6 +360,23 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `oidc` | disabled | OIDC single sign-on — issuer, client, claims, role mapping (§15); secret encrypted at rest |
 | `ldap` | disabled | LDAP / Active Directory sign-in — server, bind account, filter, role mapping (§15); bind password encrypted at rest |
 | `audit_forward` | disabled | forward audit events to a syslog or HTTP SIEM endpoint (§16) |
+
+### AI assistant — the context window
+
+The assistant's system prompt and its tool definitions cost roughly **10,000 tokens
+before any fleet data is added**. Ollama's default context window is 4096 tokens and
+it does **not** return an error when a prompt exceeds it — it silently discards the
+*oldest* tokens, which are the system prompt. An assistant running that way has no
+tool-selection guidance and no answer rules at all, which shows up as wrong tool
+choices ("security scan" answered with CVEs), chatty preambles, and confident
+"I do not have a tool for that" replies about data Fleet actually holds.
+
+Fleet therefore always sends an explicit `num_ctx`. Leave **Context window** blank to
+use the default (32768); any value you set is floored at 16384. Check
+`GET /api/v1/assistant/status` for the effective `contextWindow`, the
+`promptFloorTokens` the instructions cost, and a `contextWarning` when the chosen
+model was trained for a shorter context than Fleet requests. Prefer a model with a
+32k context; a bigger window also needs more VRAM for the KV cache.
 
 The **Settings → Branding** card edits the application name in the UI; the change
 takes effect immediately (no rebuild) and is served publicly so the login screen

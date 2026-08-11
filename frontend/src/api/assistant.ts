@@ -17,6 +17,16 @@ export interface AssistantStatus {
   reachable: boolean;
   ready: boolean;
   destination?: AssistantDestination;
+  /** Context window Fleet requests from Ollama. */
+  contextWindow?: number;
+  /** Tokens the system prompt + tool schemas cost before any fleet data. Ollama
+   *  silently drops the OLDEST tokens when the prompt overflows the window, so a
+   *  window near this floor means the assistant runs with no instructions. */
+  promptFloorTokens?: number;
+  /** The model's own trained context length, when Ollama reports it. */
+  modelContextLimit?: number;
+  /** Set when contextWindow exceeds what the model was trained for. */
+  contextWarning?: string;
 }
 
 export interface AssistantHost {

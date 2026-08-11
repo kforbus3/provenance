@@ -677,7 +677,7 @@ results are scoped to what the caller can access and every question is audited.
 
 | Method | Path | Gate |
 |--------|------|------|
-| GET | `/api/v1/assistant/status` | `Assistant.Use` — `{enabled, model, reachable, ready}` |
+| GET | `/api/v1/assistant/status` | `Assistant.Use` — `{enabled, model, reachable, ready, contextWindow, promptFloorTokens, modelContextLimit?, contextWarning?}` |
 | GET | `/api/v1/assistant/models?url=` | `System.Configure` — list Ollama models (for setup) |
 | POST | `/api/v1/assistant/ask` | `Assistant.Use` — `{question, conversationId?}` → `202 {id}` (async) |
 | GET | `/api/v1/assistant/ask/{id}` | `Assistant.Use` — poll → `{status, answer, hosts[]}` |
@@ -699,17 +699,46 @@ additionally gated by the caller's permissions):
   updates / security updates available).
 - **`list_sessions`** — currently-connected SSH sessions (gated by `Session.Replay`).
 - **`host_detail`** — full detail for one host by exact hostname (filesystems, NICs).
-- **`recent_scans`** — recent OpenSCAP scans, scheduled or manual (gated by `Host.Scan`).
+- **`compliance_scans`** — OpenSCAP COMPLIANCE posture: the latest scan **per host**
+  with profile, XCCDF score and pass/fail counts, plus a `neverScanned` marker for
+  hosts with no scan at all; with a hostname, that host's scan history (gated by
+  `Host.Scan`).
+- **`scan_findings`** — the individual benchmark rules a host is failing, with
+  severity and an access-impacting flag (gated by `Host.Scan`).
+- **`recent_scans`** — the chronological scan run log, scheduled or manual (gated by
+  `Host.Scan`). For per-host *results* use `compliance_scans`; this list is capped by
+  recency and can omit hosts.
+- **`vulnerabilities`** — CVE findings and the fleet CVE roll-up. Distinct from
+  `compliance_scans`: hardening rules versus package CVEs, and operators call both
+  "the security scan".
 - **`recent_playbook_runs`** — recent Ansible playbook runs, scheduled or manual
   (gated by `Playbook.Run`).
+- **`access_control`** — governance records by `topic`: `groups` (and their hosts),
+  `roles` (and their permissions), `service_accounts` (and their API tokens),
+  `access_reviews`. Each topic is gated by the permission that guards its page.
+- **`expiring_credentials`** — API tokens, vault credentials, passwords, CA keys and
+  SSH certificates that are expired, expiring, stale or overdue for rotation
+  (`System.Configure` or `Certificate.Manage`). Metadata only.
+- **`platform_status`** — control-plane health: HA cluster roster and leader,
+  enrollment jobs, federation site link state, and database replication role/lag.
+- **`security_events`** — failed logins, lockouts and MFA failures, with a per-IP
+  tally and behavioural (UEBA) anomalies.
 - **`fleet_insights`** — the explainable-issues engine (below): offline hosts,
   low/critical disk, high memory/load, pending security updates, and disk-runway
   projections. Additional tools: `host_metric_history`, `session_history`,
-  `audit_log`, `list_schedules`, `recent_file_transfers` — each RBAC-gated to the
-  caller.
+  `audit_log`, `list_schedules`, `recent_file_transfers`, `list_users`,
+  `list_approvals`, `windows_software`, `search_commands`, `recent_commands`,
+  `host_availability`, `search_docs` — each RBAC-gated to the caller.
 
-Configured via the `assistant` setting (`{enabled, ollamaUrl, model}`). Asks run
-in the background (local inference can exceed the request timeout); poll the `id`.
+Configured via the `assistant` setting (`{enabled, ollamaUrl, model, numCtx}`). Asks
+run in the background (local inference can exceed the request timeout); poll the `id`.
+
+**Context window** — the system prompt plus the tool schemas cost ~10k tokens before
+any fleet data. Ollama's 4096-token default silently discards the oldest tokens (the
+system prompt) rather than erroring, so Fleet always sends an explicit `num_ctx`
+(`numCtx`, default 32768, floored at 16384) and reports the effective window plus a
+warning in `GET /assistant/status`. Individual tool results are capped before they
+enter the transcript, with the true row total preserved.
 
 **Multi-turn memory** — `POST /assistant/ask` accepts and returns a
 `conversationId`; history is bounded, owner-scoped, and TTL-pruned, so follow-up
