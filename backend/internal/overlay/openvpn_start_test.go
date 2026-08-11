@@ -1,21 +1,53 @@
 package overlay
 
 import (
+	"context"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/fleet-terminal/backend/internal/config"
 )
 
 func startTestOverlay() *OpenVPN {
-	return &OpenVPN{cfg: &config.Config{
-		WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1",
-		OVPNSubnet: "10.101.0.0/24", OVPNJumpIP: "10.101.0.1", OVPNPort: 1194,
-	}}
+	return &OpenVPN{
+		cfg: &config.Config{
+			WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1",
+			OVPNSubnet: "10.101.0.0/24", OVPNJumpIP: "10.101.0.1", OVPNPort: 1194,
+		},
+		pki: stubCA{},
+	}
 }
+
+// stubCA stands in for the overlay PKI, which needs a database. Only CRLPEM is
+// exercised by the tests in this package; the issuing methods are here to satisfy
+// the interface and fail loudly if a test starts depending on them.
+type stubCA struct{ crlErr error }
+
+func (stubCA) EnsureCA(context.Context) error { return nil }
+func (stubCA) CACertPEM() []byte              { return []byte(testCAPEM) }
+func (stubCA) IssueServer(string, []string, []net.IP, time.Duration) ([]byte, []byte, error) {
+	return nil, nil, errors.New("stubCA cannot issue")
+}
+func (stubCA) IssueClient(string, time.Duration) ([]byte, []byte, string, error) {
+	return nil, nil, "", errors.New("stubCA cannot issue")
+}
+func (stubCA) RecordClient(context.Context, uuid.UUID, string, string, time.Time) error { return nil }
+func (c stubCA) CRLPEM(context.Context) ([]byte, error) {
+	if c.crlErr != nil {
+		return nil, c.crlErr
+	}
+	return []byte(testCRLPEM), nil
+}
+
+const testCAPEM = "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----\n"
 
 // section returns the text of script between start and the first end after it,
 // failing the test if the shape it depends on is gone. Tests below execute pieces of
@@ -73,7 +105,7 @@ func TestServerGuardDoesNotMatchItsOwnShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := o.JumpServerScript([]byte("ca"), []byte("crt"), []byte("key"), conf)
+	script := o.JumpServerScript([]byte("ca"), []byte("crt"), []byte("key"), []byte(testCRLPEM), conf)
 
 	guard := section(t, script, "ovpn_server_running() {", "\n}\n")
 	launch := lineWith(t, script, "openvpn --config")

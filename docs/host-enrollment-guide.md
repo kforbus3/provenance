@@ -333,8 +333,9 @@ before retiring its overlay, and removes:
 | `/etc/ssh/fleet_ca.pub`, `/etc/ssh/fleet_krl` | Any other CA or key material |
 | `/etc/ssh/auth_principals/*` (and the directory, if empty) | — |
 | `/etc/ssh/sshd_config.d/00-fleet.conf`, and the `# Fleet Terminal` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
-| The overlay client — the WireGuard interface and its boot units (config renamed to `.fleet-disabled`, not deleted), or the certificate overlay's client | — |
-| The host's peer on the jump host, so the tunnel stops handshaking from the other end too | Every other peer |
+| The overlay client **and its key material** — the WireGuard interface, its boot units, config and keys, or everything under `/etc/openvpn/fleet` | Any other VPN this host runs |
+| The host's peer / pinned address on the jump host, so the tunnel stops from the other end too | Every other peer |
+| On a certificate overlay, the host's **client certificate is revoked** and the server's CRL republished | Every other certificate |
 
 > **This can lock you out.** On a host whose only administrative access was through
 > Fleet, removing those accounts removes your way in. Make sure you have another
@@ -349,6 +350,19 @@ Two details worth knowing:
   alive. Fleet therefore writes `/usr/local/sbin/fleet-unenroll.sh`, launches it with
   `setsid`, and returns. The API reports that teardown *started*, not that it
   finished. The host's own record is `/var/log/fleet-unenroll.log`.
+- **On a certificate overlay, deleting the host's copy is not enough — it is
+  revoked.** WireGuard and OpenVPN fail differently here. A WireGuard hub keeps an
+  allowlist, so removing the peer *is* the revocation. An OpenVPN server authenticates
+  any certificate its CA signed, and removing the host's pinned address only takes
+  away its static IP — it would still connect and be handed one from the pool. So
+  teardown revokes the host's client certificate and republishes the server's CRL,
+  which is what stops a key copied off the host before it was wiped. Revocation
+  happens **before** the host row is deleted, because the record of which certificate
+  was the host's is removed with it.
+
+  The CRL is re-read for each new connection, so it takes effect without restarting
+  the server; an already-established tunnel drops at its next renegotiation.
+
 - **The overlay comes down last, on both ends.** On the host it is the final step of
   the detached script — it is the transport Fleet arrived over, so it cannot be
   brought down while the session is still using it, and doing it last means the
@@ -375,3 +389,9 @@ sudo sh fleet-unenroll.sh -u ops        # host was enrolled with a non-default S
 
 It removes the same set as the table above and is safe to re-run. When Fleet fails
 to reach a host during a teardown, it names that host in the UI and points here.
+
+One thing it cannot do: **removing a host's copy of an OpenVPN certificate does not
+revoke it.** The script runs on the host and has no access to the CA. If the key may
+have been copied off the machine, delete the host in Fleet with teardown ticked as
+well — that revokes the certificate and republishes the CRL even if the host itself
+was never reachable.

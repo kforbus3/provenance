@@ -16,7 +16,7 @@ func TestJumpServerScriptInstallsPeerIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), srv)
+	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), []byte(testCRLPEM), srv)
 
 	if !strings.Contains(script, "iptables -I FORWARD 1 -s 10.100.0.0/24 -d 10.100.0.0/24 -j DROP") {
 		t.Errorf("script does not install the overlay peer-isolation deny:\n%s", script)
@@ -44,7 +44,7 @@ func TestJumpServerScriptOmitsPeerIsolationWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), srv)
+	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), []byte(testCRLPEM), srv)
 
 	if strings.Contains(script, "iptables") {
 		t.Errorf("isolation disabled but the script still touches iptables:\n%s", script)
@@ -209,7 +209,7 @@ func TestJumpServerProvidesIptablesForIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), srv)
+	script := o.JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), []byte(testCRLPEM), srv)
 	if !strings.Contains(script, "apt-get install -y -qq iptables") {
 		t.Errorf("jump-server script does not provide iptables for its forwarding deny:\n%s", script)
 	}
@@ -224,7 +224,7 @@ func TestJumpServerProvidesIptablesForIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	off := New(cfg, nil).JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), srvOff)
+	off := New(cfg, nil).JumpServerScript([]byte("CA\n"), []byte("CERT\n"), []byte("KEY\n"), []byte(testCRLPEM), srvOff)
 	if strings.Contains(off, "install -y -qq iptables") {
 		t.Error("installs iptables for a deny that is disabled")
 	}

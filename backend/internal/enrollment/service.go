@@ -19,6 +19,7 @@ import (
 	"github.com/fleet-terminal/backend/internal/krl"
 	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/fleet-terminal/backend/internal/overlay"
+	"github.com/fleet-terminal/backend/internal/overlaypki"
 	princ "github.com/fleet-terminal/backend/internal/principals"
 	"github.com/fleet-terminal/backend/internal/sshgw"
 	"github.com/fleet-terminal/backend/internal/store"
@@ -38,12 +39,15 @@ type Service struct {
 	// ("openvpn"). Empty when only WireGuard is available. A host is
 	// provisioned onto whichever overlay its effective selection names.
 	overlays map[string]overlay.Overlay
+	// pki issues and revokes the certificate overlays' client certificates. Nil on a
+	// WireGuard-only deployment, which never needs it.
+	pki *overlaypki.PKI
 }
 
 // New constructs the enrollment Service. overlays may be nil/empty (WireGuard only);
 // it carries the cert-overlay provisioners (OpenVPN) when built.
-func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, overlays map[string]overlay.Overlay) *Service {
-	return &Service{store: st, cfg: cfg, log: log, gw: gw, overlays: overlays}
+func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, overlays map[string]overlay.Overlay, pki *overlaypki.PKI) *Service {
+	return &Service{store: st, cfg: cfg, log: log, gw: gw, overlays: overlays, pki: pki}
 }
 
 // effectiveOverlay resolves which transport to enroll a host onto: an explicit
@@ -831,6 +835,25 @@ if [ -f /etc/wireguard/$IF.conf ]; then mv -f /etc/wireguard/$IF.conf /etc/wireg
 echo WG_RETIRED`, iface)
 }
 
+// wgPurgeScript is wgTeardownScript for a host that is leaving the fleet: it retires
+// the interface AND destroys the key material and config.
+//
+// The retire deliberately renames the config and keeps the private key so a host that
+// comes back can re-use its identity. For a decommission that leaves a working tunnel
+// definition and its key on a machine nothing manages any more. The hub no longer
+// lists the peer once CleanupHostOverlay has run — WireGuard is allowlist-based, so
+// that alone denies it — but leaving the key behind is still a credential sitting on
+// a box Fleet has walked away from.
+func (s *Service) wgPurgeScript() string {
+	iface := s.cfg.WGInterface
+	return s.wgTeardownScript() + fmt.Sprintf(`
+rm -f /etc/wireguard/%[1]s.conf /etc/wireguard/%[1]s.conf.fleet-disabled
+rm -f /etc/wireguard/%[1]s.privatekey /etc/wireguard/%[1]s.publickey
+rm -f /etc/systemd/system/fleet-wg-reresolve.service /etc/systemd/system/fleet-wg-reresolve.timer
+command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1
+echo WG_PURGED`, iface)
+}
+
 // retireWireGuard tears the WireGuard overlay down on both ends when a host moves to a
 // certificate overlay: the interface + boot units on the host, the peer on the jump
 // host, and the stored public key (which is what a standby jump host rebuilds its peer
@@ -1166,20 +1189,26 @@ echo TEARDOWN_STARTED`, loginUser, overlayRetire)
 }
 
 // hostOverlayRetireScript returns the privileged script that takes host's transport
-// down on the host itself. A cert overlay whose provisioner this deployment does not
-// have leaves a note in the teardown log rather than silently skipping — the operator
-// has to stop that client by hand.
+// down on the host itself AND destroys the material it could reconnect with.
+//
+// This is the PURGE variant, not the retire one. Retiring is for a transport switch
+// and keeps the key material on purpose; a teardown means the host is leaving, and
+// what retiring leaves behind — a renamed but complete config next to its ca/cert/key
+// — reconnects the moment anyone points openvpn at it. A cert overlay whose
+// provisioner this deployment does not have leaves a loud note in the teardown log
+// rather than being silently skipped.
 func (s *Service) hostOverlayRetireScript(host *models.Host) string {
 	name := strings.TrimSpace(host.Overlay)
 	if !overlay.IsCertOverlay(name) {
-		return s.wgTeardownScript()
+		return s.wgPurgeScript()
 	}
 	ov := s.overlays[name]
 	if ov == nil {
 		return "echo '[fleet] WARNING: overlay " + name + " is not available on this deployment; " +
-			"its client is STILL RUNNING — stop it on the host by hand'"
+			"its client is STILL RUNNING and its key material is STILL PRESENT — " +
+			"stop it and remove /etc/openvpn/fleet on the host by hand'"
 	}
-	return ov.RetireHostScript().Script
+	return ov.PurgeHostScript().Script
 }
 
 // TeardownHost removes Fleet's footprint from a managed host: the NOPASSWD sudoers
@@ -1239,6 +1268,38 @@ func dedupeAddrs(addrs ...string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+// RevokeHostOverlayCerts revokes the client certificates issued to a host on a
+// certificate overlay, so the certificate itself stops being accepted rather than
+// merely losing its pinned address.
+//
+// It MUST run before the host row is deleted. overlay_clients.host_id cascades on
+// host delete, so once the host is gone there is nothing left to say which serial
+// was its — the revocation would have nothing to revoke. The record it writes lives
+// in overlay_revocations, which has no host reference and outlives the host.
+//
+// A WireGuard host needs none of this: the hub's peer list is an allowlist, so
+// removing the peer is itself the revocation.
+func (s *Service) RevokeHostOverlayCerts(ctx context.Context, host *models.Host) (int, error) {
+	if host == nil {
+		return 0, nil
+	}
+	name := strings.TrimSpace(host.Overlay)
+	if !overlay.IsCertOverlay(name) {
+		return 0, nil
+	}
+	if s.pki == nil {
+		return 0, fmt.Errorf("overlay PKI unavailable")
+	}
+	n, err := s.pki.RevokeHostClients(ctx, host.ID, "host deleted from Fleet")
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.log.Info("revoked overlay client certificates", "host", host.Hostname, "count", n)
+	}
+	return n, nil
 }
 
 // CleanupHostOverlay retires a deleted host's membership of whichever overlay it was

@@ -181,6 +181,11 @@ export interface DeleteHostResult {
   // The jump-host half: the peer that keeps the deleted host's tunnel alive. Set
   // when it could not be retired, which leaves the host reachable on the overlay.
   overlayError?: string;
+  // Certificate-overlay hosts only: how many client certificates were revoked, and
+  // why not, if that failed. A certificate that is still valid can reconnect even
+  // after the host's copy is wiped.
+  certificatesRevoked?: number;
+  revokeError?: string;
 }
 
 export async function deleteHost(id: string, teardown = false): Promise<DeleteHostResult> {

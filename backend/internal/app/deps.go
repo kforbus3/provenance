@@ -76,6 +76,13 @@ type Deps struct {
 	// travels over. Returns nil once the teardown has STARTED — the work runs
 	// detached on the host, because it deletes the account the session is using.
 	TeardownHost func(ctx context.Context, host *models.Host) error
+
+	// RevokeHostOverlayCerts revokes a host's certificate-overlay client certificates
+	// (set by the server; nil in tests). MUST be called BEFORE the host row is
+	// deleted: overlay_clients cascades on host delete, so afterwards nothing records
+	// which serial was the host's. Returns how many certificates were revoked; 0 for
+	// a WireGuard host, whose hub peer list is itself the allowlist.
+	RevokeHostOverlayCerts func(ctx context.Context, host *models.Host) (int, error)
 }
 
 // Broadcaster pushes a typed real-time event to connected clients. The concrete

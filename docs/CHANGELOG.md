@@ -7,6 +7,48 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.5.2 — A torn-down host cannot come back — 2026-08-11
+
+v1.5.1 brought the tunnel down but left a working way back onto it. On a certificate
+overlay the teardown reused the transport-switch retire, which renames `client.ovpn`
+to `.fleet-disabled` and **deliberately keeps** `ca.crt`, `client.crt` and
+`client.key` next to it — so what was left in `/etc/openvpn/fleet` was a complete,
+valid config whose key material was intact. Pointing openvpn at it, or simply moving
+it back, rejoined the overlay.
+
+The server would accept it, too. It carried `client-config-dir` but no
+`crl-verify` and no revocation of any kind, so it authenticated every certificate the
+overlay CA had ever signed. Retiring a host removed its *pinned address* and nothing
+more: it would have reconnected and been handed an address from the pool.
+
+- **Teardown now purges instead of retiring.** A new `PurgeHostScript` stops the
+  client and destroys the material it could reconnect with — everything Fleet wrote
+  under `/etc/openvpn/fleet`, including the renamed config — while `RetireHostScript`
+  keeps its transport-switch behaviour, which is the case that legitimately wants the
+  certificate kept. WireGuard is purged the same way: its config and private key are
+  removed rather than set aside.
+
+- **The overlay CA has a CRL, and the server verifies it.** Deleting a host with
+  teardown revokes its client certificates, and the refreshed list is published to the
+  jump host. Revocation is what makes a decommission final: wiping the host's copy
+  does nothing about a key copied off it beforehand. Revocation happens before the
+  host row is deleted, because `overlay_clients` cascades with it — the record lives
+  on in a new `overlay_revocations` table that is keyed only by serial, mirroring how
+  `cert_revocations` works for the SSH CA. The list is re-read per connection, so it
+  takes effect without a server restart.
+
+- **`scripts/fleet-unenroll.sh` never touched `/etc/openvpn` at all**, so on an
+  OpenVPN host neither path removed the credential. It now removes the client and its
+  certificate material, and takes the WireGuard private key with it as well. It says
+  plainly that it cannot revoke — only Fleet can.
+
+**Deploy note.** The OpenVPN server config now carries `crl-verify`, and openvpn
+refuses to start when that file is missing, so the CRL is written to the jump host
+before the config that names it. The change lands on the next enrollment or overlay
+provision. A WireGuard-only deployment is unaffected; nothing needs doing by hand.
+
+---
+
 ## v1.5.1 — Teardown takes the tunnel with it — 2026-08-11
 
 Two bugs in v1.5.0's host teardown, reported from a real decommission: the accounts

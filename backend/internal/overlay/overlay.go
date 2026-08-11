@@ -68,7 +68,25 @@ type Overlay interface {
 	// Switching transports is only complete when the old one is gone from BOTH ends.
 	// Leaving a client running means two interfaces racing for the host's traffic and
 	// a tunnel that quietly reconnects to an overlay the host has left.
+	//
+	// It deliberately KEEPS the client's key material, because a host switched to
+	// another transport and back re-uses the certificate Fleet already issued it. Use
+	// PurgeHostScript when the host is leaving the fleet.
 	RetireHostScript() HostBringup
+
+	// PurgeHostScript is RetireHostScript for a host that is being decommissioned: it
+	// retires the client AND destroys the material it could reconnect with.
+	//
+	// The distinction is the whole point. Retiring renames the config and leaves
+	// ca/cert/key in place, so the config left behind is complete and still works —
+	// moving it back, or pointing openvpn straight at it, rejoins the overlay. That is
+	// correct for a transport switch and wrong for a host that is leaving, where what
+	// is left behind is a working credential on a machine nothing manages any more.
+	//
+	// Deleting the host's copy is necessary but not sufficient on its own: a key
+	// copied off the host earlier still authenticates. Revocation (the CRL) is what
+	// makes it final; this makes the common case clean.
+	PurgeHostScript() HostBringup
 }
 
 // HostBringup is the host-side half of overlay provisioning: a privileged script and

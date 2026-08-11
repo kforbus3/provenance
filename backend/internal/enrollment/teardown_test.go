@@ -315,6 +315,7 @@ func TestTeardownPathsDoNotDrift(t *testing.T) {
 		{"the WireGuard interface", "wg-quick down"},
 		{"the WireGuard boot unit", "wg-quick@"},
 		{"the WireGuard config", ".fleet-disabled"},
+		{"the WireGuard private key", "privatekey"},
 	} {
 		if !strings.Contains(inApp, artifact.token) {
 			t.Errorf("in-app teardown does not handle %s (%q)", artifact.what, artifact.token)
@@ -323,6 +324,45 @@ func TestTeardownPathsDoNotDrift(t *testing.T) {
 			t.Errorf("scripts/fleet-unenroll.sh does not handle %s (%q)", artifact.what, artifact.token)
 		}
 	}
+}
+
+// The certificate overlay's artifacts have to come off in BOTH paths too. They were
+// the second half of the same drift: the in-app teardown reused the retire script
+// (which keeps ca/cert/key on purpose), and scripts/fleet-unenroll.sh did not mention
+// /etc/openvpn at all — so on an OpenVPN host neither path removed the credential.
+func TestOpenVPNTeardownPathsDoNotDrift(t *testing.T) {
+	manualBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "fleet-unenroll.sh"))
+	if err != nil {
+		t.Fatalf("read the manual script: %v", err)
+	}
+	manual := string(manualBytes)
+	inApp := (&overlayOnly{}).purge()
+
+	for _, artifact := range []struct{ what, token string }{
+		{"the overlay CA copy", "/ca.crt"},
+		{"the client certificate", "client.crt"},
+		{"the client private key", "client.key"},
+		{"the renamed client config", "client.ovpn.fleet-disabled"},
+		{"the peer-isolation hook", "peer-isolation.sh"},
+		{"the systemd client unit", "openvpn-client@fleet-overlay"},
+		{"the peer-isolation chains", "FLEET-OVPN-IN"},
+	} {
+		if !strings.Contains(inApp, artifact.token) {
+			t.Errorf("in-app purge does not handle %s (%q)", artifact.what, artifact.token)
+		}
+		if !strings.Contains(manual, artifact.token) {
+			t.Errorf("scripts/fleet-unenroll.sh does not handle %s (%q)", artifact.what, artifact.token)
+		}
+	}
+}
+
+// overlayOnly builds the real OpenVPN purge script without needing a PKI.
+type overlayOnly struct{}
+
+func (overlayOnly) purge() string {
+	return overlay.New(&config.Config{
+		OVPNSubnet: "10.101.0.0/24", OVPNJumpIP: "10.101.0.1", OVPNPort: 1194,
+	}, nil).PurgeHostScript().Script
 }
 
 // stubOverlay is a minimal Overlay whose only interesting behaviour is the host-side
@@ -344,4 +384,7 @@ func (stubOverlay) RetireJump(context.Context, uuid.UUID, overlay.RunFunc) (stri
 }
 func (s stubOverlay) RetireHostScript() overlay.HostBringup {
 	return overlay.HostBringup{Script: s.retire, Marker: "RETIRED_OPENVPN"}
+}
+func (s stubOverlay) PurgeHostScript() overlay.HostBringup {
+	return overlay.HostBringup{Script: s.retire + "\nrm -f /etc/openvpn/fleet/client.key\necho PURGED_OPENVPN", Marker: "PURGED_OPENVPN"}
 }

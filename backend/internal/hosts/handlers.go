@@ -667,11 +667,31 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 	// Absent means false, so an existing client that never sends it keeps today's
 	// behaviour of leaving the host provisioned.
 	teardown := httpx.QueryBool(r, "teardown")
+	revokeErr := ""
 	// Read the host before the row is gone: retiring its overlay membership needs
 	// the hostname (WireGuard's fragment is keyed by it), the id (a cert overlay's
 	// pin is keyed by it) and the overlay itself; the teardown needs its addresses
 	// and SSH user.
 	host, _ := h.d.Store.GetHost(r.Context(), id)
+
+	// Revoke the host's overlay client certificates BEFORE the row goes. Two reasons
+	// it cannot wait for the teardown below: overlay_clients cascades on host delete,
+	// so afterwards nothing records which serial was this host's; and on a
+	// certificate overlay the certificate is the credential — wiping the host's copy
+	// does not stop a copy taken off it earlier, only revocation does. The CRL is
+	// published to the jump host by the overlay cleanup further down.
+	revoked := 0
+	if teardown && h.d.RevokeHostOverlayCerts != nil && host != nil {
+		var rerr error
+		if revoked, rerr = h.d.RevokeHostOverlayCerts(r.Context(), host); rerr != nil {
+			// Not fatal to the delete — but the operator has to know the certificate
+			// is still live, because everything downstream assumes it is not.
+			h.d.Log.Error("revoke overlay certificates before host delete",
+				"host", host.Hostname, "err", rerr)
+			revokeErr = rerr.Error()
+		}
+	}
+
 	if err := h.d.Store.DeleteHost(r.Context(), id); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not delete host")
 		return
@@ -735,6 +755,10 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		}
 		if overlayErr != "" {
 			resp["overlayError"] = overlayErr
+		}
+		resp["certificatesRevoked"] = revoked
+		if revokeErr != "" {
+			resp["revokeError"] = revokeErr
 		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)

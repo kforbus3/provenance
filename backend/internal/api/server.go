@@ -1061,13 +1061,14 @@ func (s *Server) registerRoutes(r chi.Router) {
 	terminal.Mount(r, deps, s.Gateway)
 
 	// M8 — host enrollment (WireGuard provisioning + trust).
-	enroll := enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway, s.overlays)
+	enroll := enrollment.New(s.Store, s.Cfg, s.Log, s.Gateway, s.overlays, s.overlayPKI)
 	enrollment.Mount(r, deps, enroll)
 	// Host deletion (REST handler and AI action alike) uses this to retire the
 	// deleted host's WireGuard peer on the jump host, so a stale peer can't
 	// steal the overlay IP back when it is later reassigned.
 	deps.CleanupHostOverlay = enroll.CleanupHostOverlay
 	deps.TeardownHost = enroll.TeardownHost
+	deps.RevokeHostOverlayCerts = enroll.RevokeHostOverlayCerts
 	// Re-trusting a rebuilt host's key has to invalidate the gateway's in-process
 	// pin cache as well as the stored pin.
 	deps.ForgetHostKeys = s.Gateway.ForgetHostKeys

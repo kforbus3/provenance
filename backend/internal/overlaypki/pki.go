@@ -246,3 +246,87 @@ func randSerial() *big.Int {
 func (p *PKI) RecordClient(ctx context.Context, hostID uuid.UUID, cn, serial string, notAfter time.Time) error {
 	return p.store.RecordOverlayClient(ctx, hostID, cn, serial, notAfter)
 }
+
+// crlValidity is how long a generated CRL claims to be current.
+//
+// It is deliberately long. OpenVPN refuses every connection once the CRL it was
+// given has passed its nextUpdate — so a short validity turns "nobody enrolled a
+// host for a while" into a fleet-wide outage, which is a far worse failure than a
+// stale revocation list. Freshness here comes from regenerating and redistributing
+// on every revocation, not from expiry: the CA, the server and the list are all
+// Fleet-managed and the list is pushed the moment it changes.
+const crlValidity = 10 * 365 * 24 * time.Hour
+
+// RevokeHostClients revokes every unexpired client certificate issued to a host and
+// returns how many were revoked.
+//
+// Call it BEFORE the host row is deleted: overlay_clients cascades on host delete, so
+// afterwards there is nothing left to say which serial belonged to it. The revocation
+// itself is recorded in overlay_revocations, which has no host reference and outlives
+// the host — see 0073_overlay_revocations.sql.
+func (p *PKI) RevokeHostClients(ctx context.Context, hostID uuid.UUID, reason string) (int, error) {
+	certs, err := p.store.OverlayClientsForHost(ctx, hostID)
+	if err != nil {
+		return 0, fmt.Errorf("list overlay client certs: %w", err)
+	}
+	if len(certs) == 0 {
+		return 0, nil
+	}
+	if err := p.store.RevokeOverlayClients(ctx, certs, reason); err != nil {
+		return 0, fmt.Errorf("record overlay revocations: %w", err)
+	}
+	return len(certs), nil
+}
+
+// CRLPEM builds the current certificate revocation list, signed by the overlay CA.
+//
+// An empty list is a valid, signed CRL and is what a fleet with nothing revoked gets.
+// That matters: the OpenVPN server config carries `crl-verify`, and OpenVPN refuses
+// to start if that file is missing — so there must always be a CRL to write, from the
+// very first enrollment.
+func (p *PKI) CRLPEM(ctx context.Context) ([]byte, error) {
+	if err := p.EnsureCA(ctx); err != nil {
+		return nil, err
+	}
+	p.mu.RLock()
+	caCert, caKey := p.caCert, p.caKey
+	p.mu.RUnlock()
+	if caCert == nil || caKey == nil {
+		return nil, errors.New("overlay CA unavailable")
+	}
+
+	// Expired entries are dropped: the server refuses such a certificate on its own
+	// dates, so carrying it only grows the list every host has to download.
+	_, _ = p.store.PruneExpiredOverlayRevocations(ctx)
+	revoked, err := p.store.RevokedOverlaySerials(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list overlay revocations: %w", err)
+	}
+
+	now := time.Now()
+	entries := make([]x509.RevocationListEntry, 0, len(revoked))
+	for _, r := range revoked {
+		serial, ok := new(big.Int).SetString(r.Serial, 10)
+		if !ok {
+			// A serial we cannot parse cannot be revoked, and silently dropping it
+			// would leave a certificate live with nothing to show for it.
+			return nil, fmt.Errorf("overlay revocation has an unparseable serial %q (cn %q)", r.Serial, r.CommonName)
+		}
+		entries = append(entries, x509.RevocationListEntry{
+			SerialNumber:   serial,
+			RevocationTime: now,
+		})
+	}
+
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		// A monotonic-enough CRL number; consumers only require it to change.
+		Number:                    randSerial(),
+		ThisUpdate:                now.Add(-time.Minute),
+		NextUpdate:                now.Add(crlValidity),
+		RevokedCertificateEntries: entries,
+	}, caCert, caKey)
+	if err != nil {
+		return nil, fmt.Errorf("sign overlay CRL: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}), nil
+}

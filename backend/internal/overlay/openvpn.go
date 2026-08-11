@@ -34,7 +34,20 @@ const fleetDir = "/etc/openvpn/fleet"
 // OpenVPN builds the OpenVPN overlay's configuration from Fleet's settings + PKI.
 type OpenVPN struct {
 	cfg *config.Config
-	pki *overlaypki.PKI
+	pki certAuthority
+}
+
+// certAuthority is the slice of the overlay PKI this package uses. It exists so the
+// CRL path is reachable in a test: the concrete PKI needs a database to produce a
+// signed list, and the behaviour worth pinning down here is that retiring a host
+// PUBLISHES one, not how it is signed. *overlaypki.PKI satisfies it.
+type certAuthority interface {
+	EnsureCA(ctx context.Context) error
+	CACertPEM() []byte
+	IssueServer(cn string, dnsNames []string, ips []net.IP, ttl time.Duration) (certPEM, keyPEM []byte, err error)
+	IssueClient(cn string, ttl time.Duration) (certPEM, keyPEM []byte, serial string, err error)
+	RecordClient(ctx context.Context, hostID uuid.UUID, cn, serial string, notAfter time.Time) error
+	CRLPEM(ctx context.Context) ([]byte, error)
 }
 
 func New(cfg *config.Config, pki *overlaypki.PKI) *OpenVPN {
@@ -90,11 +103,18 @@ data-ciphers-fallback AES-256-GCM
 server %s %s
 topology subnet
 client-config-dir %s/ccd
+# Revocation. Without this the server accepts ANY certificate the overlay CA ever
+# signed, so a decommissioned host's client.crt/key — or a copy taken off it before
+# it was wiped — reconnects and is issued a pool address. The file is re-read for
+# each new connection, so pushing an updated list takes effect without a restart;
+# already-established tunnels drop at their next renegotiation. OpenVPN refuses to
+# start if this file is absent, which is why an empty CRL is still written.
+crl-verify %s/crl.pem
 keepalive 10 60
 persist-key
 persist-tun
 verb 3
-`, o.cfg.OVPNPort, fleetDir, fleetDir, fleetDir, network, netmask, fleetDir), nil
+`, o.cfg.OVPNPort, fleetDir, fleetDir, fleetDir, network, netmask, fleetDir, fleetDir), nil
 }
 
 // ClientConfig returns a managed host's client.ovpn (references the cert/key/ca
@@ -274,7 +294,7 @@ func runningCheck(fn, confPath string) string {
 `, fn, confPath)
 }
 
-func (o *OpenVPN) JumpServerScript(caPEM, certPEM, keyPEM []byte, serverConf string) string {
+func (o *OpenVPN) JumpServerScript(caPEM, certPEM, keyPEM, crlPEM []byte, serverConf string) string {
 	return fmt.Sprintf(`set -e
 if ! command -v openvpn >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq openvpn >/dev/null 2>&1
@@ -291,9 +311,15 @@ cat > %[1]s/server.crt <<'FLEOF'
 %[3]sFLEOF
 cat > %[1]s/server.key <<'FLEOF'
 %[4]sFLEOF
-cat > %[1]s/server.conf <<'FLEOF'
+# The CRL goes down BEFORE the config that names it: openvpn refuses to start when
+# crl-verify points at a missing file, so the order is what keeps an upgrading
+# deployment from failing to come back up.
+cat > %[1]s/crl.pem <<'FLEOF'
 %[5]sFLEOF
-%[6]s%[7]sif ovpn_server_running; then
+chmod 0644 %[1]s/crl.pem
+cat > %[1]s/server.conf <<'FLEOF'
+%[6]sFLEOF
+%[7]s%[8]sif ovpn_server_running; then
   echo OVPN_SERVER_ALREADY_RUNNING
 else
   # --daemon detaches before the tun/bind work, so its failures land nowhere unless
@@ -314,8 +340,44 @@ else
     echo '--- openvpn server log ---'
     tail -n 15 %[1]s/server.log 2>/dev/null
   fi
-fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), serverConf,
+fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), string(crlPEM), serverConf,
 		o.peerIsolationScript(), runningCheck("ovpn_server_running", fleetDir+"/server.conf"))
+}
+
+// JumpCRLScript replaces the revocation list on the jump host. No restart: the server
+// re-reads crl-verify's file for each new connection, so a revoked certificate stops
+// being accepted as soon as this lands. Written to a temporary file and moved into
+// place so a connection arriving mid-write never reads a half-written list — which
+// openvpn would treat as a broken CRL and, depending on version, refuse everything.
+func (o *OpenVPN) JumpCRLScript(crlPEM []byte) string {
+	return fmt.Sprintf(`set -e
+mkdir -p %[1]s
+cat > %[1]s/crl.pem.new <<'FLEOF'
+%[2]sFLEOF
+chmod 0644 %[1]s/crl.pem.new
+mv -f %[1]s/crl.pem.new %[1]s/crl.pem
+echo OVPN_CRL_UPDATED`, fleetDir, string(crlPEM))
+}
+
+// PurgeHostScript implements Overlay: retire the client, then destroy every file
+// Fleet put under /etc/openvpn/fleet — including the ones RetireHostScript renamed to
+// .fleet-disabled, which are a complete, working config and not merely a record of
+// what was there.
+func (o *OpenVPN) PurgeHostScript() HostBringup {
+	retire := o.RetireHostScript()
+	return HostBringup{
+		Marker: "OVPN_PURGED",
+		Script: retire.Script + fmt.Sprintf(`
+# Everything Fleet wrote lives under one directory, so this is bounded by
+# construction — no globbing outside it, and no other openvpn config is touched.
+rm -f %[1]s/ca.crt %[1]s/client.crt %[1]s/client.key       %[1]s/client.ovpn %[1]s/client.ovpn.fleet-disabled       %[1]s/peer-isolation.sh
+rm -f /etc/openvpn/fleet-overlay.conf /etc/openvpn/fleet-overlay.conf.fleet-disabled       /etc/openvpn/client/fleet-overlay.conf /etc/openvpn/client/fleet-overlay.conf.fleet-disabled
+rmdir %[1]s 2>/dev/null
+if [ -e %[1]s ]; then
+  echo "[fleet] NOTE: %[1]s still holds files Fleet did not write; left in place"
+fi
+echo OVPN_PURGED`, fleetDir),
+	}
 }
 
 // peerIsolationScript renders the fragment of JumpServerScript that keeps the
@@ -394,10 +456,28 @@ func (o *OpenVPN) RetireJump(ctx context.Context, hostID uuid.UUID, jumpRun RunF
 	if err != nil {
 		return "", fmt.Errorf("remove the pinned address on the jump host: %v: %s", err, oneLine(out))
 	}
+	detail := ""
 	if strings.Contains(out, "OVPN_CCD_REMOVED") {
-		return "pinned overlay address removed from the openvpn server", nil
+		detail = "pinned overlay address removed from the openvpn server"
 	}
-	return "", nil
+	// Push the current revocation list too. Removing the ccd pin only takes away the
+	// host's STATIC address — the server still authenticates any certificate the CA
+	// signed and would hand out a pool address instead. The CRL is what actually stops
+	// a retired host, or a copy of the key taken off it, from reconnecting.
+	crlPEM, cerr := o.pki.CRLPEM(ctx)
+	if cerr != nil {
+		return detail, fmt.Errorf("build overlay CRL: %w", cerr)
+	}
+	cout, cerr := jumpRun(o.JumpCRLScript(crlPEM))
+	if cerr != nil || !strings.Contains(cout, "OVPN_CRL_UPDATED") {
+		return detail, fmt.Errorf("publish overlay CRL to the jump host: %v: %s", cerr, oneLine(cout))
+	}
+	if detail == "" {
+		detail = "revocation list published to the openvpn server"
+	} else {
+		detail += "; revocation list published"
+	}
+	return detail, nil
 }
 
 // RetireHostScript implements Overlay: stop the client, keep it from restarting on

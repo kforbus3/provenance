@@ -231,8 +231,10 @@ function DeleteHostsDialog({
             {teardown ? (
               <Alert severity="warning" sx={{ mt: 1 }}>
                 The host will lose the Fleet account with NOPASSWD sudo, the login-only
-                account, the trusted CA and the sshd drop-in. <strong>If Fleet is the only
-                administrative access to {enrolled.length === 1 ? "this host" : "these hosts"},
+                account, the trusted CA, the sshd drop-in, and its overlay client and key
+                material. On a certificate overlay the client certificate is also revoked, so
+                a copy taken off the host beforehand cannot reconnect. <strong>If Fleet is the
+                only administrative access to {enrolled.length === 1 ? "this host" : "these hosts"},
                 this locks you out.</strong> Your own <code>authorized_keys</code> and any sshd
                 configuration Fleet did not write are left alone. A host Fleet cannot reach
                 right now is skipped and reported — clean it up with{" "}
@@ -637,6 +639,11 @@ export function HostsPage() {
             // The host cleaned up, but its peer is still on the hub — the tunnel can
             // keep handshaking, so this is not something to leave in a log line.
             failures.push(`${h.hostname}: overlay peer not retired on the jump host — ${res.overlayError}`);
+          }
+          if (res.revokeError) {
+            // Worse than a leftover file: the certificate still authenticates, so a
+            // copy taken off the host before it was wiped can rejoin the overlay.
+            failures.push(`${h.hostname}: overlay certificate NOT revoked — ${res.revokeError}`);
           }
         } catch (e) {
           failures.push(`${h.hostname}: ${(e as Error).message}`);

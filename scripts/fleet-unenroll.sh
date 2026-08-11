@@ -11,8 +11,13 @@
 #
 # What it removes: the NOPASSWD sudoers grant, both shared accounts (and their home
 # directories), the trusted CA, the certificate principal files, the sshd drop-in,
-# and the revocation list. It also retires the WireGuard interface if Fleet created
-# one.
+# and the revocation list. It also removes whichever overlay client Fleet
+# provisioned — the WireGuard interface and its keys, or the OpenVPN client and its
+# certificate material.
+#
+# Removing the host's copy of an OpenVPN certificate does not REVOKE it. If the key
+# may have been copied off this host, delete the host in Fleet with teardown ticked
+# as well, which revokes it and republishes the server's CRL.
 #
 # What it does NOT touch: authorized_keys, any other sudoers file, and any sshd
 # configuration Fleet did not write. sshd is reloaded only if `sshd -t` still passes.
@@ -140,11 +145,12 @@ for U in "$LOGIN" "$NOSUDO"; do
 	fi
 done
 
-# 5. The WireGuard overlay, if Fleet created one. The config is renamed rather than
-#    deleted so the host's old identity is recoverable and visible to an operator.
+# 5. The WireGuard overlay, if Fleet created one. Config and key material are
+#    removed: this is a decommission, not a transport switch, so there is no later
+#    membership for the host's old identity to be recovered for.
 if [ -e "/etc/wireguard/$WG_IF.conf" ] || ip link show "$WG_IF" >/dev/null 2>&1; then
 	if [ "$DRY" -eq 1 ]; then
-		echo "[dry-run] would bring down and disable $WG_IF"
+		echo "[dry-run] would bring down $WG_IF and remove its config and keys"
 	else
 		command -v systemctl >/dev/null 2>&1 && {
 			systemctl disable --now "wg-quick@$WG_IF" >/dev/null 2>&1
@@ -152,9 +158,69 @@ if [ -e "/etc/wireguard/$WG_IF.conf" ] || ip link show "$WG_IF" >/dev/null 2>&1;
 		}
 		command -v wg-quick >/dev/null 2>&1 && wg-quick down "$WG_IF" >/dev/null 2>&1
 		ip link show "$WG_IF" >/dev/null 2>&1 && ip link delete "$WG_IF" >/dev/null 2>&1
-		[ -f "/etc/wireguard/$WG_IF.conf" ] && \
-			mv -f "/etc/wireguard/$WG_IF.conf" "/etc/wireguard/$WG_IF.conf.fleet-disabled"
-		say "retired WireGuard interface $WG_IF"
+		# Removed, not renamed. A renamed config plus the private key beside it is a
+		# working tunnel definition left on a machine nothing manages any more; the
+		# hub no longer lists the peer, but the credential should not outlive the
+		# host's membership either.
+		rm -f "/etc/wireguard/$WG_IF.conf" "/etc/wireguard/$WG_IF.conf.fleet-disabled"
+		rm -f "/etc/wireguard/$WG_IF.privatekey" "/etc/wireguard/$WG_IF.publickey"
+		rm -f /etc/systemd/system/fleet-wg-reresolve.service \
+		      /etc/systemd/system/fleet-wg-reresolve.timer
+		command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1
+		say "removed WireGuard interface $WG_IF and its key material"
+	fi
+fi
+
+# 6. The certificate overlay (OpenVPN), if Fleet provisioned one. Unlike WireGuard —
+#    where the hub's peer list is an allowlist, so removing the peer is itself the
+#    revocation — an OpenVPN client authenticates with a certificate the server
+#    accepts on its own merits. Everything needed to reconnect lives in one
+#    directory, so it is removed outright rather than renamed.
+#
+#    NOTE: this destroys the host's COPY. It does not revoke the certificate. If the
+#    key may have been taken off this host, revoke it in Fleet (deleting the host with
+#    teardown does) so the server's CRL refuses it.
+if [ -d /etc/openvpn/fleet ] || [ -e /etc/openvpn/fleet-overlay.conf ] || [ -e /etc/openvpn/client/fleet-overlay.conf ]; then
+	if [ "$DRY" -eq 1 ]; then
+		echo "[dry-run] would stop the openvpn client and remove /etc/openvpn/fleet"
+	else
+		command -v systemctl >/dev/null 2>&1 && {
+			systemctl disable --now openvpn@fleet-overlay >/dev/null 2>&1
+			systemctl disable --now openvpn-client@fleet-overlay >/dev/null 2>&1
+		}
+		for _p in $(pgrep -x openvpn 2>/dev/null); do
+			if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '/etc/openvpn/fleet/client.ovpn'; then
+				kill "$_p" 2>/dev/null
+			fi
+		done
+		rm -f /run/fleet-ovpn-client.pid
+		rm -f /etc/openvpn/fleet/ca.crt /etc/openvpn/fleet/client.crt /etc/openvpn/fleet/client.key \
+		      /etc/openvpn/fleet/client.ovpn /etc/openvpn/fleet/client.ovpn.fleet-disabled \
+		      /etc/openvpn/fleet/peer-isolation.sh
+		rm -f /etc/openvpn/fleet-overlay.conf /etc/openvpn/fleet-overlay.conf.fleet-disabled \
+		      /etc/openvpn/client/fleet-overlay.conf /etc/openvpn/client/fleet-overlay.conf.fleet-disabled
+		rmdir /etc/openvpn/fleet 2>/dev/null
+		# The peer-isolation chains go with it; they are scoped to the tunnel device,
+		# and tun0 is a name the kernel reuses for the next VPN this host runs.
+		if command -v iptables >/dev/null 2>&1; then
+			for _pair in "INPUT FLEET-OVPN-IN" "OUTPUT FLEET-OVPN-OUT"; do
+				set -- $_pair
+				_chain=$1; _own=$2
+				_n=0
+				while [ $_n -lt 20 ]; do
+					_rule=$(iptables -S "$_chain" 2>/dev/null | grep -m1 -- "-j $_own" | sed "s/^-A $_chain //")
+					[ -n "$_rule" ] || break
+					iptables -D "$_chain" $_rule 2>/dev/null || break
+					_n=$((_n+1))
+				done
+				iptables -F "$_own" 2>/dev/null
+				iptables -X "$_own" 2>/dev/null
+			done
+		fi
+		say "removed the openvpn overlay client and its certificate material"
+		if [ -e /etc/openvpn/fleet ]; then
+			say "NOTE: /etc/openvpn/fleet still holds files Fleet did not write; left in place"
+		fi
 	fi
 fi
 

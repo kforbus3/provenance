@@ -25,7 +25,14 @@ func (o *OpenVPN) EnsureServer(ctx context.Context, jumpRun RunFunc) (string, er
 	if err != nil {
 		return "", fmt.Errorf("build server config: %w", err)
 	}
-	out, err := jumpRun(o.JumpServerScript(caPEM, srvCert, srvKey, srvConf))
+	// Always regenerate: the config names crl-verify, and openvpn will not start
+	// without that file. An empty list is a valid signed CRL, which is what a fleet
+	// with nothing revoked gets.
+	crlPEM, err := o.pki.CRLPEM(ctx)
+	if err != nil {
+		return "", fmt.Errorf("build overlay CRL: %w", err)
+	}
+	out, err := jumpRun(o.JumpServerScript(caPEM, srvCert, srvKey, crlPEM, srvConf))
 	if err != nil {
 		return "", fmt.Errorf("start jump OpenVPN server: %v: %s", err, oneLine(out))
 	}
