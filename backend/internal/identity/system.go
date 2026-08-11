@@ -78,3 +78,21 @@ func (i *Issuer) SystemHostPrincipals(hostID uuid.UUID) []string {
 	}
 	return []string{princ.Global}
 }
+
+// SystemHostLoginPrincipals is the login-only counterpart of SystemHostPrincipals:
+// the principal set that maps to a host's no-sudo account. Paths that act on a
+// user's behalf without an interactive session (the ad-hoc command runner) use it
+// so a user without Host.Sudo does not silently land in the privileged account.
+//
+// Like sshgw.LoginTier, it deliberately omits the fleet-wide "fleet" principal:
+// carrying it would open the privileged account on any host that still trusts
+// "fleet" (i.e. not yet under FLEET_HOST_SCOPED_ONLY), leaving the account split
+// enforced only by the backend naming the right account. That means this set
+// authenticates the MANAGED-HOST hop only — pair it with SystemHostPrincipals for
+// the jump hop via Gateway.DialWithSigners.
+func (i *Issuer) SystemHostLoginPrincipals(hostID uuid.UUID) []string {
+	if i.cfg.HostScopedOnly {
+		return []string{princ.GlobalLogin, princ.HostLogin(hostID)}
+	}
+	return []string{princ.GlobalLogin}
+}

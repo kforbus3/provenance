@@ -41,6 +41,15 @@ export async function rotateCA(): Promise<void> {
   await api.post("/api/v1/certificates/ca/rotate");
 }
 
-export async function revokeCertificate(serial: number, reason: string): Promise<void> {
-  await api.post(`/api/v1/certificates/${serial}/revoke`, { reason });
+// A revocation only takes effect on hosts that actually installed the updated
+// KRL. hostsFailed counts those that did not — they still accept the revoked
+// certificate, so the caller must show it rather than treat revoke as complete.
+export interface RevokeResult {
+  hostsUpdated: number;
+  hostsFailed: number;
+}
+
+export async function revokeCertificate(serial: number, reason: string): Promise<RevokeResult> {
+  const { data } = await api.post<RevokeResult>(`/api/v1/certificates/${serial}/revoke`, { reason });
+  return { hostsUpdated: data?.hostsUpdated ?? 0, hostsFailed: data?.hostsFailed ?? 0 };
 }

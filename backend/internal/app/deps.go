@@ -47,8 +47,11 @@ type Deps struct {
 	Events Broadcaster
 
 	// DistributeKRL pushes the current certificate revocation list to all enrolled
-	// hosts immediately (set by the server). Returns the number of hosts updated.
-	DistributeKRL func(ctx context.Context) (int, error)
+	// hosts immediately (set by the server). Returns the number of hosts where the
+	// KRL was verified installed, and the number where it was not — a host in the
+	// second count still honors the certificates that were just revoked, so callers
+	// must surface it rather than report distribution as complete.
+	DistributeKRL func(ctx context.Context) (pushed, failed int, err error)
 
 	// ForgetHostKeys drops cached SSH host-key pins for the given dial identities
 	// (set by the server; nil in tests). Deleting the ssh_host_keys rows is not

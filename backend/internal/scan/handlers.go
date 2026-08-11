@@ -30,8 +30,11 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/scans/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/scans/{id}/findings", h.findings)
 		// Remediation modifies hosts -> Host.Remediate (admin-only by default).
+		// Applying runs the generated fix script as root (`sudo bash`), so it also
+		// requires Host.Sudo. Preview only generates the script and does not, so it
+		// stays on the plain permission and remains useful to a non-sudo reviewer.
 		pr.With(d.Auth.RequirePermission("Host.Remediate")).Post("/scans/{id}/remediation/preview", h.remediatePreview)
-		pr.With(d.Auth.RequirePermission("Host.Remediate")).Post("/scans/{id}/remediate", h.remediate)
+		pr.With(d.Auth.RequirePrivilegedPermission("Host.Remediate")).Post("/scans/{id}/remediate", h.remediate)
 		pr.With(d.Auth.RequirePermission("Host.Remediate")).Get("/remediations/{id}", h.remediationStatus)
 	})
 	r.Get("/scans/{id}/report", h.report)

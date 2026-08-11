@@ -23,7 +23,9 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 	h := &handler{d: d, svc: svc}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
-		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/hosts/{id}/support-bundle", h.bundle)
+		// The collect script runs in full under `sudo sh -c` to read sshd -T, the
+		// auth log, the journal, and dmidecode, so it also requires Host.Sudo.
+		pr.With(d.Auth.RequirePrivilegedPermission("Host.Scan")).Get("/hosts/{id}/support-bundle", h.bundle)
 	})
 }
 

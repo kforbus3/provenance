@@ -7,6 +7,48 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.5.0 — Host.Sudo means what it says — 2026-08-10
+
+**Behavior change.** Running an Ansible playbook, applying OpenSCAP remediation, or
+collecting a support bundle now requires `Host.Sudo` in addition to the permission
+that already gated it. All three execute as root on the target and have no
+unprivileged mode. The builtin Administrator role holds both permissions and super
+admins hold everything, so a default deployment is unaffected — only a custom role
+that granted one of those permissions while withholding `Host.Sudo` changes, and it
+was getting root against the operator's intent.
+
+- **The login-only tier could not connect at all.** A user with `Host.Connect` and
+  without `Host.Sudo` is supposed to land in the host's no-sudo account. Its
+  certificate deliberately omits the fleet-wide `fleet` principal — that omission is
+  what makes *sshd*, not just the backend, refuse it the sudo account. But both SSH
+  hops presented that same certificate, and the jump host trusts only `fleet`, so the
+  connection was rejected before it ever reached the managed host. The two hops now
+  present different certificates: the session (or system) certificate for the jump
+  host, the tier's certificate for the managed host. Until now the only tier that
+  worked end to end was the privileged one, which means terminal access has in
+  practice been root access on every host — `Host.Sudo` is seeded to Operator as well
+  as Administrator, so no builtin role connected without it.
+
+- **Ad-hoc commands honour `Host.Sudo`.** The command runner dialed the privileged
+  account for everyone, so a user denied `Host.Sudo` still got a root shell by typing
+  `sudo` into a run. It now uses the same tier a terminal does, and records which tier
+  the run used in the audit event.
+
+- **A failed revocation push is no longer counted as a success.** Distributing the KRL
+  discarded the result of the install command and incremented the pushed count
+  regardless, so a host that never received the list — unreachable, tightened sudoers,
+  read-only `/etc/ssh` — was reported as updated while it went on accepting the
+  certificates that had just been revoked. Installation is now verified, failures are
+  counted and logged per host, the API returns `hostsFailed` alongside `hostsUpdated`,
+  the Certificates page shows it, and the background loop retries instead of
+  short-circuiting on an unchanged KRL hash.
+
+**Known gap, unchanged:** `Schedule.Manage` can schedule a playbook run without
+holding `Playbook.Run`. It is admin-only by default; treat it as equivalent when
+composing custom roles.
+
+---
+
 ## v1.4.1 — 2026-08-09
 
 Follow-ups to v1.4.0, both found switching a real host between overlays.

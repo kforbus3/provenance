@@ -438,7 +438,7 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	if s.isLeader() {
 		if n, err := s.Store.RevokeDeadInstanceCertificates(ctx, lease, self); err == nil && n > 0 {
 			s.Log.Info("revoked certificates of dead instances", "count", n)
-			if _, derr := s.distributeKRL(ctx); derr != nil {
+			if _, _, derr := s.distributeKRL(ctx); derr != nil {
 				s.Log.Warn("distribute KRL after dead-instance revoke", "err", derr)
 			}
 		}
@@ -478,9 +478,17 @@ func (s *Server) krlLoop(ctx context.Context) {
 			s.Jobs.Record("krl-distribution", nil)
 			return
 		}
-		if _, err := s.distributeKRL(ctx); err != nil {
+		pushed, failed, err := s.distributeKRL(ctx)
+		if err != nil {
 			// Leave lastHash/sinceFull so we retry on the next tick until it lands.
 			s.Jobs.Record("krl-distribution", err)
+			return
+		}
+		if failed > 0 {
+			// Same treatment as a hard error: do NOT advance lastHash, so the next
+			// tick retries the hosts that never installed the list instead of
+			// short-circuiting on an unchanged hash and leaving them revocation-blind.
+			s.Jobs.Record("krl-distribution", fmt.Errorf("%d of %d hosts did not install the KRL", failed, pushed+failed))
 			return
 		}
 		lastHash = hash
@@ -499,11 +507,13 @@ func (s *Server) krlLoop(ctx context.Context) {
 }
 
 // distributeKRL builds the current KRL and writes it to every enrolled host.
-// Returns the number of hosts updated. Hosts read RevokedKeys per-auth, so no
-// sshd reload is needed for updates to take effect.
-func (s *Server) distributeKRL(ctx context.Context) (int, error) {
+// Returns the number of hosts where installation was VERIFIED, and the number
+// where it was not. Hosts read RevokedKeys per-auth, so no sshd reload is needed
+// for updates to take effect — but a host missing from the first count is still
+// accepting the revoked certificates, so the second count must reach the operator.
+func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 	if !krl.Available() {
-		return 0, fmt.Errorf("ssh-keygen not available")
+		return 0, 0, fmt.Errorf("ssh-keygen not available")
 	}
 	// Drop KRL entries for certificates that have already expired (keeps it small).
 	_, _ = s.Store.PruneExpiredRevocations(ctx, time.Now().Add(-s.Cfg.UserCertTTL))
@@ -511,7 +521,7 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 	serials, _ := s.Store.RevokedSerials(ctx)
 	krlBytes, err := krl.Build(caKeys, serials)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// Reach every enrolled host, not just the first page — a revoked cert must be
 	// rejected fleet-wide. Push in parallel with a bounded pool so revocation
@@ -525,7 +535,18 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 	const krlConcurrency = 8
 	sem := make(chan struct{}, krlConcurrency)
 	var wg sync.WaitGroup
-	var pushed int64
+	var pushed, failed int64
+	// A host is counted as pushed only when the KRL is verified on disk there. The
+	// command ends in `echo OK`, so anything else — unreachable, a host that has
+	// tightened its sudoers, a read-only /etc/ssh, a failed tee — means the host
+	// still accepts revoked certificates. Counting those as pushed would report
+	// revocation as distributed while it silently is not enforced, which is the one
+	// failure this must not hide.
+	miss := func(h models.Host, reason string, err error, out string) {
+		atomic.AddInt64(&failed, 1)
+		s.Log.Warn("KRL push failed; host still accepts revoked certificates",
+			"host", h.Hostname, "hostID", h.ID, "reason", reason, "err", err, "output", out)
+	}
 	for i := range hosts {
 		h := hosts[i]
 		if !h.Enrolled {
@@ -538,26 +559,44 @@ func (s *Server) distributeKRL(ctx context.Context) (int, error) {
 			defer func() { <-sem }()
 			signer, err := s.Issuer.SystemSigner(ctx, s.Issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
 			if err != nil {
+				miss(h, "issue credential", err, "")
 				return
 			}
+			var lastErr error
 			for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
 				conn, derr := s.Gateway.DialWithSigner(ctx, signer, addr, h.SSHPort, h.SSHUser)
 				if derr != nil {
+					lastErr = derr
 					continue
 				}
-				if sess, e := conn.Client.NewSession(); e == nil {
-					_, _ = sess.CombinedOutput(cmd)
-					sess.Close()
-					atomic.AddInt64(&pushed, 1)
+				sess, e := conn.Client.NewSession()
+				if e != nil {
+					conn.Close()
+					miss(h, "open session", e, "")
+					return
 				}
+				out, rerr := sess.CombinedOutput(cmd)
+				sess.Close()
 				conn.Close()
-				break
+				if rerr == nil && strings.Contains(string(out), "OK") {
+					atomic.AddInt64(&pushed, 1)
+				} else {
+					miss(h, "install KRL", rerr, strings.TrimSpace(string(out)))
+				}
+				return
 			}
+			miss(h, "unreachable", lastErr, "")
 		}()
 	}
 	wg.Wait()
-	s.Log.Info("distributed KRL", "hosts", pushed, "revokedSerials", len(serials))
-	return int(pushed), nil
+	if failed > 0 {
+		// Surfaced at Error, not Info: any host in this count is still honoring the
+		// certificates just revoked. Re-run distribution or re-enroll those hosts.
+		s.Log.Error("KRL distribution incomplete", "pushed", pushed, "failed", failed, "revokedSerials", len(serials))
+	} else {
+		s.Log.Info("distributed KRL", "hosts", pushed, "revokedSerials", len(serials))
+	}
+	return int(pushed), int(failed), nil
 }
 
 // retentionLoop prunes session recordings older than the configured retention

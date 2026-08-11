@@ -563,6 +563,6 @@ func (h *handler) cutHostAccessNow(ctx context.Context, userID, hostID uuid.UUID
 		}
 	}
 	if revoked && h.d.DistributeKRL != nil {
-		_, _ = h.d.DistributeKRL(ctx)
+		_, _, _ = h.d.DistributeKRL(ctx)
 	}
 }

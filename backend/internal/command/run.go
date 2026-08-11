@@ -64,7 +64,13 @@ func (l *liveRun) snapshot() string {
 // buffer and persisting the aggregate. It runs in its own goroutine with a fresh
 // (restart-independent) context; FailStaleCommandRuns reconciles the DB row if the
 // instance dies mid-run.
-func (s *Service) Run(runID uuid.UUID, command string, hosts []*models.Host, userID uuid.UUID, username string) {
+//
+// sudo carries the requester's Host.Sudo tier. It is NOT a convenience flag: a run
+// dials the same privileged account a terminal does, so without it a user denied
+// Host.Sudo would get through the command runner exactly the root shell the
+// permission is there to withhold. False lands the run in the host's login-only
+// account, where `sudo` in the command itself fails as it should.
+func (s *Service) Run(runID uuid.UUID, command string, hosts []*models.Host, userID uuid.UUID, username string, sudo bool) {
 	batches := (len(hosts) + commandConcurrency - 1) / commandConcurrency
 	if batches < 1 {
 		batches = 1
@@ -95,7 +101,7 @@ func (s *Service) Run(runID uuid.UUID, command string, hosts []*models.Host, use
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			out, code, failed := s.runOne(ctx, command, h, userID, username)
+			out, code, failed := s.runOne(ctx, command, h, userID, username, sudo)
 			live.append(fmt.Sprintf("===== %s =====\n%s\n", h.Hostname, out))
 			mu.Lock()
 			if failed {
@@ -127,17 +133,31 @@ func (s *Service) Run(runID uuid.UUID, command string, hosts []*models.Host, use
 // runOne evaluates the command against the host's command-control policy, then (if
 // allowed) runs it over one jump-host SSH connection, returning the captured output,
 // exit code, and whether it failed.
-func (s *Service) runOne(ctx context.Context, command string, h *models.Host, userID uuid.UUID, username string) (string, int, bool) {
+func (s *Service) runOne(ctx context.Context, command string, h *models.Host, userID uuid.UUID, username string, sudo bool) (string, int, bool) {
 	// Command-control policy: the same governance as an interactive session.
 	if out, code, failed, handled := s.applyPolicy(ctx, command, h, userID, username); handled {
 		return out, code, failed
 	}
 
-	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), runCertTTL)
+	// Same privilege tier as a terminal: Host.Sudo lands in the privileged account,
+	// everyone else in the host's login-only account. The jump hop always uses the
+	// privileged system principals — the jump host trusts only "fleet" — while the
+	// host hop carries the tier's principals, so sshd, not just this code, decides
+	// which account opens.
+	jumpSigner, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), runCertTTL)
 	if err != nil {
 		return "could not issue jump credential: " + err.Error(), -1, true
 	}
-	conn, derr := s.dial(ctx, signer, h)
+	// Privileged runs present the same certificate to both hops; the login-only tier
+	// needs its own, since its principals are not trusted by the jump host.
+	loginUser, hostSigner := h.SSHUser, jumpSigner
+	if !sudo {
+		loginUser = h.SSHUser + "-login"
+		if hostSigner, err = s.issuer.SystemSigner(ctx, s.issuer.SystemHostLoginPrincipals(h.ID), runCertTTL); err != nil {
+			return "could not issue host credential: " + err.Error(), -1, true
+		}
+	}
+	conn, derr := s.dial(ctx, jumpSigner, hostSigner, h, loginUser)
 	if derr != nil {
 		return "host unreachable: " + derr.Error(), -1, true
 	}
@@ -174,12 +194,14 @@ func (s *Service) runOne(ctx context.Context, command string, h *models.Host, us
 	}
 }
 
-// dial opens a privileged connection to the host (WireGuard overlay first, then
-// management address / hostname), like the scan/support paths.
-func (s *Service) dial(ctx context.Context, signer ssh.Signer, h *models.Host) (*sshgw.Conn, error) {
+// dial opens a connection to the host (WireGuard overlay first, then management
+// address / hostname), like the scan/support paths. loginUser names the account —
+// the privileged one or the host's login-only one — and hostSigner carries the
+// matching principals.
+func (s *Service) dial(ctx context.Context, jumpSigner, hostSigner ssh.Signer, h *models.Host, loginUser string) (*sshgw.Conn, error) {
 	var lastErr error
 	for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
-		c, derr := s.gw.DialWithSigner(ctx, signer, addr, h.SSHPort, h.SSHUser)
+		c, derr := s.gw.DialWithSigners(ctx, jumpSigner, hostSigner, addr, h.SSHPort, loginUser)
 		if derr == nil {
 			return c, nil
 		}

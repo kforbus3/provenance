@@ -33,7 +33,9 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Playbook.Edit")).Get("/playbooks/{id}/versions", h.versions)
 		pr.With(d.Auth.RequirePermission("Playbook.Edit")).Get("/playbooks/{id}/versions/{version}", h.version)
 		// Execution requires Playbook.Run (admin-only by default) and host access.
-		pr.With(d.Auth.RequirePermission("Playbook.Run")).Post("/playbooks/{id}/run", h.run)
+		// A run is arbitrary root-level execution (the runner always sets Ansible
+		// become), and there is no unprivileged mode, so it also requires Host.Sudo.
+		pr.With(d.Auth.RequirePrivilegedPermission("Playbook.Run")).Post("/playbooks/{id}/run", h.run)
 		pr.With(d.Auth.RequirePermission("Playbook.Run")).Get("/playbooks/{id}/runs", h.runs)
 		pr.With(d.Auth.RequirePermission("Playbook.Run")).Get("/playbook-runs/{runId}", h.runStatus)
 	})

@@ -150,7 +150,10 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create run")
 		return
 	}
-	go h.svc.Run(rec.ID, rq.Command, hosts, p.UserID, p.Username)
+	// Same tier as a terminal: without Host.Sudo the run lands in the host's
+	// login-only account instead of the privileged one.
+	sudo := p.IsSuperAdmin || p.Has("Host.Sudo")
+	go h.svc.Run(rec.ID, rq.Command, hosts, p.UserID, p.Username, sudo)
 
 	names := make([]string, 0, len(hosts))
 	for _, hh := range hosts {
@@ -158,7 +161,7 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "command.run", rec.ID.String(), map[string]any{
 		"command": rq.Command, "targetKind": rq.TargetKind, "target": targetName,
-		"hosts": names, "hostCount": len(hosts),
+		"hosts": names, "hostCount": len(hosts), "privileged": sudo,
 	})
 	httpx.WriteJSON(w, http.StatusAccepted, rec)
 }

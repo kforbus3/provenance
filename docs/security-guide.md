@@ -143,6 +143,27 @@ and operational recommendations.
   principals are **host-scoped** (`fleet-h-<hostID>` / `fleet-login-h-<hostID>`),
   so the account split holds and the certificate is only valid on its own host.
   Both tiers still use unique per-user certs and are recorded and audited.
+  - **What `Host.Sudo` covers.** The terminal, SFTP, and the **ad-hoc command
+    runner** all honour the tier: without it you land in the login-only account and
+    a `sudo` in your own command fails. The paths that have **no unprivileged
+    mode** — Ansible playbook runs, applying OpenSCAP remediation, and
+    support-bundle collection — instead **require `Host.Sudo` in addition to** their
+    own permission, so withholding it is never silently ineffective. Background
+    workers (health monitoring, scans, CVE collection, KRL distribution) run under a
+    system identity and are not user-scoped at all.
+  - **The certificate carries the tier, not the connection.** A login-only
+    certificate deliberately omits the fleet-wide `fleet`, which is exactly why sshd
+    refuses it the sudo account. That also means it cannot authenticate the
+    jump-host hop, which trusts only `fleet` — so the two hops present **different**
+    certificates: the session (or system) certificate for the jump host, the
+    tier's certificate for the managed host.
+
+  > **Defaults are permissive.** `Host.Sudo` is seeded to **Administrator and
+  > Operator**, so every builtin role that can open a terminal has root on hosts it
+  > can reach. That preserved the pre-`Host.Sudo` behaviour (connect == root) on
+  > upgrade; it is not a least-privilege default. To grant shell access without
+  > root, create a custom role with `Host.Connect` and **without** `Host.Sudo`, or
+  > remove `Host.Sudo` from Operator.
 - **Automation permissions (admin-only by default).** Three permissions gate the
   Ansible/scheduling features and are granted to the Administrator role only:
   - **`Playbook.Run`** is effectively **arbitrary root-level command execution
@@ -154,6 +175,9 @@ and operational recommendations.
   - **`Playbook.Edit`** — author, upload, edit, delete, validate/lint playbooks
     (no execution).
   - **`Schedule.Manage`** — create and manage scheduled scans and playbook runs.
+    Note this is **not** currently paired with `Playbook.Run`: a schedule that runs
+    a playbook is authorized by `Schedule.Manage` alone. It is admin-only by
+    default; treat it as equivalent to `Playbook.Run` when composing custom roles.
 - Prefer **least privilege**: narrow custom roles plus just-in-time approvals
   over broad standing access.
 - **Attribute-based access control (ABAC).** Contextual **deny** policies layer on top of RBAC:

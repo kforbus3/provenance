@@ -76,10 +76,32 @@ func (g *Gateway) Dial(ctx context.Context, sessionID, host string, port int, us
 	return g.dialWithCred(ctx, cred, host, port, user)
 }
 
-// dialWithCred opens jump → tunnel → host using a specific credential.
+// dialWithCred opens jump → tunnel → host using one credential for both hops.
 func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, host string, port int, user string) (*Conn, error) {
 	signer := cred.CertSigner()
 	if signer == nil {
+		return nil, fmt.Errorf("session credential unavailable")
+	}
+	return g.dialWithSigners(ctx, signer, signer, host, port, user)
+}
+
+// dialWithSigners opens jump → tunnel → host, authenticating each hop with its own
+// certificate. The two hops trust different principals, so they need different
+// credentials whenever the host hop is login-only:
+//
+//   - The jump host always trusts only the fleet-wide "fleet" principal and is
+//     never locked down (see docs/security-guide.md §13), so jumpSigner must carry
+//     "fleet". The session-level certificate is the one that does.
+//   - A managed host maps a certificate to an account via AuthorizedPrincipalsFile.
+//     A login-only certificate deliberately carries "fleet-login"/"fleet-login-h-<id>"
+//     and NOT "fleet", which is what keeps sshd — not just the backend — enforcing
+//     the no-sudo tier. Reusing that certificate for the jump hop would be rejected
+//     there; adding "fleet" to it would surrender the account split on any host not
+//     yet under FLEET_HOST_SCOPED_ONLY.
+//
+// Hence: jumpSigner authenticates the jump hop, hostSigner the managed host.
+func (g *Gateway) dialWithSigners(ctx context.Context, jumpSigner, hostSigner ssh.Signer, host string, port int, user string) (*Conn, error) {
+	if jumpSigner == nil || hostSigner == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
 
@@ -89,7 +111,7 @@ func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, h
 
 	jumpCfg := g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
 	})
@@ -107,7 +129,7 @@ func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, h
 
 	hostCfg := g.pin(&ssh.ClientConfig{
 		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(hostSigner)},
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
 	})
@@ -140,7 +162,17 @@ func (g *Gateway) DialForHost(ctx context.Context, sessionID, userID, hostID uui
 	if !ok {
 		return nil, fmt.Errorf("no per-host credential for session")
 	}
-	return g.dialWithCred(ctx, cred, host, port, user)
+	// The jump hop authenticates with the SESSION certificate, which always carries
+	// the fleet-wide "fleet" principal the jump host trusts. The per-host credential
+	// authenticates only the managed host. This matters for the login-only tier,
+	// whose per-host certificate deliberately omits "fleet" — using it for the jump
+	// hop would be rejected there, so a user without Host.Sudo could not connect at
+	// all. See dialWithSigners.
+	sessCred, ok := g.vault.Get(sessionID)
+	if !ok {
+		return nil, fmt.Errorf("no live credential for session")
+	}
+	return g.dialWithSigners(ctx, sessCred.CertSigner(), cred.CertSigner(), host, port, user)
 }
 
 // LoginTier maps a connection's privilege to the host account it lands in and
@@ -152,6 +184,12 @@ func (g *Gateway) DialForHost(ctx context.Context, sessionID, userID, hostID uui
 // (principals.User → "user:<name>"); it matches no AuthorizedPrincipalsFile entry
 // and cannot collide with a "fleet"/"fleet-h-<id>" principal, so it grants no
 // access on its own even if the username were chosen adversarially.
+//
+// The returned principals are for the MANAGED-HOST hop only. The login-only set
+// omits the fleet-wide "fleet" on purpose: that is what makes sshd, rather than
+// only the backend, refuse to open the sudo account for a login-only user on a
+// host that still trusts "fleet" (i.e. not yet under FLEET_HOST_SCOPED_ONLY).
+// The jump hop is authenticated separately by the session certificate.
 func LoginTier(sudo bool, sshUser, username string) (loginUser string, principals []string) {
 	if sudo {
 		return sshUser, nil // nil -> issuer default principals {"fleet", "user:<name>"}
@@ -464,41 +502,23 @@ func (g *Gateway) DialKeyViaJump(ctx context.Context, sessionID, host string, po
 
 // DialWithSigner connects to host:port through the jump host using an explicit
 // certificate signer (e.g. the monitor's system identity) rather than a session
-// credential from the vault.
+// credential from the vault. Both hops present the same certificate, which is
+// correct for the privileged system principals (they carry "fleet", which the jump
+// host trusts). Use DialWithSigners when the host hop must be login-only.
 func (g *Gateway) DialWithSigner(ctx context.Context, signer ssh.Signer, host string, port int, user string) (*Conn, error) {
-	if signer == nil {
+	return g.DialWithSigners(ctx, signer, signer, host, port, user)
+}
+
+// DialWithSigners connects to host:port through the jump host presenting a
+// different certificate to each hop. The login-only principal sets omit the
+// fleet-wide "fleet" the jump host requires (that omission is what keeps sshd
+// enforcing the no-sudo account), so a login-only host hop must be paired with a
+// privileged jump hop — see identity.SystemHostLoginPrincipals.
+func (g *Gateway) DialWithSigners(ctx context.Context, jumpSigner, hostSigner ssh.Signer, host string, port int, user string) (*Conn, error) {
+	if jumpSigner == nil || hostSigner == nil {
 		return nil, fmt.Errorf("nil signer")
 	}
-	hostKeyCB := g.hostKeyCallback()
-	jumpCfg := g.pin(&ssh.ClientConfig{
-		User:            g.cfg.JumpUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKeyCB,
-		Timeout:         10 * time.Second,
-	})
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, jumpCfg)
-	if err != nil {
-		return nil, fmt.Errorf("dial jump host: %w", err)
-	}
-	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	tunnel, err := jumpClient.DialContext(ctx, "tcp", target)
-	if err != nil {
-		_ = jumpClient.Close()
-		return nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
-	}
-	hostCfg := g.pin(&ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKeyCB,
-		Timeout:         10 * time.Second,
-	})
-	ncc, chans, reqs, err := ssh.NewClientConn(tunnel, target, hostCfg)
-	if err != nil {
-		_ = tunnel.Close()
-		_ = jumpClient.Close()
-		return nil, fmt.Errorf("ssh handshake with %s: %w", target, err)
-	}
-	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
+	return g.dialWithSigners(ctx, jumpSigner, hostSigner, host, port, user)
 }
 
 // DialJumpWithSigner opens an SSH connection to the jump host authenticated with the

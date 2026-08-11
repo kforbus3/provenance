@@ -43,7 +43,9 @@ const STARTER = `---
 export function PlaybooksPage() {
   const qc = useQueryClient();
   const has = useAuthStore((s) => s.has);
-  const canRun = has("Playbook.Run");
+  // A playbook run is arbitrary root-level execution (the runner always sets
+  // become), so the backend requires Host.Sudo alongside Playbook.Run.
+  const canRun = has("Playbook.Run") && has("Host.Sudo");
   const { data: playbooks = [], isLoading } = useQuery({ queryKey: ["playbooks"], queryFn: listPlaybooks });
   const { data: runner } = useQuery({ queryKey: ["playbook-runner"], queryFn: runnerStatus });
 

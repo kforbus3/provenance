@@ -96,6 +96,41 @@ func (s *Service) RequirePermission(perm string) func(http.Handler) http.Handler
 	}
 }
 
+// RequirePrivilegedPermission gates an endpoint that runs as root on managed hosts
+// and has no unprivileged mode — Ansible playbook runs, OpenSCAP remediation, and
+// support-bundle collection all execute arbitrary root commands through Fleet's SSH
+// path. It requires perm AND Host.Sudo.
+//
+// Why both: Host.Sudo is the permission an operator revokes to say "this user may
+// not have root on hosts", but it only chooses the account for interactive sessions.
+// Without this pairing, a role granting Playbook.Run while withholding Host.Sudo
+// hands out root anyway, and the denial reads as effective when it is not. Callers
+// that CAN run unprivileged (the ad-hoc command runner) must not use this — they
+// downgrade to the login-only account instead of refusing.
+//
+// Super admins satisfy both via the Admin.All wildcard, and the builtin
+// Administrator role holds both, so this changes no default deployment.
+func (s *Service) RequirePrivilegedPermission(perm string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := MustPrincipal(r)
+			if p == nil {
+				unauthorized(w, "authentication required")
+				return
+			}
+			if !p.Has(perm) {
+				forbidden(w, "missing permission: "+perm)
+				return
+			}
+			if !p.Has("Host.Sudo") {
+				forbidden(w, perm+" runs as root on the target host and also requires Host.Sudo")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // CSRF note: there is intentionally no CSRF-enforcing middleware. State-changing
 // API calls authenticate with a Bearer access token in the Authorization header,
 // which a cross-site attacker cannot forge (the browser never attaches it

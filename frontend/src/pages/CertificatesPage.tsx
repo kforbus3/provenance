@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listCAs, listCertificates, revokeCertificate, rotateCA,
 } from "../api/certificates";
+import type { RevokeResult } from "../api/certificates";
 import { useAuthStore } from "../store/auth";
 import { formatDateTime } from "../lib/datetime";
 
@@ -30,9 +31,16 @@ export function CertificatesPage() {
     mutationFn: rotateCA,
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["cas"] }); },
   });
+  // A revocation is only enforced on hosts that installed the updated KRL. Hosts
+  // that did not still honor the certificate, so that count is surfaced as a
+  // warning rather than left to the server log.
+  const [revokeResult, setRevokeResult] = useState<RevokeResult | null>(null);
   const revoke = useMutation({
     mutationFn: (serial: number) => revokeCertificate(serial, "manually revoked"),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["certs"] }); },
+    onSuccess: (result) => {
+      setRevokeResult(result);
+      void qc.invalidateQueries({ queryKey: ["certs"] });
+    },
   });
 
   const fmt = (s?: string) => formatDateTime(s);
@@ -93,6 +101,20 @@ export function CertificatesPage() {
       </TableContainer>
 
       <Typography variant="h6" sx={{ mb: 1 }}>Issued certificates</Typography>
+      {revokeResult && revokeResult.hostsFailed > 0 && (
+        <Alert severity="warning" sx={{ mb: 1 }} onClose={() => setRevokeResult(null)}>
+          Revoked, but {revokeResult.hostsFailed} of {revokeResult.hostsUpdated + revokeResult.hostsFailed} host
+          {revokeResult.hostsUpdated + revokeResult.hostsFailed === 1 ? "" : "s"} did not install the updated
+          revocation list and still accept this certificate. Check the backend log for the affected hosts, then
+          re-run distribution or re-enroll them.
+        </Alert>
+      )}
+      {revokeResult && revokeResult.hostsFailed === 0 && (
+        <Alert severity="success" sx={{ mb: 1 }} onClose={() => setRevokeResult(null)}>
+          Revoked and enforced on all {revokeResult.hostsUpdated} enrolled host
+          {revokeResult.hostsUpdated === 1 ? "" : "s"}.
+        </Alert>
+      )}
       <Alert severity="info" sx={{ mb: 1 }}>
         Each browser login mints a unique, short-lived Ed25519 user certificate. Private keys
         live only in backend memory and are never stored.

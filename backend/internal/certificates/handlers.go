@@ -101,11 +101,16 @@ func (h *handler) revoke(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "certificate.revoke", strconv.FormatUint(serial, 10), map[string]any{"reason": body.Reason})
 	// Push the updated KRL to hosts immediately so the revocation takes effect.
-	pushed := 0
+	// hostsFailed is part of the response, not just a log line: those hosts still
+	// accept this certificate, so a revocation that reports success while some
+	// hosts never got the list would be the most misleading answer possible.
+	pushed, failed := 0, 0
 	if h.d.DistributeKRL != nil {
-		pushed, _ = h.d.DistributeKRL(r.Context())
+		pushed, failed, _ = h.d.DistributeKRL(r.Context())
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"status": "revoked", "hostsUpdated": pushed})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "revoked", "hostsUpdated": pushed, "hostsFailed": failed,
+	})
 }
 
 // distribute pushes the current KRL to all enrolled hosts on demand.
@@ -114,13 +119,19 @@ func (h *handler) distribute(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotImplemented, "distribution unavailable")
 		return
 	}
-	pushed, err := h.d.DistributeKRL(r.Context())
+	pushed, failed, err := h.d.DistributeKRL(r.Context())
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "distribution failed: "+err.Error())
 		return
 	}
-	h.audit(r, "certificate.krl_distribute", "", map[string]any{"hostsUpdated": pushed})
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"status": "distributed", "hostsUpdated": pushed})
+	h.audit(r, "certificate.krl_distribute", "", map[string]any{"hostsUpdated": pushed, "hostsFailed": failed})
+	status := "distributed"
+	if failed > 0 {
+		status = "partial"
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": status, "hostsUpdated": pushed, "hostsFailed": failed,
+	})
 }
 
 func (h *handler) krl(w http.ResponseWriter, r *http.Request) {

@@ -71,6 +71,10 @@ const fmtDate = (value?: string): string => formatDateTime(value);
 function SupportBundleButton({ host }: { host: Host }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The collect script runs in full under sudo (sshd -T, auth log, journal,
+  // dmidecode), so the backend requires Host.Sudo in addition to Host.Scan.
+  const has = useAuthStore((s) => s.has);
+  const canCollect = has("Host.Scan") && has("Host.Sudo");
   const onClick = async () => {
     setLoading(true);
     setError(null);
@@ -84,9 +88,11 @@ function SupportBundleButton({ host }: { host: Host }) {
   };
   return (
     <>
-      <Tooltip title="Download support bundle (diagnostics + logs)">
+      <Tooltip title={canCollect
+        ? "Download support bundle (diagnostics + logs)"
+        : "Requires Host.Sudo — the bundle collects privileged config and logs"}>
         <span>
-          <IconButton size="small" onClick={onClick} disabled={loading}>
+          <IconButton size="small" onClick={onClick} disabled={loading || !canCollect}>
             {loading ? <CircularProgress size={16} /> : <MedicalServicesIcon fontSize="small" />}
           </IconButton>
         </span>
@@ -940,7 +946,11 @@ function HostScanDialog({ host, onClose }: { host: Host | null; onClose: () => v
   const qc = useQueryClient();
   const hostId = host?.id ?? "";
   const token = useAuthStore((s) => s.accessToken) ?? "";
-  const canRemediate = useAuthStore((s) => s.has)("Host.Remediate");
+  // Applying remediation runs the generated fix script as root on the host, so the
+  // backend requires Host.Sudo alongside Host.Remediate. Mirror that here or the
+  // button offers an action that can only 403.
+  const has = useAuthStore((s) => s.has);
+  const canRemediate = has("Host.Remediate") && has("Host.Sudo");
   const [profile, setProfile] = useState("");
   const [skipExpensive, setSkipExpensive] = useState(false);
   const [skipRulesText, setSkipRulesText] = useState("");
