@@ -1080,7 +1080,16 @@ fi`, s.cfg.WGInterface, sanitize(hostname))
 
 // hostTeardownScript removes everything enrollment installed on a managed host:
 // the sudoers grant, both shared accounts, the CA trust, the principal files, the
-// sshd drop-in (and the appended block on hosts with no Include), and the KRL.
+// sshd drop-in (and the appended block on hosts with no Include), the KRL, and the
+// overlay client.
+//
+// overlayRetire is the privileged script that takes this host's transport down —
+// wgTeardownScript for WireGuard, the overlay's RetireHostScript for a certificate
+// overlay. It is embedded rather than run separately because it must happen on the
+// detached side: the tunnel is how Fleet reached the host, so bringing it down in
+// the foreground would kill the session before it could finish. It runs LAST, after
+// the accounts are gone, so the privileged account is removed even if the transport
+// teardown stalls.
 //
 // It runs DETACHED, and that is not incidental. The script deletes the very account
 // the SSH session is running as, and `userdel` refuses while a process of that user
@@ -1095,7 +1104,7 @@ fi`, s.cfg.WGInterface, sanitize(hostname))
 // is reloaded only if `sshd -t` still passes after the removal — a host whose
 // remaining config is broken keeps the running sshd it has rather than being cut off
 // by the cleanup.
-func (s *Service) hostTeardownScript(loginUser string) string {
+func (s *Service) hostTeardownScript(loginUser, overlayRetire string) string {
 	return fmt.Sprintf(`set +e
 LOGIN='%s'
 NOSUDO="${LOGIN}-login"
@@ -1143,18 +1152,41 @@ for U in "$LOGIN" "$NOSUDO"; do
   if id "$U" >/dev/null 2>&1; then echo "[fleet] WARNING: could not remove account $U"; else echo "[fleet] removed account $U"; fi
 done
 rm -f /etc/ssh/sshd_config.fleet-backup
+# The overlay LAST: it is the transport Fleet arrived over, and a host that keeps a
+# live tunnel to the jump host after being deleted is still on the fleet's network
+# with nothing left that manages or audits it.
+echo "[fleet] retiring the overlay transport"
+%s
 echo "[fleet] unenroll finished"
 rm -f /usr/local/sbin/fleet-unenroll.sh
 FLEETEOF
 chmod 0700 /usr/local/sbin/fleet-unenroll.sh
 setsid nohup /usr/local/sbin/fleet-unenroll.sh "$LOGIN" >/var/log/fleet-unenroll.log 2>&1 < /dev/null &
-echo TEARDOWN_STARTED`, loginUser)
+echo TEARDOWN_STARTED`, loginUser, overlayRetire)
+}
+
+// hostOverlayRetireScript returns the privileged script that takes host's transport
+// down on the host itself. A cert overlay whose provisioner this deployment does not
+// have leaves a note in the teardown log rather than silently skipping — the operator
+// has to stop that client by hand.
+func (s *Service) hostOverlayRetireScript(host *models.Host) string {
+	name := strings.TrimSpace(host.Overlay)
+	if !overlay.IsCertOverlay(name) {
+		return s.wgTeardownScript()
+	}
+	ov := s.overlays[name]
+	if ov == nil {
+		return "echo '[fleet] WARNING: overlay " + name + " is not available on this deployment; " +
+			"its client is STILL RUNNING — stop it on the host by hand'"
+	}
+	return ov.RetireHostScript().Script
 }
 
 // TeardownHost removes Fleet's footprint from a managed host: the NOPASSWD sudoers
-// grant, the two shared accounts, the CA trust, the principal files and the sshd
-// drop-in. Without it, deleting a host from Fleet leaves a standing root account and
-// a trusted CA on a machine Fleet no longer manages or audits.
+// grant, the two shared accounts, the CA trust, the principal files, the sshd
+// drop-in, and the overlay client. Without it, deleting a host from Fleet leaves a
+// standing root account, a trusted CA, and a live tunnel onto the fleet's network on
+// a machine Fleet no longer manages or audits.
 //
 // It must run BEFORE the overlay membership is retired — that cleanup removes the
 // jump host's route to the host, and the teardown has to reach the host to run.
@@ -1179,7 +1211,8 @@ func (s *Service) TeardownHost(ctx context.Context, host *models.Host) error {
 			lastErr = fmt.Errorf("%s: %w", addr, err)
 			continue
 		}
-		out, rerr := run(conn.Client, "sudo sh -c "+shellQuote(s.hostTeardownScript(loginUser)))
+		script := s.hostTeardownScript(loginUser, s.hostOverlayRetireScript(host))
+		out, rerr := run(conn.Client, "sudo sh -c "+shellQuote(script))
 		conn.Close()
 		if rerr != nil || !strings.Contains(out, "TEARDOWN_STARTED") {
 			return fmt.Errorf("start teardown on %s: %w (%s)", addr, orErr(rerr, out), oneLine(strings.TrimSpace(out)))
@@ -1222,8 +1255,13 @@ func (s *Service) CleanupHostOverlay(ctx context.Context, host *models.Host) err
 	if host == nil {
 		return nil
 	}
-	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
-	jumpClient, err := s.gw.DialDirect(ctx, uuid.New().String(), jumpAddr, jumpPort, s.cfg.JumpUser)
+	// A SYSTEM certificate, not a session one. This ran with uuid.New().String() as
+	// the session id — an id that by construction has no credential in the vault — so
+	// the dial failed with "no live credential for session" every single time and the
+	// jump-host half of the cleanup never ran. It is called from a goroutine that only
+	// logs, so nothing surfaced: deleted hosts kept a live peer on the hub, and their
+	// tunnels kept handshaking.
+	jumpClient, err := s.gw.DialJumpSystem(ctx)
 	if err != nil {
 		return fmt.Errorf("connect jump host: %w", err)
 	}

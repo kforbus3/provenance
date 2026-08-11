@@ -633,6 +633,10 @@ export function HostsPage() {
           const res = await deleteHost(h.id, teardown);
           if (res.teardownRequested && !res.teardownStarted) {
             failures.push(`${h.hostname}: ${res.teardownError ?? "teardown did not start"}`);
+          } else if (res.overlayError) {
+            // The host cleaned up, but its peer is still on the hub — the tunnel can
+            // keep handshaking, so this is not something to leave in a log line.
+            failures.push(`${h.hostname}: overlay peer not retired on the jump host — ${res.overlayError}`);
           }
         } catch (e) {
           failures.push(`${h.hostname}: ${(e as Error).message}`);
@@ -894,9 +898,11 @@ export function HostsPage() {
           <DialogTitle>Deleted, but teardown did not run everywhere</DialogTitle>
           <DialogContent>
             <Alert severity="warning" sx={{ mb: 2 }}>
-              These hosts were removed from Fleet, but Fleet could not reach them to remove
-              its accounts and SSH trust. They still carry the Fleet account with NOPASSWD
-              sudo. Run <code>scripts/fleet-unenroll.sh</code> on each machine.
+              These hosts were removed from Fleet, but part of the teardown did not complete.
+              A host Fleet could not reach still carries the Fleet account with NOPASSWD sudo —
+              run <code>scripts/fleet-unenroll.sh</code> on the machine. A host whose overlay
+              peer could not be retired can still reach the jump host over its tunnel — remove
+              the peer there, or re-run the delete once the jump host is reachable.
             </Alert>
             <Stack spacing={0.5}>
               {teardownReport.map((line) => (

@@ -333,7 +333,8 @@ before retiring its overlay, and removes:
 | `/etc/ssh/fleet_ca.pub`, `/etc/ssh/fleet_krl` | Any other CA or key material |
 | `/etc/ssh/auth_principals/*` (and the directory, if empty) | — |
 | `/etc/ssh/sshd_config.d/00-fleet.conf`, and the `# Fleet Terminal` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
-| The WireGuard interface and boot units (config renamed to `.fleet-disabled`, not deleted) | — |
+| The overlay client — the WireGuard interface and its boot units (config renamed to `.fleet-disabled`, not deleted), or the certificate overlay's client | — |
+| The host's peer on the jump host, so the tunnel stops handshaking from the other end too | Every other peer |
 
 > **This can lock you out.** On a host whose only administrative access was through
 > Fleet, removing those accounts removes your way in. Make sure you have another
@@ -348,6 +349,14 @@ Two details worth knowing:
   alive. Fleet therefore writes `/usr/local/sbin/fleet-unenroll.sh`, launches it with
   `setsid`, and returns. The API reports that teardown *started*, not that it
   finished. The host's own record is `/var/log/fleet-unenroll.log`.
+- **The overlay comes down last, on both ends.** On the host it is the final step of
+  the detached script — it is the transport Fleet arrived over, so it cannot be
+  brought down while the session is still using it, and doing it last means the
+  privileged account is already gone even if the transport teardown stalls. On the
+  jump host the peer is retired straight afterwards, and unlike a delete without
+  teardown that step is reported rather than left to a log line: a host that keeps its
+  peer keeps a live tunnel onto the fleet's network however well the host side was
+  cleaned.
 - **sshd is reloaded only if `sshd -t` still passes.** If the remaining configuration
   does not parse, the original `sshd_config` is restored and the running sshd is left
   alone — a cleanup that strands the host is worse than the leftovers it removes.

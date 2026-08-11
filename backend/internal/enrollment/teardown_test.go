@@ -1,6 +1,7 @@
 package enrollment
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,11 +11,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/fleet-terminal/backend/internal/overlay"
 )
 
 func teardownScript(t *testing.T, loginUser string) string {
 	t.Helper()
-	return (&Service{cfg: &config.Config{}}).hostTeardownScript(loginUser)
+	svc := &Service{cfg: &config.Config{WGInterface: "wgfleet"}}
+	return svc.hostTeardownScript(loginUser, svc.hostOverlayRetireScript(&models.Host{}))
 }
 
 // The teardown deletes the very account its SSH session is running as. userdel
@@ -233,4 +237,111 @@ TrustedUserCAKeys /etc/ssh/other_ca.pub
 	if string(out) != untouched {
 		t.Errorf("a config with no Fleet block was modified:\ngot  %q\nwant %q", out, untouched)
 	}
+}
+
+// THE BUG THIS PINS DOWN: the first cut of the teardown removed the accounts, the
+// sudoers grant and the CA trust, and left the overlay client running. The host was
+// deleted from Fleet and kept a live, handshaking tunnel onto the fleet's network,
+// with nothing left on it that Fleet managed or audited — while the documentation
+// and the manual script both said the transport was retired.
+func TestTeardownRetiresTheOverlay(t *testing.T) {
+	wgSvc := &Service{cfg: &config.Config{WGInterface: "wgfleet"}}
+
+	// WireGuard (the default; Overlay is "" or "wireguard").
+	for _, name := range []string{"", "wireguard"} {
+		script := wgSvc.hostTeardownScript("fleet", wgSvc.hostOverlayRetireScript(&models.Host{Overlay: name}))
+		for _, want := range []string{
+			"wg-quick down $IF",       // bring the tunnel down now
+			"wg-quick@$IF",            // and keep it from coming back at boot
+			"ip link delete $IF",      // remove the interface
+			"/etc/wireguard/$IF.conf", // set the config aside
+		} {
+			if !strings.Contains(script, want) {
+				t.Errorf("overlay %q: teardown leaves the tunnel up, missing %q", name, want)
+			}
+		}
+		if !strings.Contains(script, "IF=wgfleet") {
+			t.Errorf("overlay %q: teardown must target the configured interface", name)
+		}
+	}
+
+	// A certificate overlay uses its provisioner's host-side retire script instead.
+	certSvc := &Service{
+		cfg:      &config.Config{WGInterface: "wgfleet"},
+		overlays: map[string]overlay.Overlay{"openvpn": stubOverlay{retire: "echo RETIRED_OPENVPN"}},
+	}
+	certScript := certSvc.hostTeardownScript("fleet", certSvc.hostOverlayRetireScript(&models.Host{Overlay: "openvpn"}))
+	if !strings.Contains(certScript, "echo RETIRED_OPENVPN") {
+		t.Error("a cert-overlay host must get its overlay's retire script, not WireGuard's")
+	}
+	if strings.Contains(certScript, "wg-quick down") {
+		t.Error("a cert-overlay host must not get the WireGuard teardown")
+	}
+
+	// An overlay this deployment cannot provision must say so in the teardown log
+	// rather than quietly leaving a running client behind.
+	orphan := (&Service{cfg: &config.Config{}}).hostOverlayRetireScript(&models.Host{Overlay: "openvpn"})
+	if !strings.Contains(orphan, "STILL RUNNING") {
+		t.Errorf("an unavailable overlay must warn loudly, got %q", orphan)
+	}
+}
+
+// The in-app teardown and scripts/fleet-unenroll.sh remove the same things by two
+// entirely separate implementations, and they drifted the moment one of them was
+// written: the manual script retired WireGuard from the start, the in-app one never
+// did, and the docs described the manual script's behaviour for both. This walks the
+// artifact list against both so the next addition cannot land in only one.
+func TestTeardownPathsDoNotDrift(t *testing.T) {
+	manualPath := filepath.Join("..", "..", "..", "scripts", "fleet-unenroll.sh")
+	manualBytes, err := os.ReadFile(manualPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", manualPath, err)
+	}
+	manual := string(manualBytes)
+	svc := &Service{cfg: &config.Config{WGInterface: "wgfleet"}}
+	inApp := svc.hostTeardownScript("fleet", svc.hostOverlayRetireScript(&models.Host{}))
+
+	// Each artifact is named by a token that must appear in BOTH implementations.
+	// They are written differently ($IF vs "$WG_IF"), so match on the stable part.
+	for _, artifact := range []struct{ what, token string }{
+		{"the sudoers grant", "/etc/sudoers.d/fleet"},
+		{"the trusted CA", "/etc/ssh/fleet_ca.pub"},
+		{"the revocation list", "/etc/ssh/fleet_krl"},
+		{"the principal files", "/etc/ssh/auth_principals"},
+		{"the sshd drop-in", "/etc/ssh/sshd_config.d/00-fleet.conf"},
+		{"the appended sshd block", "# Fleet Terminal"},
+		{"the sshd validity check", "sshd -t"},
+		{"the login-only account", "-login"},
+		{"the WireGuard interface", "wg-quick down"},
+		{"the WireGuard boot unit", "wg-quick@"},
+		{"the WireGuard config", ".fleet-disabled"},
+	} {
+		if !strings.Contains(inApp, artifact.token) {
+			t.Errorf("in-app teardown does not handle %s (%q)", artifact.what, artifact.token)
+		}
+		if !strings.Contains(manual, artifact.token) {
+			t.Errorf("scripts/fleet-unenroll.sh does not handle %s (%q)", artifact.what, artifact.token)
+		}
+	}
+}
+
+// stubOverlay is a minimal Overlay whose only interesting behaviour is the host-side
+// retire script the teardown embeds.
+type stubOverlay struct{ retire string }
+
+func (stubOverlay) Name() string { return "openvpn" }
+func (stubOverlay) EnsureServer(context.Context, overlay.RunFunc) (string, error) {
+	return "", nil
+}
+func (stubOverlay) ProvisionHost(context.Context, uuid.UUID, string, string, overlay.RunFunc, overlay.RunFunc) (string, error) {
+	return "", nil
+}
+func (stubOverlay) PrepareHost(context.Context, uuid.UUID, string, string, overlay.RunFunc) (overlay.HostBringup, error) {
+	return overlay.HostBringup{}, nil
+}
+func (stubOverlay) RetireJump(context.Context, uuid.UUID, overlay.RunFunc) (string, error) {
+	return "", nil
+}
+func (s stubOverlay) RetireHostScript() overlay.HostBringup {
+	return overlay.HostBringup{Script: s.retire, Marker: "RETIRED_OPENVPN"}
 }

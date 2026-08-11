@@ -178,6 +178,9 @@ export interface DeleteHostResult {
   teardownRequested: boolean;
   teardownStarted?: boolean;
   teardownError?: string;
+  // The jump-host half: the peer that keeps the deleted host's tunnel alive. Set
+  // when it could not be retired, which leaves the host reachable on the overlay.
+  overlayError?: string;
 }
 
 export async function deleteHost(id: string, teardown = false): Promise<DeleteHostResult> {

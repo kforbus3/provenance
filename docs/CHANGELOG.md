@@ -7,6 +7,44 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.5.1 — Teardown takes the tunnel with it — 2026-08-11
+
+Two bugs in v1.5.0's host teardown, reported from a real decommission: the accounts
+came off and the VPN stayed up and operational. Both ends were at fault, for
+different reasons.
+
+- **The teardown never touched the overlay.** It removed the sudoers grant, both
+  accounts, the CA trust, the principal files and the sshd drop-in, and left the
+  WireGuard interface running and enabled at boot — so a host deleted from Fleet kept
+  a live tunnel onto the fleet's network with nothing on it that Fleet managed or
+  audited. `scripts/fleet-unenroll.sh` retired the transport from the start and the
+  documentation described that behaviour for both paths, so the gap was invisible
+  unless you read the generated script. The teardown now retires the host's transport
+  — WireGuard, or a certificate overlay's client via its own retire script — as its
+  last step, after the accounts are gone. An overlay this deployment cannot provision
+  now says so loudly in `/var/log/fleet-unenroll.log` instead of being skipped.
+
+- **The jump-host half of the cleanup had never run at all.** `CleanupHostOverlay`
+  dialed the jump host with a session id it generated on the spot
+  (`uuid.New().String()`), which by construction has no credential in the identity
+  vault — so every call failed the vault lookup before a packet was sent. It runs in a
+  goroutine that only logs a warning, so nothing ever surfaced: **every host deleted
+  from Fleet, in any version with this code, kept its peer on the hub.** That is why
+  the tunnel in the report was not merely up but still handshaking. It now dials with
+  a short-lived system certificate, like every other background path.
+
+  If you have deleted hosts before upgrading, their peers are still on the jump host.
+  Enrollment retires a stale claim inline when the same overlay address is reissued,
+  so they self-heal as addresses are reused — to clear them sooner, remove the peers
+  on the jump host directly.
+
+- **A requested teardown now reports the jump-host half too.** With teardown ticked,
+  the peer retirement runs synchronously and a failure is named in the UI alongside an
+  unreachable host, rather than going to a log line. Deleting without teardown keeps
+  the background best-effort behaviour.
+
+---
+
 ## v1.5.0 — Host.Sudo means what it says — 2026-08-10
 
 **Behavior change.** Running an Ansible playbook, applying OpenSCAP remediation, or

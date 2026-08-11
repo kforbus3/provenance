@@ -521,6 +521,26 @@ func (g *Gateway) DialWithSigners(ctx context.Context, jumpSigner, hostSigner ss
 	return g.dialWithSigners(ctx, jumpSigner, hostSigner, host, port, user)
 }
 
+// DialJumpSystem opens an SSH connection to the jump host with a short-lived SYSTEM
+// certificate. Background work that touches the jump host but belongs to no user
+// session — retiring a deleted host's overlay membership — needs this: there is no
+// session credential to borrow, and passing a freshly generated session id to
+// DialDirect does not conjure one, it just fails the vault lookup.
+//
+// The certificate carries only the fleet-wide principal, which is the one the jump
+// host trusts and the only one it ever needs (it is never locked down; see
+// docs/security-guide.md §13).
+func (g *Gateway) DialJumpSystem(ctx context.Context) (*ssh.Client, error) {
+	if g.issuer == nil {
+		return nil, fmt.Errorf("gateway issuer unavailable")
+	}
+	signer, err := g.issuer.SystemSigner(ctx, []string{princ.Global}, 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	return g.DialJumpWithSigner(ctx, signer)
+}
+
 // DialJumpWithSigner opens an SSH connection to the jump host authenticated with the
 // given (system) signer and returns the client. The caller uses client.DialContext to
 // tunnel arbitrary TCP through the jump host (e.g. WinRM to a Windows host) and must

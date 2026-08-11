@@ -685,7 +685,7 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 	// trust are still on a machine Fleet no longer manages, which is exactly the
 	// thing the operator asked to prevent. The host row is already gone either way;
 	// deletion is not rolled back on a teardown failure.
-	tornDown, teardownErr := false, ""
+	tornDown, teardownErr, overlayErr := false, "", ""
 	if teardown && h.d.TeardownHost != nil && host != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		if err := h.d.TeardownHost(ctx, host); err != nil {
@@ -700,17 +700,31 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 
-	// Retire the host's overlay membership in the background: best-effort (a stale
-	// entry self-heals when the address is reused), and never blocks the response.
+	// Retire the host's overlay membership on the jump host. When teardown was asked
+	// for this runs SYNCHRONOUSLY and is reported: "decommission this host" is a claim
+	// about both ends, and a hub that keeps the peer leaves the deleted host's tunnel
+	// handshaking however thoroughly the host side was cleaned. Without teardown it
+	// stays a background best-effort — a stale entry self-heals when the address is
+	// reused — and never blocks the response.
 	if h.d.CleanupHostOverlay != nil && host != nil && host.WGAddress != "" {
-		go func(hst models.Host) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := h.d.CleanupHostOverlay(ctx, &hst); err != nil {
+		if teardown {
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			if err := h.d.CleanupHostOverlay(ctx, host); err != nil {
+				overlayErr = err.Error()
 				h.d.Log.Warn("cleanup host overlay after host delete",
-					"host", hst.Hostname, "overlay", hst.Overlay, "err", err)
+					"host", host.Hostname, "overlay", host.Overlay, "err", err)
 			}
-		}(*host)
+			cancel()
+		} else {
+			go func(hst models.Host) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := h.d.CleanupHostOverlay(ctx, &hst); err != nil {
+					h.d.Log.Warn("cleanup host overlay after host delete",
+						"host", hst.Hostname, "overlay", hst.Overlay, "err", err)
+				}
+			}(*host)
+		}
 	}
 
 	resp := map[string]any{"status": "deleted", "teardownRequested": teardown}
@@ -718,6 +732,9 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		resp["teardownStarted"] = tornDown
 		if teardownErr != "" {
 			resp["teardownError"] = teardownErr
+		}
+		if overlayErr != "" {
+			resp["overlayError"] = overlayErr
 		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)
