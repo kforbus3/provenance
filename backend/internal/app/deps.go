@@ -65,6 +65,17 @@ type Deps struct {
 	// succeeds even when the jump host is unreachable — enrollment retires stale
 	// claims inline when the address is reused.
 	CleanupHostOverlay func(ctx context.Context, host *models.Host) error
+
+	// TeardownHost removes Fleet's footprint from a managed host — the NOPASSWD
+	// sudoers grant, both shared accounts, the CA trust, the principal files and the
+	// sshd drop-in (set by the server; nil in tests). Opt-in per delete: it is
+	// destructive to the machine and, if Fleet was its only administrative access,
+	// locks the operator out.
+	//
+	// Must be called BEFORE CleanupHostOverlay, which removes the route the teardown
+	// travels over. Returns nil once the teardown has STARTED — the work runs
+	// detached on the host, because it deletes the account the session is using.
+	TeardownHost func(ctx context.Context, host *models.Host) error
 }
 
 // Broadcaster pushes a typed real-time event to connected clients. The concrete

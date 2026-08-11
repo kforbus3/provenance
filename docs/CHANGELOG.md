@@ -43,6 +43,24 @@ was getting root against the operator's intent.
   the Certificates page shows it, and the background loop retries instead of
   short-circuiting on an unchanged KRL hash.
 
+- **Deleting a host can now remove Fleet from the machine.** Deletion took the host
+  out of the inventory and left everything enrollment installed in place: the `fleet`
+  account with its `NOPASSWD` sudo grant, the login-only account, the trusted CA, the
+  principal files and the sshd drop-in, on a machine Fleet no longer manages or
+  audits. The delete dialog now offers **"Also remove Fleet's accounts and SSH
+  trust from the host"** (`?teardown=true` on the API), **unchecked by default** —
+  it is destructive, and on a host whose only administrative access was Fleet it is
+  a lockout, so it stays a deliberate choice rather than a side effect of tidying the
+  inventory.
+
+  Only what Fleet wrote is removed; `authorized_keys`, other sudoers files, and any
+  sshd configuration Fleet did not write are untouched, and sshd is reloaded only if
+  `sshd -t` still passes — a host whose remaining config is broken keeps the sshd it
+  is running. The work runs detached on the host, because it deletes the account its
+  own session is using, and the API reports that teardown *started*. A host Fleet
+  cannot reach is named in the UI rather than silently skipped, and
+  `scripts/fleet-unenroll.sh` does the same cleanup locally on the machine.
+
 **Known gap, unchanged:** `Schedule.Manage` can schedule a playbook run without
 holding `Playbook.Run`. It is admin-only by default; treat it as equivalent when
 composing custom roles.

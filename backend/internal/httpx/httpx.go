@@ -7,6 +7,7 @@ package httpx
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -47,6 +48,19 @@ func ParseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// QueryBool reads an opt-in boolean query parameter. Only the explicit affirmative
+// spellings count; anything else — including absence, an empty value, and a
+// misspelling — is false. That direction is deliberate: these parameters gate
+// destructive actions, so a typo must fail closed rather than silently opt in.
+func QueryBool(r *http.Request, name string) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Audit appends an audit event, filling the actor from the request principal.

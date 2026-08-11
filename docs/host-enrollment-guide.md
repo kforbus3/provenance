@@ -311,5 +311,58 @@ deletion is audited. For an overlay-enrolled host, Fleet also retires its
 WireGuard peer on the jump host (the live kernel entry and the persisted
 `/etc/wireguard/peers/<host>.conf` fragment) — best-effort: if the jump host is
 unreachable at that moment, the stale entry is cleaned up automatically the next
-time its overlay address is reused by an enrollment. Optionally remove the
-`TrustedUserCAKeys` line on the host if it is leaving the fleet entirely.
+time its overlay address is reused by an enrollment.
+
+### Removing Fleet from the machine (opt-in)
+
+Deleting a host removes it from Fleet's *inventory*. It does not, by default,
+change the machine: the `fleet` account with its `NOPASSWD` sudo grant, the
+login-only account, the trusted CA, the principal files and the sshd drop-in all
+stay exactly as enrollment left them. That is the right behaviour for taking a host
+out of Fleet temporarily — re-enrolling reuses them — and the wrong one for
+decommissioning, so the delete dialog offers the choice.
+
+Tick **"Also remove Fleet's accounts and SSH trust from the host"** (or send
+`DELETE /api/v1/hosts/{id}?teardown=true`) and Fleet connects to the host once more
+before retiring its overlay, and removes:
+
+| Removed | Left alone |
+|---|---|
+| `/etc/sudoers.d/fleet` | Every other file in `/etc/sudoers.d` |
+| The `<ssh-user>` and `<ssh-user>-login` accounts, with their home directories | Every other account |
+| `/etc/ssh/fleet_ca.pub`, `/etc/ssh/fleet_krl` | Any other CA or key material |
+| `/etc/ssh/auth_principals/*` (and the directory, if empty) | — |
+| `/etc/ssh/sshd_config.d/00-fleet.conf`, and the `# Fleet Terminal` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
+| The WireGuard interface and boot units (config renamed to `.fleet-disabled`, not deleted) | — |
+
+> **This can lock you out.** On a host whose only administrative access was through
+> Fleet, removing those accounts removes your way in. Make sure you have another
+> route — console access, or your own key in a real user's `authorized_keys` —
+> before ticking the box. The checkbox is unchecked every time the dialog opens; it
+> is never remembered.
+
+Two details worth knowing:
+
+- **The work runs detached on the host.** The teardown deletes the account its own
+  SSH session is using, and `userdel` refuses while a process of that account is
+  alive. Fleet therefore writes `/usr/local/sbin/fleet-unenroll.sh`, launches it with
+  `setsid`, and returns. The API reports that teardown *started*, not that it
+  finished. The host's own record is `/var/log/fleet-unenroll.log`.
+- **sshd is reloaded only if `sshd -t` still passes.** If the remaining configuration
+  does not parse, the original `sshd_config` is restored and the running sshd is left
+  alone — a cleanup that strands the host is worse than the leftovers it removes.
+
+### Cleaning up a host Fleet cannot reach
+
+If the host was already offline when it was deleted, was removed from the database
+directly, or was enrolled by a Fleet deployment that no longer exists, run
+[`scripts/fleet-unenroll.sh`](../scripts/fleet-unenroll.sh) **on the machine**:
+
+```sh
+sudo sh fleet-unenroll.sh --dry-run     # show what would be removed
+sudo sh fleet-unenroll.sh               # remove it
+sudo sh fleet-unenroll.sh -u ops        # host was enrolled with a non-default SSH user
+```
+
+It removes the same set as the table above and is safe to re-run. When Fleet fails
+to reach a host during a teardown, it names that host in the UI and points here.

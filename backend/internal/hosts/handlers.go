@@ -662,15 +662,44 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
+	// Opt-in: removing Fleet's accounts and SSH trust from the machine is
+	// destructive and, where Fleet was the only administrative access, a lockout.
+	// Absent means false, so an existing client that never sends it keeps today's
+	// behaviour of leaving the host provisioned.
+	teardown := httpx.QueryBool(r, "teardown")
 	// Read the host before the row is gone: retiring its overlay membership needs
 	// the hostname (WireGuard's fragment is keyed by it), the id (a cert overlay's
-	// pin is keyed by it) and the overlay itself.
+	// pin is keyed by it) and the overlay itself; the teardown needs its addresses
+	// and SSH user.
 	host, _ := h.d.Store.GetHost(r.Context(), id)
 	if err := h.d.Store.DeleteHost(r.Context(), id); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not delete host")
 		return
 	}
-	h.audit(r, "host.delete", id.String(), nil)
+	h.audit(r, "host.delete", id.String(), map[string]any{"teardown": teardown})
+
+	// Host-side teardown is opt-in and runs SYNCHRONOUSLY, unlike the overlay
+	// cleanup below. Two reasons: it must happen before the overlay membership is
+	// retired (that removes the route it travels over), and its outcome has to reach
+	// the operator — a teardown that could not run means Fleet's accounts and CA
+	// trust are still on a machine Fleet no longer manages, which is exactly the
+	// thing the operator asked to prevent. The host row is already gone either way;
+	// deletion is not rolled back on a teardown failure.
+	tornDown, teardownErr := false, ""
+	if teardown && h.d.TeardownHost != nil && host != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		if err := h.d.TeardownHost(ctx, host); err != nil {
+			teardownErr = err.Error()
+			h.d.Log.Warn("host teardown after host delete", "host", host.Hostname, "err", err)
+			h.audit(r, "host.teardown_failed", id.String(), map[string]any{
+				"hostname": host.Hostname, "err": teardownErr,
+			})
+		} else {
+			tornDown = true
+		}
+		cancel()
+	}
+
 	// Retire the host's overlay membership in the background: best-effort (a stale
 	// entry self-heals when the address is reused), and never blocks the response.
 	if h.d.CleanupHostOverlay != nil && host != nil && host.WGAddress != "" {
@@ -683,7 +712,15 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 			}
 		}(*host)
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	resp := map[string]any{"status": "deleted", "teardownRequested": teardown}
+	if teardown {
+		resp["teardownStarted"] = tornDown
+		if teardownErr != "" {
+			resp["teardownError"] = teardownErr
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) addGroup(w http.ResponseWriter, r *http.Request) {

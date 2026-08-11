@@ -182,6 +182,85 @@ interface NewHostDialogProps {
   submitting: boolean;
 }
 
+// DeleteHostsDialog confirms removal and offers the opt-in host teardown.
+//
+// Teardown is unchecked by default and deliberately so: it removes Fleet's two
+// accounts and its SSH trust from the machine, so on a host where Fleet was the only
+// administrative access it is a lockout. Deleting without it leaves the host exactly
+// as it is — which is the right default for taking a host out of Fleet's inventory,
+// and the wrong one for decommissioning it, hence the choice.
+function DeleteHostsDialog({
+  hosts, onClose, onConfirm, submitting,
+}: {
+  hosts: Host[] | null;
+  onClose: () => void;
+  onConfirm: (teardown: boolean) => void;
+  submitting: boolean;
+}) {
+  const [teardown, setTeardown] = useState(false);
+  const open = hosts !== null && hosts.length > 0;
+  // Reset the opt-in every time the dialog opens, so it is never inherited from a
+  // previous delete.
+  useEffect(() => { if (open) setTeardown(false); }, [open]);
+  if (!open) return null;
+
+  const enrolled = hosts.filter((h) => h.enrolled);
+  const names = hosts.map((h) => h.hostname).join(", ");
+
+  return (
+    <Dialog open onClose={submitting ? undefined : onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>{hosts.length === 1 ? `Delete ${hosts[0].hostname}?` : `Delete ${hosts.length} hosts?`}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" sx={{ mb: 2 }}>
+          {hosts.length === 1
+            ? "This removes the host from Fleet — its groups, grants, scans and history."
+            : `This removes ${names} from Fleet — their groups, grants, scans and history.`}
+        </Typography>
+        {enrolled.length > 0 && (
+          <>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={teardown}
+                  onChange={(e) => setTeardown(e.target.checked)}
+                  disabled={submitting}
+                />
+              }
+              label="Also remove Fleet's accounts and SSH trust from the host"
+            />
+            {teardown ? (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                The host will lose the Fleet account with NOPASSWD sudo, the login-only
+                account, the trusted CA and the sshd drop-in. <strong>If Fleet is the only
+                administrative access to {enrolled.length === 1 ? "this host" : "these hosts"},
+                this locks you out.</strong> Your own <code>authorized_keys</code> and any sshd
+                configuration Fleet did not write are left alone. A host Fleet cannot reach
+                right now is skipped and reported — clean it up with{" "}
+                <code>scripts/fleet-unenroll.sh</code> on the machine.
+              </Alert>
+            ) : (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                Leaving this unchecked keeps the host provisioned: Fleet's accounts, its
+                NOPASSWD sudo grant and the trusted CA stay on the machine after it is
+                removed from Fleet. Re-enrolling later reuses them.
+              </Alert>
+            )}
+          </>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button
+          color="error" variant="contained" disabled={submitting}
+          onClick={() => onConfirm(teardown)}
+        >
+          {submitting ? "Deleting…" : teardown ? "Delete and tear down" : "Delete"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHostDialogProps) {
   const isEdit = Boolean(editHost);
   const [form, setForm] = useState<HostInput>(EMPTY_FORM);
@@ -539,11 +618,31 @@ export function HostsPage() {
     },
   });
 
+  // Deleting is confirmed rather than immediate, because the dialog is where the
+  // opt-in host teardown lives — and teardown is not undoable.
+  const [deleteTargets, setDeleteTargets] = useState<Host[] | null>(null);
+  const [teardownReport, setTeardownReport] = useState<string[] | null>(null);
   const deleteMut = useMutation({
-    mutationFn: async (ids: string[]) => {
-      await Promise.all(ids.map((id) => deleteHost(id)));
+    mutationFn: async ({ hosts, teardown }: { hosts: Host[]; teardown: boolean }) => {
+      // Sequential, not Promise.all: each teardown holds an SSH connection to its
+      // host while it starts, and firing a whole selection at once would stampede
+      // the jump host's sshd the way the monitor sweep once did.
+      const failures: string[] = [];
+      for (const h of hosts) {
+        try {
+          const res = await deleteHost(h.id, teardown);
+          if (res.teardownRequested && !res.teardownStarted) {
+            failures.push(`${h.hostname}: ${res.teardownError ?? "teardown did not start"}`);
+          }
+        } catch (e) {
+          failures.push(`${h.hostname}: ${(e as Error).message}`);
+        }
+      }
+      return failures;
     },
-    onSuccess: () => {
+    onSuccess: (failures) => {
+      setTeardownReport(failures.length > 0 ? failures : null);
+      setDeleteTargets(null);
       void qc.invalidateQueries({ queryKey: ["hosts"] });
       setSelection([]);
     },
@@ -716,7 +815,7 @@ export function HostsPage() {
           <Tooltip title="Delete host">
             <IconButton
               size="small" color="error"
-              onClick={() => deleteMut.mutate([params.row.id])}
+              onClick={() => setDeleteTargets([params.row])}
             >
               <DeleteIcon fontSize="small" />
             </IconButton>
@@ -724,7 +823,7 @@ export function HostsPage() {
         </Stack>
       ),
     },
-  ], [deleteMut, enrollMut, launchPrefix]);
+  ], [enrollMut, launchPrefix]);
 
   const allHosts = data?.hosts ?? [];
   const groupOptions = Array.from(new Set(allHosts.flatMap((h) => h.groups ?? []))).sort();
@@ -772,7 +871,9 @@ export function HostsPage() {
             toolbar: {
               selectedCount: selection.length,
               onNew: () => setDialogOpen(true),
-              onDelete: () => deleteMut.mutate(selection.map(String)),
+              onDelete: () => setDeleteTargets(
+                allHosts.filter((h) => selection.map(String).includes(h.id)),
+              ),
               onRefresh: () => void refetch(),
               onBulk,
             },
@@ -782,6 +883,34 @@ export function HostsPage() {
       </Box>
       {/* key forces a fresh component (and fresh form state) on each open, so a
           previous host's typed values never bleed into the next. */}
+      <DeleteHostsDialog
+        hosts={deleteTargets}
+        submitting={deleteMut.isPending}
+        onClose={() => setDeleteTargets(null)}
+        onConfirm={(teardown) => deleteMut.mutate({ hosts: deleteTargets ?? [], teardown })}
+      />
+      {teardownReport && (
+        <Dialog open onClose={() => setTeardownReport(null)} maxWidth="sm" fullWidth>
+          <DialogTitle>Deleted, but teardown did not run everywhere</DialogTitle>
+          <DialogContent>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              These hosts were removed from Fleet, but Fleet could not reach them to remove
+              its accounts and SSH trust. They still carry the Fleet account with NOPASSWD
+              sudo. Run <code>scripts/fleet-unenroll.sh</code> on each machine.
+            </Alert>
+            <Stack spacing={0.5}>
+              {teardownReport.map((line) => (
+                <Typography key={line} variant="body2" sx={{ fontFamily: "monospace", fontSize: 13 }}>
+                  {line}
+                </Typography>
+              ))}
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setTeardownReport(null)}>Close</Button>
+          </DialogActions>
+        </Dialog>
+      )}
       <NewHostDialog
         key={dialogOpen ? "new-open" : "new-closed"}
         open={dialogOpen}

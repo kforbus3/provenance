@@ -1078,6 +1078,136 @@ else
 fi`, s.cfg.WGInterface, sanitize(hostname))
 }
 
+// hostTeardownScript removes everything enrollment installed on a managed host:
+// the sudoers grant, both shared accounts, the CA trust, the principal files, the
+// sshd drop-in (and the appended block on hosts with no Include), and the KRL.
+//
+// It runs DETACHED, and that is not incidental. The script deletes the very account
+// the SSH session is running as, and `userdel` refuses while a process of that user
+// is alive — a foreground run would remove the config, fail on both accounts, and
+// leave the host half-torn-down with no login. So the outer command writes a script,
+// launches it with setsid, and returns; the script waits for the session to end,
+// then does the work and removes itself. Output goes to /var/log/fleet-unenroll.log
+// so an operator can see what happened on a host Fleet can no longer reach.
+//
+// Only paths Fleet created are touched. authorized_keys, other sudoers files, and
+// any sshd configuration Fleet did not write are left exactly as they are, and sshd
+// is reloaded only if `sshd -t` still passes after the removal — a host whose
+// remaining config is broken keeps the running sshd it has rather than being cut off
+// by the cleanup.
+func (s *Service) hostTeardownScript(loginUser string) string {
+	return fmt.Sprintf(`set +e
+LOGIN='%s'
+NOSUDO="${LOGIN}-login"
+cat > /usr/local/sbin/fleet-unenroll.sh <<'FLEETEOF'
+#!/bin/sh
+# Written by Fleet Terminal when the host was removed from its inventory.
+# Removes Fleet's accounts and SSH trust, then deletes itself.
+set +e
+LOGIN="$1"
+NOSUDO="${LOGIN}-login"
+echo "[fleet] unenroll started $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)"
+# Let the SSH session that launched this close, so userdel can take the account.
+sleep 8
+rm -f /etc/sudoers.d/fleet
+rm -f /etc/ssh/fleet_ca.pub /etc/ssh/fleet_krl
+rm -f /etc/ssh/auth_principals/"$LOGIN" /etc/ssh/auth_principals/"$NOSUDO"
+rmdir /etc/ssh/auth_principals 2>/dev/null
+rm -f /etc/ssh/sshd_config.d/00-fleet.conf
+# Hosts whose sshd_config has no Include got the directives appended under a
+# "# Fleet Terminal" marker. Drop exactly that block, nothing else.
+if grep -q '^# Fleet Terminal$' /etc/ssh/sshd_config 2>/dev/null; then
+  cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.fleet-backup
+  awk '
+    /^# Fleet Terminal$/ { skip=1; next }
+    skip && /^(PubkeyAuthentication|TrustedUserCAKeys|AuthorizedPrincipalsFile) / { next }
+    skip { skip=0 }
+    { print }
+  ' /etc/ssh/sshd_config.fleet-backup > /etc/ssh/sshd_config.fleet-new &&
+    mv -f /etc/ssh/sshd_config.fleet-new /etc/ssh/sshd_config
+fi
+# Reload only if the remaining config is valid; a broken one keeps the running sshd.
+if sshd -t 2>/dev/null; then
+  systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || \
+    service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null
+  echo "[fleet] sshd reloaded"
+else
+  echo "[fleet] WARNING: sshd -t failed after cleanup; sshd NOT reloaded, config left in place"
+  [ -f /etc/ssh/sshd_config.fleet-backup ] && mv -f /etc/ssh/sshd_config.fleet-backup /etc/ssh/sshd_config
+fi
+for U in "$LOGIN" "$NOSUDO"; do
+  id "$U" >/dev/null 2>&1 || continue
+  pkill -KILL -u "$U" 2>/dev/null
+  sleep 1
+  userdel -r "$U" 2>/dev/null || deluser --remove-home "$U" 2>/dev/null || userdel "$U" 2>/dev/null
+  if id "$U" >/dev/null 2>&1; then echo "[fleet] WARNING: could not remove account $U"; else echo "[fleet] removed account $U"; fi
+done
+rm -f /etc/ssh/sshd_config.fleet-backup
+echo "[fleet] unenroll finished"
+rm -f /usr/local/sbin/fleet-unenroll.sh
+FLEETEOF
+chmod 0700 /usr/local/sbin/fleet-unenroll.sh
+setsid nohup /usr/local/sbin/fleet-unenroll.sh "$LOGIN" >/var/log/fleet-unenroll.log 2>&1 < /dev/null &
+echo TEARDOWN_STARTED`, loginUser)
+}
+
+// TeardownHost removes Fleet's footprint from a managed host: the NOPASSWD sudoers
+// grant, the two shared accounts, the CA trust, the principal files and the sshd
+// drop-in. Without it, deleting a host from Fleet leaves a standing root account and
+// a trusted CA on a machine Fleet no longer manages or audits.
+//
+// It must run BEFORE the overlay membership is retired — that cleanup removes the
+// jump host's route to the host, and the teardown has to reach the host to run.
+//
+// The work itself is detached on the host (see hostTeardownScript), so a nil return
+// means the teardown was successfully STARTED, not that it finished; the host is
+// about to drop its Fleet accounts and will be unreachable from Fleet thereafter.
+// A host that is already unreachable returns an error and is left untouched — the
+// operator's recourse is scripts/fleet-unenroll.sh, run locally on the machine.
+func (s *Service) TeardownHost(ctx context.Context, host *models.Host) error {
+	if host == nil {
+		return nil
+	}
+	loginUser := strings.TrimSpace(host.SSHUser)
+	if loginUser == "" {
+		loginUser = "fleet"
+	}
+	var lastErr error
+	for _, addr := range dedupeAddrs(host.WGAddress, host.Address, host.Hostname) {
+		conn, err := s.gw.DialSystemForHost(ctx, host.ID, addr, host.SSHPort, loginUser)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", addr, err)
+			continue
+		}
+		out, rerr := run(conn.Client, "sudo sh -c "+shellQuote(s.hostTeardownScript(loginUser)))
+		conn.Close()
+		if rerr != nil || !strings.Contains(out, "TEARDOWN_STARTED") {
+			return fmt.Errorf("start teardown on %s: %w (%s)", addr, orErr(rerr, out), oneLine(strings.TrimSpace(out)))
+		}
+		s.log.Info("host teardown started", "host", host.Hostname, "addr", addr, "account", loginUser)
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no reachable address")
+	}
+	return fmt.Errorf("connect to host: %w", lastErr)
+}
+
+// dedupeAddrs returns the non-empty addresses in order, without duplicates.
+func dedupeAddrs(addrs ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range addrs {
+		a = strings.TrimSpace(a)
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
+}
+
 // CleanupHostOverlay retires a deleted host's membership of whichever overlay it was
 // on, from the jump host: a WireGuard peer (kernel entry + persisted fragment) or a
 // certificate overlay's pinned address.

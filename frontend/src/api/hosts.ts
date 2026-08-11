@@ -171,8 +171,20 @@ export async function updateHost(id: string, input: HostInput): Promise<Host> {
   return data;
 }
 
-export async function deleteHost(id: string): Promise<void> {
-  await api.delete(`/api/v1/hosts/${id}`);
+// Teardown is opt-in: it removes Fleet's accounts and SSH trust from the machine,
+// which is a lockout where Fleet was the only administrative access. Omitting the
+// parameter leaves the host provisioned.
+export interface DeleteHostResult {
+  teardownRequested: boolean;
+  teardownStarted?: boolean;
+  teardownError?: string;
+}
+
+export async function deleteHost(id: string, teardown = false): Promise<DeleteHostResult> {
+  const { data } = await api.delete<DeleteHostResult>(
+    `/api/v1/hosts/${id}${teardown ? "?teardown=true" : ""}`,
+  );
+  return data ?? { teardownRequested: teardown };
 }
 
 // One VPN transport's address plan. The two overlays are separate subnets on

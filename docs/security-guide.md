@@ -158,6 +158,14 @@ and operational recommendations.
     certificates: the session (or system) certificate for the jump host, the
     tier's certificate for the managed host.
 
+  - **Deleting a host does not remove the grant by default.** The accounts and the
+    `NOPASSWD` sudoers file survive removal from Fleet's inventory unless the delete
+    asks for teardown (`?teardown=true`, or the checkbox in the delete dialog). For a
+    host that is genuinely leaving, tear it down — otherwise a machine Fleet no longer
+    manages or audits keeps a standing root account. See
+    [host-enrollment-guide.md](./host-enrollment-guide.md#removing-fleet-from-the-machine-opt-in),
+    and `scripts/fleet-unenroll.sh` for hosts Fleet can no longer reach.
+
   > **Defaults are permissive.** `Host.Sudo` is seeded to **Administrator and
   > Operator**, so every builtin role that can open a terminal has root on hosts it
   > can reach. That preserved the pre-`Host.Sudo` behaviour (connect == root) on
