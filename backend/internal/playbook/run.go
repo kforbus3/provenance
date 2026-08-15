@@ -20,13 +20,34 @@ import (
 )
 
 const (
+	// defaultRunTimeout bounds a run when FLEET_PLAYBOOK_TIMEOUT is unset or
+	// unparseable. See config.PlaybookTimeout for why a large inventory outgrows it.
 	defaultRunTimeout = 30 * time.Minute
-	// Principal + cert lifetime for a run. The cert only needs to outlive the run
-	// (bounded by defaultRunTimeout), so keep the TTL tight — the run credential is
-	// written to the out-of-process runner and is revoked on completion, but a
-	// short TTL bounds the window if revocation hasn't yet reached a host.
-	runCertTTL = 45 * time.Minute
+	// runCertTTLMargin is how far the run credential outlives the run itself. The
+	// cert only needs to outlive the run, so keep the margin tight — the run
+	// credential is written to the out-of-process runner and is revoked on
+	// completion, but a short TTL bounds the window if revocation hasn't yet
+	// reached a host. Deriving the TTL from the run bound rather than fixing it
+	// means raising the bound can't silently outlive the credential that carries
+	// the run, which would strand it mid-flight with an expired cert.
+	runCertTTLMargin = 15 * time.Minute
 )
+
+// runTimeout is the wall-clock bound for one run: the configured value, or the
+// default when it is unset or nonsensical.
+func (s *Service) runTimeout() time.Duration {
+	if s.cfg != nil && s.cfg.PlaybookTimeout > 0 {
+		return s.cfg.PlaybookTimeout
+	}
+	return defaultRunTimeout
+}
+
+// runCertTTL is the lifetime of the ephemeral credential minted for a run. It is
+// derived from the run's own bound so the credential can never expire under a run
+// that is still legitimately in flight.
+func runCertTTL(timeout time.Duration) time.Duration {
+	return timeout + runCertTTLMargin
+}
 
 // liveRun holds the in-memory, incrementally-growing output of a run in flight
 // so the status endpoint can stream it to the browser by polling. On completion
@@ -127,7 +148,7 @@ func hostAddress(h *models.Host) string {
 // fresh (restart-independent) context; the in-memory live buffer does not
 // survive a restart, but FailStalePlaybookRuns reconciles the DB row.
 func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, checkMode bool) {
-	timeout := defaultRunTimeout
+	timeout := s.runTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -169,7 +190,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 	for _, h := range hosts {
 		runPrincipals = append(runPrincipals, princ.Host(h.ID))
 	}
-	mat, err := s.issuer.SystemKeyMaterial(ctx, runPrincipals, runCertTTL)
+	mat, err := s.issuer.SystemKeyMaterial(ctx, runPrincipals, runCertTTL(timeout))
 	if err != nil {
 		fail(fmt.Sprintf("could not issue run credential: %v", err))
 		return

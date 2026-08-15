@@ -425,6 +425,20 @@ Runs go through the jump host over certificate auth (the same path as scans) and
 sudo, so your plays should target **`hosts: all`** — Fleet supplies the inventory and limits it
 to the hosts/group you selected. The default new-playbook template is already set up this way.
 
+A run is bounded end to end by `FLEET_PLAYBOOK_TIMEOUT` (default **30m**). The run is
+**sequential across its inventory**, and every host that takes a new kernel adds a reboot and a
+`wait_for_connection` on top of its own upgrade — so the budget scales with host **count**, not
+with per-host work. A fleet-wide `apt dist-upgrade` outgrows 30m well before any individual host
+is slow. A run killed at the deadline reports **exit 124 with zero failed and zero unreachable
+hosts**; if you see that recap, raise the timeout rather than splitting the fleet into batches.
+The run's ephemeral SSH credential is minted to outlive the bound automatically.
+
+> **Rebooting a host Fleet runs on top of** (a hypervisor, or the Fleet VM itself) kills the run
+> that asked for it — Fleet dies mid-flight and the run is later reconciled as `interrupted`,
+> even though the upgrade succeeded. For those hosts, schedule the reboot to land *after* the
+> play ends (`shutdown -r +10`) and skip the `wait_for_connection`: there is nothing left alive
+> on Fleet's side to wait with.
+
 **Hosts with a vaulted credential** (routers, switches, appliances that don't trust the Fleet
 CA) are supported: the runner injects the host's **vaulted SSH key or password** for the final
 hop — the same credential the terminal uses — while the jump-host hop still uses the Fleet

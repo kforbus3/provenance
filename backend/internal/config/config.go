@@ -243,6 +243,16 @@ type Config struct {
 	// can legitimately wait behind others before grype runs.
 	VulnScanTimeout time.Duration
 
+	// PlaybookTimeout bounds a single playbook run end to end. A run is sequential
+	// across its inventory and every host that takes a new kernel adds a reboot and
+	// a wait_for_connection on top of its upgrade, so the bound scales with host
+	// count, not with per-host work: a fleet-wide upgrade can legitimately outgrow
+	// the default long before any individual host is in trouble. Raise this rather
+	// than splitting a fleet into batches — a run killed at the deadline reports
+	// exit 124 with no failed host, which reads as a fleet problem when it is only
+	// a budget one.
+	PlaybookTimeout time.Duration
+
 	// ReencryptSecrets, when true, opportunistically re-encrypts existing at-rest
 	// secrets (the CA key) from the legacy SHA-256 envelope to the argon2id one on
 	// boot. Off by default so a fresh deploy stays roll-back-compatible (an older
@@ -412,6 +422,7 @@ func Load() (*Config, error) {
 		ScanDir:                     env("FLEET_SCAN_DIR", "/var/lib/fleet/scans"),
 		ScanTimeout:                 envDuration("FLEET_SCAN_TIMEOUT", 60*time.Minute),
 		VulnScanTimeout:             envDuration("FLEET_VULN_SCAN_TIMEOUT", 20*time.Minute),
+		PlaybookTimeout:             envDuration("FLEET_PLAYBOOK_TIMEOUT", 30*time.Minute),
 		ControlPlaneHosts:           splitList(env("FLEET_CONTROL_PLANE_HOSTS", "")),
 		ReencryptSecrets:            envBool("FLEET_REENCRYPT_SECRETS", false),
 		ScapContentDir:              env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),

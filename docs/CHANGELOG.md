@@ -7,6 +7,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.6.1 — A fleet-wide upgrade could not finish inside its own budget — 2026-08-15
+
+A weekly "apt dist-upgrade" across a 14-host group failed with **exit 124** and a recap
+showing **zero failed and zero unreachable hosts**. Nothing was wrong with the fleet. A
+playbook run was bounded at a hardcoded **30 minutes**, and the run is *sequential* across
+its inventory: seven of those hosts took a new kernel, and each one added a reboot plus a
+`wait_for_connection` on top of its own upgrade. The budget scales with host **count**, not
+with per-host work, so the run was killed waiting for the last host to come back — 13 hosts
+upgraded, the 14th left mid-reboot, and the whole run reported as a failure.
+
+The bound was not raisable without editing the binary, which pushed operators toward
+splitting a fleet into batches — trading one honest run for several that each hide a
+partial picture.
+
+- **`FLEET_PLAYBOOK_TIMEOUT`** (default `30m`, unchanged) now bounds a playbook run, matching
+  the existing `FLEET_SCAN_TIMEOUT` shape. Raise it rather than batching a large fleet.
+- **The run's ephemeral SSH credential is derived from the bound** instead of being fixed at
+  45m. Raising the timeout past 45m would previously have expired the certificate underneath
+  a run that was still legitimately in flight, killing it on authentication somewhere in the
+  middle of the fleet and leaving hosts half-upgraded. Tests pin both ends.
+- **Documented the hypervisor case** in `docs/operations.md`: rebooting a host Fleet runs on
+  top of kills the run that asked for it, and the run is later reconciled as `interrupted`
+  even though the upgrade succeeded. Defer that reboot past the end of the play
+  (`shutdown -r +10`) and skip the wait — there is nothing left alive on Fleet's side to
+  wait with.
+
 ## v1.6.0 — Ask was answering with no instructions at all — 2026-08-11
 
 Asked for "the latest security scan result for each host", Ask replied with a chatty
