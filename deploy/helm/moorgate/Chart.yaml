@@ -11,8 +11,8 @@ keywords:
   - pam
   - bastion
   - terminal
-home: https://github.com/kforbus3/Fleet-Terminal
+home: https://github.com/kforbus3/Moorgate
 sources:
-  - https://github.com/kforbus3/Fleet-Terminal
+  - https://github.com/kforbus3/Moorgate
 maintainers:
   - name: Moorgate

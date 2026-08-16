@@ -341,7 +341,7 @@ principal `fleet`) and run WireGuard yourself.
 
 ## 8. Upgrades
 
-> **Set the new required secrets before restarting.** This release adds two
+> **Set the new required secrets before restarting.** The 2.0.0 release adds two
 > production-required variables — **`FLEET_AUDIT_HMAC_KEY`** and
 > **`FLEET_ANSIBLE_RUNNER_TOKEN`** (§3). An existing production deployment **must
 > set both in `.env` before the next restart**, or the backend **fails closed at
@@ -350,17 +350,57 @@ principal `fleet`) and run WireGuard yourself.
 > `ansible-runner` container. Optionally set `FLEET_RECORDING_KEY` at the same time
 > to encrypt new recordings at rest.
 
-- Pull/rebuild images and `docker compose up -d`. **Database migrations apply
-  automatically on backend start** (`FLEET_MIGRATE_ON_START=true`), in order, and
-  are logged (`migrations applied … versions=[…]`). Upgrading into this release
-  applies migrations **0017–0026** automatically (service accounts, session-watch,
-  recovery codes, dynamic-group rules, metric history, vulnerability scans, …).
-- Recordings and certificates survive restarts; ephemeral in-RAM keys are
-  re-issued on the next authenticated request.
-- **After adding vulnerability scanning**, rebuild so the new `grype-scanner`
-  service is present, then **load the CVE database once** (Vulnerabilities → CVE
-  database → Update online or Import offline). It persists in the `grype-db` volume
-  across subsequent upgrades.
+**Database migrations apply automatically on backend start**
+(`FLEET_MIGRATE_ON_START=true`), in order, and are logged (`migrations applied …
+versions=[…]`). Recordings and certificates survive restarts; ephemeral in-RAM keys
+are re-issued on the next authenticated request.
+
+### In-app (signed `.fleetup` bundle) upgrades — read this first
+
+The in-app updater (Settings → Maintenance → Updates → Install) loads the bundle's
+container images and then recreates the stack **using the compose files
+bind-mounted from your on-disk checkout** — *not* files carried in the bundle. That
+has one consequence that matters on every release which changes compose structure
+(a new **required** env var, a new or removed service, changed mounts/ports):
+
+> **⚠️ When a release changes compose structure, sync your checkout to the new tag
+> *before* clicking Install.** Otherwise the updater recreates the new images against
+> your *old* service definitions — the new backend never receives the new env
+> wiring, fails closed, and the update rolls back (the health-gate reports
+> `lookup backend … no such host` as the crash-looping container's DNS alias flaps).
+
+The correct order for such a release (2.0.0 is one — it adds the two required
+secrets above, removes the Redis service, and adds resource limits):
+
+```bash
+# 1. Sync the checkout to the release tag so the bind-mounted compose has the new
+#    wiring. (The GitHub remote is 'origin' on the deployment host.)
+cd <checkout>
+sudo git fetch origin --tags
+sudo git checkout vX.Y.Z            # detached HEAD at the tag is expected
+sudo chown -R <owner>:<owner> .     # if git left root-owned files
+
+# 2. Set any newly-required secrets in .env (the updater's config migration will
+#    also generate absent ones, but setting them here removes any doubt):
+printf '\nFLEET_AUDIT_HMAC_KEY=%s\nFLEET_ANSIBLE_RUNNER_TOKEN=%s\nFLEET_RECORDING_KEY=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
+
+# 3. Now upload the .fleetup bundle in the UI and Install. Verify afterwards:
+curl -fsS http://localhost:8080/version   # -> the new version
+docker compose ps                         # all services healthy
+```
+
+A rollback is non-disruptive: the previous version keeps running until an install
+succeeds, so a failed attempt leaves you exactly where you started.
+
+### Plain `docker compose` upgrades
+
+If you upgrade by pulling/rebuilding images and running `docker compose up -d`
+directly (rather than the in-app bundle), your working tree already carries the new
+compose, so only the secrets step above applies. **After adding vulnerability
+scanning**, rebuild so the new `grype-scanner` service is present, then **load the
+CVE database once** (Vulnerabilities → CVE database → Update online or Import
+offline). It persists in the `grype-db` volume across subsequent upgrades.
 
 ---
 

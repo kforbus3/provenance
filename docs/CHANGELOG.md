@@ -3433,7 +3433,7 @@ and federate identity with SAML SSO and SCIM provisioning.
   `AccessReview.Manage` permission (granted to Super Administrator, Administrator,
   and Auditor).
 - **Automation: Go SDK + `fleet` CLI.** A standalone, dependency-free Go module
-  (`github.com/kforbus3/Fleet-Terminal/sdk`) and a token-authenticated `fleet`
+  (`github.com/kforbus3/Moorgate/sdk`) and a token-authenticated `fleet`
   command-line tool for managing hosts, groups (incl. dynamic rules), users, roles,
   service accounts and tokens, vulnerability scans, and CSV reports — for CI/CD,
   scheduled jobs, and custom tooling. Authenticates with a service-account `flt_`

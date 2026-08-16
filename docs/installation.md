@@ -35,8 +35,8 @@ Optional, enabled later:
 ## 2. Get the code
 
 ```bash
-git clone https://github.com/kforbus3/Fleet-Terminal.git
-cd Fleet-Terminal
+git clone https://github.com/kforbus3/Moorgate.git
+cd Moorgate
 ```
 
 ---
