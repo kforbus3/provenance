@@ -1,4 +1,4 @@
-# Fleet Terminal — Deployment Guide
+# Moorgate — Deployment Guide
 
 How to stand up the **entire system**: the application stack (backend, frontend,
 PostgreSQL, Redis), the SSH egress path (jump host + WireGuard), and the
@@ -74,8 +74,17 @@ Generate strong secrets (required in production):
 ```sh
 openssl rand -hex 32   # FLEET_JWT_SECRET
 openssl rand -hex 32   # FLEET_CSRF_SECRET
-openssl rand -hex 32   # FLEET_CA_PASSPHRASE   (encrypts the SSH CA key at rest)
+openssl rand -hex 32   # FLEET_CA_PASSPHRASE          (encrypts the SSH CA key at rest)
+openssl rand -hex 32   # FLEET_AUDIT_HMAC_KEY         (keys the tamper-evident audit chain)
+openssl rand -hex 32   # FLEET_ANSIBLE_RUNNER_TOKEN   (backend ⇄ ansible-runner shared secret; ≥16 bytes suffices)
+openssl rand -hex 32   # FLEET_RECORDING_KEY          (optional: encrypts session recordings at rest)
 ```
+
+> **Required in production.** In addition to `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`,
+> and `FLEET_CA_PASSPHRASE`, a production backend (`FLEET_ENV=production`) **fails
+> closed at boot** unless **`FLEET_AUDIT_HMAC_KEY`** and **`FLEET_ANSIBLE_RUNNER_TOKEN`**
+> are also set (see the table below). Set all of them before the first production
+> start.
 
 Key variables (full list in `.env.example`):
 
@@ -85,6 +94,9 @@ Key variables (full list in `.env.example`):
 | `FLEET_PUBLIC_URL` | Public HTTPS URL; drives CORS, cookies, WebAuthn |
 | `FLEET_JWT_SECRET` / `FLEET_CSRF_SECRET` | Token + CSRF signing (≥16 bytes) |
 | `FLEET_CA_PASSPHRASE` | Encrypts the internal SSH CA private key at rest |
+| `FLEET_AUDIT_HMAC_KEY` | **Required in production** (≥32 bytes). Keys the HMAC that chains the tamper-evident audit log, binding each event's sequence, timestamp, and tenant. Without it the chain is unauthenticated (anyone who can write the table can forge a consistent chain). Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production. See [security-guide.md](./security-guide.md) |
+| `FLEET_ANSIBLE_RUNNER_TOKEN` | **Required in production** (≥16 bytes). Shared secret the backend presents to the `ansible-runner` sidecar; the sidecar rejects unauthenticated calls. **Must match on both** the backend and the `ansible-runner` container. Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production |
+| `FLEET_RECORDING_KEY` | *(optional, ≥32 bytes)* AES-256-GCM at-rest encryption of session recordings — **both** SSH (asciicast) **and** RDP/Guacamole streams. The backend **warns if unset** and stores recordings in plaintext. Generate with `openssl rand -hex 32`. Enabling it later encrypts only new recordings; existing plaintext recordings still play. Losing the key makes encrypted recordings unrecoverable — keep it off-host with the other secrets |
 | `POSTGRES_PASSWORD` | Database password |
 | `FLEET_COOKIE_SECURE` | `true` whenever served over HTTPS |
 | `FLEET_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Session inactivity / hard-cap lifetimes |
@@ -123,6 +135,22 @@ Key variables (full list in `.env.example`):
 > SIEM (syslog or HTTP JSON) are likewise configured **in the UI** (Settings) — no
 > environment variables needed. The OIDC client secret and LDAP bind password are
 > encrypted at rest. See [security-guide.md](./security-guide.md).
+
+### Scale & capacity
+
+The default configuration comfortably manages **hundreds of hosts** on a single
+app-stack server. Scaling to **thousands** requires two changes:
+
+- **A wider overlay subnet.** The default `FLEET_WG_SUBNET` sizes the WireGuard
+  address pool; a few hundred hosts exhaust a `/24`. For thousands, use a larger
+  block (e.g. a **`/16`**, giving ~65k addresses) *before* enrolling at scale —
+  the subnet is fixed at the pool's creation. Set it consistently on the backend
+  and the jump host.
+- **Tuned monitor concurrency.** Raise `FLEET_MONITOR_CONCURRENCY` (default `6`)
+  so health checks keep up across a large fleet, but keep it **under the jump
+  host's sshd `MaxStartups`** so probes aren't throttled or dropped.
+
+See [architecture.md](./architecture.md) for the underlying model.
 
 ---
 
@@ -186,7 +214,7 @@ The bundled jump host:
 
 - **publishes** the WireGuard UDP port (`FLEET_WG_PORT`, default 51820) so remote
   managed hosts can reach it — **open that UDP port on the host firewall**;
-- **auto-trusts the Fleet CA** by polling the backend's public CA endpoint
+- **auto-trusts the Moorgate CA** by polling the backend's public CA endpoint
   (`GET /api/v1/certificates/ca/pub`) — no manual trust step, and it tracks CA
   rotation automatically;
 - **persists** its WireGuard keypair + peers (`jump_wg`) and SSH host key
@@ -201,7 +229,7 @@ default `jumphost:22`.
 > higher-security setups, keep the jump host on a separate minimal box (§5b) so
 > public WireGuard ingress isn't on the control-plane server.
 
-To manage the Fleet server itself as a host, enroll it with the **Directly
+To manage the Moorgate server itself as a host, enroll it with the **Directly
 reachable / skip WireGuard** option: a host co-located with the jump host can't run
 a second WireGuard endpoint on the jump's port, so enrollment skips the overlay and
 the gateway reaches it at its management address through the jump host (see the
@@ -216,14 +244,49 @@ make up-app      # or: docker compose --env-file .env -f deploy/compose/docker-c
 ```
 
 Set `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` to your jump host, ensure it trusts the
-Fleet CA (`GET /api/v1/certificates/ca/pub`) and runs WireGuard on
+Moorgate CA (`GET /api/v1/certificates/ca/pub`) and runs WireGuard on
 `FLEET_WG_JUMP_ENDPOINT`. See §6.
 
 ### Other deployment targets
 
-`deploy/` also contains Kubernetes manifests (`deploy/k8s`), a Helm chart
-(`deploy/helm`), and systemd units (`deploy/systemd`) for non-Compose
+`deploy/` also contains Kubernetes manifests (`deploy/k8s`), a **Helm chart
+(`deploy/helm/moorgate`)**, and systemd units (`deploy/systemd`) for non-Compose
 environments. They consume the same environment variables described above.
+
+#### Kubernetes / Helm
+
+Install the chart at **`deploy/helm/moorgate`**:
+
+```sh
+helm install moorgate deploy/helm/moorgate \
+  --namespace moorgate --create-namespace \
+  -f my-values.yaml
+```
+
+The default chart deploys the **backend**, **frontend**, and an **in-chart
+PostgreSQL** primary. The two sidecars — **`ansibleRunner`** (playbook lint/run)
+and **`grypeScanner`** (CVE scans) — are **toggleable** via `ansibleRunner.enabled`
+and `grypeScanner.enabled` (both default `true`; disable either if you don't use the
+feature). Point at an external database with `postgres.enabled=false` +
+`postgres.externalDatabaseUrl` for real HA.
+
+Provide the same secrets as Compose through the chart's **`secrets.*`** values
+(rendered into a Kubernetes `Secret`, or supply your own with
+`secrets.create=false` + `secrets.existingSecret`). In production the backend
+**fails closed at boot** unless these are real values (generate each with
+`openssl rand -hex 32`; **never commit them** — use `--set`, a sealed Secret, or an
+External Secret):
+
+| Value | Maps to | Required |
+|---|---|---|
+| `secrets.jwtSecret` | `FLEET_JWT_SECRET` | yes |
+| `secrets.csrfSecret` | `FLEET_CSRF_SECRET` | yes |
+| `secrets.caPassphrase` | `FLEET_CA_PASSPHRASE` | yes |
+| `secrets.auditHmacKey` | `FLEET_AUDIT_HMAC_KEY` | yes |
+| `secrets.ansibleRunnerToken` | `FLEET_ANSIBLE_RUNNER_TOKEN` (also read by the `ansible-runner` Deployment) | yes |
+| `secrets.vaultPassphrase` | `FLEET_VAULT_PASSPHRASE` (must **differ** from `caPassphrase`) | for the credential vault |
+| `secrets.backupPassphrase` | `FLEET_BACKUP_PASSPHRASE` (must **differ** from `caPassphrase`) | for encrypted backups |
+| `secrets.recordingKey` | `FLEET_RECORDING_KEY` | optional (recording encryption) |
 
 ---
 
@@ -231,7 +294,7 @@ environments. They consume the same environment variables described above.
 
 The jump host is the single egress point. It must:
 
-- run OpenSSH and **trust the Fleet CA** (so the backend can SSH in with its
+- run OpenSSH and **trust the Moorgate CA** (so the backend can SSH in with its
   system certificate) — `FLEET_JUMP_USER` maps to the `fleet` principal;
 - run WireGuard as the overlay server on `FLEET_WG_PORT`, with its public key
   readable at `/etc/wireguard/publickey`;
@@ -256,6 +319,9 @@ principal `fleet`) and run WireGuard yourself.
 
 - [ ] `FLEET_ENV=production`, `FLEET_COOKIE_SECURE=true`, HTTPS + HSTS at the proxy.
 - [ ] Strong `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE`.
+- [ ] `FLEET_AUDIT_HMAC_KEY` and `FLEET_ANSIBLE_RUNNER_TOKEN` set (both **required**;
+      backend fails closed without them). `FLEET_RECORDING_KEY` set to encrypt
+      recordings at rest.
 - [ ] `FLEET_ALLOW_BOOTSTRAP=false` once the first admin exists.
 - [ ] **Require MFA** for all users (Users → *Require MFA for all*) or per user.
 - [ ] Per-IP rate limits set; `lockout_policy` tuned (Settings/Security).
@@ -274,6 +340,15 @@ principal `fleet`) and run WireGuard yourself.
 ---
 
 ## 8. Upgrades
+
+> **Set the new required secrets before restarting.** This release adds two
+> production-required variables — **`FLEET_AUDIT_HMAC_KEY`** and
+> **`FLEET_ANSIBLE_RUNNER_TOKEN`** (§3). An existing production deployment **must
+> set both in `.env` before the next restart**, or the backend **fails closed at
+> boot** and will not come back up. Generate each with `openssl rand -hex 32`, and
+> make `FLEET_ANSIBLE_RUNNER_TOKEN` identical on the backend and the
+> `ansible-runner` container. Optionally set `FLEET_RECORDING_KEY` at the same time
+> to encrypt new recordings at rest.
 
 - Pull/rebuild images and `docker compose up -d`. **Database migrations apply
   automatically on backend start** (`FLEET_MIGRATE_ON_START=true`), in order, and

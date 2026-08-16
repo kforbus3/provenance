@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // RecordStatusEvent appends one host online<->offline transition to the

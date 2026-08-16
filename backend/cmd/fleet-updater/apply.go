@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/release"
+	"github.com/kforbus3/Moorgate/backend/internal/release"
 )
 
 // Status mirrors the backend's upgrade.Status JSON shape so the backend can proxy it
@@ -103,7 +103,7 @@ func (u *Updater) persistLocked() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(u.statusPath(), b, 0o644)
+	_ = os.WriteFile(u.statusPath(), b, 0o600)
 }
 
 // loadPersistedStatus restores the last persisted status at boot, so a self-update (or
@@ -434,5 +434,5 @@ func writeOverride(path string, serviceImages map[string]string) error {
 	for _, s := range svcs {
 		fmt.Fprintf(&b, "  %s:\n    image: %s\n    pull_policy: never\n", s, serviceImages[s])
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return os.WriteFile(path, []byte(b.String()), 0o600)
 }

@@ -9,26 +9,51 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/federation/fedauth"
-	"github.com/fleet-terminal/backend/internal/federation/keys"
-	fedlink "github.com/fleet-terminal/backend/internal/federation/link"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/tenant"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/federation/fedauth"
+	"github.com/kforbus3/Moorgate/backend/internal/federation/keys"
+	fedlink "github.com/kforbus3/Moorgate/backend/internal/federation/link"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/tenant"
+	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  32 << 10,
 	WriteBufferSize: 32 << 10,
-	// The link is authenticated by a site-signed token, not by Origin.
-	CheckOrigin: func(*http.Request) bool { return true },
+	// The site link is a non-browser Go client authenticated by a site-signed token
+	// and sends no Origin (allowed). A browser upgrade, however, must be same-origin:
+	// accepting any Origin would expose the hub's WS upgraders to cross-site
+	// hijacking. The public URL is learned at request time (rememberPublicURL) since
+	// this is a package var shared with the operator proxy upgrader.
+	CheckOrigin: fedCheckOrigin,
+}
+
+// fedPublicURL holds the deployment's public URL for the WebSocket origin check.
+// It is an atomic because the upgrader is a package var initialized before any
+// config is available; the hub/site handlers populate it on first use.
+var fedPublicURL atomic.Value // string
+
+func fedCheckOrigin(r *http.Request) bool {
+	pu, _ := fedPublicURL.Load().(string)
+	return wsorigin.Allowed(r, pu)
+}
+
+// rememberPublicURL records the configured public URL for the origin check. Called
+// from the site-facing handlers, which always run before an operator proxy upgrade
+// (a proxy target must be a linked site).
+func rememberPublicURL(pu string) {
+	if pu != "" {
+		fedPublicURL.Store(pu)
+	}
 }
 
 // ensureHubKey loads the active hub federation identity or generates one.
@@ -106,6 +131,7 @@ func effectiveProtocol(req joinReq) int {
 }
 
 func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
+	rememberPublicURL(s.deps.Cfg.PublicURL)
 	var req joinReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request")
@@ -157,6 +183,7 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 // --- site-facing: persistent link ---
 
 func (s *Service) handleLink(w http.ResponseWriter, r *http.Request) {
+	rememberPublicURL(s.deps.Cfg.PublicURL)
 	siteID, err := uuid.Parse(r.URL.Query().Get("site"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad site id")

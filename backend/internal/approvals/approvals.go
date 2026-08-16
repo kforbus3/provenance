@@ -13,13 +13,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/itsm"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/itsm"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // Mount attaches approval routes to r, gated by authentication and permissions.
@@ -100,7 +100,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if ar.TicketRef == "" {
 		if cfg, cerr := itsm.LoadConfig(r.Context(), h.d.Store, h.d.Cfg.CAKeyPassphrase); cerr == nil && cfg.Configured() {
 			summary := fmt.Sprintf("Fleet access request: %s → %s %s", p.Username, ar.TargetKind, ar.TargetName)
-			desc := fmt.Sprintf("%s requested %s of access to %s %q via Fleet Terminal.\nReason: %s",
+			desc := fmt.Sprintf("%s requested %s of access to %s %q via Moorgate.\nReason: %s",
 				p.Username, (time.Duration(ar.RequestedSecs) * time.Second).String(), ar.TargetKind, ar.TargetName, ar.Reason)
 			ictx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 			ref, url, terr := itsm.New(cfg).CreateTicket(ictx, summary, desc)
@@ -340,7 +340,7 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 	// ITSM 2-way sync: record the decision back on the linked ticket. Best-effort.
 	if ar.TicketRef != "" {
 		if cfg, cerr := itsm.LoadConfig(r.Context(), h.d.Store, h.d.Cfg.CAKeyPassphrase); cerr == nil && cfg.Configured() {
-			comment := fmt.Sprintf("Fleet Terminal: access request %s by %s.", ar.Status, p.Username)
+			comment := fmt.Sprintf("Moorgate: access request %s by %s.", ar.Status, p.Username)
 			if ar.Status == "approved" && ar.GrantedSecs != nil {
 				comment += fmt.Sprintf(" Access granted for %s.", (time.Duration(*ar.GrantedSecs) * time.Second).String())
 			}

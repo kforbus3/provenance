@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 var (
@@ -79,9 +79,9 @@ func (s *Service) PreviewFix(ctx context.Context, scan *models.HostScan, host *m
 
 // Remediate applies fixes for the selected rules in the background, then re-scans
 // to verify. The remediation record is updated with the outcome + re-scan id.
-func (s *Service) Remediate(remID uuid.UUID, scan *models.HostScan, host *models.Host, ruleIDs []string, requestedBy *uuid.UUID, requester string) {
+func (s *Service) Remediate(parent context.Context, remID uuid.UUID, scan *models.HostScan, host *models.Host, ruleIDs []string, requestedBy *uuid.UUID, requester string) {
 	// Covers apply + the synchronous verification re-scan (a full scan each).
-	ctx, cancel := context.WithTimeout(context.Background(), 2*s.scanTimeout())
+	ctx, cancel := context.WithTimeout(parent, 2*s.scanTimeout())
 	defer cancel()
 	failRem := func(msg string) {
 		s.log.Warn("remediation failed", "host", host.Hostname, "rem", remID, "err", msg)
@@ -117,7 +117,7 @@ func (s *Service) Remediate(remID uuid.UUID, scan *models.HostScan, host *models
 	var rescanID *uuid.UUID
 	if rec, err := s.store.CreateHostScan(ctx, host.ID, requestedBy, requester, scan.Profile, false); err == nil {
 		// Reuse the original scan's skipped rules so the re-scan isn't slower.
-		s.Run(rec.ID, host, scan.Profile, scan.SkipRules) // synchronous within this goroutine
+		s.Run(ctx, rec.ID, host, scan.Profile, scan.SkipRules) // synchronous within this goroutine
 		rescanID = &rec.ID
 	} else {
 		s.log.Warn("remediation rescan create", "err", err)

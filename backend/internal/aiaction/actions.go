@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // ---- scan.vulnerability ----------------------------------------------------
@@ -98,7 +98,7 @@ func vulnScanAction() ActionDef {
 					continue
 				}
 				if r.runVulnScan != nil {
-					r.runVulnScan(scanID, h)
+					r.runVulnScan(context.WithoutCancel(ctx), scanID, h)
 				}
 				started++
 			}
@@ -302,7 +302,7 @@ func deleteHostAction() ActionDef {
 			}
 			if r.cleanupHostOverlay != nil && host != nil && host.WGAddress != "" {
 				go func(h models.Host) {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 					defer cancel()
 					if err := r.cleanupHostOverlay(ctx, &h); err != nil {
 						r.log.Warn("cleanup host overlay after host delete",

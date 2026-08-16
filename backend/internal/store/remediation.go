@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/models"
 	"github.com/google/uuid"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 const remediationCols = `id, scan_id, host_id, requester, rule_ids, status, exit_code,

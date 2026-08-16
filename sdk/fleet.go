@@ -1,4 +1,4 @@
-// Package fleet is the official Go client for the Fleet Terminal API.
+// Package fleet is the official Go client for the Moorgate API.
 //
 // It wraps the REST API under /api/v1 and authenticates with a service-account
 // API token (the "flt_" bearer token issued from Settings → Service Accounts, or
@@ -34,7 +34,7 @@ import (
 // with WithUserAgent (e.g. the CLI appends its version).
 const DefaultUserAgent = "fleet-go-sdk"
 
-// Client talks to a Fleet Terminal deployment. It is safe for concurrent use.
+// Client talks to a Moorgate deployment. It is safe for concurrent use.
 type Client struct {
 	baseURL   string // normalized, no trailing slash, includes scheme+host
 	apiPrefix string // "/api/v1"

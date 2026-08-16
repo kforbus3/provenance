@@ -1,0 +1,124 @@
+# Grype scanner sidecar — runs Anchore Grype vulnerability scans for the backend.
+# Internal only (ClusterIP): reachable at http://fleet-grype-scanner:8000. The ~1 GB
+# vuln DB is fetched at runtime and persisted on a PVC (not baked into the image).
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-grype-scanner
+  namespace: fleet-terminal
+  labels:
+    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/component: grype-scanner
+spec:
+  selector:
+    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/component: grype-scanner
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-grype-scanner
+  namespace: fleet-terminal
+  labels:
+    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/component: grype-scanner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-terminal
+      app.kubernetes.io/component: grype-scanner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fleet-terminal
+        app.kubernetes.io/component: grype-scanner
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grype-scanner
+          # Build/push from deploy/grype-scanner (no public image is published).
+          image: ghcr.io/kforbus3/moorgate-grype-scanner:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: GRYPE_SCAN_CONCURRENCY
+              value: "2"
+            - name: GRYPE_SCAN_TIMEOUT
+              value: "1200"
+            - name: GRYPE_DB_TIMEOUT
+              value: "900"
+            # Steer syft/grype scratch extraction to the writable /tmp emptyDir below
+            # (the root fs is read-only; the vuln DB stays on the PVC).
+            - name: TMPDIR
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Immutable root fs. The ~1 GB vuln DB persists on the PVC and syft's scan
+            # scratch space goes to the /tmp emptyDir (TMPDIR above), so nothing needs
+            # to write to the root filesystem.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: grype-db
+              mountPath: /home/scanner/.cache/grype
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: grype-db
+          persistentVolumeClaim:
+            claimName: fleet-grype-db
+        - name: tmp
+          emptyDir: {}
+---
+# Persists the grype vulnerability DB across restarts (single replica → RWO is fine).
+# Drop to an emptyDir if you accept re-downloading the ~1 GB DB on every restart.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fleet-grype-db
+  namespace: fleet-terminal
+  labels:
+    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/component: grype-scanner
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

@@ -1,4 +1,4 @@
-// Command fleetctl is the offline administrative CLI for Fleet Terminal. It
+// Command fleetctl is the offline administrative CLI for Moorgate. It
 // connects directly to the database (using the same FLEET_DATABASE_URL) and is
 // the documented out-of-band recovery path — e.g. restoring access when every
 // administrator is locked out, resetting MFA, or rotating the CA.
@@ -16,18 +16,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/ca"
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/cryptoprofile"
-	"github.com/fleet-terminal/backend/internal/db"
-	"github.com/fleet-terminal/backend/internal/kms"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/overlaypki"
-	"github.com/fleet-terminal/backend/internal/secretbox"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/vault"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/ca"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
+	"github.com/kforbus3/Moorgate/backend/internal/db"
+	"github.com/kforbus3/Moorgate/backend/internal/kms"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/overlaypki"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/vault"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `fleetctl — Fleet Terminal offline admin CLI
+	fmt.Fprint(os.Stderr, `fleetctl — Moorgate offline admin CLI
 
 Usage:
   fleetctl create-admin <username> <password> [email]   Create a Super Administrator (recovery)
@@ -262,7 +262,7 @@ func runKMS(ctx context.Context, cfg *config.Config, args []string) error {
 
 	switch sub {
 	case "status":
-		fmt.Println("Fleet Terminal — external KMS status")
+		fmt.Println("Moorgate — external KMS status")
 		fmt.Println("====================================")
 		fmt.Printf("  Provider              : %s\n", cfg.KMSProvider)
 		fmt.Printf("  Key ID                : %s\n", orNone(cfg.KMSKeyID))
@@ -329,7 +329,7 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 		return "NOT-FIPS"
 	}
 
-	fmt.Println("Fleet Terminal — FIPS readiness report")
+	fmt.Println("Moorgate — FIPS readiness report")
 	fmt.Println("======================================")
 	fmt.Printf("  Config FLEET_FIPS_MODE : %v\n", cfg.FIPSMode)
 	fmt.Printf("  Config FLEET_OVERLAY   : %s   [%s]\n", cfg.Overlay, ok(cfg.Overlay != "wireguard"))

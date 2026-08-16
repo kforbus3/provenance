@@ -13,19 +13,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	// Set in Mount from the configured public URL: a browser upgrade must be
+	// same-origin; non-browser clients (no Origin header) are allowed.
+	CheckOrigin: wsorigin.Check(""),
 }
 
 // Mount attaches the watch WebSocket endpoint. Auth is via a query-param token
 // (browsers cannot set headers on a WebSocket), like the terminal endpoint.
 func Mount(r chi.Router, d *app.Deps) {
+	upgrader.CheckOrigin = wsorigin.Check(d.Cfg.PublicURL)
 	h := &handler{d: d}
 	r.Get("/sessions/{id}/watch", h.watch)
 }
@@ -62,6 +66,27 @@ func (h *handler) watch(w http.ResponseWriter, r *http.Request) {
 	if h.d.Watch == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
+	}
+
+	// Authorization: Session.Watch alone is not enough — a watcher must also be
+	// entitled to the TARGET session, or anyone holding Session.Watch who learns a
+	// session UUID could shadow it (including another tenant's). Resolve the session
+	// under the caller's tenant scope so RLS filters a cross-tenant id (returns
+	// not-found), then require host access exactly as the terminal endpoint does.
+	sess, err := h.d.Store.GetSSHSession(ctx, sid)
+	if err != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if !principal.IsSuperAdmin {
+		if sess.HostID == nil {
+			http.Error(w, "not authorized for session", http.StatusForbidden)
+			return
+		}
+		if ok, aerr := h.d.Store.UserCanAccessHost(ctx, principal.UserID, *sess.HostID); aerr != nil || !ok {
+			http.Error(w, "not authorized for session", http.StatusForbidden)
+			return
+		}
 	}
 
 	conn, err := upgrader.Upgrade(w, r, wsRespHeader)

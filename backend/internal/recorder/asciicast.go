@@ -3,11 +3,13 @@
 package recorder
 
 import (
+	"crypto/cipher"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,6 +26,9 @@ type Recorder struct {
 	path   string
 	bytes  int64
 	closed bool
+	// gcm is non-nil when the recording is encrypted at rest; each line is written as
+	// a framed AES-256-GCM chunk (see crypto.go). Nil keeps legacy plaintext.
+	gcm cipher.AEAD
 }
 
 // Header is the asciicast v2 first line.
@@ -35,8 +40,12 @@ type header struct {
 	Env       map[string]string `json:"env,omitempty"`
 }
 
-// New creates a recording file under dir named by id and writes the header.
-func New(dir, id string, cols, rows int, startUnix int64) (*Recorder, error) {
+// New creates a recording file under dir named by id and writes the header. An
+// optional encryption key (cfg.RecordingEncryptionKey) encrypts the recording at rest
+// with AES-256-GCM; pass no key (or an empty one) for legacy plaintext. Only the first
+// key is used — the variadic parameter exists solely to keep the signature backward
+// compatible with existing callers that pass no key.
+func New(dir, id string, cols, rows int, startUnix int64, key ...[]byte) (*Recorder, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
@@ -46,6 +55,21 @@ func New(dir, id string, cols, rows int, startUnix int64) (*Recorder, error) {
 		return nil, err
 	}
 	r := &Recorder{f: f, start: time.Unix(startUnix, 0), path: path, hasher: sha256.New()}
+	if len(key) > 0 && len(key[0]) > 0 {
+		gcm, gerr := recGCM(key[0])
+		if gerr != nil {
+			f.Close()
+			return nil, gerr
+		}
+		r.gcm = gcm
+		// Encrypted files start with a magic prefix so readers can tell them from
+		// legacy plaintext asciicast; frames follow.
+		if _, werr := r.f.Write(recMagic); werr != nil {
+			f.Close()
+			return nil, werr
+		}
+		r.bytes += int64(len(recMagic))
+	}
 	h := header{Version: 2, Width: cols, Height: rows, Timestamp: startUnix,
 		Env: map[string]string{"TERM": "xterm-256color"}}
 	line, _ := json.Marshal(h)
@@ -82,8 +106,20 @@ func (r *Recorder) writeLine(line []byte) {
 
 func (r *Recorder) writeLineLocked(line []byte) {
 	line = append(line, '\n')
-	n, _ := r.f.Write(line)
+	// The content hash is always over the plaintext asciicast, so a recording's
+	// SHA-256 identifies its session content regardless of at-rest encryption.
 	_, _ = r.hasher.Write(line)
+	if r.gcm != nil {
+		frame, err := sealFrame(r.gcm, line)
+		if err != nil {
+			slog.Warn("recorder: seal frame failed; dropping line", "path", r.path, "err", err)
+			return
+		}
+		n, _ := r.f.Write(frame)
+		r.bytes += int64(n)
+		return
+	}
+	n, _ := r.f.Write(line)
 	r.bytes += int64(n)
 }
 

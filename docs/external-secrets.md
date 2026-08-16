@@ -1,8 +1,8 @@
 # External secrets manager (vault-of-record)
 
-A vault credential can be **external-backed**: instead of Fleet storing the secret material
+A vault credential can be **external-backed**: instead of Moorgate storing the secret material
 (sealed at rest), the credential holds only a *reference* into an external secrets manager, and
-Fleet fetches the value **on demand** at the point of use. This lets Fleet broker secrets from the
+Moorgate fetches the value **on demand** at the point of use. This lets Moorgate broker secrets from the
 manager your organization already runs, without becoming a second copy of record.
 
 Supported backends: **HashiCorp Vault KV (v2)** and **AWS Secrets Manager**.
@@ -13,10 +13,10 @@ Supported backends: **HashiCorp Vault KV (v2)** and **AWS Secrets Manager**.
   `external_ref` (e.g. `secret/db/prod#password`). **No secret material is stored locally** — the
   local sealed blob is empty.
 - Whenever the plaintext is needed — a reveal, an SSH/RDP credential injection, a brokered database
-  or Kubernetes connection — Fleet fetches it live from the manager through the one central resolver
+  or Kubernetes connection — Moorgate fetches it live from the manager through the one central resolver
   (`internal/credresolve`), so the value is never cached and always reflects the manager's current
   contents.
-- Because the manager is the source of record, Fleet **does not rotate** external-backed
+- Because the manager is the source of record, Moorgate **does not rotate** external-backed
   credentials (rotate them in the manager) and cannot re-seal them.
 - Everything else is unchanged: locally-sealed credentials continue to work exactly as before.
 
@@ -56,6 +56,6 @@ identically.
 
 ## Notes
 
-- Scope the Vault token to least privilege — read access only to the KV paths Fleet references.
+- Scope the Vault token to least privilege — read access only to the KV paths Moorgate references.
 - The reference format is provider-specific; more providers (e.g. AWS Secrets Manager) slot into the
   same `internal/extsecret` interface.

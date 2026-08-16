@@ -39,3 +39,6 @@ __pycache__/
 *.fleetup
 release.key
 *.release.key
+
+# Local Claude Code session artifacts (worktrees, transcripts)
+.claude/

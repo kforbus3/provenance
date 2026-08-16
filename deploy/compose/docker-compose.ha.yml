@@ -7,6 +7,19 @@
 # It is an isolated Compose project (its own name/volumes/network), so it does NOT
 # touch a `make up-single` / `up-app` stack running alongside it.
 #
+# KNOWN HA CAVEAT — per-instance rate limiting. The per-IP rate limiter
+# (internal/ratelimit) is an in-memory token bucket local to each backend process,
+# so with N instances behind the LB the EFFECTIVE limit an attacker sees is N× the
+# configured FLEET_RATE_LIMIT_* / FLEET_AUTH_RATE_LIMIT_* values (a round-robin LB
+# spreads their requests across all N buckets). This is a defense-in-depth throttle,
+# not the primary control (per-account lockout is enforced in Postgres and IS
+# cluster-wide), but size it accordingly:
+#   * set the per-instance limits to roughly (desired global limit ÷ instance count), OR
+#   * enforce the authoritative rate limit at the shared edge (LB / WAF / reverse proxy),
+#     which sees the true per-client request rate.
+# A shared (Redis/Postgres-backed) limiter is intentionally not implemented — it would
+# add a hot dependency on the request path for a secondary control.
+#
 # Run (from the repo root):
 #   docker compose --env-file .env -f deploy/compose/docker-compose.ha.yml -p fleet-ha up -d --build
 #   docker compose -p fleet-ha logs -f backend1 backend2 | grep -i cluster   # watch leadership
@@ -20,6 +33,10 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Two backends × FLEET_DB_MAX_CONNS (20) + leader-lock/backplane conns comfortably
+    # fits max_connections=200; raise this in lockstep if you add instances or raise
+    # FLEET_DB_MAX_CONNS (keep (instances × FLEET_DB_MAX_CONNS) well under this).
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_USER: fleet
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
@@ -28,17 +45,6 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    networks: [fleet]
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -65,8 +71,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     ports: !override
       - "127.0.0.1:8091:8080"
     networks: [fleet]
@@ -80,8 +84,6 @@ services:
       FLEET_MULTI_TENANCY: "false"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     ports: !override
       - "127.0.0.1:8092:8080"
@@ -105,6 +107,9 @@ volumes:
   scap-content:
   backups:
   rdp-drive:
+  # The base `backend` service (extended above) mounts this for staged upgrade
+  # bundles; declare it here so this standalone HA project validates and runs.
+  updates:
 
 networks:
   fleet:

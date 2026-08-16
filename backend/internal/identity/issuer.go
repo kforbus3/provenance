@@ -9,13 +9,13 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/ca"
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/cryptoprofile"
-	"github.com/fleet-terminal/backend/internal/metrics"
-	"github.com/fleet-terminal/backend/internal/models"
-	princ "github.com/fleet-terminal/backend/internal/principals"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/ca"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
+	"github.com/kforbus3/Moorgate/backend/internal/metrics"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	princ "github.com/kforbus3/Moorgate/backend/internal/principals"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // Issuer mints ephemeral identities, persists certificate metadata, and keeps

@@ -13,11 +13,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/federation/fedauth"
-	"github.com/fleet-terminal/backend/internal/federation/keys"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/terminal"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/federation/fedauth"
+	"github.com/kforbus3/Moorgate/backend/internal/federation/keys"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/terminal"
 )
 
 // serveHubStream dispatches a hub-initiated proxy stream on the site: it verifies

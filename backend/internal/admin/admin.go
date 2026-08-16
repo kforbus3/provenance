@@ -1,5 +1,5 @@
 // Package admin provides user, role, group, and system-settings management. It
-// follows the canonical Fleet Terminal HTTP module shape: construct from
+// follows the canonical Moorgate HTTP module shape: construct from
 // *app.Deps, gate every route with auth + RBAC middleware, and audit state
 // changes through the tamper-evident audit chain.
 package admin
@@ -11,10 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // Mount attaches admin routes to r, gated by authentication and permissions.

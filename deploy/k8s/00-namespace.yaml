@@ -1,4 +1,4 @@
-# Fleet Terminal — dedicated namespace for all platform resources.
+# Moorgate — dedicated namespace for all platform resources.
 apiVersion: v1
 kind: Namespace
 metadata:

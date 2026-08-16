@@ -1,13 +1,13 @@
-# Fleet Terminal — Disaster Recovery
+# Moorgate — Disaster Recovery
 
-This guide covers the **DR planning** side of Fleet Terminal: recovery objectives
+This guide covers the **DR planning** side of Moorgate: recovery objectives
 (RPO/RTO), what state must be protected, and the failure scenarios you should
 rehearse for. The platform's durable state lives in **PostgreSQL** and the
 **session recordings directory**; the CA private key (encrypted) lives in the
 database, protected by `FLEET_CA_PASSPHRASE`.
 
 > **The encrypted-backup and rebuild procedure lives in
-> [break-glass.md](./break-glass.md) — that runbook is authoritative.** Fleet's
+> [break-glass.md](./break-glass.md) — that runbook is authoritative.** Moorgate's
 > shipped backups are produced under **Settings → Backup & Restore**: `pg_dump`
 > piped through `openssl` (AES-256-CBC, PBKDF2) into `FLEET_BACKUP_DIR`
 > (default `/var/lib/fleet/backups`), with optional scheduling + retention.
@@ -37,7 +37,7 @@ database, protected by `FLEET_CA_PASSPHRASE`.
 
 ## Backups (where DR fits)
 
-Fleet's **database backup is the encrypted `pg_dump | openssl` artifact** managed
+Moorgate's **database backup is the encrypted `pg_dump | openssl` artifact** managed
 under **Settings → Backup & Restore** and documented step-by-step in
 [break-glass.md](./break-glass.md): enable scheduling + retention, get the files
 **off the host** (map `FLEET_BACKUP_DIR` to off-host storage or rsync the
@@ -221,7 +221,7 @@ single-pane model, not a DR model). The in-app **Disaster Recovery** page (nav;
 > replication**, with one writable at a time. On failure you promote the standby and
 > use its domain.
 >
-> **What this is not:** it is **not** zero-touch or shared-nothing magic. Fleet
+> **What this is not:** it is **not** zero-touch or shared-nothing magic. Moorgate
 > reflects replication state and *triggers* your orchestration; the actual database
 > promotion, DNS changes, and jump-host WireGuard bring-up are steps you wire up. And
 > it does **not** bring back hosts that die with a site — that is workload DR.
@@ -237,8 +237,8 @@ write to it until you fail over.
 ## Requirement 1 — data parity ("up to date at failure")
 
 - **Streaming replication** primary → standby: **async** (RPO = lag, seconds) or
-  **synchronous** (zero loss, WAN latency cost). Fleet does not manage this — use
-  native replication, Patroni, or a managed cross-region replica; Fleet only needs
+  **synchronous** (zero loss, WAN latency cost). Moorgate does not manage this — use
+  native replication, Patroni, or a managed cross-region replica; Moorgate only needs
   `FLEET_DATABASE_URL` pointed at whatever is currently primary. The DR page shows
   this instance's live posture (in-recovery + replay lag).
 - **Identical secrets on both stacks** — mandatory: `FLEET_CA_PASSPHRASE` (**the
@@ -301,12 +301,12 @@ standby, **Force failover** with "Also promote this database" → point the stan
 domain.
 
 **Unplanned (primary down):** the standby runs a **read-only standby console**
-automatically — when Fleet detects its database is a replica (`pg_is_in_recovery()`)
+automatically — when Moorgate detects its database is a replica (`pg_is_in_recovery()`)
 it boots in **standby mode**: migrations are skipped, no background writers start,
 and the entire UI is replaced by a break-glass console (login isn't possible against
 a replica). Go to the standby's address, and the console shows replication lag and a
 **Promote this instance to primary** action gated by `FLEET_DR_STANDBY_TOKEN`. Enter
-the token and promote: Fleet runs `pg_promote()` and **restarts into normal mode**
+the token and promote: Moorgate runs `pg_promote()` and **restarts into normal mode**
 against the now-primary database (ensure the container has a restart policy). Then
 fire the DNS/WG webhook (from the now-normal **Force failover**, or your automation).
 `fleetctl` on the standby remains the fallback if the console can't run.
@@ -330,9 +330,9 @@ Not symmetric — it needs replication re-established the *other* way first:
    fire its webhook to move DNS/WG back, return operators to its domain.
 4. Re-seed the other side as its standby to restore the original posture.
 
-## What Fleet does vs. what you do
+## What Moorgate does vs. what you do
 
-| Fleet does | You do |
+| Moorgate does | You do |
 |------------|--------|
 | Show recovery/replication state + peer health | Set up and monitor PostgreSQL replication |
 | Optionally run `pg_promote()` from the console | Grant `pg_promote` execution / run it via DB tooling |

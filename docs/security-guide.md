@@ -1,6 +1,6 @@
-# Fleet Terminal — Security Guide
+# Moorgate — Security Guide
 
-Fleet Terminal is a Privileged Access Management platform; its security posture is
+Moorgate is a Privileged Access Management platform; its security posture is
 central to its purpose. This guide documents the controls, their configuration,
 and operational recommendations.
 
@@ -56,11 +56,20 @@ and operational recommendations.
   the previous CA is retired (`ca_keys.retired_at`) but kept for verification of
   already-issued certs. See [certificate-lifecycle.md](./certificate-lifecycle.md).
 
-## 3. Hash-chained, tamper-evident audit
+## 3. HMAC-keyed, tamper-evident audit
 
 - Every state change appends a row to `audit_events` where
-  `hash = H(prev_hash || canonical(event))`, forming an append-only chain ordered
-  by `seq`.
+  `hash = HMAC(FLEET_AUDIT_HMAC_KEY, prev_hash || canonical(event))`, forming an
+  append-only chain ordered by `seq`. The canonical event binds the row's
+  **sequence, timestamp, and tenant** so none can be altered or reordered without
+  breaking the chain.
+- **The chain is keyed.** `FLEET_AUDIT_HMAC_KEY` (≥32 bytes, **required in
+  production** — the backend fails closed at boot without it) is what makes the
+  chain *tamper-evident* rather than merely tamper-detecting: an attacker with
+  write access to the database cannot forge a self-consistent chain without the
+  key. Generate it with `openssl rand -hex 32` and keep it off-host with the other
+  secrets. Without the key the chain would be unauthenticated. See
+  [deployment.md](./deployment.md).
 - `actor_name` is denormalized so accountability survives user deletion.
 - **Verify integrity** with `GET /api/v1/audit/verify` →
   `{"intact": true, "brokenAtSeq": 0}`. A non-zero `brokenAtSeq` pinpoints the
@@ -97,7 +106,7 @@ and operational recommendations.
   no factor is enrolled, login issues **no session** until the user completes
   forced TOTP enrollment. Prefer passkeys (phishing-resistant) for internet
   exposure.
-- **External identity providers (SSO).** In addition to local accounts, Fleet can
+- **External identity providers (SSO).** In addition to local accounts, Moorgate can
   delegate sign-on to an external IdP; each user carries an `auth_source`
   (`local` | `oidc` | `ldap`), and **external accounts cannot use a local
   password**. Both providers are configured in **Settings** (`System.Configure`)
@@ -111,9 +120,9 @@ and operational recommendations.
     user-bind password verification, with group→role mapping by **CN**. Supports
     `ldap://` / `ldaps://` and **StartTLS**; the **bind password is sealed at
     rest** (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`).
-  - **Trade-off:** SSO **bypasses Fleet's local password and MFA** — the IdP is
+  - **Trade-off:** SSO **bypasses Moorgate's local password and MFA** — the IdP is
     the authenticator, so enforce strong authentication (MFA, conditional access)
-    at the IdP. Local-account controls (lockout, password policy, Fleet MFA) apply
+    at the IdP. Local-account controls (lockout, password policy, Moorgate MFA) apply
     only to `auth_source=local` users.
 - **Session reaping:** a background loop enforces idle (`FLEET_SESSION_IDLE_TTL`)
   and absolute (`FLEET_SESSION_ABSOLUTE_TTL`) limits even for connections that
@@ -159,12 +168,12 @@ and operational recommendations.
     tier's certificate for the managed host.
 
   - **Deleting a host does not remove the grant by default.** The accounts and the
-    `NOPASSWD` sudoers file survive removal from Fleet's inventory unless the delete
+    `NOPASSWD` sudoers file survive removal from Moorgate's inventory unless the delete
     asks for teardown (`?teardown=true`, or the checkbox in the delete dialog). For a
-    host that is genuinely leaving, tear it down — otherwise a machine Fleet no longer
+    host that is genuinely leaving, tear it down — otherwise a machine Moorgate no longer
     manages or audits keeps a standing root account. See
     [host-enrollment-guide.md](./host-enrollment-guide.md#removing-fleet-from-the-machine-opt-in),
-    and `scripts/fleet-unenroll.sh` for hosts Fleet can no longer reach.
+    and `scripts/fleet-unenroll.sh` for hosts Moorgate can no longer reach.
 
   > **Defaults are permissive.** `Host.Sudo` is seeded to **Administrator and
   > Operator**, so every builtin role that can open a terminal has root on hosts it
@@ -176,7 +185,7 @@ and operational recommendations.
   Ansible/scheduling features and are granted to the Administrator role only:
   - **`Playbook.Run`** is effectively **arbitrary root-level command execution
     across hosts** — running a playbook applies changes on the targets through
-    Fleet's SSH path. It is therefore admin-only by default and granted
+    Moorgate's SSH path. It is therefore admin-only by default and granted
     *separately* from `Playbook.Edit`. It is still **access-scoped** (the runner
     can only target hosts the user can reach, via `UserCanAccessHost`) and every
     run is **audited**. Treat granting it like granting root on the fleet.
@@ -231,7 +240,7 @@ and operational recommendations.
   movement. It also keeps one tenant's or environment's hosts off another's at the
   network layer, behind the row-level separation multi-tenancy enforces in the
   database.
-  - Nothing in Fleet needs host-to-host reachability: terminal sessions, SFTP, the
+  - Nothing in Moorgate needs host-to-host reachability: terminal sessions, SFTP, the
     health monitor, Ansible playbook runs (via `ProxyJump`), and the database and
     Kubernetes brokers all dial **from** the jump host, so none of them is a
     forwarded flow. Turn it off only for a deployment that genuinely needs managed
@@ -243,7 +252,7 @@ and operational recommendations.
       `overlay peer isolation ON` in its log, or `iptables -L FORWARD -v -n` for
       the rule and its drop counters.
     - **On each managed host**, so a host stays isolated even if the jump-host
-      rule is removed, fails to apply, or a jump host outside Fleet's control
+      rule is removed, fails to apply, or a jump host outside Moorgate's control
       never had it:
       - **WireGuard** — `AllowedIPs = <jump host>/32`. That one value does two
         jobs: the host cannot *address* a sibling, and it **drops a decrypted
@@ -306,10 +315,10 @@ and operational recommendations.
   the API — like the CA private key, it is stored only as ciphertext.
 - **External KMS / HSM (optional).** The CA and credential-vault master passphrases can be
   wrapped by an external KMS (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, or GCP Cloud KMS)
-  instead of living in the environment as plaintext — Fleet unwraps them once at boot, so a stolen
+  instead of living in the environment as plaintext — Moorgate unwraps them once at boot, so a stolen
   disk or backup can't be decrypted without live KMS access. See [kms.md](./kms.md).
 - **External secrets manager (optional).** A vault credential can be *external-backed*: instead of
-  Fleet storing the material, it references a secret in an external manager (HashiCorp Vault KV) and
+  Moorgate storing the material, it references a secret in an external manager (HashiCorp Vault KV) and
   fetches it on demand at point of use — no local copy is kept. See
   [external-secrets.md](./external-secrets.md).
 
@@ -430,7 +439,7 @@ factors themselves:
 
 ## 16. Live session shadowing
 
-Fleet supports **read-only, real-time viewing of an active terminal session** for
+Moorgate supports **read-only, real-time viewing of an active terminal session** for
 four-eyes oversight of privileged access. It is an observation control, not a
 control channel:
 
@@ -444,9 +453,34 @@ control channel:
 - Requires `Session.Watch` (seeded to Super Administrator, Administrator, Auditor).
   It is distinct from — and complements — after-the-fact recording/replay.
 
+## 17. Session-recording encryption at rest
+
+Terminal and desktop sessions are recorded for after-the-fact replay. Set
+**`FLEET_RECORDING_KEY`** (≥32 bytes, `openssl rand -hex 32`) to encrypt those
+recordings **at rest with AES-256-GCM**. One key covers **both** recording types:
+
+- **SSH sessions** — the asciicast stream the backend writes.
+- **RDP / Windows desktop sessions** — the Guacamole recording. Because **guacd
+  owns the live write path**, an RDP recording is written by guacd during the
+  session and **finalized-encrypted at session end** by the backend (rather than
+  streamed encrypted). SSH recordings are encrypted as they are written.
+
+Notes:
+
+- The key is **optional but recommended**; the backend **logs a warning at boot
+  when it is unset** and stores recordings in plaintext.
+- Enabling the key encrypts only **new** recordings. **Existing plaintext
+  recordings still play** — replay transparently handles both encrypted and
+  plaintext files, so you can turn encryption on without a migration.
+- Losing the key makes encrypted recordings **unrecoverable**. Keep it off-host
+  with the other production secrets, and include it in your backup/DR material.
+
 ## Security checklist (production)
 
 - [ ] Strong `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE` set.
+- [ ] `FLEET_AUDIT_HMAC_KEY` and `FLEET_ANSIBLE_RUNNER_TOKEN` set (both required in
+      production; backend fails closed without them). `FLEET_RECORDING_KEY` set to
+      encrypt session recordings at rest.
 - [ ] `FLEET_ENV=production`, `FLEET_COOKIE_SECURE=true`, TLS at the edge.
 - [ ] `FLEET_ALLOW_BOOTSTRAP=false` after initial setup.
 - [ ] **Require MFA** globally (or per user); prefer passkeys.

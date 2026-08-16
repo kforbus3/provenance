@@ -12,11 +12,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/tenant"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/tenant"
 )
 
 // Mount attaches audit routes to r, gated by authentication and permissions.
@@ -147,6 +147,7 @@ func applyEntityNames(events []models.AuditEvent, resolve func(string) string) {
 		for k, v := range events[i].Detail {
 			if s, ok := v.(string); ok {
 				if n := resolve(s); n != "" {
+					//nolint:gosec // i is the index from `for i := range events`, always in bounds; Detail[k] is a map write to an existing key
 					events[i].Detail[k] = n
 				}
 			}

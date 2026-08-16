@@ -1,7 +1,7 @@
 # Multi-Site Federation
 
-Federation turns one Fleet Terminal instance into a **hub** — a single pane of
-glass over many independent **site** instances, each a full Fleet stack on its
+Federation turns one Moorgate instance into a **hub** — a single pane of
+glass over many independent **site** instances, each a full Moorgate stack on its
 own separated network. Operators log into the hub and manage every site from one
 place.
 
@@ -110,7 +110,7 @@ management writes) go to the site on demand over the same channel.
 
 ## Upgrading a federation
 
-Each stack — hub and every site — is a full Fleet deployment with its own database and
+Each stack — hub and every site — is a full Moorgate deployment with its own database and
 migrations, upgraded through the normal in-UI updater (Settings → Updates). Federation
 adds one ordering rule and the visibility to follow it.
 

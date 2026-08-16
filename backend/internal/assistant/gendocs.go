@@ -1,6 +1,6 @@
 //go:build ignore
 
-// gendocs embeds the curated Fleet Terminal documentation into docs_generated.go
+// gendocs embeds the curated Moorgate documentation into docs_generated.go
 // so the assistant's search_docs tool can retrieve it without any runtime file
 // access. The repository docs/ directory is the single source of truth; run
 //

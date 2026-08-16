@@ -27,9 +27,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/secretbox"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // caTTL is the overlay CA lifetime; client/server leaf certs are much shorter-lived.

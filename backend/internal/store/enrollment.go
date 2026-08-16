@@ -2,14 +2,17 @@ package store
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // CreateEnrollmentJob opens an enrollment job for a host.
@@ -193,24 +196,166 @@ func (s *Store) WGAddressInUse(ctx context.Context, wgAddr string, exceptID uuid
 	return n > 0, err
 }
 
-// NextFreeWGAddress returns the lowest unused /24 host address in the overlay
-// whose network is derived from jumpIP, skipping the jump host's own address.
-func (s *Store) NextFreeWGAddress(ctx context.Context, jumpIP string) (string, error) {
+// wgAllocLockKey is a fixed advisory-lock key (ASCII "WGIP") that serializes
+// overlay-address allocation across backend replicas. pg_advisory_xact_lock holds
+// it for the life of the enclosing transaction and releases it on commit/rollback,
+// so two replicas enrolling different hosts at the same instant take turns reading
+// the used set and can never pick the same free address.
+const wgAllocLockKey int64 = 0x57474950 // 'W','G','I','P'
+
+// NextFreeWGAddress returns the lowest unused host address in the overlay,
+// skipping the jump host's own address. This is a read-only "what would be next"
+// probe (used by the UI) and is NOT race-safe on its own: two callers can be
+// handed the same address before either persists it. Use ReserveWGAddress to
+// atomically allocate AND assign under the allocation lock; the UNIQUE index on
+// hosts.wg_address (migration 0075) is the final backstop against a double-assign.
+//
+// When an overlay subnet CIDR is supplied (e.g. cfg.WGSubnet "10.100.0.0/24" or a
+// larger "10.100.0.0/16"), the whole subnet is scanned, so a bigger mask lifts the
+// host ceiling accordingly. With no subnet the network is derived from jumpIP as a
+// /24 for backward compatibility.
+//
+// INTEGRATOR: pass the configured overlay subnet as the third argument at every
+// call site (cfg.WGSubnet) so the ceiling follows the deployment's mask instead of
+// defaulting to /24. The variadic keeps existing 2-arg callers compiling.
+func (s *Store) NextFreeWGAddress(ctx context.Context, jumpIP string, subnet ...string) (string, error) {
 	used, err := s.UsedWGAddresses(ctx)
 	if err != nil {
 		return "", err
 	}
-	parts := strings.Split(strings.TrimSpace(jumpIP), ".")
+	return nextFreeWGCandidate(jumpIP, firstOrEmpty(subnet), used)
+}
+
+// ReserveWGAddress atomically allocates the next free overlay address and assigns
+// it to hostID in a single transaction, serialized across replicas by the overlay
+// allocation advisory lock. Because the assignment is written before the lock is
+// released, a second replica blocked on the lock reads a used set that already
+// includes this address and is guaranteed to pick a different one — concurrent
+// replicas can never double-assign. Returns the assigned address.
+//
+// This is the race-safe path enrollment should use in place of a
+// NextFreeWGAddress + SetHostWGAddress pair.
+func (s *Store) ReserveWGAddress(ctx context.Context, hostID uuid.UUID, jumpIP string, subnet ...string) (string, error) {
+	net := firstOrEmpty(subnet)
+	var assigned string
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, wgAllocLockKey); err != nil {
+			return err
+		}
+		used, err := usedWGAddressesTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		cand, err := nextFreeWGCandidate(jumpIP, net, used)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE hosts SET wg_address=$2::inet, updated_at=now() WHERE id=$1`, hostID, cand); err != nil {
+			return err
+		}
+		assigned = cand
+		return nil
+	})
+	return assigned, err
+}
+
+// usedWGAddressesTx reads the assigned overlay addresses inside an open
+// transaction (so the read participates in the allocation lock's serialization).
+func usedWGAddressesTx(ctx context.Context, tx pgx.Tx) (map[string]bool, error) {
+	rows, err := tx.Query(ctx, `SELECT host(wg_address) FROM hosts WHERE wg_address IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	used := map[string]bool{}
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		used[a] = true
+	}
+	return used, rows.Err()
+}
+
+func firstOrEmpty(s []string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return ""
+}
+
+// nextFreeWGCandidate picks the lowest overlay host address not in used, skipping
+// the jump host's address. It is a pure function so the allocation policy is unit
+// testable without a database.
+//
+// With a subnet CIDR it scans the whole IPv4 block (network + broadcast excluded),
+// so a /16 offers ~65k addresses vs a /24's ~253 — this is what lifts the
+// "hundreds/thousands of hosts" ceiling. With no subnet it falls back to the legacy
+// .10–.250 window of the /24 derived from jumpIP.
+func nextFreeWGCandidate(jumpIP, subnet string, used map[string]bool) (string, error) {
+	jump := strings.TrimSpace(jumpIP)
+	if subnet = strings.TrimSpace(subnet); subnet != "" {
+		_, ipnet, err := net.ParseCIDR(subnet)
+		if err != nil {
+			return "", fmt.Errorf("invalid overlay subnet %q: %w", subnet, err)
+		}
+		return firstFreeInNet(ipnet, jump, used)
+	}
+	// Legacy path: no configured subnet, assume a /24 around the jump IP.
+	parts := strings.Split(jump, ".")
 	if len(parts) != 4 {
 		return "", fmt.Errorf("invalid jump ip %q", jumpIP)
 	}
 	prefix := strings.Join(parts[:3], ".")
 	for n := 10; n <= 250; n++ {
 		cand := fmt.Sprintf("%s.%d", prefix, n)
-		if cand == jumpIP || used[cand] {
+		if cand == jump || used[cand] {
 			continue
 		}
 		return cand, nil
 	}
 	return "", fmt.Errorf("no free overlay addresses")
+}
+
+// maxWGScan bounds how many candidate addresses firstFreeInNet will examine, so a
+// mistakenly huge mask (e.g. /8 = 16M hosts) can't turn allocation into a
+// multi-second scan. A /16 (65k) — the realistic large-overlay case — is well
+// within this bound.
+const maxWGScan = 1 << 20
+
+// firstFreeInNet returns the first usable IPv4 host address in ipnet that is
+// neither the jump address nor already used. The network and broadcast addresses
+// are skipped for any block with room for them (/31 and /32 use every address).
+func firstFreeInNet(ipnet *net.IPNet, jump string, used map[string]bool) (string, error) {
+	ip4 := ipnet.IP.To4()
+	if ip4 == nil {
+		return "", fmt.Errorf("overlay subnet %s is not IPv4", ipnet.String())
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 {
+		return "", fmt.Errorf("overlay subnet %s is not IPv4", ipnet.String())
+	}
+	base := binary.BigEndian.Uint32(ip4)
+	count := uint64(1) << uint(bits-ones)
+	var start, end uint64
+	if count <= 2 { // /31, /32: every address is usable
+		start, end = 0, count
+	} else {
+		start, end = 1, count-1 // exclude network + broadcast
+	}
+	if end-start > maxWGScan {
+		end = start + maxWGScan
+	}
+	for off := start; off < end; off++ {
+		var addr [4]byte
+		binary.BigEndian.PutUint32(addr[:], base+uint32(off))
+		cand := net.IP(addr[:]).String()
+		if cand == jump || used[cand] {
+			continue
+		}
+		return cand, nil
+	}
+	return "", fmt.Errorf("no free overlay addresses in %s", ipnet.String())
 }

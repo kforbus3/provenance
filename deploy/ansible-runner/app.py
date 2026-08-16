@@ -13,24 +13,49 @@ managed host:
 Execution (POST /run, streaming) lands in Phase 2.
 """
 
+import hmac
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from typing import List
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 app = FastAPI(title="fleet-ansible-runner", version="1")
 
+log = logging.getLogger("fleet-ansible-runner")
+
 # Cap how long a validation/lint may run so a pathological file can't wedge the
 # sidecar.
 CHECK_TIMEOUT = int(os.environ.get("RUNNER_CHECK_TIMEOUT", "60"))
 MAX_CONTENT = 1 << 20  # 1 MiB of YAML is plenty for a single playbook.
+
+# M2: shared-secret authentication for the state-changing endpoints. The backend
+# sends X-Runner-Token (sourced from FLEET_ANSIBLE_RUNNER_TOKEN); the runner rejects
+# any request whose token is missing or does not match. An EMPTY env var disables the
+# check (dev / back-compat) but is logged loudly so it can't pass unnoticed in prod —
+# the backend additionally refuses to boot in production without a >=16 byte token.
+RUNNER_TOKEN = os.environ.get("FLEET_ANSIBLE_RUNNER_TOKEN", "")
+if not RUNNER_TOKEN:
+    log.warning(
+        "FLEET_ANSIBLE_RUNNER_TOKEN is empty — the runner's execution/check endpoints "
+        "are UNAUTHENTICATED (dev/back-compat mode). Set it in production."
+    )
+
+
+def _require_token(x_runner_token: str = Header(default="")):
+    """FastAPI dependency: enforce the shared secret on protected endpoints."""
+    if not RUNNER_TOKEN:
+        return  # dev/back-compat: no token configured
+    if not hmac.compare_digest(x_runner_token or "", RUNNER_TOKEN):
+        raise HTTPException(status_code=401, detail="invalid or missing runner token")
 
 
 class ContentRequest(BaseModel):
@@ -95,7 +120,7 @@ def healthz():
     return {"status": "ok"}
 
 
-@app.post("/syntax-check", response_model=CheckResult)
+@app.post("/syntax-check", response_model=CheckResult, dependencies=[Depends(_require_token)])
 def syntax_check(req: ContentRequest):
     # `-i localhost,` gives an inline inventory so syntax-check never complains
     # about an empty hosts list; it still does not connect to anything.
@@ -105,7 +130,7 @@ def syntax_check(req: ContentRequest):
     )
 
 
-@app.post("/lint", response_model=CheckResult)
+@app.post("/lint", response_model=CheckResult, dependencies=[Depends(_require_token)])
 def lint(req: ContentRequest):
     # --project-dir gives ansible-lint a writable place for its cache (the temp
     # dir), silencing the "project directory not writable" warnings.
@@ -153,10 +178,45 @@ class RunRequest(BaseModel):
     check_mode: bool = False    # ansible --check (dry run)
     become: bool = True
     timeout_secs: int = 1800
+    # OpenSSH known_hosts material built by the backend from its TOFU host-key pins
+    # (jump host + every target). Written to a per-run file the ssh_config points at,
+    # so host keys are verified instead of blindly accepted (H3).
+    known_hosts: str = ""
 
 
 def _ndjson(obj) -> str:
     return json.dumps(obj) + "\n"
+
+
+# H4 (defense in depth): every value that lands in the INI inventory or the ssh_config
+# is validated against a strict allowlist before use, so even if the backend's boundary
+# checks were bypassed a hostile name/address/user can't inject an Ansible variable
+# (e.g. ansible_ssh_common_args -> ProxyCommand) or an ssh option. These mirror the
+# backend's validHostname/validAddress/validSSHUser allowlists.
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_ADDRESS_RE = re.compile(r"^[A-Za-z0-9._:-]+$")  # colon for IPv6 literals
+_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_targets(req: "RunRequest"):
+    """Return an error string if any inventory/ssh_config value is unsafe, else None."""
+    for h in req.hosts:
+        if not _HOSTNAME_RE.match(h.name or ""):
+            return f"invalid host name: {h.name!r}"
+        if not _ADDRESS_RE.match(h.address or ""):
+            return f"invalid host address: {h.address!r}"
+        if not _USER_RE.match(h.user or ""):
+            return f"invalid host user: {h.user!r}"
+        if not (0 < h.port < 65536):
+            return f"invalid host port for {h.name!r}: {h.port}"
+    if not _USER_RE.match(req.jump_user or ""):
+        return f"invalid jump user: {req.jump_user!r}"
+    jhost, jport = _split_host_port(req.jump_host)
+    if req.jump_host and not _ADDRESS_RE.match(jhost):
+        return f"invalid jump host: {jhost!r}"
+    if req.jump_host and not (0 < jport < 65536):
+        return f"invalid jump port: {jport}"
+    return None
 
 
 def _split_host_port(hostport: str, default_port: int = 22):
@@ -169,22 +229,32 @@ def _split_host_port(hostport: str, default_port: int = 22):
     return hostport, default_port
 
 
-_COMMON = [
-    "    IdentitiesOnly yes",
-    "    StrictHostKeyChecking no",
-    "    UserKnownHostsFile /dev/null",
-    "    ConnectTimeout 15",
-    "",
-]
+def _common(known_hosts_path: str) -> List[str]:
+    # H3: verify host keys against the backend's TOFU pins instead of the old
+    # StrictHostKeyChecking=no / UserKnownHostsFile=/dev/null bypass, which defeated
+    # the product's host-key pinning. `accept-new` is the deliberate no-pin-yet policy:
+    # a host already in the known_hosts file (i.e. pinned by the backend) is strictly
+    # verified and a changed key is refused (MITM caught); a host with no pin is trusted
+    # on first contact and recorded for the rest of the run, so its key can't change
+    # mid-run either. Durable pinning stays the backend gateway's job.
+    return [
+        "    IdentitiesOnly yes",
+        "    StrictHostKeyChecking accept-new",
+        f"    UserKnownHostsFile {known_hosts_path}",
+        "    ConnectTimeout 15",
+        "",
+    ]
 
 
-def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict) -> str:
+def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict,
+                      known_hosts_path: str) -> str:
     # A real ssh_config so BOTH hops authenticate correctly and command-line options
     # (which do NOT propagate to a ProxyJump's inner connection) aren't relied on. The
     # jump hop ALWAYS uses the Fleet certificate; the final hop uses the Fleet cert for
     # fleet_cert hosts, or a per-host vaulted key/password for vaulted hosts. ssh_config
     # `Host` patterns match the ADDRESS ansible connects to (ansible_host), not the
     # inventory alias — so per-host stanzas and the catch-all key on the address.
+    common = _common(known_hosts_path)
     jhost, jport = _split_host_port(req.jump_host)
     lines = [
         "Host fleet-jump",
@@ -192,7 +262,7 @@ def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict) -> 
         f"    Port {jport}",
         f"    User {req.jump_user}",
         f"    IdentityFile {key_path}",
-    ] + _COMMON
+    ] + common
 
     vaulted_addrs = []
     for h in req.hosts:
@@ -202,7 +272,7 @@ def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict) -> 
                 f"Host {h.address}",
                 "    ProxyJump fleet-jump",
                 f"    IdentityFile {vault_key_paths[h.address]}",
-            ] + _COMMON
+            ] + common
         elif h.auth_method == "vault_password":
             vaulted_addrs.append(h.address)
             lines += [
@@ -211,11 +281,7 @@ def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict) -> 
                 "    PubkeyAuthentication no",
                 "    PreferredAuthentications password,keyboard-interactive",
                 "    NumberOfPasswordPrompts 1",
-                "    StrictHostKeyChecking no",
-                "    UserKnownHostsFile /dev/null",
-                "    ConnectTimeout 15",
-                "",
-            ]
+            ] + common
 
     # Catch-all for fleet_cert hosts — reached via the jump using the Fleet cert.
     # Exclude the jump alias and every vaulted address so they keep their own stanza.
@@ -224,7 +290,7 @@ def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict) -> 
         f"Host * {exclusions}",
         "    ProxyJump fleet-jump",
         f"    IdentityFile {key_path}",
-    ] + _COMMON
+    ] + common
     return "\n".join(lines)
 
 
@@ -326,6 +392,12 @@ def _stream_run(req: RunRequest):
     if len(req.playbook) > MAX_CONTENT:
         yield _ndjson({"done": True, "rc": 1, "error": "playbook is too large"})
         return
+    # H4 defense in depth: refuse the run outright if any name/address/user that would
+    # be written into the inventory / ssh_config is not on the strict allowlist.
+    bad = _validate_targets(req)
+    if bad:
+        yield _ndjson({"done": True, "rc": 1, "error": bad})
+        return
 
     workdir = tempfile.mkdtemp(prefix="fleet-run-")
     proc = None
@@ -334,6 +406,7 @@ def _stream_run(req: RunRequest):
         pb_path = os.path.join(workdir, "playbook.yml")
         inv_path = os.path.join(workdir, "inventory.ini")
         cfg_path = os.path.join(workdir, "ssh_config")
+        kh_path = os.path.join(workdir, "known_hosts")
         key_path = os.path.join(workdir, "id")
         cert_path = os.path.join(workdir, "id-cert.pub")
 
@@ -357,9 +430,16 @@ def _stream_run(req: RunRequest):
         # ssh_config and inventory are 0600: the inventory embeds vaulted ansible_password
         # values and the ssh_config references the private-key paths. Match the 0600 the
         # key files themselves use, rather than the default (world-readable) umask.
+        # Per-run known_hosts from the backend's TOFU pins (H3). accept-new appends any
+        # unpinned host's first key here, so the file must be writable (0600, not
+        # /dev/null). Verification against it is what replaces StrictHostKeyChecking=no.
+        khfd = os.open(kh_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(khfd, "w", encoding="utf-8") as fh:
+            kh = req.known_hosts or ""
+            fh.write(kh if kh.endswith("\n") or kh == "" else kh + "\n")
         icfd = os.open(cfg_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(icfd, "w", encoding="utf-8") as fh:
-            fh.write(_build_ssh_config(req, key_path, vault_key_paths))
+            fh.write(_build_ssh_config(req, key_path, vault_key_paths, kh_path))
         ivfd = os.open(inv_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(ivfd, "w", encoding="utf-8") as fh:
             fh.write(_build_inventory(req, cfg_path, vault_key_paths))
@@ -382,7 +462,16 @@ def _stream_run(req: RunRequest):
             "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
             "HOME": workdir,
             "ANSIBLE_NOCOLOR": "1",
-            "ANSIBLE_HOST_KEY_CHECKING": "False",
+            # H3: leave ansible's host-key checking ON. Setting it False makes ansible
+            # inject `-o StrictHostKeyChecking=no` on the ssh command line, which would
+            # override the accept-new + known_hosts policy in our ssh_config. With it
+            # True, ansible defers to the ssh_config the inventory points at (-F).
+            "ANSIBLE_HOST_KEY_CHECKING": "True",
+            # The paramiko-based network_cli path (community.routeros etc.) does NOT read
+            # our ssh_config, and with host-key checking now on it would hard-fail on an
+            # unknown appliance key. Auto-add gives it the same TOFU/accept-new behavior:
+            # unknown keys are recorded, a CHANGED key is still refused (BadHostKey).
+            "ANSIBLE_PARAMIKO_HOST_KEY_AUTO_ADD": "True",
             "ANSIBLE_RETRY_FILES_ENABLED": "0",
             "ANSIBLE_LOCAL_TEMP": workdir,
             # Find the build-time installed collections (community.routeros etc.) even
@@ -415,7 +504,7 @@ def _stream_run(req: RunRequest):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-@app.post("/run")
+@app.post("/run", dependencies=[Depends(_require_token)])
 def run(req: RunRequest):
     # NDJSON stream: {"line": "..."} per output line, then {"done": true, "rc": N}.
     return StreamingResponse(_stream_run(req), media_type="application/x-ndjson")

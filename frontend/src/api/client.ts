@@ -62,9 +62,26 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+// readCookie returns a non-HttpOnly cookie value, or null. Used for the CSRF
+// double-submit token, which the backend sets as a JS-readable `fleet_csrf`
+// cookie alongside the HttpOnly session cookie.
+function readCookie(name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = document.cookie.match(new RegExp("(?:^|; )" + escaped + "=([^;]*)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 api.interceptors.request.use((cfg) => {
   if (accessToken) {
     cfg.headers.Authorization = `Bearer ${accessToken}`;
+  } else {
+    // Cookie-authenticated requests (e.g. /auth/refresh) carry no bearer token, so
+    // the backend's CSRF middleware requires the double-submit token: echo the
+    // fleet_csrf cookie back in the X-CSRF-Token header.
+    const csrf = readCookie("fleet_csrf");
+    if (csrf) {
+      cfg.headers["X-CSRF-Token"] = csrf;
+    }
   }
   if (activeTenant) {
     cfg.headers["X-Fleet-Tenant"] = activeTenant;

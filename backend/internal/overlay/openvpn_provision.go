@@ -39,14 +39,31 @@ func (o *OpenVPN) EnsureServer(ctx context.Context, jumpRun RunFunc) (string, er
 	if strings.Contains(out, "OVPN_SERVER_START_FAILED") {
 		return "", fmt.Errorf("jump OpenVPN server failed to start: %s", oneLine(out))
 	}
+	// Peer isolation is a security control. When it is REQUIRED (configured on) but the
+	// jump host could not install the forwarding deny, fail the provisioning closed:
+	// bringing the overlay up anyway would leave managed hosts able to reach each other,
+	// which is precisely the posture isolation exists to prevent.
+	if err := serverIsolationError(out, o.cfg.OverlayPeerIsolation); err != nil {
+		return "", err
+	}
 	detail := "openvpn server ready on jump host"
-	// Peer isolation is deliberately non-fatal (a jump host with no usable iptables
-	// still serves the overlay), so say so plainly rather than letting a security
-	// control fail into silence.
 	if strings.Contains(out, "OVPN_PEER_ISOLATION_FAILED") {
+		// Reached only when isolation is disabled (serverIsolationError returned nil):
+		// say so plainly rather than letting the absence go unrecorded.
 		detail += " — WARNING: could not apply overlay peer isolation on the jump host; managed hosts can reach each other over the overlay"
 	}
 	return detail, nil
+}
+
+// serverIsolationError returns a hard, fail-closed error when peer isolation is
+// required but the jump host reported it could not install the forwarding deny.
+func serverIsolationError(out string, required bool) error {
+	if required && strings.Contains(out, "OVPN_PEER_ISOLATION_FAILED") {
+		return fmt.Errorf("overlay peer isolation is enabled but the jump host could not install the overlay "+
+			"forwarding deny (%s); refusing to bring up an overlay on which managed hosts can reach each other",
+			oneLine(out))
+	}
+	return nil
 }
 
 // hostConfiguredMarker is printed by HostInstallScript once the client material is in
@@ -84,7 +101,33 @@ func (o *OpenVPN) ProvisionHost(ctx context.Context, hostID uuid.UUID, overlayIP
 	if herr != nil || strings.Contains(out, "OVPN_INSTALL_FAILED") || !strings.Contains(out, hb.Marker) {
 		return "", fmt.Errorf("install OpenVPN on host: %v: %s", herr, oneLine(out))
 	}
-	return checkHostBringup(out, overlayIP)
+	detail, err := checkHostBringup(out, overlayIP)
+	if err != nil {
+		return "", err
+	}
+	// Fail closed: OpenVPN has no AllowedIPs, so the host-side iptables filter is the
+	// ONLY thing isolating this host at its own end. When isolation is required but the
+	// host reports it was not applied, refuse the enrollment rather than silently
+	// joining a host that other managed hosts can reach over the overlay.
+	if err := hostIsolationError(out, o.cfg.OverlayPeerIsolation); err != nil {
+		return "", err
+	}
+	return detail, nil
+}
+
+// hostIsolationError returns a hard, fail-closed error when peer isolation is required
+// but the host bring-up output shows it could not be applied (iptables missing, or the
+// rules did not take). It returns nil when isolation is not required or was applied.
+func hostIsolationError(out string, required bool) error {
+	if !required {
+		return nil
+	}
+	if strings.Contains(out, "OVPN_IPTABLES_MISSING") || strings.Contains(out, "OVPN_ISOLATION_MISSING") {
+		return fmt.Errorf("overlay peer isolation is enabled but was NOT applied on this host (%s); "+
+			"refusing to enroll — the host would be able to reach, and be reached by, other managed hosts "+
+			"over the overlay", oneLine(out))
+	}
+	return nil
 }
 
 // checkHostBringup turns the host bring-up script's output into a step detail, or an

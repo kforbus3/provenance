@@ -1,0 +1,19 @@
+# Minimal golangci-lint config for the Go SDK. Mirrors the backend's philosophy:
+# tests legitimately ignore errors on fixtures/HTTP handlers, and CLI stdout writes
+# (fmt.Fprint*) plus deferred Close/drain are the standard ignorable idioms.
+version: "2"
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.Copy
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

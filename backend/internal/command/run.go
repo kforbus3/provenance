@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/commandpolicy"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/commandpolicy"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
 )
 
 const (
@@ -70,20 +70,20 @@ func (l *liveRun) snapshot() string {
 // Host.Sudo would get through the command runner exactly the root shell the
 // permission is there to withhold. False lands the run in the host's login-only
 // account, where `sudo` in the command itself fails as it should.
-func (s *Service) Run(runID uuid.UUID, command string, hosts []*models.Host, userID uuid.UUID, username string, sudo bool) {
+func (s *Service) Run(parent context.Context, runID uuid.UUID, command string, hosts []*models.Host, userID uuid.UUID, username string, sudo bool) {
 	batches := (len(hosts) + commandConcurrency - 1) / commandConcurrency
 	if batches < 1 {
 		batches = 1
 	}
 	runTimeout := perHostTimeout*time.Duration(batches) + 2*time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	ctx, cancel := context.WithTimeout(parent, runTimeout)
 	defer cancel()
 
 	live := &liveRun{}
 	s.live.Store(runID, live)
 	defer s.live.Delete(runID)
 
-	if err := s.store.StartCommandRun(context.Background(), runID); err != nil {
+	if err := s.store.StartCommandRun(ctx, runID); err != nil {
 		s.log.Error("command run: mark running", "err", err)
 	}
 
@@ -123,7 +123,9 @@ func (s *Service) Run(runID uuid.UUID, command string, hosts []*models.Host, use
 		status, errMsg = "failed", fmt.Sprintf("run exceeded the %s timeout", runTimeout)
 	}
 	exitCode := worstCode
-	pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Detach from the run-timeout ctx (it may already be Done) but keep request
+	// values so the final persist still runs under the caller's tenant scope.
+	pctx, pcancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 	defer pcancel()
 	if err := s.store.CompleteCommandRun(pctx, runID, status, live.snapshot(), &exitCode, errMsg); err != nil {
 		s.log.Error("command run: persist result", "err", err, "run", runID)

@@ -4,5 +4,5 @@
 -- except Super Administrator, which holds it implicitly via the Admin.All wildcard.
 -- An operator may still delegate it explicitly to a custom role. Idempotent.
 INSERT INTO permissions(key, description) VALUES
-    ('System.Upgrade', 'Upload and apply Fleet Terminal upgrades')
+    ('System.Upgrade', 'Upload and apply Moorgate upgrades')
 ON CONFLICT (key) DO NOTHING;

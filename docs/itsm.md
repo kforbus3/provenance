@@ -1,6 +1,6 @@
 # ITSM integration (ServiceNow / Jira)
 
-Fleet can open a **change/incident ticket** in your IT service-management system for each
+Moorgate can open a **change/incident ticket** in your IT service-management system for each
 just-in-time access request, and attach the ticket reference to the approval — so privileged-access
 grants carry a change record. Supported systems: **ServiceNow** and **Jira**.
 
@@ -9,10 +9,10 @@ Configure it under **Settings → Integrations → ITSM integration** (requires 
 ## How it works
 
 - When a user files an access request (Approvals → Request access), if the integration is enabled
-  and the requester didn't already supply a ticket reference, Fleet opens a ticket describing the
+  and the requester didn't already supply a ticket reference, Moorgate opens a ticket describing the
   request (who, what, how long, and the stated reason) and stores its reference on the approval.
 - The ticket reference (and a link) is included in the approval notification.
-- **Two-way sync**: when the request is later **approved or denied**, Fleet records the decision back
+- **Two-way sync**: when the request is later **approved or denied**, Moorgate records the decision back
   on the ticket — a ServiceNow *work note* or a Jira *comment* — noting the outcome, who decided, and
   the granted duration (audited as `approval.ticket_update`). Closing/transitioning the ticket is
   left to your ITSM's own workflow.
@@ -28,7 +28,7 @@ Configure it under **Settings → Integrations → ITSM integration** (requires 
 | Token | ServiceNow password | Jira API token |
 | Project | Table (default `incident`) | Project key (e.g. `OPS`) |
 
-The token is **sealed at rest** (like Fleet's other integration secrets) and is never returned by
+The token is **sealed at rest** (like Moorgate's other integration secrets) and is never returned by
 the API. Leave the token field blank when editing to keep the stored value. Use **Test connection**
 to verify credentials without creating a ticket.
 
@@ -36,5 +36,5 @@ to verify credentials without creating a ticket.
 
 - Use a least-privilege ITSM account — it only needs to create records in the target table/project.
 - Tickets are created as ServiceNow *incidents* (or the configured table) and Jira *Task* issues.
-- A requester can still enter their own ticket reference on the request; Fleet only auto-opens one
+- A requester can still enter their own ticket reference on the request; Moorgate only auto-opens one
   when none is provided.

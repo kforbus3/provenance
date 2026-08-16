@@ -3,7 +3,7 @@ package assistant
 import (
 	"testing"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // TestDiskFreeSummary reproduces the nas case the user flagged: the host card

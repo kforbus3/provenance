@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 const vaultCheckoutCols = `c.id, c.secret_id, c.user_id, c.reason, c.status, c.requested_at, c.expires_at,

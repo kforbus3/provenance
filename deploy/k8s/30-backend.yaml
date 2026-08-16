@@ -1,4 +1,4 @@
-# Fleet Terminal backend (Go API + SSH gateway).
+# Moorgate backend (Go API + SSH gateway).
 apiVersion: v1
 kind: Service
 metadata:
@@ -49,6 +49,10 @@ spec:
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
+      # Must exceed FLEET_SHUTDOWN_TIMEOUT (default 20s) so the backend can drain live
+      # SSH/terminal/RDP sessions on SIGTERM before the kubelet SIGKILLs it. The preStop
+      # sleep below is included in this budget.
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -58,8 +62,15 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: ghcr.io/fleet-terminal/backend:latest
+          image: ghcr.io/kforbus3/moorgate-backend:latest
           imagePullPolicy: IfNotPresent
+          # Give kube-proxy/Ingress time to remove this pod from the Service endpoints
+          # before the container receives SIGTERM, so no new request/session is routed
+          # here mid-shutdown. Native sleep action (no shell needed in the image).
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           ports:
             - name: http
               containerPort: 8080
@@ -105,14 +116,47 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            - name: recordings
+            # All four dirs are subpaths of ONE shared ReadWriteMany volume so that,
+            # with replicas>1 + the HPA, every replica sees the same files: recording
+            # replay works from any pod, the leader's retention prune sees all pods'
+            # recordings, and backups/updates are shared. RWO would break these.
+            - name: fleet-data
               mountPath: /var/lib/fleet/recordings
+              subPath: recordings
+            - name: fleet-data
+              mountPath: /var/lib/fleet/scans
+              subPath: scans
+            - name: fleet-data
+              mountPath: /var/lib/fleet/backups
+              subPath: backups
+            - name: fleet-data
+              mountPath: /var/lib/fleet/updates
+              subPath: updates
       volumes:
         - name: tmp
           emptyDir: {}
-        # Session recordings — swap emptyDir for a PVC/object-store sidecar in prod.
-        - name: recordings
-          emptyDir: {}
+        - name: fleet-data
+          persistentVolumeClaim:
+            claimName: fleet-shared-data
+---
+# Shared state for the backend replicas. REQUIRES a ReadWriteMany StorageClass
+# (NFS, CephFS, AWS EFS, Azure Files, GCP Filestore, …). ReadWriteOnce will NOT work
+# once replicas>1 lands pods on different nodes — recording replay 404s and retention
+# prunes only one pod's files. Set storageClassName to your RWX class before applying.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fleet-shared-data
+  namespace: fleet-terminal
+  labels:
+    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/component: backend
+spec:
+  accessModes: ["ReadWriteMany"]
+  # storageClassName: nfs-client   # <-- set to an RWX-capable class
+  resources:
+    requests:
+      storage: 20Gi
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

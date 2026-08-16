@@ -43,6 +43,33 @@ func TestBroadcastSessionFiltering(t *testing.T) {
 	}
 }
 
+// A Session.Replay holder's cross-user visibility is scoped to its own tenant: an
+// event tagged with another tenant must not reach it, so session activity (usernames,
+// hostnames) never leaks across tenants over the events WS.
+func TestBroadcastSessionTenantScoping(t *testing.T) {
+	h := NewHub()
+	owner := uuid.New()
+	tenantA, tenantB := uuid.New(), uuid.New()
+
+	add := func(uid, tid uuid.UUID, all bool) *client {
+		c := &client{send: make(chan []byte, 1), userID: uid, tenantID: tid, allSessions: all}
+		h.clients[c] = struct{}{}
+		return c
+	}
+	sameTenantReplay := add(uuid.New(), tenantA, true)  // Replay holder in the owner's tenant
+	otherTenantReplay := add(uuid.New(), tenantB, true) // Replay holder in a DIFFERENT tenant
+
+	// Session owned by a user in tenantA.
+	h.BroadcastSession("session.start", owner, map[string]any{"hostId": "h", "tenantId": tenantA.String()})
+
+	if !received(sameTenantReplay) {
+		t.Error("a Replay holder in the session's tenant should receive the event")
+	}
+	if received(otherTenantReplay) {
+		t.Error("a Replay holder in another tenant must NOT receive the event")
+	}
+}
+
 // Broadcast (global, e.g. host.status) reaches every client regardless of user.
 func TestBroadcastGlobalReachesAll(t *testing.T) {
 	h := NewHub()

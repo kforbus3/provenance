@@ -26,13 +26,13 @@ import (
 	"github.com/wwt/guac"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/accesspolicy"
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/credinject"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/sshgw"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/accesspolicy"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/credinject"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 type handler struct {
@@ -159,6 +159,7 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not reach the host over RDP: %w", err)
 	}
+	//nolint:gosec // ephemeral single-use per-session proxy (30s accept deadline, closed after one conn) that the separate guacd container must reach cross-network via RDPProxyHost
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		rawConn.Close()
@@ -340,6 +341,12 @@ func (h *handler) onDisconnect(connID string, _ *http.Request, _ guac.Tunnel) {
 
 	duration := time.Since(sess.start).Milliseconds()
 	if sess.recID != uuid.Nil {
+		// guacd (external) wrote the recording as plaintext; now that the session has
+		// ended the file is complete, so encrypt it at rest when a key is configured.
+		// A failure is logged but never blocks finalize (the plaintext still replays).
+		if err := encryptFileAtRest(sess.recPath, h.d.Cfg.RecordingEncryptionKey); err != nil {
+			h.d.Log.Warn("rdp: could not encrypt recording at rest", "err", err, "id", sess.recID)
+		}
 		var size int64
 		if fi, err := os.Stat(sess.recPath); err == nil {
 			size = fi.Size()

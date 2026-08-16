@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/overlaypki"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/overlaypki"
 )
 
 func testCfg() *config.Config {

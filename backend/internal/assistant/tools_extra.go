@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/insights"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/ueba"
+	"github.com/kforbus3/Moorgate/backend/internal/insights"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/ueba"
 )
 
 // This file holds the second wave of read-only assistant tools that closed the

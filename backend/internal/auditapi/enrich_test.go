@@ -3,7 +3,7 @@ package auditapi
 import (
 	"testing"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 func TestApplyEntityNamesResolvesTargetAndDetail(t *testing.T) {
@@ -12,7 +12,7 @@ func TestApplyEntityNamesResolvesTargetAndDetail(t *testing.T) {
 		hostID = "db60ac96-f240-4e8e-829a-1880c7fa7c03"
 		jobID  = "00000000-0000-0000-0000-000000000123"
 	)
-	names := map[string]string{userID: "keith", hostID: "control01"}
+	names := map[string]string{userID: "alice", hostID: "web-01"}
 	resolve := func(s string) string { return names[s] }
 
 	events := []models.AuditEvent{{
@@ -23,10 +23,10 @@ func TestApplyEntityNamesResolvesTargetAndDetail(t *testing.T) {
 	}}
 	applyEntityNames(events, resolve)
 
-	if events[0].TargetName != "keith" {
+	if events[0].TargetName != "alice" {
 		t.Errorf("target not resolved: TargetName=%q", events[0].TargetName)
 	}
-	if events[0].Detail["hostId"] != "control01" {
+	if events[0].Detail["hostId"] != "web-01" {
 		t.Errorf("host uuid in detail not resolved: %v", events[0].Detail["hostId"])
 	}
 	// A UUID that resolves to nothing (a job id) must be left untouched, as must

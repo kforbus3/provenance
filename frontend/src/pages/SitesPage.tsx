@@ -65,7 +65,7 @@ export function SitesPage() {
         <Button startIcon={<AddIcon />} variant="contained" onClick={() => setAdding(true)}>Add Site</Button>
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Each site is an independent Fleet Terminal instance on its own network that dials out to this
+        Each site is an independent Moorgate instance on its own network that dials out to this
         hub. Manage them all from here.
       </Typography>
 

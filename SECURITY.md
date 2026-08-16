@@ -1,6 +1,6 @@
 # Security Policy
 
-Fleet Terminal is a privileged access management (PAM) platform. It brokers SSH
+Moorgate is a privileged access management (PAM) platform. It brokers SSH
 access to production hosts, issues SSH certificates, and stores audit records, so
 security issues are taken seriously. Thank you for helping keep it and its users safe.
 
@@ -51,8 +51,9 @@ Out of scope:
 
 ## Operator security notes
 
-Fleet Terminal is self-hosted; deployment security is partly your responsibility.
-A few essentials, covered in more detail in [`docs/security.md`](docs/security.md):
+Moorgate is self-hosted; deployment security is partly your responsibility.
+A few essentials, covered in more detail in the
+[Security Guide](docs/security-guide.md):
 
 - **`FLEET_CA_PASSPHRASE`** and **`FLEET_BACKUP_PASSPHRASE`** are the root of trust.
   Keep them off the server (e.g. in a password manager); they are deliberately

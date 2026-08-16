@@ -1,14 +1,15 @@
-module github.com/kforbus3/Fleet-Terminal/terraform-provider-fleet
+module github.com/kforbus3/Moorgate/terraform-provider-fleet
 
 go 1.25.0
 
 // Build with a current toolchain: the standard library gets security fixes
 // like anything else, and building on the module's floor version ships them.
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.13.0
-	github.com/kforbus3/Fleet-Terminal/sdk v0.0.0
+	github.com/hashicorp/terraform-plugin-go v0.25.0
+	github.com/kforbus3/Moorgate/sdk v0.0.0
 )
 
 require (
@@ -17,7 +18,6 @@ require (
 	github.com/hashicorp/go-hclog v1.5.0 // indirect
 	github.com/hashicorp/go-plugin v1.6.2 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
-	github.com/hashicorp/terraform-plugin-go v0.25.0 // indirect
 	github.com/hashicorp/terraform-plugin-log v0.9.0 // indirect
 	github.com/hashicorp/terraform-registry-address v0.2.3 // indirect
 	github.com/hashicorp/terraform-svchost v0.1.1 // indirect
@@ -37,4 +37,4 @@ require (
 )
 
 // The SDK is developed in the same repository; build against the local copy.
-replace github.com/kforbus3/Fleet-Terminal/sdk => ../sdk
+replace github.com/kforbus3/Moorgate/sdk => ../sdk

@@ -1,6 +1,6 @@
-# Exposing Fleet Terminal to the Internet
+# Exposing Moorgate to the Internet
 
-This guide covers putting the Fleet Terminal web UI on the public internet behind
+This guide covers putting the Moorgate web UI on the public internet behind
 **Nginx Proxy Manager (NPM)** with a **Let's Encrypt** certificate, so users on
 laptops anywhere can reach hosts over SSH **without a VPN, SSH client, or keys**.
 
@@ -124,7 +124,7 @@ Let's Encrypt request:
 Requirements and caveats:
 
 - **The certificate's SAN (or CN) must match the hostname in `FLEET_PUBLIC_URL`.**
-  Fleet derives the cookie domain, CORS origin, and the **WebAuthn/passkey relying
+  Moorgate derives the cookie domain, CORS origin, and the **WebAuthn/passkey relying
   party ID** from that hostname, so a mismatched cert breaks login and passkeys, not
   just the TLS padlock.
 - **Internal/enterprise CA:** every client browser must **trust your CA** (its root
@@ -132,7 +132,7 @@ Requirements and caveats:
   WebAuthn refuses to run. Public/commercial certs need no client-side trust.
 - **Renewal is on you.** Unlike Let's Encrypt (which NPM auto-renews), a custom cert
   does **not** auto-renew — replace it in NPM before it expires (re-upload, or script
-  it against the NPM API). Fleet's Expiry & Rotation dashboard tracks *Fleet's* CA
+  it against the NPM API). Moorgate's Expiry & Rotation dashboard tracks *Moorgate's* CA
   and tokens, **not** the front-door proxy certificate, so track that one separately.
 
 ### Not using Nginx Proxy Manager?
@@ -144,7 +144,7 @@ cert via the `tls <cert> <key>` directive), **nginx** (`ssl_certificate` /
 - terminate TLS with your certificate and forward to the **frontend** container;
 - pass **WebSocket** upgrades through (the terminal, SFTP, RDP, and the live events
   feed are all WebSockets);
-- set `X-Forwarded-For` / `X-Forwarded-Proto`, and — so Fleet sees the real client
+- set `X-Forwarded-For` / `X-Forwarded-Proto`, and — so Moorgate sees the real client
   IP for the audit log, rate limiter, and the conditional-access IP allowlist — add
   the proxy's address to **`FLEET_TRUSTED_PROXIES`** (see the conditional-access
   notes); and
@@ -189,7 +189,7 @@ can be enrolled three ways, all from the host's Enroll dialog:
 - **Manual pre-trust + "trusted"** — install the CA trust yourself, then enroll
   with the trusted method (no key or password sent to the backend).
 
-After bootstrap the host trusts the Fleet CA and every user connects with their
+After bootstrap the host trusts the Moorgate CA and every user connects with their
 own ephemeral per-host certificate; the operator's bootstrap key is no longer used.
 
 ## Pre-flight checklist

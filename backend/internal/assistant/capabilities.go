@@ -43,7 +43,7 @@ var capabilityCatalog = map[string]string{
 	"expiring_credentials":  "credentials, certificates and keys that are expiring or overdue for rotation",
 	"fleet_insights":        "what currently needs attention across the fleet",
 	"platform_status":       "Fleet's own cluster, enrollment jobs, federation sites and database replication",
-	"search_docs":           "the Fleet Terminal product documentation",
+	"search_docs":           "the Moorgate product documentation",
 }
 
 // capabilityStatement renders the catalogue as one sentence, for the answer given

@@ -1,6 +1,6 @@
-# Fleet Terminal — systemd install (`fleetd.service`)
+# Moorgate — systemd install (`fleetd.service`)
 
-Runs the Fleet Terminal backend (`fleetd`) as a hardened systemd service on a
+Runs the Moorgate backend (`fleetd`) as a hardened systemd service on a
 bare-metal or VM host. Postgres and Redis can run on the same host or remotely;
 point the backend at them via the env file.
 

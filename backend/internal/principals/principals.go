@@ -1,4 +1,4 @@
-// Package principals defines the SSH certificate principal names Fleet Terminal
+// Package principals defines the SSH certificate principal names Moorgate
 // uses to authorize a certificate to a managed-host account, and the helpers
 // that make those principals host-scoped.
 //

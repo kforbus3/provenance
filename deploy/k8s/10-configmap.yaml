@@ -22,4 +22,12 @@ data:
   FLEET_REDIS_URL: "redis://fleet-redis:6379/0"
   FLEET_JUMP_HOST: "jumphost:22"
   FLEET_JUMP_USER: "fleet"
+  # On-disk paths — all live on the shared RWX volume (see 30-backend.yaml) so every
+  # replica reads/writes the same files (recording replay, retention pruning, backups).
   FLEET_RECORDING_DIR: "/var/lib/fleet/recordings"
+  FLEET_SCAN_DIR: "/var/lib/fleet/scans"
+  FLEET_BACKUP_DIR: "/var/lib/fleet/backups"
+  FLEET_UPDATES_DIR: "/var/lib/fleet/updates"
+  # Internal sidecar endpoints (see 32-ansible-runner.yaml / 33-grype-scanner.yaml).
+  FLEET_ANSIBLE_RUNNER_URL: "http://fleet-ansible-runner:8000"
+  FLEET_GRYPE_SCANNER_URL: "http://fleet-grype-scanner:8000"

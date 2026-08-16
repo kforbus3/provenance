@@ -1,6 +1,6 @@
 # Operations Guide
 
-Day-to-day operator flows for Fleet Terminal. Assumes the stack is up via `make up`.
+Day-to-day operator flows for Moorgate. Assumes the stack is up via `make up`.
 
 ## First run
 
@@ -19,9 +19,9 @@ Day-to-day operator flows for Fleet Terminal. Assumes the stack is up via `make 
 > silently does not work rather than an error. Use **`make up-single`** for those.
 > `redeploy-single` warns when the running jump host predates its compose file.
 
-## Upgrading Fleet Terminal (in-UI)
+## Upgrading Moorgate (in-UI)
 
-Fleet upgrades itself from a single signed **`.fleetup`** bundle — no SSH, no
+Moorgate upgrades itself from a single signed **`.fleetup`** bundle — no SSH, no
 `docker compose` — under **Settings → Maintenance → Updates**. Upload a bundle (or, with a
 release channel configured, click **Check for updates**), review its manifest (version,
 additive vs. breaking migrations, components), and **Install**. A privileged
@@ -83,7 +83,7 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
      over your ssh, then runs it with `ssh -t … sudo sh` so sudo can prompt), then paste the printed
      host public key into the Finish step. No install, no key upload. Under a certificate overlay
      (OpenVPN) the script carries the host's client certificate and prints no key — just Finish.
-   - **Already trusts the Fleet CA** — re-provision a previously-enrolled host with the session cert.
+   - **Already trusts the Moorgate CA** — re-provision a previously-enrolled host with the session cert.
    The password / pasted key is used once and never stored.
 3. Enrollment, over SSH:
    - reads the jump host's WireGuard key,
@@ -164,7 +164,7 @@ WebSocket hub, so it updates as people connect and disconnect (needs `Session.Re
 
 The monitor runs authenticated SSH health checks (no ICMP) every 30s, updating status
 (online/offline/unknown), latency, uptime, and WireGuard handshake freshness. The dashboard
-subscribes to a WebSocket and updates in real time. Enrolled hosts are probed with Fleet's
+subscribes to a WebSocket and updates in real time. Enrolled hosts are probed with Moorgate's
 system certificate; **directly-managed hosts that authenticate with a vaulted credential**
 (`vault_password` / `vault_ssh_key` — routers, switches, appliances that skip WireGuard
 enrollment) are probed with that credential injected in a system context, so they report
@@ -215,11 +215,11 @@ automatically (and their members' access follows):
 
 The Groups page badges each group **Dynamic** or **Manual** and summarizes the rule.
 
-> On a **Dynamic** group, **manual add/remove is disabled** — Fleet refuses it so membership
+> On a **Dynamic** group, **manual add/remove is disabled** — Moorgate refuses it so membership
 > always reflects the rule. An **empty rule matches no hosts** (it is not "all hosts"). Live
 > metrics are intentionally not rule inputs, so membership won't flap.
 
-## AI assistant (Ask Fleet)
+## AI assistant (Ask Moorgate)
 
 An optional assistant answers natural-language questions about the fleet —
 "which hosts have less than 20% disk free?", "offline debian hosts", "prod hosts under heavy
@@ -231,7 +231,7 @@ audited.
 > **Where your data goes.** Answering a question sends what it reads — host inventory,
 > sessions, audit entries, whatever your permissions reach — to whichever Ollama instance is
 > configured. That is why the intended deployment is an Ollama on your own network, and why
-> Fleet checks: if the configured URL resolves to a public address, the settings page says so
+> Moorgate checks: if the configured URL resolves to a public address, the settings page says so
 > plainly rather than claiming the data stayed home. Point it at a host you control. Beyond host data and active sessions, it can also report
 **pending package updates** and **recent security scans and playbook runs** — including whether
 each was **scheduled or run manually** (recent runs need `Playbook.Run`).
@@ -261,7 +261,7 @@ issued — no separate setup step needed.
 
 ## Single sign-on (SSO)
 
-Fleet can authenticate users against an external identity provider as well as
+Moorgate can authenticate users against an external identity provider as well as
 local accounts. Every user has an **`auth_source`** (`local`, `oidc`, or `ldap`);
 externally-backed accounts can't use a local password. Configure either under
 **Settings** (admin / `System.Configure`).
@@ -285,7 +285,7 @@ role.
 DN**, and a **user filter** (`%s` = username, e.g. `(sAMAccountName=%s)`). Map the
 **username/email/display-name/groups** attributes, pick a **default role**, and
 add **group → role mappings** (`GroupCN=FleetRole`). Directory users sign in on the
-**normal sign-in form** — Fleet **falls back to LDAP when local auth fails**,
+**normal sign-in form** — Moorgate **falls back to LDAP when local auth fails**,
 looks the user up with the service account, then verifies the password by binding
 as the user's own DN, provisioning the account (and applying group mappings by CN)
 as needed.
@@ -324,7 +324,7 @@ host (CIS, STIG, PCI-DSS, …) and defaults to the standard baseline — then **
   the scanner + SCAP content** if missing (so the first scan on a host can take a few minutes).
 - Strict profiles (e.g. **ANSSI High**) run many filesystem-walking checks and can take **tens of
   minutes** on a busy host (the cost is the number of files in users' home directories, not bytes).
-  Fleet caps a scan at the **scan timeout** — adjust it in **Settings → Security scans** (5–480 min;
+  Moorgate caps a scan at the **scan timeout** — adjust it in **Settings → Security scans** (5–480 min;
   overrides the `FLEET_SCAN_TIMEOUT` default of 60m). Raise it for hosts with very large
   filesystems, or use a lighter profile for routine checks.
 - Alternatively, tick **"Skip slow filesystem rules"** in the scan dialog to exclude the
@@ -346,19 +346,19 @@ lists the failed rules so you can **select which to fix**:
   new score appears as the latest scan in the history. The run's output is shown in the dialog and
   audited (`host.remediate`).
 - Rules that touch SSH, the firewall, account lockout, networking sysctls (`ip_forward`,
-  `rp_filter`, `route_localnet`, `send_redirects`, `ip_local_port_range`), or Fleet's privilege path
+  `rp_filter`, `route_localnet`, `send_redirects`, `ip_local_port_range`), or Moorgate's privilege path
   (`sudo_*` such as `noexec`/`requiretty`, and direct/root-login lockout) are flagged **⚠
-  access-impacting** because their fixes can sever Fleet's own access to or automation of the host —
+  access-impacting** because their fixes can sever Moorgate's own access to or automation of the host —
   enrollment and remediation run non-interactive `sudo bash`, which `Defaults noexec`/`requiretty`
   breaks. Applying any of them requires an explicit extra confirmation. **Remediation changes host
   configuration and is not automatically reversible — test on non-critical hosts first.**
 - Remediating a **control-plane host** — the jump host, a host tagged `control-plane`/`protected`, or
   one listed in `FLEET_CONTROL_PLANE_HOSTS` — requires a second, distinct confirmation. Hardening the
-  box that runs Fleet (e.g. an `ip_forward=0` sysctl that breaks Docker's bridge networking) can lock
-  Fleet out of the entire fleet; only proceed with out-of-band console access to recover. If it does
+  box that runs Moorgate (e.g. an `ip_forward=0` sysctl that breaks Docker's bridge networking) can lock
+  Moorgate out of the entire fleet; only proceed with out-of-band console access to recover. If it does
   get locked out, see the recovery runbook: [break-glass §5](break-glass.md#5-recovering-after-hardening-locked-fleet-out-of-its-own-host).
 - The scan needs SCAP content matching the host's **OS version** (e.g. `ssg-debian13-ds.xml`
-  for Debian 13). If a host's distro is newer than its packaged `scap-security-guide`, Fleet
+  for Debian 13). If a host's distro is newer than its packaged `scap-security-guide`, Moorgate
   **auto-provisions** the right datastream: the backend downloads the ComplianceAsCode release
   **once** (cached under `FLEET_SCAP_CONTENT_DIR`) and pushes the matching `ssg-*-ds.xml` to the
   host over SSH during prepare/scan — so hosts never need internet access to GitHub. Pin a
@@ -422,7 +422,7 @@ change without applying anything; clear it to apply for real. Output **streams l
 (auto-scrolling) and each playbook keeps its own **run history**.
 
 Runs go through the jump host over certificate auth (the same path as scans) and execute under
-sudo, so your plays should target **`hosts: all`** — Fleet supplies the inventory and limits it
+sudo, so your plays should target **`hosts: all`** — Moorgate supplies the inventory and limits it
 to the hosts/group you selected. The default new-playbook template is already set up this way.
 
 A run is bounded end to end by `FLEET_PLAYBOOK_TIMEOUT` (default **30m**). The run is
@@ -433,15 +433,15 @@ is slow. A run killed at the deadline reports **exit 124 with zero failed and ze
 hosts**; if you see that recap, raise the timeout rather than splitting the fleet into batches.
 The run's ephemeral SSH credential is minted to outlive the bound automatically.
 
-> **Rebooting a host Fleet runs on top of** (a hypervisor, or the Fleet VM itself) kills the run
-> that asked for it — Fleet dies mid-flight and the run is later reconciled as `interrupted`,
+> **Rebooting a host Moorgate runs on top of** (a hypervisor, or the Moorgate VM itself) kills the run
+> that asked for it — Moorgate dies mid-flight and the run is later reconciled as `interrupted`,
 > even though the upgrade succeeded. For those hosts, schedule the reboot to land *after* the
 > play ends (`shutdown -r +10`) and skip the `wait_for_connection`: there is nothing left alive
-> on Fleet's side to wait with.
+> on Moorgate's side to wait with.
 
-**Hosts with a vaulted credential** (routers, switches, appliances that don't trust the Fleet
+**Hosts with a vaulted credential** (routers, switches, appliances that don't trust the Moorgate
 CA) are supported: the runner injects the host's **vaulted SSH key or password** for the final
-hop — the same credential the terminal uses — while the jump-host hop still uses the Fleet
+hop — the same credential the terminal uses — while the jump-host hop still uses the Moorgate
 certificate. Cert-trusting and vaulted hosts can be mixed in one run. Only *open-policy* vaulted
 credentials are used (a check-out-gated secret is skipped). **Privilege escalation defaults per
 host:** enrolled Linux hosts run under sudo as before, but vaulted hosts default to `become:
@@ -453,12 +453,12 @@ work either — use `raw:` commands or the network modules below.
 ### MikroTik / RouterOS (API)
 
 RouterOS 7's SSH doesn't cleanly close command sessions, so `raw`/`network_cli` playbooks hang. The
-reliable path is the **RouterOS binary API** (port 8728), which Fleet tunnels through the jump host.
+reliable path is the **RouterOS binary API** (port 8728), which Moorgate tunnels through the jump host.
 
 Setup:
 1. On the router, enable the `api` service (`/ip service enable api`) and create/keep an admin
    **user + password** (the API can't use SSH keys).
-2. In Fleet, add the router as a host, attach an **open-policy password credential**
+2. In Moorgate, add the router as a host, attach an **open-policy password credential**
    (`Auth Method = vault_password`), and set **Device type = MikroTik RouterOS (API)** (default
    port 8728). Marking it RouterOS also stops the monitor from running Linux fact commands
    against it (which a RouterOS device rejects).
@@ -628,7 +628,7 @@ the [Break-Glass & Recovery Runbook](./break-glass.md).
 ## Upgrades (in-UI)
 
 **Settings → Maintenance → Updates** (needs the **System.Upgrade** permission — super-admins
-only) upgrades Fleet in place from a single signed file. Choose a **`.fleetup`** bundle, review
+only) upgrades Moorgate in place from a single signed file. Choose a **`.fleetup`** bundle, review
 its manifest (target version, release notes, and whether its database migrations are *additive*
 or *breaking*), and **Install**. The frontend is swapped invisibly; the backend restarts for a
 few seconds and the page reconnects on its own. **The jump host and WireGuard overlay are never
@@ -649,7 +649,7 @@ sign a bundle with `make bundle BUNDLE_VERSION=vX.Y.Z BUNDLE_FROM=<min-upgradabl
 builds+tags the images, `docker save`s them, and signs the manifest). Verify any bundle with
 `fleetctl release verify --bundle <file> --keys <pubkey>`.
 
-**Check for updates (pull).** Instead of uploading, you can point Fleet at a signed release
+**Check for updates (pull).** Instead of uploading, you can point Moorgate at a signed release
 channel: set **`FLEET_UPDATE_CHANNEL_URL`** to a hosted `channel.json`, and the Updates panel
 gains a **Check for updates** button that downloads + installs straight into the same verified
 pipeline. Publish the channel with `fleetctl release channel --key <priv> --base-url
@@ -722,7 +722,7 @@ each request shows the requester, the target, and — once resolved — **who ap
 when, and any decision note. Grants expire automatically; a background reaper revokes elapsed
 grants every minute.
 
-When an approver resolves a request, Fleet notifies the configured admin channel **and** emails
+When an approver resolves a request, Moorgate notifies the configured admin channel **and** emails
 the requester directly (if they have a profile email); when a grant later expires, the requester
 is emailed again. See [Notifications](#notifications) to enable delivery.
 

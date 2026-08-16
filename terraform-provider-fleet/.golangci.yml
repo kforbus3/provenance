@@ -1,0 +1,11 @@
+# Minimal golangci-lint config for the Terraform provider. Test files may ignore
+# errors on fixtures, and acceptance-test scaffolding (e.g. testAccPreCheck) is
+# intentionally present ahead of the TF_ACC CRUD tests that reference it.
+version: "2"
+linters:
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unused

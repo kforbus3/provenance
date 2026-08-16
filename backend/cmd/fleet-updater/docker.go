@@ -162,7 +162,7 @@ func (h *httpHealth) check(client *http.Client, baseURL, wantVersion string) err
 	if err != nil {
 		return err
 	}
-	io.Copy(io.Discard, io.LimitReader(rr.Body, 4096))
+	_, _ = io.Copy(io.Discard, io.LimitReader(rr.Body, 4096))
 	rr.Body.Close()
 	if rr.StatusCode != http.StatusOK {
 		return fmt.Errorf("/ready returned %d", rr.StatusCode)

@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 const databaseCols = `d.id, d.name, d.engine, d.address, d.port, d.database_name, d.credential_id,

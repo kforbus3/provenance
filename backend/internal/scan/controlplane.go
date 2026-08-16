@@ -3,8 +3,8 @@ package scan
 import (
 	"strings"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // controlPlaneTags mark a host as part of Fleet's own control plane. Remediating

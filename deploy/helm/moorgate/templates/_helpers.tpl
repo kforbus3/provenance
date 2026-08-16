@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "fleet-terminal.name" -}}
+{{- define "moorgate.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 Fully qualified app name.
 */}}
-{{- define "fleet-terminal.fullname" -}}
+{{- define "moorgate.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -24,16 +24,16 @@ Fully qualified app name.
 {{/*
 Chart label value.
 */}}
-{{- define "fleet-terminal.chart" -}}
+{{- define "moorgate.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 Common labels.
 */}}
-{{- define "fleet-terminal.labels" -}}
-helm.sh/chart: {{ include "fleet-terminal.chart" . }}
-app.kubernetes.io/name: {{ include "fleet-terminal.name" . }}
+{{- define "moorgate.labels" -}}
+helm.sh/chart: {{ include "moorgate.chart" . }}
+app.kubernetes.io/name: {{ include "moorgate.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
@@ -45,8 +45,8 @@ app.kubernetes.io/part-of: fleet-terminal
 {{/*
 Selector labels for a given component (pass via "context" + "component").
 */}}
-{{- define "fleet-terminal.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "fleet-terminal.name" .context }}
+{{- define "moorgate.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "moorgate.name" .context }}
 app.kubernetes.io/instance: {{ .context.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
@@ -54,53 +54,61 @@ app.kubernetes.io/component: {{ .component }}
 {{/*
 Resource name helpers per component.
 */}}
-{{- define "fleet-terminal.backend.fullname" -}}
-{{- printf "%s-backend" (include "fleet-terminal.fullname" .) -}}
+{{- define "moorgate.backend.fullname" -}}
+{{- printf "%s-backend" (include "moorgate.fullname" .) -}}
 {{- end -}}
 
-{{- define "fleet-terminal.frontend.fullname" -}}
-{{- printf "%s-frontend" (include "fleet-terminal.fullname" .) -}}
+{{- define "moorgate.frontend.fullname" -}}
+{{- printf "%s-frontend" (include "moorgate.fullname" .) -}}
 {{- end -}}
 
-{{- define "fleet-terminal.postgres.fullname" -}}
-{{- printf "%s-postgres" (include "fleet-terminal.fullname" .) -}}
+{{- define "moorgate.postgres.fullname" -}}
+{{- printf "%s-postgres" (include "moorgate.fullname" .) -}}
 {{- end -}}
 
-{{- define "fleet-terminal.redis.fullname" -}}
-{{- printf "%s-redis" (include "fleet-terminal.fullname" .) -}}
+{{- define "moorgate.redis.fullname" -}}
+{{- printf "%s-redis" (include "moorgate.fullname" .) -}}
+{{- end -}}
+
+{{- define "moorgate.ansibleRunner.fullname" -}}
+{{- printf "%s-ansible-runner" (include "moorgate.fullname" .) -}}
+{{- end -}}
+
+{{- define "moorgate.grypeScanner.fullname" -}}
+{{- printf "%s-grype-scanner" (include "moorgate.fullname" .) -}}
 {{- end -}}
 
 {{/*
 Name of the Secret holding sensitive config.
 */}}
-{{- define "fleet-terminal.secretName" -}}
+{{- define "moorgate.secretName" -}}
 {{- if .Values.secrets.existingSecret -}}
 {{- .Values.secrets.existingSecret -}}
 {{- else -}}
-{{- printf "%s-secrets" (include "fleet-terminal.fullname" .) -}}
+{{- printf "%s-secrets" (include "moorgate.fullname" .) -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
 Backend image reference (tag falls back to chart appVersion).
 */}}
-{{- define "fleet-terminal.backend.image" -}}
+{{- define "moorgate.backend.image" -}}
 {{- printf "%s:%s" .Values.backend.image.repository (default .Chart.AppVersion .Values.backend.image.tag) -}}
 {{- end -}}
 
 {{/*
 Frontend image reference.
 */}}
-{{- define "fleet-terminal.frontend.image" -}}
+{{- define "moorgate.frontend.image" -}}
 {{- printf "%s:%s" .Values.frontend.image.repository (default .Chart.AppVersion .Values.frontend.image.tag) -}}
 {{- end -}}
 
 {{/*
 Database URL the backend connects to (in-chart Postgres or external).
 */}}
-{{- define "fleet-terminal.databaseUrl" -}}
+{{- define "moorgate.databaseUrl" -}}
 {{- if .Values.postgres.enabled -}}
-{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password (include "fleet-terminal.postgres.fullname" .) .Values.postgres.auth.database -}}
+{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password (include "moorgate.postgres.fullname" .) .Values.postgres.auth.database -}}
 {{- else -}}
 {{- required "postgres.externalDatabaseUrl is required when postgres.enabled=false" .Values.postgres.externalDatabaseUrl -}}
 {{- end -}}
@@ -109,6 +117,6 @@ Database URL the backend connects to (in-chart Postgres or external).
 {{/*
 Redis URL (templated against the release).
 */}}
-{{- define "fleet-terminal.redisUrl" -}}
+{{- define "moorgate.redisUrl" -}}
 {{- tpl .Values.redis.url . -}}
 {{- end -}}

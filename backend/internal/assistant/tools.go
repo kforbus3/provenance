@@ -1,6 +1,6 @@
 package assistant
 
-import "github.com/fleet-terminal/backend/internal/store"
+import "github.com/kforbus3/Moorgate/backend/internal/store"
 
 const systemPrompt = `You are Fleet Assistant, helping an experienced Linux system administrator
 manage a fleet of hosts. You answer questions from read-only tools, and — only when
@@ -114,7 +114,7 @@ CHOOSING TOOLS
   per-IP failure tally. Use for "any failed logins", "brute-force attempts", "account
   lockouts", "MFA failures". These are separate from audit_log — use this for login
   security. (Fleet sign-ins only; it does not have host-level auth logs.)
-- search_docs: the Fleet Terminal product documentation. Use it for HOW-TO and
+- search_docs: the Moorgate product documentation. Use it for HOW-TO and
   conceptual questions about using or configuring the product (SSO/SAML/SCIM setup, host
   enrollment, certificates, backups, the API/SDK, access reviews, deployment, hardening).
   When you use it, ground the answer in the returned sections and CITE the doc title and
@@ -476,7 +476,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "search_docs",
-		Description: "Search the Fleet Terminal product documentation (installation, administration, host enrollment, certificate lifecycle, API reference, automation SDK/CLI, single sign-on with SAML/OIDC/LDAP, SCIM provisioning, backups, security hardening, deployment, internet exposure). Use this for HOW-TO and conceptual questions about USING or CONFIGURING the product — e.g. 'how do I configure SAML', 'how does host enrollment work', 'how do I set up scheduled backups', 'what permission does the scan API need', 'how do access reviews work'. This is distinct from the live-state tools (query_hosts, fleet_insights, etc.), which answer about the current fleet rather than how the product works. Returns the most relevant documentation sections; ground your answer in them and cite the doc title and heading.",
+		Description: "Search the Moorgate product documentation (installation, administration, host enrollment, certificate lifecycle, API reference, automation SDK/CLI, single sign-on with SAML/OIDC/LDAP, SCIM provisioning, backups, security hardening, deployment, internet exposure). Use this for HOW-TO and conceptual questions about USING or CONFIGURING the product — e.g. 'how do I configure SAML', 'how does host enrollment work', 'how do I set up scheduled backups', 'what permission does the scan API need', 'how do access reviews work'. This is distinct from the live-state tools (query_hosts, fleet_insights, etc.), which answer about the current fleet rather than how the product works. Returns the most relevant documentation sections; ground your answer in them and cite the doc title and heading.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fleet-terminal/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
 )
 
 // Save persists an incoming config. The SMTP password is encrypted at rest; if
@@ -114,7 +114,7 @@ func (s *Service) SendTest(ctx context.Context, channel string) error {
 		Type:     "test",
 		Severity: SeverityInfo,
 		Title:    "Fleet test notification",
-		Body:     "This is a test notification from Fleet Terminal. If you received it, the channel is configured correctly.",
+		Body:     "This is a test notification from Moorgate. If you received it, the channel is configured correctly.",
 	}
 	switch channel {
 	case "email":

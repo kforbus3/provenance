@@ -21,12 +21,12 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/identity"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/sshgw"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/identity"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 const (
@@ -194,15 +194,16 @@ func (s *Service) EnsureInstalled(h *models.Host) {
 
 // Run executes a scan in the background and records its outcome. skipRules are
 // rule ids excluded from the evaluation (oscap --skip-rule). It is launched in
-// its own goroutine by the handler; ctx should be detached (context.Background).
-func (s *Service) Run(scanID uuid.UUID, h *models.Host, profile string, skipRules []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout())
+// its own goroutine by the handler; parent is a request-derived context detached
+// from request cancellation (context.WithoutCancel) so the scan outlives the request.
+func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host, profile string, skipRules []string) {
+	ctx, cancel := context.WithTimeout(parent, s.scanTimeout())
 	defer cancel()
 
 	fail := func(msg string) {
 		s.log.Warn("host scan failed", "host", h.Hostname, "scan", scanID, "err", msg)
 		// Record the failure with a fresh context — the main one may have expired.
-		fctx, fcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		fctx, fcancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 		defer fcancel()
 		_ = s.store.FailHostScan(fctx, scanID, msg)
 	}
@@ -273,14 +274,14 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host, profile string, skipRule
 		return
 	}
 	reportPath := filepath.Join(s.cfg.ScanDir, scanID.String()+".html")
-	if err := os.WriteFile(reportPath, []byte(report), 0o640); err != nil {
+	if err := os.WriteFile(reportPath, []byte(report), 0o600); err != nil {
 		fail("write report: " + err.Error())
 		return
 	}
 	resultsPath := ""
 	if strings.TrimSpace(results) != "" {
 		resultsPath = filepath.Join(s.cfg.ScanDir, scanID.String()+".results.xml")
-		if err := os.WriteFile(resultsPath, []byte(results), 0o640); err != nil {
+		if err := os.WriteFile(resultsPath, []byte(results), 0o600); err != nil {
 			s.log.Warn("write results xml", "scan", scanID, "err", err)
 			resultsPath = ""
 		}
@@ -303,7 +304,7 @@ func (s *Service) Run(scanID uuid.UUID, h *models.Host, profile string, skipRule
 		"profile", meta["PROFILE"], "pass", pass, "fail", failCnt)
 
 	if failCnt > 0 && s.nfy != nil {
-		s.nfy.Notify(context.Background(), notify.Event{
+		s.nfy.Notify(context.WithoutCancel(parent), notify.Event{
 			Type: notify.EventScanFindings, Severity: notify.SeverityWarning,
 			Title: fmt.Sprintf("Scan found %d failed rule(s) on %s", failCnt, h.Hostname),
 			Body: fmt.Sprintf("OpenSCAP scan of %s (profile %s) finished: %d passed, %d failed, %d other.",

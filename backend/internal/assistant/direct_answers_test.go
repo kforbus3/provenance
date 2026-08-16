@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 func f64(v float64) *float64 { return &v }

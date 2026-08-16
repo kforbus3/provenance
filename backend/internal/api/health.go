@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
 )
 
 // healthComponent is one checked subsystem.

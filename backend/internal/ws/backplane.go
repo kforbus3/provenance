@@ -49,6 +49,7 @@ type envelope struct {
 	Type    string          `json:"t,omitempty"`
 	Data    json.RawMessage `json:"d,omitempty"`
 	UserID  string          `json:"u,omitempty"`
+	Tenant  string          `json:"tn,omitempty"` // session owner's tenant (visibility scope)
 	Session bool            `json:"s,omitempty"`
 	Control string          `json:"c,omitempty"`
 	Target  string          `json:"tg,omitempty"`
@@ -222,7 +223,8 @@ func (b *Backplane) dispatch(env envelope) {
 	}
 	if env.Session {
 		uid, _ := uuid.Parse(env.UserID)
-		b.hub.fanout(env.Type, env.Data, sessionAllow(uid))
+		tid, _ := uuid.Parse(env.Tenant) // empty/invalid → Nil → historical global scope
+		b.hub.fanout(env.Type, env.Data, sessionAllow(uid, tid))
 		return
 	}
 	b.hub.fanout(env.Type, env.Data, nil)

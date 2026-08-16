@@ -19,29 +19,38 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/accesspolicy"
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/commandpolicy"
-	"github.com/fleet-terminal/backend/internal/credinject"
-	"github.com/fleet-terminal/backend/internal/livesessions"
-	"github.com/fleet-terminal/backend/internal/metrics"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/recorder"
-	"github.com/fleet-terminal/backend/internal/sshgw"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/accesspolicy"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/commandpolicy"
+	"github.com/kforbus3/Moorgate/backend/internal/credinject"
+	"github.com/kforbus3/Moorgate/backend/internal/livesessions"
+	"github.com/kforbus3/Moorgate/backend/internal/metrics"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/recorder"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	// Same-origin is enforced by the reverse proxy / CORS; allow the upgrade here.
-	CheckOrigin: func(r *http.Request) bool { return true },
+	// CheckOrigin is set in Mount from the configured public URL: a browser upgrade
+	// must be same-origin (WebSockets are not covered by the same-origin policy);
+	// non-browser clients that send no Origin are allowed.
+	CheckOrigin: wsorigin.Check(""),
 }
+
+// maxTermDimension bounds terminal columns/rows from a client resize request. A PTY
+// window is at most a few hundred cells; clamping blocks a client from sending an
+// absurd size that could drive large allocations in the PTY/recording layers.
+const maxTermDimension = 1000
 
 // Mount attaches the terminal WebSocket endpoint.
 func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
+	upgrader.CheckOrigin = wsorigin.Check(d.Cfg.PublicURL)
 	h := &handler{d: d, gw: gw}
 	// WebSocket auth uses a query-param token (browsers cannot set headers on WS).
 	r.Get("/terminal/{hostId}", h.serve)
@@ -307,7 +316,7 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	startUnix := time.Now().Unix()
 	var capture *recorder.Recorder
 	if sshSessionID != uuid.Nil {
-		capture, _ = recorder.New(h.d.Cfg.RecordingDir, sshSessionID.String(), cols, rows, startUnix)
+		capture, _ = recorder.New(h.d.Cfg.RecordingDir, sshSessionID.String(), cols, rows, startUnix, h.d.Cfg.RecordingEncryptionKey)
 	}
 
 	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
@@ -328,6 +337,9 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 		h.d.Events.BroadcastSession("session.start", p.UserID, map[string]any{
 			"sshSessionId": sshSessionID, "username": p.Username,
 			"hostId": host.ID, "hostname": host.Hostname, "startedAt": startUnix,
+			// tenantId scopes cross-user (Session.Replay) visibility of this event to
+			// the session owner's tenant on the events WS.
+			"tenantId": p.TenantID,
 		})
 	}
 
@@ -474,6 +486,7 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 				if json.Unmarshal(data, &cm) == nil {
 					switch cm.Type {
 					case "resize":
+						cm.Cols, cm.Rows = clampDim(cm.Cols), clampDim(cm.Rows)
 						if cm.Cols > 0 && cm.Rows > 0 {
 							_ = session.WindowChange(cm.Rows, cm.Cols)
 							if capture != nil {
@@ -538,6 +551,7 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 		h.d.Events.BroadcastSession("session.end", p.UserID, map[string]any{
 			"sshSessionId": sshSessionID, "username": p.Username,
 			"hostId": host.ID, "hostname": host.Hostname,
+			"tenantId": p.TenantID,
 		})
 	}
 }
@@ -608,6 +622,18 @@ func recordingInput(sshSessionID uuid.UUID, res recorder.Result) store.Recording
 		SSHSessionID: sshSessionID, Format: "asciicast-v2", Path: res.Path,
 		SizeBytes: res.SizeBytes, DurationMS: res.DurationMS, SHA256: res.SHA256,
 	}
+}
+
+// clampDim bounds a client-supplied terminal dimension to [0, maxTermDimension].
+// A non-positive value is returned as 0 so the caller's ">0" guard rejects it.
+func clampDim(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > maxTermDimension {
+		return maxTermDimension
+	}
+	return v
 }
 
 func contains(xs []string, v string) bool {

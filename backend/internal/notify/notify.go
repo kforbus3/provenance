@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // Event types. Stable string keys — they also index Config.Events and appear in
@@ -36,8 +36,8 @@ const (
 	EventCommandFlagged         = "command.flagged"
 	EventCommandBlocked         = "command.blocked"
 	EventCommandApproval        = "command.approval"
-	EventCredentialRotated      = "credential.rotated"
-	EventCredentialRotateFailed = "credential.rotate_failed"
+	EventCredentialRotated      = "credential.rotated"       //nolint:gosec // not a credential: notification event-type name
+	EventCredentialRotateFailed = "credential.rotate_failed" //nolint:gosec // not a credential: notification event-type name
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The

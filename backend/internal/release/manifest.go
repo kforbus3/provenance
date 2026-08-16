@@ -1,4 +1,4 @@
-// Package release defines Fleet Terminal's signed upgrade bundle (`.fleetup`): its
+// Package release defines Moorgate's signed upgrade bundle (`.fleetup`): its
 // manifest, Ed25519 detached-signature signing/verification, and streaming
 // read/write of the bundle tar (a manifest + detached signature + one saved Docker
 // image tar per changed component). It is the trust foundation for the in-UI

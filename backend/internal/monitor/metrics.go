@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
 )
 
 // metricsScript gathers disk, memory, load, and network facts in one shot. Each

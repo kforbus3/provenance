@@ -15,18 +15,18 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/credinject"
-	"github.com/fleet-terminal/backend/internal/identity"
-	"github.com/fleet-terminal/backend/internal/jobs"
-	"github.com/fleet-terminal/backend/internal/metrics"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/overlay"
-	"github.com/fleet-terminal/backend/internal/sshgw"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/winrm"
-	"github.com/fleet-terminal/backend/internal/ws"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/credinject"
+	"github.com/kforbus3/Moorgate/backend/internal/identity"
+	"github.com/kforbus3/Moorgate/backend/internal/jobs"
+	"github.com/kforbus3/Moorgate/backend/internal/metrics"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/overlay"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/winrm"
+	"github.com/kforbus3/Moorgate/backend/internal/ws"
 )
 
 // Monitor periodically probes hosts and reports their health.
@@ -43,9 +43,38 @@ type Monitor struct {
 	interval time.Duration
 }
 
+// Sweep cadence and worker-pool tuning.
+const (
+	// targetCadence is the desired gap between sweep STARTS on a fleet small
+	// enough to finish within it. Larger fleets whose sweep already exceeds this
+	// simply re-sweep as soon as they can (down to minSweepGap), so status never
+	// falls further behind than the sweep itself takes.
+	targetCadence = 30 * time.Second
+
+	// minSweepGap floors the idle time after a sweep so an empty or instantly
+	// completing sweep can't busy-loop the probe pool and the jump host.
+	minSweepGap = 2 * time.Second
+
+	// defaultMonitorConcurrency is the worker-pool size when unconfigured. Each
+	// probe opens one pre-auth SSH connection to the jump host; OpenSSH's default
+	// MaxStartups is 10:30:100 (random pre-auth drops begin at 10 concurrent), so
+	// 6 leaves headroom for interactive terminals and KRL pushes that also transit
+	// the jump host.
+	defaultMonitorConcurrency = 6
+
+	// maxMonitorConcurrency is the documented safe ceiling for
+	// FLEET_MONITOR_CONCURRENCY. It sits just above the OpenSSH default
+	// MaxStartups hard limit so an operator can raise throughput for a large fleet
+	// WITHOUT silently exceeding what the jump host will accept — going higher only
+	// helps if sshd MaxStartups on the jump host is raised to match, otherwise a
+	// rotating subset of probes is refused and hosts flap offline. The value is
+	// clamped here so a fat-fingered config can't melt the jump host.
+	maxMonitorConcurrency = 16
+)
+
 // New constructs a Monitor.
 func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, hub *ws.Hub, reg *jobs.Registry, nfy *notify.Service) *Monitor {
-	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, nfy: nfy, interval: 30 * time.Second}
+	return &Monitor{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, hub: hub, jobs: reg, nfy: nfy, interval: targetCadence}
 }
 
 // hasVaultedCredential reports whether a host authenticates with a vaulted
@@ -136,23 +165,48 @@ func (m *Monitor) Run(ctx context.Context, leader func() bool) {
 				t.Reset(5 * time.Second)
 				continue
 			}
+			start := time.Now()
 			m.sweep(ctx)
-			t.Reset(m.interval)
+			// Adaptive cadence: idle the remainder of the target window on small
+			// fleets (whose sweep finished quickly) and re-sweep promptly on large
+			// fleets (whose sweep already consumed the window under the bounded,
+			// jump-host-friendly worker pool). Since AllHosts is now batched, the
+			// cost of a sweep is the probes themselves — not host enumeration.
+			t.Reset(nextSweepGap(m.interval, time.Since(start)))
 		}
 	}
 }
 
 // monitorConcurrency returns how many hosts to probe at once. Each probe opens a
-// fresh SSH connection to the jump host, so this stays well under the jump host's
-// sshd MaxStartups pre-auth limit (OpenSSH default 10), leaving headroom for user
+// fresh SSH connection to the jump host, so this stays near the jump host's sshd
+// MaxStartups pre-auth limit (OpenSSH default 10), leaving headroom for user
 // terminals and KRL pushes: too high and a rotating subset of probes is refused,
 // flapping hosts offline; a small pool still keeps a few unreachable hosts from
-// stalling the whole sweep.
+// stalling the whole sweep. The configured value is clamped to
+// [1, maxMonitorConcurrency] so throughput can be raised for a large fleet up to a
+// documented safe ceiling without a fat-fingered config melting the jump host.
 func (m *Monitor) monitorConcurrency() int {
-	if n := m.cfg.MonitorConcurrency; n >= 1 {
-		return n
+	n := m.cfg.MonitorConcurrency
+	if n < 1 {
+		n = defaultMonitorConcurrency
 	}
-	return 6
+	if n > maxMonitorConcurrency {
+		n = maxMonitorConcurrency
+	}
+	return n
+}
+
+// nextSweepGap returns how long to idle after a sweep that took `elapsed`, so
+// sweeps start about `target` apart on small fleets while large fleets — whose
+// sweep already meets or exceeds the target under the bounded, jump-host-friendly
+// worker pool — re-probe promptly instead of waiting a fixed extra interval. The
+// gap never drops below minSweepGap, so an empty or instantaneous sweep can't spin
+// the worker pool or the jump host.
+func nextSweepGap(target, elapsed time.Duration) time.Duration {
+	if remaining := target - elapsed; remaining > minSweepGap {
+		return remaining
+	}
+	return minSweepGap
 }
 
 // sweep probes every enrolled host once, in parallel with a bounded worker pool.

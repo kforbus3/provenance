@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "fleet-terminal.frontend.fullname" . }}
+  name: {{ include "moorgate.frontend.fullname" . }}
   labels:
-    {{- include "fleet-terminal.labels" . | nindent 4 }}
+    {{- include "moorgate.labels" . | nindent 4 }}
     app.kubernetes.io/component: frontend
 spec:
   selector:
-    {{- include "fleet-terminal.selectorLabels" (dict "context" . "component" "frontend") | nindent 4 }}
+    {{- include "moorgate.selectorLabels" (dict "context" . "component" "frontend") | nindent 4 }}
   ports:
     - name: http
       port: 80
@@ -16,9 +16,9 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "fleet-terminal.frontend.fullname" . }}
+  name: {{ include "moorgate.frontend.fullname" . }}
   labels:
-    {{- include "fleet-terminal.labels" . | nindent 4 }}
+    {{- include "moorgate.labels" . | nindent 4 }}
     app.kubernetes.io/component: frontend
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
@@ -29,11 +29,11 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      {{- include "fleet-terminal.selectorLabels" (dict "context" . "component" "frontend") | nindent 6 }}
+      {{- include "moorgate.selectorLabels" (dict "context" . "component" "frontend") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fleet-terminal.labels" . | nindent 8 }}
+        {{- include "moorgate.labels" . | nindent 8 }}
         app.kubernetes.io/component: frontend
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -49,11 +49,15 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: {{ include "fleet-terminal.frontend.image" . | quote }}
+          image: {{ include "moorgate.frontend.image" . | quote }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 80
+          env:
+            # Point nginx's templated upstream at the in-cluster backend Service.
+            - name: BACKEND_HOST
+              value: {{ printf "%s:8080" (include "moorgate.backend.fullname" .) | quote }}
           readinessProbe:
             httpGet:
               path: /
@@ -78,12 +82,18 @@ spec:
               mountPath: /var/cache/nginx
             - name: nginx-run
               mountPath: /var/run
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: nginx-cache
           emptyDir: {}
         - name: nginx-run
+          emptyDir: {}
+        # The base image renders the config template into /etc/nginx/conf.d at
+        # startup, which must be writable under readOnlyRootFilesystem.
+        - name: nginx-conf
           emptyDir: {}
         - name: tmp
           emptyDir: {}

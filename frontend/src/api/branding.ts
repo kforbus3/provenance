@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getVersion } from "./client";
 
 // Default brand name; matches the backend fallback when no branding is set.
-export const DEFAULT_APP_NAME = "Fleet Terminal";
+export const DEFAULT_APP_NAME = "Moorgate";
 
 // useAppName returns the configured application/brand name. It reads the public
 // /version endpoint (also used by the dashboard), so it works pre-auth on the

@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // hostKeyPinStore is the persistence the verifier needs. *store.Store satisfies it.
@@ -173,6 +173,7 @@ func (g *Gateway) ForgetHostKeys(ids ...string) {
 // production) restores the previous accept-any behavior.
 func (g *Gateway) hostKeyCallback() ssh.HostKeyCallback {
 	if g.cfg.SSHInsecureHostKeys {
+		//nolint:gosec // opt-in FLEET_SSH_INSECURE_HOST_KEYS dev path only; config.go refuses it outside development
 		return ssh.InsecureIgnoreHostKey()
 	}
 	return g.hostKeys.check

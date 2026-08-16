@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fleet-terminal/backend/internal/release"
+	"github.com/kforbus3/Moorgate/backend/internal/release"
 )
 
 // applyConfigAdditions merges a manifest's additive config into the deployment's .env

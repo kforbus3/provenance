@@ -1,7 +1,7 @@
 # Behavior analytics (UEBA)
 
 Behavior analytics surfaces access patterns that deviate from a user's established baseline,
-computed from Fleet's own session records — explainable statistics, no machine learning and no
+computed from Moorgate's own session records — explainable statistics, no machine learning and no
 external dependency. It's an **advisory** signal layered on the tamper-evident audit log: verify
 before acting.
 

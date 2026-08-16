@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/cpe"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/winrm"
+	"github.com/kforbus3/Moorgate/backend/internal/cpe"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/winrm"
 )
 
 // --- CycloneDX SBOM ---
@@ -81,7 +81,7 @@ func newBOM(hostname, osID, osVersion string) cdxBOM {
 		Version:     1,
 		Metadata: &cdxMetadata{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Tools:     []cdxTool{{Vendor: "Fleet Terminal", Name: "fleet-vulnscan"}},
+			Tools:     []cdxTool{{Vendor: "Moorgate", Name: "fleet-vulnscan"}},
 			Component: subject,
 		},
 	}

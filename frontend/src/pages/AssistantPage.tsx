@@ -106,7 +106,7 @@ export function AssistantPage() {
   return (
     <Box sx={{ maxWidth: 1000 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-        <Typography variant="h5">Ask Fleet</Typography>
+        <Typography variant="h5">Ask Moorgate</Typography>
         {turns.length > 0 && (
           <Button size="small" onClick={newConversation} disabled={busy}>New conversation</Button>
         )}

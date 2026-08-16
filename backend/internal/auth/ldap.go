@@ -10,9 +10,9 @@ import (
 
 	ldap "github.com/go-ldap/ldap/v3"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/secretbox"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 const ldapSettingKey = "ldap"
@@ -112,9 +112,20 @@ func (s *Service) authenticateLDAP(ctx context.Context, username, password strin
 	display := entry.GetAttributeValue(dAttr)
 	groups := entry.GetAttributeValues(gAttr)
 
+	// Only ever resolve to an account this directory owns. A directory entry whose
+	// uid/mail collides with an existing local-password account (or the bootstrap
+	// super-admin) must NOT authenticate as that account — otherwise anyone who can
+	// create a matching uid/mail in the directory takes it over. This mirrors the
+	// OIDC/SAML provisioning guards; see idpAccountConflict.
 	user, err := s.store.GetUserByUsername(ctx, uname)
+	if err == nil && idpAccountConflict(user, "ldap") {
+		return nil, ErrInvalidCredentials
+	}
 	if err != nil && email != "" {
 		user, err = s.store.GetUserByEmail(ctx, email)
+		if err == nil && idpAccountConflict(user, "ldap") {
+			return nil, ErrInvalidCredentials
+		}
 	}
 	if err != nil {
 		if !c.AutoProvision {
@@ -136,14 +147,14 @@ func (s *Service) authenticateLDAP(ctx context.Context, username, password strin
 	if user.IsDisabled {
 		return nil, ErrAccountDisabled
 	}
-	// Group → role mapping (additive). Match on each group's CN.
-	if len(c.GroupRoleMap) > 0 {
-		for _, g := range groups {
-			if role, ok := c.GroupRoleMap[ldapCN(g)]; ok && role != "" {
-				_ = s.store.AssignRoleByName(ctx, user.ID, role)
-			}
-		}
+	// Group → role mapping, authoritative for IdP-managed roles. Match on each
+	// group's CN; roles the directory no longer grants are revoked (see
+	// reconcileGroupRoles).
+	cns := make([]string, 0, len(groups))
+	for _, g := range groups {
+		cns = append(cns, ldapCN(g))
 	}
+	s.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, cns)
 	return user, nil
 }
 

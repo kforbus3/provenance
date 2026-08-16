@@ -1,4 +1,4 @@
-# PostgreSQL — stateful primary for Fleet Terminal.
+# PostgreSQL — stateful primary for Moorgate.
 # Single-replica StatefulSet with a PVC template; for HA swap in an operator
 # (CloudNativePG / Zalando) but the app only needs one writable endpoint.
 apiVersion: v1
@@ -50,6 +50,13 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
+          # The backend HPA scales to 10 replicas × FLEET_DB_MAX_CONNS (20) = 200
+          # connections, plus a couple per replica for the HA leader lock / event
+          # backplane — far past the stock max_connections=100. Raise it (300 leaves
+          # headroom for fleetctl/psql). Each connection also costs RAM, so keep the
+          # memory limit below in step. For real HA, point the backend at an external
+          # pooled Postgres (PgBouncer/Patroni/CloudNativePG) instead of this single pod.
+          args: ["postgres", "-c", "max_connections=300"]
           ports:
             - name: postgres
               containerPort: 5432
@@ -87,12 +94,24 @@ spec:
               memory: "1Gi"
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            # Immutable root fs. The database lives on the PVC (mounted at PGDATA); the
+            # official image only additionally needs a writable unix-socket dir and /tmp
+            # (used by the bootstrap postmaster during initdb) — both emptyDir below.
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data

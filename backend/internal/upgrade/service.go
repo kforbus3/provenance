@@ -21,12 +21,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/backup"
-	"github.com/fleet-terminal/backend/internal/cluster"
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/release"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/ws"
+	"github.com/kforbus3/Moorgate/backend/internal/backup"
+	"github.com/kforbus3/Moorgate/backend/internal/cluster"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/release"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/ws"
 )
 
 // Service coordinates upgrades and drain state for one backend instance.

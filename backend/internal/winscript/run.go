@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/credinject"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/winrm"
+	"github.com/kforbus3/Moorgate/backend/internal/credinject"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/winrm"
 )
 
 const (
@@ -83,29 +83,29 @@ func firstWinAddr(h *models.Host) string {
 // check-out/approval-gated credential is only used while they hold an active check-out.
 // A nil userID means a scheduled/unattended run, which — having no interactive
 // check-out — uses only open-policy credentials (like the monitor's fact collection).
-func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, userID *uuid.UUID) {
+func (s *Service) Run(parent context.Context, runID uuid.UUID, content string, hosts []*models.Host, userID *uuid.UUID) {
 	// Per-host WinRM timeout is operator-configurable in Settings. The whole-run
 	// timeout scales with how many concurrency-bounded batches the hosts take, plus
 	// a buffer, so a large fleet isn't cut off mid-run.
-	perHost := s.store.ScriptTimeout(context.Background())
+	perHost := s.store.ScriptTimeout(parent)
 	batches := (len(hosts) + winScriptConcurrency - 1) / winScriptConcurrency
 	if batches < 1 {
 		batches = 1
 	}
 	runTimeout := perHost*time.Duration(batches) + 5*time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	ctx, cancel := context.WithTimeout(parent, runTimeout)
 	defer cancel()
 
 	live := &liveRun{}
 	s.live.Store(runID, live)
 	defer s.live.Delete(runID)
 
-	if err := s.store.StartWinScriptRun(context.Background(), runID); err != nil {
+	if err := s.store.StartWinScriptRun(ctx, runID); err != nil {
 		s.log.Error("winscript run: mark running", "err", err)
 	}
 
 	complete := func(status, errMsg string, exitCode *int) {
-		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		pctx, pcancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 		defer pcancel()
 		if err := s.store.CompleteWinScriptRun(pctx, runID, status, live.snapshot(), exitCode, errMsg); err != nil {
 			s.log.Error("winscript run: persist result", "err", err, "run", runID)
@@ -162,7 +162,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, use
 		for _, h := range hosts {
 			names = append(names, h.Hostname)
 		}
-		s.nfy.Notify(context.Background(), notify.Event{
+		s.nfy.Notify(context.WithoutCancel(parent), notify.Event{
 			Type: notify.EventScriptFailed, Severity: notify.SeverityError,
 			Title: "PowerShell script run failed",
 			Body:  fmt.Sprintf("A PowerShell run against %s failed: %s", strings.Join(names, ", "), errMsg),

@@ -3,7 +3,7 @@ package release
 import "crypto/ed25519"
 
 // embeddedTrustKeys is the base64 Ed25519 release public key(s) baked into the binary
-// at build time via -ldflags "-X github.com/fleet-terminal/backend/internal/release.embeddedTrustKeys=<b64[,b64...]>".
+// at build time via -ldflags "-X github.com/kforbus3/Moorgate/backend/internal/release.embeddedTrustKeys=<b64[,b64...]>".
 // It is empty in a plain `go build`; a real release build stamps the publisher's key.
 // When empty and no runtime keys are configured, TrustedKeys returns nothing and
 // verification fails closed (no upgrade can be applied) — the intended safe default.

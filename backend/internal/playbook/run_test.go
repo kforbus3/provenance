@@ -1,11 +1,48 @@
 package playbook
 
 import (
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
 )
+
+// The runner must verify host keys against the backend's TOFU pins (H3). The
+// known_hosts file it is handed carries a line — keyed exactly as ssh will look the
+// host up (sshgw.HostKeyID) — for the jump host and every PINNED target, and omits
+// unpinned targets so the runner falls back to accept-new for them rather than
+// failing the run.
+func TestBuildKnownHostsUsesPinsAndSkipsUnpinned(t *testing.T) {
+	jumpID := sshgw.HostKeyID("jump.example", 2222)
+	finalID := sshgw.HostKeyID("10.8.0.5", 22)
+	pins := map[string]string{
+		jumpID:  "ssh-ed25519 AAAAJUMPKEY",
+		finalID: "ssh-ed25519 AAAAFINALKEY\n", // trailing newline must not double up
+	}
+	lookup := func(id string) (string, bool) { v, ok := pins[id]; return v, ok }
+
+	hosts := []*models.Host{
+		{WGAddress: "10.8.0.5", SSHPort: 22}, // pinned -> line emitted
+		{Address: "10.8.0.9", SSHPort: 22},   // unpinned -> omitted (accept-new)
+	}
+	out := buildKnownHosts(lookup, "jump.example:2222", hosts)
+
+	if !strings.Contains(out, jumpID+" ssh-ed25519 AAAAJUMPKEY\n") {
+		t.Errorf("jump host pin missing from known_hosts:\n%s", out)
+	}
+	if !strings.Contains(out, finalID+" ssh-ed25519 AAAAFINALKEY\n") {
+		t.Errorf("target pin missing/misformatted in known_hosts:\n%s", out)
+	}
+	if strings.Contains(out, "10.8.0.9") {
+		t.Errorf("unpinned host must be omitted, got:\n%s", out)
+	}
+	if strings.Contains(out, "\n\n") {
+		t.Errorf("known_hosts has a blank line (bad pin formatting):\n%q", out)
+	}
+}
 
 // A fleet-wide upgrade is sequential across its inventory, and every host that
 // takes a new kernel adds a reboot plus a wait_for_connection on top of its own

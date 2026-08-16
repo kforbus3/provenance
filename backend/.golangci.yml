@@ -1,0 +1,72 @@
+version: "2"
+run:
+  tests: true
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gosec
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Deferred rollback/close whose error is intentionally ignored is an accepted
+      # Go idiom (a Rollback after a successful Commit is a no-op returning ErrTxDone).
+      exclude-functions:
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+        - (github.com/jackc/pgx/v5.Rows).Close
+    gosec:
+      excludes:
+        # G104 overlaps errcheck; let errcheck own unchecked-error reporting.
+        - G104
+        # G115 (int-overflow on conversions) is overwhelmingly false-positive in Go
+        # and fires on every env-sized int->int32/int64 conversion.
+        - G115
+        # gosec's experimental taint-analysis rules (SSRF/path-traversal/XSS/open-
+        # redirect) are high-false-positive, and these exact categories already had a
+        # dedicated deep security-review pass (SSRF guard, path validation, XSS-safe
+        # rendering, SAML relay-state checks). Kept out of the CI gate as noise.
+        - G703
+        - G704
+        - G705
+        - G710
+    staticcheck:
+      # Defect-focused (this gate is about bugs, not taste): keep the SA analysis
+      # checks, drop the ST style and QF quickfix suggestions.
+      checks:
+        - all
+        - -ST*
+        - -QF*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - gosec
+        path: _test\.go
+      - linters:
+          - gosec
+          - staticcheck
+          - unused
+        path: (^|/)(mocks?|generated|.*\.gen)\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -40,12 +40,45 @@ See [`examples/main.tf`](./examples/main.tf) for a complete configuration.
 ## Building from source
 
 This provider lives in the Fleet Terminal monorepo and builds against the local SDK
-(via a `replace` directive), so build it from a checkout:
+via a `replace github.com/kforbus3/Fleet-Terminal/sdk => ../sdk` directive, so build
+it from a checkout of the monorepo:
 
 ```bash
 cd terraform-provider-fleet
 go build -o terraform-provider-fleet
 ```
+
+### Why the `replace` directive stays
+
+The SDK is developed in this repository and is **not published as a standalone Go
+module** (its `require` is pinned to the placeholder `v0.0.0`). The `replace` points
+`go build` at `../sdk`, and removing it would break the build. It is **not** a
+blocker for consumers:
+
+- **Registry users** never build the provider — Terraform downloads a signed binary
+  from the registry. The `replace` only affects `go build` in this checkout.
+- **Release builds** run GoReleaser from this directory inside a monorepo checkout,
+  where `../sdk` is present, so the directive resolves normally (see below).
+
+If the SDK is ever cut as its own tagged module, drop the `replace` and pin a real
+version in `require`.
+
+## Publishing to the Terraform Registry
+
+Releases are cut with [GoReleaser](https://goreleaser.com) using
+[`.goreleaser.yml`](./.goreleaser.yml) and the registry manifest
+[`terraform-registry-manifest.json`](./terraform-registry-manifest.json). Tag the
+repo and run GoReleaser from this directory with a GPG key registered with the
+registry:
+
+```bash
+cd terraform-provider-fleet
+GPG_FINGERPRINT=<key-fingerprint> goreleaser release --clean
+```
+
+This produces per-OS/arch zips, a `SHA256SUMS` file, and its detached GPG signature —
+exactly what the registry ingests. (This GPG key is the *registry* signing key and is
+separate from the offline `.fleetup` bundle key.)
 
 Install it for local use with a [dev override](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers)
 in your `~/.terraformrc`:

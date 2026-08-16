@@ -1,6 +1,7 @@
 package kms
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -91,8 +92,8 @@ func TestGCPUnwrapRejectsForeignToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	//lint:ignore SA1012 the prefix check rejects the token before the context is used
-	if _, err := p.Unwrap(nil, "vault:v1:abc"); err == nil {
+	// The prefix check rejects the token before the context is used.
+	if _, err := p.Unwrap(context.TODO(), "vault:v1:abc"); err == nil {
 		t.Error("gcp-kms Unwrap should reject a non-GCP token")
 	}
 }

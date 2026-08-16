@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,10 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // Mount attaches scan routes. JSON routes use cookie auth + Host.Scan; the report
@@ -149,7 +150,7 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create scan")
 		return
 	}
-	go h.svc.Run(rec.ID, host, rq.Profile, skipRules)
+	go h.svc.Run(context.WithoutCancel(r.Context()), rec.ID, host, rq.Profile, skipRules)
 
 	h.audit(r, "host.scan", rec.ID.String(), map[string]any{
 		"hostId": host.ID, "hostname": host.Hostname, "profile": rq.Profile, "skipped": len(skipRules),
@@ -376,7 +377,7 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not start remediation")
 		return
 	}
-	go h.svc.Remediate(rec.ID, scan, host, rq.RuleIDs, &p.UserID, p.Username)
+	go h.svc.Remediate(context.WithoutCancel(r.Context()), rec.ID, scan, host, rq.RuleIDs, &p.UserID, p.Username)
 	h.audit(r, "host.remediate", rec.ID.String(), map[string]any{
 		"hostId": host.ID, "hostname": host.Hostname, "rules": rq.RuleIDs,
 		"accessImpacting": impacting, "controlPlane": isControlPlaneHost(host, h.d.Cfg),

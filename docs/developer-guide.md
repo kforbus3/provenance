@@ -1,6 +1,6 @@
-# Fleet Terminal — Developer Guide
+# Moorgate — Developer Guide
 
-This guide covers building, running, and extending Fleet Terminal. Everything
+This guide covers building, running, and extending Moorgate. Everything
 runs through Docker, so **no local Go, Node, or PostgreSQL toolchain is required.**
 
 ## Layout

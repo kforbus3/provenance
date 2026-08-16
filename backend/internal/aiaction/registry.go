@@ -17,8 +17,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // Risk tiers. Phase 2 ships only "safe" actions (reversible, low-impact, executed
@@ -69,7 +69,7 @@ type Registry struct {
 
 	// Runner hooks wired from the server so this package imports neither the
 	// vulnscan service nor the auth service.
-	runVulnScan         func(scanID uuid.UUID, h *models.Host)
+	runVulnScan         func(ctx context.Context, scanID uuid.UUID, h *models.Host)
 	destroyUserSessions func(ctx context.Context, userID uuid.UUID)
 	// notifyApproval, if set, alerts approvers that a guarded action is pending.
 	notifyApproval func(ctx context.Context, action *models.AssistantAction)
@@ -80,7 +80,7 @@ type Registry struct {
 
 // New builds the registry with its runner hooks and registers the actions.
 func New(st *store.Store, log *slog.Logger,
-	runVulnScan func(uuid.UUID, *models.Host),
+	runVulnScan func(context.Context, uuid.UUID, *models.Host),
 	destroyUserSessions func(context.Context, uuid.UUID),
 	notifyApproval func(context.Context, *models.AssistantAction),
 	cleanupHostOverlay func(context.Context, *models.Host) error,

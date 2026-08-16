@@ -19,11 +19,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/aiaction"
-	"github.com/fleet-terminal/backend/internal/insights"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/tenant"
+	"github.com/kforbus3/Moorgate/backend/internal/aiaction"
+	"github.com/kforbus3/Moorgate/backend/internal/insights"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/tenant"
 )
 
 const (
@@ -283,7 +283,7 @@ func (s *Service) Ask(ctx context.Context, question, conversationID string, who 
 	// synchronous request: scoped to that tenant, never cross-tenant. With MT off the
 	// value is still a tenant id but the pool ignores it and uses Bypass, unchanged.
 	tenantScope := tenant.GUCValue(ctx)
-	go s.run(askID, convoID, question, who, cfg, tenantScope)
+	go s.run(context.WithoutCancel(ctx), askID, convoID, question, who, cfg, tenantScope)
 	return askID, convoID, true
 }
 
@@ -304,8 +304,8 @@ func (s *Service) Result(id string, caller uuid.UUID) (*AskResult, bool) {
 	return r, true
 }
 
-func (s *Service) run(id, convoID, question string, who Caller, cfg Settings, tenantScope string) {
-	ctx, cancel := context.WithTimeout(context.Background(), askTimeout)
+func (s *Service) run(parent context.Context, id, convoID, question string, who Caller, cfg Settings, tenantScope string) {
+	ctx, cancel := context.WithTimeout(parent, askTimeout)
 	defer cancel()
 	// Re-apply the caller's tenant scope so RLS filters every query this background
 	// run makes to the caller's tenant (see Ask). Empty only if the caller was
@@ -538,7 +538,6 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 	}
 
 	toolsUsed := false
-	retriedClarify := false
 	for i := 0; i < maxToolIterations; i++ {
 		resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: messages, Tools: toolset, Options: deterministicOptions(cfg.NumCtx)})
 		if err != nil {
@@ -555,8 +554,9 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			// already in the prior answer, and letting the model re-enter the tool loop
 			// here made it wander into unrelated tools and hallucinate (observed). If the
 			// tool-less retry still can't answer, keep the honest clarification.
-			if final != "" && !retriedClarify && looksLikeClarification(final) && countUserTurns(messages) > 1 {
-				retriedClarify = true
+			// Entering this no-tool-call branch returns below, so this retry runs at
+			// most once per converse call — no extra guard flag needed.
+			if final != "" && looksLikeClarification(final) && countUserTurns(messages) > 1 {
 				inst := "Do not ask me to clarify. My question is a follow-up about your previous answer"
 				if prior := lastAssistantContent(messages); prior != "" {
 					inst += ": \"" + truncateForPrompt(prior, 500) + "\""

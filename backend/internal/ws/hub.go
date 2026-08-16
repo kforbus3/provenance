@@ -12,13 +12,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/fleet-terminal/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	// Set in Mount from the configured public URL: a browser upgrade must be
+	// same-origin; non-browser clients (no Origin header) are allowed.
+	CheckOrigin: wsorigin.Check(""),
 }
 
 // Event is a typed message broadcast to clients.
@@ -57,9 +60,10 @@ func (h *Hub) Broadcast(eventType string, data any) {
 // all sessions anyway). Everyone else is skipped, so one user's activity does not
 // leak to every connected dashboard.
 func (h *Hub) BroadcastSession(eventType string, userID uuid.UUID, data any) {
-	h.fanout(eventType, data, sessionAllow(userID))
+	tenantID := sessionTenant(data)
+	h.fanout(eventType, data, sessionAllow(userID, tenantID))
 	if h.bp != nil {
-		h.bp.publish(envelope{Type: eventType, Data: toRaw(data), UserID: userID.String(), Session: true})
+		h.bp.publish(envelope{Type: eventType, Data: toRaw(data), UserID: userID.String(), Tenant: tenantID.String(), Session: true})
 	}
 }
 
@@ -72,9 +76,41 @@ func (h *Hub) PublishTerminate(sessionID uuid.UUID) {
 	}
 }
 
-// sessionAllow is the visibility filter for session-activity events.
-func sessionAllow(userID uuid.UUID) func(*client) bool {
-	return func(c *client) bool { return c.allSessions || c.userID == userID }
+// sessionAllow is the visibility filter for session-activity events. A client sees a
+// session event when it owns the session (same user) or holds Session.Replay — but a
+// Replay holder's cross-user visibility is scoped to its OWN tenant, so under
+// multi-tenancy one tenant's Replay holder never sees another tenant's session
+// activity (usernames, hostnames, session ids). tenantID == Nil means the event
+// carried no tenant (non-session callers); those keep the historical global view.
+func sessionAllow(userID, tenantID uuid.UUID) func(*client) bool {
+	return func(c *client) bool {
+		if c.userID == userID {
+			return true
+		}
+		if !c.allSessions {
+			return false
+		}
+		return tenantID == uuid.Nil || c.tenantID == tenantID
+	}
+}
+
+// sessionTenant extracts the session owner's tenant from a session-event payload
+// (BroadcastSession's callers include "tenantId"), used to tenant-scope cross-user
+// visibility. Returns Nil when absent.
+func sessionTenant(data any) uuid.UUID {
+	m, ok := data.(map[string]any)
+	if !ok {
+		return uuid.Nil
+	}
+	switch v := m["tenantId"].(type) {
+	case uuid.UUID:
+		return v
+	case string:
+		if id, err := uuid.Parse(v); err == nil {
+			return id
+		}
+	}
+	return uuid.Nil
 }
 
 // fanout marshals once and delivers to every client for which allow (if non-nil)
@@ -121,11 +157,15 @@ type client struct {
 	// holders (and super admins / Admin.All, which Has covers).
 	userID      uuid.UUID
 	allSessions bool
+	// tenantID is the client's tenant; it bounds a Session.Replay holder's cross-user
+	// session visibility to its own tenant (see sessionAllow).
+	tenantID uuid.UUID
 }
 
 // Mount attaches the events WebSocket endpoint. Clients authenticate with a
 // short-lived access token passed as a query parameter.
 func Mount(r chi.Router, d *app.Deps, hub *Hub) {
+	upgrader.CheckOrigin = wsorigin.Check(d.Cfg.PublicURL)
 	r.Get("/events/ws", func(w http.ResponseWriter, req *http.Request) {
 		token, respHeader := d.Auth.WSToken(req)
 		p, err := d.Auth.AuthenticateToken(req.Context(), token)
@@ -141,6 +181,7 @@ func Mount(r chi.Router, d *app.Deps, hub *Hub) {
 			conn: conn, send: make(chan []byte, 32),
 			userID:      p.UserID,
 			allSessions: p.Has("Session.Replay"),
+			tenantID:    p.TenantID,
 		}
 		hub.add(c)
 		go c.writePump()

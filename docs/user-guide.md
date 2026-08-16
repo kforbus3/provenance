@@ -1,6 +1,6 @@
-# Fleet Terminal — User Guide
+# Moorgate — User Guide
 
-Fleet Terminal lets you open SSH sessions and transfer files to your servers
+Moorgate lets you open SSH sessions and transfer files to your servers
 **right from your browser** — no SSH client, no VPN, no keys to manage. This
 guide walks through everyday use, step by step.
 
@@ -8,7 +8,7 @@ guide walks through everyday use, step by step.
 
 ## 1. Sign in
 
-1. Open the Fleet Terminal URL your administrator gave you.
+1. Open the Moorgate URL your administrator gave you.
 2. Enter your **username** and **password**, then **Sign in**.
 3. First time, or after a reset, you may be asked to **set a new password**
    (minimum 12 characters with upper, lower, a digit, and a symbol).
@@ -21,7 +21,7 @@ you log out or your session times out (typically 30 minutes idle).
 
 - **OIDC:** if SSO is enabled, the login page shows a **Sign in with SSO** button.
   Click it and you'll be sent to your organization's identity provider to sign in;
-  you're returned to Fleet Terminal already authenticated — no separate password
+  you're returned to Moorgate already authenticated — no separate password
   to enter here.
 - **LDAP / Active Directory:** just sign in on the normal form with your usual
   **directory username and password** — the same credentials you use elsewhere on
@@ -54,7 +54,7 @@ authenticator app or a passkey), you can **Generate recovery codes**. These are
 one-time backup codes — 10 of them, each looking like `xxxx-xxxx-xxxx`.
 
 - They're shown **only once**, right after you generate them. **Save them now** —
-  print them or store them in your password manager. Fleet Terminal keeps only a
+  print them or store them in your password manager. Moorgate keeps only a
   scrambled copy and can never show them to you again.
 - If you ever lose your phone or security key, type **one recovery code** into the
   normal 2FA prompt at sign-in (the same box where you'd enter a 6-digit code) —
@@ -119,10 +119,10 @@ package updates, with security updates called out separately (for example,
 
 ### Databases and Kubernetes
 
-Fleet also brokers access to **databases** and **Kubernetes clusters** the same way — you never
+Moorgate also brokers access to **databases** and **Kubernetes clusters** the same way — you never
 handle the credential. On the **Databases** page, run SQL against a registered PostgreSQL, MySQL,
-MariaDB, or SQL Server target (Fleet injects a vaulted credential and audits every query). On the
-**Kubernetes** page, browse cluster resources or point `kubectl` at Fleet's proxy. These appear only
+MariaDB, or SQL Server target (Moorgate injects a vaulted credential and audits every query). On the
+**Kubernetes** page, browse cluster resources or point `kubectl` at Moorgate's proxy. These appear only
 if an administrator has registered targets and granted you access.
 
 ---
@@ -176,7 +176,7 @@ a self-contained file to watch offline.
 
 ---
 
-## 7. Ask Fleet — the AI assistant
+## 7. Ask Moorgate — the AI assistant
 
 If you have the `Assistant.Use` permission, an **Ask** item appears in the
 sidebar. It lets you ask questions about your fleet in plain language and get a
@@ -226,7 +226,7 @@ action" below). You can ask about:
   **Sources** you can click straight into the in-app help.
 
 **It remembers the conversation.** Ask a question, then follow up naturally —
-*"and db-02?"* or *"what about last week?"* — and Fleet keeps the earlier context,
+*"and db-02?"* or *"what about last week?"* — and Moorgate keeps the earlier context,
 so you don't have to repeat yourself. The thread stays put even if you refresh the
 page. When you want a clean slate on a new topic, click **New conversation** to
 start fresh.
@@ -243,7 +243,7 @@ legacy"*. Ask never acts on its own:
 
 1. It **proposes** the action as a card showing exactly what will happen.
 2. **Nothing runs until you click Confirm** (or **Dismiss** to cancel).
-3. When you confirm, Fleet re-checks your permission and runs it, then shows the
+3. When you confirm, Moorgate re-checks your permission and runs it, then shows the
    result. Every action is recorded in the audit log.
 
 You can only propose actions you already have permission for (e.g. scanning needs
@@ -257,7 +257,7 @@ Confirm button they show **Request approval**: the action waits until someone wi
 the `Assistant.Approve` permission (an administrator) approves it, and it can never
 be approved by the person who requested it (separation of duties). Approvers see a
 short **"Awaiting your approval"** list at the top of the Ask page with Approve /
-Deny for each. On approval, Fleet re-checks that the original requester still has the
+Deny for each. On approval, Moorgate re-checks that the original requester still has the
 required permission and account before running it. Guarded actions, like all
 actions, are fully audited.
 

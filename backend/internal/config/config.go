@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/extsecret"
-	"github.com/fleet-terminal/backend/internal/kms"
+	"github.com/kforbus3/Moorgate/backend/internal/extsecret"
+	"github.com/kforbus3/Moorgate/backend/internal/kms"
 )
 
 // Config is the fully-resolved application configuration.
@@ -69,6 +69,12 @@ type Config struct {
 	CookieDomain       string
 	CookieSecure       bool
 	CSRFSecret         []byte
+	// AuditHMACKey (FLEET_AUDIT_HMAC_KEY), when set, keys the audit-log integrity
+	// chain with HMAC-SHA256 instead of a bare SHA-256 hash, so a party with only
+	// database write access cannot silently rewrite history and recompute a valid
+	// chain. Required in production; a fixed insecure default is used in development
+	// so a local chain stays verifiable across restarts.
+	AuditHMACKey []byte
 
 	// Per-IP rate limiting (0 disables). General applies to the whole API; Auth
 	// is a stricter limit for the unauthenticated auth/bootstrap endpoints. Both
@@ -233,6 +239,10 @@ type Config struct {
 
 	// Session recordings storage
 	RecordingDir string
+	// RecordingEncryptionKey (FLEET_RECORDING_KEY), when set, encrypts session
+	// recordings at rest with AES-256-GCM. Empty leaves recordings as plaintext on
+	// disk (legacy behavior); a warning is emitted in production.
+	RecordingEncryptionKey []byte
 
 	// OpenSCAP scan report storage
 	ScanDir     string
@@ -276,9 +286,15 @@ type Config struct {
 	// backend delegates playbook validation/lint (and, later, execution) to it.
 	// Empty disables the Ansible playbook feature's runner-backed operations.
 	AnsibleRunnerURL string
-	GrypeScannerURL  string // vulnerability-scanner sidecar
-	MSRCAPIURL       string // Microsoft Security Update Guide API (Windows CVE mapping)
-	MSRCMonths       int    // how many recent MSRC releases an online update fetches
+	// AnsibleRunnerToken (FLEET_ANSIBLE_RUNNER_TOKEN) is a shared secret the backend
+	// presents to the runner sidecar's /run API (X-Runner-Token). The runner rejects
+	// unauthenticated calls when this is set, so nothing else on the Docker network
+	// can submit playbooks (which would be remote code execution). Required in
+	// production; empty disables the check in development.
+	AnsibleRunnerToken string
+	GrypeScannerURL    string // vulnerability-scanner sidecar
+	MSRCAPIURL         string // Microsoft Security Update Guide API (Windows CVE mapping)
+	MSRCMonths         int    // how many recent MSRC releases an online update fetches
 
 	// CARotateAfter is how old the active SSH CA key may get before Fleet sends a
 	// rotation-reminder notification (the CA never auto-expires; rotation is
@@ -428,6 +444,7 @@ func Load() (*Config, error) {
 		ScapContentDir:              env("FLEET_SCAP_CONTENT_DIR", "/var/lib/fleet/scap-content"),
 		ScapContentVersion:          env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:            env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
+		AnsibleRunnerToken:          env("FLEET_ANSIBLE_RUNNER_TOKEN", ""),
 		GrypeScannerURL:             env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
 		MSRCAPIURL:                  env("FLEET_MSRC_API_URL", "https://api.msrc.microsoft.com"),
 		MSRCMonths:                  envInt("FLEET_MSRC_MONTHS", 12),
@@ -463,6 +480,8 @@ func Load() (*Config, error) {
 	c.MFAEncryptionKey = []byte(env("FLEET_MFA_ENCRYPTION_KEY", ""))
 	c.CSRFSecret = []byte(env("FLEET_CSRF_SECRET", ""))
 	c.CAKeyPassphrase = []byte(env("FLEET_CA_PASSPHRASE", ""))
+	c.AuditHMACKey = []byte(env("FLEET_AUDIT_HMAC_KEY", ""))
+	c.RecordingEncryptionKey = []byte(env("FLEET_RECORDING_KEY", ""))
 
 	// External KMS / HSM backend (default "local" = no wrapping, behavior unchanged).
 	c.KMSProvider = env("FLEET_KMS_PROVIDER", "local")
@@ -498,7 +517,7 @@ func Load() (*Config, error) {
 
 	// WebAuthn: derive sensible localhost defaults from the public URL.
 	c.WebAuthnRPID = env("FLEET_WEBAUTHN_RPID", hostOnly(c.PublicURL))
-	c.WebAuthnRPName = env("FLEET_WEBAUTHN_RP_NAME", "Fleet Terminal")
+	c.WebAuthnRPName = env("FLEET_WEBAUTHN_RP_NAME", "Moorgate")
 	if origins := env("FLEET_WEBAUTHN_ORIGINS", ""); origins != "" {
 		c.WebAuthnOrigins = strings.Split(origins, ",")
 	} else {
@@ -579,6 +598,16 @@ func (c *Config) validate() error {
 		if len(c.CAKeyPassphrase) < 16 && !c.caPassphraseViaKMS() {
 			missing = append(missing, "FLEET_CA_PASSPHRASE (>=16 bytes) or FLEET_CA_PASSPHRASE_WRAPPED with FLEET_KMS_PROVIDER")
 		}
+		// A dedicated key for the tamper-evident audit chain, held outside the DB so a
+		// party with only database write access cannot forge a valid chain.
+		if len(c.AuditHMACKey) < 32 {
+			missing = append(missing, "FLEET_AUDIT_HMAC_KEY (>=32 bytes)")
+		}
+		// Authenticate the backend to the Ansible runner sidecar so nothing else on the
+		// container network can submit playbooks (remote code execution).
+		if len(c.AnsibleRunnerToken) < 16 {
+			missing = append(missing, "FLEET_ANSIBLE_RUNNER_TOKEN (>=16 bytes)")
+		}
 		if len(missing) > 0 {
 			return fmt.Errorf("missing required config for %q environment: %s",
 				c.Environment, strings.Join(missing, ", "))
@@ -595,6 +624,12 @@ func (c *Config) validate() error {
 		// at-rest-decrypted row in cleartext. Not fatal so single-host deploys still boot.
 		if pgSSLDisabled(c.DatabaseURL) {
 			slog.Warn("FLEET_DATABASE_URL uses sslmode=disable — the Postgres connection is UNENCRYPTED. This is only safe when the database is on the same host; for any networked/managed Postgres set sslmode=verify-full with a CA.")
+		}
+		if len(c.RecordingEncryptionKey) != 0 && len(c.RecordingEncryptionKey) < 32 {
+			return fmt.Errorf("FLEET_RECORDING_KEY, when set, must be at least 32 bytes")
+		}
+		if len(c.RecordingEncryptionKey) == 0 {
+			slog.Warn("FLEET_RECORDING_KEY is unset — session recordings are stored UNENCRYPTED on disk. Set a 32+ byte key to encrypt them at rest.")
 		}
 	} else {
 		// Development-only fallbacks so the local stack boots without configured
@@ -617,6 +652,12 @@ func (c *Config) validate() error {
 			// undecryptable. This is the one remaining fixed dev default.
 			c.CAKeyPassphrase = []byte("dev-insecure-ca-passphrase-change")
 			ephemeral = append(ephemeral, "FLEET_CA_PASSPHRASE (fixed insecure default)")
+		}
+		if len(c.AuditHMACKey) == 0 {
+			// Fixed (not random) so a persisted dev audit chain stays verifiable
+			// across restarts, mirroring the CA passphrase rationale above.
+			c.AuditHMACKey = []byte("dev-insecure-audit-hmac-key-change")
+			ephemeral = append(ephemeral, "FLEET_AUDIT_HMAC_KEY (fixed insecure default)")
 		}
 		if len(ephemeral) > 0 {
 			slog.Warn("running in DEVELOPMENT mode with insecure secrets — set FLEET_ENV=production and provide real secrets for any non-local deployment",

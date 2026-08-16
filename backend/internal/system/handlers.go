@@ -12,11 +12,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/jobs"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/jobs"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // Mount attaches system routes (admin-gated).
@@ -74,6 +74,7 @@ func (h *handler) backup(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 	// pg_dump reads the connection URI directly; --no-owner keeps the dump portable.
+	//nolint:gosec // fixed argv: constant flags plus the server's own DatabaseURL from config; no user/request input reaches the command
 	cmd := exec.CommandContext(ctx, "pg_dump", "--no-owner", "--clean", "--if-exists", h.d.Cfg.DatabaseURL)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

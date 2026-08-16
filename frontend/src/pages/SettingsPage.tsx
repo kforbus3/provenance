@@ -266,7 +266,7 @@ function BrandingCard({ current }: { current: unknown }) {
   const [name, setName] = useState(cur.app_name ?? "");
   const [saved, setSaved] = useState(false);
   const save = useMutation({
-    mutationFn: () => setSetting("branding", { app_name: name.trim() || "Fleet Terminal" }),
+    mutationFn: () => setSetting("branding", { app_name: name.trim() || "Moorgate" }),
     onSuccess: () => {
       setSaved(true);
       void qc.invalidateQueries({ queryKey: ["settings"] });
@@ -284,7 +284,7 @@ function BrandingCard({ current }: { current: unknown }) {
         <TextField
           label="Application name" value={name}
           onChange={(e) => { setName(e.target.value); setSaved(false); }}
-          placeholder="Fleet Terminal" sx={{ flexGrow: 1, maxWidth: 360 }}
+          placeholder="Moorgate" sx={{ flexGrow: 1, maxWidth: 360 }}
         />
         <Button variant="contained" sx={{ mt: 1 }} disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
@@ -335,7 +335,7 @@ function AssistantCard({ current }: { current: unknown }) {
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
       <Typography variant="h6">AI assistant (local Ollama)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        Point Fleet at a local Ollama instance to enable read-only natural-language queries over
+        Point Moorgate at a local Ollama instance to enable read-only natural-language queries over
         your fleet (e.g. “hosts with less than 20% disk free”). Queries are RBAC-scoped and
         audited, and answering one sends the data it reads — host inventory, sessions, audit
         entries — to whichever Ollama instance you configure below.
@@ -684,7 +684,7 @@ function ITSMCard() {
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
       <Typography variant="h6">ITSM integration (ServiceNow / Jira)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        When enabled, Fleet opens a change/incident ticket for each just-in-time access request and
+        When enabled, Moorgate opens a change/incident ticket for each just-in-time access request and
         attaches its reference to the approval. Best-effort — a request is never blocked if the ITSM is
         unreachable.
       </Typography>
@@ -885,7 +885,7 @@ function SSOCard() {
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="h6" gutterBottom>Single sign-on (OIDC)</Typography>
         <Alert severity="error" action={<Button size="small" onClick={() => void refetch()}>Retry</Button>}>
-          Couldn't load the current configuration. If you just updated Fleet, hard-refresh the page
+          Couldn't load the current configuration. If you just updated Moorgate, hard-refresh the page
           (Ctrl/Cmd-Shift-R) to clear a cached bundle, then retry.
         </Alert>
       </Paper>
@@ -989,7 +989,7 @@ function SAMLCard() {
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="h6" gutterBottom>Single sign-on (SAML)</Typography>
         <Alert severity="error" action={<Button size="small" onClick={() => void refetch()}>Retry</Button>}>
-          Couldn't load the current configuration. If you just updated Fleet, hard-refresh the page
+          Couldn't load the current configuration. If you just updated Moorgate, hard-refresh the page
           (Ctrl/Cmd-Shift-R) to clear a cached bundle, then retry.
         </Alert>
       </Paper>
@@ -1092,7 +1092,7 @@ function SCIMCard() {
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
       <Typography variant="h6">Provisioning (SCIM 2.0)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        Let your identity provider create, update, and — importantly — deprovision Fleet accounts
+        Let your identity provider create, update, and — importantly — deprovision Moorgate accounts
         automatically. Pairs with SAML SSO: SCIM manages the account lifecycle, SAML authenticates the
         login. Point your IdP's SCIM connector at the base URL below with the bearer token.
       </Typography>
@@ -1172,7 +1172,7 @@ function LDAPCard() {
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="h6" gutterBottom>LDAP / Active Directory</Typography>
         <Alert severity="error" action={<Button size="small" onClick={() => void refetch()}>Retry</Button>}>
-          Couldn't load the current configuration. If you just updated Fleet, hard-refresh the page
+          Couldn't load the current configuration. If you just updated Moorgate, hard-refresh the page
           (Ctrl/Cmd-Shift-R) to clear a cached bundle, then retry.
         </Alert>
       </Paper>

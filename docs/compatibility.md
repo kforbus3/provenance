@@ -1,6 +1,6 @@
 # Compatibility, versioning and support
 
-What Fleet Terminal promises to keep working, for how long, and what it reserves
+What Moorgate promises to keep working, for how long, and what it reserves
 the right to change. This is the contract behind the version number: from 1.0
 onward the number is a statement about compatibility, not a changelog.
 
@@ -8,7 +8,7 @@ onward the number is a statement about compatibility, not a changelog.
 
 ## Versioning
 
-Fleet Terminal follows [Semantic Versioning](https://semver.org). Given
+Moorgate follows [Semantic Versioning](https://semver.org). Given
 `MAJOR.MINOR.PATCH`:
 
 - **PATCH** — bug fixes and security fixes. No new surface, nothing removed.
@@ -67,7 +67,7 @@ Changing these is not a breaking change, and they may change in any release:
   implementation detail; use the audit log or the metrics.
 - **Metric names not listed in the operations guide**, and the exact set of
   labels on any metric.
-- **The database schema itself.** Read Fleet's tables directly and a migration
+- **The database schema itself.** Read Moorgate's tables directly and a migration
   will eventually move them under you. The REST API is the supported way to get
   at the data.
 - **Internal Go packages** (`backend/internal/...`). The published SDK is the

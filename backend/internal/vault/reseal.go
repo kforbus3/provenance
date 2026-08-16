@@ -3,8 +3,8 @@ package vault
 import (
 	"context"
 
-	"github.com/fleet-terminal/backend/internal/secretbox"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // ResealSecrets re-seals every stored vault-secret version to the active KDF profile

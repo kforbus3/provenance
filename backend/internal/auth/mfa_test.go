@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
 )
 
 func testService() *Service {

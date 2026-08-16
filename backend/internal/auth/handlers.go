@@ -9,8 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // Handler exposes auth HTTP endpoints.
@@ -35,12 +35,22 @@ func (h *Handler) Mount(r chi.Router) {
 		gr.Get("/auth/oidc/status", h.oidcStatus)
 		gr.Get("/auth/oidc/login", h.oidcLogin)
 		gr.Get("/auth/oidc/callback", h.oidcCallback)
+		// RP-initiated logout: clears the Fleet session and, when the IdP advertises
+		// an end_session_endpoint, bounces the browser through it.
+		gr.Get("/auth/oidc/logout", h.oidcLogout)
 		// SAML SSO (public: SP-initiated redirect, IdP-initiated ACS POST, SP metadata,
 		// and the login-page status probe). The ACS handles both flows.
 		gr.Get("/auth/saml/status", h.samlStatus)
 		gr.Get("/auth/saml/login", h.samlLogin)
 		gr.Post("/auth/saml/acs", h.samlACS)
 		gr.Get("/auth/saml/metadata", h.samlMetadata)
+		// SP-initiated Single Logout: ends the local session and (when an SP key +
+		// IdP SLO endpoint are configured) redirects through the IdP's SLO service.
+		gr.Get("/auth/saml/logout", h.samlLogout)
+		// SP SLO service: receives the IdP's LogoutResponse (redirect binding) and
+		// IdP-initiated LogoutRequests (redirect or POST binding).
+		gr.Get("/auth/saml/slo", h.samlSLO)
+		gr.Post("/auth/saml/slo", h.samlSLO)
 	})
 	r.Group(func(pr chi.Router) {
 		pr.Use(h.svc.RequireAuth)
@@ -144,7 +154,7 @@ func (h *Handler) mfaSetupBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "account unavailable")
 		return
 	}
-	secret, url, err := GenerateTOTP("Fleet Terminal", u.Username)
+	secret, url, err := GenerateTOTP("Moorgate", u.Username)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate secret")
 		return
@@ -446,7 +456,7 @@ func (h *Handler) mfaList(w http.ResponseWriter, r *http.Request) {
 // mfaEnroll generates a new TOTP secret and stores it as pending (unconfirmed).
 func (h *Handler) mfaEnroll(w http.ResponseWriter, r *http.Request) {
 	p := MustPrincipal(r)
-	secret, url, err := GenerateTOTP("Fleet Terminal", p.Username)
+	secret, url, err := GenerateTOTP("Moorgate", p.Username)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate secret")
 		return
@@ -520,17 +530,20 @@ func (h *Handler) mfaDelete(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) setAuthCookies(w http.ResponseWriter, t *Tokens) {
 	secure := h.svc.cfg.CookieSecure
 	domain := h.svc.cfg.CookieDomain
+	//nolint:gosec // Secure is deployment-controlled (cfg.CookieSecure); disabled only for local HTTP dev. HttpOnly+SameSiteStrict are set.
 	http.SetCookie(w, &http.Cookie{
 		Name: RefreshCookie, Value: t.Refresh, Path: "/api/v1/auth", Domain: domain,
 		HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
 		Expires: time.Now().Add(h.svc.cfg.RefreshTokenTTL),
 	})
+	//nolint:gosec // Secure is deployment-controlled (cfg.CookieSecure); disabled only for local HTTP dev. HttpOnly+SameSiteStrict are set.
 	http.SetCookie(w, &http.Cookie{
 		Name: "fleet_sid", Value: t.Session.ID.String(), Path: "/api/v1/auth", Domain: domain,
 		HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
 		Expires: time.Now().Add(h.svc.cfg.RefreshTokenTTL),
 	})
 	// CSRF cookie is readable by JS (double-submit), so HttpOnly is false.
+	//nolint:gosec // CSRF double-submit token is intentionally JS-readable (HttpOnly=false); Secure+SameSiteStrict still enforced.
 	http.SetCookie(w, &http.Cookie{
 		Name: CSRFCookie, Value: t.CSRF, Path: "/", Domain: domain,
 		HttpOnly: false, Secure: secure, SameSite: http.SameSiteStrictMode,
@@ -539,10 +552,16 @@ func (h *Handler) setAuthCookies(w http.ResponseWriter, t *Tokens) {
 }
 
 func (h *Handler) clearAuthCookies(w http.ResponseWriter) {
+	secure := h.svc.cfg.CookieSecure
+	domain := h.svc.cfg.CookieDomain
 	for _, c := range []struct{ name, path string }{
 		{RefreshCookie, "/api/v1/auth"}, {"fleet_sid", "/api/v1/auth"}, {CSRFCookie, "/"},
 	} {
-		http.SetCookie(w, &http.Cookie{Name: c.name, Value: "", Path: c.path, MaxAge: -1})
+		//nolint:gosec // Secure is deployment-controlled (cfg.CookieSecure); this is a deletion cookie (MaxAge<0) carrying matching flags.
+		http.SetCookie(w, &http.Cookie{
+			Name: c.name, Value: "", Path: c.path, Domain: domain, MaxAge: -1,
+			HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
+		})
 	}
 }
 

@@ -37,7 +37,7 @@ Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images
   the deployment default is a cert overlay — so a pure-WireGuard deployment never creates it.
 - Validated end-to-end in Docker: OpenVPN PKI chain + live tunnel (mutual ECDSA auth,
   TLS1.3/`TLS_AES_256_GCM`, ECDHE-P256, ping over the tunnel), ccd static per-host IP,
-  Fleet's actual provisioning scripts on real containers; overlay-CA persistence/reload
+  Moorgate's actual provisioning scripts on real containers; overlay-CA persistence/reload
   against real Postgres; FIPS + WireGuard boots both validated.
 
 **Done (P0 — foundation, and P1 — in-process crypto):**
@@ -101,7 +101,7 @@ created.
 
 **Remaining (operator-provided / optional):**
 - **Host-OS FIPS OpenSSL images** — the jump host and managed hosts must run a
-  FIPS-validated OpenSSL for the whole trust chain to be FIPS; Fleet documents this
+  FIPS-validated OpenSSL for the whole trust chain to be FIPS; Moorgate documents this
   requirement but does not ship the host images.
 - **Guided TOTP re-enrollment UX** — SHA-1 TOTP still verifies (HMAC-SHA-1 is technically
   FIPS-approved); a forced SHA-256 TOTP re-enrollment flow is not built, by choice.
@@ -112,7 +112,7 @@ created.
 
 ## Goal & boundary
 
-Add an opt-in **FIPS mode** in which *all* cryptography Fleet performs uses FIPS 140-3
+Add an opt-in **FIPS mode** in which *all* cryptography Moorgate performs uses FIPS 140-3
 approved algorithms running inside a validated cryptographic module. FIPS mode is a
 **policy profile**, selected by `FLEET_FIPS_MODE=true`. When off (the default),
 nothing changes — Ed25519, WireGuard, and Argon2id remain for normal installs. We take
@@ -126,7 +126,7 @@ Two deployment stories, both required:
    under an approved KDF, and refreshes credentials. Planned in detail below.
 
 Honest scope statement for buyers: FIPS mode requires the **whole trust chain** to be
-FIPS — the Fleet backend image (validated module), the jump host, and every managed
+FIPS — the Moorgate backend image (validated module), the jump host, and every managed
 host's OS crypto (OpenSSL) — not just the Go binary.
 
 ---
@@ -214,19 +214,19 @@ WireGuard has **no FIPS mode** (its primitives are all non-approved), so it is r
 not reconfigured. **OpenVPN is the primary/default FIPS overlay**; **IPsec/IKEv2 via
 strongSwan is a supported alternative** (`FLEET_OVERLAY=openvpn|strongswan`) for
 operators who prefer kernel IPsec or already run strongSwan. Both authenticate hosts
-with certs from Fleet's ECDSA CA and use approved suites (AES-256-GCM, ECDH/ECDHE
+with certs from Moorgate's ECDSA CA and use approved suites (AES-256-GCM, ECDH/ECDHE
 P-256). The overlay is pluggable behind the profile's `OverlayProvisioner`, so adding
 strongSwan is a second provisioner implementation, not a rearchitecture.
 
 FIPS OpenVPN shape: OpenVPN 2.5+ linked against a **FIPS-validated OpenSSL 3 provider**,
 `tls-version-min 1.2`, `data-ciphers AES-256-GCM`, ECDHE-P256, and **certificate auth**
-— clients present a cert issued by Fleet's (now ECDSA) CA. This is a nice synergy: the
-overlay and SSH share the same FIPS CA, and the per-host identity Fleet already persists
+— clients present a cert issued by Moorgate's (now ECDSA) CA. This is a nice synergy: the
+overlay and SSH share the same FIPS CA, and the per-host identity Moorgate already persists
 (from the HA work) becomes the OpenVPN client identity.
 
-Fleet changes:
+Moorgate changes:
 - The jump-host image runs an **OpenVPN server** (FIPS OpenSSL) instead of / alongside
-  the WG hub. It trusts the Fleet CA and issues/accepts client certs.
+  the WG hub. It trusts the Moorgate CA and issues/accepts client certs.
 - `internal/enrollment` gains an **OpenVPN provisioning path** parallel to the WG one:
   install openvpn, drop a client config + a CA-issued client cert, bring up the tunnel,
   register the client on the server. Reuses the enrollment scaffolding (validation,
@@ -279,7 +279,7 @@ overlay is already `openvpn` keeps `FLEET_WG_SUBNET` instead, so an existing FIP
 fleet is not renumbered underneath itself; set the variable explicitly to move it.
 
 **Switching an enrolled host between transports is a re-enrollment** with the other
-overlay selected — any method, including no-install. Fleet then:
+overlay selected — any method, including no-install. Moorgate then:
 
 - renumbers the host into the joining overlay's pool (its address cannot follow it
   across subnets) and releases the SSH host-key pin held for the old address, since

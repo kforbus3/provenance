@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 const hostCols = `id, hostname, description, environment, owner,
@@ -166,36 +166,120 @@ func (s *Store) HostnamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.U
 	return out, rows.Err()
 }
 
+// attachHostDetails attaches groups/inventory/status/metrics to a single host. It
+// delegates to attachHostDetailsBatch, so GetHost and the list paths share one
+// stitching implementation.
 func (s *Store) attachHostDetails(ctx context.Context, h *models.Host) {
-	h.Groups, _ = s.scanStrings(ctx, `
-		SELECT g.name FROM host_groups hg JOIN groups g ON g.id=hg.group_id
-		WHERE hg.host_id=$1 ORDER BY g.name`, h.ID)
-	var inv models.HostInventory
-	var updatePkgs, obsoletePkgs []byte
-	if err := s.pool.QueryRow(ctx, `
-		SELECT os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
+	s.attachHostDetailsBatch(ctx, []*models.Host{h})
+}
+
+// attachHostDetailsBatch attaches groups, inventory, status, and metrics to every
+// host in one bounded set of queries — one per detail type using WHERE host_id =
+// ANY($1) — instead of ~4 queries per host. This turns the ListHosts / AllHosts
+// fan-out from O(4N) round-trips (401 queries for 100 hosts) into a constant 4,
+// which is what makes the 30s monitor sweep affordable at thousands of hosts.
+//
+// It is best-effort like the per-host version it replaces: a detail whose row is
+// absent (or fails to scan) is simply left nil on that host, and the output for
+// any given host is byte-for-byte identical to the old per-host path.
+func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host) {
+	if len(hosts) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, len(hosts))
+	byID := make(map[uuid.UUID]*models.Host, len(hosts))
+	for i, h := range hosts {
+		ids[i] = h.ID
+		byID[h.ID] = h
+	}
+
+	// 1. Groups (ordered by name, matching the per-host query).
+	if rows, err := s.pool.Query(ctx, `
+		SELECT hg.host_id, g.name FROM host_groups hg JOIN groups g ON g.id=hg.group_id
+		WHERE hg.host_id = ANY($1) ORDER BY hg.host_id, g.name`, ids); err == nil {
+		for rows.Next() {
+			var hid uuid.UUID
+			var name string
+			if rows.Scan(&hid, &name) == nil {
+				if h := byID[hid]; h != nil {
+					h.Groups = append(h.Groups, name)
+				}
+			}
+		}
+		rows.Close()
+	}
+
+	// 2. Inventory.
+	if rows, err := s.pool.Query(ctx, `
+		SELECT host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages
-		FROM host_inventory WHERE host_id=$1`, h.ID).
-		Scan(&inv.OSName, &inv.OSVersion, &inv.KernelVersion, &inv.Architecture,
-			&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
-			&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs); err == nil {
-		if len(updatePkgs) > 0 {
-			_ = json.Unmarshal(updatePkgs, &inv.UpdatePackages)
+		FROM host_inventory WHERE host_id = ANY($1)`, ids); err == nil {
+		for rows.Next() {
+			var hid uuid.UUID
+			var inv models.HostInventory
+			var updatePkgs, obsoletePkgs []byte
+			if rows.Scan(&hid, &inv.OSName, &inv.OSVersion, &inv.KernelVersion, &inv.Architecture,
+				&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
+				&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs) != nil {
+				continue
+			}
+			if len(updatePkgs) > 0 {
+				_ = json.Unmarshal(updatePkgs, &inv.UpdatePackages)
+			}
+			if len(obsoletePkgs) > 0 {
+				_ = json.Unmarshal(obsoletePkgs, &inv.ObsoletePackages)
+			}
+			if h := byID[hid]; h != nil {
+				h.Inventory = &inv
+			}
 		}
-		if len(obsoletePkgs) > 0 {
-			_ = json.Unmarshal(obsoletePkgs, &inv.ObsoletePackages)
+		rows.Close()
+	}
+
+	// 3. Status.
+	if rows, err := s.pool.Query(ctx, `
+		SELECT host_id, status, ssh_ok, wg_ok, latency_ms, uptime_seconds, last_success_at, last_failure_at, last_error, checked_at
+		FROM host_status WHERE host_id = ANY($1)`, ids); err == nil {
+		for rows.Next() {
+			var hid uuid.UUID
+			var st models.HostStatus
+			if rows.Scan(&hid, &st.Status, &st.SSHOK, &st.WGOK, &st.LatencyMS, &st.UptimeSeconds,
+				&st.LastSuccessAt, &st.LastFailureAt, &st.LastError, &st.CheckedAt) != nil {
+				continue
+			}
+			if h := byID[hid]; h != nil {
+				h.Status = &st
+			}
 		}
-		h.Inventory = &inv
+		rows.Close()
 	}
-	var st models.HostStatus
-	if err := s.pool.QueryRow(ctx, `
-		SELECT status, ssh_ok, wg_ok, latency_ms, uptime_seconds, last_success_at, last_failure_at, last_error, checked_at
-		FROM host_status WHERE host_id=$1`, h.ID).
-		Scan(&st.Status, &st.SSHOK, &st.WGOK, &st.LatencyMS, &st.UptimeSeconds,
-			&st.LastSuccessAt, &st.LastFailureAt, &st.LastError, &st.CheckedAt); err == nil {
-		h.Status = &st
+
+	// 4. Metrics.
+	if rows, err := s.pool.Query(ctx, `
+		SELECT host_id, collected_at, disk, min_disk_free_pct, mem_total_mb, mem_available_mb, mem_used_pct,
+			load1, load5, load15, load_per_core, network, primary_ip
+		FROM host_metrics WHERE host_id = ANY($1)`, ids); err == nil {
+		for rows.Next() {
+			var hid uuid.UUID
+			var m models.HostMetrics
+			var disk, netb []byte
+			if rows.Scan(&hid, &m.CollectedAt, &disk, &m.MinDiskFreePct, &m.MemTotalMB, &m.MemAvailableMB, &m.MemUsedPct,
+				&m.Load1, &m.Load5, &m.Load15, &m.LoadPerCore, &netb, &m.PrimaryIP) != nil {
+				continue
+			}
+			_ = json.Unmarshal(disk, &m.Disk)
+			if len(netb) > 0 && string(netb) != "{}" {
+				var n models.HostNetwork
+				if json.Unmarshal(netb, &n) == nil {
+					m.Network = &n
+				}
+			}
+			if h := byID[hid]; h != nil {
+				h.Metrics = &m
+			}
+		}
+		rows.Close()
 	}
-	h.Metrics = s.loadMetrics(ctx, h.ID)
 }
 
 // ListHosts returns all hosts with details. Filtering/sorting is applied in the
@@ -223,9 +307,11 @@ func (s *Store) ListHosts(ctx context.Context, limit, offset int) ([]models.Host
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	ptrs := make([]*models.Host, len(hosts))
 	for i := range hosts {
-		s.attachHostDetails(ctx, &hosts[i])
+		ptrs[i] = &hosts[i]
 	}
+	s.attachHostDetailsBatch(ctx, ptrs)
 	return hosts, nil
 }
 
@@ -339,9 +425,11 @@ func (s *Store) ListAccessibleHosts(ctx context.Context, userID uuid.UUID, isSup
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	ptrs := make([]*models.Host, len(hosts))
 	for i := range hosts {
-		s.attachHostDetails(ctx, &hosts[i])
+		ptrs[i] = &hosts[i]
 	}
+	s.attachHostDetailsBatch(ctx, ptrs)
 	return hosts, nil
 }
 

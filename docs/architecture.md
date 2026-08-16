@@ -1,6 +1,6 @@
-# Fleet Terminal — Architecture
+# Moorgate — Architecture
 
-Fleet Terminal is a Privileged Access Management (PAM) platform for browser-based
+Moorgate is a Privileged Access Management (PAM) platform for browser-based
 SSH. It brokers every SSH session through a hardened gateway, issues short-lived
 ephemeral SSH certificates instead of distributing long-lived keys, and records
 an immutable, tamper-evident audit trail of every privileged action.
@@ -94,7 +94,7 @@ no local Go/Node/Postgres toolchain is required (see the [Developer Guide](./dev
 
 The full chain is: **Browser → HTTPS/WSS → React → REST → Backend → SSH Gateway
 → Jump Host → WireGuard → Managed Hosts.** Managed hosts are configured to trust
-the Fleet user CA (`TrustedUserCAKeys`); the backend never needs to push or
+the Moorgate user CA (`TrustedUserCAKeys`); the backend never needs to push or
 manage `authorized_keys` per user.
 
 ---
@@ -130,14 +130,14 @@ ephemeral-identity issuance once identity is established:
   PKCE. When OIDC is enabled the login page shows a **Sign in with SSO** button;
   the backend redirects the browser to the configured IdP, then verifies the
   returned ID token against the provider's JWKS, maps the username/email/groups
-  claims to a Fleet user (provisioning or role-mapping as configured), and issues
-  a normal Fleet session — from there the Issuer mints the ephemeral identity
+  claims to a Moorgate user (provisioning or role-mapping as configured), and issues
+  a normal Moorgate session — from there the Issuer mints the ephemeral identity
   exactly as for password login. Uses `github.com/coreos/go-oidc/v3` and
   `golang.org/x/oauth2`.
 - **LDAP / Active Directory (`internal/auth/ldap.go`)** — directory users sign in
   through the normal username/password form. The backend performs a
   service-account (bind-DN) lookup to resolve the user's DN, then re-binds as that
-  user to verify the password, mapping directory attributes/groups to a Fleet
+  user to verify the password, mapping directory attributes/groups to a Moorgate
   user. Uses `github.com/go-ldap/ldap/v3`.
 
 A third, **non-interactive** auth path serves automation. A **service account**
@@ -179,7 +179,7 @@ runner to `--syntax-check` / lint YAML, and orchestrates runs:
 2. It resolves each target's jump-reachable address (WireGuard tunnel IP, or the
    direct address for skip-WireGuard hosts) and POSTs the playbook, inventory,
    ephemeral certificate, and jump-host coordinates to the runner.
-3. The **sidecar** performs the actual SSH — connecting **through the Fleet jump
+3. The **sidecar** performs the actual SSH — connecting **through the Moorgate jump
    host** using the supplied certificate — and streams run output back; the
    backend records the run and an audit event. The runner never holds long-lived
    keys and is reachable only on the internal compose network.
@@ -223,7 +223,7 @@ scheduler renders the same reports weekly/monthly and delivers them as **CSV ema
 attachments** through the `notify` layer (a `report.scheduled` event); the notify
 layer gained multipart/mixed attachment support, which the webhook channel ignores.
 
-### 9. Fleet insights and health digests
+### 9. Moorgate insights and health digests
 The **`insights`** engine derives explainable, no-ML issues from host status +
 metric history — offline hosts, low/critical disk, high memory/load, pending
 security updates, and a disk-runway (days-to-full) projection with a confidence
@@ -275,10 +275,13 @@ responses, request decoding, ID parsing, and best-effort audit writes.
   Every route is wrapped with `RequireAuth` + `RequirePermission("<Perm>")`;
   frontend permission checks are advisory. `Admin.All` is treated as a wildcard.
 
-- **Hash-chained, tamper-evident audit.** Every state change appends a row to
-  `audit_events` where `hash = H(prev_hash || canonical(event))`. The chain can
-  be verified end-to-end via `GET /api/v1/audit/verify`, which returns the first
-  broken sequence number if the chain has been altered. See the
+- **HMAC-keyed, tamper-evident audit.** Every state change appends a row to
+  `audit_events` where `hash = HMAC(FLEET_AUDIT_HMAC_KEY, prev_hash ||
+  canonical(event))`, binding each event's sequence, timestamp, and tenant. Keying
+  the chain (rather than a plain hash) makes it tamper-evident against an attacker
+  who can write the table: without the key they cannot recompute a consistent
+  chain. The chain can be verified end-to-end via `GET /api/v1/audit/verify`, which
+  returns the first broken sequence number if the chain has been altered. See the
   [Security Guide](./security-guide.md).
 
 - **Defense in depth at the edge.** Access tokens are HMAC-signed JWTs; refresh
@@ -290,6 +293,22 @@ responses, request decoding, ID parsing, and best-effort audit writes.
 - **Network isolation.** Managed hosts are never exposed directly. All SSH egress
   flows through the Jump Host and a WireGuard tunnel mesh, so the only inbound
   surface a managed host needs is the WireGuard endpoint.
+
+## Scale & capacity
+
+The design is single-app-stack by default and scales along two well-understood axes:
+
+- **Fleet size.** The default configuration comfortably manages **hundreds of
+  hosts**. Reaching **thousands** requires a **wider WireGuard overlay subnet**
+  (`FLEET_WG_SUBNET`, e.g. a `/16` instead of the default) so the address pool
+  isn't exhausted, and a higher `FLEET_MONITOR_CONCURRENCY` so health checks keep
+  pace — kept **below the jump host's sshd `MaxStartups`** so probes aren't
+  throttled. Size the subnet before enrolling at scale; it is fixed once the pool
+  exists. See [deployment.md](./deployment.md).
+- **Throughput / availability.** The backend is stateless apart from Postgres and
+  the on-disk recording/scan/backup volume, so it scales horizontally behind a
+  load balancer. See [high-availability.md](./high-availability.md) and the Helm
+  chart (`deploy/helm/moorgate`) for a multi-replica reference.
 
 See [database.md](./database.md) for the full schema and [api.md](./api.md) for
 the endpoint reference.

@@ -1,4 +1,4 @@
-// Command fleet-enroll-agent enrolls a managed host into Fleet Terminal using
+// Command fleet-enroll-agent enrolls a managed host into Moorgate using
 // the SSH agent on the OPERATOR'S machine. The agent's private key never leaves
 // this machine: the backend performs the SSH handshake and asks this bridge to
 // sign challenges, which it forwards to the local agent ($SSH_AUTH_SOCK).
@@ -68,6 +68,7 @@ func run() error {
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	if *insecure {
+		//nolint:gosec // guarded by the operator-only -insecure dev flag (default false); refused in FIPS mode above
 		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}
 	}
 
@@ -102,6 +103,7 @@ func run() error {
 	}
 	dialer := *websocket.DefaultDialer
 	if *insecure {
+		//nolint:gosec // guarded by the operator-only -insecure dev flag (default false); refused in FIPS mode above
 		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
 	}
 	ws, resp, err := dialer.Dial(wsURL, nil)

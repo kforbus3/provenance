@@ -1,9 +1,58 @@
 # Changelog
 
-Notable changes to Fleet Terminal, newest first. Dates are release dates. Database
+Notable changes to Moorgate, newest first. Dates are release dates. Database
 schema migrations apply automatically on startup; deploy notes call out anything else.
 
 ---
+
+## v2.0.0 — Moorgate — 2026-08-16
+
+The product is now **Moorgate**. Alongside the rename, this release closes every
+blocker and security finding from the enterprise-readiness audit and adds the
+hardening an enterprise deployment expects. It is the first release verified by
+deploying the Helm chart to a real Kubernetes cluster, not just by rendering it.
+
+**Action required for existing production deployments.** Two new secrets are
+**required** in production and the backend fails closed at boot without them. Set
+both before upgrading (generate each with `openssl rand -hex 32`):
+
+- `FLEET_AUDIT_HMAC_KEY` (≥32 bytes) — keys the tamper-evident audit chain.
+- `FLEET_ANSIBLE_RUNNER_TOKEN` (≥16 bytes) — authenticates the backend to the
+  ansible-runner sidecar; set the same value on both.
+
+Optional but recommended: `FLEET_RECORDING_KEY` (≥32 bytes) encrypts session
+recordings at rest. The `FLEET_*` variable names, the `fleetd`/`fleetctl`/`fleet`
+binaries, and the `.fleetup` bundle format are unchanged, so nothing else about an
+existing deployment moves.
+
+**Security.** Closed an LDAP account-takeover (a directory identity can no longer
+bind onto a local-password account or the bootstrap super-admin). The audit log is
+now HMAC-keyed and tamper-evident, binding sequence, timestamp, and tenant.
+Multi-tenancy row-level security now covers the tables it had missed, with isolation
+tests and a build-time guard against future gaps. Ansible hardening: the
+inventory-injection RCE is closed, SSH host-key verification is restored, and the
+backend authenticates to the runner. CSRF is enforced, HSTS and security headers and
+WebSocket-Origin checks are added, session-watch is tenant-scoped, ABAC fails closed,
+and the SSRF guard pins the validated IP at dial time. SAML Single Logout (SP- and
+IdP-initiated) with an SP signing-key surface; session recordings (SSH and RDP) can
+be encrypted at rest; SIEM forwarding gains TLS, auth, and a bounded retry queue.
+
+**Scale.** Overlay addressing follows the configured subnet — a `/16`
+(`FLEET_WG_SUBNET`) lifts the old ~240-host ceiling to tens of thousands — and
+allocation is race-safe. The host-list query is no longer N+1 (401 → 5 queries per
+100 hosts), and the monitor sweep uses an adaptive cadence with configurable
+concurrency.
+
+**Deployment.** The default Kubernetes/Helm deploy now works, verified on a real
+cluster: the backend runs unprivileged under `runAsNonRoot`, the frontend proxies to
+the in-cluster backend Service, containers run read-only-root with the writable
+mounts they need, and the chart ships all required secrets. A tag-triggered release
+pipeline publishes signed container images to GHCR with SBOM attestations.
+
+**Tooling & docs.** Go toolchain and vulnerable dependencies bumped (govulncheck
+clean); `golangci-lint` and frontend `eslint` are now blocking, clean CI gates. The
+documentation, the in-app help, and the Ask assistant's knowledge are updated for the
+rename, the new configuration, and the new features.
 
 ---
 
@@ -27,10 +76,10 @@ partial picture.
   45m. Raising the timeout past 45m would previously have expired the certificate underneath
   a run that was still legitimately in flight, killing it on authentication somewhere in the
   middle of the fleet and leaving hosts half-upgraded. Tests pin both ends.
-- **Documented the hypervisor case** in `docs/operations.md`: rebooting a host Fleet runs on
+- **Documented the hypervisor case** in `docs/operations.md`: rebooting a host Moorgate runs on
   top of kills the run that asked for it, and the run is later reconciled as `interrupted`
   even though the upgrade succeeded. Defer that reboot past the end of the play
-  (`shutdown -r +10`) and skip the wait — there is nothing left alive on Fleet's side to
+  (`shutdown -r +10`) and skip the wait — there is nothing left alive on Moorgate's side to
   wait with.
 
 ## v1.6.0 — Ask was answering with no instructions at all — 2026-08-11
@@ -47,11 +96,11 @@ system prompt was thrown away before the model saw it: no tool-selection guidanc
 "answer only what was asked", no follow-up rules. Measured against the live model, the
 same question routes to the CVE tool at 4096 and to the scan tool at 32768.
 
-- **Fleet now always sends an explicit `num_ctx`** (default 32768, floored at 16384,
+- **Moorgate now always sends an explicit `num_ctx`** (default 32768, floored at 16384,
   configurable as `numCtx` in the `assistant` setting and in **Settings → AI
   assistant**). `GET /assistant/status` reports the effective `contextWindow`, the
   `promptFloorTokens` the instructions cost, and warns when the selected model's
-  trained context is shorter than what Fleet requests. A test fails the build if the
+  trained context is shorter than what Moorgate requests. A test fails the build if the
   prompt and tool schemas grow past half the default window.
 - **Tool results are capped before they reach the model** (~24 KB, largest list
   trimmed, with the true total and an explicit "N of M" note). `audit_log` alone asks
@@ -67,7 +116,7 @@ closed:
   has scanned is a finding, not an absence. The fleet-wide answer is built in code, so
   the list is never truncated or miscounted.
 - **`scan_findings`** — the individual benchmark rules a host is failing, worst first,
-  flagging rules whose remediation could sever Fleet's own access to that host.
+  flagging rules whose remediation could sever Moorgate's own access to that host.
 - **"Security scan" is disambiguated deterministically.** It routes to compliance, says
   which kind it reported, and a correction ("not the vulnerability scans") now switches
   datasets instead of repeating the mistake.
@@ -108,7 +157,7 @@ overlay CA had ever signed. Retiring a host removed its *pinned address* and not
 more: it would have reconnected and been handed an address from the pool.
 
 - **Teardown now purges instead of retiring.** A new `PurgeHostScript` stops the
-  client and destroys the material it could reconnect with — everything Fleet wrote
+  client and destroys the material it could reconnect with — everything Moorgate wrote
   under `/etc/openvpn/fleet`, including the renamed config — while `RetireHostScript`
   keeps its transport-switch behaviour, which is the case that legitimately wants the
   certificate kept. WireGuard is purged the same way: its config and private key are
@@ -126,7 +175,7 @@ more: it would have reconnected and been handed an address from the pool.
 - **`scripts/fleet-unenroll.sh` never touched `/etc/openvpn` at all**, so on an
   OpenVPN host neither path removed the credential. It now removes the client and its
   certificate material, and takes the WireGuard private key with it as well. It says
-  plainly that it cannot revoke — only Fleet can.
+  plainly that it cannot revoke — only Moorgate can.
 
 **Deploy note.** The OpenVPN server config now carries `crl-verify`, and openvpn
 refuses to start when that file is missing, so the CRL is written to the jump host
@@ -143,8 +192,8 @@ different reasons.
 
 - **The teardown never touched the overlay.** It removed the sudoers grant, both
   accounts, the CA trust, the principal files and the sshd drop-in, and left the
-  WireGuard interface running and enabled at boot — so a host deleted from Fleet kept
-  a live tunnel onto the fleet's network with nothing on it that Fleet managed or
+  WireGuard interface running and enabled at boot — so a host deleted from Moorgate kept
+  a live tunnel onto the fleet's network with nothing on it that Moorgate managed or
   audited. `scripts/fleet-unenroll.sh` retired the transport from the start and the
   documentation described that behaviour for both paths, so the gap was invisible
   unless you read the generated script. The teardown now retires the host's transport
@@ -157,7 +206,7 @@ different reasons.
   (`uuid.New().String()`), which by construction has no credential in the identity
   vault — so every call failed the vault lookup before a packet was sent. It runs in a
   goroutine that only logs a warning, so nothing ever surfaced: **every host deleted
-  from Fleet, in any version with this code, kept its peer on the hub.** That is why
+  from Moorgate, in any version with this code, kept its peer on the hub.** That is why
   the tunnel in the report was not merely up but still handshaking. It now dials with
   a short-lived system certificate, like every other background path.
 
@@ -209,21 +258,21 @@ was getting root against the operator's intent.
   the Certificates page shows it, and the background loop retries instead of
   short-circuiting on an unchanged KRL hash.
 
-- **Deleting a host can now remove Fleet from the machine.** Deletion took the host
+- **Deleting a host can now remove Moorgate from the machine.** Deletion took the host
   out of the inventory and left everything enrollment installed in place: the `fleet`
   account with its `NOPASSWD` sudo grant, the login-only account, the trusted CA, the
-  principal files and the sshd drop-in, on a machine Fleet no longer manages or
-  audits. The delete dialog now offers **"Also remove Fleet's accounts and SSH
+  principal files and the sshd drop-in, on a machine Moorgate no longer manages or
+  audits. The delete dialog now offers **"Also remove Moorgate's accounts and SSH
   trust from the host"** (`?teardown=true` on the API), **unchecked by default** —
-  it is destructive, and on a host whose only administrative access was Fleet it is
+  it is destructive, and on a host whose only administrative access was Moorgate it is
   a lockout, so it stays a deliberate choice rather than a side effect of tidying the
   inventory.
 
-  Only what Fleet wrote is removed; `authorized_keys`, other sudoers files, and any
-  sshd configuration Fleet did not write are untouched, and sshd is reloaded only if
+  Only what Moorgate wrote is removed; `authorized_keys`, other sudoers files, and any
+  sshd configuration Moorgate did not write are untouched, and sshd is reloaded only if
   `sshd -t` still passes — a host whose remaining config is broken keeps the sshd it
   is running. The work runs detached on the host, because it deletes the account its
-  own session is using, and the API reports that teardown *started*. A host Fleet
+  own session is using, and the API reports that teardown *started*. A host Moorgate
   cannot reach is named in the UI rather than silently skipped, and
   `scripts/fleet-unenroll.sh` does the same cleanup locally on the machine.
 
@@ -243,7 +292,7 @@ No deploy note: this one is a plain bundle install.
   the peer-isolation chains on the host. They are scoped to the tunnel device, so once
   that device is gone they match nothing — but `tun0` is a name the kernel reuses, so
   the next VPN the host runs would inherit a DROP naming a jump host it has never heard
-  of, and an operator auditing the host finds Fleet rules for an overlay Fleet no longer
+  of, and an operator auditing the host finds Moorgate rules for an overlay Moorgate no longer
   uses. The retirement now removes the jumps out of INPUT/OUTPUT and deletes the chains.
 
 - **The enrollment progress dialog names the transport it is provisioning.** It said
@@ -306,7 +355,7 @@ unaffected.
   idempotent, but not self-cleaning. Moving the OpenVPN overlay onto its own subnet
   changes that address, and the rule left over from the old one matches everything
   from the new jump host — blackholing the tunnel with nothing logged anywhere. The
-  rules now live in Fleet's own `FLEET-OVPN-IN`/`FLEET-OVPN-OUT` chains, flushed and
+  rules now live in Moorgate's own `FLEET-OVPN-IN`/`FLEET-OVPN-OUT` chains, flushed and
   refilled on every connect, so a stale address is retired as a side effect of writing
   the current one.
 
@@ -411,7 +460,7 @@ unaffected.
 
 - **The OpenVPN overlay server was never started, and enrollment reported it
   healthy anyway.** `JumpServerScript` guarded the launch with `pgrep -f 'openvpn
-  .*server.conf'`. Fleet runs these scripts as `sh -c "<the whole script>"`, so the
+  .*server.conf'`. Moorgate runs these scripts as `sh -c "<the whole script>"`, so the
   script's own shell carries that exact command line in its argv — and `pgrep -f`
   matches command lines. The guard therefore always answered "already running", the
   launch never ran, and `EnsureServer` reported `openvpn server ready on jump host`
@@ -427,7 +476,7 @@ unaffected.
 - **Enrollment onto a certificate overlay now has to prove the tunnel carries
   traffic.** Every check that should have caught the dead server passed:
   `configure_host_overlay` built its "OpenVPN tunnel up (addr …)" detail from the
-  address Fleet *meant* to assign, off a host script that printed
+  address Moorgate *meant* to assign, off a host script that printed
   `OVPN_HOST_CONFIGURED` unconditionally after a fixed `sleep 2`; and
   `verify_certificate_login` falls back to the host's management address, so it
   passed over the LAN with no tunnel at all.
@@ -482,9 +531,9 @@ unaffected.
   came out on WireGuard.
 
   The overlay now rides the script URL (`?overlay=openvpn`), and the generator
-  builds for it: Fleet issues the host's client certificate and pins its address to
+  builds for it: Moorgate issues the host's client certificate and pins its address to
   that certificate on the jump host while generating the script, then embeds the
-  host-side bring-up in it. Because the tunnel authenticates as the identity Fleet
+  host-side bring-up in it. Because the tunnel authenticates as the identity Moorgate
   just issued, there is no public key printed and nothing to paste back — the Finish
   step verifies certificate login instead of adding a peer. **The script is
   therefore a credential**: it holds the host's overlay private key. The copy-paste
@@ -540,7 +589,7 @@ unaffected.
 ## v1.3.0 — The overlay is a management network, not a flat one — 2026-08-08
 
 **Deploy note.** Peer isolation is on by default and takes effect on upgrade. Read
-the second entry before installing if anything outside Fleet relies on managed
+the second entry before installing if anything outside Moorgate relies on managed
 hosts reaching each other over the overlay — `FLEET_OVERLAY_PEER_ISOLATION=0`
 preserves the old behaviour. Two further notes for existing deployments:
 
@@ -555,7 +604,7 @@ preserves the old behaviour. Two further notes for existing deployments:
 
 - **Peer isolation is now enforced at the host end too.** The jump host's
   forwarding deny (below) is one machine's `iptables` — and it fails open with a
-  warning on a jump host whose filtering Fleet does not control. A managed host's
+  warning on a jump host whose filtering Moorgate does not control. A managed host's
   own WireGuard config now lists only the jump host in `AllowedIPs`, instead of the
   whole overlay subnet. In WireGuard that one value does two jobs: the host cannot
   *address* a sibling, and it **drops a decrypted packet claiming to come from
@@ -577,7 +626,7 @@ preserves the old behaviour. Two further notes for existing deployments:
 
 - **The overlay is hub-and-spoke now, not a flat network.** Managed hosts could
   reach each other over the overlay — ping, and just as easily each other's
-  sshd/RDP/WinRM port. Every other control Fleet has exists so that reaching a host
+  sshd/RDP/WinRM port. Every other control Moorgate has exists so that reaching a host
   is brokered, authorized and recorded; the overlay was an unmediated path around
   all of it, handing the least-trusted component in the deployment (a managed host,
   running whatever it runs) direct L3 reach to every other host. It also undid at
@@ -589,12 +638,12 @@ preserves the old behaviour. Two further notes for existing deployments:
   for both overlays. `FLEET_OVERLAY_PEER_ISOLATION=0` turns it off for a deployment
   that genuinely needs hosts to talk to each other over the overlay.
 
-  **On by default, including for existing deployments** — nothing in Fleet uses
+  **On by default, including for existing deployments** — nothing in Moorgate uses
   host-to-host reachability. Terminal sessions, SFTP, the health monitor, playbook
   runs (via `ProxyJump`), and the database and Kubernetes brokers all dial *from*
   the jump host, so none of them is a forwarded flow and none is affected. What
   changes is only what a host can do on its own behalf. If you have built something
-  outside Fleet on top of host-to-host overlay reachability, set the variable to
+  outside Moorgate on top of host-to-host overlay reachability, set the variable to
   `0` before upgrading.
 
   A jump host with no usable `iptables` backend logs the failure and keeps serving
@@ -674,7 +723,7 @@ compatibility rather than a running count.
   two minor releases, and removed only in a major — with a runtime warning naming
   the replacement, so operators find out from their own logs.
 - **Twenty reachable vulnerabilities are closed.** Nothing had been scanning
-  dependencies. `govulncheck` reported sixteen reachable from Fleet's own code
+  dependencies. `govulncheck` reported sixteen reachable from Moorgate's own code
   across ten modules, and four more in the Terraform provider that nothing had
   ever looked at. Among them: SQL injection via placeholder confusion in
   `jackc/pgx`, the driver every query and audit row goes through; acceptance of
@@ -694,7 +743,7 @@ compatibility rather than a running count.
   not be scoped.
 - **The assistant no longer claims your data stayed home when it did not.** The
   settings page stated flatly that data never leaves your network; the URL field
-  accepts any URL, so that held only by convention. Fleet now classifies where
+  accepts any URL, so that held only by convention. Moorgate now classifies where
   the configured Ollama actually is and warns when it is a public address. It
   classifies rather than blocks — a model server one rack over is legitimate.
 - **CI enforces all of it**: `govulncheck` over every Go module, `staticcheck`,
@@ -762,15 +811,15 @@ No configuration change is required. Two things to know:
   ownership reconciler (sessions, scans, playbook/script/command runs, enrollment
   jobs, dead-instance certificate revocation) now always excludes rows owned by
   the instance running the sweep — it is alive by definition. Previously a
-  host-level stall (observed in prod: the hypervisor under the Fleet VM was
+  host-level stall (observed in prod: the hypervisor under the Moorgate VM was
   itself mid-upgrade, starving the VM for minutes) froze the heartbeat goroutine
   past its 30s lease, and the next reconcile sweep declared the instance's own
   running playbook "orphaned" and failed it — while ansible was still running and
   went on to finish the job.
-- **Runs cut off by a Fleet restart are now "interrupted" (amber), not "failed"
-  (red).** A playbook that reboots the machine hosting Fleet itself can never
+- **Runs cut off by a Moorgate restart are now "interrupted" (amber), not "failed"
+  (red).** A playbook that reboots the machine hosting Moorgate itself can never
   report completion — the ansible process dies with the host. Such runs now end
-  as `interrupted` with the explanation "Fleet restarted mid-run — the run was
+  as `interrupted` with the explanation "Moorgate restarted mid-run — the run was
   cut off and its result was not collected; the target hosts may still have
   completed their tasks", and Ask explains the status the same way. Retention
   prunes interrupted runs like completed/failed ones.
@@ -877,7 +926,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.69.0 — Ask Fleet: calendar ranges, feedback, follow-up chips, and a regression harness
+## v0.69.0 — Ask Moorgate: calendar ranges, feedback, follow-up chips, and a regression harness
 
 - **True calendar ranges for "yesterday", "this week", and "last week"** — "who connected
   yesterday?" now means midnight-to-midnight of the prior day (display timezone), "this
@@ -904,7 +953,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.23 — Ask Fleet: "today" is the calendar day; bare connection questions scope to a week
+## v0.68.23 — Ask Moorgate: "today" is the calendar day; bare connection questions scope to a week
 
 - **"today" now means since local midnight for every time-windowed question**, not a
   rolling 24 hours — "which hosts were accessed today?", "who connected today?", "what
@@ -918,7 +967,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.22 — Ask Fleet: "recently" is a week, not a month
+## v0.68.22 — Ask Moorgate: "recently" is a week, not a month
 
 - **"recently"/"lately" now scopes host-connection questions to the past week** (was 30
   days). "Has anyone connected to <host> recently?" no longer sweeps in a month of
@@ -929,7 +978,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.20–0.68.21 — Ask Fleet: calendar-day "today" + follow-up context
+## v0.68.20–0.68.21 — Ask Moorgate: calendar-day "today" + follow-up context
 
 - **"today" now means the calendar day**, not a rolling 24 hours — "who connected today"
   no longer includes yesterday-evening sessions (window starts at local midnight).
@@ -943,11 +992,11 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.19 — Ask Fleet: broaden session-history routing
+## v0.68.19 — Ask Moorgate: broaden session-history routing
 
 Two "who connected" phrasings mis-routed: "has anyone connected to <host> recently?"
 fell to the model and used a too-narrow 24h window ("no one" when there were sessions
-2 days back), and "has anyone logged into <host>?" was answered from Fleet SIGN-IN auth
+2 days back), and "has anyone logged into <host>?" was answered from Moorgate SIGN-IN auth
 events instead of SSH sessions to that host. The session-history fast path now recognizes
 "has anyone / did anyone / anyone connected/logged into/accessed <host>" (including
 "logged into"/"onto"), with "recently" mapping to a 30-day window. Guarded so "who has
@@ -956,7 +1005,7 @@ access to <host>" (a permissions question) still defers to the model.
 
 ---
 
-## v0.68.18 — Ask Fleet: systematic reliability overhaul
+## v0.68.18 — Ask Moorgate: systematic reliability overhaul
 
 A ground-up pass over the assistant, validated by an end-to-end harness that runs the
 full question battery through the live API against real fleet data (no more one-off
@@ -998,7 +1047,7 @@ are covered by unit tests.
 Backend-only; the configured model (e.g. qwen2.5:14b-instruct) is unchanged.
 
 
-## v0.68.11 — Ask Fleet: deterministic disk + session-history routing
+## v0.68.11 — Ask Moorgate: deterministic disk + session-history routing
 
 Two false negatives found in real-usage testing, both from time/threshold arguments the
 local model got wrong or a too-narrow default window:
@@ -1014,7 +1063,7 @@ local model got wrong or a too-narrow default window:
 
 ---
 
-## v0.68.10 — Ask Fleet: de-prioritize automated audit noise
+## v0.68.10 — Ask Moorgate: de-prioritize automated audit noise
 
 "What changed in the audit log today?" led with automated background events (the
 assistant's own queries, per-session certificate issuance) that dominate the log by
@@ -1027,7 +1076,7 @@ changes, and logins, and drops the 30 assistant-query / 14 cert-issuance noise e
 
 ---
 
-## v0.68.9 — Ask Fleet: unified answer discipline across both paths
+## v0.68.9 — Ask Moorgate: unified answer discipline across both paths
 
 The scope/summarize reminder from v0.68.8 (LLM-tool-loop path) is now also applied to
 the fast-path narration, so questions that route deterministically (schedules, pending
@@ -1041,7 +1090,7 @@ a schedule" -> the 8 schedules ordered by next fire.
 
 ---
 
-## v0.68.8 — Ask Fleet: focused final-answer pass
+## v0.68.8 — Ask Moorgate: focused final-answer pass
 
 The scope/qualifier rules in the (long) system prompt were being ignored by the local
 model when a tool returned a large result — it would enumerate every row and append a
@@ -1055,7 +1104,7 @@ table beneath the answer.
 
 ---
 
-## v0.68.7 — Ask Fleet: time-window fix + qualifier discipline
+## v0.68.7 — Ask Moorgate: time-window fix + qualifier discipline
 
 Follow-ups from real usage:
 
@@ -1072,7 +1121,7 @@ Builds on v0.68.6's deterministic sampling + answer-scope discipline.
 
 ---
 
-## v0.68.6 — Ask Fleet: consistent, scoped answers
+## v0.68.6 — Ask Moorgate: consistent, scoped answers
 
 Two changes make the AI assistant behave like a precise sysadmin tool instead of a
 chatbot, addressing answers that varied by phrasing and volunteered unrequested detail.
@@ -1207,7 +1256,7 @@ Closes the last gaps that made some releases need a host-side `make redeploy-sin
   so this is no new trust boundary).
 - `fleetctl release build` gains `--config-add KEY=VALUE` and `--config-secret KEY`;
   `make bundle` builds whatever `BUNDLE_COMPONENTS` lists (so `fleet-updater` can ride
-  along). Docs: new "Upgrading Fleet Terminal (in-UI)" section in operations.md.
+  along). Docs: new "Upgrading Moorgate (in-UI)" section in operations.md.
 
 The only step still done by hand is the one-time bootstrap of a brand-new deployment.
 
@@ -1367,7 +1416,7 @@ import its API client.)
 ## v0.64.0 — Manage & schedule MikroTik/RouterOS updates via the RouterOS API
 
 RouterOS 7's SSH doesn't cleanly close command sessions, so `raw`/`network_cli` playbooks hang
-(a long-standing Ansible↔RouterOS issue). Fleet now drives RouterOS over its **binary API**
+(a long-standing Ansible↔RouterOS issue). Moorgate now drives RouterOS over its **binary API**
 (port 8728) instead, **tunneled through the jump host** — and you can **schedule** it with the
 existing playbook scheduler.
 
@@ -1395,11 +1444,11 @@ runner image shipped with neither — so a network_cli play failed immediately w
 now initialize.
 
 Honest status on reaching a **jump-hosted** device via network_cli: paramiko doesn't
-read the ssh_config's ProxyJump, so a device only reachable through the Fleet jump host
+read the ssh_config's ProxyJump, so a device only reachable through the Moorgate jump host
 may still not connect. The correct mechanism (a ProxyCommand in
 `ansible_ssh_common_args`) is shared with the proven `raw` connection path, so it isn't
 changed by default to avoid regressing working `raw` upgrades. **For upgrading RouterOS
-through Fleet, the `raw` + `until`-reconnect playbook remains the supported path**;
+through Moorgate, the `raw` + `until`-reconnect playbook remains the supported path**;
 community.routeros/network_cli is best for directly-reachable network devices today.
 
 ## v0.63.3 — Network-device playbooks (MikroTik / community.routeros)
@@ -1411,10 +1460,10 @@ proper modules (`community.routeros.command`, `connection: network_cli`) instead
 
 Because `network_cli` uses paramiko/libssh (which don't read the ssh_config the way
 the default ssh connection does), the runner now also wires network_cli connections to
-**tunnel through the Fleet jump host** (a paramiko `ProxyCommand`) and to authenticate
+**tunnel through the Moorgate jump host** (a paramiko `ProxyCommand`) and to authenticate
 vaulted hosts (a per-host key/password), so a jump-hosted network device is reachable.
 This path should be verified on real hardware; the `raw` + `until`-reconnect approach
-remains the proven way to reach RouterOS through Fleet. Requires rebuilding the
+remains the proven way to reach RouterOS through Moorgate. Requires rebuilding the
 ansible-runner sidecar (`make redeploy-single`).
 
 ## v0.63.2 — Playbooks: don't force sudo on vaulted (appliance) hosts
@@ -1447,15 +1496,15 @@ verified apply pipeline — no manual download.
 ## v0.62.0 — Playbooks work against vaulted-credential hosts
 
 Ansible playbooks can now target hosts that authenticate with a **vaulted SSH key or
-password** (routers, switches, appliances) — not just hosts that trust the Fleet CA.
+password** (routers, switches, appliances) — not just hosts that trust the Moorgate CA.
 
-Previously the playbook runner always authenticated with the run's ephemeral Fleet
+Previously the playbook runner always authenticated with the run's ephemeral Moorgate
 certificate. A host reached with a vaulted credential (e.g. a MikroTik switch you can
 open a terminal to) would fail every play with `Permission denied (publickey)`, even
 though the terminal logged in fine — because the terminal injects the vaulted
 credential and the runner didn't. Now the runner injects the **same per-host vaulted
 credential the terminal uses** for the final hop, while the jump-host hop still uses
-the Fleet certificate. Mixed target sets work: cert-trusting hosts and vaulted hosts
+the Moorgate certificate. Mixed target sets work: cert-trusting hosts and vaulted hosts
 in one run each authenticate their own way.
 
 - Only **open-policy** vaulted credentials are used (a check-out-gated secret is never
@@ -1466,9 +1515,9 @@ in one run each authenticate their own way.
   not POSIX shells, so `become: sudo` and shell modules won't work — use the
   appropriate `ansible_network_os` collection or `raw:` commands in the playbook.
 
-## v0.61.0 — Upgrade Fleet from the UI (single-host)
+## v0.61.0 — Upgrade Moorgate from the UI (single-host)
 
-You can now upgrade Fleet Terminal by uploading one signed file in the UI instead of
+You can now upgrade Moorgate by uploading one signed file in the UI instead of
 running `make redeploy-single` on the host. **Settings → Maintenance → Updates**:
 choose a `.fleetup` bundle, review its manifest (version, release notes,
 additive/breaking migrations), and install it in place.
@@ -1541,7 +1590,7 @@ response carries a `remediation` field per finding. No configuration needed; the
   but sometimes tack on an unrelated tool call (e.g. the schedule list) whose table
   clobbered the insights table shown beneath the answer — so a health question
   could render an irrelevant grid.
-- **Fleet insights: report pending security updates even when a host has no
+- **Moorgate insights: report pending security updates even when a host has no
   metrics yet.** Pending updates come from inventory, not metrics, but the insight
   loop skipped any host whose metrics hadn't been collected — so a freshly enrolled
   host (or one whose metric probe was lagging/failing) could hide pending security
@@ -1720,7 +1769,7 @@ to land on the same instance as the session's PTY; otherwise the watcher saw not
   non-blocking path, so shadowing never slows the operator's terminal; under a burst a
   remote watcher drops frames rather than stalling the session (same policy as a local
   slow watcher).
-- No new infrastructure or configuration — it rides the backplane Fleet already uses, and
+- No new infrastructure or configuration — it rides the backplane Moorgate already uses, and
   is inert in a single-instance deployment.
 - The HA test stack (`deploy/compose/docker-compose.ha.yml`) is now self-contained: it
   pins its two backends to its own Postgres single-tenant, so it runs as-shipped
@@ -1790,8 +1839,8 @@ hub serves many provider customers. Off by default and a no-op unless multi-tena
 
 ## v0.52.0 — Multi-site federation
 
-Turn one Fleet instance into a **hub** — a single pane of glass over many independent **site**
-instances, each a full autonomous Fleet stack on its own network. Opt-in and **off by default**
+Turn one Moorgate instance into a **hub** — a single pane of glass over many independent **site**
+instances, each a full autonomous Moorgate stack on its own network. Opt-in and **off by default**
 (`FLEET_MODE=standalone`): a standalone instance builds and mounts none of it and is unchanged.
 
 - **Site-initiated tunnels.** Sites need no inbound reachability — each dials the hub over a single
@@ -1814,7 +1863,7 @@ instances, each a full autonomous Fleet stack on its own network. Opt-in and **o
 ## v0.51.0 — ITSM two-way sync
 
 The ITSM integration (v0.48.0) now writes the **decision back** to the linked ticket: when an access
-request is approved or denied, Fleet posts a ServiceNow *work note* or a Jira *comment* recording the
+request is approved or denied, Moorgate posts a ServiceNow *work note* or a Jira *comment* recording the
 outcome, who decided, and the granted duration (audited as `approval.ticket_update`). Best-effort, so
 a decision is never blocked on the ITSM. Closing/transitioning the ticket remains the ITSM workflow's
 job. Verified end-to-end (request → ticket opened → approval → comment written back). See docs/itsm.md.
@@ -1823,7 +1872,7 @@ job. Verified end-to-end (request → ticket opened → approval → comment wri
 
 The external secrets manager (vault-of-record, v0.47.0) now supports **AWS Secrets Manager**
 alongside HashiCorp Vault KV. Back a vault credential with an AWS secret (name or ARN, optionally
-`#field` to extract one key from a JSON secret); Fleet fetches it on demand via a SigV4-signed
+`#field` to extract one key from a JSON secret); Moorgate fetches it on demand via a SigV4-signed
 `GetSecretValue` — no AWS SDK, and no local copy is stored. Configure with `FLEET_EXTSECRET_AWS_*`
 (an endpoint override supports emulators). The SigV4 signer is now shared (`internal/awssig`)
 between AWS KMS and Secrets Manager. Verified end-to-end against LocalStack. See
@@ -1846,7 +1895,7 @@ vaulted-credential injection and `db.query` auditing as the SQL engines.
 
 ## v0.48.0 — ITSM integration (ServiceNow / Jira)
 
-Tie privileged access to change management. When enabled, Fleet opens a **change/incident ticket**
+Tie privileged access to change management. When enabled, Moorgate opens a **change/incident ticket**
 in ServiceNow or Jira for each just-in-time access request and attaches the ticket reference to the
 approval, so every grant carries a change record.
 
@@ -1862,8 +1911,8 @@ approval, so every grant carries a change record.
 
 ## v0.47.0 — External secrets manager (vault-of-record)
 
-A vault credential can now be **external-backed**: instead of Fleet storing the secret material, the
-credential references it in an external secrets manager (**HashiCorp Vault KV v2**), and Fleet
+A vault credential can now be **external-backed**: instead of Moorgate storing the secret material, the
+credential references it in an external secrets manager (**HashiCorp Vault KV v2**), and Moorgate
 fetches the value **on demand** at point of use. Integrate with the secrets manager your
 organization already runs instead of keeping a second copy.
 
@@ -1872,7 +1921,7 @@ organization already runs instead of keeping a second copy.
   credential injection, the database broker, the Kubernetes broker — resolves the value live through
   one new central resolver (`internal/credresolve`), so it always reflects the manager's current
   contents and is never cached.
-- **Manager is source of record.** Fleet does not rotate or re-seal external-backed credentials
+- **Manager is source of record.** Moorgate does not rotate or re-seal external-backed credentials
   (rotate them in the manager); local rotation is refused.
 - Locally-sealed credentials are byte-for-byte unchanged. Configure with `FLEET_EXTSECRET_VAULT_*`;
   tick "Store in an external secrets manager" when creating a credential. Migration `0058`. Verified
@@ -1883,7 +1932,7 @@ external-KMS and external-secrets features are configurable in the standard depl
 
 ## v0.46.0 — Behavior analytics (UEBA)
 
-Surface access patterns that deviate from a user's established baseline, computed from Fleet's own
+Surface access patterns that deviate from a user's established baseline, computed from Moorgate's own
 session records — no ML, no external dependency, just explainable statistics over data you already
 have. Four detectors:
 
@@ -1900,15 +1949,15 @@ seeded sessions; normal activity produced none).
 
 ## v0.45.0 — Kubernetes access brokering
 
-Broker access to Kubernetes clusters the way Fleet brokers SSH/RDP/databases. Register a
-cluster (API server + a vaulted bearer-token credential), and Fleet becomes an **authenticating
-proxy**: a user — or their `kubectl` — authenticates to Fleet, and Fleet forwards to the cluster's
+Broker access to Kubernetes clusters the way Moorgate brokers SSH/RDP/databases. Register a
+cluster (API server + a vaulted bearer-token credential), and Moorgate becomes an **authenticating
+proxy**: a user — or their `kubectl` — authenticates to Moorgate, and Moorgate forwards to the cluster's
 API server with the vaulted token injected, **auditing every call**. The operator never sees the token.
 
 - **Resource browser** built in: list pods, deployments, services, namespaces, and nodes per
   cluster/namespace with no kubectl required.
-- **Raw authenticating proxy** at `/k8s/clusters/{id}/proxy/*` — point `kubectl` at Fleet with a
-  Fleet token and reach the cluster through the broker.
+- **Raw authenticating proxy** at `/k8s/clusters/{id}/proxy/*` — point `kubectl` at Moorgate with a
+  Moorgate token and reach the cluster through the broker.
 - Per-cluster TLS: verify the API server against a stored CA bundle, or skip verification for test
   clusters. New permissions `Kubernetes.Manage` / `Kubernetes.Access`; migration `0057`; new
   **Kubernetes** page. Every call audited (`k8s.proxy`, `k8s.list`).
@@ -1987,14 +2036,14 @@ auditing — the operator never sees the password.
 
 ## v0.40.0 — External KMS / HSM for master-key protection
 
-Fleet's at-rest secrets (the CA signing key and every credential-vault entry) were already
+Moorgate's at-rest secrets (the CA signing key and every credential-vault entry) were already
 AES-256-GCM sealed with a passphrase. That passphrase can now be **protected by an external
 Key Management Service or HSM** instead of living in the environment as plaintext — the
 near-universal enterprise security-review requirement, *"is the master key in a KMS/HSM?"*
 
 - **Unseal-via-KMS.** Wrap your `FLEET_CA_PASSPHRASE` / `FLEET_VAULT_PASSPHRASE` once with the
   external KMS (`fleetctl kms wrap`) and store only the opaque wrapped blob
-  (`FLEET_CA_PASSPHRASE_WRAPPED` / `FLEET_VAULT_PASSPHRASE_WRAPPED`). At boot Fleet makes a single
+  (`FLEET_CA_PASSPHRASE_WRAPPED` / `FLEET_VAULT_PASSPHRASE_WRAPPED`). At boot Moorgate makes a single
   Unwrap call to recover the passphrase into memory. A stolen disk or database backup is useless
   without live access to the KMS.
 - **No re-seal, no format change.** The on-disk sealed-data format is unchanged, so enabling (or
@@ -2013,9 +2062,9 @@ near-universal enterprise security-review requirement, *"is the master key in a 
 
 ## v0.39.0 — Database access brokering (PostgreSQL)
 
-Fleet now brokers privileged access to **databases**, not just SSH/RDP hosts. Register a
+Moorgate now brokers privileged access to **databases**, not just SSH/RDP hosts. Register a
 PostgreSQL target (address, port, database, and a vaulted credential), then run SQL from the
-new **Databases** page: Fleet reaches the database **through the jump host**, injects the
+new **Databases** page: Moorgate reaches the database **through the jump host**, injects the
 vaulted credential (you never see the password), executes your statement, and **audits it**.
 
 - Zero-knowledge: the database password is decrypted in RAM at point of use and never returned
@@ -2070,7 +2119,7 @@ CSV exports. For a chosen date range it bundles:
 
 - an **audit-log integrity attestation** — a genesis-to-latest verification of the hash-chained
   audit log, stated as PASS (chain cryptographically intact) or FAIL with the broken sequence.
-  This is Fleet's tamper-evidence guarantee rendered as evidence auditors can file;
+  This is Moorgate's tamper-evidence guarantee rendered as evidence auditors can file;
 - summary statistics for privileged access (sessions, distinct users/hosts), certificate
   issuance (and revocations), scan posture (pass/fail), vulnerabilities (with critical/high
   counts), and privileged-command activity (flagged/blocked).
@@ -2182,7 +2231,7 @@ readiness verdict; a default deploy is byte-for-byte unchanged. Migrations
 ## v0.35.0 — Multi-tenancy (MSP) — experimental, default off
 
 One deployment can now serve multiple **isolated customer tenants**, for MSPs. Opt in
-with `FLEET_MULTI_TENANCY=true` (default off — with it off, Fleet is unchanged).
+with `FLEET_MULTI_TENANCY=true` (default off — with it off, Moorgate is unchanged).
 
 - **Provider manages many customers.** Existing data lands in a seeded **Provider**
   tenant; its admins get a **Tenants** console to create customer tenants and **switch
@@ -2252,7 +2301,7 @@ filesystem/network deep-dives. Scoped to the caller's accessible hosts.
 
 Tightened the assistant's tool-selection guidance so questions like "who ran df" /
 "did anyone run rm -rf" go firmly to **search_commands** (interactive terminals) and
-**recent_commands** (Fleet Run-Command), instead of being answered by the fleet-health
+**recent_commands** (Moorgate Run-Command), instead of being answered by the fleet-health
 tool. `fleet_insights` is now scoped explicitly to health/capacity questions only.
 Helps smaller local models route these correctly. (Prompt-only; requires the assistant
 tools from v0.33.0 to be deployed — if your Sessions page has no "Commands" tab, deploy
@@ -2280,7 +2329,7 @@ once the monitor has collected the list (frontend-only; no migration).
 Four enhancements, led by deepening the Ask AI assistant.
 
 - **Ask AI — "who ran command X".** Two new assistant tools:
-  - **`recent_commands`** — the authoritative record of commands run through Fleet's
+  - **`recent_commands`** — the authoritative record of commands run through Moorgate's
     Run-Command feature (exact command, who ran it, target, status, exit code, when),
     gated by Command.Run.
   - **`search_commands`** — searches the commands users **typed** in recorded interactive
@@ -2368,12 +2417,12 @@ it on a beefier host.
 ## v0.32.0 — Read-only DR standby mode (usable warm standby)
 
 Makes the two-site warm standby (v0.31.0) actually **runnable on the replica**.
-Previously, a standby Fleet pointed at a read-only replica couldn't serve requests
+Previously, a standby Moorgate pointed at a read-only replica couldn't serve requests
 (login/audit/heartbeat all write), so the DR console could only *finish* a failover
-after the database was promoted by other means. Now Fleet detects the replica and
+after the database was promoted by other means. Now Moorgate detects the replica and
 runs in a dedicated **standby mode**:
 
-- **Automatic detection.** On startup Fleet checks `pg_is_in_recovery()`. If its
+- **Automatic detection.** On startup Moorgate checks `pg_is_in_recovery()`. If its
   database is a replica it boots read-only: **migrations are skipped**, **no
   background writers start** (cluster/monitor/scheduler/CA — none of which a replica
   can service), and the API surface is reduced to a health check plus the DR
@@ -2397,7 +2446,7 @@ actually pointed at a replica, so existing single-instance deployments are unaff
 ## v0.31.0 — Disaster Recovery console (two-site warm standby)
 
 A new **Disaster Recovery** page (nav; `DR.Manage` — Super Administrator +
-Administrator by default) for running Fleet as **two independent instances** — an
+Administrator by default) for running Moorgate as **two independent instances** — an
 active primary and a warm standby at a second site — with administrator-triggered
 **failover / failback** from the UI.
 
@@ -2414,7 +2463,7 @@ active primary and a warm standby at a second site — with administrator-trigge
   failover/failback webhook URLs.
 
 **Scope boundary (by design):** the console is a **trigger + status surface**, not
-the orchestrator — Fleet does not replicate the database or move DNS itself.
+the orchestrator — Moorgate does not replicate the database or move DNS itself.
 `pg_promote()` works only when this DB is actually a standby and the role may run it
 (superuser-only unless you `GRANT EXECUTE ON FUNCTION pg_promote`); the console
 surfaces the DB's error verbatim otherwise. Full runbook — replication setup, the
@@ -2497,7 +2546,7 @@ sessions with **context snippets**, each linking straight to its replay.
   with the query and match count). Endpoint: `GET /sessions/search?q=`.
 
 *Note:* this searches recorded **content**; there is no separate parsed
-command-history store (Fleet records full PTY sessions, not individual commands).
+command-history store (Moorgate records full PTY sessions, not individual commands).
 
 ## v0.27.0 — In-browser config-file editor
 
@@ -2506,7 +2555,7 @@ the **Files** browser, without downloading, editing locally, and re-uploading. E
 file row now has an **Edit** (pencil) action that opens the contents in a monospace
 editor; **Save** writes it back over the same audited jump-host/SFTP path.
 
-- **Automatic on-host backup.** Before overwriting, Fleet copies the current file
+- **Automatic on-host backup.** Before overwriting, Moorgate copies the current file
   to `<name>.fleetbak-<timestamp>` on the host (toggle off if you don't want it), so
   a bad edit is always recoverable. The save reports where the backup went.
 - **Safe by construction.** The editor refuses files over 2 MiB or that look
@@ -2704,7 +2753,7 @@ new CVE data source — it reuses grype's existing (online/offline) NVD database
 
 ## v0.23.0 — Windows software inventory (over WinRM)
 
-Fleet now inventories the **installed applications** on Windows hosts, read over
+Moorgate now inventories the **installed applications** on Windows hosts, read over
 WinRM from the registry Uninstall keys (64- and 32-bit views; Windows/KB updates
 filtered out — those are the MSRC path). It's the foundation for third-party CVE
 coverage (next), and useful on its own:
@@ -2740,7 +2789,7 @@ Windows vulnerability scans now report **real CVE IDs, MSRC severity, and CVSS
 scores** — not just "N missing security updates." The Windows Update Agent reports
 which KBs a host is missing, but not (reliably) the CVEs/severity they remediate;
 that authoritative data lives in Microsoft's **Security Update Guide** (CVRF), keyed
-by KB. Fleet now caches that KB→CVE mapping and enriches each finding with it.
+by KB. Moorgate now caches that KB→CVE mapping and enriches each finding with it.
 
 - **New `msrc` package** parses CVRF documents; migration `0041` adds
   `msrc_updates` (KB→CVE, severity, CVSS, vector, title, release).
@@ -2922,7 +2971,7 @@ someone reactivated it by hand. No amount of service auto-start/recovery can hel
 a service whose config file is gone.
 
 The config is now written to a persistent, ACL-locked path
-(`%ProgramData%\Fleet\fleet.conf`, restricted to SYSTEM + Administrators since it
+(`%ProgramData%\Moorgate\fleet.conf`, restricted to SYSTEM + Administrators since it
 holds the private key) and is no longer deleted, so the tunnel reconnects on its
 own after a reboot with nobody logged in. Existing Windows hosts must **re-enroll**
 to pick up the persistent config (the old temp config is gone).
@@ -2952,7 +3001,7 @@ resource details as Linux hosts.
   fact collection works over TLS with no manual `Enable-PSRemoting` and no
   `AllowUnencrypted`. Each step is best-effort and prints a summary of what it
   configured. The one manual action remains pasting the printed public key back
-  into Fleet.
+  into Moorgate.
 - **Richer Windows facts.** Fact collection over WinRM now also gathers **disk
   usage per drive, free/used memory, network interfaces, and the default
   gateway**, populated into the same `HostMetrics` the UI already renders — so the
@@ -3034,7 +3083,7 @@ Windows/RDP hosts can now join the WireGuard overlay, so they're reachable from
 **anywhere** with internet — the same dial-out model as Linux, previously Linux-only.
 On an RDP host, **Enroll** offers a **PowerShell** script: run it elevated on the host
 and it installs WireGuard, brings up a persistent dial-out tunnel to the jump host (no
-inbound firewall rules), and prints its public key; paste that back and Fleet adds it as
+inbound firewall rules), and prints its public key; paste that back and Moorgate adds it as
 an overlay peer. The RDP session and WinRM fact collection then ride the tunnel.
 Enrollment is protocol-aware (bash for SSH hosts, PowerShell for Windows) and, for
 Windows, verifies RDP reachability over the new tunnel instead of SSH-cert login.
@@ -3116,7 +3165,7 @@ tunnel (the reference-player approach) via a new token-authenticated endpoint
 
 ## v0.17.0 — High Availability (multi-instance)
 
-Fleet Terminal can now run as **multiple backend instances** behind a load balancer,
+Moorgate can now run as **multiple backend instances** behind a load balancer,
 for redundancy and rolling upgrades. HA is **safe by default** — a single-instance
 deployment is unchanged (it is simply always the leader). See the new
 [High Availability guide](high-availability.md).
@@ -3183,7 +3232,7 @@ desktop) are independent and **off by default** (a data-transfer surface); guacd
 enforces each gate and enabled directions are audited. (Clipboard needs an HTTPS
 origin.) The live desktop also resizes to follow the browser window.
 
-**Drive redirection (file transfer).** Enabling **Enable drive** mounts a **Fleet**
+**Drive redirection (file transfer).** Enabling **Enable drive** mounts a **Moorgate**
 drive in the session and adds a **Files** button to the viewer — browse, download, and
 upload. **Allow upload / Allow download** are independent and off by default. Each
 session gets an isolated exchange directory on the shared `rdp-drive` volume that the
@@ -3200,7 +3249,7 @@ now runs as the backend's `fleet` user (uid 100 / gid 101) and mounts the shared
 
 ## v0.15.0 — Windows desktops (RDP)
 
-Fleet brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
+Moorgate brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
 terminals and SFTP — no local RDP client, no direct route to the host.
 
 - **Live RDP in the browser.** Set a host's **Protocol** to **RDP** and pick its port
@@ -3231,10 +3280,10 @@ them.
 
 - **Credential injection (connect without seeing the secret).** On a host's edit
   form, set **Authentication** to a vault credential (password or SSH key). When
-  anyone opens a terminal or SFTP to that host, Fleet decrypts the credential **in
+  anyone opens a terminal or SFTP to that host, Moorgate decrypts the credential **in
   memory** and authenticates the connection with it — the operator never sees the
   secret, and it never reaches the browser. Use it for appliances, network gear, and
-  legacy systems that can't accept Fleet's ephemeral certificates. Attaching a
+  legacy systems that can't accept Moorgate's ephemeral certificates. Attaching a
   credential requires `Host.Edit` plus access to it; injected sessions are audited.
 - **Check-out & approval.** Each credential has an **access policy**: *open* (reveal/
   inject per grants), *check-out required* (time-boxed, self-service), or *approval
@@ -3252,10 +3301,10 @@ them.
 
 ## v0.13.0 — Credential vault
 
-Fleet is now a secrets manager, not just an SSH-certificate broker.
+Moorgate is now a secrets manager, not just an SSH-certificate broker.
 
 - **Credential vault.** A new **Credentials** page stores static credentials —
-  **passwords, SSH keys, API keys** — for systems that can't use Fleet's ephemeral
+  **passwords, SSH keys, API keys** — for systems that can't use Moorgate's ephemeral
   certificates (network gear, appliances, databases, legacy hosts). Secret material
   is **encrypted at rest** with secretbox under a dedicated **`FLEET_VAULT_PASSPHRASE`**
   (required in production and enforced to differ from the CA passphrase; falls back
@@ -3288,7 +3337,7 @@ strong value distinct from `FLEET_CA_PASSPHRASE`.
 
 ## v0.12.0 — Terraform provider
 
-Manage Fleet as infrastructure-as-code.
+Manage Moorgate as infrastructure-as-code.
 
 - **`terraform-provider-fleet`** — a Terraform provider (built on the modern plugin
   framework and the Go SDK) that manages **hosts**, **groups** (including dynamic
@@ -3311,7 +3360,7 @@ require a second person to approve, and administrators can govern what it may do
   propose — **disable a user** and **delete a host** — never run on the requester's
   confirm. They show **Request approval** and wait for a different administrator (with
   the new `Assistant.Approve` permission) to approve or deny. Separation of duties is
-  enforced: the requester can never approve their own action. On approval, Fleet
+  enforced: the requester can never approve their own action. On approval, Moorgate
   **re-checks that the original requester still holds the required permission and an
   active account** before running it — an approval is not a bypass. Approvers see an
   "Awaiting your approval" inbox on the Ask page and a badge in the sidebar; every
@@ -3327,7 +3376,7 @@ granted to Super Administrator and Administrator) applies automatically.
 
 ## v0.10.0 — Actionable AI assistant: docs answers + confirmed actions
 
-The "Ask Fleet" assistant gains two capabilities, built so it can never act without
+The "Ask Moorgate" assistant gains two capabilities, built so it can never act without
 explicit human confirmation.
 
 - **Answers grounded in the documentation.** Ask how-to and conceptual questions —
@@ -3373,7 +3422,7 @@ the assistant under Settings → AI assistant as before.
 
 ## v0.9.0 — Access certification, automation SDK/CLI, and SAML + SCIM
 
-Three enterprise capabilities: certify access on a schedule, manage Fleet as code,
+Three enterprise capabilities: certify access on a schedule, manage Moorgate as code,
 and federate identity with SAML SSO and SCIM provisioning.
 
 - **Access certification (access reviews).** Create recertification campaigns that
@@ -3397,7 +3446,7 @@ and federate identity with SAML SSO and SCIM provisioning.
   gated by an auto-create toggle. The SP metadata, ACS, and entity-ID URLs are shown
   in the config UI.
 - **SCIM 2.0 provisioning.** Let your identity provider create, update, and
-  **deprovision** Fleet accounts automatically — disabling an account (and tearing
+  **deprovision** Moorgate accounts automatically — disabling an account (and tearing
   down its live sessions and credentials) the moment a user is removed upstream.
   Users create/read/replace/PATCH/delete plus discovery endpoints, authenticated by a
   dedicated, revocable `scim_` bearer token. Pairs with SAML SSO.

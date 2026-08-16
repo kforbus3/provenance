@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/fleet-terminal/backend/internal/kms"
+	"github.com/kforbus3/Moorgate/backend/internal/kms"
 )
 
 // TestResolveSecretsUnwrapsViaKMS proves the full boot path: a KMS-wrapped passphrase

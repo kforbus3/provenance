@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide takes you from nothing to a running Fleet Terminal you can sign in to.
+This guide takes you from nothing to a running Moorgate you can sign in to.
 It covers the common **single-server** deployment (the application stack plus a
 co-located jump host, all via Docker Compose). For production topologies, Kubernetes/
 Helm, an external jump host, and the full hardening checklist, see the
@@ -25,9 +25,9 @@ Helm, an external jump host, and the full hardening checklist, see the
 Optional, enabled later:
 
 - **A domain name + TLS** for production (terminate TLS at a reverse proxy — see the Deployment and Internet-Exposure guides).
-- **A local Ollama instance** if you want the "Ask Fleet" AI assistant (configured in the UI, not required to run).
+- **A local Ollama instance** if you want the "Ask Moorgate" AI assistant (configured in the UI, not required to run).
 
-> Fleet Terminal is the SSH control plane for your fleet. Install it on a host you
+> Moorgate is the SSH control plane for your fleet. Install it on a host you
 > trust and can lock down — it holds the SSH certificate authority.
 
 ---
@@ -110,7 +110,7 @@ version stamped into the build is derived from the nearest git tag.
 ## 5. Create the first administrator (bootstrap)
 
 Open `FLEET_PUBLIC_URL` in a browser. On first run — while **no** user account exists
-— Fleet Terminal shows a one-time **bootstrap** page. Create your first account there;
+— Moorgate shows a one-time **bootstrap** page. Create your first account there;
 it becomes the super administrator.
 
 > Bootstrap self-gates: once any user exists, the bootstrap endpoint is closed. If you
@@ -147,7 +147,7 @@ internet for this). The page shows the database's build date once it's loaded.
 If the server has no outbound internet, you can still run vulnerability scans:
 
 1. On an internet-connected machine, download an Anchore Grype database archive.
-2. On the Fleet **Vulnerabilities** page, use **Import offline** to upload that archive.
+2. On the Moorgate **Vulnerabilities** page, use **Import offline** to upload that archive.
 
 Everything else (the application, compliance scans, enrollment) works offline. See the
 Administration Guide's vulnerability-scanning section for details.
@@ -156,7 +156,7 @@ Administration Guide's vulnerability-scanning section for details.
 
 ## 8. Next steps
 
-You now have a running Fleet Terminal. To make it useful:
+You now have a running Moorgate. To make it useful:
 
 1. **Enroll your first host** — [Host Enrollment Guide](./host-enrollment-guide.md).
 2. **Set up users, roles, and groups** — [Administration Guide](./admin-guide.md).

@@ -6,17 +6,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/credinject"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	princ "github.com/fleet-terminal/backend/internal/principals"
+	"github.com/kforbus3/Moorgate/backend/internal/credinject"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	princ "github.com/kforbus3/Moorgate/backend/internal/principals"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
 )
 
 const (
@@ -129,6 +132,12 @@ type runRequest struct {
 	CheckMode   bool      `json:"checkMode"`
 	Become      bool      `json:"become"`
 	TimeoutSecs int       `json:"timeoutSecs"`
+	// KnownHosts is an OpenSSH known_hosts file built from the backend's stored
+	// host-key pins (TOFU) for the jump host and every target. The runner writes it
+	// out and verifies against it (H3), instead of the old StrictHostKeyChecking=no
+	// bypass. A host with no pin yet is simply absent — the runner accepts its key on
+	// first contact (accept-new) and refuses any later change for the rest of the run.
+	KnownHosts string `json:"knownHosts,omitempty"`
 }
 
 // hostAddress picks the address reachable through the jump host: the WireGuard
@@ -143,26 +152,81 @@ func hostAddress(h *models.Host) string {
 	return h.Hostname
 }
 
+// splitHostPort parses a "host:port" string, falling back to def when there is no
+// (or an unparseable) port. Used to key the jump host's known_hosts entry.
+func splitHostPort(hp string, def int) (string, int) {
+	hp = strings.TrimSpace(hp)
+	if hp == "" {
+		return "", def
+	}
+	host, portStr, err := net.SplitHostPort(hp)
+	if err != nil {
+		return hp, def
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		return host, def
+	}
+	return host, p
+}
+
+// buildKnownHosts renders an OpenSSH known_hosts file from the backend's stored
+// host-key pins for the jump host and every target, keyed by the exact identity ssh
+// looks a host up under (address + port, normalized the way the TOFU verifier pins
+// it — see sshgw.HostKeyID). lookup returns the pinned authorized-key line and
+// whether a pin exists. A host without a pin is omitted, so the runner (accept-new)
+// trusts its key on first contact and refuses any later change; a host WITH a pin is
+// strictly verified, which is what closes the H3 host-key-verification bypass.
+func buildKnownHosts(lookup func(id string) (string, bool), jumpHost string, hosts []*models.Host) string {
+	var b strings.Builder
+	seen := map[string]bool{}
+	add := func(addr string, port int) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return
+		}
+		id := sshgw.HostKeyID(addr, port)
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		line, ok := lookup(id)
+		if !ok {
+			return
+		}
+		line = strings.TrimRight(line, "\n")
+		if line == "" {
+			return
+		}
+		b.WriteString(id + " " + line + "\n")
+	}
+	jh, jp := splitHostPort(jumpHost, 22)
+	add(jh, jp)
+	for _, h := range hosts {
+		add(hostAddress(h), h.SSHPort)
+	}
+	return b.String()
+}
+
 // Run executes a playbook against the given hosts, streaming output into the
 // live buffer and persisting the result. It runs in its own goroutine with a
 // fresh (restart-independent) context; the in-memory live buffer does not
 // survive a restart, but FailStalePlaybookRuns reconciles the DB row.
-func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, checkMode bool) {
+func (s *Service) Run(parent context.Context, runID uuid.UUID, content string, hosts []*models.Host, checkMode bool) {
 	timeout := s.runTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	live := &liveRun{}
 	s.live.Store(runID, live)
 	defer s.live.Delete(runID)
 
-	bg := context.Background()
-	if err := s.store.StartPlaybookRun(bg, runID); err != nil {
+	if err := s.store.StartPlaybookRun(ctx, runID); err != nil {
 		s.log.Error("playbook run: mark running", "err", err)
 	}
 
 	fail := func(msg string) {
-		fctx, fcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		fctx, fcancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 		defer fcancel()
 		out := live.snapshot()
 		if out != "" {
@@ -199,7 +263,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 	// the runner stops working promptly (the KRL converges to hosts via the
 	// periodic reconcile). Host scoping already bounds it to this run's targets.
 	defer func() {
-		rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 		defer rcancel()
 		if err := s.store.RevokeCertificate(rctx, mat.Serial, "playbook_run_complete"); err != nil {
 			s.log.Warn("revoke run credential", "err", err, "serial", mat.Serial)
@@ -245,7 +309,17 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 		CheckMode:   checkMode,
 		Become:      true,
 		TimeoutSecs: int(timeout.Seconds()) - 30,
+		// Host-key pins for the jump host + every target, so the runner verifies host
+		// keys against the product's TOFU pins instead of disabling the check (H3).
+		KnownHosts: buildKnownHosts(func(id string) (string, bool) {
+			pin, ok, err := s.store.GetHostKey(ctx, id)
+			if err != nil || !ok {
+				return "", false
+			}
+			return pin.KeyLine, true
+		}, s.cfg.JumpHost, hosts),
 	}
+	//nolint:gosec // PrivateKey is the per-run vault SSH key deliberately sent to the ansible-runner (internal network, token-authenticated) so it can drive the run
 	body, _ := json.Marshal(reqBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/run", bytes.NewReader(body))
@@ -254,6 +328,12 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Authenticate to the runner with the shared secret so nothing else on the
+	// container network can submit a playbook for execution (M2). Empty token keeps
+	// the header off for dev/back-compat, where the runner also allows unauthenticated.
+	if s.cfg.AnsibleRunnerToken != "" {
+		req.Header.Set("X-Runner-Token", s.cfg.AnsibleRunnerToken)
+	}
 
 	// No client timeout on the streaming response; the context bounds the run.
 	streamClient := &http.Client{}
@@ -317,7 +397,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 		errMsg = fmt.Sprintf("ansible-playbook exited %d", *exitCode)
 	}
 
-	pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+	pctx, pcancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 	defer pcancel()
 	if err := s.store.CompletePlaybookRun(pctx, runID, status, live.snapshot(), exitCode, errMsg); err != nil {
 		s.log.Error("playbook run: persist result", "err", err, "run", runID)
@@ -328,7 +408,7 @@ func (s *Service) Run(runID uuid.UUID, content string, hosts []*models.Host, che
 		for _, h := range hosts {
 			names = append(names, h.Hostname)
 		}
-		s.nfy.Notify(context.Background(), notify.Event{
+		s.nfy.Notify(context.WithoutCancel(parent), notify.Event{
 			Type: notify.EventPlaybookFailed, Severity: notify.SeverityError,
 			Title: "Playbook run failed",
 			Body:  fmt.Sprintf("A playbook run against %s failed: %s", strings.Join(names, ", "), errMsg),

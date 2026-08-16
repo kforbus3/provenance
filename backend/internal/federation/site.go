@@ -16,11 +16,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/federation/fedauth"
-	"github.com/fleet-terminal/backend/internal/federation/keys"
-	fedlink "github.com/fleet-terminal/backend/internal/federation/link"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/federation/fedauth"
+	"github.com/kforbus3/Moorgate/backend/internal/federation/keys"
+	fedlink "github.com/kforbus3/Moorgate/backend/internal/federation/link"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // siteState is the resolved site identity + hub trust, loaded from federation_hub.

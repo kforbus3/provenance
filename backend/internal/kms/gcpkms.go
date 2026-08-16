@@ -74,7 +74,7 @@ func newGCPKMS(cfg Config) (Provider, error) {
 	}
 	tokenURI := sa.TokenURI
 	if tokenURI == "" {
-		tokenURI = "https://oauth2.googleapis.com/token"
+		tokenURI = "https://oauth2.googleapis.com/token" //nolint:gosec // not a credential: Google's public OAuth2 token endpoint URL
 	}
 	return &gcpKMS{
 		keyName:     cfg.KeyID,

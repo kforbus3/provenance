@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // TestRecurrenceSummary_Timezone verifies the recurrence string carries the display

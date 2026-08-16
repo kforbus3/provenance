@@ -1,6 +1,6 @@
 # High Availability
 
-Fleet Terminal can run as **multiple backend instances** behind a load balancer for
+Moorgate can run as **multiple backend instances** behind a load balancer for
 redundancy and rolling upgrades. This guide covers the model, what it guarantees, how
 the pieces fit, and how to deploy and operate it.
 
@@ -132,7 +132,7 @@ standby jump host must therefore present:
 2. **The same WG server private key** — replicate it to the standby (out of band; treat
    it like the CA key). Peers authenticate the hub by its public key, so the standby
    must own the same keypair.
-3. **The peer list**, rebuilt from Postgres. Fleet persists each managed host's WG
+3. **The peer list**, rebuilt from Postgres. Moorgate persists each managed host's WG
    public key + overlay address; on the standby, after restoring the WG key, run:
 
    ```sh

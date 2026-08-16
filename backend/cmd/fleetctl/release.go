@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/release"
+	"github.com/kforbus3/Moorgate/backend/internal/release"
 )
 
 // runRelease implements `fleetctl release <keygen|build>` — the offline publisher
@@ -86,11 +86,11 @@ func releaseChannel(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(*out, body, 0o644); err != nil {
+	if err := os.WriteFile(*out, body, 0o600); err != nil {
 		return err
 	}
 	sig := release.Sign(body, priv)
-	if err := os.WriteFile(*out+".sig", []byte(release.EncodeSig(sig)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(*out+".sig", []byte(release.EncodeSig(sig)+"\n"), 0o600); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s (%d release(s), latest %s) + %s.sig\nHost both at %s\n", *out, len(idx.Releases), idx.Latest, *out, *baseURL)

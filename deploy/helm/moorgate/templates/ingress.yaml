@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "fleet-terminal.fullname" . }}
+  name: {{ include "moorgate.fullname" . }}
   labels:
-    {{- include "fleet-terminal.labels" . | nindent 4 }}
+    {{- include "moorgate.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -27,14 +27,14 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "fleet-terminal.backend.fullname" . }}
+                name: {{ include "moorgate.backend.fullname" . }}
                 port:
                   number: 8080
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "fleet-terminal.frontend.fullname" . }}
+                name: {{ include "moorgate.frontend.fullname" . }}
                 port:
                   number: 80
 {{- end }}

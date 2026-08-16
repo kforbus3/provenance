@@ -10,6 +10,7 @@
 package ssrf
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,12 +19,13 @@ import (
 	"time"
 )
 
-// SafeClient returns an http.Client that re-validates every redirect target with
-// ValidateURL, so an allowed initial URL cannot 30x-redirect to a disallowed
-// address (metadata/loopback/link-local). Redirect depth is capped. Callers must
-// still call ValidateURL on the initial URL before the request. (Note: this does
-// not close a DNS-rebinding TOCTOU between validation and dial — that would need a
-// validating DialContext — but it removes the redirect-follow bypass.)
+// SafeClient returns an http.Client hardened against SSRF three ways: it caps and
+// re-validates redirects (an allowed initial URL cannot 30x-redirect to a
+// disallowed address), and its transport uses a validating DialContext that
+// re-resolves the host at dial time, refuses any disallowed IP, and connects to
+// the validated IP directly — so a DNS answer cannot change between an earlier
+// ValidateURL check and the actual dial (the DNS-rebinding TOCTOU). Callers should
+// still call ValidateURL on the initial URL for an early, clear rejection.
 func SafeClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
@@ -33,6 +35,47 @@ func SafeClient(timeout time.Duration) *http.Client {
 			}
 			return ValidateURL(req.URL.String())
 		},
+		Transport: &http.Transport{
+			DialContext:           safeDialContext(&net.Dialer{Timeout: timeout}),
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		},
+	}
+}
+
+// safeDialContext resolves the requested host, refuses the connection if ANY
+// resolved IP is disallowed (metadata/loopback/link-local/unspecified/multicast),
+// then dials a validated IP directly. Dialing the resolved IP — rather than
+// handing the hostname back to the dialer to resolve again — is what closes the
+// DNS-rebinding window: the connection lands on exactly the address that was
+// checked.
+func safeDialContext(d *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("could not resolve host %q", host)
+		}
+		for _, ip := range ips {
+			if disallowed(ip.IP) {
+				return nil, fmt.Errorf("host %q resolves to a disallowed address (metadata/loopback)", host)
+			}
+		}
+		var lastErr error
+		for _, ip := range ips {
+			conn, derr := d.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+			if derr == nil {
+				return conn, nil
+			}
+			lastErr = derr
+		}
+		return nil, lastErr
 	}
 }
 

@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fleet-terminal/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
 )
 
 func peerScript(t *testing.T) string {
 	t.Helper()
 	s := &Service{cfg: &config.Config{WGInterface: "wgfleet"}}
 	return s.jumpPeerScript("containers", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		"containers.example.com:51820", "10.100.0.24")
+		"jumphost.example.com:51820", "10.100.0.24")
 }
 
 // The persisted peer fragment MUST carry the endpoint and keepalive, not just the
@@ -23,7 +23,7 @@ func TestJumpPeerScriptPersistsEndpoint(t *testing.T) {
 
 	conf := got[strings.Index(got, "cat > /etc/wireguard/peers/"):]
 	for _, want := range []string{
-		"Endpoint = containers.example.com:51820",
+		"Endpoint = jumphost.example.com:51820",
 		"PersistentKeepalive = 25",
 		"AllowedIPs = 10.100.0.24/32",
 		"PublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -38,7 +38,7 @@ func TestJumpPeerScriptPersistsEndpoint(t *testing.T) {
 // immediate at enrollment rather than waiting on the first restart.
 func TestJumpPeerScriptRuntimeSetKeepsEndpoint(t *testing.T) {
 	got := peerScript(t)
-	if !strings.Contains(got, "endpoint 'containers.example.com:51820'") {
+	if !strings.Contains(got, "endpoint 'jumphost.example.com:51820'") {
 		t.Errorf("runtime wg set lost its endpoint:\n%s", got)
 	}
 	if !strings.Contains(got, "persistent-keepalive 25") {

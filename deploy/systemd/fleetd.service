@@ -1,6 +1,6 @@
 [Unit]
-Description=Fleet Terminal backend (fleetd) — browser-based SSH PAM gateway
-Documentation=https://github.com/fleet-terminal/fleet-terminal
+Description=Moorgate backend (fleetd) — browser-based SSH PAM gateway
+Documentation=https://github.com/kforbus3/Fleet-Terminal
 After=network-online.target
 Wants=network-online.target
 # Uncomment if Postgres/Redis run on the same host via systemd:

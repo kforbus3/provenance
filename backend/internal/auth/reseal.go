@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/fleet-terminal/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
 )
 
 // ResealSecrets re-seals the auth subsystem's at-rest secrets (the LDAP bind password

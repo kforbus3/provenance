@@ -1,4 +1,4 @@
-// terraform-provider-fleet is the Terraform provider for Fleet Terminal. It lets
+// terraform-provider-fleet is the Terraform provider for Moorgate. It lets
 // you manage Fleet resources — hosts, groups, service accounts, and their tokens —
 // as infrastructure-as-code, authenticating with a service-account API token.
 package main
@@ -10,7 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/kforbus3/Fleet-Terminal/terraform-provider-fleet/internal/provider"
+	"github.com/kforbus3/Moorgate/terraform-provider-fleet/internal/provider"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".

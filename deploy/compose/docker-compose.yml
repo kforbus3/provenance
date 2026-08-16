@@ -1,5 +1,6 @@
 # Fleet Terminal — application stack.
-# Brings up Postgres, Redis, the Go backend, and the React frontend.
+# Brings up Postgres, the Go backend, and the React frontend (plus the
+# ansible-runner, grype-scanner, guacd, and fleet-updater sidecars).
 # The local SSH test fabric (jump host + managed hosts) lives in the
 # docker-compose.testfabric.yml override.
 
@@ -9,6 +10,13 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Connection sizing: each backend opens up to FLEET_DB_MAX_CONNS (default 20)
+    # plus a couple for the HA leader lock / event backplane. One backend fits the
+    # stock max_connections=100; if you run several backends (see
+    # docker-compose.ha.yml) or raise FLEET_DB_MAX_CONNS, raise max_connections to
+    # stay ahead of (backends × FLEET_DB_MAX_CONNS + headroom). 200 covers the
+    # bundled HA stack (2 backends) with room to grow.
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_USER: fleet
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
@@ -20,19 +28,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [fleet]
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
     networks: [fleet]
 
   backend:
@@ -60,12 +63,19 @@ services:
       FLEET_HTTP_ADDR: ":8080"
       FLEET_PUBLIC_URL: ${FLEET_PUBLIC_URL:-http://localhost:8080}
       FLEET_DATABASE_URL: ${FLEET_DATABASE_URL:-postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable}
-      FLEET_REDIS_URL: redis://redis:6379/0
       FLEET_JWT_SECRET: ${FLEET_JWT_SECRET:-}
       FLEET_CSRF_SECRET: ${FLEET_CSRF_SECRET:-}
       FLEET_CA_PASSPHRASE: ${FLEET_CA_PASSPHRASE:-}
       FLEET_VAULT_PASSPHRASE: ${FLEET_VAULT_PASSPHRASE:-}
       FLEET_BACKUP_PASSPHRASE: ${FLEET_BACKUP_PASSPHRASE:-}
+      # Audit-log integrity HMAC key. REQUIRED outside development (the backend
+      # refuses to start without it): keys the tamper-evident audit chain, held
+      # outside the DB so DB write access alone can't forge it. `openssl rand -hex 32`.
+      FLEET_AUDIT_HMAC_KEY: ${FLEET_AUDIT_HMAC_KEY:-}
+      # Encrypts session recordings at rest. Optional but STRONGLY recommended in
+      # production (unset = recordings stored unencrypted; the backend warns). Must be
+      # >=32 bytes if set. `openssl rand -hex 32`.
+      FLEET_RECORDING_KEY: ${FLEET_RECORDING_KEY:-}
       # External KMS/HSM for master-key protection (optional; default local). See docs/kms.md.
       FLEET_KMS_PROVIDER: ${FLEET_KMS_PROVIDER:-local}
       FLEET_KMS_KEY_ID: ${FLEET_KMS_KEY_ID:-}
@@ -124,6 +134,11 @@ services:
       FLEET_SCAP_CONTENT_DIR: /var/lib/fleet/scap-content
       FLEET_SCAP_CONTENT_VERSION: ${FLEET_SCAP_CONTENT_VERSION:-}
       FLEET_ANSIBLE_RUNNER_URL: ${FLEET_ANSIBLE_RUNNER_URL:-http://ansible-runner:8000}
+      # Shared secret the backend sends (X-Runner-Token) to the ansible-runner sidecar.
+      # REQUIRED outside development (the backend refuses to start without it): without
+      # it, anything on the internal network could submit playbooks (RCE). The runner
+      # sidecar reads the SAME value below. `openssl rand -hex 32`.
+      FLEET_ANSIBLE_RUNNER_TOKEN: ${FLEET_ANSIBLE_RUNNER_TOKEN:-}
       FLEET_GRYPE_SCANNER_URL: ${FLEET_GRYPE_SCANNER_URL:-http://grype-scanner:8000}
       FLEET_MAX_UPLOAD_BYTES: ${FLEET_MAX_UPLOAD_BYTES:-5368709120}
       # WireGuard overlay — managed-host enrollment uses these. Empty falls back
@@ -186,8 +201,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+    healthcheck:
+      # The alpine runtime ships busybox wget; hit the unauthenticated /health probe.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
     ports:
       # Bound to loopback: the frontend nginx reaches the backend over the internal
       # `fleet` network (proxy_pass http://backend:8080), so the published port is
@@ -209,6 +237,14 @@ services:
       VITE_API_BASE: ${FLEET_PUBLIC_URL:-http://localhost:8080}
     depends_on:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
     ports:
       - "5173:80"
     networks: [fleet]
@@ -221,6 +257,18 @@ services:
       context: ../ansible-runner
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      # Must match the backend's FLEET_ANSIBLE_RUNNER_TOKEN; the runner rejects any
+      # execute/check request whose X-Runner-Token doesn't match.
+      FLEET_ANSIBLE_RUNNER_TOKEN: ${FLEET_ANSIBLE_RUNNER_TOKEN:-}
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
     networks: [fleet]
 
   # Sidecar that runs Anchore Grype vulnerability scans for the backend. Internal
@@ -248,6 +296,16 @@ services:
       GRYPE_DB_TIMEOUT: ${GRYPE_DB_TIMEOUT:-900}
     volumes:
       - grype-db:/home/scanner/.cache/grype
+    deploy:
+      resources:
+        # grype loads the full ~1 GB vuln DB per scan and is CPU/memory-heavy; cap it
+        # so a fleet-wide scan can't starve the backend. Raise on a beefier host.
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.1"
+          memory: 128M
     networks: [fleet]
 
   # Privileged upgrade sidecar (in-UI upgrade system). It holds the Docker socket so
@@ -313,7 +371,6 @@ services:
 
 volumes:
   pgdata:
-  redisdata:
   recordings:
   scans:
   scap-content:

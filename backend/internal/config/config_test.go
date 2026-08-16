@@ -5,11 +5,13 @@ import "testing"
 func TestValidateSecretsFailClosed(t *testing.T) {
 	good := func() *Config {
 		return &Config{
-			Environment:     "production",
-			DatabaseURL:     "postgres://x",
-			JWTSecret:       []byte("0123456789012345678901234567890123"), // >=32
-			CSRFSecret:      []byte("0123456789012345"),                   // >=16
-			CAKeyPassphrase: []byte("0123456789012345"),                   // >=16
+			Environment:        "production",
+			DatabaseURL:        "postgres://x",
+			JWTSecret:          []byte("0123456789012345678901234567890123"), // >=32
+			CSRFSecret:         []byte("0123456789012345"),                   // >=16
+			CAKeyPassphrase:    []byte("0123456789012345"),                   // >=16
+			AuditHMACKey:       []byte("0123456789012345678901234567890123"), // >=32
+			AnsibleRunnerToken: "0123456789012345",                           // >=16
 		}
 	}
 

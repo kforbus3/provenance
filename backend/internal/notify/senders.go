@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/secretbox"
-	"github.com/fleet-terminal/backend/internal/ssrf"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/ssrf"
 )
 
 // emailPassword decrypts the stored SMTP password (empty if none/unset).

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // RequestIP is a best-effort client-IP extractor for audit records (the reverse proxy
@@ -29,30 +29,46 @@ func RequestIP(r *http.Request) string {
 	return host
 }
 
+// policyStore is the slice of the store the Enforcer needs. Narrowing it to an
+// interface keeps the fail-closed store-error path testable with a fake. *store.Store
+// satisfies it, so callers are unchanged.
+type policyStore interface {
+	EnabledAccessPolicies(ctx context.Context) ([]store.AccessPolicy, error)
+	UserRoleNames(ctx context.Context, userID uuid.UUID) ([]string, error)
+	DisplayTimezone(ctx context.Context) string
+	AppendAudit(ctx context.Context, e models.AuditEvent) (*models.AuditEvent, error)
+}
+
 // Enforcer loads enabled policies, the subject's roles, and the configured timezone,
 // then evaluates the pure engine. It is used at every interactive connect choke point
 // after the RBAC/host-access check succeeds.
 type Enforcer struct {
-	st  *store.Store
+	st  policyStore
 	log *slog.Logger
 }
 
-func NewEnforcer(st *store.Store, log *slog.Logger) *Enforcer {
+func NewEnforcer(st policyStore, log *slog.Logger) *Enforcer {
 	return &Enforcer{st: st, log: log}
 }
 
-// Check evaluates ABAC for one connection attempt. Super admins are never denied. On a
-// store error it FAILS OPEN (allows) and logs: ABAC restricts access on top of RBAC —
-// it is not the primary authorization — so a policy-store hiccup must not sever all
-// access. This mirrors the existing conditional-access (enforceSessionPolicy) behavior.
+// Check evaluates ABAC for one connection attempt. Super admins are never denied.
+//
+// On a policy-store error it FAILS CLOSED — it denies THIS connection attempt rather
+// than silently dropping every contextual restriction. A store that cannot be read
+// means the configured access policies are unknown, and allowing through an unknown
+// policy set is exactly the bypass a store outage should not grant. Denial is scoped
+// to the single attempt (each connect re-evaluates), so a transient blip degrades to
+// "retry", not a permanent lockout, and super admins are already exempt above so a
+// break-glass path remains. The failure is surfaced at Error level and, via Authorize,
+// written to the audit log.
 func (e *Enforcer) Check(ctx context.Context, userID uuid.UUID, isSuper bool, host HostAttrs) Decision {
 	if isSuper {
 		return Decision{}
 	}
 	pols, err := e.st.EnabledAccessPolicies(ctx)
 	if err != nil {
-		e.log.Warn("access-policy: could not load policies, allowing", "error", err)
-		return Decision{}
+		e.log.Error("access-policy: could not load policies; denying (fail closed)", "error", err, "user", userID)
+		return Decision{Denied: true, Reason: "access policy store unavailable; access denied (fail closed) — retry shortly"}
 	}
 	if len(pols) == 0 {
 		return Decision{}

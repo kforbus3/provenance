@@ -10,12 +10,17 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
 )
 
 var agentUpgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,
 	WriteBufferSize: 8192,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	// CheckOrigin is bound per request from the configured public URL (see
+	// enrollAgent): the operator's browser bridge must be same-origin, while a
+	// non-browser CLI bridge sending no Origin is allowed.
+	CheckOrigin: wsorigin.Check(""),
 }
 
 // agentEnrollReq is the first (text) frame the operator's bridge sends, carrying
@@ -59,7 +64,10 @@ func (h *handler) enrollAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := agentUpgrader.Upgrade(w, r, nil)
+	// Bind the origin check to this deployment's public URL for the upgrade.
+	up := agentUpgrader
+	up.CheckOrigin = wsorigin.Check(h.d.Cfg.PublicURL)
+	conn, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

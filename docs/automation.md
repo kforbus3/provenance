@@ -1,6 +1,6 @@
 # Automation: SDK & CLI
 
-Fleet Terminal can be driven as code. Alongside the [REST API](./api.md), an
+Moorgate can be driven as code. Alongside the [REST API](./api.md), an
 official **Go SDK** and a **`fleet` command-line tool** let you manage inventory
 and access from CI/CD pipelines, scheduled jobs, and your own tooling — without a
 browser and without database access.
@@ -126,7 +126,7 @@ For any endpoint not wrapped by the SDK, call it directly per the
 ## 5. Terraform
 
 A **Terraform provider** (`terraform-provider-fleet`, in the repository) manages
-Fleet as declarative infrastructure over the same API and token model. It exposes:
+Moorgate as declarative infrastructure over the same API and token model. It exposes:
 
 - `fleet_host` — managed hosts (full CRUD + import)
 - `fleet_group` — groups, including dynamic membership rules

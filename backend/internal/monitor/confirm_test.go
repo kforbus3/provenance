@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // testMonitor builds a Monitor with just enough wiring for probeConfirmed:
@@ -152,7 +152,7 @@ func TestProbeConfirmedNoRetryWhenOverlayAlreadyDown(t *testing.T) {
 
 func TestProbeConfirmedNoOverlayRetryWithoutWGAddress(t *testing.T) {
 	m := testMonitor(3)
-	h := &models.Host{Hostname: "control01"} // direct/skip-WireGuard host: WGOK is always false
+	h := &models.Host{Hostname: "bastion"} // direct/skip-WireGuard host: WGOK is always false
 	calls := 0
 	if _, _, _ = m.probeConfirmed(context.Background(), h, "online", true, scriptedWGProbe(&calls, false)); calls != 1 {
 		t.Fatalf("probe ran %d times, want 1 for a host not enrolled in the overlay", calls)

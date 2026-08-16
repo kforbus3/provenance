@@ -1,0 +1,128 @@
+name: Release
+
+# Tag-triggered publish pipeline. Pushing a semver tag (e.g. `v0.70.5`) builds
+# the backend and frontend images, pushes them to GHCR under the real
+# `kforbus3/moorgate-*` namespace, generates an SBOM per image, and signs
+# both images with cosign keyless (Sigstore OIDC — no long-lived key).
+#
+# Note: this workflow deliberately does NOT sign or publish the `.fleetup`
+# update bundle. That bundle is signed with the maintainer's release key, which
+# is offline on the maintainer's machine by design (see the deploy runbook) and
+# is never present in CI. Bundle building stays a manual, local step; only the
+# container images are published here.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Least privilege, widened only where a step needs it:
+#   packages: write  -> push images to GHCR
+#   id-token: write  -> cosign keyless signing via the GitHub OIDC provider
+#   contents: read   -> checkout
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # Lowercased, real namespace. The old ci.yml referenced
+  # ghcr.io/fleet-terminal/* which never existed.
+  BACKEND_IMAGE: ghcr.io/kforbus3/moorgate-backend
+  FRONTEND_IMAGE: ghcr.io/kforbus3/moorgate-frontend
+
+jobs:
+  publish:
+    name: Build · push · SBOM · sign (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            image: ghcr.io/kforbus3/moorgate-backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+          - name: frontend
+            image: ghcr.io/kforbus3/moorgate-frontend
+            # The frontend Dockerfile COPYs frontend/ and docs/, so its build
+            # context is the repository root (see frontend/Dockerfile).
+            context: .
+            dockerfile: ./frontend/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          # The git tag (e.g. 0.70.5, stripped of the leading `v`) and `latest`.
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build and push ${{ matrix.name }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+
+      # Generate an SBOM for the pushed image (by digest, so it describes exactly
+      # what was published). anchore/sbom-action wraps syft; it writes the SBOM
+      # to a file we hand to cosign below and also uploads it as a build artifact.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.name }}.spdx.json
+          artifact-name: sbom-${{ matrix.name }}.spdx.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless signing: cosign obtains a short-lived certificate from Fulcio
+      # using the workflow's OIDC identity (id-token: write) and records the
+      # signature in the Rekor transparency log. No private key is stored.
+      - name: Sign image (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            "${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+
+      # Attach the SBOM to the image as a keyless attestation. Consumers can
+      # verify both the signature and the SBOM against the workflow identity
+      # with `cosign verify` / `cosign verify-attestation`.
+      - name: Attest SBOM (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign attest --yes \
+            --predicate "sbom-${{ matrix.name }}.spdx.json" \
+            --type spdxjson \
+            "${{ matrix.image }}@${{ steps.build.outputs.digest }}"

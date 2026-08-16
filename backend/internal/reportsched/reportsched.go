@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 const settingKey = "report_schedule"

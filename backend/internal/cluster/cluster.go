@@ -22,7 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // leaderLockKey is the fixed advisory-lock key contended for leadership. Arbitrary

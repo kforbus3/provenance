@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/cryptoprofile"
-	princ "github.com/fleet-terminal/backend/internal/principals"
+	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
+	princ "github.com/kforbus3/Moorgate/backend/internal/principals"
 )
 
 // systemHolder caches a service certificate used by background workers (monitor,

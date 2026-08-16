@@ -11,7 +11,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/fleet-terminal/backend/internal/secretbox"
+	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
 )
 
 // Identity is an Ed25519 keypair with its derived fingerprint.

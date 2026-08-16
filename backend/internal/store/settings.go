@@ -30,10 +30,10 @@ func (s *Store) GetSetting(ctx context.Context, key string) (json.RawMessage, er
 }
 
 // AppName returns the configured brand/application name from the branding setting,
-// falling back to "Fleet Terminal" when unset or invalid. Shared by the API version
+// falling back to "Moorgate" when unset or invalid. Shared by the API version
 // endpoint and the compliance evidence pack so both honor white-labeling.
 func (s *Store) AppName(ctx context.Context) string {
-	const def = "Fleet Terminal"
+	const def = "Moorgate"
 	raw, err := s.GetSetting(ctx, "branding")
 	if err != nil {
 		return def

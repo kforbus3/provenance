@@ -1,6 +1,6 @@
-# Contributing to Fleet Terminal
+# Contributing to Moorgate
 
-Thanks for your interest in improving Fleet Terminal. This guide covers how to get
+Thanks for your interest in improving Moorgate. This guide covers how to get
 a development environment running, the checks your change must pass, and how to
 submit it.
 

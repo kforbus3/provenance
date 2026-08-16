@@ -1,8 +1,8 @@
-Fleet Terminal has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+Moorgate has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
 
 Components:
-  - Backend  : {{ include "fleet-terminal.backend.image" . }} (replicas: {{ if .Values.backend.autoscaling.enabled }}{{ .Values.backend.autoscaling.minReplicas }}-{{ .Values.backend.autoscaling.maxReplicas }} via HPA{{ else }}{{ .Values.backend.replicaCount }}{{ end }})
-  - Frontend : {{ include "fleet-terminal.frontend.image" . }} (replicas: {{ .Values.frontend.replicaCount }})
+  - Backend  : {{ include "moorgate.backend.image" . }} (replicas: {{ if .Values.backend.autoscaling.enabled }}{{ .Values.backend.autoscaling.minReplicas }}-{{ .Values.backend.autoscaling.maxReplicas }} via HPA{{ else }}{{ .Values.backend.replicaCount }}{{ end }})
+  - Frontend : {{ include "moorgate.frontend.image" . }} (replicas: {{ .Values.frontend.replicaCount }})
   - Postgres : {{ if .Values.postgres.enabled }}in-chart ({{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}){{ else }}external{{ end }}
   - Redis    : {{ if .Values.redis.enabled }}in-chart ({{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}){{ else }}external{{ end }}
 
@@ -16,14 +16,14 @@ Access the UI at:
 
 Ingress is disabled. Port-forward to reach the frontend locally:
 
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fleet-terminal.frontend.fullname" . }} 8080:80
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "moorgate.frontend.fullname" . }} 8080:80
   # then open http://localhost:8080
 
 {{- end }}
 
 Check rollout status:
 
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "fleet-terminal.backend.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "moorgate.backend.fullname" . }}
   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
 
 Backend probes: readiness GET /ready, liveness GET /health, metrics GET {{ .Values.backend.metrics.path }} on :{{ .Values.backend.metrics.port }}.

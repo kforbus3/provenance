@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Governance coverage: the Fleet Terminal admin surfaces that had no assistant
+// Governance coverage: the Moorgate admin surfaces that had no assistant
 // tool at all — groups, roles, service accounts, access reviews, and the
 // credential/certificate lifecycle. An operator looking at those pages asks the
 // assistant about them ("who can reach nas", "what expires this month"), and the

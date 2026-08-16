@@ -1,4 +1,4 @@
-# Redis — job queue / cache for Fleet Terminal.
+# Redis — job queue / cache for Moorgate.
 apiVersion: v1
 kind: Service
 metadata:

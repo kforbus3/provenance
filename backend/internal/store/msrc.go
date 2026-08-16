@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
 )
 
 // UpsertMSRC stores KB→CVE mappings, replacing any existing row for the same

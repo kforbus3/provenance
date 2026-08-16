@@ -1,4 +1,4 @@
-// Command fleet is the remote automation CLI for Fleet Terminal. It authenticates
+// Command fleet is the remote automation CLI for Moorgate. It authenticates
 // with a service-account API token and drives the REST API through the Go SDK,
 // so anything you can do in the web UI's inventory/access surfaces you can script
 // here — for CI/CD, cron jobs, and infrastructure automation.
@@ -32,7 +32,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
+	fleet "github.com/kforbus3/Moorgate/sdk"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -105,7 +105,7 @@ func client() (*fleet.Client, error) {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `fleet — remote automation CLI for Fleet Terminal
+	fmt.Fprint(os.Stderr, `fleet — remote automation CLI for Moorgate
 
 Usage:
   fleet <command> [subcommand] [flags]

@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // --- CVRF JSON (only the fields we need) ---

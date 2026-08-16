@@ -44,14 +44,23 @@ func realIP(cidrs []string) func(http.Handler) http.Handler {
 // securityHeaders adds baseline response headers to every backend response. The
 // SPA itself is served (and framed/CSP-protected) by the frontend nginx; these
 // cover the API and the backend's own HTML routes (which set their own CSP).
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
-		next.ServeHTTP(w, r)
-	})
+//
+// hsts enables Strict-Transport-Security. It is gated on the caller (production /
+// secure-cookie deployments) so a plaintext local-http dev server does not pin the
+// browser to HTTPS for two years and lock the developer out of http://localhost.
+func securityHeaders(hsts bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Referrer-Policy", "no-referrer")
+			if hsts {
+				h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func clientFromXFF(r *http.Request, trusted func(net.IP) bool) string {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/awssig"
+	"github.com/kforbus3/Moorgate/backend/internal/awssig"
 )
 
 // awsSecrets reads secrets from AWS Secrets Manager (GetSecretValue). A reference is a

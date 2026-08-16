@@ -21,14 +21,14 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/config"
-	"github.com/fleet-terminal/backend/internal/credinject"
-	"github.com/fleet-terminal/backend/internal/identity"
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/notify"
-	"github.com/fleet-terminal/backend/internal/sshgw"
-	"github.com/fleet-terminal/backend/internal/store"
-	"github.com/fleet-terminal/backend/internal/winrm"
+	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/Moorgate/backend/internal/credinject"
+	"github.com/kforbus3/Moorgate/backend/internal/identity"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/notify"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/Moorgate/backend/internal/winrm"
 )
 
 // collectScript tars a host's package databases (only the paths that exist, so it
@@ -68,11 +68,11 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gatewa
 
 // Run performs a scan in the background: collect package DBs over SSH, hand them
 // to the sidecar, store the findings. Marks the scan failed on any error.
-func (s *Service) Run(scanID uuid.UUID, h *models.Host) {
+func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host) {
 	// Cover SSH collection plus the (possibly queued) grype-scanner request. A small
 	// margin over the HTTP client timeout so the client timeout surfaces first with a
 	// clearer "scanner unreachable" message rather than a bare context cancellation.
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.VulnScanTimeout+2*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, s.cfg.VulnScanTimeout+2*time.Minute)
 	defer cancel()
 	fail := func(msg string) {
 		s.log.Warn("vuln scan failed", "host", h.Hostname, "err", msg)

@@ -13,8 +13,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           # Read from go.mod rather than pinning: this said 1.23 while the
           # module required 1.24, and only worked because Go silently downloads
@@ -42,7 +42,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -60,10 +60,83 @@ jobs:
     name: Docker images build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build backend image
         run: docker build -t fleet-backend:ci ./backend
       - name: Build frontend image
         # The frontend Dockerfile requires the repo root as build context
         # (it COPYs frontend/ and docs/ — see the note in frontend/Dockerfile).
         run: docker build -t fleet-frontend:ci -f frontend/Dockerfile .
+
+  go-lint:
+    name: Go lint (golangci-lint)
+    runs-on: ubuntu-latest
+    # Blocking: the ruleset (govet/staticcheck/errcheck/ineffassign/unused/gosec)
+    # is verified clean across all three modules. Genuine findings are fixed and
+    # deliberate exceptions are annotated with //nolint + a reason.
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [backend, sdk, terraform-provider-fleet]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: golangci-lint
+        # v8 installs golangci-lint v2, which the .golangci.yml files use (v2 schema).
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          working-directory: ${{ matrix.module }}
+          # Each module ships its own .golangci.yml (backend: full ruleset incl. gosec;
+          # sdk/provider: defect-focused defaults with test-file exclusions).
+          args: --timeout=10m
+
+  govulncheck:
+    name: govulncheck (go1.26.6)
+    runs-on: ubuntu-latest
+    # security.yml also runs govulncheck weekly and on push to main; this keeps
+    # it on the PR path, pinned to the bumped 1.26.6 toolchain the modules
+    # declare (via go-version-file), so a newly reachable stdlib CVE is caught
+    # before merge.
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [backend, sdk, terraform-provider-fleet]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  frontend-lint:
+    name: Frontend lint (eslint)
+    runs-on: ubuntu-latest
+    # Blocking: eslint runs clean (0 errors) across the tree; style items surface
+    # as warnings, real problems as errors.
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install
+      # help-content.ts is generated and git-ignored; eslint ignores it, but the
+      # build-help step keeps parity with the other frontend jobs.
+      - run: npm run build-help && npm run build-guac-player
+      - run: npm run lint

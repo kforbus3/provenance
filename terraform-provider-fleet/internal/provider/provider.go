@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
+	fleet "github.com/kforbus3/Moorgate/sdk"
 )
 
 // Ensure the implementation satisfies the provider interface.
@@ -41,7 +41,7 @@ func (p *fleetProvider) Metadata(_ context.Context, _ provider.MetadataRequest, 
 
 func (p *fleetProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manage a Fleet Terminal deployment as code. Authenticates with a service-account API token.",
+		MarkdownDescription: "Manage a Moorgate deployment as code. Authenticates with a service-account API token.",
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
 				MarkdownDescription: "Base URL of the Fleet deployment, e.g. `https://fleet.example.com`. Falls back to the `FLEET_URL` environment variable.",

@@ -1,0 +1,122 @@
+{{- if .Values.grypeScanner.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "moorgate.grypeScanner.fullname" . }}
+  labels:
+    {{- include "moorgate.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grype-scanner
+spec:
+  selector:
+    {{- include "moorgate.selectorLabels" (dict "context" . "component" "grype-scanner") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "moorgate.grypeScanner.fullname" . }}
+  labels:
+    {{- include "moorgate.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grype-scanner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "moorgate.selectorLabels" (dict "context" . "component" "grype-scanner") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "moorgate.labels" . | nindent 8 }}
+        app.kubernetes.io/component: grype-scanner
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grype-scanner
+          image: "{{ .Values.grypeScanner.image.repository }}:{{ default .Chart.AppVersion .Values.grypeScanner.image.tag }}"
+          imagePullPolicy: {{ .Values.grypeScanner.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: GRYPE_SCAN_CONCURRENCY
+              value: {{ .Values.grypeScanner.scanConcurrency | quote }}
+            - name: GRYPE_SCAN_TIMEOUT
+              value: {{ .Values.grypeScanner.scanTimeout | quote }}
+            - name: GRYPE_DB_TIMEOUT
+              value: {{ .Values.grypeScanner.dbTimeout | quote }}
+            # syft/grype scratch extraction goes to the /tmp emptyDir (root fs is RO;
+            # the vuln DB stays on the PVC).
+            - name: TMPDIR
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.grypeScanner.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Immutable root fs; the vuln DB persists on the PVC and syft scratch space
+            # goes to the /tmp emptyDir (TMPDIR above).
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: grype-db
+              mountPath: /home/scanner/.cache/grype
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: grype-db
+          {{- if .Values.grypeScanner.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "moorgate.grypeScanner.fullname" . }}-db
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- if .Values.grypeScanner.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "moorgate.grypeScanner.fullname" . }}-db
+  labels:
+    {{- include "moorgate.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grype-scanner
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.grypeScanner.persistence.storageClass }}
+  storageClassName: {{ .Values.grypeScanner.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.grypeScanner.persistence.size | quote }}
+{{- end }}
+{{- end }}

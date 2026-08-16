@@ -11,10 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/auth"
-	"github.com/fleet-terminal/backend/internal/httpx"
-	"github.com/fleet-terminal/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/auth"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/recorder"
 )
 
 // MountAPI attaches the read-only RDP recording replay routes, gated by the same
@@ -98,7 +99,9 @@ func (h *apiHandler) stream(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
-	f, err := os.Open(h.resolvePath(rec.Path))
+	// Transparently decrypts an encrypted recording (and passes legacy plaintext
+	// through) so both play in the browser identically.
+	f, err := recorder.Open(h.resolvePath(rec.Path), h.d.Cfg.RecordingEncryptionKey)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
 		return
@@ -121,7 +124,9 @@ func (h *apiHandler) download(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
-	f, err := os.Open(h.resolvePath(rec.Path))
+	// Decrypt on the fly for download too, so the saved .guac file is the real
+	// (plaintext) Guacamole recording regardless of at-rest encryption.
+	f, err := recorder.Open(h.resolvePath(rec.Path), h.d.Cfg.RecordingEncryptionKey)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "recording file not found")
 		return

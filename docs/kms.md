@@ -1,12 +1,12 @@
 # External KMS / HSM for master-key protection
 
-Fleet seals its at-rest secrets — the SSH CA signing key (`ca_keys.private_enc`) and every
+Moorgate seals its at-rest secrets — the SSH CA signing key (`ca_keys.private_enc`) and every
 credential-vault entry (`vault_secret_versions.sealed`) — with **AES-256-GCM**, using a passphrase
 derived per record (argon2id, or PBKDF2 under FIPS). See `internal/secretbox`.
 
 By default those passphrases are supplied as environment variables
 (`FLEET_CA_PASSPHRASE`, `FLEET_VAULT_PASSPHRASE`). An external **Key Management Service (KMS)** or
-**HSM** lets you keep them off disk in plaintext: you store only a KMS-**wrapped** blob, and Fleet
+**HSM** lets you keep them off disk in plaintext: you store only a KMS-**wrapped** blob, and Moorgate
 asks the KMS to unwrap it into memory once at boot.
 
 ## Threat model / what this buys you
@@ -14,8 +14,8 @@ asks the KMS to unwrap it into memory once at boot.
 - An attacker who steals the disk, a database dump, or an environment file gets only the *wrapped*
   passphrase. Without live, authorized access to the KMS key they cannot unwrap it, so they cannot
   decrypt the CA key or any vault secret.
-- The KMS key never leaves the KMS/HSM; Fleet only ever sends a small ciphertext to unwrap.
-- Every unwrap is authorized and audited by the KMS itself (in addition to Fleet's own audit log).
+- The KMS key never leaves the KMS/HSM; Moorgate only ever sends a small ciphertext to unwrap.
+- Every unwrap is authorized and audited by the KMS itself (in addition to Moorgate's own audit log).
 
 It does **not** change the on-disk sealed-data format. Enabling or disabling a KMS backend needs no
 migration and no re-seal — only the passphrase *source* moves.
@@ -88,8 +88,8 @@ Then in your deployment environment, **replace the plaintext passphrases with th
 You can wrap only one of the two if you prefer a phased rollout; a plaintext value and a wrapped
 value can coexist across the CA and vault passphrases.
 
-On the next boot Fleet logs `master passphrases unsealed via external KMS` and operates normally.
-If the KMS is unreachable or the key is wrong, boot **fails closed** — Fleet does not start with an
+On the next boot Moorgate logs `master passphrases unsealed via external KMS` and operates normally.
+If the KMS is unreachable or the key is wrong, boot **fails closed** — Moorgate does not start with an
 unusable CA/vault.
 
 ## Verifying

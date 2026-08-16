@@ -2,14 +2,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "fleet-terminal.postgres.fullname" . }}
+  name: {{ include "moorgate.postgres.fullname" . }}
   labels:
-    {{- include "fleet-terminal.labels" . | nindent 4 }}
+    {{- include "moorgate.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
   clusterIP: None
   selector:
-    {{- include "fleet-terminal.selectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+    {{- include "moorgate.selectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
   ports:
     - name: postgres
       port: 5432
@@ -18,20 +18,20 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "fleet-terminal.postgres.fullname" . }}
+  name: {{ include "moorgate.postgres.fullname" . }}
   labels:
-    {{- include "fleet-terminal.labels" . | nindent 4 }}
+    {{- include "moorgate.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
-  serviceName: {{ include "fleet-terminal.postgres.fullname" . }}
+  serviceName: {{ include "moorgate.postgres.fullname" . }}
   replicas: 1
   selector:
     matchLabels:
-      {{- include "fleet-terminal.selectorLabels" (dict "context" . "component" "postgres") | nindent 6 }}
+      {{- include "moorgate.selectorLabels" (dict "context" . "component" "postgres") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fleet-terminal.labels" . | nindent 8 }}
+        {{- include "moorgate.labels" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -49,6 +49,8 @@ spec:
         - name: postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          # Sized for (backend replicas × FLEET_DB_MAX_CONNS) + HA overhead; see values.
+          args: ["postgres", "-c", "max_connections={{ .Values.postgres.maxConnections }}"]
           ports:
             - name: postgres
               containerPort: 5432
@@ -60,7 +62,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "fleet-terminal.secretName" . }}
+                  name: {{ include "moorgate.secretName" . }}
                   key: POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
@@ -80,17 +82,28 @@ spec:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            # Immutable root fs. The database lives on the data volume (PGDATA); the
+            # image only additionally needs a writable unix-socket dir and /tmp (used by
+            # the bootstrap postmaster during initdb), both emptyDir below.
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
-      {{- if not .Values.postgres.persistence.enabled }}
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if not .Values.postgres.persistence.enabled }}
         - name: data
           emptyDir: {}
-      {{- end }}
+        {{- end }}
   {{- if .Values.postgres.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:

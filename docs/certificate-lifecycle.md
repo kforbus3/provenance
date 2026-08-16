@@ -1,6 +1,6 @@
-# Fleet Terminal — Certificate Lifecycle
+# Moorgate — Certificate Lifecycle
 
-Fleet Terminal authenticates SSH using **short-lived OpenSSH certificates** signed
+Moorgate authenticates SSH using **short-lived OpenSSH certificates** signed
 by an internal certificate authority, instead of distributing long-lived user
 keys. This document describes the full lifecycle: CA creation, ephemeral issuance,
 renewal, revocation, rotation, and the data model.

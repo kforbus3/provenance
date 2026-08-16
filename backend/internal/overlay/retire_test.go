@@ -128,6 +128,9 @@ func TestRetireJumpRemovesThePinnedAddress(t *testing.T) {
 	if !strings.Contains(strings.Join(*ran, "\n"), "crl.pem") {
 		t.Error("the revocation list must be published even when there was no pin to remove")
 	}
+	if !strings.Contains(detail, "revocation list") {
+		t.Errorf("the idempotent retire should still report the revocation list was published, got %q", detail)
+	}
 
 	// A CRL that cannot be published is an ERROR, not a detail line. Reporting
 	// success here would tell the operator a host was cut off when it was not.

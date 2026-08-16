@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fleet-terminal/backend/internal/app"
-	"github.com/fleet-terminal/backend/internal/httpx"
+	"github.com/kforbus3/Moorgate/backend/internal/app"
+	"github.com/kforbus3/Moorgate/backend/internal/httpx"
 )
 
 // standbyHandler serves the read-only DR standby console. It never writes to the

@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/sshgw"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
 )
 
 // osTokenRe guards the OS id/version tokens we interpolate into a filename and a
@@ -217,6 +217,20 @@ func extractZipEntry(f *zip.File, dest string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, rc)
-	return err
+	// Bound decompression to guard against a zip bomb even from trusted
+	// ComplianceAsCode content: honor the entry's declared uncompressed size,
+	// capped by a hard ceiling, and reject an entry that overruns it.
+	const maxEntryBytes = 1 << 30 // 1 GiB
+	limit := int64(maxEntryBytes)
+	if f.UncompressedSize64 < uint64(maxEntryBytes) {
+		limit = int64(f.UncompressedSize64) + 1 // +1 lets us detect an overrun past the declared size
+	}
+	n, err := io.Copy(out, io.LimitReader(rc, limit))
+	if err != nil {
+		return err
+	}
+	if n > int64(f.UncompressedSize64) {
+		return fmt.Errorf("zip entry %s exceeds its declared uncompressed size", f.Name)
+	}
+	return nil
 }

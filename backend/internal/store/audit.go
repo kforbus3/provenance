@@ -2,17 +2,20 @@ package store
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/fleet-terminal/backend/internal/models"
-	"github.com/fleet-terminal/backend/internal/tenant"
+	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/Moorgate/backend/internal/tenant"
 )
 
 // providerTenantID is the seeded Provider tenant; audit events for background/system
@@ -20,10 +23,57 @@ import (
 // need not import auth (which imports store).
 const providerTenantID = "00000000-0000-0000-0000-000000000001"
 
+// Audit hash-chain algorithms, recorded per row in audit_events.hash_alg so a mixed
+// chain (pre- and post-upgrade rows) stays verifiable.
+//
+//	auditAlgLegacy: keyless SHA-256 over the OLD canonical record. This is what every
+//	                row written before 0076 used; it EXCLUDES seq, created_at and
+//	                tenant_id. Verified WITHOUT a key so historical chains still pass.
+//	auditAlgHMAC:   HMAC-SHA256(AuditHMACKey) over the NEW canonical record, which
+//	                additionally binds seq, created_at and tenant_id. Written for every
+//	                new row once a key is configured, and tamper-evident against a party
+//	                with DB write access (they cannot forge the MAC without the key).
+const (
+	auditAlgLegacy int16 = 1
+	auditAlgHMAC   int16 = 2
+)
+
+// auditHMACKey holds the server-wide key that keys the audit chain. It is process
+// state (a *Store field would be cleaner, but the Store struct and its constructor
+// live in another agent's file); there is one Store per process, so a package-level
+// key set once at startup is equivalent. Guarded because appends run concurrently.
+var (
+	auditHMACKeyMu   sync.RWMutex
+	auditHMACKey     []byte
+	auditKeylessWarn sync.Once
+)
+
+// SetAuditHMACKey installs the key that keys the audit hash chain (HMAC-SHA256).
+// Call once at startup, before serving, with cfg.AuditHMACKey. An empty key keeps
+// the legacy keyless behavior: new rows are written with hash_alg=1 and a warning is
+// logged on the first append so the operator knows the chain is not tamper-evident
+// against a party with DB write access. Copies the key so the caller may reuse it.
+func SetAuditHMACKey(key []byte) {
+	auditHMACKeyMu.Lock()
+	defer auditHMACKeyMu.Unlock()
+	if len(key) == 0 {
+		auditHMACKey = nil
+		return
+	}
+	auditHMACKey = append([]byte(nil), key...)
+}
+
+func currentAuditHMACKey() []byte {
+	auditHMACKeyMu.RLock()
+	defer auditHMACKeyMu.RUnlock()
+	return auditHMACKey
+}
+
 // auditRowTenant resolves the tenant_id column value for an audit event from the
 // request context: the caller's tenant when scoped to one, else the Provider tenant
 // for cross-tenant/background/unscoped work. This tags the row for tenant-scoped
-// audit READS; it is deliberately NOT part of the hash chain (which is global).
+// audit READS; with the keyed chain (hash_alg=2) it is ALSO bound into the MAC so it
+// can no longer be rewritten without invalidating the row.
 func auditRowTenant(ctx context.Context) string {
 	if v := tenant.GUCValue(ctx); v != "" && v != tenant.Bypass {
 		if _, err := uuid.Parse(v); err == nil {
@@ -33,10 +83,47 @@ func auditRowTenant(ctx context.Context) string {
 	return providerTenantID
 }
 
-// AppendAudit writes a tamper-evident audit event. Each event's hash chains to
-// the previous event's hash: hash = SHA256(prev_hash || canonical(event)).
-// The insert is serialized with a transaction + advisory lock so the chain stays
-// strictly ordered even under concurrency.
+// auditCanonicalLegacy is the pre-HMAC canonical record (hash_alg=1). It EXCLUDES
+// seq, created_at and tenant_id. Kept verbatim so rows written before the upgrade
+// keep verifying.
+func auditCanonicalLegacy(actorID, actorName, action, tk, tid, ip string, detailJSON []byte) string {
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s",
+		actorID, actorName, action, tk, tid, ip, string(detailJSON))
+}
+
+// auditCanonicalHMAC is the keyed canonical record (hash_alg=2). It binds seq,
+// created_at (UTC, RFC3339Nano) and tenant_id in addition to the event fields, so
+// none of those columns can be rewritten without invalidating the MAC.
+func auditCanonicalHMAC(seq int64, createdAt time.Time, tenantID, actorID, actorName, action, tk, tid, ip string, detailJSON []byte) string {
+	return fmt.Sprintf("%d|%s|%s|%s|%s|%s|%s|%s|%s|%s",
+		seq, createdAt.UTC().Format(time.RFC3339Nano), tenantID,
+		actorID, actorName, action, tk, tid, ip, string(detailJSON))
+}
+
+// auditMAC computes the chained hash for a row: keyed HMAC-SHA256 for alg=2, plain
+// (keyless) SHA-256 for the legacy alg=1.
+func auditMAC(alg int16, key []byte, prev, canonical string) string {
+	data := []byte(prev + "|" + canonical)
+	if alg == auditAlgHMAC {
+		m := hmac.New(sha256.New, key)
+		m.Write(data)
+		return hex.EncodeToString(m.Sum(nil))
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// AppendAudit writes a tamper-evident audit event. Each event's hash chains to the
+// previous event's hash. With a configured AuditHMACKey the hash is
+// HMAC-SHA256(key, prev_hash || canonical(event)) over a canonical record that binds
+// seq, created_at and tenant_id (hash_alg=2); without a key it falls back to the
+// legacy keyless SHA-256 (hash_alg=1). The insert is serialized with a transaction +
+// advisory lock so the chain stays strictly ordered under concurrency.
+//
+// The row is inserted with a placeholder hash and the server-assigned seq/created_at
+// (and the normalized column values) are read back, so the MAC is computed over
+// EXACTLY what VerifyAuditChain later re-reads from the row; the real hash is then
+// written in the same transaction.
 func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.AuditEvent, error) {
 	if e.Detail == nil {
 		e.Detail = map[string]any{}
@@ -47,10 +134,20 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 	// prev_hash read is RLS-filtered and an event written while acting inside a customer
 	// tenant chains to that tenant's last visible hash — corrupting the global chain and
 	// defeating tamper-evidence. The row's tenant_id is inserted EXPLICITLY (the RLS
-	// default under bypass would mis-tag it), so tenant-scoped audit reads still work.
-	// tenant_id is intentionally NOT part of the hashed canonical record.
+	// default under bypass would mis-tag it) and, for hash_alg=2, is also bound into the MAC.
 	rowTenant := auditRowTenant(ctx)
 	bctx := tenant.WithBypass(ctx)
+
+	key := currentAuditHMACKey()
+	alg := auditAlgLegacy
+	if len(key) > 0 {
+		alg = auditAlgHMAC
+	} else {
+		auditKeylessWarn.Do(func() {
+			slog.Warn("audit chain is UNKEYED: no AuditHMACKey configured; new audit rows use the legacy keyless SHA-256 chain (hash_alg=1) and are not tamper-evident against a party with DB write access. Set cfg.AuditHMACKey to key the chain.")
+		})
+	}
+
 	var out models.AuditEvent
 	err := s.tx(bctx, func(tx pgx.Tx) error {
 		// Serialize appends so prev_hash is read consistently.
@@ -58,25 +155,51 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 			return err
 		}
 		var prev string
-		err := tx.QueryRow(bctx, `SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1`).Scan(&prev)
-		if err != nil && err != pgx.ErrNoRows {
+		if err := tx.QueryRow(bctx, `SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1`).Scan(&prev); err != nil && err != pgx.ErrNoRows {
 			return err
 		}
 		detailJSON, _ := json.Marshal(e.Detail)
-		// Canonical record bound into the hash (excludes server-assigned seq).
-		canonical := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s",
-			nilUUID(e.ActorID), e.ActorName, e.Action, e.TargetKind, e.TargetID, e.IP, string(detailJSON))
-		sum := sha256.Sum256([]byte(prev + "|" + canonical))
-		hash := hex.EncodeToString(sum[:])
 
+		var (
+			seq        int64
+			id         uuid.UUID
+			tenantID   string
+			actorID    *uuid.UUID
+			actorName  string
+			action, tk string
+			tid, ipOut string
+			detailBack map[string]any
+			createdAt  time.Time
+		)
 		row := tx.QueryRow(bctx, `
 			INSERT INTO audit_events
-				(tenant_id, actor_id, actor_name, action, target_kind, target_id, ip, detail, prev_hash, hash)
-			VALUES ($1::uuid, $2, NULLIF($3,'')::citext, $4, $5, $6, NULLIF($7,'')::inet, $8, $9, $10)
-			RETURNING seq, id, action, target_kind, target_id, prev_hash, hash, created_at`,
-			rowTenant, e.ActorID, e.ActorName, e.Action, e.TargetKind, e.TargetID, e.IP, detailJSON, prev, hash)
-		return row.Scan(&out.Seq, &out.ID, &out.Action, &out.TargetKind, &out.TargetID,
-			&out.PrevHash, &out.Hash, &out.CreatedAt)
+				(tenant_id, actor_id, actor_name, action, target_kind, target_id, ip, detail, prev_hash, hash, hash_alg)
+			VALUES ($1::uuid, $2, NULLIF($3,'')::citext, $4, $5, $6, NULLIF($7,'')::inet, $8, $9, '', $10)
+			RETURNING seq, id, tenant_id::text, actor_id, COALESCE(actor_name,''), action,
+			          target_kind, target_id, COALESCE(host(ip),''), detail, prev_hash, created_at`,
+			rowTenant, e.ActorID, e.ActorName, e.Action, e.TargetKind, e.TargetID, e.IP, detailJSON, prev, alg)
+		if err := row.Scan(&seq, &id, &tenantID, &actorID, &actorName, &action, &tk, &tid, &ipOut,
+			&detailBack, &out.PrevHash, &createdAt); err != nil {
+			return err
+		}
+
+		// Marshal the read-back detail so the MAC is over exactly what verify re-reads.
+		canonDetail, _ := json.Marshal(detailBack)
+		var canonical string
+		if alg == auditAlgHMAC {
+			canonical = auditCanonicalHMAC(seq, createdAt, tenantID,
+				nilUUID(actorID), actorName, action, tk, tid, ipOut, canonDetail)
+		} else {
+			canonical = auditCanonicalLegacy(nilUUID(actorID), actorName, action, tk, tid, ipOut, canonDetail)
+		}
+		hash := auditMAC(alg, key, out.PrevHash, canonical)
+
+		if _, err := tx.Exec(bctx, `UPDATE audit_events SET hash=$1 WHERE seq=$2`, hash, seq); err != nil {
+			return err
+		}
+		out.Seq, out.ID, out.Action, out.TargetKind, out.TargetID, out.Hash, out.CreatedAt =
+			seq, id, action, tk, tid, hash, createdAt
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -160,11 +283,15 @@ func (s *Store) DistinctAuditActions(ctx context.Context) ([]string, error) {
 }
 
 // VerifyAuditChain recomputes the hash chain and reports the first seq where it
-// breaks (0 = intact). This makes tampering with any historical row detectable.
+// breaks (0 = intact). This makes tampering with any historical row detectable. Each
+// row is re-derived with its own hash_alg: legacy rows keyless, keyed rows with the
+// configured AuditHMACKey. NOTE: verifying keyed (hash_alg=2) rows requires the same
+// AuditHMACKey to be configured; with no key those rows report as broken.
 func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq int64, err error) {
+	key := currentAuditHMACKey()
 	rows, qerr := s.pool.Query(ctx, `
-		SELECT seq, actor_id, COALESCE(actor_name,''), action, target_kind, target_id,
-		       COALESCE(host(ip),''), detail, prev_hash, hash
+		SELECT seq, tenant_id::text, actor_id, COALESCE(actor_name,''), action, target_kind, target_id,
+		       COALESCE(host(ip),''), detail, prev_hash, hash, created_at, hash_alg
 		FROM audit_events ORDER BY seq ASC`)
 	if qerr != nil {
 		return false, 0, qerr
@@ -173,20 +300,31 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq 
 	prev := ""
 	for rows.Next() {
 		var (
-			seq                                      int64
-			actorID                                  *uuid.UUID
-			actorName, action, tk, tid, ip, prevH, h string
-			detail                                   map[string]any
+			seq             int64
+			tenantID        string
+			actorID         *uuid.UUID
+			actorName       string
+			action, tk, tid string
+			ip, prevH, h    string
+			createdAt       time.Time
+			alg             int16
+			detail          map[string]any
 		)
-		if err := rows.Scan(&seq, &actorID, &actorName, &action, &tk, &tid, &ip, &detail, &prevH, &h); err != nil {
+		if err := rows.Scan(&seq, &tenantID, &actorID, &actorName, &action, &tk, &tid, &ip,
+			&detail, &prevH, &h, &createdAt, &alg); err != nil {
 			return false, 0, err
 		}
 		detailJSON, _ := json.Marshal(detail)
-		canonical := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s",
-			nilUUID(actorID), actorName, action, tk, tid, ip, string(detailJSON))
-		sum := sha256.Sum256([]byte(prev + "|" + canonical))
-		want := hex.EncodeToString(sum[:])
-		if prevH != prev || h != want {
+		var canonical string
+		if alg == auditAlgHMAC {
+			canonical = auditCanonicalHMAC(seq, createdAt, tenantID,
+				nilUUID(actorID), actorName, action, tk, tid, ip, detailJSON)
+		} else {
+			canonical = auditCanonicalLegacy(nilUUID(actorID), actorName, action, tk, tid, ip, detailJSON)
+		}
+		want := auditMAC(alg, key, prev, canonical)
+		// Constant-time compare on the hash; prev_hash linkage must also match.
+		if prevH != prev || !hmac.Equal([]byte(h), []byte(want)) {
 			return false, seq, nil
 		}
 		prev = h

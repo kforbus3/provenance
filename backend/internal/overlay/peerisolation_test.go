@@ -260,8 +260,40 @@ func TestHostInstallProvidesIptablesForIsolation(t *testing.T) {
 	}
 }
 
-// A host that ends up without iptables still enrolls — but the step has to carry the
-// warning, or an operator has no way to know this host is unisolated.
+// When peer isolation is REQUIRED, a host (or jump host) that could not apply it must
+// fail the enrollment closed rather than join the overlay silently unisolated.
+func TestIsolationFailsClosedWhenRequired(t *testing.T) {
+	missing := "OVPN_IPTABLES_MISSING\nOVPN_HOST_IP=10.101.0.27\nOVPN_HOST_CONFIGURED\n"
+	notApplied := "OVPN_ISOLATION_MISSING\nOVPN_HOST_IP=10.101.0.27\nOVPN_HOST_CONFIGURED\n"
+
+	// Host end.
+	if err := hostIsolationError(missing, true); err == nil {
+		t.Error("required host isolation that could not be installed must fail closed")
+	}
+	if err := hostIsolationError(notApplied, true); err == nil {
+		t.Error("required host isolation that did not take must fail closed")
+	}
+	if err := hostIsolationError(missing, false); err != nil {
+		t.Errorf("isolation disabled must not fail the host: %v", err)
+	}
+	if err := hostIsolationError("OVPN_ISOLATION_OK\nOVPN_HOST_IP=10.101.0.27\n", true); err != nil {
+		t.Errorf("applied host isolation must not fail: %v", err)
+	}
+
+	// Jump-server end.
+	if err := serverIsolationError("OVPN_PEER_ISOLATION_FAILED\n", true); err == nil {
+		t.Error("required jump-host isolation that failed must fail closed")
+	}
+	if err := serverIsolationError("OVPN_PEER_ISOLATION_FAILED\n", false); err != nil {
+		t.Errorf("isolation disabled must not fail the jump host: %v", err)
+	}
+	if err := serverIsolationError("all good\n", true); err != nil {
+		t.Errorf("no isolation failure marker must not error: %v", err)
+	}
+}
+
+// checkHostBringup itself still formats the operator-facing warning detail (the hard
+// fail-closed decision is layered on in ProvisionHost via hostIsolationError).
 func TestBringupWarnsWhenIsolationCouldNotBeApplied(t *testing.T) {
 	out := "OVPN_IPTABLES_MISSING\nOVPN_HOST_IP=10.101.0.27\nOVPN_HOST_CONFIGURED\n"
 	detail, err := checkHostBringup(out, "10.101.0.27")
