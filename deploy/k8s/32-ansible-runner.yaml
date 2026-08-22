@@ -63,6 +63,10 @@ spec:
             # cache and ansible-lint's ~/.cache land on a writable mount (root fs is RO).
             - name: HOME
               value: /home/runner
+            # Ansible connection/become-prompt timeout (seconds); 30 rides out a
+            # momentary network blip on overlay-routed hosts.
+            - name: FLEET_ANSIBLE_TIMEOUT
+              value: "30"
           readinessProbe:
             httpGet:
               path: /healthz

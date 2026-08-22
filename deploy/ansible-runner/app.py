@@ -473,6 +473,14 @@ def _stream_run(req: RunRequest):
             # unknown keys are recorded, a CHANGED key is still refused (BadHostKey).
             "ANSIBLE_PARAMIKO_HOST_KEY_AUTO_ADD": "True",
             "ANSIBLE_RETRY_FILES_ENABLED": "0",
+            # Connection (and become-prompt) timeout. The default (~12s incl. ansible's
+            # padding) is too tight for hosts reached over the WG overlay: one lost
+            # packet puts the established stream into TCP retransmission backoff
+            # (1+2+4+8s...), so a momentary blip surfaces as "Timeout (12s) waiting for
+            # privilege escalation prompt" and fails the host. 30s rides out a single
+            # retransmit cycle; ConnectTimeout in the generated ssh_config still bounds
+            # the initial TCP connect.
+            "ANSIBLE_TIMEOUT": os.environ.get("FLEET_ANSIBLE_TIMEOUT", "30"),
             "ANSIBLE_LOCAL_TEMP": workdir,
             # Find the build-time installed collections (community.routeros etc.) even
             # though HOME is the ephemeral workdir.

@@ -261,6 +261,9 @@ services:
       # Must match the backend's FLEET_ANSIBLE_RUNNER_TOKEN; the runner rejects any
       # execute/check request whose X-Runner-Token doesn't match.
       FLEET_ANSIBLE_RUNNER_TOKEN: ${FLEET_ANSIBLE_RUNNER_TOKEN:-}
+      # Ansible connection/become-prompt timeout (seconds). The runner defaults to 30
+      # so a momentary overlay blip (TCP retransmission backoff) can't fail a host.
+      FLEET_ANSIBLE_TIMEOUT: ${FLEET_ANSIBLE_TIMEOUT:-30}
     deploy:
       resources:
         limits:

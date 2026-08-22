@@ -60,6 +60,9 @@ spec:
             # and ansible-lint's ~/.cache work with the read-only root fs.
             - name: HOME
               value: /home/runner
+            # Connection/become-prompt timeout — see values.ansibleRunner.ansibleTimeout.
+            - name: FLEET_ANSIBLE_TIMEOUT
+              value: {{ .Values.ansibleRunner.ansibleTimeout | default 30 | quote }}
           readinessProbe:
             httpGet:
               path: /healthz

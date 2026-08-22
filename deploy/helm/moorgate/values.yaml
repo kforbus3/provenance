@@ -155,6 +155,9 @@ ansibleRunner:
     repository: ghcr.io/kforbus3/moorgate-ansible-runner
     tag: ""            # defaults to .Chart.AppVersion when empty
     pullPolicy: IfNotPresent
+  # Ansible connection/become-prompt timeout (seconds). 30 rides out a momentary
+  # network blip (one TCP retransmission backoff cycle) on overlay-routed hosts.
+  ansibleTimeout: 30
   resources:
     requests:
       cpu: 100m
