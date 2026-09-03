@@ -62,7 +62,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: ghcr.io/kforbus3/moorgate-backend:latest
+          image: ghcr.io/kforbus3/blackfriars-backend:latest
           imagePullPolicy: IfNotPresent
           # Give kube-proxy/Ingress time to remove this pod from the Service endpoints
           # before the container receives SIGTERM, so no new request/session is routed

@@ -253,15 +253,15 @@ Blackfriars CA (`GET /api/v1/certificates/ca/pub`) and runs WireGuard on
 ### Other deployment targets
 
 `deploy/` also contains Kubernetes manifests (`deploy/k8s`), a **Helm chart
-(`deploy/helm/moorgate`)**, and systemd units (`deploy/systemd`) for non-Compose
+(`deploy/helm/blackfriars`)**, and systemd units (`deploy/systemd`) for non-Compose
 environments. They consume the same environment variables described above.
 
 #### Kubernetes / Helm
 
-Install the chart at **`deploy/helm/moorgate`**:
+Install the chart at **`deploy/helm/blackfriars`**:
 
 ```sh
-helm install moorgate deploy/helm/moorgate \
+helm install blackfriars deploy/helm/blackfriars \
   --namespace moorgate --create-namespace \
   -f my-values.yaml
 ```

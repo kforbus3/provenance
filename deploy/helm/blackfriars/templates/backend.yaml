@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "moorgate.backend.fullname" . }}
+  name: {{ include "blackfriars.backend.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
   {{- if .Values.backend.metrics.scrape }}
   annotations:
@@ -13,7 +13,7 @@ metadata:
   {{- end }}
 spec:
   selector:
-    {{- include "moorgate.selectorLabels" (dict "context" . "component" "backend") | nindent 4 }}
+    {{- include "blackfriars.selectorLabels" (dict "context" . "component" "backend") | nindent 4 }}
   ports:
     - name: http
       port: 8080
@@ -22,9 +22,9 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "moorgate.backend.fullname" . }}
+  name: {{ include "blackfriars.backend.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
   {{- if not .Values.backend.autoscaling.enabled }}
@@ -37,11 +37,11 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      {{- include "moorgate.selectorLabels" (dict "context" . "component" "backend") | nindent 6 }}
+      {{- include "blackfriars.selectorLabels" (dict "context" . "component" "backend") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "moorgate.labels" . | nindent 8 }}
+        {{- include "blackfriars.labels" . | nindent 8 }}
         app.kubernetes.io/component: backend
       annotations:
         # Roll pods when config/secret content changes.
@@ -68,7 +68,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: {{ include "moorgate.backend.image" . | quote }}
+          image: {{ include "blackfriars.backend.image" . | quote }}
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           {{- if gt (int .Values.backend.preStopSleepSeconds) 0 }}
           # Let Service endpoints deregister before the container is signalled, so no
@@ -83,9 +83,9 @@ spec:
               containerPort: 8080
           envFrom:
             - configMapRef:
-                name: {{ include "moorgate.fullname" . }}-config
+                name: {{ include "blackfriars.fullname" . }}-config
             - secretRef:
-                name: {{ include "moorgate.secretName" . }}
+                name: {{ include "blackfriars.secretName" . }}
           readinessProbe:
             httpGet:
               path: /ready
@@ -139,7 +139,7 @@ spec:
         - name: fleet-data
           {{- if .Values.backend.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "moorgate.backend.fullname" . }}-data
+            claimName: {{ include "blackfriars.backend.fullname" . }}-data
           {{- else }}
           emptyDir: {}
           {{- end }}
@@ -148,9 +148,9 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "moorgate.backend.fullname" . }}-data
+  name: {{ include "blackfriars.backend.fullname" . }}-data
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
   accessModes: [{{ .Values.backend.persistence.accessMode | quote }}]
@@ -166,15 +166,15 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "moorgate.backend.fullname" . }}
+  name: {{ include "blackfriars.backend.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "moorgate.backend.fullname" . }}
+    name: {{ include "blackfriars.backend.fullname" . }}
   minReplicas: {{ .Values.backend.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.backend.autoscaling.maxReplicas }}
   metrics:

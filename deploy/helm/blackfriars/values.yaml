@@ -11,7 +11,7 @@ imagePullSecrets: []
 backend:
   replicaCount: 2
   image:
-    repository: ghcr.io/kforbus3/moorgate-backend
+    repository: ghcr.io/kforbus3/blackfriars-backend
     tag: ""            # defaults to .Chart.AppVersion when empty
     pullPolicy: IfNotPresent
   resources:
@@ -54,7 +54,7 @@ backend:
 frontend:
   replicaCount: 2
   image:
-    repository: ghcr.io/kforbus3/moorgate-frontend
+    repository: ghcr.io/kforbus3/blackfriars-frontend
     tag: ""            # defaults to .Chart.AppVersion when empty
     pullPolicy: IfNotPresent
   resources:
@@ -152,7 +152,7 @@ postgres:
 ansibleRunner:
   enabled: true
   image:
-    repository: ghcr.io/kforbus3/moorgate-ansible-runner
+    repository: ghcr.io/kforbus3/blackfriars-ansible-runner
     tag: ""            # defaults to .Chart.AppVersion when empty
     pullPolicy: IfNotPresent
   # Ansible connection/become-prompt timeout (seconds). 30 rides out a momentary
@@ -172,7 +172,7 @@ ansibleRunner:
 grypeScanner:
   enabled: true
   image:
-    repository: ghcr.io/kforbus3/moorgate-grype-scanner
+    repository: ghcr.io/kforbus3/blackfriars-grype-scanner
     tag: ""            # defaults to .Chart.AppVersion when empty
     pullPolicy: IfNotPresent
   scanConcurrency: 2

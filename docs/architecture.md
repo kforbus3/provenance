@@ -308,7 +308,7 @@ The design is single-app-stack by default and scales along two well-understood a
 - **Throughput / availability.** The backend is stateless apart from Postgres and
   the on-disk recording/scan/backup volume, so it scales horizontally behind a
   load balancer. See [high-availability.md](./high-availability.md) and the Helm
-  chart (`deploy/helm/moorgate`) for a multi-replica reference.
+  chart (`deploy/helm/blackfriars`) for a multi-replica reference.
 
 See [database.md](./database.md) for the full schema and [api.md](./api.md) for
 the endpoint reference.

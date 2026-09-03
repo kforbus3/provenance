@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "moorgate.ansibleRunner.fullname" . }}
+  name: {{ include "blackfriars.ansibleRunner.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: ansible-runner
 spec:
   selector:
-    {{- include "moorgate.selectorLabels" (dict "context" . "component" "ansible-runner") | nindent 4 }}
+    {{- include "blackfriars.selectorLabels" (dict "context" . "component" "ansible-runner") | nindent 4 }}
   ports:
     - name: http
       port: 8000
@@ -17,19 +17,19 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "moorgate.ansibleRunner.fullname" . }}
+  name: {{ include "blackfriars.ansibleRunner.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: ansible-runner
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "moorgate.selectorLabels" (dict "context" . "component" "ansible-runner") | nindent 6 }}
+      {{- include "blackfriars.selectorLabels" (dict "context" . "component" "ansible-runner") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "moorgate.labels" . | nindent 8 }}
+        {{- include "blackfriars.labels" . | nindent 8 }}
         app.kubernetes.io/component: ansible-runner
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -54,7 +54,7 @@ spec:
             - name: FLEET_ANSIBLE_RUNNER_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "moorgate.secretName" . }}
+                  name: {{ include "blackfriars.secretName" . }}
                   key: FLEET_ANSIBLE_RUNNER_TOKEN
             # HOME on the writable emptyDir so Ansible's ~/.ansible tmp/collection cache
             # and ansible-lint's ~/.cache work with the read-only root fs.

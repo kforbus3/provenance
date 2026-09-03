@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "moorgate.grypeScanner.fullname" . }}
+  name: {{ include "blackfriars.grypeScanner.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: grype-scanner
 spec:
   selector:
-    {{- include "moorgate.selectorLabels" (dict "context" . "component" "grype-scanner") | nindent 4 }}
+    {{- include "blackfriars.selectorLabels" (dict "context" . "component" "grype-scanner") | nindent 4 }}
   ports:
     - name: http
       port: 8000
@@ -17,9 +17,9 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "moorgate.grypeScanner.fullname" . }}
+  name: {{ include "blackfriars.grypeScanner.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: grype-scanner
 spec:
   replicas: 1
@@ -27,11 +27,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "moorgate.selectorLabels" (dict "context" . "component" "grype-scanner") | nindent 6 }}
+      {{- include "blackfriars.selectorLabels" (dict "context" . "component" "grype-scanner") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "moorgate.labels" . | nindent 8 }}
+        {{- include "blackfriars.labels" . | nindent 8 }}
         app.kubernetes.io/component: grype-scanner
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -95,7 +95,7 @@ spec:
         - name: grype-db
           {{- if .Values.grypeScanner.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "moorgate.grypeScanner.fullname" . }}-db
+            claimName: {{ include "blackfriars.grypeScanner.fullname" . }}-db
           {{- else }}
           emptyDir: {}
           {{- end }}
@@ -106,9 +106,9 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "moorgate.grypeScanner.fullname" . }}-db
+  name: {{ include "blackfriars.grypeScanner.fullname" . }}-db
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: grype-scanner
 spec:
   accessModes: ["ReadWriteOnce"]

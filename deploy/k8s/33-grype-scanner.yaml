@@ -50,7 +50,7 @@ spec:
       containers:
         - name: grype-scanner
           # Build/push from deploy/grype-scanner (no public image is published).
-          image: ghcr.io/kforbus3/moorgate-grype-scanner:latest
+          image: ghcr.io/kforbus3/blackfriars-grype-scanner:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

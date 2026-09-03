@@ -48,7 +48,7 @@ spec:
       containers:
         - name: ansible-runner
           # Build/push from deploy/ansible-runner (no public image is published).
-          image: ghcr.io/kforbus3/moorgate-ansible-runner:latest
+          image: ghcr.io/kforbus3/blackfriars-ansible-runner:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
