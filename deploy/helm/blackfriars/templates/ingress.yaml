@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "moorgate.fullname" . }}
+  name: {{ include "blackfriars.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -27,14 +27,14 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "moorgate.backend.fullname" . }}
+                name: {{ include "blackfriars.backend.fullname" . }}
                 port:
                   number: 8080
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "moorgate.frontend.fullname" . }}
+                name: {{ include "blackfriars.frontend.fullname" . }}
                 port:
                   number: 80
 {{- end }}

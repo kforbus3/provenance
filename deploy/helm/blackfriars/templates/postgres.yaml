@@ -2,14 +2,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "moorgate.postgres.fullname" . }}
+  name: {{ include "blackfriars.postgres.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
   clusterIP: None
   selector:
-    {{- include "moorgate.selectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+    {{- include "blackfriars.selectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
   ports:
     - name: postgres
       port: 5432
@@ -18,20 +18,20 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "moorgate.postgres.fullname" . }}
+  name: {{ include "blackfriars.postgres.fullname" . }}
   labels:
-    {{- include "moorgate.labels" . | nindent 4 }}
+    {{- include "blackfriars.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
-  serviceName: {{ include "moorgate.postgres.fullname" . }}
+  serviceName: {{ include "blackfriars.postgres.fullname" . }}
   replicas: 1
   selector:
     matchLabels:
-      {{- include "moorgate.selectorLabels" (dict "context" . "component" "postgres") | nindent 6 }}
+      {{- include "blackfriars.selectorLabels" (dict "context" . "component" "postgres") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "moorgate.labels" . | nindent 8 }}
+        {{- include "blackfriars.labels" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
       {{- with .Values.imagePullSecrets }}
@@ -62,7 +62,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "moorgate.secretName" . }}
+                  name: {{ include "blackfriars.secretName" . }}
                   key: POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

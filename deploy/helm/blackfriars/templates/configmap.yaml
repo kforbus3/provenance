@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "blackfriars.fullname" . }}-config
+  labels:
+    {{- include "blackfriars.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+data:
+  {{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  FLEET_REDIS_URL: {{ include "blackfriars.redisUrl" . | quote }}
+  {{- if .Values.ansibleRunner.enabled }}
+  FLEET_ANSIBLE_RUNNER_URL: {{ printf "http://%s:8000" (include "blackfriars.ansibleRunner.fullname" .) | quote }}
+  {{- end }}
+  {{- if .Values.grypeScanner.enabled }}
+  FLEET_GRYPE_SCANNER_URL: {{ printf "http://%s:8000" (include "blackfriars.grypeScanner.fullname" .) | quote }}
+  {{- end }}
