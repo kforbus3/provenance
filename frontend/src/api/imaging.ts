@@ -329,3 +329,44 @@ export async function diskUsage(): Promise<DiskUsage> {
   const { data } = await api.get("/api/v1/imaging/disk");
   return data;
 }
+
+// --- machines being imaged right now -----------------------------------------
+
+export interface PhaseChange {
+  phase: string;
+  at: string;
+}
+
+// Live progress of an imaging run. Held in memory on the server and expired
+// there, so this is what is happening at this moment rather than a history —
+// a finished machine lingers briefly and then drops off.
+export interface ImagingNow {
+  id: string;
+  phase: string;
+  percent: number;
+  detail?: string;
+  disk?: string;
+  image?: string;
+  address?: string;
+  firstSeen: string;
+  lastSeen: string;
+  finishedAt?: string;
+  history: PhaseChange[];
+  // "stalled" is not an error: writing a large image to a slow disk is a long
+  // silence, and the imager reports on phase changes rather than on a timer.
+  state: "active" | "stalled" | "done" | "failed";
+  ageSeconds: number;
+  staleSeconds: number;
+}
+
+export async function imagingNow(): Promise<{ imaging: ImagingNow[]; active: number }> {
+  const { data } = await api.get("/api/v1/imaging/now");
+  return { imaging: data.imaging ?? [], active: data.active ?? 0 };
+}
+
+// Drop a row for a machine that will never report again — unplugged mid-write,
+// most often. It expires on its own; this is for the operator who would rather
+// not look at it for the next ten minutes.
+export async function forgetImaging(id: string) {
+  await api.delete(`/api/v1/imaging/now/${encodeURIComponent(id)}`);
+}
