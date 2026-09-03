@@ -1,0 +1,40 @@
+#!/bin/sh
+# Mark an initramfs that will fetch the LUKS bootstrap key at boot.
+#
+# This exists for luks-enroll-reap.sh, which destroys the bootstrap keyslot only
+# after the machine has booted *without* using the bootstrap key -- that boot
+# being the proof the TPM/Tang binding actually works. It used to establish this
+# by looking for cryptsetup-keys.d in the booted initramfs, because that is where
+# the key was.
+#
+# The key now lives on the BOOT partition and init-premount/ab-luks-key fetches
+# it, so no initramfs contains a key any more and that check would say "keyless,
+# binding proven" about a boot the bootstrap key had just unlocked. Removing the
+# keyslot on that evidence is the tpm2 bug again, with a machine that no longer
+# boots at all.
+#
+# So mark it by name instead. The marker is written when, and only when, crypttab
+# still points at the bootstrap key -- exactly the condition under which
+# init-premount/ab-luks-key does anything. luks-enroll.sh rewrites crypttab to
+# clevis and rebuilds, which drops the marker and makes the next boot the proof
+# the reaper is waiting for.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+grep -qs '/cryptkey/luks\.key' /etc/crypttab || exit 0
+
+mkdir -p "${DESTDIR}/cryptkey"
+chmod 0700 "${DESTDIR}/cryptkey"
+: > "${DESTDIR}/cryptkey/bootstrap-key-in-use"
+
+# blkid is what init-premount/ab-luks-key finds the BOOT partition with, and it
+# is not otherwise guaranteed to be in a minimal initramfs.
+copy_exec /sbin/blkid 2>/dev/null || true
+
+exit 0

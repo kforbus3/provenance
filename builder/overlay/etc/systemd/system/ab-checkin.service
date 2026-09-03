@@ -1,0 +1,30 @@
+[Unit]
+Description=Report to the provisioning server that this machine booted
+# After the network is actually usable, not merely configured: the report goes
+# to the provisioning server, and a machine that has just been imaged is often
+# still on that network only briefly.
+#
+# Deliberately NOT After=ab-mark-good.service. That edge closed an ordering
+# cycle -- multi-user.target wants this unit, this unit came after
+# ab-mark-good.service, and that came after multi-user.target -- which systemd
+# resolved by deleting one of the two jobs at boot. It bought nothing: this
+# only reports, and reporting before or after the try counter is cleared makes
+# no difference to anything.
+After=network-online.target
+Wants=network-online.target
+# Nothing to report if the imager never left an address on the BOOT partition,
+# e.g. an image written to a disk by hand rather than provisioned over a network.
+ConditionPathExists=/boot/ab-deploy.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ab-checkin.sh
+# Best-effort by design. A machine that cannot reach the server has usually just
+# moved to its production network, which is not a fault and must not be reported
+# as one -- nor delay anything else that is waiting on this.
+SuccessExitStatus=0 1
+TimeoutStartSec=30
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

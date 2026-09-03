@@ -1,0 +1,19 @@
+#!ipxe
+# Dispatcher — the script every PXE client is pointed at by DHCP.
+#
+# A machine first asks for a script named after its own MAC. If the web UI has
+# assigned that machine a specific image, that file exists and wins; if not the
+# request 404s and `||` takes over. What it falls back to depends on the
+# UNASSIGNED setting: default.ipxe images the machine with the default image, or
+# unassigned.ipxe holds it — printing its MAC and retrying without touching the
+# disk, so a fleet can be discovered safely and then assigned.
+#
+# This is what lets a switch full of machines image concurrently off one server
+# while still allowing individual machines to be targeted, with no per-machine
+# setup on the machines themselves.
+#
+# ${mac:hexhyp} is expanded by iPXE at boot time (e.g. 00-11-22-33-44-55), not
+# here: envsubst is given an explicit variable list, so it leaves iPXE's own
+# variables untouched.
+
+chain --autofree http://${SERVER_IP}/hosts/${mac:hexhyp}.ipxe || chain --autofree http://${SERVER_IP}/${FALLBACK}

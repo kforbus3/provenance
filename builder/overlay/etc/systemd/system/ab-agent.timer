@@ -1,0 +1,23 @@
+[Unit]
+Description=Check in with the Flipside control plane periodically
+Documentation=file:///usr/local/sbin/ab-agent.sh
+
+[Timer]
+# Soon after boot, so a machine appears in the fleet within a minute of coming
+# up rather than after a full interval of looking absent.
+OnBootSec=45s
+OnUnitActiveSec=5min
+# Every machine in the fleet was imaged from the same server and boots with the
+# same timer, so without this they all check in on the same second -- and after
+# a site-wide power cut they would all check in on the *same* second forever.
+# The offset is derived from the machine ID, so it is stable per machine rather
+# than re-randomised each boot.
+RandomizedDelaySec=120
+FixedRandomDelay=true
+# A machine that was powered off through several intervals checks in once when
+# it comes back, rather than not at all until the next one comes round.
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

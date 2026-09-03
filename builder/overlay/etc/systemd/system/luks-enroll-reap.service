@@ -1,0 +1,18 @@
+[Unit]
+Description=Destroy the LUKS bootstrap key after a boot proved TPM/Tang unlock works
+# Phase 2 of enrollment. luks-enroll.service writes the pending stamp; this runs
+# on the boot after that one, which is the boot that proves the binding works.
+ConditionPathExists=/var/lib/luks-enroll.pending
+ConditionPathExists=!/var/lib/luks-enroll.done
+# /boot holds the initramfs this machine actually booted, which is what the
+# script checks before it destroys anything.
+RequiresMountsFor=/boot
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/luks-enroll-reap.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

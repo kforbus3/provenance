@@ -1,0 +1,616 @@
+#!/bin/sh
+# Assemble the machine's writable state on top of the read-only A/B root slot.
+#
+# Without this the root slot is the only writable filesystem, so a user writing
+# to /home fills a 5 GiB partition while tens of gigabytes sit unused in
+# /var/lib/overlay. Worse, everything written to the root slot is destroyed the
+# next time an A/B update replaces it -- which is the whole point of A/B.
+#
+# What gets mounted where is not hardcoded here. The image ships a manifest at
+# /usr/lib/ab/state.conf and this applies it, so the same code serves an image
+# whose whole root is a shared overlay and one whose root is read-only with a
+# handful of enumerated writable paths. The default manifest is:
+#
+#     model overlay
+#     overlay /
+#
+# which is the original behaviour: the slot becomes the read-only lower layer
+# and every write lands on the overlay partition. An image with no manifest at
+# all -- anything built before this existed -- gets exactly that too, because
+# machines already in the field boot their own slot's initramfs and must not
+# change behaviour underneath themselves.
+#
+# One optional line changes where the overlay's upper layer lives:
+#
+#     upper per-slot
+#
+# which gives each slot its own upper (`upper-A`, `upper-B`) instead of the one
+# both share. A configuration change made while running A then cannot follow you
+# into B, so "boot the other slot" recovers from a bad edit and not only from a
+# bad image -- at the cost of the two slots no longer sharing anything the
+# overlay covers. See BUILDER.md#a-separate-upper-layer-per-slot.
+#
+# Runs in local-bottom, after the root slot is mounted at $rootmnt and before
+# the switch to it. Add ab.state=off (ab.overlay=off) to the kernel command line
+# to boot the slot untouched, which is the escape hatch if the writable state
+# ever goes bad.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0;;
+esac
+
+[ -r /scripts/functions ] && . /scripts/functions
+
+msg() { echo "ab-overlay: $*" > /dev/kmsg 2>/dev/null || echo "ab-overlay: $*"; }
+
+RESET=0
+for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in
+        ab.overlay=off|ab.state=off)
+            msg "disabled on the command line; booting the slot directly"; exit 0;;
+        ab.overlay=reset|ab.state=reset) RESET=1;;
+    esac
+done
+
+# The overlay is normally an unlocked LUKS volume by now: the initramfs holds
+# every crypttab entry so it can unlock whichever slot it was told to boot, and
+# the overlay comes along with them. An unencrypted image has it by label.
+OVL=/dev/mapper/luks-overlay
+if [ ! -b "$OVL" ]; then
+    OVL="$(blkid -L overlay 2>/dev/null || true)"
+fi
+if [ ! -b "$OVL" ]; then
+    msg "no overlay device; booting the slot directly"
+    exit 0
+fi
+
+modprobe overlay >/dev/null 2>&1 || true
+
+mkdir -p /ab-lower /ab-rw
+
+# The slot needs a second, stable reference to serve as the lower layer. A bind
+# is used rather than `mount --move`: the initramfs leaves $rootmnt shared, and
+# --move refuses a shared mount outright -- which is exactly how this silently
+# fell back to a plain root the first time. Making it private and moving it
+# would also work, but a bind leaves the original mount untouched, so a failure
+# anywhere below costs nothing.
+# `-o bind` rather than `--bind`: the initramfs ships klibc's minimal mount,
+# which understands the -o form but none of util-linux's long options. Using
+# --bind (or --move) silently fails there, which is precisely how this fell back
+# to a plain root twice while looking like it had run.
+bind_mount() { mount -o bind "$1" "$2" 2>/dev/null || mount --bind "$1" "$2" 2>/dev/null; }
+
+# Removal has to be done through a helper because the initramfs may not have
+# rm: klibc ships `nuke` instead, and a bare `rm -rf` fails with "rm: not
+# found" -- to the kernel log only, so the script carries on as if it had
+# worked. The hook copies rm in; this is the backstop if that ever fails.
+remove_path() {
+    [ -e "$1" ] || [ -L "$1" ] || return 1
+    if rm -rf "$1" 2>/dev/null; then return 0; fi
+    if nuke "$1" 2>/dev/null; then return 0; fi
+    return 1
+}
+
+if ! bind_mount "$rootmnt" /ab-lower; then
+    msg "could not bind the root slot as a lower layer; booting it directly"
+    exit 0
+fi
+
+undo() {                       # leave the slot exactly as it was found
+    umount /ab-rw 2>/dev/null || true
+    umount /ab-lower 2>/dev/null || true
+    # Under the stateful and appliance models GRUB passes `ro`, because
+    # everything writable is supposed to come from the manifest -- which is
+    # exactly what is not being applied here. Left alone, the fallback would
+    # boot to a system with nowhere to write anything, which is not a fallback.
+    # Writes land on the slot and an update will replace them; that is the
+    # correct trade for a machine that would otherwise not come up.
+    if mount -o remount,rw "$rootmnt" 2>/dev/null; then
+        msg "  remounted the slot read-write so the machine can still be used"
+    fi
+    msg "$1 -- booting the slot directly"
+    exit 0
+}
+
+mount -t ext4 "$OVL" /ab-rw 2>/dev/null || undo "overlay filesystem would not mount"
+
+# --- the manifest ------------------------------------------------------------
+#
+# Read from the slot rather than from the overlay partition, so the image
+# decides how its own state is laid out and an update can change that layout in
+# the same step that delivers the software expecting it.
+#
+# Directives are applied in file order. build-image.sh emits them parent-first
+# (it has real coreutils and can sort; this has busybox and should not have to),
+# so `overlay /` always lands before anything mounted inside it.
+CONF=/ab-lower/usr/lib/ab/state.conf
+MODEL=overlay
+UPPER_MODE=shared             # shared | per-slot; see "upper" below
+MOUNTS=/ab-conf-mounts        # "verb path [arg]" per line, in application order
+RESETS=/ab-conf-resets        # paths cleared from their store on a slot change
+KEEPS=/ab-conf-keeps          # paths held back from that clearing
+: > "$MOUNTS"; : > "$RESETS"; : > "$KEEPS"
+
+if [ -r "$CONF" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue;; esac
+        verb="${line%% *}"; rest="${line#"$verb"}"
+        rest="${rest# }"
+        case "$verb" in
+            model)                    MODEL="$rest";;
+            upper)                    UPPER_MODE="$rest";;
+            overlay|persist|slot-private|volatile)
+                                      printf '%s %s\n' "$verb" "$rest" >> "$MOUNTS";;
+            reset-on-update)          printf '%s\n' "$rest" >> "$RESETS";;
+            keep)                     printf '%s\n' "$rest" >> "$KEEPS";;
+            *) msg "state.conf: ignoring unknown directive '$verb'";;
+        esac
+    done < "$CONF"
+else
+    # No manifest: an image built before this existed. Reproduce what it did.
+    printf 'overlay /\n' > "$MOUNTS"
+    for d in /usr /bin /sbin /lib /lib32 /lib64 /libx32 /boot \
+             /var/lib/dpkg /var/lib/apt /var/cache/apt; do
+        printf '%s\n' "$d" >> "$RESETS"
+    done
+    printf '/usr/local\n' > "$KEEPS"
+fi
+
+# --- helpers used from here down ---------------------------------------------
+
+# dirname/basename/rmdir are not guaranteed here -- this is the script that
+# discovered the hard way that even `rm` is not -- so parent directories are
+# taken with parameter expansion, which is the shell itself and cannot be
+# missing.
+parent_of() { case "$1" in */*) printf '%s\n' "${1%/*}";; *) printf '/\n';; esac; }
+
+# Put the image's copy of a path into a store, the first time the store is used
+# and again whenever an update clears it. Without this a bind over /var hands
+# the machine an empty /var.
+#
+# Built alongside and renamed into place: a half-copied store is
+# indistinguishable from a complete one, and this runs on a machine that can
+# lose power mid-copy.
+seed_store() {                 # seed_store <store path> <source path>
+    [ -e "$1" ] && return 0
+    mkdir -p "$(parent_of "$1")" 2>/dev/null || return 1
+    [ -e "$2" ] || return 0    # not in the image either; correctly absent
+    remove_path "$1.new" || true
+    # A partial copy is the worst outcome available here. The overlay partition
+    # ships at its minimum and is not grown until first-boot-expand runs, well
+    # after this -- so seeding a large /var into it could fill it partway, and
+    # what came out was a machine with a truncated /var bound over the real one:
+    # not a crash, boots, looks almost right. build-image.sh now refuses to ship
+    # a manifest that cannot fit, and this is the second line of defence: if the
+    # copy fails for any reason the half-built store is thrown away, the
+    # directive fails, and the path stays on the slot where it is at least
+    # complete.
+    if [ -d "$2" ]; then
+        mkdir -p "$1.new" || return 1
+        if ! cp -a "$2/." "$1.new/" 2>/dev/null; then
+            msg "  WARNING: could not seed $1 from the image (out of space?);"
+            msg "           discarding the partial copy and leaving $2 on the slot"
+            remove_path "$1.new"
+            return 1
+        fi
+    else
+        if ! cp -a "$2" "$1.new" 2>/dev/null; then
+            msg "  WARNING: could not seed $1 from the image"
+            remove_path "$1.new"
+            return 1
+        fi
+    fi
+    mv "$1.new" "$1" 2>/dev/null || { remove_path "$1.new"; return 1; }
+    return 0
+}
+
+# --- which directory on the overlay partition backs a given path -------------
+#
+# Every write to /home lands somewhere under /var/lib/overlay, but *where*
+# depends on the directive covering it: the shared upper layer, the shared
+# persist tree, or this slot's private tree. Clearing a path on update, or
+# dropping one the image owns, has to reach into the right one -- so the
+# question "what backs /var/lib/dpkg" is asked here rather than assumed.
+#
+# The longest matching directive wins, the same way the kernel picks a mount.
+SLOT=""
+for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in rauc.slot=*) SLOT="${arg#rauc.slot=}";; esac
+done
+
+# --- where the overlay's upper layer lives -----------------------------------
+#
+# Shared by both slots by default: an update replaces the OS in the inactive
+# slot and reboots into it, and an upper layer tied to a slot would take /home
+# with it every time. The cost is that a bad edit follows you into the other
+# slot, so booting it is not by itself a way out of one.
+#
+# `upper per-slot` buys that way out. Each slot gets its own upper and its own
+# workdir, so nothing written while running A is visible from B -- including the
+# configuration change that stopped A from booting. Everything below is written
+# in terms of these two variables precisely so that this is the only place the
+# difference exists.
+UPPER_ROOT=/ab-rw/upper
+WORK_ROOT=/ab-rw/work
+case "$UPPER_MODE" in
+    shared) ;;
+    per-slot)
+        # No rauc.slot means no way to tell which upper is this boot's. Falling
+        # back to the shared one would hand the machine a layer it has never
+        # written to, which from inside is indistinguishable from having been
+        # wiped -- so refuse, the same way a model change is refused. grub.cfg
+        # always passes rauc.slot, so this is only reachable from a hand-typed
+        # command line, where a refusal is the useful answer.
+        if [ -z "$SLOT" ]; then
+            msg "REFUSING: this image gives each slot its own upper layer, and"
+            msg "  there is no rauc.slot= on the kernel command line to say which"
+            msg "  one this is. Add rauc.slot=A or rauc.slot=B, or boot with"
+            msg "  ab.state=off to get in and look around."
+            undo "no slot for a per-slot upper layer"
+        fi
+        UPPER_ROOT="/ab-rw/upper-$SLOT"
+        WORK_ROOT="/ab-rw/work-$SLOT"
+        ;;
+    *)
+        # An unknown value must not silently become "per-slot": that would move
+        # every existing machine's writes out from under it. Shared is both the
+        # historical behaviour and the recoverable one.
+        msg "state.conf: unknown 'upper $UPPER_MODE'; using the shared upper layer"
+        UPPER_MODE=shared
+        ;;
+esac
+
+# What the machine records as the layout it was imaged with, and what an image
+# delivered by an update is checked against. The upper mode is part of it: it
+# decides which directory every write has been landing in, so changing it has
+# exactly the same consequence as changing the model, and gets the same refusal.
+MODEL_ID="$MODEL"
+[ "$UPPER_MODE" = per-slot ] && MODEL_ID="$MODEL+per-slot-upper"
+
+# Sets STORE_PATH and STORE_VERB; returns 1 if nothing backs the path.
+# Globals rather than a printed value because the caller needs both, and both
+# are needed together: *where* a path is backed decides what clearing it means.
+resolve_store() {              # resolve_store <absolute path>
+    _p="$1"; STORE_PATH=""; STORE_VERB=""; _bestlen=-1
+    while read -r _verb _mp _arg; do
+        [ -n "$_mp" ] || continue
+        case "$_p" in
+            "$_mp") ;;
+            "$_mp"/*) ;;
+            *) [ "$_mp" = "/" ] || continue;;
+        esac
+        _len=${#_mp}
+        [ "$_len" -gt "$_bestlen" ] || continue
+        case "$_verb" in
+            overlay)      STORE_PATH="$UPPER_ROOT$_p";;
+            persist)      STORE_PATH="/ab-rw/persist$_p";;
+            slot-private) STORE_PATH="/ab-rw/slots/${SLOT:-unknown}$_p";;
+            volatile)     STORE_PATH=""; STORE_VERB=volatile; _bestlen=$_len; continue;;
+            *)            continue;;
+        esac
+        STORE_VERB="$_verb"
+        _bestlen=$_len
+    done < "$MOUNTS"
+    [ -n "$STORE_PATH" ]
+}
+
+# Clear a path from its store so the image's copy is what the machine reads.
+#
+# Under an overlay that is just a delete: removing the upper copy uncovers the
+# slot's. Under a bind there is nothing underneath -- the store *is* the
+# filesystem the machine sees -- so a bare delete does not reveal the image's
+# version, it destroys the file outright. That is the difference between
+# "/var/lib/dpkg reverts to the new release's" and "/var/lib/dpkg is gone", and
+# it is why this cannot simply be remove_path.
+clear_from_store() {           # clear_from_store <absolute path>
+    resolve_store "$1" || return 1
+    remove_path "$STORE_PATH" || return 1
+    [ "$STORE_VERB" = overlay ] && return 0
+    seed_store "$STORE_PATH" "/ab-lower$1"
+    return 0
+}
+
+# --- ab.state=reset: boot once from clean writable state ---------------------
+#
+# Everything written since the machine was imaged lives in the writable stores,
+# so a bad edit there follows you into the other slot and makes "boot the other
+# slot to recover" useless. This sets those stores aside and starts empty ones.
+#
+# It is a rename, not a delete: same filesystem, so it is instant and costs no
+# space, and every file is still there under /var/lib/overlay/*.prev for you to
+# copy back. Nothing is written to grubenv, so this applies to one boot only.
+#
+# All three stores are moved, not just the upper layer. Moving only `upper`
+# would leave a machine that had been told "start clean" still running on its
+# old /var and /home, which is the opposite of what the recovery entry promises.
+#
+# The exception is the *other* slot's upper under `upper per-slot`. Only this
+# slot's is set aside: the whole reason to give the slots separate uppers is so
+# that the other one is a known-good state to fall back on, and a reset entry
+# that wiped it too would destroy exactly what it was reached for.
+#
+# If a previous snapshot is already there, refuse rather than overwrite it -- a
+# second reset would otherwise destroy the state you were trying to rescue. That
+# is safe to refuse because ab.state=off always boots the slot regardless.
+if [ "$RESET" = 1 ]; then
+    # "upper" or "upper-A" -- whichever this boot is actually writing to.
+    _upper_name="${UPPER_ROOT##*/}"
+    _blocked=""
+    for s in "$_upper_name" persist slots; do
+        [ -e "/ab-rw/$s.prev" ] && _blocked="$_blocked $s.prev"
+    done
+    if [ -n "$_blocked" ]; then
+        msg "reset refused:$_blocked already exist(s) under /var/lib/overlay, and"
+        msg "  overwriting would destroy the earlier snapshot. Move or remove them"
+        msg "  first, or boot with ab.state=off to get in and clean up."
+    else
+        _moved=""
+        for s in "$_upper_name" persist slots; do
+            [ -e "/ab-rw/$s" ] || continue
+            mv "/ab-rw/$s" "/ab-rw/$s.prev" 2>/dev/null && _moved="$_moved $s"
+        done
+        remove_path "$WORK_ROOT"    || true
+        remove_path "$WORK_ROOT.d"  || true
+        if [ -n "$_moved" ]; then
+            msg "set aside:$_moved (as *.prev under /var/lib/overlay); starting clean"
+            [ "$UPPER_MODE" = per-slot ] && \
+                msg "  the other slot's upper layer was left alone"
+        else
+            msg "nothing to set aside; continuing"
+        fi
+    fi
+fi
+
+# --- finish an interrupted keep-aside ----------------------------------------
+#
+# Paths held back from a slot-change clear are moved out of the way and moved
+# back. Losing power between the two used to mean /usr/local simply was not
+# there on the next boot, with the only copy under a dotfile nobody knew to look
+# for. Restoring first, before anything else touches the stores, closes that.
+restore_keeps() {
+    [ -d /ab-rw/.keep ] || return 0
+    _left=0
+    for _d in /ab-rw/.keep/*.path; do
+        [ -r "$_d" ] || continue
+        _n="${_d%.path}"
+        [ -e "$_n.data" ] || { remove_path "$_d"; continue; }
+        _dst="$(cat "$_d" 2>/dev/null)"
+        [ -n "$_dst" ] || { _left=1; continue; }
+        mkdir -p "$(parent_of "$_dst")" 2>/dev/null || true
+        if mv "$_n.data" "$_dst" 2>/dev/null; then
+            remove_path "$_d"
+        else
+            msg "  WARNING: could not restore $_dst; it is at $_n.data"
+            _left=1
+        fi
+    done
+    [ "$_left" = 0 ] && remove_path /ab-rw/.keep
+    return 0
+}
+restore_keeps
+
+# --- refuse a state-model change delivered by an update ----------------------
+#
+# The manifest comes from the image, so an update can carry a different one. If
+# it does, everything the machine has written is still on the partition but in
+# the wrong store for the new layout -- a machine that had /home in the shared
+# upper layer boots with /home coming from an empty persist tree and looks, from
+# the inside, like it has been wiped.
+#
+# Nothing here can safely migrate that: only a person knows which files matter.
+# So the mismatch is refused loudly and the slot is booted as-is, which is
+# recoverable, rather than applied, which looks like data loss.
+#
+# Switching the upper layer between shared and per-slot is the same fault in a
+# different variable -- every write the machine has made is in `upper` and the
+# new manifest would read `upper-A` -- so it is folded into the same identity
+# string and refused the same way. The message says which half changed, because
+# "overlay" and "overlay+per-slot-upper" differ by something an operator has to
+# be told to look for.
+PREV_MODEL=""
+[ -r /ab-rw/.model ] && PREV_MODEL="$(cat /ab-rw/.model 2>/dev/null)"
+if [ -n "$PREV_MODEL" ] && [ "$PREV_MODEL" != "$MODEL_ID" ]; then
+    msg "REFUSING: this image uses state layout '$MODEL_ID', the machine was"
+    msg "  imaged with '$PREV_MODEL'. Its writable state is laid out for the old"
+    msg "  one and applying the new one would hide it."
+    case "$PREV_MODEL" in
+        "$MODEL"|"$MODEL+per-slot-upper")
+            msg "  Only the upper layer differs: one of these images gives each slot"
+            msg "  its own and the other shares one. Everything the machine wrote is"
+            msg "  still under /var/lib/overlay, in the store the old layout used.";;
+    esac
+    msg "  Changing the layout needs a re-image, not an update."
+    undo "state layout mismatch"
+fi
+
+# --- reconcile the stores with the slot being booted -------------------------
+#
+# The stores were written against whichever slot was running at the time. If
+# that is not this slot, anything they hold for an OS-owned path now shadows a
+# file the update was supposed to replace -- a binary from the old release
+# masking the new one, and no way to tell from inside the running system. Those
+# paths are dropped on a slot change; everything a person or a service owns is
+# kept, which is what makes persistent state worth having.
+LAST=""
+[ -r /ab-rw/.slot ] && LAST="$(cat /ab-rw/.slot 2>/dev/null)"
+
+if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
+    msg "slot changed ${LAST} -> ${SLOT}; clearing OS paths from writable state"
+
+    # A kept path is one that lives inside something being cleared but is not
+    # the image's to clear. /usr/local is the reason this exists: the FHS
+    # reserves it for locally installed software precisely because packages
+    # never touch it, and it is where a person puts a script expecting it to
+    # stay put -- but it sits inside /usr, so clearing /usr wholesale took it,
+    # and a script in /usr/local/bin vanished on the first update with nothing
+    # said. Kept paths are moved aside and put back rather than skipped,
+    # because a store has no way to delete part of a directory and keep the
+    # rest.
+    mkdir -p /ab-rw/.keep 2>/dev/null || true
+    _i=0
+    while IFS= read -r kpath; do
+        case "$kpath" in /*) ;; *) continue;; esac
+        _covered=0
+        while IFS= read -r rpath; do
+            case "$kpath" in
+                "$rpath"|"$rpath"/*) _covered=1; break;;
+            esac
+        done < "$RESETS"
+        [ "$_covered" = 1 ] || continue
+        resolve_store "$kpath" || continue
+        _src="$STORE_PATH"
+        [ -e "$_src" ] || continue
+        _i=$((_i + 1))
+        printf '%s\n' "$_src" > "/ab-rw/.keep/$_i.path"
+        mv "$_src" "/ab-rw/.keep/$_i.data" 2>/dev/null || remove_path "/ab-rw/.keep/$_i.path"
+    done < "$KEEPS"
+
+    while IFS= read -r rpath; do
+        case "$rpath" in /*) ;; *) continue;; esac
+        clear_from_store "$rpath"
+    done < "$RESETS"
+
+    restore_keeps
+    [ "$_i" -gt 0 ] && msg "  kept $_i path(s) the image does not own (e.g. /usr/local)"
+
+    # Files the image declares it owns -- shipped in the build's overlay, or
+    # named with --own-path. Whatever the machine has written at those exact
+    # paths is dropped, so the copy that came with the update is the one it
+    # reads. Without this, shipping an /etc/hosts or an /etc/netplan file in a
+    # new image changes nothing on a machine that already has its own: the
+    # store shadows it, silently and with no way to tell from inside.
+    #
+    # Per file, never per directory: clearing /etc/netplan wholesale would take
+    # the machine's other netplan files with it. Same name, image wins; anything
+    # else in that directory is left exactly as it was.
+    OWNED=/ab-lower/usr/lib/ab/image-owned.list
+    if [ -r "$OWNED" ]; then
+        n=0
+        while IFS= read -r path; do
+            case "$path" in
+                /*) ;;                      # absolute only; ignore anything else
+                *) continue;;
+            esac
+            case "$path" in
+                *..*) continue;;            # never let a manifest escape the store
+            esac
+            if clear_from_store "$path"; then
+                n=$((n + 1))
+            fi
+        done < "$OWNED"
+        [ "$n" -gt 0 ] && msg "  dropped $n machine-local file(s) the new image owns"
+    fi
+fi
+[ -n "$SLOT" ] && { printf '%s\n' "$SLOT" > /ab-rw/.slot 2>/dev/null || true; }
+
+# --- apply the manifest ------------------------------------------------------
+
+apply_overlay() {              # apply_overlay <path>
+    _p="$1"
+    if [ "$_p" = "/" ]; then
+        _low=/ab-lower; _up="$UPPER_ROOT"; _wrk="$WORK_ROOT"; _tgt="$rootmnt"
+    else
+        # Each overlay needs its own workdir: two mounts cannot share one, and
+        # nesting them under the root overlay's workdir would put them somewhere
+        # overlayfs considers its own to clean out. work.d is a sibling.
+        _slug=""; _rest="${_p#/}"
+        while [ -n "$_rest" ]; do
+            _slug="${_slug}${_rest%%/*}_"
+            case "$_rest" in */*) _rest="${_rest#*/}";; *) _rest="";; esac
+        done
+        _low="/ab-lower$_p"; _up="$UPPER_ROOT$_p"
+        _wrk="$WORK_ROOT.d/$_slug"; _tgt="$rootmnt$_p"
+    fi
+    [ -d "$_low" ] || { msg "  overlay $_p: not present in the image; skipped"; return 1; }
+    mkdir -p "$_up" "$_wrk" 2>/dev/null || return 1
+    # Every option goes before the device. klibc's mount parses with getopt,
+    # which stops at the first non-option argument: with the device first, the
+    # trailing -o is read as a positional and the whole call dies with a usage
+    # message. That is what "overlay mount failed" was -- not a rejection by
+    # overlayfs, which mounts these exact directories without complaint.
+    mount -t overlay -o "lowerdir=$_low,upperdir=$_up,workdir=$_wrk" ab-root "$_tgt" 2>/dev/null
+}
+
+apply_bind() {                 # apply_bind <path> <store root>
+    _p="$1"; _store="$2$1"; _tgt="$rootmnt$1"
+    # A seed that failed is not the same as a path the image does not ship.
+    # seed_store returns 0 for the latter and leaves no store, which the mkdir
+    # below then creates empty -- correct. It returns 1 only when a copy it
+    # should have made did not work, and binding an empty store over a /var the
+    # image did populate would hand the machine a blank one.
+    seed_store "$_store" "/ab-lower$_p" || return 1
+    # A path the image does not ship -- /var/lib/docker on an image with no
+    # docker yet, which is the normal case -- still has to be backed by the
+    # store. Without this the bind has no source, fails, and the directive
+    # quietly does nothing: writes fall through to whatever the model does by
+    # default, so a slot-private path ends up shared and looks fine until the
+    # first slot change hands the other slot someone else's data.
+    [ -e "$_store" ] || mkdir -p "$_store" 2>/dev/null || return 1
+    [ -d "$_tgt" ] || mkdir -p "$_tgt" 2>/dev/null || return 1
+    bind_mount "$_store" "$_tgt"
+}
+
+apply_volatile() {             # apply_volatile <path> [size]
+    _p="$1"; _sz="${2:-}"; _tgt="$rootmnt$1"
+    [ -d "$_tgt" ] || mkdir -p "$_tgt" 2>/dev/null || return 1
+    if [ -n "$_sz" ]; then
+        mount -t tmpfs -o "mode=0755,size=$_sz" ab-volatile "$_tgt" 2>/dev/null
+    else
+        mount -t tmpfs -o mode=0755 ab-volatile "$_tgt" 2>/dev/null
+    fi
+}
+
+APPLIED=0
+ROOT_OVERLAY=0
+while read -r verb mp arg; do
+    [ -n "$mp" ] || continue
+    case "$verb" in
+        overlay)
+            if apply_overlay "$mp"; then
+                APPLIED=$((APPLIED + 1))
+                [ "$mp" = "/" ] && ROOT_OVERLAY=1
+            elif [ "$mp" = "/" ]; then
+                # The root overlay is the whole point of the default model. If
+                # it will not mount there is nothing worth continuing with, and
+                # a half-applied manifest is harder to reason about than none.
+                undo "overlay mount failed"
+            else
+                msg "  overlay $mp: failed; that path stays on the slot"
+            fi;;
+        persist)
+            if apply_bind "$mp" /ab-rw/persist; then APPLIED=$((APPLIED + 1))
+            else msg "  persist $mp: failed; that path stays on the slot"; fi;;
+        slot-private)
+            if [ -z "$SLOT" ]; then
+                msg "  slot-private $mp: no rauc.slot on the command line; skipped"
+            elif apply_bind "$mp" "/ab-rw/slots/$SLOT"; then APPLIED=$((APPLIED + 1))
+            else msg "  slot-private $mp: failed; that path stays on the slot"; fi;;
+        volatile)
+            if apply_volatile "$mp" "$arg"; then APPLIED=$((APPLIED + 1))
+            else msg "  volatile $mp: failed; that path stays on the slot"; fi;;
+    esac
+done < "$MOUNTS"
+
+printf '%s\n' "$MODEL_ID" > /ab-rw/.model 2>/dev/null || true
+
+# The overlay partition stays reachable at /var/lib/overlay, where fstab and
+# everything else expect it -- and where upper.prev has to be readable after a
+# reset boot for any of this to be recoverable.
+#
+# The lower layer is deliberately NOT bound into /run here. It was, and it never
+# survived: systemd mounts a fresh tmpfs over /run right after the switch to
+# root, so the bind was gone before anyone could look at it, and ab-overlay-diff
+# silently reported every changed file as new. It mounts the slot read-only
+# itself instead, which does not depend on anything surviving that transition.
+mkdir -p "$rootmnt/var/lib/overlay" 2>/dev/null || true
+bind_mount /ab-rw "$rootmnt/var/lib/overlay" || true
+
+if [ "$ROOT_OVERLAY" = 1 ]; then
+    msg "root is now an overlay (lower=slot ${SLOT:-?}, upper=${UPPER_ROOT#/ab-rw/} on the overlay partition)"
+else
+    msg "model ${MODEL}: slot ${SLOT:-?} with ${APPLIED} writable path(s) from the overlay partition"
+fi
+[ "$UPPER_MODE" = per-slot ] && \
+    msg "  each slot has its own upper layer; nothing written here reaches the other slot"
+exit 0

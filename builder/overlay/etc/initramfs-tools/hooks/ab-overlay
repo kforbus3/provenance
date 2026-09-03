@@ -1,0 +1,28 @@
+#!/bin/sh
+# Put what the overlay root needs into the initramfs: the overlay module, blkid
+# for the unencrypted case where the partition is found by label, and rm.
+#
+# rm is not optional and not present by default. The initramfs ships klibc's
+# utilities, which provide `nuke` rather than `rm` -- so every `rm -rf` in
+# scripts/local-bottom/ab-overlay failed with "rm: not found", silently, because
+# the failure only reaches the kernel log and the script carries on. That is why
+# clearing OS paths on a slot change appeared to work for months while doing
+# nothing at all: an A/B update would leave the previous release's /usr in the
+# upper layer, shadowing the one the update had just installed.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+manual_add_modules overlay
+copy_exec /sbin/blkid /sbin 2>/dev/null || true
+copy_exec /bin/rm /bin 2>/dev/null || copy_exec /usr/bin/rm /bin 2>/dev/null || true
+# cp for the same reason as rm: a `persist` or `slot-private` directive seeds
+# its store from the image's copy the first time it is used, and klibc has no
+# cp at all. Without this a bind over /var hands the machine an empty /var --
+# and, like the rm case, says so only to the kernel log.
+copy_exec /bin/cp /bin 2>/dev/null || copy_exec /usr/bin/cp /bin 2>/dev/null || true
+exit 0

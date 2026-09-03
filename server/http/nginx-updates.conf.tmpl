@@ -1,0 +1,63 @@
+# Update bundles, on an address a machine can reach after it has left the
+# provisioning segment.
+#
+# The listener next door is bound to SERVER_IP on purpose: the imaging network
+# is the only one that needs the image library, and a wildcard bind would put
+# every built image on every network this host touches. But a machine is only
+# on that segment while it is being imaged. Afterwards it lives on the LAN,
+# which is exactly when it needs updates -- so OTA was unreachable from
+# everywhere the fleet actually is, and `rauc install` reported "server not
+# responding" because nothing was listening at the name the machine resolved.
+#
+# So this is deliberately not the same server block with a second address. It
+# serves /bundles/ and nothing else: the bundles are signed and verified against
+# the keyring in each image, so publishing them more widely costs nothing that
+# the signature does not already cover, while /images/, /imager/ and /hosts/
+# stay on the provisioning segment where they were.
+server {
+    listen ${UPDATE_IP}:${UPDATE_PORT} default_server;
+    server_name _;
+    root /srv/http;
+    sendfile on;
+
+    # No listing here even though the imaging listener has one: `latest` names
+    # the newest bundle, so nothing needs to enumerate the directory, and an
+    # index is a promise about the layout that ab-update does not rely on.
+    autoindex off;
+
+    location ^~ /bundles/ {
+        add_header Cache-Control "no-cache";
+    }
+
+    # The control plane's one machine-facing endpoint, on the address the fleet
+    # can actually reach. Without this the agent could download a bundle from
+    # here but had nowhere to ask whether it should -- and a control plane the
+    # machines cannot reach is not a control plane, it is a wish list.
+    #
+    # Exactly this path, like the imaging endpoints on the other listener. The
+    # rest of /api/ is the admin surface, and this address is by definition the
+    # more exposed of the two: it is bound wherever the fleet lives, which may
+    # be a general-purpose LAN rather than a segment kept for provisioning.
+    location = /api/fleet/heartbeat {
+        proxy_pass http://${WEBUI_ADDR};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 2s;
+        # Longer than the imaging endpoints': this one does real work (it folds
+        # the report into any rollout that owns the machine), and a machine that
+        # gives up early simply does not learn about an update it is due.
+        proxy_read_timeout 10s;
+    }
+
+    location = /health {
+        access_log off;
+        return 200 "OK\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Everything else is 404 rather than 403 or a default page: this address
+    # publishes update bundles, and says nothing about what else exists.
+    location / {
+        return 404;
+    }
+}
