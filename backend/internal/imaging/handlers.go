@@ -1,6 +1,7 @@
 package imaging
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -106,7 +107,7 @@ func clean(v string, limit int) string {
 // hand-rolling one in sed to avoid it would be worse.
 func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if tok := h.svc.cfg.AgentToken; tok != "" {
-		if r.Header.Get("X-Agent-Token") != tok {
+		if !agentTokenOK(r, tok) {
 			httpx.WriteError(w, http.StatusUnauthorized, "bad or missing agent token")
 			return
 		}
@@ -170,6 +171,37 @@ func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 		out["action"] = "none"
 	}
 	writeKV(w, out)
+}
+
+// AgentTokenHeader is the header every deployed agent sends its token in.
+//
+// The name is not one this code gets to choose. It is compiled into ab-agent on
+// every image ever built, and an agent cannot be corrected without an update it
+// would have to authenticate to receive -- so the server accepts what the fleet
+// sends, exactly as it serves the unversioned machine paths.
+//
+// Getting this wrong is silent and total. FLEET_AGENT_TOKEN is set precisely
+// when the control plane is reachable from a network that is not the
+// provisioning one, which is the moment a fleet is at its most spread out; a
+// mismatch 401s every heartbeat from every machine at once, and the only symptom
+// is machines quietly ceasing to check in.
+const AgentTokenHeader = "X-Flipside-Agent-Token"
+
+// agentTokenAltHeader is accepted as well, for anything written against this
+// API rather than shipped in an image -- a load balancer health check, a
+// third-party agent. Not preferred, and not what any real machine sends.
+const agentTokenAltHeader = "X-Agent-Token"
+
+func agentTokenOK(r *http.Request, want string) bool {
+	// Constant-time, because this compares a shared secret and the timing of a
+	// byte-wise comparison is a real if slow oracle.
+	for _, h := range []string{AgentTokenHeader, agentTokenAltHeader} {
+		if got := r.Header.Get(h); got != "" &&
+			subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func writeKV(w http.ResponseWriter, kv map[string]string) {
