@@ -141,14 +141,33 @@ func (c *Credential) zero() {
 			k[i] = 0
 		}
 	case *ecdsa.PrivateKey:
-		if k.D != nil { //nolint:staticcheck // SA1019: no supported way to scrub an ECDSA key; see above
-			words := k.D.Bits() //nolint:staticcheck // SA1019: ditto
-			for i := range words {
-				words[i] = 0
-			}
-			k.D.SetInt64(0) //nolint:staticcheck // SA1019: ditto
-		}
+		zeroECDSA(k)
 	}
 	c.privateKey = nil
 	c.certSigner = nil
+}
+
+// zeroECDSA overwrites the big.Int holding an ECDSA secret.
+//
+// Its own function so the three reads of a deprecated field sit together and
+// the reason for them is stated once, just above.
+//
+// Both directives, because CI runs two tools that read different ones: the
+// security job runs staticcheck directly, which honours `lint:ignore`, and the
+// CI job runs golangci-lint, which honours `nolint`. An exemption that works
+// under only one of them is not an exemption. `lint:ignore` also has to sit on
+// the line itself -- above the function it matches nothing, and staticcheck
+// then reports the unused directive, which is a useful thing for it to do.
+func zeroECDSA(k *ecdsa.PrivateKey) {
+	//lint:ignore SA1019 writing to D is unsupported, which is exactly what scrubbing does; the replacements encode and decode keys and cannot zero one
+	if k.D == nil { //nolint:staticcheck // SA1019: as in the lint:ignore above
+		return
+	}
+	//lint:ignore SA1019 as above
+	words := k.D.Bits() //nolint:staticcheck // SA1019: as above
+	for i := range words {
+		words[i] = 0
+	}
+	//lint:ignore SA1019 as above
+	k.D.SetInt64(0) //nolint:staticcheck // SA1019: as above
 }
