@@ -293,24 +293,33 @@ type Config struct {
 	// production; empty disables the check in development.
 	AnsibleRunnerToken string
 
-	// --- Flipside: OS images and updates (see docs/imaging.md) ---------------
+	// --- Imaging: OS images, PXE and updates (see docs/imaging.md) -----------
 	//
-	// FlipsideURL is the API base of a Flipside deployment — the A/B image
-	// builder, PXE imaging server and staged-rollout control plane. Empty
-	// leaves the whole subsystem inert: no pages, no polling, no behaviour
-	// change of any kind.
-	FlipsideURL string
-	// FlipsideToken is a Flipside API token (flt_...). Give it the *operator*
-	// role: operator can build images and bundles and run rollouts, which is
-	// everything Moorgate drives. Admin would add Flipside's own user and
-	// secret management, which nothing here reaches and which should not be
-	// carried in a shared token.
-	FlipsideToken string
-	// FlipsideNudge controls whether Moorgate makes machines a live rollout is
-	// waiting on check in immediately, instead of waiting for their own timer.
-	// This is the whole of the "push" Moorgate adds; turning it off leaves
-	// rollouts working exactly as Flipside runs them alone, only slower.
-	FlipsideNudge bool
+	// ArtifactDir is where built images, update bundles and the netboot imager
+	// live -- the directory the builder container writes into and the
+	// provisioning server serves from.
+	ArtifactDir string
+	// ControlURL is the address machines reach this server on *after* they have
+	// left the provisioning network. Every other address in a deployment is on
+	// the imaging segment, which a machine is on for the twenty minutes it takes
+	// to image it and never again. Empty and machines fall back to the address
+	// they were imaged from, which they stop being able to reach the moment they
+	// are unracked -- they keep running perfectly and are simply never heard
+	// from again.
+	ControlURL string
+	// AgentInterval is how often a machine's agent checks in, in seconds. Sent
+	// back in every reply, so changing it re-paces the whole fleet without
+	// touching a machine.
+	AgentInterval int
+	// AgentToken, when set, must be presented by an agent to check in. Off by
+	// default: the first heartbeat comes from a machine that was just imaged and
+	// holds no credential. Set it when the control plane is reachable from a
+	// network that is not the provisioning one.
+	AgentToken string
+	// ImagingNudge controls whether machines a live rollout is waiting on are
+	// asked to check in immediately rather than waiting for their own timer.
+	// This is the whole of the "push"; off, rollouts still work, only slower.
+	ImagingNudge bool
 
 	GrypeScannerURL string // vulnerability-scanner sidecar
 	MSRCAPIURL      string // Microsoft Security Update Guide API (Windows CVE mapping)
@@ -465,9 +474,11 @@ func Load() (*Config, error) {
 		ScapContentVersion:          env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:            env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
 		AnsibleRunnerToken:          env("FLEET_ANSIBLE_RUNNER_TOKEN", ""),
-		FlipsideURL:                 strings.TrimRight(env("FLEET_FLIPSIDE_URL", ""), "/"),
-		FlipsideToken:               env("FLEET_FLIPSIDE_TOKEN", ""),
-		FlipsideNudge:               envBool("FLEET_FLIPSIDE_NUDGE", true),
+		ArtifactDir:                 env("FLEET_ARTIFACT_DIR", "/output"),
+		ControlURL:                  strings.TrimRight(env("FLEET_CONTROL_URL", ""), "/"),
+		AgentInterval:               envInt("FLEET_AGENT_INTERVAL", 300),
+		AgentToken:                  env("FLEET_AGENT_TOKEN", ""),
+		ImagingNudge:                envBool("FLEET_IMAGING_NUDGE", true),
 		GrypeScannerURL:             env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
 		MSRCAPIURL:                  env("FLEET_MSRC_API_URL", "https://api.msrc.microsoft.com"),
 		MSRCMonths:                  envInt("FLEET_MSRC_MONTHS", 12),

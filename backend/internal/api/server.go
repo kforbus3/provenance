@@ -234,7 +234,9 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// Scan + playbook services are shared between their HTTP handlers and the
 	// scheduler, so construct them once here.
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
-	// Inert unless FLEET_FLIPSIDE_URL is set; see docs/imaging.md.
+	// Always constructed: machines check in whether or not an operator has ever
+	// opened the page, and a heartbeat that 404s is a machine that silently
+	// stops being accounted for. See docs/imaging.md.
 	s.imagingSvc = imaging.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.msrcSvc = msrc.New(st, cfg.MSRCAPIURL, cfg.MSRCMonths, log)

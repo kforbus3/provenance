@@ -279,12 +279,6 @@ type HostOptions struct {
 	// RouterOSAPI is the legacy flag that predates DeviceType; still honored for hosts
 	// configured before the device-type selector so they keep API management.
 	RouterOSAPI bool `json:"routerOsApi,omitempty"`
-	// FlipsideMachineID pins this host to a machine in Flipside, the OS image
-	// and update system (see docs/imaging.md). Recorded rather than derived
-	// because it is the only pairing that survives a rename or a re-image --
-	// matching on hostname is a guess that stops being true the moment somebody
-	// changes one.
-	FlipsideMachineID string `json:"flipsideMachineId,omitempty"`
 }
 
 // IsRouterOS reports whether the host is a MikroTik RouterOS device managed over the API.

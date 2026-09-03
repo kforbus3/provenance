@@ -1,7 +1,6 @@
 package imaging
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
@@ -12,38 +11,34 @@ import (
 	"github.com/kforbus3/Moorgate/backend/internal/auth"
 	"github.com/kforbus3/Moorgate/backend/internal/httpx"
 	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
 )
 
 // Mount registers the imaging routes.
 //
-// Everything proxies to Flipside rather than exposing it directly, so that
-// Moorgate's authentication, roles, host-access rules and audit log apply to
-// OS updates exactly as they do to everything else — and so the Flipside
-// operator token never leaves the backend. A browser holding that token would
-// be a second, weaker way into the imaging server.
+// One of them is unlike everything else in this product: the agent heartbeat is
+// reached by machines, not by people, and is deliberately open. See heartbeat.
 func Mount(r chi.Router, d *app.Deps, svc *Service) {
 	h := &handler{d: d, svc: svc}
+
+	// Machines. No session, no role -- see the comment on heartbeat.
+	r.Post("/imaging/heartbeat", h.heartbeat)
+
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
 
-		// Always answerable, even when nothing is configured: the UI needs to
-		// know whether to show the section at all, and "not configured" is a
-		// legitimate answer rather than an error.
-		pr.Get("/imaging/status", h.status)
-
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images", h.images)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/bundles", h.bundles)
-		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/fleet", h.fleet)
-		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/groups", h.groups)
+		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/machines", h.machines)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/rollouts", h.rollouts)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/rollouts/{id}", h.rollout)
 
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/rollouts", h.createRollout)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/rollouts/{id}/{verb}", h.steerRollout)
-		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Put("/imaging/hosts/{hostId}/link", h.link)
-		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/hosts/{hostId}/nudge", h.nudge)
-		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/hosts/{hostId}/install", h.install)
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Delete("/imaging/rollouts/{id}", h.deleteRollout)
+
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Put("/imaging/machines/{id}", h.updateMachine)
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/nudge", h.nudge)
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/install", h.install)
 	})
 }
 
@@ -52,267 +47,373 @@ type handler struct {
 	svc *Service
 }
 
-// fail turns a Flipside error into an HTTP response that says which system
-// failed and why. Without this every problem reads as "500 from Moorgate",
-// and the first hour of debugging goes to the wrong service.
-func (h *handler) fail(w http.ResponseWriter, err error) {
-	if errors.Is(err, ErrNotConfigured) {
-		httpx.WriteError(w, http.StatusServiceUnavailable,
-			"no Flipside server is configured (set FLEET_FLIPSIDE_URL)")
-		return
+func clean(v string, limit int) string {
+	v = strings.ReplaceAll(strings.ReplaceAll(v, "\n", " "), "\r", " ")
+	v = strings.TrimSpace(v)
+	if len(v) > limit {
+		v = v[:limit]
 	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		switch {
-		case apiErr.Unauthorized():
-			httpx.WriteError(w, http.StatusBadGateway,
-				"Flipside rejected this server's token — check FLEET_FLIPSIDE_TOKEN "+
-					"and that it still exists and has the operator role")
-		case apiErr.Status >= 400 && apiErr.Status < 500:
-			// Flipside's own refusal, passed through: it validates rollouts and
-			// says exactly what is wrong with one, and rewording that here
-			// would only lose detail.
-			httpx.WriteError(w, apiErr.Status, apiErr.Detail)
-		default:
-			httpx.WriteError(w, http.StatusBadGateway, apiErr.Error())
-		}
-		return
-	}
-	httpx.WriteError(w, http.StatusBadGateway, err.Error())
+	return v
 }
 
-func (h *handler) status(w http.ResponseWriter, r *http.Request) {
-	if !h.svc.Enabled() {
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"configured": false})
+// --- the machine-facing endpoint ---------------------------------------------
+
+// heartbeat is one agent check-in. It answers with what, if anything, the
+// machine should do.
+//
+// Unauthenticated on purpose, and it is the only endpoint here that is. It is
+// reached by a machine this system provisioned and handed no credential to: at
+// the moment of its first check-in the machine has just been imaged and has
+// nothing to authenticate with. What it can assert is bounded to the fields
+// below, and what it can cause is bounded to "install a bundle this server is
+// already offering, signed by a key the machine already trusts" -- so a machine
+// that lies its way into a rollout receives an update it would have been given
+// anyway. Set AGENT_TOKEN when the control plane is reachable from a network
+// that is not the provisioning one.
+//
+// It answers `key=value` lines rather than JSON. The agent is a shell script on
+// a minimal image that ships neither jq nor python3; adding a JSON parser to
+// every machine in order to read six fields would be a strange price, and
+// hand-rolling one in sed to avoid it would be worse.
+func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
+	if tok := h.svc.cfg.AgentToken; tok != "" {
+		if r.Header.Get("X-Agent-Token") != tok {
+			httpx.WriteError(w, http.StatusUnauthorized, "bad or missing agent token")
+			return
+		}
+	}
+	if err := r.ParseForm(); err != nil {
+		writeKV(w, map[string]string{"ok": "false", "error": "unreadable form"})
 		return
 	}
-	version, err := h.svc.client.Health(r.Context())
-	out := map[string]any{
-		"configured": true,
-		"url":        h.svc.cfg.FlipsideURL,
-		"nudge":      h.svc.cfg.FlipsideNudge,
-		"reachable":  err == nil,
+	id := clean(r.PostForm.Get("id"), 128)
+	if id == "" {
+		writeKV(w, map[string]string{"ok": "false", "error": "id is required"})
+		return
 	}
-	if err != nil {
-		// The reason, not just a red dot. "Flipside rejected this token" and
-		// "nothing is listening" need different people to do different things.
-		out["error"] = err.Error()
+
+	m := &models.ImagingMachine{
+		ID:            id,
+		Hostname:      clean(r.PostForm.Get("hostname"), 200),
+		Address:       clientIP(r),
+		Slot:          clean(r.PostForm.Get("slot"), 8),
+		Version:       clean(r.PostForm.Get("version"), 200),
+		Arch:          clean(r.PostForm.Get("arch"), 32),
+		AgentVersion:  clean(r.PostForm.Get("agent_version"), 32),
+		BootID:        clean(r.PostForm.Get("boot_id"), 64),
+		Health:        clean(r.PostForm.Get("health"), 32),
+		UpdateState:   clean(r.PostForm.Get("update_state"), 32),
+		UpdateError:   clean(r.PostForm.Get("update_error"), 300),
+		UpdateRollout: clean(r.PostForm.Get("update_rollout"), 64),
+		ReportedBy:    id,
+		ReportSource:  "agent",
+	}
+	// Note what is absent: groups, held, label. Those are an operator's word
+	// about a machine, never the machine's word about itself -- otherwise any
+	// machine on the network could put itself into a rollout it was never
+	// targeted by.
+	if _, err := h.svc.store.ReportMachine(r.Context(), m); err != nil {
+		h.svc.log.Warn("imaging: recording a heartbeat", "machine", id, "err", err)
+		writeKV(w, map[string]string{"ok": "false", "error": "could not record"})
+		return
+	}
+
+	out := map[string]string{
+		"ok":       "true",
+		"interval": itoa(int(h.svc.AgentInterval().Seconds())),
+	}
+	if url := h.svc.cfg.ControlURL; url != "" {
+		// Re-point the fleet centrally. This is the way out of the
+		// imaging-address trap: the URL the imager wrote is the provisioning
+		// server's, which a machine stops being able to reach the moment it is
+		// unracked.
+		out["control_url"] = strings.TrimRight(url, "/")
+	}
+	if act := h.svc.EvaluateFor(r.Context(), id, Report{
+		Version: m.Version, Health: m.Health,
+		UpdateState: m.UpdateState, UpdateError: m.UpdateError,
+	}); act != nil {
+		out["action"] = act.Type
+		out["bundle_url"] = act.BundleURL
+		out["version"] = act.Version
+		out["rollout"] = act.RolloutID
 	} else {
-		out["version"] = version
+		out["action"] = "none"
 	}
-	httpx.WriteJSON(w, http.StatusOK, out)
+	writeKV(w, out)
 }
 
-func (h *handler) images(w http.ResponseWriter, r *http.Request) {
-	images, err := h.svc.client.Images(r.Context())
-	if err != nil {
-		h.fail(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"images": images})
-}
-
-func (h *handler) bundles(w http.ResponseWriter, r *http.Request) {
-	bundles, err := h.svc.client.Bundles(r.Context())
-	if err != nil {
-		h.fail(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, bundles)
-}
-
-func (h *handler) groups(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.svc.client.Groups(r.Context())
-	if err != nil {
-		h.fail(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": groups})
-}
-
-// fleetRow is one line of the merged view: a Moorgate host and whatever
-// Flipside knows about the same machine.
-type fleetRow struct {
-	HostID    string   `json:"hostId,omitempty"`
-	Hostname  string   `json:"hostname"`
-	Env       string   `json:"environment,omitempty"`
-	Tags      []string `json:"tags,omitempty"`
-	Enrolled  bool     `json:"enrolled"`
-	MachineID string   `json:"machineId,omitempty"`
-	LinkedBy  string   `json:"linkedBy"` // linked | hostname | none
-	Machine   *Machine `json:"machine,omitempty"`
-	// Reachable is whether Moorgate could push to this host — which is the
-	// whole reason the two systems are joined, and the thing an operator wants
-	// to see at a glance before starting a rollout.
-	Reachable bool `json:"reachable"`
-}
-
-func (h *handler) fleet(w http.ResponseWriter, r *http.Request) {
-	view, err := h.svc.client.Fleet(r.Context())
-	if err != nil {
-		h.fail(w, err)
-		return
-	}
-	hosts, err := h.svc.store.ListHosts(r.Context(), 10000, 0)
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not list hosts")
-		return
-	}
-	p := auth.MustPrincipal(r)
-	links, orphans := Correlate(hosts, view.Machines)
-
-	rows := make([]fleetRow, 0, len(links)+len(orphans))
-	for _, l := range links {
-		// A host the caller may not see must not appear here just because it
-		// also exists in Flipside. Host access is Moorgate's rule and applies
-		// to every view of a host, including this one.
-		if !h.canSee(r, p, l.Host.ID) {
-			continue
+func writeKV(w http.ResponseWriter, kv map[string]string) {
+	var b strings.Builder
+	for _, k := range []string{"ok", "error", "interval", "control_url", "action",
+		"bundle_url", "version", "rollout"} {
+		if v, present := kv[k]; present && v != "" {
+			b.WriteString(k)
+			b.WriteString("=")
+			b.WriteString(v)
+			b.WriteString("\n")
 		}
-		rows = append(rows, fleetRow{
-			HostID:    l.Host.ID.String(),
-			Hostname:  l.Host.Hostname,
-			Env:       l.Host.Environment,
-			Tags:      l.Host.Tags,
-			Enrolled:  l.Host.Enrolled,
-			MachineID: machineID(l.Machine),
-			LinkedBy:  l.How,
-			Machine:   l.Machine,
-			Reachable: l.Host.Enrolled && l.Host.Protocol != "rdp",
-		})
 	}
-	// Machines Flipside has and Moorgate does not — imaged but never enrolled,
-	// usually. Shown without a host id, so nothing about them is actionable
-	// here; the point is that they are visible at all.
-	for i := range orphans {
-		m := orphans[i]
-		rows = append(rows, fleetRow{
-			Hostname:  firstNonEmpty(m.Hostname, m.ID),
-			MachineID: m.ID,
-			LinkedBy:  "none",
-			Machine:   &m,
-		})
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(b.String()))
+}
+
+func itoa(n int) string {
+	if n <= 0 {
+		return "300"
+	}
+	digits := ""
+	for n > 0 {
+		digits = string(rune('0'+n%10)) + digits
+		n /= 10
+	}
+	return digits
+}
+
+func clientIP(r *http.Request) string {
+	if r.RemoteAddr == "" {
+		return ""
+	}
+	if i := strings.LastIndex(r.RemoteAddr, ":"); i > 0 {
+		return r.RemoteAddr[:i]
+	}
+	return r.RemoteAddr
+}
+
+// --- the operator-facing endpoints -------------------------------------------
+
+// images and bundles are the artefact library, read off the same directory the
+// builder writes to and the provisioning server serves from.
+func (h *handler) images(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Images()
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the image library")
+		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"rows":       rows,
-		"counts":     view.Counts,
-		"versions":   view.Versions,
-		"interval":   view.Interval,
-		"controlUrl": view.ControlURL,
+		"images": out, "dir": h.svc.artifactDir()})
+}
+
+// bundles also reports how many machines are running each version, because the
+// question an operator actually has in front of the bundle list is "is anything
+// still on the old one", and answering it anywhere else means reading two pages
+// and doing the join by eye.
+func (h *handler) bundles(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Bundles()
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the bundle library")
+		return
+	}
+	running := map[string]int{}
+	if fleet, ferr := h.svc.FleetView(r.Context(), auth.MustPrincipal(r)); ferr == nil {
+		for i := range fleet {
+			if v := fleet[i].Version; v != "" {
+				running[v]++
+			}
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"bundles": out, "runningVersions": running, "controlUrl": h.svc.cfg.ControlURL})
+}
+
+func (h *handler) machines(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.FleetView(r.Context(), auth.MustPrincipal(r))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the fleet")
+		return
+	}
+	counts := map[string]int{"online": 0, "stale": 0, "offline": 0, "unknown": 0}
+	versions := map[string]int{}
+	for i := range rows {
+		counts[rows[i].Presence]++
+		if rows[i].Version != "" && (rows[i].Presence == "online" || rows[i].Presence == "stale") {
+			versions[rows[i].Version]++
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"machines": rows, "counts": counts, "versions": versions,
+		"interval": int(h.svc.AgentInterval().Seconds()),
 	})
 }
 
-func machineID(m *Machine) string {
-	if m == nil {
-		return ""
-	}
-	return m.ID
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func (h *handler) rollouts(w http.ResponseWriter, r *http.Request) {
-	rollouts, err := h.svc.client.Rollouts(r.Context())
+	out, err := h.svc.Rollouts(r.Context())
 	if err != nil {
-		h.fail(w, err)
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list rollouts")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"rollouts": rollouts})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"rollouts": out})
 }
 
 func (h *handler) rollout(w http.ResponseWriter, r *http.Request) {
-	out, err := h.svc.client.Rollout(r.Context(), chi.URLParam(r, "id"))
+	id, ok := parseUUID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	out, err := h.svc.RolloutDetail(r.Context(), id)
 	if err != nil {
-		h.fail(w, err)
+		httpx.WriteError(w, http.StatusNotFound, "no such rollout")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
+type newRolloutReq struct {
+	Bundle      string      `json:"bundle"`
+	BundleURL   string      `json:"bundleUrl"`
+	Description string      `json:"description"`
+	Groups      []uuid.UUID `json:"groups"`
+	Hosts       []uuid.UUID `json:"hosts"`
+	All         bool        `json:"all"`
+	Canary      *int        `json:"canary"`
+	BatchSize   *int        `json:"batchSize"`
+	SoakSeconds *int        `json:"soakSeconds"`
+	MaxFailures *int        `json:"maxFailures"`
+	WindowStart string      `json:"windowStart"`
+	WindowEnd   string      `json:"windowEnd"`
+	WindowDays  []int32     `json:"windowDays"`
+}
+
 func (h *handler) createRollout(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	if !httpx.Decode(w, r, &body) {
+	var req newRolloutReq
+	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	out, err := h.svc.client.CreateRollout(r.Context(), body)
+	p := auth.MustPrincipal(r)
+	out, err := h.svc.CreateRollout(r.Context(), NewRollout{
+		Bundle: req.Bundle, BundleURL: req.BundleURL, Description: req.Description,
+		Groups: req.Groups, Hosts: req.Hosts, All: req.All,
+		Canary: req.Canary, BatchSize: req.BatchSize,
+		SoakSeconds: req.SoakSeconds, MaxFailures: req.MaxFailures,
+		WindowStart: req.WindowStart, WindowEnd: req.WindowEnd, WindowDays: req.WindowDays,
+	}, p)
 	if err != nil {
-		h.fail(w, err)
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.audit(r, "imaging.rollout.create", out.ID, map[string]any{
+	h.audit(r, "imaging.rollout.create", out.ID.String(), map[string]any{
 		"bundle": out.Bundle, "version": out.Version, "machines": out.Total,
 	})
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 func (h *handler) steerRollout(w http.ResponseWriter, r *http.Request) {
-	id, verb := chi.URLParam(r, "id"), chi.URLParam(r, "verb")
+	id, ok := parseUUID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	verb := chi.URLParam(r, "verb")
 	switch verb {
 	case "pause", "resume", "cancel":
 	default:
 		httpx.WriteError(w, http.StatusBadRequest, "verb must be pause, resume or cancel")
 		return
 	}
-	if err := h.svc.client.SteerRollout(r.Context(), id, verb); err != nil {
-		h.fail(w, err)
+	if err := h.svc.SteerRollout(r.Context(), id, verb); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.audit(r, "imaging.rollout."+verb, id, nil)
+	h.audit(r, "imaging.rollout."+verb, id.String(), nil)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-type linkReq struct {
-	MachineID string `json:"machineId"`
-}
-
-// link pins a host to a Flipside machine, or clears the pin with an empty id.
-func (h *handler) link(w http.ResponseWriter, r *http.Request) {
-	host, p, ok := h.host(w, r)
+func (h *handler) deleteRollout(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
-	var body linkReq
-	if !httpx.Decode(w, r, &body) {
+	rec, err := h.d.Store.GetRollout(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such rollout")
 		return
 	}
-	id := strings.TrimSpace(body.MachineID)
-	// The id reaches a URL path when Flipside is called about this machine, and
-	// it comes from a browser. Bounded and free of separators; Flipside's own
-	// ids are MAC addresses or similar.
-	if len(id) > 128 || strings.ContainsAny(id, "/\\?#") {
-		httpx.WriteError(w, http.StatusBadRequest, "that is not a usable machine id")
+	if rec.State == RolloutRunning {
+		httpx.WriteError(w, http.StatusConflict, "cancel the rollout before deleting it")
 		return
 	}
-	in := hostInputFrom(host)
-	in.Options.FlipsideMachineID = id
-	if _, err := h.svc.store.UpdateHost(r.Context(), host.ID, in); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not save the link")
+	if err := h.d.Store.DeleteRollout(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not delete it")
 		return
 	}
-	_ = p
-	h.audit(r, "imaging.host.link", host.ID.String(), map[string]any{"machineId": id})
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "machineId": id})
+	h.audit(r, "imaging.rollout.delete", id.String(), nil)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+type updateMachineReq struct {
+	HostID *string `json:"hostId"` // "" clears the pairing
+	Label  *string `json:"label"`
+	Held   *bool   `json:"held"`
+}
+
+// updateMachine writes the operator-owned half of a machine record: which host
+// it is, what it is called, and whether it is held back from rollouts.
+func (h *handler) updateMachine(w http.ResponseWriter, r *http.Request) {
+	id := clean(chi.URLParam(r, "id"), 128)
+	m, err := h.d.Store.GetMachine(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return
+	}
+	var req updateMachineReq
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if req.HostID != nil {
+		var hostID *uuid.UUID
+		if s := strings.TrimSpace(*req.HostID); s != "" {
+			parsed, perr := uuid.Parse(s)
+			if perr != nil {
+				httpx.WriteError(w, http.StatusBadRequest, "bad host id")
+				return
+			}
+			// A caller may not pair a machine to a host they cannot see; that
+			// would be a way to act on one through the back door.
+			if !h.canSee(r, auth.MustPrincipal(r), parsed) {
+				httpx.WriteError(w, http.StatusNotFound, "host not found")
+				return
+			}
+			hostID = &parsed
+		}
+		if err := h.d.Store.LinkMachine(r.Context(), id, hostID); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not save the pairing")
+			return
+		}
+		h.audit(r, "imaging.machine.link", id, map[string]any{"hostId": req.HostID})
+	}
+	if req.Label != nil || req.Held != nil {
+		label, held := m.Label, m.Held
+		if req.Label != nil {
+			label = clean(*req.Label, 128)
+		}
+		if req.Held != nil {
+			held = *req.Held
+		}
+		if err := h.d.Store.SetMachineOperatorFields(r.Context(), id, label, held); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not save")
+			return
+		}
+		h.audit(r, "imaging.machine.update", id, map[string]any{"label": label, "held": held})
+	}
+	out, err := h.d.Store.GetMachine(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not re-read the machine")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 func (h *handler) nudge(w http.ResponseWriter, r *http.Request) {
-	host, _, ok := h.host(w, r)
+	host, _, ok := h.machineHost(w, r)
 	if !ok {
 		return
 	}
 	out, err := h.svc.Nudge(r.Context(), host)
-	h.audit(r, "imaging.host.nudge", host.ID.String(), map[string]any{"ok": err == nil})
+	h.audit(r, "imaging.machine.nudge", host.ID.String(), map[string]any{"ok": err == nil})
 	if err != nil {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"ok": false, "output": out, "error": err.Error(),
-			// A failed nudge is not a failed update, and saying so here stops
-			// it being read as one.
+			// A failed nudge is not a failed update, and saying so stops it
+			// being read as one.
 			"note": "The machine's agent still checks in on its own timer, so this " +
 				"delays the update rather than preventing it.",
 		})
@@ -323,102 +424,59 @@ func (h *handler) nudge(w http.ResponseWriter, r *http.Request) {
 
 type installReq struct {
 	BundleURL string `json:"bundleUrl"`
-	Reboot    bool   `json:"reboot"`
 }
 
-// install writes a bundle to a host directly and then tells Flipside what it
-// found there, for machines that cannot reach Flipside themselves.
 func (h *handler) install(w http.ResponseWriter, r *http.Request) {
-	host, _, ok := h.host(w, r)
+	host, machineID, ok := h.machineHost(w, r)
 	if !ok {
 		return
 	}
-	var body installReq
-	if !httpx.Decode(w, r, &body) {
+	var req installReq
+	if !httpx.Decode(w, r, &req) {
 		return
-	}
-	// Reported back to Flipside afterwards, because a machine that cannot reach
-	// it cannot say it took the update -- and a rollout containing that machine
-	// would otherwise wait for a check-in that can never arrive.
-	machineID := MachineIDFor(host)
-	if machineID == "" {
-		// Without a pairing there is nothing to report against. The install
-		// still happens; it just does not advance any rollout, and saying so
-		// is better than silently doing half the job.
-		machineID = ""
 	}
 	p := auth.MustPrincipal(r)
 	out, err := h.svc.InstallAndReport(r.Context(), host, machineID,
-		strings.TrimSpace(body.BundleURL), "moorgate:"+p.Username)
-	h.audit(r, "imaging.host.install", host.ID.String(), map[string]any{
-		"bundleUrl": body.BundleURL, "ok": err == nil, "machineId": machineID,
+		strings.TrimSpace(req.BundleURL), "operator:"+p.Username)
+	h.audit(r, "imaging.machine.install", machineID, map[string]any{
+		"bundleUrl": req.BundleURL, "ok": err == nil, "host": host.Hostname,
 	})
 	if err != nil {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"ok": false, "output": out, "error": err.Error()})
 		return
 	}
-	note := "Installed to the inactive slot. The machine boots it on the next " +
-		"reboot; until then it is still running the old version."
-	if machineID == "" {
-		note += " This host is not paired with a Flipside machine, so no rollout " +
-			"was told about it — pair it if you want the rollout to count this."
-	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out, "note": note})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out,
+		"note": "Installed to the inactive slot. The machine boots it on the next " +
+			"reboot; until then it is still running the old version."})
 }
 
-// hostInputFrom copies a host into the shape UpdateHost writes back.
-//
-// UpdateHost is a whole-row write: every column in HostInput is assigned, so a
-// field left unset is a field *cleared*. Setting one option by hand-listing the
-// others is a trap, and it had already sprung -- the first version of this
-// omitted WGAddress, so pairing a host with a Flipside machine would have wiped
-// its overlay address, which is how Moorgate reaches it. Pairing a host would
-// have broken the ability to push to it, silently, and the page that did it
-// would have said "Paired."
-//
-// One conversion, in one place, with a test that fails when a field is added to
-// HostInput and not copied here.
-func hostInputFrom(h *models.Host) store.HostInput {
-	return store.HostInput{
-		Hostname:     h.Hostname,
-		Description:  h.Description,
-		Environment:  h.Environment,
-		Owner:        h.Owner,
-		Address:      h.Address,
-		WGAddress:    h.WGAddress,
-		SSHPort:      h.SSHPort,
-		SSHUser:      h.SSHUser,
-		Tags:         h.Tags,
-		AuthMethod:   h.AuthMethod,
-		CredentialID: h.CredentialID,
-		Protocol:     h.Protocol,
-		RDPPort:      h.RDPPort,
-		RDPOptions:   h.RDPOptions,
-		Options:      h.Options,
-	}
-}
-
-// host resolves the host in the path and checks the caller may touch it.
-func (h *handler) host(w http.ResponseWriter, r *http.Request) (*models.Host, *auth.Principal, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, "hostId"))
+// machineHost resolves the machine in the path to the host it is paired with,
+// checking the caller may touch that host.
+func (h *handler) machineHost(w http.ResponseWriter, r *http.Request) (*models.Host, string, bool) {
+	id := clean(chi.URLParam(r, "id"), 128)
+	m, err := h.d.Store.GetMachine(r.Context(), id)
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, "bad host id")
-		return nil, nil, false
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return nil, "", false
 	}
-	p := auth.MustPrincipal(r)
-	if !h.canSee(r, p, id) {
+	if m.HostID == nil {
+		httpx.WriteError(w, http.StatusBadRequest,
+			"this machine is not paired with a host, so there is no way to reach it")
+		return nil, "", false
+	}
+	if !h.canSee(r, auth.MustPrincipal(r), *m.HostID) {
 		// Not found rather than forbidden: whether a host exists is itself
 		// something a caller without access should not learn.
-		httpx.WriteError(w, http.StatusNotFound, "host not found")
-		return nil, nil, false
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return nil, "", false
 	}
-	host, err := h.svc.store.GetHost(r.Context(), id)
+	host, err := h.d.Store.GetHost(r.Context(), *m.HostID)
 	if err != nil {
-		httpx.WriteError(w, http.StatusNotFound, "host not found")
-		return nil, nil, false
+		httpx.WriteError(w, http.StatusNotFound, "the paired host no longer exists")
+		return nil, "", false
 	}
-	return host, p, true
+	return host, id, true
 }
 
 func (h *handler) canSee(r *http.Request, p *auth.Principal, hostID uuid.UUID) bool {
@@ -430,6 +488,15 @@ func (h *handler) canSee(r *http.Request, p *auth.Principal, hostID uuid.UUID) b
 	}
 	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
 	return err == nil && ok
+}
+
+func parseUUID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad id")
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 func (h *handler) audit(r *http.Request, action, target string, detail map[string]any) {

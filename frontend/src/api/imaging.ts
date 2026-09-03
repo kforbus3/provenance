@@ -1,145 +1,145 @@
 import { api } from "./client";
 
-// Flipside: OS images, signed update bundles, and staged rollouts, driven
-// through Moorgate so that its roles, host-access rules and audit log apply
-// (see docs/imaging.md). Everything here goes to Moorgate's own /imaging/*
-// routes, never to Flipside directly — the Flipside operator token stays in the
-// backend, because a browser holding it would be a second, weaker way in.
-
-export interface ImagingStatus {
-  configured: boolean;
-  url?: string;
-  nudge?: boolean;
-  reachable?: boolean;
-  version?: string;
-  error?: string;
-}
-
-export interface ImageMeta {
-  distro?: string;
-  suite?: string;
-  arch?: string;
-  profile?: string;
-  version?: string;
-  encrypted?: boolean;
-  secure_boot?: boolean;
-  packages?: number;
-  created?: string;
-}
+// Imaging: OS images, signed update bundles, and staged rollouts.
+//
+// These are this server's own routes, not a proxy to anything. The imager, the
+// rollout engine and the fleet manager are one program, so a rollout targets the
+// same host groups everything else does, host access decides what is visible,
+// and every action lands in the same audit log (see docs/imaging.md).
 
 export interface Image {
   name: string;
   size: number;
   created: string;
   sha256?: string;
-  meta?: ImageMeta;
+  distro?: string;
+  suite?: string;
+  arch?: string;
+  profile?: string;
+  version?: string;
+  encrypted: boolean;
+  secureBoot: boolean;
+  packages?: number;
+  hasSbom: boolean;
 }
 
 export interface Bundle {
   name: string;
+  size: number;
+  created: string;
   version?: string;
   compatible?: string;
   source?: string;
   description?: string;
-  size: number;
-  created: string;
-  is_latest?: boolean;
+  isLatest: boolean;
+  hasSbom: boolean;
 }
 
+export type Presence = "online" | "stale" | "offline" | "unknown";
+
+// Machine is one machine as the imaging system knows it — keyed by what the
+// imager saw (usually a MAC), because a machine exists before it is a host: it
+// is imaged on the provisioning switch and only later enrolled.
 export interface Machine {
   id: string;
-  hostname?: string;
-  address?: string;
-  slot?: string;
-  version?: string;
-  image?: string;
-  groups?: string[];
-  label?: string;
-  paused?: boolean;
-  presence: "online" | "stale" | "offline" | "unknown";
-  health?: string;
-  update_state?: string;
-  update_error?: string;
-  last_seen?: number;
-}
-
-export interface FleetRow {
   hostId?: string;
   hostname: string;
+  address?: string;
+  slot?: string;
+  version: string;
+  image?: string;
+  arch?: string;
+  agentVersion?: string;
+  bootId?: string;
+  health?: string;
+  updateState: string;
+  updateError?: string;
+  updateRollout?: string;
+  // Who last said this and how they knew: a machine's own check-in, or
+  // something reporting what it read off the host over SSH.
+  reportedBy?: string;
+  reportSource: "agent" | "observed";
+  label?: string;
+  held: boolean;
+  firstSeen: string;
+  lastSeen?: string;
+  imagedAt?: string;
+  bootedAt?: string;
+  presence: Presence;
+  hostName?: string;
   environment?: string;
   tags?: string[];
-  enrolled: boolean;
-  machineId?: string;
-  linkedBy: "linked" | "hostname" | "none";
-  machine?: Machine;
+  // Whether this server can reach the paired host right now, which is the
+  // difference between an update that lands in minutes and one that lands
+  // whenever the machine next asks.
   reachable: boolean;
 }
 
-export interface RolloutStrategy {
-  canary: number;
-  batch_size: number;
-  soak_seconds: number;
-  max_failures: number;
+export interface RolloutProgress {
+  state: string;
+  error?: string;
+  attempts: number;
+  changedAt: string;
 }
 
 export interface Rollout {
   id: string;
   bundle: string;
   version: string;
-  bundle_url?: string;
+  bundleUrl?: string;
+  description?: string;
   state: "running" | "paused" | "halted" | "completed" | "cancelled";
-  halt_reason?: string;
-  created: number;
-  created_by?: string;
+  haltReason?: string;
+  targetGroups: string[];
+  targetHosts: string[];
+  targetAll: boolean;
+  canary: number;
+  batchSize: number;
+  soakSeconds: number;
+  maxFailures: number;
+  windowStart?: string;
+  windowEnd?: string;
+  windowDays?: number[];
+  canaryDoneAt?: string;
+  createdAt: string;
+  createdBy?: string;
   total: number;
   done: number;
-  counts: Record<string, number>;
-  machines: Record<string, { state: string; error?: string }>;
-  target: { groups: string[]; hosts: string[]; all: boolean };
-  strategy: RolloutStrategy;
+  counts?: Record<string, number>;
+  machines?: Record<string, RolloutProgress>;
 }
 
-export interface FleetGroup {
-  name: string;
-  description?: string;
-  hosts: number;
-}
-
-export async function imagingStatus(): Promise<ImagingStatus> {
-  const { data } = await api.get("/api/v1/imaging/status");
-  return data;
-}
-
-export async function listImages(): Promise<Image[]> {
-  const { data } = await api.get("/api/v1/imaging/images");
-  return data.images ?? [];
-}
-
-export async function listBundles(): Promise<{ bundles: Bundle[]; running_versions: Record<string, number> }> {
-  const { data } = await api.get("/api/v1/imaging/bundles");
-  return { bundles: data.bundles ?? [], running_versions: data.running_versions ?? {} };
-}
-
-export async function listFleetGroups(): Promise<FleetGroup[]> {
-  const { data } = await api.get("/api/v1/imaging/groups");
-  return data.groups ?? [];
-}
-
-export interface FleetView {
-  rows: FleetRow[];
+export interface MachineList {
+  machines: Machine[];
   counts: Record<string, number>;
   versions: Record<string, number>;
   interval: number;
-  controlUrl: string;
 }
 
-export async function imagingFleet(): Promise<FleetView> {
-  const { data } = await api.get("/api/v1/imaging/fleet");
+export async function listMachines(): Promise<MachineList> {
+  const { data } = await api.get("/api/v1/imaging/machines");
   return {
-    rows: data.rows ?? [],
+    machines: data.machines ?? [],
     counts: data.counts ?? {},
     versions: data.versions ?? {},
     interval: data.interval ?? 300,
+  };
+}
+
+export async function listImages(): Promise<{ images: Image[]; dir: string }> {
+  const { data } = await api.get("/api/v1/imaging/images");
+  return { images: data.images ?? [], dir: data.dir ?? "" };
+}
+
+export async function listBundles(): Promise<{
+  bundles: Bundle[];
+  runningVersions: Record<string, number>;
+  controlUrl: string;
+}> {
+  const { data } = await api.get("/api/v1/imaging/bundles");
+  return {
+    bundles: data.bundles ?? [],
+    runningVersions: data.runningVersions ?? {},
     controlUrl: data.controlUrl ?? "",
   };
 }
@@ -149,13 +149,25 @@ export async function listRollouts(): Promise<Rollout[]> {
   return data.rollouts ?? [];
 }
 
+export async function getRollout(id: string): Promise<Rollout> {
+  const { data } = await api.get(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}`);
+  return data;
+}
+
 export interface NewRollout {
   bundle: string;
+  bundleUrl?: string;
+  description?: string;
   groups?: string[];
   hosts?: string[];
   all?: boolean;
-  strategy?: Partial<RolloutStrategy>;
-  window?: { start: string; end: string; days?: number[] } | null;
+  canary?: number;
+  batchSize?: number;
+  soakSeconds?: number;
+  maxFailures?: number;
+  windowStart?: string;
+  windowEnd?: string;
+  windowDays?: number[];
 }
 
 export async function createRollout(body: NewRollout): Promise<Rollout> {
@@ -167,8 +179,20 @@ export async function steerRollout(id: string, verb: "pause" | "resume" | "cance
   await api.post(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}/${verb}`);
 }
 
-export async function linkHost(hostId: string, machineId: string) {
-  await api.put(`/api/v1/imaging/hosts/${hostId}/link`, { machineId });
+export async function deleteRollout(id: string) {
+  await api.delete(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}`);
+}
+
+// Pair a machine with the host it is, name it, or hold it back from rollouts.
+// All three are an operator's word about a machine and never the machine's word
+// about itself — otherwise anything on the network could put itself into a
+// rollout it was never targeted by.
+export async function updateMachine(
+  id: string,
+  body: { hostId?: string | null; label?: string; held?: boolean },
+): Promise<Machine> {
+  const { data } = await api.put(`/api/v1/imaging/machines/${encodeURIComponent(id)}`, body);
+  return data;
 }
 
 export interface ActionResult {
@@ -178,18 +202,20 @@ export interface ActionResult {
   note?: string;
 }
 
-// Make a machine check in with Flipside now rather than on its own timer. This
-// is the whole of the "push" Moorgate adds: the agent then does exactly what it
-// would have done minutes later, and Flipside applies the rollout's rules
-// unchanged.
-export async function nudgeHost(hostId: string): Promise<ActionResult> {
-  const { data } = await api.post(`/api/v1/imaging/hosts/${hostId}/nudge`);
+// Make a machine check in now rather than on its own timer. This is the whole of
+// the "push": the agent then does exactly what it would have done minutes later,
+// and the rollout's rules — canary, soak, batch, window, budget — are unchanged.
+export async function nudgeMachine(id: string): Promise<ActionResult> {
+  const { data } = await api.post(`/api/v1/imaging/machines/${encodeURIComponent(id)}/nudge`);
   return data;
 }
 
-// Write a bundle to a host directly, for machines that cannot reach Flipside
-// at all.
-export async function installOnHost(hostId: string, bundleUrl: string): Promise<ActionResult> {
-  const { data } = await api.post(`/api/v1/imaging/hosts/${hostId}/install`, { bundleUrl });
+// Write a bundle to a machine's inactive slot over SSH, for machines with no
+// route back to this server at all.
+export async function installOnMachine(id: string, bundleUrl: string): Promise<ActionResult> {
+  const { data } = await api.post(
+    `/api/v1/imaging/machines/${encodeURIComponent(id)}/install`,
+    { bundleUrl },
+  );
   return data;
 }

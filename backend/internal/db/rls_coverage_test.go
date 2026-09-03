@@ -33,6 +33,8 @@ import (
 // table here is a deliberate security decision — it asserts the table holds no
 // per-tenant data (or is isolated some other way). Keep the reason accurate.
 var rlsGlobalAllowlist = map[string]string{
+	// --- imaging control plane (0080) ---
+	"imaging_rollout_machines": "one machine's progress through one rollout; reachable only via imaging_rollouts, which is RLS-scoped. A tenant_id here would be a second copy of the parent's and a second place for the two to disagree (0080).",
 	// --- tenancy + RBAC catalog (global by design; the per-user *assignment* is scoped) ---
 	"tenants":          "the tenant registry itself — the root of the tenancy model, administered by the provider tenant; not tenant-scoped (0051).",
 	"permissions":      "global RBAC capability catalog (static permission keys) shared by all tenants (0001).",
