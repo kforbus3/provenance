@@ -313,8 +313,8 @@ type Config struct {
 	FlipsideNudge bool
 
 	GrypeScannerURL string // vulnerability-scanner sidecar
-	MSRCAPIURL         string // Microsoft Security Update Guide API (Windows CVE mapping)
-	MSRCMonths         int    // how many recent MSRC releases an online update fetches
+	MSRCAPIURL      string // Microsoft Security Update Guide API (Windows CVE mapping)
+	MSRCMonths      int    // how many recent MSRC releases an online update fetches
 
 	// CARotateAfter is how old the active SSH CA key may get before Fleet sends a
 	// rotation-reminder notification (the CA never auto-expires; rotation is
