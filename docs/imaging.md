@@ -319,6 +319,19 @@ on a host they cannot already see.
   go away — it means they are one deployment's concerns rather than two products',
   and that the privilege is contained deliberately rather than by accident of
   which repository it lived in.
+- **There is no Kubernetes manifest for the builder, on purpose.** Everything
+  else here ships one. Mounting a node's Docker socket into a pod and running it
+  privileged is a materially different proposition in a shared cluster than it is
+  on a single Docker host — it is node-level root, available to anything that can
+  reach the pod, and it does not survive a containerd-only node at all. Doing it
+  properly on Kubernetes means a different build strategy (BuildKit or Kaniko in
+  a pod, with its own cache and registry story), not a translated compose file.
+  Until that exists, run the builder on a Docker host and point the cluster at
+  the artefacts it produces; `FLEET_BUILDER_RUNNER_URL` is a URL precisely so the
+  builder does not have to live where the backend does.
+
+  The rest of imaging — rollouts, machines, heartbeats, the artefact library —
+  works on Kubernetes unchanged. Only building is affected.
 
 ## Backups
 

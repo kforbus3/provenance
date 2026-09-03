@@ -291,6 +291,25 @@ External Secret):
 | `secrets.backupPassphrase` | `FLEET_BACKUP_PASSPHRASE` (must **differ** from `caPassphrase`) | for encrypted backups |
 | `secrets.recordingKey` | `FLEET_RECORDING_KEY` | optional (recording encryption) |
 
+##### The image builder is not in the chart, deliberately
+
+Everything else here ships a manifest; the builder (`deploy/builder-runner`)
+does not. It drives builds through a node's Docker socket, and a privileged pod
+holding that socket is **node-level root, reachable by anything that can reach
+the pod** — a materially different proposition in a shared cluster than on a
+single Docker host, and useless on a containerd-only node. Doing it properly
+means BuildKit or Kaniko in a pod, with its own cache and registry story: a
+different design, not a translated compose file. Shipping a privileged
+translation of one would be offering an option that had not actually been
+thought through.
+
+Run the builder on a Docker host instead and point the cluster at what it
+produces. `FLEET_BUILDER_RUNNER_URL` is a URL precisely so the builder need not
+live where the backend does; leave it unset and the build routes answer `501`
+and say why. **The rest of imaging — rollouts, machines, heartbeats, the
+artefact library — runs on Kubernetes unchanged.** Only building is affected.
+See [imaging.md](imaging.md).
+
 ---
 
 ## 6. The jump host & WireGuard
