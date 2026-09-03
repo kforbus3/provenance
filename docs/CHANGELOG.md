@@ -7,44 +7,79 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
-**Flipside is now Blackfriars's OS imaging and update subsystem.** The two products
-join here, and the join is not cosmetic: it gives each of them the half it was
-missing.
+**Blackfriars is Moorgate and Flipside as one program.** Not one product driving
+the other over an API — one codebase, one database, one set of host groups, one
+permission model, one audit log. That distinction is the whole of this release.
 
-[Flipside](https://github.com/kforbus3/flipside) builds the operating system
-images this fleet runs, images machines over PXE, and rolls signed update
-bundles out in stages. Its control plane has to be a **pull** — a machine is
-imaged on a private provisioning switch and then moved to wherever it lives, so
-the imaging server cannot reach it afterwards, and each machine's agent polls
-every few minutes instead.
+An imaging control plane on its own has to be a **pull**: a machine is imaged on
+a private provisioning switch and then moved to wherever it lives, so the imaging
+server never learns its address and cannot route to it. An operator who starts a
+rollout can only wait. This server already reaches every enrolled host through
+the jump host, so the pull stays — it is what makes a rollout work for a machine
+behind a firewall nobody here controls — and reaching out becomes the fast path
+on top of it.
 
-Blackfriars has exactly what that lacks. Every enrolled host is reachable through
-the jump host, so:
+The rollout engine decides everything: canary, soak, batch size, failure budget,
+maintenance window, and the rule that a machine counts as updated only when it
+comes back on the new version and healthy. Reaching a machine decides nothing —
+a nudge makes it ask sooner, and the answer is the one it would have got on its
+own timer. One set of rules governs a rollout however it was started.
 
-- **A rollout finishes in minutes rather than polling hours.** Blackfriars nudges
-  the machines a live rollout is waiting on and they check in at once. Nothing
-  about the rollout changes; only the waiting is removed.
-- **Machines that can never reach Flipside can still be updated.** Blackfriars
-  reaches *them*, installs over SSH, and reports what it observed on the host —
-  which is stronger evidence than a machine's own word, and is recorded as a
-  different kind of claim.
+**What that buys, concretely**
 
-Flipside keeps every decision a rollout makes: canary, soak, batch size, failure
-budget, maintenance window, and the rule that a machine counts as updated only
-when it comes back on the new version and healthy. Blackfriars supplies reach,
-identity, roles and the audit trail. Two copies of that logic would have to be
-kept in step and would not be.
+- **Rollouts target host groups** — the same groups access control and policy
+  use, not a second set naming the same machines. A stale copy of "which machines
+  are production" is how the wrong fleet gets an update.
+- **A machine is its own record**, keyed by what the imager saw, with a nullable
+  link to a host. A machine exists *before* it is a host, and that window is
+  exactly where "imaged perfectly and never came back" lives — the failure the
+  imager's own reports cannot cover, because the last of them is sent before the
+  reboot.
+- Pairing a machine to a host is recorded by an operator, never inferred from a
+  hostname. Hostname matching works until somebody renames one, and then it
+  silently re-points at a different machine.
 
-- New **Imaging** page: the fleet's OS versions paired with Blackfriars hosts,
-  rollouts with live progress, and the image and bundle libraries.
-- New permissions `Imaging.View` (Administrator, Operator, Auditor) and
-  `Imaging.Manage` (Administrator, Operator). Managing changes what a machine
-  runs, and is enforced through the same gateway, policy and audit path as
-  `Command.Run`.
+**New**
+
+- **Imaging** page: machines being written right now, the fleet's OS versions,
+  rollouts with live progress, the image and bundle libraries, and builds.
+- **Image building**, behind the `builder-runner` sidecar and the Docker socket
+  allowlist. The backend never touches the socket: building means a privileged
+  container that loop-mounts a disk, and that privilege does not belong in the
+  process that also holds the SSH certificate authority. Opt-in —
+  `make up-imaging`, or `docker compose --profile imaging`.
+- Four permissions, split because they are different acts: `Imaging.View`,
+  `Imaging.Build` (produces an artefact, reaches no host), `Imaging.Manage`
+  (changes what a machine boots), `Imaging.Provision` (reconfigures a network
+  segment). Everyone who could build before still can.
 - A rollout halting on its failure budget is a notifiable event.
-- Configure with `FLEET_FLIPSIDE_URL` and `FLEET_FLIPSIDE_TOKEN` (operator role).
-  Unset, the whole subsystem is inert — no pages, no polling, no change of any
-  kind.
+- SBOMs (SPDX + CycloneDX), optional Secure Boot and LUKS, PXE/iPXE imaging.
+
+**Fixed, and worth naming**
+
+- **A maintenance window that wrapped past midnight permitted updates at every
+  hour of the day.** `22:00–04:00` fell through to "was yesterday an allowed
+  day", which with no day restriction is always true — the exact opposite of what
+  the window was set for, and invisible until a machine rebooted mid-shift.
+- **The imaged and first-boot moments were written to nothing.** Both were set by
+  the imager endpoints and named in no SQL statement, so the only record that
+  answers "did the machine come back" was silently discarded.
+- An observation read off a host no longer blanks an update state it never
+  claimed.
+
+**Configuration.** `FLEET_CONTROL_URL` is the one to get right: the address
+machines **in the field** reach this server on, routinely not the address a
+browser uses. Also `FLEET_ARTIFACT_DIR`, `FLEET_AGENT_INTERVAL`,
+`FLEET_AGENT_TOKEN`, `FLEET_IMAGING_NUDGE`, and — only if you build here —
+`FLEET_BUILDER_RUNNER_URL` with a matching `FLEET_BUILDER_RUNNER_TOKEN`. All are
+in `.env.example`.
+
+**Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
+See [deployment.md](./deployment.md).
+
+The `FLEET_*` names, the `fleetd`/`fleetctl`/`fleet` binaries, the `.fleetup`
+bundle format and the container names are unchanged. The Go module path is now
+`github.com/kforbus3/blackfriars`.
 
 See [imaging.md](./imaging.md).
 
