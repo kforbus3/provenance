@@ -320,6 +320,15 @@ type Config struct {
 	// asked to check in immediately rather than waiting for their own timer.
 	// This is the whole of the "push"; off, rollouts still work, only slower.
 	ImagingNudge bool
+	// BuilderRunnerURL is the builder-runner sidecar: the only thing in a
+	// deployment that touches the Docker socket. Building an image means running
+	// a privileged container that loop-mounts a disk, so the ability to ask for
+	// one is the host -- and it is deliberately not held by the process that also
+	// holds the certificate authority.
+	BuilderRunnerURL string
+	// BuilderRunnerToken is the shared secret sent as X-Runner-Token, exactly as
+	// for the Ansible runner. Required in production for the same reason.
+	BuilderRunnerToken string
 
 	GrypeScannerURL string // vulnerability-scanner sidecar
 	MSRCAPIURL      string // Microsoft Security Update Guide API (Windows CVE mapping)
@@ -479,35 +488,41 @@ func Load() (*Config, error) {
 		AgentInterval:               envInt("FLEET_AGENT_INTERVAL", 300),
 		AgentToken:                  env("FLEET_AGENT_TOKEN", ""),
 		ImagingNudge:                envBool("FLEET_IMAGING_NUDGE", true),
-		GrypeScannerURL:             env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
-		MSRCAPIURL:                  env("FLEET_MSRC_API_URL", "https://api.msrc.microsoft.com"),
-		MSRCMonths:                  envInt("FLEET_MSRC_MONTHS", 12),
-		CARotateAfter:               envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
-		BackupDir:                   env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
-		ReleaseTrustKeys:            env("FLEET_RELEASE_TRUST_KEYS", ""),
-		UpdatesDir:                  env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
-		UpdaterURL:                  env("FLEET_UPDATER_URL", "http://fleet-updater:9000"),
-		UpdaterToken:                env("FLEET_UPDATER_TOKEN", ""),
-		UpdateChannelURL:            env("FLEET_UPDATE_CHANNEL_URL", ""),
-		BackupPassphrase:            env("FLEET_BACKUP_PASSPHRASE", ""),
-		VaultPassphrase:             env("FLEET_VAULT_PASSPHRASE", ""),
-		GuacdAddr:                   env("FLEET_GUACD_ADDR", "guacd:4822"),
-		RDPProxyHost:                env("FLEET_RDP_PROXY_HOST", "backend"),
-		RDPDriveDir:                 env("FLEET_RDP_DRIVE_DIR", "/var/lib/fleet/rdp-drive"),
-		RDPCollectFacts:             envBool("FLEET_RDP_COLLECT_FACTS", true),
-		RDPWinRMPorts:               parseIntList(env("FLEET_RDP_WINRM_PORTS", "5986,5985")),
-		MaxUploadBytes:              envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
-		LogLevel:                    env("FLEET_LOG_LEVEL", "info"),
-		LogFormat:                   env("FLEET_LOG_FORMAT", "json"),
-		OTLPEndpoint:                env("FLEET_OTLP_ENDPOINT", ""),
-		TracingOn:                   envBool("FLEET_TRACING", false),
-		AllowBootstrap:              envBool("FLEET_ALLOW_BOOTSTRAP", true),
-		Mode:                        strings.ToLower(env("FLEET_MODE", "standalone")),
-		HubURL:                      env("FLEET_HUB_URL", ""),
-		HubJoinToken:                env("FLEET_HUB_JOIN_TOKEN", ""),
-		HubKeyFingerprint:           env("FLEET_HUB_KEY_FINGERPRINT", ""),
-		FederationTransport:         strings.ToLower(env("FLEET_FEDERATION_TRANSPORT", "wss")),
-		Environment:                 env("FLEET_ENV", "development"),
+		// No default. Unlike the Ansible runner, this sidecar is not part of
+		// every deployment -- it needs the Docker socket and a lot of disk, and a
+		// fleet that consumes images someone else builds should not be made to
+		// run it, nor to invent a secret for a service it does not have.
+		BuilderRunnerURL:    strings.TrimRight(env("FLEET_BUILDER_RUNNER_URL", ""), "/"),
+		BuilderRunnerToken:  env("FLEET_BUILDER_RUNNER_TOKEN", ""),
+		GrypeScannerURL:     env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
+		MSRCAPIURL:          env("FLEET_MSRC_API_URL", "https://api.msrc.microsoft.com"),
+		MSRCMonths:          envInt("FLEET_MSRC_MONTHS", 12),
+		CARotateAfter:       envDuration("FLEET_CA_ROTATE_AFTER", 365*24*time.Hour),
+		BackupDir:           env("FLEET_BACKUP_DIR", "/var/lib/fleet/backups"),
+		ReleaseTrustKeys:    env("FLEET_RELEASE_TRUST_KEYS", ""),
+		UpdatesDir:          env("FLEET_UPDATES_DIR", "/var/lib/fleet/updates"),
+		UpdaterURL:          env("FLEET_UPDATER_URL", "http://fleet-updater:9000"),
+		UpdaterToken:        env("FLEET_UPDATER_TOKEN", ""),
+		UpdateChannelURL:    env("FLEET_UPDATE_CHANNEL_URL", ""),
+		BackupPassphrase:    env("FLEET_BACKUP_PASSPHRASE", ""),
+		VaultPassphrase:     env("FLEET_VAULT_PASSPHRASE", ""),
+		GuacdAddr:           env("FLEET_GUACD_ADDR", "guacd:4822"),
+		RDPProxyHost:        env("FLEET_RDP_PROXY_HOST", "backend"),
+		RDPDriveDir:         env("FLEET_RDP_DRIVE_DIR", "/var/lib/fleet/rdp-drive"),
+		RDPCollectFacts:     envBool("FLEET_RDP_COLLECT_FACTS", true),
+		RDPWinRMPorts:       parseIntList(env("FLEET_RDP_WINRM_PORTS", "5986,5985")),
+		MaxUploadBytes:      envInt64("FLEET_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
+		LogLevel:            env("FLEET_LOG_LEVEL", "info"),
+		LogFormat:           env("FLEET_LOG_FORMAT", "json"),
+		OTLPEndpoint:        env("FLEET_OTLP_ENDPOINT", ""),
+		TracingOn:           envBool("FLEET_TRACING", false),
+		AllowBootstrap:      envBool("FLEET_ALLOW_BOOTSTRAP", true),
+		Mode:                strings.ToLower(env("FLEET_MODE", "standalone")),
+		HubURL:              env("FLEET_HUB_URL", ""),
+		HubJoinToken:        env("FLEET_HUB_JOIN_TOKEN", ""),
+		HubKeyFingerprint:   env("FLEET_HUB_KEY_FINGERPRINT", ""),
+		FederationTransport: strings.ToLower(env("FLEET_FEDERATION_TRANSPORT", "wss")),
+		Environment:         env("FLEET_ENV", "development"),
 	}
 
 	c.JWTSecret = []byte(env("FLEET_JWT_SECRET", ""))
@@ -641,6 +656,14 @@ func (c *Config) validate() error {
 		// container network can submit playbooks (remote code execution).
 		if len(c.AnsibleRunnerToken) < 16 {
 			missing = append(missing, "FLEET_ANSIBLE_RUNNER_TOKEN (>=16 bytes)")
+		}
+		// Same reasoning, one step worse: the builder runner starts *privileged*
+		// containers, so anything on the container network that can reach it
+		// unauthenticated is root on the host. Required only when a runner is
+		// actually configured -- a deployment that never builds images should not
+		// be made to invent a secret for a service it does not run.
+		if c.BuilderRunnerURL != "" && len(c.BuilderRunnerToken) < 16 {
+			missing = append(missing, "FLEET_BUILDER_RUNNER_TOKEN (>=16 bytes)")
 		}
 		if len(missing) > 0 {
 			return fmt.Errorf("missing required config for %q environment: %s",

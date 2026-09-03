@@ -140,6 +140,21 @@ services:
       # sidecar reads the SAME value below. `openssl rand -hex 32`.
       FLEET_ANSIBLE_RUNNER_TOKEN: ${FLEET_ANSIBLE_RUNNER_TOKEN:-}
       FLEET_GRYPE_SCANNER_URL: ${FLEET_GRYPE_SCANNER_URL:-http://grype-scanner:8000}
+      # Image building (docs/imaging.md). Empty by default and the whole build
+      # path is simply absent: the sidecar needs the Docker socket and a lot of
+      # disk, and a fleet that consumes images somebody else builds should not
+      # have to run it. Bring it up with `--profile imaging` and set both.
+      FLEET_BUILDER_RUNNER_URL: ${FLEET_BUILDER_RUNNER_URL:-}
+      # Shared secret the backend sends (X-Runner-Token) to the builder runner.
+      # The runner can start PRIVILEGED containers, so anything on the internal
+      # network that can reach it unauthenticated is root on the host. Required
+      # outside development whenever a runner URL is set. `openssl rand -hex 32`.
+      FLEET_BUILDER_RUNNER_TOKEN: ${FLEET_BUILDER_RUNNER_TOKEN:-}
+      # Where built images and bundles live, and the address machines in the
+      # FIELD reach this server on -- routinely not the address an operator's
+      # browser uses. See docs/imaging.md.
+      FLEET_ARTIFACT_DIR: ${FLEET_ARTIFACT_DIR:-/output}
+      FLEET_CONTROL_URL: ${FLEET_CONTROL_URL:-}
       FLEET_MAX_UPLOAD_BYTES: ${FLEET_MAX_UPLOAD_BYTES:-5368709120}
       # WireGuard overlay — managed-host enrollment uses these. Empty falls back
       # to the binary's defaults (see .env.example). FLEET_WG_JUMP_ENDPOINT MUST
@@ -272,6 +287,51 @@ services:
         reservations:
           cpus: "0.1"
           memory: 64M
+    networks: [fleet]
+
+  # Sidecar that builds OS images and update bundles, and drives the PXE
+  # provisioning stack. Internal only, reachable at http://builder-runner:8000.
+  #
+  # Opt-in (`docker compose --profile imaging up`) for two reasons that are both
+  # about not making every deployment pay for this one: it needs the Docker
+  # socket, and a full image build wants tens of gigabytes of disk.
+  #
+  # It holds the Docker socket so the BACKEND does not. Building an image means
+  # running a privileged container that loop-mounts a disk, and a process that
+  # can ask for that can ask for anything -- so the ability is kept in a
+  # container that does nothing else, rather than in the one that also holds the
+  # SSH certificate authority.
+  builder-runner:
+    profiles: [imaging]
+    build:
+      context: ../builder-runner
+      dockerfile: Dockerfile
+    image: blackfriars-builder-runner
+    restart: unless-stopped
+    environment:
+      # Must match the backend's FLEET_BUILDER_RUNNER_TOKEN.
+      FLEET_BUILDER_RUNNER_TOKEN: ${FLEET_BUILDER_RUNNER_TOKEN:-}
+      # The address machines in the field reach the control plane on. The
+      # provisioning stack is rendered with it, so it has to be known here too.
+      CONTROL_URL: ${FLEET_CONTROL_URL:-}
+      # Absolute path to the project ON THE HOST. Sibling containers are started
+      # through the Docker socket, so the daemon resolves their bind mounts
+      # against the host filesystem, not this container's. Left empty it is
+      # detected from this container's own /project mount, which is always right.
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
+    volumes:
+      # The socket. This is the privilege; everything above is about containing it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The project, for the builder context, overlay.d, and output/.
+      - ../..:/project
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+        reservations:
+          cpus: "0.1"
+          memory: 128M
     networks: [fleet]
 
   # Sidecar that runs Anchore Grype vulnerability scans for the backend. Internal
