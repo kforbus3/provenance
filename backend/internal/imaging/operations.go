@@ -228,20 +228,31 @@ func (s *Service) fill(ctx context.Context, rec *models.ImagingRollout, detail b
 }
 
 // NewRollout is what an operator asked for.
+//
+// Carries its own JSON tags and is decoded into directly. There was a separate
+// request struct beside the handler with exactly these fields, which is one
+// definition of a rollout's inputs too many: the failure mode of two is that
+// somebody adds a field to one of them.
+//
+// The pointers are the point of the struct. A rollout has real defaults --
+// canary 1, batches of 10, a fifteen-minute soak, stop after 2 -- and zero is a
+// meaningful value for every one of them. `"canary": 0` is "skip the canary",
+// which is a different instruction from omitting the field, and only a pointer
+// can tell those apart.
 type NewRollout struct {
-	Bundle      string
-	BundleURL   string
-	Description string
-	Groups      []uuid.UUID
-	Hosts       []uuid.UUID
-	All         bool
-	Canary      *int
-	BatchSize   *int
-	SoakSeconds *int
-	MaxFailures *int
-	WindowStart string
-	WindowEnd   string
-	WindowDays  []int32
+	Bundle      string      `json:"bundle"`
+	BundleURL   string      `json:"bundleUrl"`
+	Description string      `json:"description"`
+	Groups      []uuid.UUID `json:"groups"`
+	Hosts       []uuid.UUID `json:"hosts"`
+	All         bool        `json:"all"`
+	Canary      *int        `json:"canary"`
+	BatchSize   *int        `json:"batchSize"`
+	SoakSeconds *int        `json:"soakSeconds"`
+	MaxFailures *int        `json:"maxFailures"`
+	WindowStart string      `json:"windowStart"`
+	WindowEnd   string      `json:"windowEnd"`
+	WindowDays  []int32     `json:"windowDays"`
 }
 
 // CreateRollout records the intent. Nothing is sent anywhere by it: machines

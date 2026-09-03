@@ -287,35 +287,16 @@ func (h *handler) rollout(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
-type newRolloutReq struct {
-	Bundle      string      `json:"bundle"`
-	BundleURL   string      `json:"bundleUrl"`
-	Description string      `json:"description"`
-	Groups      []uuid.UUID `json:"groups"`
-	Hosts       []uuid.UUID `json:"hosts"`
-	All         bool        `json:"all"`
-	Canary      *int        `json:"canary"`
-	BatchSize   *int        `json:"batchSize"`
-	SoakSeconds *int        `json:"soakSeconds"`
-	MaxFailures *int        `json:"maxFailures"`
-	WindowStart string      `json:"windowStart"`
-	WindowEnd   string      `json:"windowEnd"`
-	WindowDays  []int32     `json:"windowDays"`
-}
-
 func (h *handler) createRollout(w http.ResponseWriter, r *http.Request) {
-	var req newRolloutReq
+	// Decoded straight into the type the service takes. There is no separate
+	// request struct: it had exactly these fields, and a second definition of a
+	// rollout's inputs is a place for the two to drift.
+	var req NewRollout
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
 	p := auth.MustPrincipal(r)
-	out, err := h.svc.CreateRollout(r.Context(), NewRollout{
-		Bundle: req.Bundle, BundleURL: req.BundleURL, Description: req.Description,
-		Groups: req.Groups, Hosts: req.Hosts, All: req.All,
-		Canary: req.Canary, BatchSize: req.BatchSize,
-		SoakSeconds: req.SoakSeconds, MaxFailures: req.MaxFailures,
-		WindowStart: req.WindowStart, WindowEnd: req.WindowEnd, WindowDays: req.WindowDays,
-	}, p)
+	out, err := h.svc.CreateRollout(r.Context(), req, p)
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
