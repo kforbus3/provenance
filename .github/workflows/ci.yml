@@ -140,3 +140,27 @@ jobs:
       # build-help step keeps parity with the other frontend jobs.
       - run: npm run build-help && npm run build-guac-player
       - run: npm run lint
+
+  sidecars:
+    name: Sidecars (builder-runner · dockerproxy)
+    runs-on: ubuntu-latest
+    # Blocking, and worth blocking on. Both of these sit in front of the Docker
+    # socket: the proxy IS the allowlist, and the runner's token is the only
+    # thing between the container network and the ability to start a privileged
+    # container. Neither is exercised by the Go suite.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r deploy/builder-runner/requirements.txt httpx
+      # Every route the runner exposes must refuse a missing and a wrong token.
+      # The routes are enumerated from the app, so one added without the guard
+      # fails here rather than being quietly reachable.
+      - name: Builder-runner authentication
+        run: python deploy/builder-runner/test_auth.py
+      # The proxy's allowlist rules, without needing a Docker daemon. The
+      # daemon-backed half lives in scripts/imaging/test-docker-proxy.sh.
+      - name: Docker proxy rules
+        run: python deploy/dockerproxy/test_rules.py
