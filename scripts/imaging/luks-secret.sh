@@ -1,20 +1,20 @@
 #!/bin/bash
 #
 # Generate, store and retrieve an image's LUKS passphrase using OpenBao or
-# HashiCorp Vault -- the command-line equivalent of what the web UI does.
+# HashiCorp Vault -- the command-line equivalent of what the control plane does.
 #
-# The web UI holds this integration properly: it is configured once, generates
+# The control plane holds this integration properly: it is configured once, generates
 # the passphrase, files it, and reads it back when it packages an update bundle.
 # This script exists so `./builder/run.sh` is not a second-class path, and it
 # writes the same KV v2 payload the UI does, so an image built either way is
 # recoverable from the other.
 #
 #   # generate a passphrase, store it, and stage it for the builder
-#   ./scripts/luks-secret.sh new debian-trixie-amd64-ab.img
+#   ./scripts/imaging/luks-secret.sh new debian-trixie-amd64-ab.img
 #   ./builder/run.sh --encrypt --unlock tpm2 \
 #       --luks-passphrase-file /output/.luks-pass \
 #       --output /output/debian-trixie-amd64-ab.img
-#   ./scripts/luks-secret.sh clean
+#   ./scripts/imaging/luks-secret.sh clean
 #
 # The passphrase is staged in a file rather than passed as an argument because
 # arguments are visible in `ps` to every user on the build host. output/ is
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-$HERE/../output}"
+OUTPUT_DIR="${OUTPUT_DIR:-$HERE/../../output}"
 STAGED="$OUTPUT_DIR/.luks-pass"
 # The path the *builder* sees. output/ is bind-mounted at /output, so the host
 # path above and this one are the same file under different names.
@@ -68,7 +68,7 @@ find_cli() {
 
 # Strip the compression suffix so foo.img and foo.img.zst -- the same image,
 # built with different --compress -- resolve to one entry. Matches
-# secretstore.secret_name() in the web UI backend.
+# secretstore.secret_name() in the control plane backend.
 secret_name() {
     local n="${1##*/}"
     case "$n" in

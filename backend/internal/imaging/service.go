@@ -45,6 +45,10 @@ type Service struct {
 	issuer *identity.Issuer
 	nfy    *notify.Service
 
+	// Live progress of machines being imaged right now. In memory on purpose;
+	// see progress.go.
+	progress *progressRegistry
+
 	// Rollouts whose halt has already been announced, so a halted rollout
 	// notifies once rather than on every pass of the loop.
 	mu      sync.Mutex
@@ -52,12 +56,17 @@ type Service struct {
 	touched map[string]time.Time
 }
 
+// timeNow exists so imagerhandlers.go reads the clock through one name rather
+// than reaching for time.Now() in the middle of building a record.
+func timeNow() time.Time { return time.Now() }
+
 func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway,
 	issuer *identity.Issuer, nfy *notify.Service) *Service {
 	return &Service{
 		store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, nfy: nfy,
-		halted:  map[string]bool{},
-		touched: map[string]time.Time{},
+		progress: newProgressRegistry(),
+		halted:   map[string]bool{},
+		touched:  map[string]time.Time{},
 	}
 }
 

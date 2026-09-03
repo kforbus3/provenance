@@ -50,7 +50,7 @@ MODE="${MODE:-poweroff}"
 #                    blessed, so an update that boots but is not healthy still
 #                    rolls back. Same staging as rollback, but the slot is left
 #                    entirely functional and only the check says no.
-# assigned-name   -- the imager leaves the name assigned in the web UI on the
+# assigned-name   -- the imager leaves the name assigned in the control plane on the
 #                    BOOT partition; machine-identity must apply it, and it must
 #                    survive a reboot rather than reverting to the image's.
 case "$MODE" in poweroff|hostname-reboot|early-reboot|rollback|health-fail|assigned-name) ;; *) echo "HARNESS-FAIL: bad MODE"; exit 1;; esac
@@ -396,7 +396,7 @@ prime_rollback() {
 }
 
 # What imager/init writes to the BOOT partition after dd'ing the image, for a
-# machine the web UI has given a name. No checkin_url on purpose: ab-checkin
+# machine the control plane has given a name. No checkin_url on purpose: ab-checkin
 # exits immediately without one, so this does not spend the boot waiting on a
 # provisioning server that is not there.
 ASSIGNED=assigned-01

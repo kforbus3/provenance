@@ -1,7 +1,7 @@
 #!/bin/bash
 # The machine half of the control plane, driven as a machine drives it.
 #
-# The server half is covered by webui/backend/tests/test_fleet_rollout.py. This
+# The server half is covered by backend/internal/imaging/engine_test.go. This
 # covers the part that runs on the machine, where every mistake is expensive and
 # invisible: an agent that cannot parse a directive, or forgets which server it
 # was moved to, or reinstalls the same bundle on every beat, is a fleet-wide
@@ -11,10 +11,10 @@
 # by environment for exactly this -- a harness that reimplemented the parsing
 # would be testing the reimplementation.
 #
-#   ./scripts/test-fleet-agent.sh
+#   ./scripts/imaging/test-fleet-agent.sh
 set -u
 
-AGENT="$(cd "$(dirname "$0")/.." && pwd)/builder/overlay/usr/local/sbin/ab-agent.sh"
+AGENT="$(cd "$(dirname "$0")/../.." && pwd)/builder/overlay/usr/local/sbin/ab-agent.sh"
 [ -x "$AGENT" ] || { echo "not executable: $AGENT" >&2; exit 1; }
 
 WORK="$(mktemp -d)"

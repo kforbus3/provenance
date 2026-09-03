@@ -10,11 +10,11 @@
 # on the Imaging page with nothing anywhere to explain it.
 #
 # This runs the real container: the real entrypoint renders the real template,
-# and a stub stands in for the web UI. It asserts the two machine-facing
+# and a stub stands in for the control plane. It asserts the machine-facing
 # endpoints arrive, and -- just as important -- that nothing else does.
 #
 #   docker run is used directly; this needs a docker daemon, not privileges.
-#     bash scripts/test-imaging-report-route.sh
+#     bash scripts/imaging/test-imaging-report-route.sh
 set -u
 
 NET=abtest-report-net
@@ -34,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
 docker build -q -t "$IMG" "$REPO/server/http" >/dev/null || { echo "HARNESS-FAIL: build"; exit 1; }
 docker network create "$NET" >/dev/null || { echo "HARNESS-FAIL: network"; exit 1; }
@@ -70,7 +70,7 @@ req() {   # req <method> <path> -> HTTP status
         -w '%{http_code}' --max-time 5 -X "$1" "http://$HTTP$2" 2>/dev/null
 }
 
-echo "== the endpoints a machine reports into are routed to the web UI =="
+echo "== the endpoints a machine reports into are routed to the control plane =="
 code=$(req POST /api/imaging/report)
 [ "$code" = "200" ] && ok "POST /api/imaging/report -> $code" \
                     || bad "POST /api/imaging/report -> $code (404 means the report is discarded)"
@@ -81,15 +81,15 @@ code=$(req POST /api/imaging/checkin)
 # The status alone is not proof: nginx could answer 200 from the file root.
 LOG="$(docker logs "$STUB" 2>&1)"
 printf '%s\n' "$LOG" | grep -q "HIT POST /api/imaging/report" \
-    && ok "the report actually reached the web UI, not the file root" \
-    || bad "nothing arrived at the web UI (stub log: $(printf '%s' "$LOG" | tr '\n' ' '))"
+    && ok "the report actually reached the control plane, not the file root" \
+    || bad "nothing arrived at the control plane (stub log: $(printf '%s' "$LOG" | tr '\n' ' '))"
 printf '%s\n' "$LOG" | grep -q "HIT POST /api/imaging/checkin" \
-    && ok "the check-in actually reached the web UI" \
+    && ok "the check-in actually reached the control plane" \
     || bad "the check-in did not arrive"
 
 echo ""
 echo "== and nothing else on the API is published to the imaging segment =="
-# These are the admin surface. They are all behind require_auth, but the imaging
+# These are the admin surface. They are all behind authentication, but the imaging
 # network has no business being able to reach them at all -- a prefix proxy over
 # /api/ would have done exactly that, which is why the locations are exact.
 for path in /api/images /api/bundles /api/secrets/entries /api/server/config /api/imaging; do
@@ -98,15 +98,15 @@ for path in /api/images /api/bundles /api/secrets/entries /api/server/config /ap
                         || bad "GET $path -> $code; the admin API is reachable from the imaging network"
 done
 # The delete endpoint shares the /api/imaging/ prefix; a prefix match would
-# expose it, an exact match does not. Asserted by what the web UI received
+# expose it, an exact match does not. Asserted by what the control plane received
 # rather than by status code: nginx's static handler answers DELETE with 405
 # rather than 404, and pinning the code would make this test about nginx's
 # choice of rejection instead of about whether the request was forwarded.
 req DELETE /api/imaging/aa:bb:cc:dd:ee:ff >/dev/null
 if docker logs "$STUB" 2>&1 | grep -q "HIT DELETE"; then
-    bad "DELETE /api/imaging/<id> reached the web UI; a prefix match slipped through"
+    bad "DELETE /api/imaging/<id> reached the control plane; a prefix match slipped through"
 else
-    ok "DELETE /api/imaging/<id> never reached the web UI (exact match holds)"
+    ok "DELETE /api/imaging/<id> never reached the control plane (exact match holds)"
 fi
 
 echo ""
@@ -160,7 +160,7 @@ code=$(req GET /images/)
 echo ""
 echo "== a WEBUI_ADDR that cannot resolve must not take PXE down =="
 # nginx resolves proxy_pass names at config load and refuses to start if it
-# cannot. PXE dying because the web UI moved would be a far worse failure than
+# cannot. PXE dying because the control plane moved would be a far worse failure than
 # losing the progress display, so the entrypoint checks and falls back.
 docker rm -f "$HTTP" >/dev/null 2>&1
 docker run -d --name "$HTTP" --network "$NET" \
@@ -173,7 +173,7 @@ for _ in $(seq 1 40); do
     sleep 0.5
 done
 [ -n "$up" ] && ok "nginx still serves PXE with an unresolvable WEBUI_ADDR" \
-             || bad "nginx did not come up; an unreachable web UI took PXE down with it"
+             || bad "nginx did not come up; an unreachable control plane took PXE down with it"
 docker logs "$HTTP" 2>&1 | grep -q "Falling back to 127.0.0.1:8080" \
     && ok "the fallback was reported, not silent" \
     || bad "nothing said the address was unusable"

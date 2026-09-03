@@ -16,11 +16,11 @@
 # a filesystem, or the network. A case that gets far enough to need any of
 # those is itself a failure -- it means validation moved later.
 #
-#   bash scripts/test-profile-args.sh
+#   bash scripts/imaging/test-profile-args.sh
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BUILD="$HERE/../builder/build-image.sh"
+BUILD="$HERE/../../builder/build-image.sh"
 [ -r "$BUILD" ] || { echo "HARNESS-FAIL: no $BUILD"; exit 1; }
 
 PASS=0; FAIL=0

@@ -2,14 +2,14 @@
 # Drive ab-update.sh with stubbed rauc/curl/df to check the streaming fallback
 # and the failure diagnostics -- no bundle, no server, no machine, ~1 second.
 #
-# This exists because the real thing (scripts/test-update-bundle.sh) builds two
+# This exists because the real thing (scripts/imaging/test-update-bundle.sh) builds two
 # 8 GiB images and boots them under QEMU, so it only runs nightly. The streaming
 # fallback was broken for a week under that arrangement: it fired only on the
 # one error a 'plain' bundle produces, so a dm-verity failure went straight to
 # "update failed" with no retry, and the nightly was the only thing that knew.
 # A failure mode that takes 90 minutes to observe is one nobody observes.
 set -u
-cd "$(dirname "$0")/.." || exit 1
+cd "$(dirname "$0")/../.." || exit 1
 T=/tmp/abu; rm -rf $T; mkdir -p $T/bin; export PATH="$T/bin:$PATH"
 URL="http://example/bundles/x.raucb"
 fail=0
@@ -100,7 +100,7 @@ check "exit 0" "$rc" "0"
 hasnt "no fallback" "$out" "Streaming the update failed"
 
 echo "== 7. the URL answers with HTML: refuse before rauc sees it =="
-# The web UI's SPA returns its front page for any unknown path, so a bundle URL
+# The control plane's SPA returns its front page for any unknown path, so a bundle URL
 # on the wrong port downloads a React app under a .raucb name. RAUC read the
 # last eight bytes of that page as the signature size and reported a corrupt
 # bundle, which sent the first person to read it looking at signing keys.
@@ -110,7 +110,7 @@ export STREAM_ERR="should not get this far"
 out=$(bash builder/overlay/usr/local/sbin/ab-update.sh "http://server:8080/bundles/x.raucb" 2>&1); rc=$?
 check "exit 4"            "$rc" "4"
 has   "says not a bundle" "$out" "is not a RAUC bundle"
-has   "names the port"    "$out" "Port 8080 is the web UI"
+has   "names the port"    "$out" "Port 8080 is the control plane"
 hasnt "rauc not invoked"  "$out" "installing"
 
 echo "== 8. a real bundle passes the check =="

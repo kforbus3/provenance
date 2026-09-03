@@ -15,10 +15,10 @@
 # So this exercises both directions against the real daemon: the calls the
 # project actually makes must work, and the escapes must be refused.
 #
-#   ./scripts/test-docker-proxy.sh          # needs a working docker
+#   ./scripts/imaging/test-docker-proxy.sh          # needs a working docker
 set -u
 
-PROXY="$(cd "$(dirname "$0")/.." && pwd)/dockerproxy/proxy.py"
+PROXY="$(cd "$(dirname "$0")/../.." && pwd)/deploy/dockerproxy/proxy.py"
 [ -f "$PROXY" ] || { echo "not found: $PROXY" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 || { echo "SKIP: no docker CLI"; exit 0; }
