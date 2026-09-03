@@ -90,6 +90,7 @@ scripts/    orchestration + dev helpers
 - [docs/api.md](docs/api.md) — REST API reference · [docs/database.md](docs/database.md) — schema reference
 - [docs/security-guide.md](docs/security-guide.md) · [docs/certificate-lifecycle.md](docs/certificate-lifecycle.md)
 - [docs/admin-guide.md](docs/admin-guide.md) · [docs/user-guide.md](docs/user-guide.md) · [docs/host-enrollment-guide.md](docs/host-enrollment-guide.md)
+- [docs/imaging.md](docs/imaging.md) — OS images and updates, driven from here (Flipside)
 
 ## Status
 

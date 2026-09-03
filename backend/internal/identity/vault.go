@@ -118,10 +118,22 @@ func (v *Vault) Sessions() []uuid.UUID {
 	return out
 }
 
-// zero overwrites the private key material so it cannot be recovered from memory.
-// Ed25519 keys are byte slices (overwrite in place); ECDSA keys hold their secret
-// in a big.Int (overwrite its backing words), so both key types are best-effort
-// scrubbed before the reference is dropped.
+// zero overwrites the private key material before the reference is dropped.
+//
+// Ed25519 keys are byte slices and are overwritten in place, which is complete.
+//
+// ECDSA is weaker than it looks, and worth being precise about. The secret is
+// exposed as a big.Int in the deprecated D field, and its backing words are
+// overwritten here -- but since Go 1.25 the key also holds its own internal
+// copy, which no exported API can reach. So this scrubs the copy an attacker
+// would find by walking a big.Int and does not scrub the one inside the key.
+// It is worth doing and it is not a guarantee.
+//
+// D is deprecated precisely because modifying it is not supported; the
+// suggested replacements (PrivateKey.Bytes, ParseRawPrivateKey) encode and
+// decode keys and cannot zero one. There is no supported way to do this, so
+// the check is silenced here rather than at the linter, where it would also
+// silence real findings.
 func (c *Credential) zero() {
 	switch k := c.privateKey.(type) {
 	case ed25519.PrivateKey:
@@ -129,14 +141,33 @@ func (c *Credential) zero() {
 			k[i] = 0
 		}
 	case *ecdsa.PrivateKey:
-		if k.D != nil {
-			words := k.D.Bits()
-			for i := range words {
-				words[i] = 0
-			}
-			k.D.SetInt64(0)
-		}
+		zeroECDSA(k)
 	}
 	c.privateKey = nil
 	c.certSigner = nil
+}
+
+// zeroECDSA overwrites the big.Int holding an ECDSA secret.
+//
+// Its own function so the three reads of a deprecated field sit together and
+// the reason for them is stated once, just above.
+//
+// Both directives, because CI runs two tools that read different ones: the
+// security job runs staticcheck directly, which honours `lint:ignore`, and the
+// CI job runs golangci-lint, which honours `nolint`. An exemption that works
+// under only one of them is not an exemption. `lint:ignore` also has to sit on
+// the line itself -- above the function it matches nothing, and staticcheck
+// then reports the unused directive, which is a useful thing for it to do.
+func zeroECDSA(k *ecdsa.PrivateKey) {
+	//lint:ignore SA1019 writing to D is unsupported, which is exactly what scrubbing does; the replacements encode and decode keys and cannot zero one
+	if k.D == nil { //nolint:staticcheck // SA1019: as in the lint:ignore above
+		return
+	}
+	//lint:ignore SA1019 as above
+	words := k.D.Bits() //nolint:staticcheck // SA1019: as above
+	for i := range words {
+		words[i] = 0
+	}
+	//lint:ignore SA1019 as above
+	k.D.SetInt64(0) //nolint:staticcheck // SA1019: as above
 }

@@ -38,6 +38,7 @@ const (
 	EventCommandApproval        = "command.approval"
 	EventCredentialRotated      = "credential.rotated"       //nolint:gosec // not a credential: notification event-type name
 	EventCredentialRotateFailed = "credential.rotate_failed" //nolint:gosec // not a credential: notification event-type name
+	EventRolloutHalted          = "rollout.halted"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -63,6 +64,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventCommandApproval, "Command awaiting approval"},
 	{EventCredentialRotated, "Vault credential auto-rotated"},
 	{EventCredentialRotateFailed, "Vault credential auto-rotation failed"},
+	{EventRolloutHalted, "OS update rollout halted on its failure budget"},
 }
 
 const settingKey = "notifications"

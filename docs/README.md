@@ -61,6 +61,25 @@ a deepened **AI assistant** — multi-turn conversation memory, **fleet insights
 and pending package updates; an **app-wide display timezone**; and **per-host
 pending package updates** surfaced in the inventory.
 
+### Operating systems: imaging and updates
+
+Moorgate manages machines that already exist; **Flipside** builds the operating
+system they run and puts it on their disks. The two are joined so there is one
+place to look and — more usefully — so that OS updates can be *pushed*.
+
+Flipside's control plane is necessarily a pull: a machine is imaged on a private
+provisioning switch and then moved to wherever it lives, so the imaging server
+cannot reach it afterwards and each machine's agent polls instead. Moorgate
+reaches every enrolled host through the jump host, so it supplies exactly what
+Flipside cannot have — a rollout that would take hours of polling finishes in
+minutes, and machines that can never reach Flipside can still be updated and
+reported on.
+
+Flipside keeps the rollout logic (canary, soak, batches, failure budget, and the
+rule that a machine counts as updated only when it comes back on the new version
+and healthy). Moorgate supplies reach, identity, roles and the audit trail. See
+[imaging.md](./imaging.md).
+
 ### Enterprise & platform features
 
 These reference docs cover the enterprise capabilities layered on top of core SSH
