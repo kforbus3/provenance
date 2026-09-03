@@ -21,9 +21,9 @@ import { listGroups } from "../api/admin";
 import { listHosts } from "../api/hosts";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
-  installOnMachine, listBuilds, listBundles, listImages, listMachines, listRollouts,
-  nudgeMachine, startBuild, steerRollout, updateMachine,
-  type BuildJob, type Bundle, type Image, type Machine, type Rollout,
+  forgetImaging, imagingNow, installOnMachine, listBuilds, listBundles, listImages,
+  listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
+  type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
 } from "../api/imaging";
 
 type Note = { kind: "success" | "error" | "info"; text: string } | null;
@@ -82,6 +82,13 @@ export function ImagingPage() {
   const { data: bundleData } = useQuery({ queryKey: ["imaging-bundles"], queryFn: listBundles });
   // A running build is polled; an idle list is not. There is nothing to watch
   // between builds, and this page is left open all day.
+  // Polled quickly while anything is being written, and not at all otherwise.
+  // An imaging run is twenty minutes of a machine that cannot be reached any
+  // other way, so this is the one view where a stale number is actively unhelpful.
+  const { data: now } = useQuery({
+    queryKey: ["imaging-now"], queryFn: imagingNow,
+    refetchInterval: (q) => ((q.state.data as { active: number } | undefined)?.active ? 3_000 : 20_000),
+  });
   const { data: builds = [] } = useQuery({
     queryKey: ["imaging-builds"], queryFn: listBuilds, retry: false,
     refetchInterval: (q) =>
@@ -127,6 +134,13 @@ export function ImagingPage() {
       <Typography variant="h5" sx={{ mb: 2 }}>Imaging</Typography>
       {msg && <Alert severity={msg.kind} sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
 
+      {/* Above the tabs, not inside one. A machine being written is the most
+          perishable thing on this page -- it exists for twenty minutes and
+          cannot be reached any other way -- and it should not be somewhere an
+          operator has to already know to look. */}
+      <ImagingNowPanel rows={now?.imaging ?? []} canManage={canManage}
+                       onDone={() => qc.invalidateQueries({ queryKey: ["imaging-now"] })} />
+
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label={`Machines${fleet ? ` (${fleet.machines.length})` : ""}`} />
         <Tab label={`Rollouts${rollouts.length ? ` (${rollouts.length})` : ""}`} />
@@ -148,6 +162,78 @@ export function ImagingPage() {
       {tab === 4 && <BuildsTab builds={builds} canBuild={canBuild}
                                onChanged={refreshArtifacts} setMsg={setMsg} />}
     </Box>
+  );
+}
+
+// --- machines being imaged right now -----------------------------------------
+
+const IMAGING_STATE: Record<string, { color: "info" | "warning" | "success" | "error"; label: string }> = {
+  active: { color: "info", label: "imaging" },
+  stalled: { color: "warning", label: "stalled" },
+  done: { color: "success", label: "done" },
+  failed: { color: "error", label: "failed" },
+};
+
+function mmss(seconds: number) {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * ImagingNowPanel: what is being written to a disk at this moment.
+ *
+ * Absent entirely when nothing is imaging, rather than an empty box. This is a
+ * progress bar, not an inventory — the inventory is the Machines tab, and a
+ * machine appears there for good once its run finishes.
+ */
+function ImagingNowPanel({ rows, canManage, onDone }: {
+  rows: ImagingNow[]; canManage: boolean; onDone: () => void;
+}) {
+  const forget = useMutation({
+    mutationFn: (id: string) => forgetImaging(id),
+    onSuccess: onDone,
+  });
+  if (rows.length === 0) return null;
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
+        Being imaged now ({rows.length})
+      </Typography>
+      <Stack spacing={1.5}>
+        {rows.map((r) => {
+          const st = IMAGING_STATE[r.state] ?? IMAGING_STATE.active;
+          return (
+            <Box key={r.id}>
+              <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
+                <Typography variant="body2">{r.id}</Typography>
+                <Chip size="small" color={st.color} label={st.label} />
+                <Typography variant="caption" color="text.secondary">
+                  {r.phase}{r.detail ? ` — ${r.detail}` : ""}
+                  {r.disk ? ` · ${r.disk}` : ""} · {mmss(r.ageSeconds)}
+                </Typography>
+                <Box flexGrow={1} />
+                {r.state === "stalled" && (
+                  <Tooltip title="No report for a while. The imager reports on phase changes rather than on a timer, and writing a large image to a slow disk is a long silence — this is not yet a failure.">
+                    <Typography variant="caption" color="warning.main">
+                      quiet for {mmss(r.staleSeconds)}
+                    </Typography>
+                  </Tooltip>
+                )}
+                {canManage && (r.state === "stalled" || r.state === "failed") && (
+                  <Tooltip title="Drop this row. It expires on its own; this is for a machine you know will never report again.">
+                    <span><Button size="small" disabled={forget.isPending}
+                                  onClick={() => forget.mutate(r.id)}>Dismiss</Button></span>
+                  </Tooltip>
+                )}
+              </Stack>
+              <LinearProgress variant="determinate" value={r.percent}
+                              color={r.state === "failed" ? "error" : r.state === "done" ? "success" : "primary"} />
+            </Box>
+          );
+        })}
+      </Stack>
+    </Paper>
   );
 }
 
