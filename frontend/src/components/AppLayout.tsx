@@ -16,6 +16,7 @@ import GroupWorkIcon from "@mui/icons-material/GroupWork";
 import ApiIcon from "@mui/icons-material/Api";
 import AssessmentIcon from "@mui/icons-material/Assessment";
 import BugReportIcon from "@mui/icons-material/BugReport";
+import AlbumIcon from "@mui/icons-material/Album";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
@@ -84,6 +85,7 @@ const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: stri
   { to: "/lifecycle", label: "Expiry & Rotation", icon: <HourglassBottomIcon />, perm: "System.Configure" },
   { to: "/security", label: "Security", icon: <ShieldIcon /> },
   { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
+  { to: "/imaging", label: "Imaging", icon: <AlbumIcon />, perm: "Imaging.View" },
   { to: "/command-policy", label: "Command Control", icon: <PolicyIcon />, perm: "CommandPolicy.Manage" },
   { to: "/access-policies", label: "Access Policies", icon: <GavelIcon />, perm: "AccessPolicy.Manage" },
   { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },

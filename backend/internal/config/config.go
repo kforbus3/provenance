@@ -292,7 +292,27 @@ type Config struct {
 	// can submit playbooks (which would be remote code execution). Required in
 	// production; empty disables the check in development.
 	AnsibleRunnerToken string
-	GrypeScannerURL    string // vulnerability-scanner sidecar
+
+	// --- Flipside: OS images and updates (see docs/imaging.md) ---------------
+	//
+	// FlipsideURL is the API base of a Flipside deployment — the A/B image
+	// builder, PXE imaging server and staged-rollout control plane. Empty
+	// leaves the whole subsystem inert: no pages, no polling, no behaviour
+	// change of any kind.
+	FlipsideURL string
+	// FlipsideToken is a Flipside API token (flt_...). Give it the *operator*
+	// role: operator can build images and bundles and run rollouts, which is
+	// everything Moorgate drives. Admin would add Flipside's own user and
+	// secret management, which nothing here reaches and which should not be
+	// carried in a shared token.
+	FlipsideToken string
+	// FlipsideNudge controls whether Moorgate makes machines a live rollout is
+	// waiting on check in immediately, instead of waiting for their own timer.
+	// This is the whole of the "push" Moorgate adds; turning it off leaves
+	// rollouts working exactly as Flipside runs them alone, only slower.
+	FlipsideNudge bool
+
+	GrypeScannerURL string // vulnerability-scanner sidecar
 	MSRCAPIURL         string // Microsoft Security Update Guide API (Windows CVE mapping)
 	MSRCMonths         int    // how many recent MSRC releases an online update fetches
 
@@ -445,6 +465,9 @@ func Load() (*Config, error) {
 		ScapContentVersion:          env("FLEET_SCAP_CONTENT_VERSION", ""),
 		AnsibleRunnerURL:            env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
 		AnsibleRunnerToken:          env("FLEET_ANSIBLE_RUNNER_TOKEN", ""),
+		FlipsideURL:                 strings.TrimRight(env("FLEET_FLIPSIDE_URL", ""), "/"),
+		FlipsideToken:               env("FLEET_FLIPSIDE_TOKEN", ""),
+		FlipsideNudge:               envBool("FLEET_FLIPSIDE_NUDGE", true),
 		GrypeScannerURL:             env("FLEET_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
 		MSRCAPIURL:                  env("FLEET_MSRC_API_URL", "https://api.msrc.microsoft.com"),
 		MSRCMonths:                  envInt("FLEET_MSRC_MONTHS", 12),

@@ -669,6 +669,50 @@ viewing scans require `Host.Scan`; CVE-database management requires
 
 ---
 
+## Imaging and OS updates (Flipside)
+
+OS images, signed update bundles and staged rollouts, driven from a
+[Flipside](./imaging.md) deployment. Everything proxies through the backend, so
+Moorgate's roles, host-access rules and audit log apply — and so the Flipside
+operator token never reaches a browser. Inert unless `FLEET_FLIPSIDE_URL` is set;
+`/imaging/status` answers `{"configured": false}` rather than erroring.
+
+The two actions worth understanding are the two ways Moorgate gives Flipside the
+reach it structurally cannot have:
+
+- **`/nudge`** makes a machine check in with Flipside *now* rather than on its
+  own timer. The agent then does exactly what it would have done minutes later,
+  and Flipside applies the rollout's canary, soak, batching and failure budget
+  unchanged. Moorgate removes the waiting and decides nothing. A failed nudge
+  costs latency, not the update — the agent still polls.
+- **`/install`** writes a bundle over SSH, for machines that cannot reach
+  Flipside at all, and then reports to Flipside what it observed on the host.
+  It bypasses the rollout's pacing entirely, which is why it is a separate
+  action rather than a faster path to the same thing.
+
+| Method | Path | Required permission |
+|--------|------|---------------------|
+| GET | `/api/v1/imaging/status` | any authenticated user |
+| GET | `/api/v1/imaging/images` | `Imaging.View` |
+| GET | `/api/v1/imaging/bundles` | `Imaging.View` |
+| GET | `/api/v1/imaging/groups` | `Imaging.View` |
+| GET | `/api/v1/imaging/fleet` | `Imaging.View` |
+| GET | `/api/v1/imaging/rollouts` | `Imaging.View` |
+| GET | `/api/v1/imaging/rollouts/{id}` | `Imaging.View` |
+| POST | `/api/v1/imaging/rollouts` | `Imaging.Manage` |
+| POST | `/api/v1/imaging/rollouts/{id}/{pause\|resume\|cancel}` | `Imaging.Manage` |
+| PUT | `/api/v1/imaging/hosts/{hostId}/link` | `Imaging.Manage` |
+| POST | `/api/v1/imaging/hosts/{hostId}/nudge` | `Imaging.Manage` |
+| POST | `/api/v1/imaging/hosts/{hostId}/install` | `Imaging.Manage` |
+
+`/imaging/fleet` returns one row per machine, pairing Moorgate hosts with
+Flipside machines and saying **how** they were paired: `linked` (recorded, and
+the only form that survives a rename or re-image), `hostname` (a guess), or
+`none`. Machines Flipside knows about and Moorgate does not appear too, without
+a host id — usually a machine that was imaged and never enrolled, which is worth
+seeing rather than hiding. Host-access rules apply: a host the caller may not
+see does not appear here either.
+
 ## AI assistant (Ollama)
 
 Read-only natural-language queries over fleet data via a local Ollama instance.

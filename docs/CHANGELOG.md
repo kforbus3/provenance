@@ -5,6 +5,51 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**Flipside is now Moorgate's OS imaging and update subsystem.** The two products
+join here, and the join is not cosmetic: it gives each of them the half it was
+missing.
+
+[Flipside](https://github.com/kforbus3/flipside) builds the operating system
+images this fleet runs, images machines over PXE, and rolls signed update
+bundles out in stages. Its control plane has to be a **pull** — a machine is
+imaged on a private provisioning switch and then moved to wherever it lives, so
+the imaging server cannot reach it afterwards, and each machine's agent polls
+every few minutes instead.
+
+Moorgate has exactly what that lacks. Every enrolled host is reachable through
+the jump host, so:
+
+- **A rollout finishes in minutes rather than polling hours.** Moorgate nudges
+  the machines a live rollout is waiting on and they check in at once. Nothing
+  about the rollout changes; only the waiting is removed.
+- **Machines that can never reach Flipside can still be updated.** Moorgate
+  reaches *them*, installs over SSH, and reports what it observed on the host —
+  which is stronger evidence than a machine's own word, and is recorded as a
+  different kind of claim.
+
+Flipside keeps every decision a rollout makes: canary, soak, batch size, failure
+budget, maintenance window, and the rule that a machine counts as updated only
+when it comes back on the new version and healthy. Moorgate supplies reach,
+identity, roles and the audit trail. Two copies of that logic would have to be
+kept in step and would not be.
+
+- New **Imaging** page: the fleet's OS versions paired with Moorgate hosts,
+  rollouts with live progress, and the image and bundle libraries.
+- New permissions `Imaging.View` (Administrator, Operator, Auditor) and
+  `Imaging.Manage` (Administrator, Operator). Managing changes what a machine
+  runs, and is enforced through the same gateway, policy and audit path as
+  `Command.Run`.
+- A rollout halting on its failure budget is a notifiable event.
+- Configure with `FLEET_FLIPSIDE_URL` and `FLEET_FLIPSIDE_TOKEN` (operator role).
+  Unset, the whole subsystem is inert — no pages, no polling, no change of any
+  kind.
+
+See [imaging.md](./imaging.md).
+
+---
+
 ## v2.0.0 — Moorgate — 2026-08-16
 
 The product is now **Moorgate**. Alongside the rename, this release closes every

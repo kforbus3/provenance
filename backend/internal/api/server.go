@@ -53,6 +53,7 @@ import (
 	"github.com/kforbus3/Moorgate/backend/internal/hosts"
 	"github.com/kforbus3/Moorgate/backend/internal/httpx"
 	"github.com/kforbus3/Moorgate/backend/internal/identity"
+	"github.com/kforbus3/Moorgate/backend/internal/imaging"
 	"github.com/kforbus3/Moorgate/backend/internal/insights"
 	"github.com/kforbus3/Moorgate/backend/internal/itsmapi"
 	"github.com/kforbus3/Moorgate/backend/internal/jobs"
@@ -128,6 +129,7 @@ type Server struct {
 	overlays   map[string]overlay.Overlay
 
 	scanSvc      *scan.Service
+	imagingSvc   *imaging.Service
 	vulnScan     *vulnscan.Service
 	msrcSvc      *msrc.Service
 	actionReg    *aiaction.Registry
@@ -232,6 +234,8 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// Scan + playbook services are shared between their HTTP handlers and the
 	// scheduler, so construct them once here.
 	s.scanSvc = scan.New(st, cfg, log, gateway, issuer, s.Notify)
+	// Inert unless FLEET_FLIPSIDE_URL is set; see docs/imaging.md.
+	s.imagingSvc = imaging.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.msrcSvc = msrc.New(st, cfg.MSRCAPIURL, cfg.MSRCMonths, log)
 	// Assistant action registry (propose→confirm→execute, plus approval for guarded
@@ -383,6 +387,10 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx, s.isLeader)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx, s.isLeader)
+	// Only the leader nudges: in a multi-instance deployment every other
+	// instance doing it would give each host N simultaneous connections
+	// saying the same thing.
+	go s.imagingSvc.Run(ctx, s.isLeader)
 	// Multi-site federation background loops (site: maintain hub link; hub: prune).
 	if s.federation != nil {
 		s.federation.Start(ctx)
@@ -1112,6 +1120,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	playbook.Mount(r, deps, s.playbookSvc)
 	winscript.Mount(r, deps, s.winscriptSvc)
 	command.Mount(r, deps, s.commandSvc)
+	imaging.Mount(r, deps, s.imagingSvc)
 
 	notify.Mount(r, s.Auth, s.Notify)
 
