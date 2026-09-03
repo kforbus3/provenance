@@ -39,6 +39,10 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Put("/imaging/machines/{id}", h.updateMachine)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/nudge", h.nudge)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/install", h.install)
+
+		// Building artefacts and running the provisioning stack; see
+		// buildhandlers.go for why those are separate permissions.
+		mountBuilds(pr, h)
 	})
 }
 
