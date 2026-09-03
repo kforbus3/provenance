@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore or generate persistent machine identity (machine-id, SSH host keys)
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/machine-identity.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

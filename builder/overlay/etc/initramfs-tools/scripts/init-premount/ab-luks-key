@@ -1,0 +1,83 @@
+#!/bin/sh
+# Put this machine's LUKS bootstrap key where crypttab expects it.
+#
+# The key lives on the BOOT partition rather than inside the image, because an
+# update replaces the root slot *and* the initramfs generated from it. A key
+# baked into the image is the builder's key, not this machine's: installing a
+# bundle built from a different image used to give slot B an initramfs whose
+# keyfile opened nothing here, and the machine came up as
+#
+#   No key available with this passphrase.
+#   cryptsetup: ERROR: luks-rootfs-a: maximum number of tries exceeded
+#   ALERT!  LABEL=rootfs-b does not exist.  Dropping to a shell!
+#
+# BOOT is shared by both slots and is not part of a bundle, so the key there is
+# the machine's own and survives every update.
+#
+# init-premount, not local-top. cryptroot is itself a local-top script and
+# initramfs-tools orders those by declared prereqs -- which cryptroot does not
+# declare for us, and could not. Every init-premount script runs before every
+# local-top script, so this is an ordering guarantee rather than a hope.
+#
+# Failure here is deliberately not fatal: cryptsetup falls back to prompting for
+# the passphrase, which is a bad night for whoever is on console but is strictly
+# better than an initramfs shell. Every path says why, because the alternative
+# is a machine that asks for a password no one knew it wanted.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0;;
+esac
+
+. /scripts/functions
+
+DEST=/cryptkey/luks.key
+MNT=/ab-bootpart
+
+# Nothing to do on an unencrypted image, or once tpm2/tang enrolment has reaped
+# the bootstrap key and rewritten crypttab to use clevis.
+[ -f /cryptroot/crypttab ] || exit 0
+grep -q "$DEST" /cryptroot/crypttab 2>/dev/null || exit 0
+
+mkdir -p "$MNT" "$(dirname "$DEST")"
+chmod 0700 "$(dirname "$DEST")"
+
+# By label, like everything else here: the partition number differs between the
+# BIOS and UEFI layouts, and a machine imaged from one must not depend on the
+# other. blkid rather than a udev symlink, for the same reason crypttab uses
+# PARTLABEL= -- udev may not have settled this early.
+BOOTDEV="$(blkid -l -t LABEL=BOOT -o device 2>/dev/null)"
+[ -n "$BOOTDEV" ] || BOOTDEV="$(blkid -l -t PARTLABEL=BOOT -o device 2>/dev/null)"
+# Cache-free retry. blkid answers from /run/blkid/blkid.tab when it exists, and
+# an entry written before a label was applied hides that label afterwards --
+# which is a real failure mode wherever something scanned the disk earlier in
+# the same boot. -c /dev/null forces a probe of the devices themselves. Only
+# reached when the cached lookups found nothing, so it costs a scan exactly when
+# the alternative is prompting for a passphrase nobody knew about.
+if [ -z "$BOOTDEV" ]; then
+    BOOTDEV="$(blkid -c /dev/null -t LABEL=BOOT -o device 2>/dev/null | head -1)"
+    [ -n "$BOOTDEV" ] || BOOTDEV="$(blkid -c /dev/null -t PARTLABEL=BOOT -o device 2>/dev/null | head -1)"
+fi
+
+if [ -z "$BOOTDEV" ]; then
+    log_warning_msg "ab-luks-key: cannot find the BOOT partition;" \
+                    "falling back to a passphrase prompt"
+    exit 0
+fi
+
+if ! mount -t ext4 -o ro "$BOOTDEV" "$MNT" 2>/dev/null; then
+    log_warning_msg "ab-luks-key: cannot mount $BOOTDEV; falling back to a passphrase prompt"
+    exit 0
+fi
+
+if [ -f "$MNT/ab-keys/luks.key" ]; then
+    cp "$MNT/ab-keys/luks.key" "$DEST"
+    chmod 0400 "$DEST"
+else
+    log_warning_msg "ab-luks-key: no key at ab-keys/luks.key on $BOOTDEV;" \
+                    "falling back to a passphrase prompt"
+fi
+
+umount "$MNT" 2>/dev/null || true
+exit 0

@@ -1,0 +1,15 @@
+[Unit]
+Description=First-boot LUKS enrollment (TPM2 / Tang)
+# Network is needed for Tang; harmless for TPM2.
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/luks-enroll.conf
+ConditionPathExists=!/var/lib/luks-enroll.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/luks-enroll.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

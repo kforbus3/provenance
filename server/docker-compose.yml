@@ -1,0 +1,27 @@
+# Network provisioning server: PXE/iPXE (dnsmasq) + image host (nginx).
+#
+# Host networking is required so DHCP/proxyDHCP and TFTP reach the LAN. This
+# works on a Linux host; configure values in .env first.
+services:
+  dnsmasq:
+    build: ./dnsmasq
+    image: debian-ab-dnsmasq
+    container_name: debian-ab-dnsmasq
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    env_file: .env
+
+  http:
+    build: ./http
+    image: debian-ab-http
+    container_name: debian-ab-http
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      # Built artifacts: the A/B image(s) and the imager kernel/initramfs.
+      # HOST_OUTPUT_DIR lets the web UI control this stack via the Docker socket
+      # with a correct absolute host path; it defaults to the local ./output.
+      - ${HOST_OUTPUT_DIR:-../output}:/data:ro

@@ -1,0 +1,56 @@
+[Unit]
+Description=Mark booted A/B slot as good (reset GRUB try counter)
+# Before logins are permitted -- NOT After=multi-user.target, which is where
+# this used to sit and which cost a fleet a genuinely mystifying failure.
+#
+# grub.cfg arms a one-shot fallback on every boot (<SLOT>_TRY=1) and this unit
+# disarms it. Ordered after multi-user.target it ran ~90 seconds into boot on a
+# measured machine, while the login prompt appeared at ~38s. That left a ~50
+# second window in which the machine was fully usable, someone could log in,
+# change something and reboot -- and GRUB, still seeing A_TRY=1, would boot the
+# *other slot*. "Log in, set the hostname, reboot" lands squarely in it. The
+# machine then comes up on a slot with none of the configuration just applied,
+# which reads as the machine having reverted itself rather than as a boot
+# counter that was never cleared.
+#
+# It also formed an ordering cycle: this unit was After=multi-user.target and
+# WantedBy=multi-user.target, while ab-checkin.service was After= this one and
+# also WantedBy=multi-user.target. systemd broke the loop by deleting a job --
+# it chose ab-checkin on the boots that were watched, but both units are merely
+# Wanted, so both were eligible. Deleting this one means the counter is never
+# reset at all.
+#
+# So: as early as it can meaningfully run, and no later than the moment a person
+# could act on the machine. systemd-user-sessions.service is the gate that
+# permits logins, so ordering before it makes the rule "if you can log in, this
+# slot is already marked good". Ordering only -- a failure here must never be
+# what stops anyone logging in.
+#
+# The trade is deliberate: a boot that reaches a login prompt and then fails a
+# later service no longer rolls back on its own. Everything A/B rollback is
+# actually for -- an unbootable kernel, a broken initramfs, a root filesystem
+# that will not mount, a drop to emergency -- happens before this point and is
+# still covered.
+#
+# boot-complete.target is systemd's own "the boot succeeded" synchronisation
+# point, and Requires= means a failed health check leaves this unit unrun --
+# the slot is not blessed, and an update that got this far is rolled back on
+# the next boot. With no checks installed the target is reached immediately, so
+# the default behaviour is unchanged: booting far enough to permit logins is
+# itself the check.
+#
+# The target is ordered before logins too (see ab-health-check.service), so
+# adding checks does not reopen the window this unit was moved to close.
+Requires=boot-complete.target
+After=boot-complete.target
+After=local-fs.target boot.mount
+Before=systemd-user-sessions.service
+RequiresMountsFor=/boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ab-mark-good.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

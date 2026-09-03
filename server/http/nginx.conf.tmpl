@@ -1,0 +1,101 @@
+server {
+    # Bound to the provisioning IP only. The container uses host networking, so
+    # a wildcard listener would expose the image library on every network the
+    # host is attached to; the imaging segment is the only one that needs it.
+    listen ${SERVER_IP}:80 default_server;
+    server_name _;
+    root /srv/http;
+    # No directory listing: everything a machine fetches -- images, the imager,
+    # per-MAC scripts, bundles -- is named by an iPXE script or an assignment,
+    # never enumerated. A listing only advertises what else lives under
+    # output/, which is the web UI's working directory, not a public library.
+    autoindex off;
+    sendfile on;
+
+    # Web UI job logs live under output/jobs — not for PXE clients.
+    location ^~ /images/jobs/ {
+        return 404;
+    }
+
+    # The RAUC signing keypair lives in output/rauc-keys so the builder can
+    # find it, and output/ is this root's /images -- so without this block the
+    # private key that signs every update the fleet trusts is one GET away
+    # from anything on the imaging segment. Nothing on the wire ever needs it:
+    # machines carry the certificate, not the key.
+    location ^~ /images/rauc-keys/ {
+        return 404;
+    }
+
+    # The fleet record and per-machine assignments are the web UI's state, not
+    # boot material; machines fetch only their own /hosts/<mac>.ipxe.
+    location = /images/deployments.jsonl { return 404; }
+    location = /images/hosts/assignments.json { return 404; }
+    location = /hosts/assignments.json { return 404; }
+
+    # Hidden files anywhere under the root. The concrete one is
+    # output/.secrets-store.json -- the web UI's secrets-manager config,
+    # including its token -- but nothing legitimate fetches dotfiles at all.
+    location ~ /\. {
+        return 404;
+    }
+
+    # --- the two endpoints a machine being imaged reports into ---------------
+    #
+    # The imager posts progress to <image host>/api/imaging/report, because that
+    # is the only address it is given: the iPXE scripts pass imager.url= and
+    # nothing else, so init derives the report URL from the image's host. That
+    # host is this listener, and this listener served static files and nothing
+    # else -- so every report 404'd into the file root and was discarded. The
+    # imager treats reporting as best-effort and says nothing when it fails, so
+    # the visible symptom was a machine that imaged perfectly and never once
+    # appeared on the Imaging page, with no error anywhere to explain it.
+    #
+    # Exact-match locations, not a prefix over /api/. The rest of the API is the
+    # admin surface -- images, bundles, secrets, server control -- and while it
+    # is all behind require_auth, none of it has any business being published on
+    # the imaging segment. /api/imaging (the authenticated list) and
+    # /api/imaging/<ident> (delete) are deliberately not matched here either;
+    # only the two endpoints machines themselves post to, which are
+    # unauthenticated by design because a machine mid-image has no credentials.
+    location = /api/imaging/report {
+        proxy_pass http://${WEBUI_ADDR};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        # A machine mid-write must never be held up by a slow or absent web UI:
+        # reporting is best-effort, and the imaging run matters more than the
+        # progress bar. Fail fast and let the imager carry on.
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 5s;
+    }
+    location = /api/imaging/checkin {
+        proxy_pass http://${WEBUI_ADDR};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 5s;
+    }
+
+    # The recurring agent check-in. Matched here as well as on the update
+    # listener because a machine's very first heartbeat happens while it is
+    # still on this segment, right after imaging -- and appearing in the fleet
+    # immediately, rather than after it has been moved and reconfigured, is what
+    # tells an operator the imaging run actually worked.
+    location = /api/fleet/heartbeat {
+        proxy_pass http://${WEBUI_ADDR};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 10s;
+    }
+
+    # Large image files: stream efficiently, no buffering limits.
+    location / {
+        add_header Cache-Control "no-cache";
+    }
+
+    location = /health {
+        access_log off;
+        return 200 "OK\n";
+        add_header Content-Type text/plain;
+    }
+}

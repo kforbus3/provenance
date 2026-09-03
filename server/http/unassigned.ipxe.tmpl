@@ -1,0 +1,27 @@
+#!ipxe
+# Served to machines that have no per-machine image assigned, when the server is
+# set to hold unassigned machines instead of imaging them.
+#
+# Nothing is written to the disk. The machine prints its MAC and retries, which
+# does two useful things: it appears in the web UI's monitor (dnsmasq logged its
+# DHCP request), and once an image is assigned it picks that up on the next
+# retry on its own — no second power cycle, no walking back to the rack.
+
+echo
+echo ====================================================
+echo   A/B Network Imager - waiting for assignment
+echo
+echo   MAC     : ${mac}
+echo   Address : ${ip}
+echo
+echo   This machine has no image assigned to it, and the
+echo   server is set to hold unassigned machines.
+echo   Nothing has been written to its disk.
+echo
+echo   Assign an image to this MAC in the web UI; this
+echo   machine will pick it up within ${RETRY_SECONDS}s.
+echo ====================================================
+echo
+
+sleep ${RETRY_SECONDS}
+reboot

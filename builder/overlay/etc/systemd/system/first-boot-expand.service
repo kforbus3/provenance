@@ -1,0 +1,33 @@
+[Unit]
+Description=Grow overlay partition to fill disk on first boot
+# RequiresMountsFor pulls in and orders after the generated mount unit for the
+# overlay, so the LUKS mapper is open and the filesystem is mounted before this
+# runs. Previously the unit carried DefaultDependencies=no with only
+# After=local-fs.target, which allowed it to run early enough that `blkid -L
+# overlay` could find nothing — and the old script treated that as "nothing to
+# do", stamped itself done and disabled itself, permanently.
+RequiresMountsFor=/var/lib/overlay
+# /boot too: `cryptsetup resize` on the encrypted overlay needs a key, and the
+# bootstrap key lives on the BOOT partition (crypttab names /cryptkey/luks.key,
+# which exists only inside the initramfs). Without this the resize would fall
+# back to "no usable key" depending on mount ordering, and the overlay would
+# quietly stay at its minimum size.
+RequiresMountsFor=/boot
+After=local-fs.target
+Before=multi-user.target
+# Run before LUKS enrollment. On a tpm2/tang image, luks-enroll binds the
+# volumes to the TPM (or Tang) and then deletes the bootstrap keyfiles and
+# rewrites crypttab to "none". `cryptsetup resize` needs a key, so growing the
+# encrypted overlay has to happen while that keyfile still exists. The ordering
+# already worked out that way by accident — luks-enroll waits on
+# network-online.target — but nothing enforced it.
+Before=luks-enroll.service
+ConditionPathExists=!/var/lib/first-boot-expand.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/first-boot-expand.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

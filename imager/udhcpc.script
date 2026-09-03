@@ -1,0 +1,22 @@
+#!/bin/busybox sh
+# udhcpc callback: apply the lease. busybox provides $ip, $subnet (dotted
+# netmask), $router and $dns. ifconfig accepts the dotted netmask directly.
+BB=/bin/busybox
+case "$1" in
+    deconfig)
+        $BB ifconfig "$interface" 0.0.0.0 2>/dev/null
+        $BB ifconfig "$interface" up 2>/dev/null
+        ;;
+    bound|renew)
+        $BB ifconfig "$interface" "$ip" netmask "${subnet:-255.255.255.0}" up
+        if [ -n "${router:-}" ]; then
+            $BB ip route del default 2>/dev/null
+            for r in $router; do
+                $BB ip route add default via "$r" dev "$interface" 2>/dev/null
+            done
+        fi
+        : > /etc/resolv.conf
+        for d in ${dns:-}; do echo "nameserver $d" >> /etc/resolv.conf; done
+        ;;
+esac
+exit 0

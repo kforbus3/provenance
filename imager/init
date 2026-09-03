@@ -1,0 +1,477 @@
+#!/bin/busybox sh
+#
+# Imager init: runs as PID 1 in the netboot initramfs. Brings up networking,
+# downloads the A/B disk image over HTTP, writes it to the local disk, and
+# reboots — fully unattended. Configured entirely via kernel command line:
+#
+#   imager.url=http://SERVER/images/debian-ab.img.zst   (required)
+#   imager.disk=/dev/sda        target disk (default: largest non-removable disk)
+#   imager.compress=auto        auto|zstd|gzip|none (default: auto from URL)
+#   imager.action=reboot        reboot|poweroff|shell  (default: reboot)
+#   imager.wipe=0               1 = wipe partition table before writing
+#   imager.control=http://LAN/ where the machine checks in from *after* it has
+#                              left the provisioning network (default: unset)
+#
+set -u
+
+BB=/bin/busybox
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+$BB mkdir -p /proc /sys /dev /tmp /newroot
+$BB mount -t proc     proc     /proc
+$BB mount -t sysfs    sysfs    /sys
+$BB mount -t devtmpfs devtmpfs /dev 2>/dev/null || $BB mdev -s
+
+# Pretty console output.
+RED=$(printf '\033[0;31m'); GRN=$(printf '\033[0;32m'); YEL=$(printf '\033[1;33m'); NC=$(printf '\033[0m')
+say()  { echo "${GRN}[imager]${NC} $*"; }
+warn() { echo "${YEL}[imager]${NC} $*"; }
+# A failure is reported before dropping to the shell, so the console a nobody is
+# watching is not the only place the failure exists. `report` is defined later --
+# guarded, because die() can fire before then.
+die()  {
+    echo "${RED}[imager] FATAL:${NC} $*"
+    command -v report >/dev/null 2>&1 && { report failed 0 "$*"; $BB sleep 1; }
+    echo "Dropping to a shell."
+    exec $BB sh
+}
+
+banner() {
+    echo
+    echo "  ┌──────────────────────────────────────────┐"
+    echo "  │   A/B Network Imager                       │"
+    echo "  └──────────────────────────────────────────┘"
+    echo
+}
+
+# --- Parse kernel cmdline ---
+getarg() {
+    for x in $(cat /proc/cmdline); do
+        case "$x" in "$1="*) echo "${x#*=}"; return 0;; esac
+    done
+    echo "$2"
+}
+
+banner
+IMG_URL="$(getarg imager.url '')"
+TARGET="$(getarg imager.disk '')"
+COMPRESS="$(getarg imager.compress auto)"
+ACTION="$(getarg imager.action reboot)"
+WIPE="$(getarg imager.wipe 0)"
+
+[ -n "$IMG_URL" ] || die "imager.url= not set on the kernel command line"
+
+# ---------------------------------------------------------------- reporting
+#
+# The imager tells the provisioning server what it is doing, so an operator can
+# watch a room full of machines from one page instead of walking to each screen.
+# Reporting is best-effort by design: a machine that cannot reach the server
+# must still image itself, so every call is backgrounded, time-limited and its
+# failure ignored. Nothing here can block or fail the imaging run.
+# The name this machine is to answer to, assigned per MAC in the web UI and
+# passed on the kernel command line. Empty means the image's own hostname
+# stands, which is what every machine did before this existed.
+ASSIGNED_HOSTNAME="$(getarg imager.hostname '')"
+
+REPORT_URL="$(getarg imager.report '')"
+if [ -z "$REPORT_URL" ]; then
+    # Default to the host serving the image, which is the provisioning server in
+    # every deployment this ships with.
+    REPORT_URL="$(echo "$IMG_URL" | $BB sed -n 's|^\(https\?://[^/]*\)/.*|\1|p')/api/imaging/report"
+fi
+
+# Where the machine should check in from once it has left this network -- which
+# is a different address from the one above, and that difference is the whole
+# point. Everything here happens on a private provisioning segment the machine
+# is about to leave; a control-plane URL pointing at it would be unreachable
+# from the machine's first real boot onward. So the server passes the address
+# that works from out there, and the agent takes it from here. Empty is fine:
+# the agent then falls back to the provisioning address, which is right for a
+# machine that never moves and harmless for one that does -- the server can
+# re-point it in any reply once it has been heard from once.
+CONTROL_URL="$(getarg imager.control '')"
+
+# A machine needs a stable identity across the phases it reports. The MAC of the
+# interface that got the DHCP lease is the same thing the DHCP server and the
+# iPXE menu know it by, so the UI can line them up without a lookup table.
+#
+# Resolved after the network is up, NOT here. This used to be computed at this
+# point in the script -- before any network driver had been modprobed -- so the
+# only interface that existed was lo, whose address is all zeroes and is
+# filtered out. Every machine therefore fell back to "unknown-$$", and since
+# /init is PID 1 that is "unknown-1" on every machine in the fleet: every
+# machine reporting under one identity, overwriting each other in the UI.
+#
+# It was invisible because neither consumer worked. The reports 404'd (no /api
+# route on the provisioning server) and the check-in marker was never written
+# (the imager could not mount ext4), so nothing ever displayed the id.
+CLIENT_ID=""
+
+resolve_client_id() {
+    [ -n "$CLIENT_ID" ] && return 0
+    # The interface that actually took a lease, when there is one.
+    if [ -n "${NET_DEV:-}" ] && [ -r "/sys/class/net/$NET_DEV/address" ]; then
+        CLIENT_ID="$($BB cat "/sys/class/net/$NET_DEV/address" 2>/dev/null)"
+    fi
+    # Otherwise any real interface -- but only ones that exist by now.
+    if [ -z "$CLIENT_ID" ]; then
+        for _d in $($BB ls /sys/class/net 2>/dev/null); do
+            [ "$_d" = lo ] && continue
+            _a="$($BB cat "/sys/class/net/$_d/address" 2>/dev/null)"
+            case "$_a" in ""|00:00:00:00:00:00) continue;; esac
+            CLIENT_ID="$_a"; break
+        done
+    fi
+    # Last resort. Distinct per machine only by luck, so say so rather than
+    # letting a whole fleet quietly share one row in the UI.
+    if [ -z "$CLIENT_ID" ]; then
+        CLIENT_ID="unknown-$$"
+        say "WARNING: no MAC address found; reporting as '$CLIENT_ID'. Every machine"
+        say "         doing this reports under the same identity."
+    fi
+}
+
+report() {   # report <phase> <percent> [detail]
+    [ -n "$REPORT_URL" ] || return 0
+    # Lazily, so a failure reported before the network is up still carries
+    # whatever identity is available rather than an empty one.
+    resolve_client_id
+    _p="$1"; _pct="${2:-}"; _d="${3:-}"
+    (
+        if ! $BB wget -q -T 3 -O /dev/null --post-data \
+            "id=${CLIENT_ID}&phase=${_p}&percent=${_pct}&detail=${_d}&disk=${TARGET:-}&url=${IMG_URL}" \
+            "$REPORT_URL" 2>/dev/null
+        then
+            # Once per run, not per phase. Reporting stays best-effort and the
+            # imaging carries on regardless -- but silence here is exactly what
+            # let a whole deployment image perfectly and never appear in the web
+            # UI, with nothing anywhere saying why. A machine that cannot report
+            # should say so on the console it is already printing to.
+            if ! [ -f /tmp/.report-unreachable ]; then
+                : > /tmp/.report-unreachable
+                say "NOTE: cannot reach ${REPORT_URL}"
+                say "      imaging continues, but this machine will not appear on the"
+                say "      Imaging page. Check WEBUI_ADDR in server/.env."
+            fi
+        fi
+    ) &
+}
+
+# --- Load hardware modules (network + storage), best-effort ---
+say "Loading hardware drivers…"
+if [ -d /lib/modules ]; then
+    KVER="$(ls /lib/modules | head -n1)"
+    # The real modprobe, not busybox's. Modules ship compressed (.ko.xz) and stay
+    # that way in the initramfs -- decompressing the tree at build time is what
+    # made this image 527 MB unpacked, which every machine has to hold in RAM to
+    # boot. busybox cannot read a compressed module; kmod can.
+    #
+    # No depmod here either. modules.dep is generated by the real depmod at build
+    # time and shipped; busybox's depmod cannot read compressed modules, so
+    # running it would replace a correct index with an empty one.
+    if [ -x /sbin/modprobe ]; then
+        MODPROBE=/sbin/modprobe
+    else
+        # Loud, because the consequence is no network and no disk driver, and the
+        # imager's next failure would be a confusing one about reaching the server.
+        say "ERROR: /sbin/modprobe missing from this imager; no drivers will load."
+        say "       Rebuild the imager (./imager/run.sh)."
+        MODPROBE="$BB modprobe"
+    fi
+    for m in virtio_pci virtio_net virtio_blk virtio_scsi \
+             e1000 e1000e igb igc ixgbe tg3 r8169 atlantic bnx2 bnx2x \
+             ahci sd_mod nvme nvme_core xhci_pci ehci_pci usb_storage \
+             ext4 jbd2 mbcache crc16 \
+             crc32c_generic libcrc32c crc32_generic \
+             vfat fat nls_cp437 nls_iso8859_1 mii; do
+        $MODPROBE "$m" 2>/dev/null || true
+    done
+fi
+$BB mdev -s 2>/dev/null || true
+$BB sleep 2
+
+# --- Bring up networking via DHCP on every ethernet link ---
+say "Configuring network (DHCP)…"
+for dev in $($BB ls /sys/class/net); do
+    [ "$dev" = "lo" ] && continue
+    $BB ip link set "$dev" up 2>/dev/null || true
+done
+$BB sleep 3
+GOT_IP=0
+for dev in $($BB ls /sys/class/net); do
+    [ "$dev" = "lo" ] && continue
+    $BB udhcpc -i "$dev" -q -t 8 -T 2 -s /usr/share/udhcpc/default.script >/dev/null 2>&1 || true
+    # Only accept the interface if it actually received an IPv4 address.
+    if $BB ip -4 addr show "$dev" 2>/dev/null | $BB grep -q "inet "; then
+        GOT_IP=1
+        NET_DEV="$dev"
+        say "Network up on $dev: $($BB ip -o -4 addr show "$dev" | $BB awk '{print $4}')"
+        break
+    fi
+done
+[ "$GOT_IP" = 1 ] || die "DHCP failed on all interfaces (no IPv4 lease applied)"
+
+# Now that an interface exists and has a lease, this machine has an identity.
+resolve_client_id
+say "Reporting as $CLIENT_ID"
+
+# --- Choose the target disk ---
+if [ -z "$TARGET" ]; then
+    say "Auto-selecting target disk (largest non-removable)…"
+    BEST=""; BEST_SZ=0
+    for d in /sys/block/*; do
+        name="$($BB basename "$d")"
+        case "$name" in loop*|ram*|sr*|fd*|dm-*|md*) continue;; esac
+        [ "$(cat "$d/removable" 2>/dev/null)" = "1" ] && continue
+        sz="$(cat "$d/size" 2>/dev/null || echo 0)"
+        if [ "$sz" -gt "$BEST_SZ" ]; then BEST_SZ="$sz"; BEST="/dev/$name"; fi
+    done
+    TARGET="$BEST"
+fi
+[ -n "$TARGET" ] && [ -b "$TARGET" ] || die "No suitable target disk found (set imager.disk=)"
+TARGET_GB=$(( $(cat /sys/block/$($BB basename $TARGET)/size) * 512 / 1000000000 ))
+say "Target disk: ${TARGET} (~${TARGET_GB} GB)"
+report detected 0 "${TARGET} ${TARGET_GB}GB"
+
+# --- Decide decompressor ---
+case "$COMPRESS" in
+    auto) case "$IMG_URL" in *.zst) DECOMP="zstd -d";; *.gz) DECOMP="gzip -d";; *) DECOMP="cat";; esac;;
+    zstd) DECOMP="zstd -d";; gzip) DECOMP="gzip -d";; none) DECOMP="cat";;
+    *) DECOMP="cat";;
+esac
+
+if [ "$WIPE" = "1" ]; then
+    say "Wiping existing partition table on ${TARGET}"
+    $BB dd if=/dev/zero of="$TARGET" bs=1M count=16 conv=fsync 2>/dev/null || true
+fi
+
+# --- Fetch the expected checksum (the builder publishes <image>.sha256) ---
+SHA_EXPECT="$($BB wget -q -O - "${IMG_URL}.sha256" 2>/dev/null | $BB awk '{print $1}')" || true
+
+# --- Stream the image to disk ---
+say "Writing image to ${TARGET}"
+report writing 5 ""
+say "Source: ${IMG_URL}"
+echo "${YEL}  This can take a few minutes; do not power off.${NC}"
+if [ -n "$SHA_EXPECT" ]; then
+    # Hash the compressed stream in flight via a fifo; a truncated or corrupted
+    # download then fails loudly instead of leaving a silently broken disk.
+    $BB mkfifo /tmp/hashpipe
+    $BB sha256sum /tmp/hashpipe > /tmp/hash.out &
+    HASHPID=$!
+    $BB wget -O - "$IMG_URL" | $BB tee /tmp/hashpipe | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+    wait $HASHPID
+    SHA_ACTUAL="$($BB awk '{print $1}' /tmp/hash.out)"
+    if [ "$SHA_ACTUAL" = "$SHA_EXPECT" ]; then
+        say "${GRN}Download SHA256 verified.${NC}"
+    else
+        die "SHA256 mismatch (got ${SHA_ACTUAL:-nothing}, expected ${SHA_EXPECT}) — download truncated or corrupt; NOT rebooting"
+    fi
+else
+    warn "No ${IMG_URL}.sha256 on the server; skipping download verification"
+    $BB wget -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+fi
+$BB sync
+
+# Integrity check: a GPT image must leave the "EFI PART" signature at LBA1.
+# This catches a failed/partial download that dd would otherwise report as success.
+if $BB dd if="$TARGET" bs=1 skip=512 count=8 2>/dev/null | $BB grep -aq "EFI PART"; then
+    say "${GRN}Image written successfully (GPT verified).${NC}"
+    report verified 90 ""
+else
+    die "Imaging failed: no valid GPT on ${TARGET} (download/URL problem?)"
+fi
+
+# The image is smaller than the disk it was just written to, so the GPT that came
+# with it still describes a disk the size of the IMAGE: its backup header sits
+# where the image ended and its last-usable-LBA is far short of the real end.
+# Everything boots fine like that, which is why this is easy to miss — but the
+# free space is invisible to the partition table, so first-boot-expand finds
+# "no free space to grow" and the overlay stays at its minimum size forever.
+# Relocating the backup header to the true end of the disk is what makes the
+# remaining space real.
+if [ -x /usr/sbin/sgdisk ]; then
+    say "Relocating GPT backup header to the end of ${TARGET}…"
+    /usr/sbin/sgdisk -e "$TARGET" >/dev/null 2>&1 \
+        && say "${GRN}Disk now spans its full size.${NC}" \
+        || say "WARNING: could not relocate the GPT backup header"
+fi
+
+# Grow the overlay partition to fill the disk, here rather than on first boot.
+#
+# First boot is a bad place to do it. The overlay is encrypted, so growing it
+# there means `cryptsetup resize`, which needs the volume key -- and by then the
+# bootstrap keyfile may already have been consumed and deleted by LUKS
+# enrolment, leaving the partition stuck at its built size with no way to grow
+# it non-interactively. Here nothing is mounted and no volume is open, so
+# enlarging the partition needs no key at all: the dm-crypt mapping is simply
+# created at full size on first boot, and all that remains is a filesystem
+# resize, which never needed a key.
+#
+# Only the end of the partition moves. The start sector, type, name and unique
+# GUID are preserved, so no data is relocated and nothing else on the disk
+# changes.
+grow_overlay() {
+    [ -x /usr/sbin/sgdisk ] || { say "WARNING: sgdisk missing; cannot grow the overlay"; return 1; }
+
+    local num start typeguid uniqueguid
+    num="$(/usr/sbin/sgdisk -p "$TARGET" 2>/dev/null \
+        | $BB awk '$NF == "overlay" { print $1; exit }')"
+    [ -n "$num" ] || { say "WARNING: no partition named 'overlay'; leaving the disk as imaged"; return 1; }
+
+    start="$(/usr/sbin/sgdisk -i "$num" "$TARGET" 2>/dev/null \
+        | $BB awk '/First sector/ { print $3; exit }')"
+    typeguid="$(/usr/sbin/sgdisk -i "$num" "$TARGET" 2>/dev/null \
+        | $BB awk '/Partition GUID code/ { print $4; exit }')"
+    uniqueguid="$(/usr/sbin/sgdisk -i "$num" "$TARGET" 2>/dev/null \
+        | $BB awk '/Partition unique GUID/ { print $4; exit }')"
+    [ -n "$start" ] && [ -n "$typeguid" ] && [ -n "$uniqueguid" ] || {
+        say "WARNING: could not read partition $num; leaving the disk as imaged"; return 1; }
+
+    say "Growing overlay (partition ${num}) to fill ${TARGET}…"
+    if /usr/sbin/sgdisk -d "$num" \
+            -n "${num}:${start}:0" -t "${num}:${typeguid}" \
+            -u "${num}:${uniqueguid}" -c "${num}:overlay" "$TARGET" >/dev/null 2>&1; then
+        say "${GRN}Overlay now spans the free space.${NC}"
+        return 0
+    fi
+    say "WARNING: could not grow the overlay partition; first boot will retry"
+    return 1
+}
+grow_overlay || true
+
+# Re-read the partition table so the kernel sees the new layout.
+#
+# Not best-effort any more. Everything after this depends on the kernel knowing
+# the partitions that were just written: without it there is no BOOT node to
+# mount, and the check-in marker -- which carries the assigned hostname and is
+# what ab-checkin.service waits on -- is silently never written.
+if $BB blockdev --rereadpt "$TARGET" 2>/dev/null; then
+    _rr=ok
+else
+    _rr=failed
+    # The disk is not in use here, so a refusal is worth saying out loud rather
+    # than discovering three steps later as a mount that cannot find its device.
+    say "WARNING: the kernel refused to re-read the partition table on $TARGET"
+fi
+$BB sync
+say "partition table re-read: $_rr"
+say "  /proc/partitions: $($BB cat /proc/partitions 2>/dev/null | $BB awk 'NR>2 {printf "%s ", $4}')"
+say "  nodes: $($BB ls -d /dev/${TARGET##*/}* 2>/dev/null | $BB tr '\n' ' ')"
+
+# --- leave the machine a way to report that it booted ------------------------
+#
+# Everything up to here is reported by the imager, and the last of it is sent
+# before the reboot -- so a machine that images perfectly and then fails to boot
+# looks exactly like one that worked. The machine has to say so itself, and
+# after the reboot it no longer has a kernel command line telling it where the
+# server is.
+#
+# So the address is left on the BOOT partition, which is plain ext4 (the root
+# slots may be LUKS, and the overlay certainly is) and is mounted at /boot by
+# the installed system. ab-checkin.service reads it on the next boot.
+# Find the freshly written BOOT partition's device node, waiting for it to
+# appear and creating it if nothing else does.
+#
+# There is no udev here and no `udevadm settle` to wait on. blockdev --rereadpt
+# makes the kernel re-read the table and devtmpfs creates the nodes in response,
+# but that is asynchronous -- and the old code tested `[ -b ... ]` on the very
+# next line and gave up silently when it lost the race. The marker was simply
+# never written: ab-checkin.service has ConditionPathExists on it, so it did
+# nothing, no machine ever reported that it booted, and the assigned hostname
+# had nowhere to travel. Every path here now says what happened.
+find_part_node() {              # find_part_node <disk> <number> -> node, or empty
+    _d="$1"; _n="$2"; _try=0
+    while [ "$_try" -lt 40 ]; do
+        for _cand in "${_d}${_n}" "${_d}p${_n}"; do
+            [ -b "$_cand" ] && { echo "$_cand"; return 0; }
+        done
+        # devtmpfs has not produced it. The kernel still knows the partition, so
+        # take the numbers from sysfs and make the node -- the same thing this
+        # project's own harnesses do inside containers with no udev.
+        _base="${_d##*/}"
+        for _cand in "${_base}${_n}" "${_base}p${_n}"; do
+            if [ -r "/sys/class/block/${_cand}/dev" ]; then
+                _mm="$($BB cat "/sys/class/block/${_cand}/dev")"
+                $BB mknod "/dev/${_cand}" b "${_mm%%:*}" "${_mm##*:}" 2>/dev/null \
+                    && { echo "/dev/${_cand}"; return 0; }
+            fi
+        done
+        $BB sleep 0.25
+        _try=$((_try + 1))
+    done
+    return 1
+}
+
+leave_checkin_marker() {
+    if [ -z "$REPORT_URL" ]; then
+        say "NOTE: no report URL, so no check-in marker was left on this machine"
+        return 0
+    fi
+    _url="$(echo "$REPORT_URL" | $BB sed 's|/report$|/checkin|')"
+    _num="$(/usr/sbin/sgdisk -p "$TARGET" 2>/dev/null | $BB awk '$NF == "BOOT" { print $1; exit }')"
+    if [ -z "$_num" ]; then
+        say "WARNING: no partition labelled BOOT on $TARGET; this machine will not"
+        say "         report that it booted, and any assigned hostname is lost"
+        return 0
+    fi
+    _part="$(find_part_node "$TARGET" "$_num")"
+    if [ -z "$_part" ]; then
+        say "WARNING: the BOOT partition node for $TARGET$_num never appeared; this"
+        say "         machine will not report that it booted, and any assigned"
+        say "         hostname is lost"
+        return 0
+    fi
+    $BB mkdir -p /mnt/bootpart 2>/dev/null || return 0
+    # ext4 is in the modprobe list at the top, but that runs before any disk has
+    # been touched and its failures are swallowed. Ask again here, where it
+    # actually matters, and then try with an explicit type and without one --
+    # busybox mount and the kernel disagree about which of those works when the
+    # module has only just arrived.
+    ${MODPROBE:-$BB modprobe} ext4 2>/dev/null || true
+    # -i is load-bearing: without it busybox tries to exec a /sbin/mount.ext4
+    # helper first, and an initramfs has no mount helpers. The exec fails with
+    # ENOENT and busybox reports *that* as the mount failure -- "mounting
+    # /dev/vda3 on /mnt/bootpart failed: No such file or directory" -- which
+    # names a missing file that has nothing to do with either the device or the
+    # mountpoint. Both were present and correct the whole time; the device was
+    # even readable. This wrote no marker on any machine ever imaged, so
+    # ab-checkin.service (ConditionPathExists on it) never ran and no machine
+    # ever reported that it booted.
+    if ! _err="$($BB mount -i -t ext4 "$_part" /mnt/bootpart 2>&1)"; then
+        say "WARNING: could not mount $_part; no check-in marker was left."
+        say "         $_err"
+        # Is it ext4 specifically, or is mounting broken here generally? The ESP
+        # is vfat and sits on the same disk, so trying it separates the two.
+        _esp="${TARGET}2"
+        [ -b "$_esp" ] || _esp="${TARGET}p2"
+        # busybox reports the errno, which for a missing crypto driver is a
+        # thoroughly misleading ENOENT ("No such file or directory") naming a
+        # device and a directory that both exist. The kernel says what actually
+        # happened, and printed directly rather than through $( ) -- that
+        # swallowed dmesg twice while working fine for other commands.
+        say "         kernel log:"
+        $BB dmesg 2>&1 | $BB tail -5
+        return 0
+    fi
+    printf '{"checkin_url":"%s","control_url":"%s","image":"%s","id":"%s","hostname":"%s"}\n' \
+        "$_url" "$CONTROL_URL" "$IMG_URL" "$CLIENT_ID" "$ASSIGNED_HOSTNAME" \
+        > /mnt/bootpart/ab-deploy.json 2>/dev/null || true
+    $BB sync
+    $BB umount /mnt/bootpart 2>/dev/null || true
+    if [ -n "$ASSIGNED_HOSTNAME" ]; then
+        say "This machine will come up as '${ASSIGNED_HOSTNAME}'"
+    fi
+}
+leave_checkin_marker || true
+
+report done 100 ""
+# The reports are backgrounded; give them a moment to leave before the machine
+# powers off, or the UI would keep showing it as writing until it times out.
+$BB sleep 1
+
+case "$ACTION" in
+    shell) say "Done. Dropping to a shell (imager.action=shell)."; exec $BB sh;;
+    poweroff) say "Done. Powering off in 5s…"; $BB sleep 5; $BB poweroff -f;;
+    *) say "Done. Rebooting in 5s…"; $BB sleep 5; $BB reboot -f;;
+esac

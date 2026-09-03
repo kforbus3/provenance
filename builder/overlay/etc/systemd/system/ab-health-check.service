@@ -1,0 +1,41 @@
+[Unit]
+Description=Decide whether this boot is healthy enough to keep the slot
+Documentation=file:///usr/local/sbin/ab-health-check.sh
+# Before boot-complete.target, which is systemd's own synchronisation point for
+# "the boot succeeded". A failure here means the target is never reached, so
+# ab-mark-good -- which Requires= it -- never runs, so the slot is never blessed
+# and an update that got this far is still rolled back on the next boot.
+Before=boot-complete.target
+# Not Requisite/Requires on the target: this unit *decides* the target, it does
+# not depend on it.
+After=local-fs.target
+# Runs before logins are permitted, so a bad update cannot be blessed by someone
+# logging in and rebooting before the checks have had their say. That also means
+# a check that hangs is a machine nobody can log into, which is what
+# TimeoutStartSec is for.
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ab-health-check.sh
+# A hung check must not become an unreachable machine. Hitting this is a failed
+# start, which is the correct answer: a boot that cannot demonstrate health
+# inside a minute has not demonstrated health.
+TimeoutStartSec=60
+
+[Install]
+# RequiredBy, not WantedBy. WantedBy produces a Wants= dependency, and a failing
+# Wants= does not fail the unit that wants it -- so boot-complete.target reached
+# `active` with the check sitting in `failed`, ab-mark-good's Requires= on the
+# target was satisfied, and a slot that had just failed its health check was
+# blessed. The whole mechanism was decorative. Measured, not reasoned about:
+#
+#   health-check=failed
+#   boot-complete=active
+#   mark-good-result=success
+#
+# RequiredBy gives the target a Requires= on this unit, and Before= above gives
+# it the ordering that makes a failure here prevent the target from starting.
+# Both halves are needed: Requires= without the ordering does not stop it either.
+RequiredBy=boot-complete.target

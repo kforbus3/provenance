@@ -1,0 +1,24 @@
+[Unit]
+Description=Check in with the Flipside control plane and apply any offered update
+Documentation=file:///usr/local/sbin/ab-agent.sh
+After=network-online.target
+Wants=network-online.target
+# Never while the boot is still deciding whether it was a success. ab-mark-good
+# is what blesses the running slot; installing the *next* update over the
+# inactive slot before that has happened would destroy the only slot this
+# machine could still fall back to.
+After=ab-mark-good.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ab-agent.sh
+# Long enough for the whole install: this unit is not just the check-in, it is
+# also the download and the RAUC install when the server offers one. A bundle
+# over a slow link on a busy machine is a matter of minutes, not seconds.
+TimeoutStartSec=3600
+# A machine that cannot reach the server has almost always just moved to its
+# production network. That is the normal life of a provisioned machine and must
+# not be recorded as a failed unit -- `systemctl is-system-running` is what the
+# agent itself reports as this machine's health, so a failure here would make
+# every unreachable machine report itself degraded.
+SuccessExitStatus=0 1

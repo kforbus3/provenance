@@ -1,0 +1,29 @@
+#!ipxe
+# Rendered from environment by the HTTP container entrypoint.
+echo
+echo ====================================================
+echo   A/B Network Imager
+echo   Server : ${SERVER_IP}
+echo   Image  : ${IMAGE_FILE}
+echo   Action : ${ACTION} after imaging
+echo ====================================================
+echo Booting the imager... this machine's disk will be re-imaged.
+echo
+
+# The imager is a kernel the machine executes, so it has to match the machine.
+# ${buildarch} is iPXE's own variable for the firmware it is running on, left
+# alone by envsubst, so each machine picks its own imager without the server
+# needing to know or care what is on the network.
+iseq ${buildarch} arm64 && set imgdir imager/arm64 || set imgdir imager
+
+kernel http://${SERVER_IP}/${imgdir}/vmlinuz imager.url=http://${SERVER_IP}/images/${IMAGE_FILE} imager.action=${ACTION} imager.compress=auto${CONTROL_ARG} console=tty0 console=ttyS0,115200 || goto noimager
+initrd http://${SERVER_IP}/${imgdir}/initramfs.img || goto noimager
+boot
+
+:noimager
+echo
+echo No imager available for this machine's architecture (${buildarch}).
+echo Build it on the Build Image page, or: ./imager/run.sh --arch arm64
+echo
+sleep 30
+reboot
