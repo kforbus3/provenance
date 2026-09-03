@@ -401,11 +401,11 @@ func (s *Service) reconcile(ctx context.Context) {
 		return
 	}
 
-	var waiting []string
+	waiting := map[string]bool{}
 	// Machines a rollout believes are mid-update. If one of them cannot reach
-	// Flipside — a site with no route back — nobody will ever tell Flipside how
-	// it went, and the rollout sits on it until the offer times out. Moorgate
-	// can see the machine, so Moorgate says.
+	// Flipside -- a site with no route back -- nobody will ever tell Flipside
+	// how it went, and the rollout sits on it until the offer times out and
+	// records a successful update as a failure.
 	inFlight := map[string]bool{}
 	for i := range rollouts {
 		r := &rollouts[i]
@@ -416,7 +416,7 @@ func (s *Service) reconcile(ctx context.Context) {
 		for id, m := range r.Machines {
 			switch m.State {
 			case "pending":
-				waiting = append(waiting, id)
+				waiting[id] = true
 			case "installing", "rebooting":
 				inFlight[id] = true
 			}
@@ -426,74 +426,85 @@ func (s *Service) reconcile(ctx context.Context) {
 		return
 	}
 
+	// The real fleet view, not stub records built from the rollout's machine
+	// ids. Two things depend on it and both were wrong without it:
+	//
+	//   - correlation needs the hostname a machine reports, or only hosts with
+	//     an explicitly recorded pairing are ever matched -- and most are
+	//     matched by name, so most of the fleet would never be nudged at all;
+	//   - settling needs presence, or Moorgate speaks over machines that are
+	//     perfectly capable of reporting for themselves, on every pass.
+	view, err := s.client.Fleet(ctx)
+	if err != nil {
+		s.log.Debug("imaging: reading the fleet", "err", err)
+		return
+	}
+	if len(view.Machines) == 0 {
+		// Nothing to correlate against, so nothing to decide. Reading every host
+		// out of the database to pair them with an empty list is work with no
+		// possible outcome.
+		return
+	}
 	hosts, err := s.store.ListHosts(ctx, 10000, 0)
 	if err != nil {
 		s.log.Warn("imaging: listing hosts", "err", err)
 		return
 	}
-	machines := make([]Machine, 0, len(waiting)+len(inFlight))
-	for _, id := range waiting {
-		machines = append(machines, Machine{ID: id})
-	}
-	for id := range inFlight {
-		machines = append(machines, Machine{ID: id})
-	}
-	links, _ := Correlate(hosts, machines)
+	links, _ := Correlate(hosts, view.Machines)
 
-	// Only machines a rollout is actually waiting on, and only ones Moorgate
-	// can reach. Everything else updates on the agent's own timer, as it did
-	// before this existed.
-	wanted := map[string]bool{}
-	for _, id := range waiting {
-		wanted[id] = true
-	}
-	sent := 0
+	acted := 0
 	for _, l := range links {
-		if l.Machine == nil || sent >= maxNudgesPerPass {
+		if l.Machine == nil || acted >= maxNudgesPerPass {
 			continue
 		}
 		if l.Host.InMaintenance() || !l.Host.Enrolled || l.Host.Protocol == "rdp" {
 			continue
 		}
-		// A machine the rollout thinks is mid-update. Nudging it would do
-		// nothing useful; what is needed is somebody to look and say what
-		// happened, and only if the machine cannot say so itself.
-		if inFlight[l.Machine.ID] {
-			sent++
-			host := l.Host
-			id := l.Machine.ID
-			go s.settle(ctx, host, id)
+		id := l.Machine.ID
+		if !waiting[id] && !inFlight[id] {
 			continue
 		}
-		if !wanted[l.Machine.ID] {
-			continue
-		}
-		// One nudge per machine per interval. Without this, a machine that is
-		// slow to install would be nudged on every pass for the whole install.
+		// One action per machine per few minutes. Without this, a machine that
+		// takes twenty minutes to install would be reached on every pass for
+		// the whole of it.
 		s.mu.Lock()
-		last, seen := s.nudgedAt[l.Machine.ID]
+		last, seen := s.nudgedAt[id]
 		fresh := seen && time.Since(last) < 5*time.Minute
 		if !fresh {
-			s.nudgedAt[l.Machine.ID] = time.Now()
+			s.nudgedAt[id] = time.Now()
 		}
 		s.mu.Unlock()
 		if fresh {
 			continue
 		}
-		sent++
+
+		acted++
 		host := l.Host
-		go func() {
-			if _, err := s.Nudge(ctx, host); err != nil {
-				// Not an alert. A nudge that fails costs latency and nothing
-				// else -- the agent still polls -- and a fleet with a few
-				// sleeping laptops would otherwise generate a steady drip of
-				// warnings about a system that is working correctly.
-				s.log.Debug("imaging: nudge", "host", host.Hostname, "err", err)
+		switch {
+		case inFlight[id]:
+			// Only when Flipside is not hearing from the machine itself. A
+			// machine whose presence is online is one that is checking in, and
+			// its own word arrives on its own timer -- Moorgate has no business
+			// speaking over it.
+			if l.Machine.Presence == "online" {
+				acted--
+				continue
 			}
-		}()
+			go s.settle(ctx, host, id)
+		default:
+			go func() {
+				if _, err := s.Nudge(ctx, host); err != nil {
+					// Not an alert. A nudge that fails costs latency and
+					// nothing else -- the agent still polls -- and a fleet with
+					// a few sleeping laptops would otherwise produce a steady
+					// drip of warnings about a system that is working.
+					s.log.Debug("imaging: nudge", "host", host.Hostname, "err", err)
+				}
+			}()
+		}
 	}
-	if sent > 0 {
-		s.log.Info("imaging: nudged machines a rollout is waiting on", "count", sent)
+	if acted > 0 {
+		s.log.Info("imaging: reached machines a rollout is waiting on", "count", acted)
 	}
 }
 
