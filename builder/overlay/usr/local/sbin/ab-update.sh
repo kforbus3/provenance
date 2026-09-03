@@ -106,7 +106,7 @@ if [ "$?" = 1 ]; then
         echo ""
         case "$BUNDLE" in
             *:8080/*)
-                echo "  Port 8080 is the web UI, which answers any unknown path with its"
+                echo "  Port 8080 is the control plane, which answers any unknown path with its"
                 echo "  own front page. Bundles are served by the provisioning server:"
                 echo "  drop the port, or use 'ab-update' with no arguments.";;
             *)

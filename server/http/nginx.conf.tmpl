@@ -50,18 +50,23 @@ server {
     # the visible symptom was a machine that imaged perfectly and never once
     # appeared on the Imaging page, with no error anywhere to explain it.
     #
+    # WEBUI_ADDR is the control plane's address. The name is what it has always
+    # been and what existing server/.env files set; renaming it would be a
+    # migration for every deployment in exchange for a tidier variable.
+    #
     # Exact-match locations, not a prefix over /api/. The rest of the API is the
     # admin surface -- images, bundles, secrets, server control -- and while it
-    # is all behind require_auth, none of it has any business being published on
-    # the imaging segment. /api/imaging (the authenticated list) and
-    # /api/imaging/<ident> (delete) are deliberately not matched here either;
-    # only the two endpoints machines themselves post to, which are
-    # unauthenticated by design because a machine mid-image has no credentials.
+    # is all behind authentication, none of it has any business being published
+    # on the imaging segment. The operator-facing routes under /api/v1/imaging
+    # are deliberately not matched here either; only the endpoints machines
+    # themselves post to, which are unauthenticated by design because a machine
+    # mid-image holds no credential and has no way to obtain one.
     location = /api/imaging/report {
         proxy_pass http://${WEBUI_ADDR};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
-        # A machine mid-write must never be held up by a slow or absent web UI:
+        # A machine mid-write must never be held up by a slow or absent control
+        # plane:
         # reporting is best-effort, and the imaging run matters more than the
         # progress bar. Fail fast and let the imager carry on.
         proxy_connect_timeout 2s;

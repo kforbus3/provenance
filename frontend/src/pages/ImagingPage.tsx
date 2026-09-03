@@ -12,6 +12,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
+import BuildIcon from "@mui/icons-material/Build";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { formatDateTime } from "../lib/datetime";
@@ -19,9 +20,10 @@ import { useAuthStore } from "../store/auth";
 import { listGroups } from "../api/admin";
 import { listHosts } from "../api/hosts";
 import {
-  createRollout, installOnMachine, listBundles, listImages, listMachines, listRollouts,
-  nudgeMachine, steerRollout, updateMachine,
-  type Machine, type Rollout,
+  buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
+  installOnMachine, listBuilds, listBundles, listImages, listMachines, listRollouts,
+  nudgeMachine, startBuild, steerRollout, updateMachine,
+  type BuildJob, type Bundle, type Image, type Machine, type Rollout,
 } from "../api/imaging";
 
 type Note = { kind: "success" | "error" | "info"; text: string } | null;
@@ -66,6 +68,7 @@ function apiError(e: unknown): string {
 export function ImagingPage() {
   const qc = useQueryClient();
   const canManage = useAuthStore((s) => s.has("Imaging.Manage"));
+  const canBuild = useAuthStore((s) => s.has("Imaging.Build"));
   const [tab, setTab] = useState(0);
   const [msg, setMsg] = useState<Note>(null);
 
@@ -77,10 +80,22 @@ export function ImagingPage() {
   });
   const { data: imageData } = useQuery({ queryKey: ["imaging-images"], queryFn: listImages });
   const { data: bundleData } = useQuery({ queryKey: ["imaging-bundles"], queryFn: listBundles });
+  // A running build is polled; an idle list is not. There is nothing to watch
+  // between builds, and this page is left open all day.
+  const { data: builds = [] } = useQuery({
+    queryKey: ["imaging-builds"], queryFn: listBuilds, retry: false,
+    refetchInterval: (q) =>
+      (q.state.data as BuildJob[] | undefined)?.some((b) => b.status === "running") ? 3_000 : false,
+  });
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["imaging-machines"] });
     qc.invalidateQueries({ queryKey: ["imaging-rollouts"] });
+  };
+  const refreshArtifacts = () => {
+    qc.invalidateQueries({ queryKey: ["imaging-images"] });
+    qc.invalidateQueries({ queryKey: ["imaging-bundles"] });
+    qc.invalidateQueries({ queryKey: ["imaging-builds"] });
   };
 
   const nudge = useMutation({
@@ -117,6 +132,7 @@ export function ImagingPage() {
         <Tab label={`Rollouts${rollouts.length ? ` (${rollouts.length})` : ""}`} />
         <Tab label={`Images${images.length ? ` (${images.length})` : ""}`} />
         <Tab label={`Bundles${bundleData ? ` (${bundleData.bundles.length})` : ""}`} />
+        <Tab label={`Builds${builds.length ? ` (${builds.length})` : ""}`} />
       </Tabs>
 
       {tab === 0 && <MachinesTab fleet={fleet} canManage={canManage}
@@ -125,8 +141,12 @@ export function ImagingPage() {
       {tab === 1 && <RolloutsTab rollouts={rollouts} canManage={canManage}
                                  onSteer={(id, verb) => steer.mutate({ id, verb })}
                                  onCreated={refresh} setMsg={setMsg} />}
-      {tab === 2 && <ImagesTab images={images} dir={imageData?.dir ?? ""} />}
-      {tab === 3 && <BundlesTab data={bundleData} />}
+      {tab === 2 && <ImagesTab images={images} dir={imageData?.dir ?? ""} canBuild={canBuild}
+                               onChanged={refreshArtifacts} setMsg={setMsg} />}
+      {tab === 3 && <BundlesTab data={bundleData} images={images} canBuild={canBuild}
+                                onChanged={refreshArtifacts} setMsg={setMsg} />}
+      {tab === 4 && <BuildsTab builds={builds} canBuild={canBuild}
+                               onChanged={refreshArtifacts} setMsg={setMsg} />}
     </Box>
   );
 }
@@ -638,97 +658,458 @@ function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
 
 // --- artefacts ---------------------------------------------------------------
 
-function ImagesTab({ images, dir }: {
-  images: Awaited<ReturnType<typeof listImages>>["images"]; dir: string;
-}) {
-  if (images.length === 0) {
-    return (
-      <Alert severity="info">
-        No images have been built yet{dir ? <> — nothing in <code>{dir}</code></> : null}.
-      </Alert>
-    );
-  }
+function DiskChip() {
+  const { data } = useQuery({ queryKey: ["imaging-disk"], queryFn: diskUsage, retry: false });
+  if (!data) return null;
+  // The way a build fails on a full volume is not a clean error: debootstrap
+  // gets part way, the loop device stays attached, and the reason is two
+  // hundred lines up the log. Cheaper to see the number beforehand.
+  const low = data.free > 0 && data.free < 10e9;
   return (
-    <Paper variant="outlined">
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Image</TableCell><TableCell>System</TableCell>
-            <TableCell>Version</TableCell><TableCell>Contents</TableCell>
-            <TableCell>Size</TableCell><TableCell>Built</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {images.map((i) => (
-            <TableRow key={i.name} hover>
-              <TableCell>
-                {i.name}
-                <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                  {i.encrypted && <Chip size="small" label="LUKS" />}
-                  {i.secureBoot && <Chip size="small" color="success" label="Secure Boot" />}
-                  {i.profile && i.profile !== "minimal" && <Chip size="small" label={i.profile} />}
-                </Stack>
-              </TableCell>
-              <TableCell>{[i.distro, i.suite, i.arch].filter(Boolean).join(" ")}</TableCell>
-              <TableCell>{i.version ?? "—"}</TableCell>
-              <TableCell>
-                {i.hasSbom
-                  ? `${i.packages ?? 0} packages`
-                  /* Worth naming rather than blanking: an image with no SBOM is
-                     one nothing can answer a CVE question about later. */
-                  : <Typography variant="caption" color="text.secondary">no SBOM</Typography>}
-              </TableCell>
-              <TableCell>{bytes(i.size)}</TableCell>
-              <TableCell>{formatDateTime(i.created)}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Paper>
+    <Tooltip title={`Artefacts occupy ${bytes(data.artifacts)} of ${bytes(data.total)}`}>
+      <Chip size="small" color={low ? "warning" : "default"} variant="outlined"
+            label={`${bytes(data.free)} free`} />
+    </Tooltip>
   );
 }
 
-function BundlesTab({ data }: { data?: Awaited<ReturnType<typeof listBundles>> }) {
-  const running = data?.runningVersions ?? {};
-  const rows = data?.bundles ?? [];
-  if (rows.length === 0) {
-    return <Alert severity="info">No update bundles have been built yet.</Alert>;
-  }
+function ImagesTab({ images, dir, canBuild, onChanged, setMsg }: {
+  images: Image[]; dir: string; canBuild: boolean;
+  onChanged: () => void; setMsg: (m: Note) => void;
+}) {
+  const [building, setBuilding] = useState(false);
+  const remove = useMutation({
+    mutationFn: (name: string) => deleteImage(name),
+    onSuccess: () => { setMsg({ kind: "success", text: "Image deleted." }); onChanged(); },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
   return (
-    <Paper variant="outlined">
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Bundle</TableCell><TableCell>Version</TableCell>
-            <TableCell>Built from</TableCell><TableCell>In the field</TableCell>
-            <TableCell>Size</TableCell><TableCell>Built</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((b) => (
-            <TableRow key={b.name} hover>
-              <TableCell>
-                {b.name}
-                {b.isLatest && (
-                  <Tooltip title="What a machine running bare ab-update fetches. Deleting it changes what the whole fleet gets.">
-                    <Chip size="small" color="primary" sx={{ ml: 1 }} label="latest" />
-                  </Tooltip>
-                )}
-              </TableCell>
-              <TableCell>{b.version ?? "—"}</TableCell>
-              <TableCell>{b.source ?? "—"}</TableCell>
-              <TableCell>
-                {/* What is actually deployed, not what has been built. The two
-                    differ, and only one of them is the fleet's real state. */}
-                {b.version && running[b.version] ? `${running[b.version]} machines` : "—"}
-              </TableCell>
-              <TableCell>{bytes(b.size)}</TableCell>
-              <TableCell>{formatDateTime(b.created)}</TableCell>
+    <>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+        {canBuild && (
+          <Button variant="contained" startIcon={<BuildIcon />} onClick={() => setBuilding(true)}>
+            Build image
+          </Button>
+        )}
+        <Box flexGrow={1} />
+        <DiskChip />
+      </Stack>
+
+      {images.length === 0 ? (
+        <Alert severity="info">
+          No images have been built yet{dir ? <> — nothing in <code>{dir}</code></> : null}.
+        </Alert>
+      ) : (
+        <Paper variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Image</TableCell><TableCell>System</TableCell>
+                <TableCell>Version</TableCell><TableCell>Contents</TableCell>
+                <TableCell>Size</TableCell><TableCell>Built</TableCell>
+                <TableCell align="right" />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {images.map((i) => (
+                <TableRow key={i.name} hover>
+                  <TableCell>
+                    {i.name}
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
+                      {i.encrypted && <Chip size="small" label="LUKS" />}
+                      {i.secureBoot && <Chip size="small" color="success" label="Secure Boot" />}
+                      {i.profile && i.profile !== "minimal" && <Chip size="small" label={i.profile} />}
+                    </Stack>
+                  </TableCell>
+                  <TableCell>{[i.distro, i.suite, i.arch].filter(Boolean).join(" ")}</TableCell>
+                  <TableCell>{i.version ?? "—"}</TableCell>
+                  <TableCell>
+                    {i.hasSbom
+                      ? `${i.packages ?? 0} packages`
+                      /* Worth naming rather than blanking: an image with no SBOM
+                         is one nothing can answer a CVE question about later. */
+                      : <Typography variant="caption" color="text.secondary">no SBOM</Typography>}
+                  </TableCell>
+                  <TableCell>{bytes(i.size)}</TableCell>
+                  <TableCell>{formatDateTime(i.created)}</TableCell>
+                  <TableCell align="right">
+                    {canBuild && (
+                      <Button size="small" color="error" disabled={remove.isPending}
+                              onClick={() => remove.mutate(i.name)}>Delete</Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Paper>
+      )}
+      <BuildImageDialog open={building} onClose={() => setBuilding(false)}
+                        onStarted={onChanged} setMsg={setMsg} />
+    </>
+  );
+}
+
+function BundlesTab({ data, images, canBuild, onChanged, setMsg }: {
+  data?: Awaited<ReturnType<typeof listBundles>>; images: Image[]; canBuild: boolean;
+  onChanged: () => void; setMsg: (m: Note) => void;
+}) {
+  const [building, setBuilding] = useState(false);
+  const running = data?.runningVersions ?? {};
+  const rows: Bundle[] = data?.bundles ?? [];
+  const remove = useMutation({
+    mutationFn: (name: string) => deleteBundle(name),
+    onSuccess: () => { setMsg({ kind: "success", text: "Bundle deleted." }); onChanged(); },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
+  return (
+    <>
+      {canBuild && (
+        <Button variant="contained" startIcon={<BuildIcon />} sx={{ mb: 2 }}
+                onClick={() => setBuilding(true)}>Build bundle</Button>
+      )}
+      {rows.length === 0 ? (
+        <Alert severity="info">
+          No update bundles have been built yet. A bundle is a signed image packaged so
+          a running machine can install it into its inactive slot.
+        </Alert>
+      ) : (
+        <Paper variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Bundle</TableCell><TableCell>Version</TableCell>
+                <TableCell>Built from</TableCell><TableCell>In the field</TableCell>
+                <TableCell>Size</TableCell><TableCell>Built</TableCell>
+                <TableCell align="right" />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((b) => (
+                <TableRow key={b.name} hover>
+                  <TableCell>
+                    {b.name}
+                    {b.isLatest && (
+                      <Tooltip title="What a machine running bare ab-update fetches. Deleting it changes what the whole fleet gets.">
+                        <Chip size="small" color="primary" sx={{ ml: 1 }} label="latest" />
+                      </Tooltip>
+                    )}
+                  </TableCell>
+                  <TableCell>{b.version ?? "—"}</TableCell>
+                  <TableCell>{b.source ?? "—"}</TableCell>
+                  <TableCell>
+                    {/* What is actually deployed, not what has been built. The two
+                        differ, and only one of them is the fleet's real state. */}
+                    {b.version && running[b.version] ? `${running[b.version]} machines` : "—"}
+                  </TableCell>
+                  <TableCell>{bytes(b.size)}</TableCell>
+                  <TableCell>{formatDateTime(b.created)}</TableCell>
+                  <TableCell align="right">
+                    {canBuild && (
+                      <Button size="small" color="error" disabled={remove.isPending}
+                              onClick={() => remove.mutate(b.name)}>Delete</Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Paper>
+      )}
+      <BuildBundleDialog open={building} images={images} onClose={() => setBuilding(false)}
+                         onStarted={onChanged} setMsg={setMsg} />
+    </>
+  );
+}
+
+// --- builds ------------------------------------------------------------------
+
+const JOB_COLOR: Record<string, "success" | "error" | "warning" | "info"> = {
+  running: "info", success: "success", failed: "error", canceled: "warning",
+};
+
+function BuildsTab({ builds, canBuild, onChanged, setMsg }: {
+  builds: BuildJob[]; canBuild: boolean; onChanged: () => void; setMsg: (m: Note) => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const cancel = useMutation({
+    mutationFn: (id: string) => cancelBuild(id),
+    onSuccess: () => {
+      // Cancelling removes the container the build runs in, not just the label
+      // on it — a non-interactive shell defers signals until its foreground
+      // command returns, so signalling the shell alone would leave the builder
+      // running while this page claimed the job was cancelled.
+      setMsg({ kind: "info", text: "Cancelled. The build container was removed." });
+      onChanged();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
+  if (builds.length === 0) {
+    return (
+      <Alert severity="info">
+        Nothing has been built here. Builds run in the builder-runner sidecar, which is
+        opt-in — if the Build buttons return "no image builder is configured", the
+        deployment is not running one. See <code>docs/imaging.md</code>.
+      </Alert>
+    );
+  }
+
+  return (
+    <>
+      <Paper variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Build</TableCell><TableCell>Status</TableCell>
+              <TableCell>Started</TableCell><TableCell align="right" />
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Paper>
+          </TableHead>
+          <TableBody>
+            {builds.map((b) => (
+              <TableRow key={b.id} hover>
+                <TableCell>
+                  <Typography variant="body2">{b.label}</Typography>
+                  <Typography variant="caption" color="text.secondary">{b.id}</Typography>
+                  {b.status === "running" && b.progress && (
+                    <>
+                      <LinearProgress variant="determinate" sx={{ mt: 0.5 }}
+                        value={Math.round((b.progress.step / Math.max(b.progress.total, 1)) * 100)} />
+                      <Typography variant="caption" color="text.secondary">
+                        {b.progress.step}/{b.progress.total} {b.progress.label}
+                      </Typography>
+                    </>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Chip size="small" color={JOB_COLOR[b.status] ?? "default"} label={b.status} />
+                </TableCell>
+                <TableCell>{b.started ? formatDateTime(b.started) : "—"}</TableCell>
+                <TableCell align="right">
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button size="small" onClick={() => setOpen(b.id)}>Log</Button>
+                    {canBuild && b.status === "running" && (
+                      <Button size="small" color="error" disabled={cancel.isPending}
+                              onClick={() => cancel.mutate(b.id)}>Cancel</Button>
+                    )}
+                  </Stack>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Paper>
+      <BuildLogDialog id={open} onClose={() => setOpen(null)} />
+    </>
+  );
+}
+
+/** BuildLogDialog: the build's output, followed while it is still running. */
+function BuildLogDialog({ id, onClose }: { id: string | null; onClose: () => void }) {
+  const { data } = useQuery({
+    queryKey: ["imaging-build-log", id], queryFn: () => buildLog(id!), enabled: !!id,
+    refetchInterval: (q) =>
+      (q.state.data as BuildJob | undefined)?.status === "running" ? 2_000 : false,
+  });
+  return (
+    <Dialog open={!!id} onClose={onClose} fullWidth maxWidth="lg">
+      <DialogTitle>{data?.label ?? id}</DialogTitle>
+      <DialogContent>
+        <Box component="pre" sx={{
+          m: 0, p: 1.5, maxHeight: "60vh", overflow: "auto", fontSize: 12,
+          bgcolor: "action.hover", borderRadius: 1, whiteSpace: "pre-wrap",
+        }}>
+          {(data?.log ?? []).join("\n") || "…"}
+        </Box>
+      </DialogContent>
+      <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
+    </Dialog>
+  );
+}
+
+/**
+ * BuildImageDialog: the common options, not all of them.
+ *
+ * The builder takes about thirty; most exist for one deployment's layout and
+ * putting all of them in a dialog would bury the six that are always answered.
+ * What is left out is reachable by editing the overlay and rebuilding, and the
+ * builder validates everything either way — it refuses a build rather than
+ * shipping an image whose state manifest is wrong, which is otherwise a thing
+ * discovered at a boot prompt.
+ */
+function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
+  open: boolean; onClose: () => void; onStarted: () => void; setMsg: (m: Note) => void;
+}) {
+  const [distro, setDistro] = useState("debian");
+  const [suite, setSuite] = useState("trixie");
+  const [arch, setArch] = useState("amd64");
+  const [hostname, setHostname] = useState("");
+  const [username, setUsername] = useState("debian");
+  const [password, setPassword] = useState("");
+  const [profile, setProfile] = useState("minimal");
+  const [secureBoot, setSecureBoot] = useState("auto");
+  const [packages, setPackages] = useState("");
+  const [sshKey, setSshKey] = useState("");
+  const [encrypt, setEncrypt] = useState(false);
+  const [luks, setLuks] = useState("");
+
+  const start = useMutation({
+    mutationFn: () => startBuild("image", {
+      distro, suite, arch, hostname: hostname.trim(), username,
+      password: password || "debian", profile, secureBoot,
+      packages: packages.trim(), sshKey: sshKey.trim(),
+      encrypt, luksPassphrase: encrypt ? luks : "",
+    }),
+    onSuccess: (job) => {
+      setMsg({ kind: "success", text: `Started: ${job.label}. Watch it on the Builds tab.` });
+      onStarted();
+      onClose();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Build an image</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <Stack direction="row" spacing={2}>
+            <TextField select fullWidth label="Distribution" value={distro}
+                       onChange={(e) => setDistro(e.target.value)}>
+              <MenuItem value="debian">Debian</MenuItem>
+              <MenuItem value="ubuntu">Ubuntu</MenuItem>
+            </TextField>
+            <TextField fullWidth label="Suite" value={suite}
+                       onChange={(e) => setSuite(e.target.value)} placeholder="trixie" />
+            <TextField select fullWidth label="Architecture" value={arch}
+                       onChange={(e) => setArch(e.target.value)}
+                       helperText="Built natively, not emulated">
+              <MenuItem value="amd64">amd64</MenuItem>
+              <MenuItem value="arm64">arm64</MenuItem>
+            </TextField>
+          </Stack>
+          <Stack direction="row" spacing={2}>
+            <TextField fullWidth label="Hostname" value={hostname}
+                       onChange={(e) => setHostname(e.target.value)}
+                       placeholder={`${distro}-ab`}
+                       helperText="Overridden per machine by a PXE assignment" />
+            <TextField fullWidth label="Login user" value={username}
+                       onChange={(e) => setUsername(e.target.value)} />
+            <TextField fullWidth type="password" label="Password" value={password}
+                       onChange={(e) => setPassword(e.target.value)}
+                       helperText="Sent in the build environment, never on a command line" />
+          </Stack>
+          <Stack direction="row" spacing={2}>
+            <TextField select fullWidth label="Profile" value={profile}
+                       onChange={(e) => setProfile(e.target.value)}>
+              <MenuItem value="minimal">minimal</MenuItem>
+              <MenuItem value="server">server</MenuItem>
+              <MenuItem value="desktop">desktop</MenuItem>
+            </TextField>
+            <TextField select fullWidth label="Secure Boot" value={secureBoot}
+                       onChange={(e) => setSecureBoot(e.target.value)}
+                       helperText="auto: on where the distribution's signed chain is available">
+              <MenuItem value="auto">auto</MenuItem>
+              <MenuItem value="on">require</MenuItem>
+              <MenuItem value="off">off</MenuItem>
+            </TextField>
+          </Stack>
+          <TextField fullWidth label="Extra packages" value={packages}
+                     onChange={(e) => setPackages(e.target.value)}
+                     placeholder="curl vim tmux" helperText="Space-separated" />
+          <TextField fullWidth label="SSH authorized key" value={sshKey}
+                     onChange={(e) => setSshKey(e.target.value)}
+                     placeholder="ssh-ed25519 AAAA…"
+                     helperText="For reaching the machine before it is enrolled" />
+          <FormControlLabel
+            control={<Switch checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} />}
+            label="Encrypt the root filesystem (LUKS)" />
+          {encrypt && (
+            <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
+                       onChange={(e) => setLuks(e.target.value)}
+                       helperText="Also travels in the environment, not on a command line" />
+          )}
+          <Typography variant="caption" color="text.secondary">
+            The build runs in a privileged container in the builder-runner sidecar and takes
+            tens of minutes. One image build runs at a time: two share the output directory,
+            and the failure is not a clean error but two loop devices and a half-written file.
+          </Typography>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={start.isPending}
+                onClick={() => start.mutate()}>Build</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/**
+ * BuildBundleDialog: package a built image as a signed update.
+ *
+ * The version matters more than it looks. A rollout tells a machine that
+ * installed the bundle from one that did not by comparing versions, so a bundle
+ * without one produces a rollout that can never finish — which is why creating
+ * such a rollout is refused rather than left running for ever.
+ */
+function BuildBundleDialog({ open, images, onClose, onStarted, setMsg }: {
+  open: boolean; images: Image[]; onClose: () => void; onStarted: () => void;
+  setMsg: (m: Note) => void;
+}) {
+  const [image, setImage] = useState("");
+  const [version, setVersion] = useState("");
+  const [description, setDescription] = useState("");
+  const [luks, setLuks] = useState("");
+  const chosen = images.find((i) => i.name === image);
+
+  const start = useMutation({
+    mutationFn: () => startBuild("bundle", {
+      image, version: version.trim(), description: description.trim(),
+      encrypted: !!chosen?.encrypted, luksPassphrase: chosen?.encrypted ? luks : "",
+    }),
+    onSuccess: (job) => {
+      setMsg({ kind: "success", text: `Started: ${job.label}. Watch it on the Builds tab.` });
+      onStarted();
+      onClose();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Build an update bundle</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField select fullWidth label="Image" value={image}
+                     onChange={(e) => setImage(e.target.value)}>
+            {images.map((i) => (
+              <MenuItem key={i.name} value={i.name}>
+                {i.name}{i.version ? ` — ${i.version}` : ""}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField fullWidth label="Version" value={version}
+                     onChange={(e) => setVersion(e.target.value)} placeholder="1.4.0"
+                     helperText="How a rollout tells an updated machine from one still waiting. A bundle without one cannot be rolled out." />
+          <TextField fullWidth label="Description" value={description}
+                     onChange={(e) => setDescription(e.target.value)}
+                     placeholder="What changed" />
+          {chosen?.encrypted && (
+            <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
+                       onChange={(e) => setLuks(e.target.value)}
+                       helperText="Needed to open the encrypted image and read the root slot out of it." />
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={!image || !version.trim() || start.isPending}
+                onClick={() => start.mutate()}>Build</Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

@@ -159,6 +159,76 @@ A window may wrap past midnight (`22:00`–`04:00`), in which case it belongs to
 the day it *started* on: a Saturday window covers 23:00 Saturday and 01:00
 Sunday, and neither Saturday noon nor Sunday noon.
 
+## Building images
+
+Builds run in the **builder-runner** sidecar, which is the only thing in a
+deployment that touches the Docker socket.
+
+That split is the point. Building an image means running a privileged container
+that attaches a disk image to a loop device and debootstraps into it. A process
+that can ask the Docker daemon for that can ask it for anything — a socket that
+can start a privileged container with `/` bind-mounted is root on the host with
+extra steps. So the backend holds an HTTP client and a token, and the privilege
+lives in a container that does nothing else, rather than in the one that also
+holds the SSH certificate authority.
+
+The runner does not hold the raw socket either. It talks to `dockerproxy`, which
+passes an allowlist of the calls a build actually makes and refuses the rest:
+`exec` into another container, an arbitrary image, a host bind mount outside the
+project. Both ways of getting an allowlist wrong are quiet — too tight and a
+build fails with a 403 that names no call, too loose and the socket is still a
+socket — so both directions are covered by
+`scripts/imaging/test-docker-proxy.sh` against a real daemon.
+
+The sidecar has no users, no sessions, no database and no opinion about who may
+do anything. Every request reaching it has already passed this product's
+authentication, permission check and audit. A second copy of that would mean
+there were two, and the weaker one would be the one that mattered.
+
+Building is **opt-in**:
+
+```bash
+docker compose --profile imaging up -d
+```
+
+with `FLEET_BUILDER_RUNNER_URL` and `FLEET_BUILDER_RUNNER_TOKEN` set. With no
+runner URL the build routes answer `501` and say so; nothing is broken, the
+deployment simply does not include the privileged sidecar. A fleet that consumes
+images somebody else builds should not have to run one, nor invent a secret for
+a service it does not have.
+
+One build of a kind runs at a time. Two image builds share the output directory
+and the same builder tag, and the failure is not a clean error — it is two loop
+devices and a half-written artefact.
+
+Cancelling a build removes the container, rather than only relabelling the job.
+A non-interactive shell defers signals until its foreground command returns, so
+signalling the shell alone would leave the builder running while the UI claimed
+the build was cancelled.
+
+## The imaging run itself
+
+Two more endpoints are machine-facing, and unauthenticated for a stronger reason
+than the heartbeat: the imager runs from a netboot initramfs, on the
+provisioning network precisely because it has not been provisioned yet. There is
+no moment at which a credential could have been given to it.
+
+| endpoint | who calls it | what it does |
+| --- | --- | --- |
+| `POST /api/imaging/report` | the imager, on each phase change | progress; held in memory, expires on its own |
+| `POST /api/imaging/checkin` | the installed system, on first boot | records that the machine came back |
+
+`checkin` is the one that closes the loop. Without it, "imaged" is the last thing
+ever heard from a machine — and it is sent *before* the reboot, so a machine that
+images perfectly and then fails to boot looks exactly like a success.
+
+Note these paths are **unversioned**, and deliberately so. `/api/fleet/heartbeat`
+is compiled into every agent on every image ever built, and the report URL is
+derived inside a netboot initramfs from the address the image came from. Neither
+can be changed by editing this repository: the change would have to reach
+machines that only take an update by asking these endpoints for one. They are
+the wire contract; the `/api/v1/imaging/...` routes are the convenience.
+
 ## Configuration
 
 | variable | meaning |
@@ -168,6 +238,8 @@ Sunday, and neither Saturday noon nor Sunday noon.
 | `FLEET_AGENT_INTERVAL` | seconds between agent check-ins (default 300) |
 | `FLEET_AGENT_TOKEN` | optional shared token required on the heartbeat endpoint |
 | `FLEET_IMAGING_NUDGE` | `true` (default) to reach machines a rollout is waiting on; `false` to leave rollouts to poll |
+| `FLEET_BUILDER_RUNNER_URL` | the builder-runner sidecar. Empty (default) = no build path at all |
+| `FLEET_BUILDER_RUNNER_TOKEN` | shared secret sent as `X-Runner-Token`. Required whenever a runner URL is set |
 
 `FLEET_CONTROL_URL` is the one that catches people. It is the address a machine
 on the far side of the fleet can reach, which is routinely **not** the address
@@ -213,15 +285,25 @@ hand-rolling one in `sed` to avoid it would be worse.
 
 | permission | grants |
 | --- | --- |
-| `Imaging.View` | see images, bundles, rollouts, and each machine's OS version |
-| `Imaging.Manage` | start and steer rollouts, pair and hold machines, nudge and install |
+| `Imaging.View` | see images, bundles, rollouts, builds, and each machine's OS version |
+| `Imaging.Build` | build images, bundles and the imager; manage the artefact library and build overlay |
+| `Imaging.Manage` | run rollouts, pair and hold machines, nudge and install |
+| `Imaging.Provision` | configure and run the PXE stack, and assign MACs to hostnames |
 
-`Imaging.Manage` means the ability to change what operating system a managed
-host is running. It is a high-privilege grant and should be treated like
+Three, because they are genuinely different acts. **Build** produces an artefact
+and reaches no host at all; the person who maintains the image is often not the
+person who runs the fleet, and splitting these is what makes "you may prepare the
+release, someone else approves putting it on the fleet" expressible. **Manage**
+is the act that changes what a machine boots. **Provision** reconfigures a
+network segment, where the blast radius of a wrong DHCP range is every machine
+on that switch, imaged or not.
+
+`Imaging.Manage` means the ability to change what operating system a managed host
+is running. It is a high-privilege grant and should be treated like
 `Command.Run` — which is in fact how the reach half of it is enforced
 underneath: every nudge and direct install goes through the same gateway,
-certificate issuance and audit path as any other command, and a caller cannot
-act on a host they cannot already see.
+certificate issuance and audit path as any other command, and a caller cannot act
+on a host they cannot already see.
 
 ## Boundaries
 
@@ -234,7 +316,26 @@ act on a host they cannot already see.
   is not correctness.
 - **The builder still needs privileged containers**, and the PXE server still
   needs to sit on the provisioning segment. Being one product does not make those
-  go away — it means they are one deployment's concerns rather than two products'.
+  go away — it means they are one deployment's concerns rather than two products',
+  and that the privilege is contained deliberately rather than by accident of
+  which repository it lived in.
+
+## Backups
+
+The database backup covers machines, rollouts, users, sessions, tokens and the
+audit log, like everything else here. It cannot cover two things that are files:
+
+- **`output/rauc-keys/`** — the update signing key. Losing it means no machine
+  already deployed can ever be updated again. Not "until we re-key": ever,
+  because those machines verify against a certificate baked into their own image.
+  Leaking it means anyone can sign an update every one of them will install.
+- **`server/.env` and the MAC assignments** — the provisioning stack's network
+  configuration and which machine gets which hostname.
+
+`scripts/imaging/imaging-keys-backup.sh` archives exactly those. Built images and
+bundles are deliberately *not* in it: they are large, and they are reproducible
+from the builder given the same inputs — unlike the key, which is reproducible
+from nothing.
 
 ## A note on names on disk
 

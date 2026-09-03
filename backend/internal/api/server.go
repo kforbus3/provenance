@@ -1010,6 +1010,12 @@ func (s *Server) buildRouter() chi.Router {
 		})
 	}
 
+	// The machine-facing endpoints, at the unversioned paths burned into every
+	// agent and every netboot imager already in the field. See
+	// imaging.MountMachineCompat -- these cannot be migrated, because reaching
+	// the machines to migrate them is what they are for.
+	imaging.MountMachineCompat(r, s.deps, s.imagingSvc)
+
 	// Versioned API surface. Module routers mount here.
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(rateLimitMW)

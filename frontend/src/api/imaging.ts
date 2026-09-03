@@ -219,3 +219,113 @@ export async function installOnMachine(id: string, bundleUrl: string): Promise<A
   );
   return data;
 }
+
+// --- building ----------------------------------------------------------------
+//
+// Builds run in the builder-runner sidecar, which is the only thing in a
+// deployment that touches the Docker socket. It is opt-in: a 501 from any of
+// these means no runner is configured, not that something is broken.
+
+export interface BuildJob {
+  id: string;
+  type: "image" | "bundle" | "imager";
+  label: string;
+  status: "running" | "success" | "failed" | "canceled";
+  returncode?: number | null;
+  started: string;
+  finished?: string;
+  lines: number;
+  progress?: { step: number; total: number; label: string } | null;
+  // Only on a single-job read.
+  log?: string[];
+  offset?: number;
+  total?: number;
+}
+
+export interface ImageBuildRequest {
+  distro?: string;
+  suite?: string;
+  arch?: string;
+  hostname?: string;
+  username?: string;
+  password?: string;
+  imageSize?: string;
+  rootSize?: number;
+  compress?: string;
+  profile?: string;
+  desktop?: string;
+  secureBoot?: string;
+  packages?: string;
+  sshKey?: string;
+  sshKeyOnly?: boolean;
+  encrypt?: boolean;
+  unlock?: string;
+  luksPassphrase?: string;
+  tangUrl?: string;
+  stateModel?: string;
+  slotPrivateUpper?: boolean;
+  persistPaths?: string;
+  slotPrivatePaths?: string;
+  volatilePaths?: string;
+  resetPaths?: string;
+  keepPaths?: string;
+  ownPaths?: string;
+  runScript?: string;
+}
+
+export interface BundleBuildRequest {
+  image: string;
+  version?: string;
+  description?: string;
+  encrypted?: boolean;
+  luksPassphrase?: string;
+}
+
+export async function startBuild(
+  kind: "image" | "bundle" | "imager",
+  body: ImageBuildRequest | BundleBuildRequest | { arch?: string },
+): Promise<BuildJob> {
+  const { data } = await api.post(`/api/v1/imaging/builds/${kind}`, body);
+  return data;
+}
+
+export async function listBuilds(): Promise<BuildJob[]> {
+  const { data } = await api.get("/api/v1/imaging/builds");
+  return data.builds ?? [];
+}
+
+// Polled with an offset rather than streamed, so a reconnect resumes where it
+// left off instead of replaying an hour of build output.
+export async function buildLog(id: string, offset = 0): Promise<BuildJob> {
+  const { data } = await api.get(
+    `/api/v1/imaging/builds/${encodeURIComponent(id)}?offset=${offset}`,
+  );
+  return data;
+}
+
+export async function cancelBuild(id: string): Promise<BuildJob> {
+  const { data } = await api.post(`/api/v1/imaging/builds/${encodeURIComponent(id)}/cancel`);
+  return data;
+}
+
+export async function deleteImage(name: string) {
+  await api.delete(`/api/v1/imaging/images/${encodeURIComponent(name)}`);
+}
+
+export async function deleteBundle(name: string) {
+  await api.delete(`/api/v1/imaging/bundles/${encodeURIComponent(name)}`);
+}
+
+export interface DiskUsage {
+  artifacts: number;
+  free: number;
+  total: number;
+}
+
+// Worth showing because of how a build fails when the volume is full: not
+// cleanly, but part way through debootstrap with a loop device still attached
+// and the reason two hundred lines up the log.
+export async function diskUsage(): Promise<DiskUsage> {
+  const { data } = await api.get("/api/v1/imaging/disk");
+  return data;
+}

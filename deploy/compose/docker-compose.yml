@@ -289,6 +289,38 @@ services:
           memory: 64M
     networks: [fleet]
 
+  # The Docker socket, behind an allowlist.
+  #
+  # It passes the calls this project actually makes and refuses the rest: exec
+  # into another container, an arbitrary image, a host bind mount outside the
+  # project. Both directions of getting this wrong are quiet -- too tight and a
+  # build fails with a 403 and no clue which call; too loose and the socket is
+  # still a socket, and the proxy is decoration -- so both are covered by
+  # scripts/imaging/test-docker-proxy.sh against a real daemon.
+  dockerproxy:
+    profiles: [imaging]
+    build:
+      context: ../dockerproxy
+    image: blackfriars-dockerproxy
+    restart: unless-stopped
+    environment:
+      # Where the project lives on the host, which bounds what may be
+      # bind-mounted into a build. Empty is discovered from the runner's own
+      # /project mount, so the two cannot disagree.
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
+      LOG_LEVEL: ${PROXY_LOG_LEVEL:-INFO}
+    volumes:
+      # Not :ro. A read-only bind of a unix socket restricts nothing about what
+      # can be done through it -- the confinement is the allowlist, and
+      # pretending otherwise would be decoration.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dockerproxy:/shared
+    # It connects to one socket and listens on another. Nothing else.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    networks: [fleet]
+
   # Sidecar that builds OS images and update bundles, and drives the PXE
   # provisioning stack. Internal only, reachable at http://builder-runner:8000.
   #
@@ -319,9 +351,18 @@ services:
       # against the host filesystem, not this container's. Left empty it is
       # detected from this container's own /project mount, which is always right.
       HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
+      # Set to unix:///var/run/docker.sock (and mount it) only if the allowlist
+      # ever refuses something a build legitimately needs.
+      DOCKER_HOST: ${DOCKER_HOST:-unix:///shared/docker.sock}
+    # The runner does not hold the raw socket either. It talks to dockerproxy,
+    # which passes an allowlist of the calls a build actually makes and refuses
+    # the rest. Two layers, because the runner runs shell that interpolates
+    # build options, and "the options came from an authenticated operator" is
+    # the reasoning behind most command injections.
+    depends_on: [dockerproxy]
     volumes:
-      # The socket. This is the privilege; everything above is about containing it.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # The proxied socket, not /var/run/docker.sock. See the note above.
+      - dockerproxy:/shared
       # The project, for the builder context, overlay.d, and output/.
       - ../..:/project
     deploy:
@@ -441,6 +482,7 @@ volumes:
   grype-db:
   rdp-drive:
   updates: # staged upgrade bundles, shared between backend and fleet-updater
+  dockerproxy: # the allowlisted socket the builder runner talks to
 
 networks:
   fleet:

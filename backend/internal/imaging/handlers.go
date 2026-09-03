@@ -20,8 +20,10 @@ import (
 func Mount(r chi.Router, d *app.Deps, svc *Service) {
 	h := &handler{d: d, svc: svc}
 
-	// Machines. No session, no role -- see the comment on heartbeat.
+	// Machines. No session, no role -- see the comment on heartbeat, and the
+	// stronger version of the same argument at the top of imagerhandlers.go.
 	r.Post("/imaging/heartbeat", h.heartbeat)
+	mountImager(r, h)
 
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
@@ -29,6 +31,8 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images", h.images)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/bundles", h.bundles)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/machines", h.machines)
+		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/now", h.imagingNow)
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Delete("/imaging/now/{id}", h.forgetImaging)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/rollouts", h.rollouts)
 		pr.With(d.Auth.RequirePermission("Imaging.View")).Get("/imaging/rollouts/{id}", h.rollout)
 
@@ -44,6 +48,27 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		// buildhandlers.go for why those are separate permissions.
 		mountBuilds(pr, h)
 	})
+}
+
+// MountMachineCompat registers the machine-facing endpoints at the *unversioned*
+// paths that software already in the field posts to.
+//
+// `/api/fleet/heartbeat` is compiled into every ab-agent on every image ever
+// built, and `/api/imaging/report` is derived inside a netboot initramfs from
+// the address the image came from. Neither can be changed by editing this
+// repository: the change would have to reach machines that only take an update
+// by asking these endpoints for one, which is the definition of a path that
+// cannot be migrated.
+//
+// So they are not deprecated aliases waiting to be removed. They are the wire
+// contract, and the versioned routes are the convenience. Mounted outside
+// /api/v1 deliberately, and outside its CSRF and session middleware, because a
+// machine has neither.
+func MountMachineCompat(r chi.Router, d *app.Deps, svc *Service) {
+	h := &handler{d: d, svc: svc}
+	r.Post("/api/fleet/heartbeat", h.heartbeat)
+	r.Post("/api/imaging/report", h.imagerReport)
+	r.Post("/api/imaging/checkin", h.imagerCheckin)
 }
 
 type handler struct {

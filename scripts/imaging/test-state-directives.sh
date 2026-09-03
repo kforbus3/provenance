@@ -13,7 +13,7 @@
 # and each one takes about a second.
 #
 #   docker run --rm --privileged --platform linux/amd64 \
-#     -v "$PWD":/repo:ro ubuntu:24.04 bash /repo/scripts/test-state-directives.sh
+#     -v "$PWD":/repo:ro ubuntu:24.04 bash /repo/scripts/imaging/test-state-directives.sh
 #
 # It does not replace the QEMU tests: it cannot prove the script is *in* the
 # initramfs, that busybox has the tools it needs, or that systemd is happy with

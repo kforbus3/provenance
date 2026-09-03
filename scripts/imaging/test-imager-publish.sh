@@ -13,7 +13,7 @@
 # published, and publishing is atomic so a machine sees only whole artifacts.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-VERIFY="$HERE/../imager/verify-initramfs.sh"
+VERIFY="$HERE/../../imager/verify-initramfs.sh"
 FAILED=0
 
 WORK="$(mktemp -d)"
@@ -89,7 +89,7 @@ done
 echo "== the build publishes atomically =="
 # The property, read off the build script: nothing may redirect or copy onto a
 # served artifact in place. Both are fetched by netbooting machines.
-BUILD="$HERE/../imager/build-imager.sh"
+BUILD="$HERE/../../imager/build-imager.sh"
 if grep -qE '> *"\$OUT/initramfs\.img"' "$BUILD"; then
     bad "build-imager.sh still writes the initramfs directly onto the served path"
 else

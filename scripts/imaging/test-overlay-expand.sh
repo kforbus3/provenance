@@ -2,7 +2,7 @@
 # Overlay expansion test. Runs in a privileged container, no QEMU needed:
 #
 #   docker run --rm --privileged --platform linux/amd64 \
-#     -v "$PWD":/repo:ro ubuntu:22.04 bash /repo/scripts/test-overlay-expand.sh
+#     -v "$PWD":/repo:ro ubuntu:22.04 bash /repo/scripts/imaging/test-overlay-expand.sh
 #
 # SKIP_IMAGER_GROW=1  simulate an imager that does not grow the partition
 # KEEP_KEY=1          leave a usable LUKS keyfile in crypttab

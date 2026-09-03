@@ -18,10 +18,10 @@
 # 50 and were not watching this at all.
 #
 #   docker run --rm --privileged -v "$PWD":/repo:ro ubuntu:24.04 \
-#       bash /repo/scripts/test-luks-key-portability.sh
+#       bash /repo/scripts/imaging/test-luks-key-portability.sh
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 IT="$REPO/builder/overlay/etc/initramfs-tools"
 ok=0; fail=0
 pass() { echo "  ok   $1"; ok=$((ok + 1)); }
