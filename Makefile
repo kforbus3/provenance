@@ -44,6 +44,15 @@ up: env ## Build & start the full stack + test fabric
 up-app: env ## Start only the application stack (no test fabric)
 	$(COMPOSE) up -d --build
 
+.PHONY: up-imaging
+up-imaging: env ## Start the app stack WITH the image builder (privileged; needs the Docker socket)
+	$(COMPOSE) --profile imaging up -d --build
+	@echo "Builder up. It holds the Docker socket so the backend does not, and it reaches"
+	@echo "that socket through the allowlisting proxy -- building an image means starting a"
+	@echo "PRIVILEGED container, so this is deliberately not part of the default stack."
+	@echo "Set FLEET_BUILDER_RUNNER_URL=http://builder-runner:8000 and a matching"
+	@echo "FLEET_BUILDER_RUNNER_TOKEN on both services, or the build routes answer 501."
+
 .PHONY: up-single
 up-single: env ## Single-server production: (re)build & start the WHOLE stack incl. the jump host
 	$(COMPOSE_SINGLE) up -d --build
