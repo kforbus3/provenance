@@ -50,8 +50,8 @@ func (s *Store) ReportMachine(ctx context.Context, m *models.ImagingMachine) (*m
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO imaging_machines (id, tenant_id, hostname, address, slot, version,
 			image, arch, agent_version, boot_id, health, update_state, update_error,
-			update_rollout, reported_by, report_source, last_seen)
-		VALUES ($1, `+s.ownerArgSQL()+`, $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+			update_rollout, reported_by, report_source, imaged_at, booted_at, last_seen)
+		VALUES ($1, `+s.ownerArgSQL()+`, $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
 		ON CONFLICT (id) DO UPDATE SET
 			hostname      = COALESCE(NULLIF(EXCLUDED.hostname, ''),      imaging_machines.hostname),
 			address       = COALESCE(NULLIF(EXCLUDED.address, ''),       imaging_machines.address),
@@ -62,18 +62,39 @@ func (s *Store) ReportMachine(ctx context.Context, m *models.ImagingMachine) (*m
 			agent_version = COALESCE(NULLIF(EXCLUDED.agent_version, ''), imaging_machines.agent_version),
 			boot_id       = COALESCE(NULLIF(EXCLUDED.boot_id, ''),       imaging_machines.boot_id),
 			health        = COALESCE(NULLIF(EXCLUDED.health, ''),        imaging_machines.health),
-			-- update_state is written even when empty: "idle" is a real thing to
-			-- say, and it is how a machine reports that it has finished.
-			update_state  = EXCLUDED.update_state,
-			update_error  = EXCLUDED.update_error,
-			update_rollout= EXCLUDED.update_rollout,
+			-- An agent's empty update_state is written, because "idle" is a real
+			-- thing for a machine to say and it is how one reports that it has
+			-- finished. Anything else's empty update_state is NOT: an observation
+			-- read off a host, or a report from the imager, means "I have nothing
+			-- to say about this", and blanking a machine's state because the
+			-- speaker did not know it is not the same claim at all. settle() in
+			-- particular deliberately asserts no update state, and without this
+			-- it would erase one.
+			update_state  = CASE WHEN EXCLUDED.report_source = 'agent'
+			                       OR EXCLUDED.update_state <> ''
+			                     THEN EXCLUDED.update_state
+			                     ELSE imaging_machines.update_state END,
+			update_error  = CASE WHEN EXCLUDED.report_source = 'agent'
+			                       OR EXCLUDED.update_error <> ''
+			                     THEN EXCLUDED.update_error
+			                     ELSE imaging_machines.update_error END,
+			update_rollout= CASE WHEN EXCLUDED.report_source = 'agent'
+			                       OR EXCLUDED.update_rollout <> ''
+			                     THEN EXCLUDED.update_rollout
+			                     ELSE imaging_machines.update_rollout END,
 			reported_by   = EXCLUDED.reported_by,
 			report_source = EXCLUDED.report_source,
+			-- The two moments that bracket an imaging run, and the only record
+			-- that answers "did it come back". Written when supplied and kept
+			-- otherwise, so an ordinary heartbeat does not erase them and a
+			-- re-imaged machine gets the new dates rather than keeping the old.
+			imaged_at     = COALESCE(EXCLUDED.imaged_at, imaging_machines.imaged_at),
+			booted_at     = COALESCE(EXCLUDED.booted_at, imaging_machines.booted_at),
 			last_seen     = now()
 		RETURNING `+machineCols,
 		m.ID, m.Hostname, m.Address, m.Slot, m.Version, m.Image, m.Arch,
 		m.AgentVersion, m.BootID, m.Health, m.UpdateState, m.UpdateError,
-		m.UpdateRollout, m.ReportedBy, m.ReportSource)
+		m.UpdateRollout, m.ReportedBy, m.ReportSource, m.ImagedAt, m.BootedAt)
 	return scanMachine(row)
 }
 
