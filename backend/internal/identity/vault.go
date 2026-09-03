@@ -118,10 +118,22 @@ func (v *Vault) Sessions() []uuid.UUID {
 	return out
 }
 
-// zero overwrites the private key material so it cannot be recovered from memory.
-// Ed25519 keys are byte slices (overwrite in place); ECDSA keys hold their secret
-// in a big.Int (overwrite its backing words), so both key types are best-effort
-// scrubbed before the reference is dropped.
+// zero overwrites the private key material before the reference is dropped.
+//
+// Ed25519 keys are byte slices and are overwritten in place, which is complete.
+//
+// ECDSA is weaker than it looks, and worth being precise about. The secret is
+// exposed as a big.Int in the deprecated D field, and its backing words are
+// overwritten here -- but since Go 1.25 the key also holds its own internal
+// copy, which no exported API can reach. So this scrubs the copy an attacker
+// would find by walking a big.Int and does not scrub the one inside the key.
+// It is worth doing and it is not a guarantee.
+//
+// D is deprecated precisely because modifying it is not supported; the
+// suggested replacements (PrivateKey.Bytes, ParseRawPrivateKey) encode and
+// decode keys and cannot zero one. There is no supported way to do this, so
+// the check is silenced here rather than at the linter, where it would also
+// silence real findings.
 func (c *Credential) zero() {
 	switch k := c.privateKey.(type) {
 	case ed25519.PrivateKey:
@@ -129,12 +141,12 @@ func (c *Credential) zero() {
 			k[i] = 0
 		}
 	case *ecdsa.PrivateKey:
-		if k.D != nil {
-			words := k.D.Bits()
+		if k.D != nil { //nolint:staticcheck // SA1019: no supported way to scrub an ECDSA key; see above
+			words := k.D.Bits() //nolint:staticcheck // SA1019: ditto
 			for i := range words {
 				words[i] = 0
 			}
-			k.D.SetInt64(0)
+			k.D.SetInt64(0) //nolint:staticcheck // SA1019: ditto
 		}
 	}
 	c.privateKey = nil
