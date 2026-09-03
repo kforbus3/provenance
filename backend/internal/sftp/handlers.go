@@ -21,14 +21,14 @@ import (
 	"github.com/google/uuid"
 	pkgsftp "github.com/pkg/sftp"
 
-	"github.com/kforbus3/Moorgate/backend/internal/accesspolicy"
-	"github.com/kforbus3/Moorgate/backend/internal/app"
-	"github.com/kforbus3/Moorgate/backend/internal/auth"
-	"github.com/kforbus3/Moorgate/backend/internal/credinject"
-	"github.com/kforbus3/Moorgate/backend/internal/httpx"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/accesspolicy"
+	"github.com/kforbus3/blackfriars/backend/internal/app"
+	"github.com/kforbus3/blackfriars/backend/internal/auth"
+	"github.com/kforbus3/blackfriars/backend/internal/credinject"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
 
 // Mount attaches SFTP routes (require auth + File.Transfer + host access).

@@ -1,6 +1,6 @@
-# Moorgate — Documentation
+# Blackfriars — Documentation
 
-Moorgate is a Go + React Privileged Access Management (PAM) platform for
+Blackfriars is a Go + React Privileged Access Management (PAM) platform for
 browser-based SSH: ephemeral, in-RAM SSH certificates, a hardened jump-host /
 WireGuard egress path, backend-authoritative RBAC, and a tamper-evident,
 hash-chained audit log.
@@ -22,7 +22,7 @@ the first Super Administrator. See the [Administrator Guide](./admin-guide.md).
 
 | Doc | Audience | What it covers |
 |-----|----------|----------------|
-| [installation.md](./installation.md) | operators | Install and stand up Moorgate from scratch: prerequisites, config, first boot |
+| [installation.md](./installation.md) | operators | Install and stand up Blackfriars from scratch: prerequisites, config, first boot |
 | [deployment.md](./deployment.md) | operators | Deploy the whole system: config, local + production stack |
 | [internet-exposure.md](./internet-exposure.md) | operators / security | Exposing the UI to the internet behind a reverse proxy + MFA |
 | [operations.md](./operations.md) | operators | Day-to-day flows: enroll, connect, transfer, approvals, MFA |
@@ -63,13 +63,13 @@ pending package updates** surfaced in the inventory.
 
 ### Operating systems: imaging and updates
 
-Moorgate manages machines that already exist; **Flipside** builds the operating
+Blackfriars manages machines that already exist; **Flipside** builds the operating
 system they run and puts it on their disks. The two are joined so there is one
 place to look and — more usefully — so that OS updates can be *pushed*.
 
 Flipside's control plane is necessarily a pull: a machine is imaged on a private
 provisioning switch and then moved to wherever it lives, so the imaging server
-cannot reach it afterwards and each machine's agent polls instead. Moorgate
+cannot reach it afterwards and each machine's agent polls instead. Blackfriars
 reaches every enrolled host through the jump host, so it supplies exactly what
 Flipside cannot have — a rollout that would take hours of polling finishes in
 minutes, and machines that can never reach Flipside can still be updated and
@@ -77,7 +77,7 @@ reported on.
 
 Flipside keeps the rollout logic (canary, soak, batches, failure budget, and the
 rule that a machine counts as updated only when it comes back on the new version
-and healthy). Moorgate supplies reach, identity, roles and the audit trail. See
+and healthy). Blackfriars supplies reach, identity, roles and the audit trail. See
 [imaging.md](./imaging.md).
 
 ### Enterprise & platform features
@@ -88,7 +88,7 @@ brokering:
 | Doc | Audience | What it covers |
 |-----|----------|----------------|
 | [access-policies.md](./access-policies.md) | security / admins | Attribute-based access control (ABAC) layered on RBAC to deny connections by context |
-| [automation.md](./automation.md) | integrators / operators | Driving Moorgate as code with the Go SDK and the `fleet` CLI |
+| [automation.md](./automation.md) | integrators / operators | Driving Blackfriars as code with the Go SDK and the `fleet` CLI |
 | [behavior-analytics.md](./behavior-analytics.md) | security | UEBA: explainable, ML-free detection of access patterns deviating from a user's baseline |
 | [database-broker.md](./database-broker.md) | operators / security | Brokered privileged access to databases with vaulted credentials, run through the jump host |
 | [kubernetes.md](./kubernetes.md) | operators / security | Brokered Kubernetes access via an authenticating proxy with a vaulted bearer token |

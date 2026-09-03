@@ -16,18 +16,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kforbus3/Moorgate/backend/internal/auth"
-	"github.com/kforbus3/Moorgate/backend/internal/ca"
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
-	"github.com/kforbus3/Moorgate/backend/internal/db"
-	"github.com/kforbus3/Moorgate/backend/internal/kms"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/notify"
-	"github.com/kforbus3/Moorgate/backend/internal/overlaypki"
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
-	"github.com/kforbus3/Moorgate/backend/internal/vault"
+	"github.com/kforbus3/blackfriars/backend/internal/auth"
+	"github.com/kforbus3/blackfriars/backend/internal/ca"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
+	"github.com/kforbus3/blackfriars/backend/internal/db"
+	"github.com/kforbus3/blackfriars/backend/internal/kms"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/notify"
+	"github.com/kforbus3/blackfriars/backend/internal/overlaypki"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/vault"
 )
 
 func main() {

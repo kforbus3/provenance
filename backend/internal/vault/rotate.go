@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/Moorgate/backend/internal/auth"
-	"github.com/kforbus3/Moorgate/backend/internal/httpx"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/auth"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
 )
 
 // rotate rotates a password credential on the host that uses it: connect with the

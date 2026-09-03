@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-pdf/fpdf"
 
-	"github.com/kforbus3/Moorgate/backend/internal/store"
-	"github.com/kforbus3/Moorgate/backend/internal/tenant"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/tenant"
 )
 
 // packMeta carries the non-data inputs for an evidence pack.

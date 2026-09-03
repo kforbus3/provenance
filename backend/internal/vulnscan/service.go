@@ -21,14 +21,14 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/credinject"
-	"github.com/kforbus3/Moorgate/backend/internal/identity"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/notify"
-	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
-	"github.com/kforbus3/Moorgate/backend/internal/winrm"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/credinject"
+	"github.com/kforbus3/blackfriars/backend/internal/identity"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/notify"
+	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/winrm"
 )
 
 // collectScript tars a host's package databases (only the paths that exist, so it

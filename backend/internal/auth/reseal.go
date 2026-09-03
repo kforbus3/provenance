@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
 )
 
 // ResealSecrets re-seals the auth subsystem's at-rest secrets (the LDAP bind password

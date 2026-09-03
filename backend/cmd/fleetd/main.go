@@ -19,14 +19,14 @@ import (
 	// resolves zones for schedule computation, even without an OS tzdata package.
 	_ "time/tzdata"
 
-	"github.com/kforbus3/Moorgate/backend/internal/api"
-	"github.com/kforbus3/Moorgate/backend/internal/auth"
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
-	"github.com/kforbus3/Moorgate/backend/internal/db"
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
-	"github.com/kforbus3/Moorgate/backend/internal/telemetry"
-	"github.com/kforbus3/Moorgate/backend/internal/tenant"
+	"github.com/kforbus3/blackfriars/backend/internal/api"
+	"github.com/kforbus3/blackfriars/backend/internal/auth"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
+	"github.com/kforbus3/blackfriars/backend/internal/db"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/telemetry"
+	"github.com/kforbus3/blackfriars/backend/internal/tenant"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".

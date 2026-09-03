@@ -1,6 +1,6 @@
-# Moorgate — Certificate Lifecycle
+# Blackfriars — Certificate Lifecycle
 
-Moorgate authenticates SSH using **short-lived OpenSSH certificates** signed
+Blackfriars authenticates SSH using **short-lived OpenSSH certificates** signed
 by an internal certificate authority, instead of distributing long-lived user
 keys. This document describes the full lifecycle: CA creation, ephemeral issuance,
 renewal, revocation, rotation, and the data model.

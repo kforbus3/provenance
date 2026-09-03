@@ -1,4 +1,4 @@
-module github.com/kforbus3/Moorgate/backend
+module github.com/kforbus3/blackfriars/backend
 
 go 1.26.0
 

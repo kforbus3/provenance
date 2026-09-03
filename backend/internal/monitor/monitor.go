@@ -15,18 +15,18 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/credinject"
-	"github.com/kforbus3/Moorgate/backend/internal/identity"
-	"github.com/kforbus3/Moorgate/backend/internal/jobs"
-	"github.com/kforbus3/Moorgate/backend/internal/metrics"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/notify"
-	"github.com/kforbus3/Moorgate/backend/internal/overlay"
-	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
-	"github.com/kforbus3/Moorgate/backend/internal/winrm"
-	"github.com/kforbus3/Moorgate/backend/internal/ws"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/credinject"
+	"github.com/kforbus3/blackfriars/backend/internal/identity"
+	"github.com/kforbus3/blackfriars/backend/internal/jobs"
+	"github.com/kforbus3/blackfriars/backend/internal/metrics"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/notify"
+	"github.com/kforbus3/blackfriars/backend/internal/overlay"
+	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/winrm"
+	"github.com/kforbus3/blackfriars/backend/internal/ws"
 )
 
 // Monitor periodically probes hosts and reports their health.

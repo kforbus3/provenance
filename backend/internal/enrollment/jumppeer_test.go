@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
 )
 
 func peerScript(t *testing.T) string {

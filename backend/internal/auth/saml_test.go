@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
 )
 
 // selfSignedRSA returns a PEM RSA private key (PKCS#8) and a matching self-signed

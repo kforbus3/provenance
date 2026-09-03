@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/app"
-	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/blackfriars/backend/internal/app"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
 )
 
 // standbyHandler serves the read-only DR standby console. It never writes to the

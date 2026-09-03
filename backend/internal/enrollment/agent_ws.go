@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
+	"github.com/kforbus3/blackfriars/backend/internal/wsorigin"
 )
 
 var agentUpgrader = websocket.Upgrader{

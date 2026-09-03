@@ -11,8 +11,8 @@ keywords:
   - pam
   - bastion
   - terminal
-home: https://github.com/kforbus3/Moorgate
+home: https://github.com/kforbus3/blackfriars
 sources:
-  - https://github.com/kforbus3/Moorgate
+  - https://github.com/kforbus3/blackfriars
 maintainers:
   - name: Moorgate

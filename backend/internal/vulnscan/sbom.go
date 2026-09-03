@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/cpe"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/winrm"
+	"github.com/kforbus3/blackfriars/backend/internal/cpe"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/winrm"
 )
 
 // --- CycloneDX SBOM ---
