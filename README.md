@@ -1,9 +1,17 @@
-# Moorgate
+# Blackfriars
 
-**Browser-based Privileged Access Management (PAM) for Linux fleets.**
+**Privileged access management and OS lifecycle for Linux fleets, in one place.**
 
-Moorgate gives operators secure, audited SSH access to Linux fleets **from the
-browser** — hundreds of hosts on the default configuration, scaling to thousands with a
+Blackfriars covers a machine's whole life: it **builds** the operating system a
+machine runs, **puts it on the disk** over PXE, **updates it** in staged
+rollouts, and gives operators secure, audited **browser SSH access** to it for
+everything in between. Two halves that are usually two products, deliberately
+one — because each is the answer to the other's hardest problem, and the seam
+between them is where the interesting failures live (see
+[docs/imaging.md](docs/imaging.md)).
+
+The access half gives operators secure, audited SSH access to Linux fleets
+**from the browser** — hundreds of hosts on the default configuration, scaling to thousands with a
 wider overlay subnet (`FLEET_WG_SUBNET`) and tuned monitor concurrency — with no SSH
 client, VPN, WireGuard, keys, or
 certificates on the user side. The browser talks only to the backend over HTTPS/WebSocket;
@@ -50,6 +58,8 @@ Browser ──HTTPS/WS──> React SPA ──REST/WS──> Go Backend ──SS
 | Resilience | **Encrypted database backups** + retention policy and **break-glass recovery** runbook |
 | Notifications | Outbound notifications on key events: **email (SMTP)**, **webhook** (Slack / Discord / Microsoft Teams / generic JSON), and severity-gated **PagerDuty + Opsgenie** incident channels |
 | Assistant | AI assistant aware of host inventory/metrics, **security scans, playbook runs, and pending updates**; **multi-turn conversations**, **fleet insights** ("what's wrong with the fleet?" + disk-runway projections), and scheduled **health digests** |
+| Imaging | **A/B OS image builder** (GRUB + RAUC dual-root), **PXE/iPXE netboot imaging**, **signed update bundles**, **SBOMs** (SPDX + CycloneDX), optional **Secure Boot** and LUKS |
+| OS updates | **Staged rollouts** (canary → soak → batches → failure budget → maintenance window) over a **pull** control plane, with reach-out as the fast path: check-in-on-demand, direct install over SSH for machines with no route home, and **attested reports** for machines that cannot speak for themselves |
 | Ops | Prometheus metrics, structured logs, health/ready endpoints, **System Health dashboard**, **CA-key rotation reminders**, **app-wide display timezone**, Docker/K8s/Helm/systemd artifacts |
 
 ## Quick start
@@ -78,10 +88,18 @@ make down      # stop;  make clean  # stop + remove volumes
 ```
 backend/    Go API server + SSH gateway (chi, pgx, x/crypto/ssh, gorilla/websocket)
 frontend/   React + TypeScript + Vite + MUI + xterm.js + React Query + Zustand
+builder/    A/B image builder (debootstrap, GRUB, RAUC, SBOM, Secure Boot) — shell
+imager/     the netboot imager that writes an image to a machine's disk
+server/     PXE/iPXE + artefact provisioning server for the imaging segment
+overlay.d/  image profiles layered into a build
 deploy/     docker-compose (app + test fabric), k8s manifests, Helm chart, systemd units
 docs/       architecture, API, schema, admin/user/developer/security/DR guides
-scripts/    orchestration + dev helpers
+scripts/    orchestration + dev helpers; scripts/imaging/ is the boot-test suite
 ```
+
+The Go module path, the binary names and the `FLEET_*` environment prefix are
+unchanged from this codebase's earlier life. Renaming them would be a migration
+for every existing deployment in exchange for nothing.
 
 ## Architecture & docs
 
