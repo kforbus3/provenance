@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
-	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
 )
 
 // fipsReadiness is the web-UI view of `fleetctl fips check`: whether each

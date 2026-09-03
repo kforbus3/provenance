@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
 )
 
 // Save persists an incoming config. The SMTP password is encrypted at rest; if

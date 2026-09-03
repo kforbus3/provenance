@@ -32,7 +32,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	fleet "github.com/kforbus3/Moorgate/sdk"
+	fleet "github.com/kforbus3/blackfriars/sdk"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".

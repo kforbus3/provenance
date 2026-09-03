@@ -13,9 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/kforbus3/Moorgate/backend/internal/app"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/wsorigin"
+	"github.com/kforbus3/blackfriars/backend/internal/app"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/wsorigin"
 )
 
 var upgrader = websocket.Upgrader{

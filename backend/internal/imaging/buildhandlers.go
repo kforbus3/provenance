@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
 )
 
 // The build and provisioning half of the API.

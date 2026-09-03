@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
 )
 
 func quietForwarder() *Forwarder {

@@ -3,7 +3,7 @@ package vulnscan
 import (
 	"testing"
 
-	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
 )
 
 // A CVE that hits several binary packages from one source package is ONE

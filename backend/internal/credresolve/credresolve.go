@@ -12,10 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/Moorgate/backend/internal/extsecret"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/extsecret"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
 
 // Open resolves the plaintext for an already-loaded secret. vaultKey is used only for

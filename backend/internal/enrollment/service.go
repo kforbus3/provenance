@@ -15,14 +15,14 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/krl"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/overlay"
-	"github.com/kforbus3/Moorgate/backend/internal/overlaypki"
-	princ "github.com/kforbus3/Moorgate/backend/internal/principals"
-	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/krl"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/overlay"
+	"github.com/kforbus3/blackfriars/backend/internal/overlaypki"
+	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
+	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 
 	"log/slog"
 

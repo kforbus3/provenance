@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/extsecret"
-	"github.com/kforbus3/Moorgate/backend/internal/kms"
+	"github.com/kforbus3/blackfriars/backend/internal/extsecret"
+	"github.com/kforbus3/blackfriars/backend/internal/kms"
 )
 
 // Config is the fully-resolved application configuration.

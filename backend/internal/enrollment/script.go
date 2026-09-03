@@ -12,9 +12,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/Moorgate/backend/internal/krl"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/overlay"
+	"github.com/kforbus3/blackfriars/backend/internal/krl"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/overlay"
 )
 
 // EnrollScript generates a self-contained bootstrap script for the no-install

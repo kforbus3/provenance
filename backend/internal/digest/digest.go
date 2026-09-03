@@ -16,9 +16,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/Moorgate/backend/internal/insights"
-	"github.com/kforbus3/Moorgate/backend/internal/notify"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/insights"
+	"github.com/kforbus3/blackfriars/backend/internal/notify"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
 
 const settingKey = "digest_policy"

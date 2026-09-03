@@ -1,7 +1,7 @@
 # Multi-Tenancy (MSP) — Design & Phased Plan
 
 Status: **P0 (RLS foundation) + P1 (tenant management, auth scoping, provider console)
-shipped.** Opt-in via `FLEET_MULTI_TENANCY` (default **off**); with the flag off, Moorgate
+shipped.** Opt-in via `FLEET_MULTI_TENANCY` (default **off**); with the flag off, Blackfriars
 is byte-for-byte single-tenant as today. Built incrementally on `main`.
 
 **Proven end-to-end** (real API, non-superuser DB role): a provider admin creates a
@@ -26,7 +26,7 @@ not enable it against real multi-customer data.
 
 ## Goal
 
-Let one Moorgate deployment serve multiple isolated customer **tenants**, so an MSP can
+Let one Blackfriars deployment serve multiple isolated customer **tenants**, so an MSP can
 operate many customers from a single pane of glass. Data belonging to one tenant must
 never be visible to another.
 

@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/models"
-	"github.com/kforbus3/Moorgate/backend/internal/sshgw"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
 )
 
 // THE BUG THIS PINS DOWN: CleanupHostOverlay dialed the jump host with

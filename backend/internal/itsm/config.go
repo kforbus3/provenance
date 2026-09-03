@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
 
 // SettingKey is the settings row that holds the ITSM configuration.

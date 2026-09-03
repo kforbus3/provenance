@@ -1,6 +1,6 @@
-# Moorgate — Developer Guide
+# Blackfriars — Developer Guide
 
-This guide covers building, running, and extending Moorgate. Everything
+This guide covers building, running, and extending Blackfriars. Everything
 runs through Docker, so **no local Go, Node, or PostgreSQL toolchain is required.**
 
 ## Layout

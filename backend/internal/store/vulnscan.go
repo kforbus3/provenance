@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
 )
 
 // VulnSummary is the per-severity breakdown recorded on a scan. Every count is of

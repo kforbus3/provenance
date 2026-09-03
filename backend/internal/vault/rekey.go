@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
 
 // RekeyResult reports the outcome of a vault master-key rotation.

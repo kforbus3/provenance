@@ -1,8 +1,8 @@
 # Kubernetes access brokering
 
-Moorgate brokers access to Kubernetes clusters the same way it brokers SSH, RDP, and databases: users
-never hold the cluster credential. Instead Moorgate acts as an **authenticating proxy** — a user (or
-their `kubectl`) authenticates to Moorgate, and Moorgate forwards the request to the cluster's API server
+Blackfriars brokers access to Kubernetes clusters the same way it brokers SSH, RDP, and databases: users
+never hold the cluster credential. Instead Blackfriars acts as an **authenticating proxy** — a user (or
+their `kubectl`) authenticates to Blackfriars, and Blackfriars forwards the request to the cluster's API server
 with a **vaulted bearer token** injected, auditing every call.
 
 Manage clusters under **Kubernetes** (register/edit/delete needs `Kubernetes.Manage`; reaching a
@@ -25,19 +25,19 @@ per namespace, with no `kubectl` required. Every listing is audited (`k8s.list`)
 
 ## Use kubectl through the broker
 
-Point `kubectl` at Moorgate's proxy for a cluster and authenticate with a Moorgate token:
+Point `kubectl` at Blackfriars's proxy for a cluster and authenticate with a Blackfriars token:
 
     kubectl --server=https://<fleet-host>/api/v1/k8s/clusters/<clusterId>/proxy \
             --token=<fleet-access-token> \
             get pods -n <namespace>
 
-Moorgate forwards each request to the cluster's API server with the vaulted credential and records it
+Blackfriars forwards each request to the cluster's API server with the vaulted credential and records it
 (`k8s.proxy`). What the caller can do in the cluster is bounded by the credential's own RBAC on the
-cluster side, on top of Moorgate's `Kubernetes.Access` gate and any [access policies](./access-policies.md).
+cluster side, on top of Blackfriars's `Kubernetes.Access` gate and any [access policies](./access-policies.md).
 
 ## Notes
 
 - The backend reaches the API server directly, so the cluster's control plane must be reachable from
-  Moorgate's network.
+  Blackfriars's network.
 - Use a least-privilege ServiceAccount token, not a cluster-admin credential, unless brokered
   cluster-admin is genuinely intended.

@@ -17,10 +17,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/Moorgate/backend/internal/config"
-	"github.com/kforbus3/Moorgate/backend/internal/cryptoprofile"
-	"github.com/kforbus3/Moorgate/backend/internal/secretbox"
-	"github.com/kforbus3/Moorgate/backend/internal/store"
+	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
+	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
 
 // CA manages the signing key material in memory and persists encrypted keys.

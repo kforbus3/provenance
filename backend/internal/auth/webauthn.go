@@ -14,7 +14,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
 )
 
 // waUser adapts a Fleet user + its stored passkeys to the webauthn.User interface.

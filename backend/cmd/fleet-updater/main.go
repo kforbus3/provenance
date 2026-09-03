@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/release"
+	"github.com/kforbus3/blackfriars/backend/internal/release"
 )
 
 // Config is resolved from the environment (set in the compose service definition).

@@ -1,4 +1,4 @@
-module github.com/kforbus3/Moorgate/sdk
+module github.com/kforbus3/blackfriars/sdk
 
 go 1.23.0
 

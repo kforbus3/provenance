@@ -16,7 +16,7 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
-	"github.com/kforbus3/Moorgate/backend/internal/models"
+	"github.com/kforbus3/blackfriars/backend/internal/models"
 )
 
 // totpAlg is the HMAC hash for TOTP, set once at boot from the crypto profile:

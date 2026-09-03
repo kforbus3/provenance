@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/kforbus3/Moorgate/backend/internal/ueba"
+	"github.com/kforbus3/blackfriars/backend/internal/ueba"
 )
 
 // SessionsForUEBA returns recorded sessions started since `since`, newest first and

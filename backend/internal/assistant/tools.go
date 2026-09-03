@@ -1,6 +1,6 @@
 package assistant
 
-import "github.com/kforbus3/Moorgate/backend/internal/store"
+import "github.com/kforbus3/blackfriars/backend/internal/store"
 
 const systemPrompt = `You are Fleet Assistant, helping an experienced Linux system administrator
 manage a fleet of hosts. You answer questions from read-only tools, and — only when

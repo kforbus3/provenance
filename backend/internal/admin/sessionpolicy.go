@@ -9,8 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/Moorgate/backend/internal/auth"
-	"github.com/kforbus3/Moorgate/backend/internal/httpx"
+	"github.com/kforbus3/blackfriars/backend/internal/auth"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
 )
 
 // sessionPolicyKey mirrors the store's settings key for the global conditional-

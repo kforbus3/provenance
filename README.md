@@ -104,6 +104,7 @@ for every existing deployment in exchange for nothing.
 ## Architecture & docs
 
 - [docs/architecture.md](docs/architecture.md) — components, data flows, security model
+- [docs/imaging.md](docs/imaging.md) — building images, staged rollouts, and why the two halves are one program
 - [docs/deployment.md](docs/deployment.md) — deploy the whole system · [docs/internet-exposure.md](docs/internet-exposure.md) — internet-facing
 - [docs/api.md](docs/api.md) — REST API reference · [docs/database.md](docs/database.md) — schema reference
 - [docs/security-guide.md](docs/security-guide.md) · [docs/certificate-lifecycle.md](docs/certificate-lifecycle.md)
@@ -129,7 +130,7 @@ Working and verified end-to-end (see `git log` for the milestone history):
 - Host inventory + **quick-connect Terminals launcher** with **group filter** and **per-host
   pending package updates**; **enroll hosts five ways** — SSH password, SSH private key,
   **forwarded SSH agent** (key stays local), a **no-install ssh-pipe** script, or a **direct
-  "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Moorgate itself).
+  "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Blackfriars itself).
   WireGuard-routed methods install CA trust + WireGuard and verify per-user cert login
 - Internal SSH **CA + ephemeral certificates, unique per (user, host)** (in-RAM keys, 7-day,
   auto-renew, revoke via distributed KRL)
