@@ -81,7 +81,7 @@ func newBOM(hostname, osID, osVersion string) cdxBOM {
 		Version:     1,
 		Metadata: &cdxMetadata{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Tools:     []cdxTool{{Vendor: "Moorgate", Name: "fleet-vulnscan"}},
+			Tools:     []cdxTool{{Vendor: "Blackfriars", Name: "fleet-vulnscan"}},
 			Component: subject,
 		},
 	}

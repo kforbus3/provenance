@@ -566,7 +566,7 @@ func Load() (*Config, error) {
 
 	// WebAuthn: derive sensible localhost defaults from the public URL.
 	c.WebAuthnRPID = env("FLEET_WEBAUTHN_RPID", hostOnly(c.PublicURL))
-	c.WebAuthnRPName = env("FLEET_WEBAUTHN_RP_NAME", "Moorgate")
+	c.WebAuthnRPName = env("FLEET_WEBAUTHN_RP_NAME", "Blackfriars")
 	if origins := env("FLEET_WEBAUTHN_ORIGINS", ""); origins != "" {
 		c.WebAuthnOrigins = strings.Split(origins, ",")
 	} else {

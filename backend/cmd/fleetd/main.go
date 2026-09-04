@@ -1,4 +1,4 @@
-// Command fleetd is the Moorgate API server and SSH gateway.
+// Command fleetd is the Blackfriars API server and SSH gateway.
 package main
 
 import (

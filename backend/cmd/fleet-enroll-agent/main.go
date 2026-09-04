@@ -1,4 +1,4 @@
-// Command fleet-enroll-agent enrolls a managed host into Moorgate using
+// Command fleet-enroll-agent enrolls a managed host into Blackfriars using
 // the SSH agent on the OPERATOR'S machine. The agent's private key never leaves
 // this machine: the backend performs the SSH handshake and asks this bridge to
 // sign challenges, which it forwards to the local agent ($SSH_AUTH_SOCK).

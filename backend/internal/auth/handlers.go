@@ -154,7 +154,7 @@ func (h *Handler) mfaSetupBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "account unavailable")
 		return
 	}
-	secret, url, err := GenerateTOTP("Moorgate", u.Username)
+	secret, url, err := GenerateTOTP("Blackfriars", u.Username)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate secret")
 		return
@@ -456,7 +456,7 @@ func (h *Handler) mfaList(w http.ResponseWriter, r *http.Request) {
 // mfaEnroll generates a new TOTP secret and stores it as pending (unconfirmed).
 func (h *Handler) mfaEnroll(w http.ResponseWriter, r *http.Request) {
 	p := MustPrincipal(r)
-	secret, url, err := GenerateTOTP("Moorgate", p.Username)
+	secret, url, err := GenerateTOTP("Blackfriars", p.Username)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate secret")
 		return

@@ -1,4 +1,4 @@
-// Command fleetctl is the offline administrative CLI for Moorgate. It
+// Command fleetctl is the offline administrative CLI for Blackfriars. It
 // connects directly to the database (using the same FLEET_DATABASE_URL) and is
 // the documented out-of-band recovery path — e.g. restoring access when every
 // administrator is locked out, resetting MFA, or rotating the CA.
@@ -42,7 +42,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `fleetctl — Moorgate offline admin CLI
+	fmt.Fprint(os.Stderr, `fleetctl — Blackfriars offline admin CLI
 
 Usage:
   fleetctl create-admin <username> <password> [email]   Create a Super Administrator (recovery)
@@ -262,7 +262,7 @@ func runKMS(ctx context.Context, cfg *config.Config, args []string) error {
 
 	switch sub {
 	case "status":
-		fmt.Println("Moorgate — external KMS status")
+		fmt.Println("Blackfriars — external KMS status")
 		fmt.Println("====================================")
 		fmt.Printf("  Provider              : %s\n", cfg.KMSProvider)
 		fmt.Printf("  Key ID                : %s\n", orNone(cfg.KMSKeyID))
@@ -329,7 +329,7 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 		return "NOT-FIPS"
 	}
 
-	fmt.Println("Moorgate — FIPS readiness report")
+	fmt.Println("Blackfriars — FIPS readiness report")
 	fmt.Println("======================================")
 	fmt.Printf("  Config FLEET_FIPS_MODE : %v\n", cfg.FIPSMode)
 	fmt.Printf("  Config FLEET_OVERLAY   : %s   [%s]\n", cfg.Overlay, ok(cfg.Overlay != "wireguard"))
