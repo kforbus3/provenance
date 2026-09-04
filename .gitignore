@@ -40,5 +40,16 @@ __pycache__/
 release.key
 *.release.key
 
+# The builder's output directory: images, update bundles, SBOMs, the netboot
+# imager, job logs — and output/rauc-keys, which holds the UPDATE SIGNING KEY.
+#
+# That last one is why this is not merely about size. A `git add -A` after a
+# build stages a 600 MB image and a 3 KB private key together, and only the
+# image trips GitHub's 100 MB limit. Commit at a moment when just the key has
+# changed and it goes up silently — publishing the trust anchor for every
+# machine ever imaged from this checkout. Back it up with
+# scripts/imaging/imaging-keys-backup.sh; never commit it.
+output/
+
 # Local Claude Code session artifacts (worktrees, transcripts)
 .claude/
