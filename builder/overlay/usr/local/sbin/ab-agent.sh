@@ -40,6 +40,7 @@ AGENT_VERSION=1
 
 # Defaults, overridden by $CONF.
 SERVER=""                 # base URL, e.g. https://flipside.example.com
+FALLBACK=""               # last address known to work; see save_conf
 INTERVAL=300              # advisory; the systemd timer is what actually paces us
 TOKEN=""                  # sent as X-Flipside-Agent-Token when set
 REBOOT=auto               # auto | manual -- whether to reboot after an install
@@ -76,11 +77,31 @@ save_conf() {
     cat > "$CONF" <<EOF
 # Flipside agent configuration. Written by ab-agent --set-server; safe to edit.
 SERVER="$SERVER"
+# The last address that was known to work, kept when the server moves us to a
+# new one. A machine that has been re-pointed and then cannot reach the new
+# address falls back to this rather than going silent for good.
+FALLBACK="$FALLBACK"
 INTERVAL=$INTERVAL
 TOKEN="$TOKEN"
 REBOOT=$REBOOT
 ENABLED=$ENABLED
 EOF
+}
+
+# probe_server: can this machine actually reach that control plane?
+#
+# A real heartbeat rather than a TCP connect or a HEAD: reachable is not the
+# question, "does a check-in to this address get accepted" is. A URL that
+# resolves, listens, and then 401s every agent is exactly as fatal as one that
+# does not resolve at all, and only a real check-in tells the two apart.
+probe_server() {
+    local base="${1%/}" id="$2"
+    local -a a=()
+    [ -n "$TOKEN" ] && a=(-H "X-Flipside-Agent-Token: $TOKEN")
+    curl -fsS --max-time 10 ${a[@]+"${a[@]}"} \
+        --data-urlencode "id=$id" \
+        --data-urlencode "version=$(running_version)" \
+        "$base/api/fleet/heartbeat" >/dev/null 2>&1
 }
 
 # ------------------------------------------------------------ what we report
@@ -200,6 +221,19 @@ beat() {
         # server has usually just moved networks, which is the normal life of a
         # provisioned machine and not a fault. The server notices the silence.
         log "could not reach $url"
+        # Unless we were moved here and the move turned out to be wrong. The
+        # probe in the adopt path makes that unlikely, but not impossible: an
+        # address can work at the moment it is probed and stop working an hour
+        # later, and by then the machine has already discarded the one that
+        # worked. Falling back is the difference between a machine that recovers
+        # on its own and one that needs a person in the room with it.
+        if [ -n "$FALLBACK" ] && [ "$FALLBACK" != "${SERVER%/}" ] && probe_server "$FALLBACK" "$id"; then
+            log "falling back to $FALLBACK, which still answers"
+            SERVER="$FALLBACK"; FALLBACK=""; save_conf
+            # Not retried here: the timer comes round again shortly, and a
+            # recursive retry inside a failure path is how one bad address turns
+            # into a loop.
+        fi
         return 1
     }
 
@@ -224,9 +258,32 @@ EOF
     # The server can move the fleet to an address that works from out here. It
     # is the only way to fix a fleet that was imaged pointing at a provisioning
     # address it can no longer reach, short of visiting every machine.
+    #
+    # But it is only ever adopted after being PROVEN to work, because the same
+    # mechanism is otherwise a way to lose the entire fleet at once. This
+    # machine is being told to throw away the one address it is known to be able
+    # to reach, in favour of one nobody has tried, by a server that cannot see
+    # this machine's network. If the new address is wrong the machine goes
+    # silent -- and it cannot be told anything ever again, because being told
+    # requires the address it just discarded. Every machine in the fleet does
+    # this on the same beat, so one wrong CONTROL_URL takes all of them, and the
+    # recovery is a person visiting each one.
+    #
+    # It cost about a minute to find that out by running it. So: probe first,
+    # keep what works, and say so either way.
     if [ -n "$advertised" ] && [ "$advertised" != "${SERVER%/}" ]; then
-        log "server moved us to $advertised"
-        SERVER="$advertised"; save_conf
+        if probe_server "$advertised" "$id"; then
+            log "server moved us to $advertised (probed; keeping ${SERVER%/} as fallback)"
+            FALLBACK="${SERVER%/}"
+            SERVER="$advertised"
+            save_conf
+        else
+            # Deliberately loud. This is a server misconfiguration, it affects
+            # every machine, and the only place it is visible is here.
+            log "REFUSING to move to $advertised: cannot reach it from this machine."
+            log "  staying on ${SERVER%/}. Check CONTROL_URL on the server -- it must be"
+            log "  an address the FLEET can reach, not one the web UI is reached on."
+        fi
     fi
     if [ -n "$interval" ] && [ "$interval" != "$INTERVAL" ]; then
         INTERVAL="$interval"; save_conf
