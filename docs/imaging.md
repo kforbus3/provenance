@@ -206,6 +206,23 @@ A non-interactive shell defers signals until its foreground command returns, so
 signalling the shell alone would leave the builder running while the UI claimed
 the build was cancelled.
 
+## SBOMs, and what they cannot tell you
+
+Every image and every bundle gets both an **SPDX 2.3** and a **CycloneDX 1.5**
+SBOM, written beside the artefact, plus a `packages.tsv`. Verified against a real
+build: 201 packages, every one carrying a version, and every CycloneDX component
+carrying a **purl** — which is the field a CVE scanner matches on. These do the
+vulnerability job properly.
+
+They do **not** carry licence data. `make-sbom.sh` writes `NOASSERTION` for
+`licenseConcluded`, `licenseDeclared` and `copyrightText` on every package, and
+does not attempt to read them — Debian keeps licences in per-package copyright
+files that are only semi-machine-readable, and guessing would be worse than
+declining. So these SBOMs answer "what CVEs affect this image" and cannot answer
+"what licences am I shipping", which is the other half of why an SBOM gets asked
+for. Worth knowing before feeding one to a compliance tool and getting 201
+unknowns back.
+
 ## The imaging run itself
 
 Two more endpoints are machine-facing, and unauthenticated for a stronger reason
