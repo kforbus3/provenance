@@ -170,7 +170,7 @@ func (h *handler) playerRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := h.d.Store.GetSSHSession(r.Context(), id)
-	title := "Moorgate session"
+	title := "Blackfriars session"
 	if sess != nil {
 		title = sess.Username + "@" + sess.Hostname + " · " + sess.StartedAt.Format("2006-01-02 15:04:05")
 	}

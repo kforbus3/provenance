@@ -1,5 +1,5 @@
 // Package hosts provides host inventory CRUD and serves as the canonical example
-// of a Moorgate HTTP module: construct from *app.Deps, gate every route
+// of a Blackfriars HTTP module: construct from *app.Deps, gate every route
 // with auth + RBAC middleware, and audit state changes.
 package hosts
 

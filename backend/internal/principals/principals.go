@@ -1,4 +1,4 @@
-// Package principals defines the SSH certificate principal names Moorgate
+// Package principals defines the SSH certificate principal names Blackfriars
 // uses to authorize a certificate to a managed-host account, and the helpers
 // that make those principals host-scoped.
 //

@@ -1,5 +1,5 @@
 // Package admin provides user, role, group, and system-settings management. It
-// follows the canonical Moorgate HTTP module shape: construct from
+// follows the canonical Blackfriars HTTP module shape: construct from
 // *app.Deps, gate every route with auth + RBAC middleware, and audit state
 // changes through the tamper-evident audit chain.
 package admin

@@ -1210,7 +1210,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 // setting, falling back to the default. Served publicly so the login and
 // bootstrap screens (pre-auth) can render it.
 func (s *Server) appName(r *http.Request) string {
-	const def = "Moorgate"
+	const def = "Blackfriars"
 	raw, err := s.Store.GetSetting(r.Context(), "branding")
 	if err != nil {
 		return def

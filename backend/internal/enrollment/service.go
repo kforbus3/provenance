@@ -1146,7 +1146,7 @@ LOGIN='%s'
 NOSUDO="${LOGIN}-login"
 cat > /usr/local/sbin/fleet-unenroll.sh <<'FLEETEOF'
 #!/bin/sh
-# Written by Moorgate when the host was removed from its inventory.
+# Written by Blackfriars when the host was removed from its inventory.
 # Removes Fleet's accounts and SSH trust, then deletes itself.
 set +e
 LOGIN="$1"
