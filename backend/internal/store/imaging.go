@@ -48,10 +48,10 @@ func scanMachine(row pgx.Row) (*models.ImagingMachine, error) {
 // somebody ran an update.
 func (s *Store) ReportMachine(ctx context.Context, m *models.ImagingMachine) (*models.ImagingMachine, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO imaging_machines (id, tenant_id, hostname, address, slot, version,
+		INSERT INTO imaging_machines (id, hostname, address, slot, version,
 			image, arch, agent_version, boot_id, health, update_state, update_error,
 			update_rollout, reported_by, report_source, imaged_at, booted_at, last_seen)
-		VALUES ($1, `+s.ownerArgSQL()+`, $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
 		ON CONFLICT (id) DO UPDATE SET
 			hostname      = COALESCE(NULLIF(EXCLUDED.hostname, ''),      imaging_machines.hostname),
 			address       = COALESCE(NULLIF(EXCLUDED.address, ''),       imaging_machines.address),
@@ -96,13 +96,6 @@ func (s *Store) ReportMachine(ctx context.Context, m *models.ImagingMachine) (*m
 		m.AgentVersion, m.BootID, m.Health, m.UpdateState, m.UpdateError,
 		m.UpdateRollout, m.ReportedBy, m.ReportSource, m.ImagedAt, m.BootedAt)
 	return scanMachine(row)
-}
-
-// ownerArgSQL is the tenant the row belongs to, as SQL rather than a parameter,
-// so the upsert above stays one statement.
-func (s *Store) ownerArgSQL() string {
-	return `COALESCE(NULLIF(current_setting('app.tenant_id', true), '')::uuid,
-	         (SELECT id FROM tenants ORDER BY created_at LIMIT 1))`
 }
 
 func (s *Store) ListMachines(ctx context.Context) ([]models.ImagingMachine, error) {
@@ -169,8 +162,14 @@ func (s *Store) RecordImagingEvent(ctx context.Context, machineID, event string,
 	if detail == nil {
 		detail = map[string]any{}
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO imaging_events (tenant_id, machine_id, event, detail)
-		VALUES (`+s.ownerArgSQL()+`, $1, $2, $3)`, machineID, event, detail)
+	// tenant_id is omitted throughout this file: the column's DEFAULT is
+	// fleet_current_tenant(), which resolves the request's tenant, the provider
+	// tenant under bypass, and the background contexts a machine's heartbeat
+	// arrives in. Supplying it here meant a second implementation of that rule,
+	// and it was wrong -- it cast 'bypass' straight to uuid, so every write
+	// failed on the single-tenant configuration nearly everyone runs.
+	_, _ = s.pool.Exec(ctx, `INSERT INTO imaging_events (machine_id, event, detail)
+		VALUES ($1, $2, $3)`, machineID, event, detail)
 }
 
 // --- rollouts ----------------------------------------------------------------
@@ -194,14 +193,29 @@ func scanRollout(row pgx.Row) (*models.ImagingRollout, error) {
 }
 
 func (s *Store) CreateRollout(ctx context.Context, r *models.ImagingRollout, by *uuid.UUID) (*models.ImagingRollout, error) {
+	// A nil Go slice is SQL NULL, and these columns are NOT NULL. Their DEFAULT
+	// '{}' does not save us: a default applies only when the column is left out
+	// of the INSERT, and this statement names it and passes the value. So the
+	// most ordinary rollout there is -- target the whole fleet, name no groups --
+	// failed on a not-null violation.
+	//
+	// Coerced here rather than in the handler because it is the SQL that has the
+	// requirement, and a second caller would otherwise have to know about it.
+	groups, hosts := r.TargetGroups, r.TargetHosts
+	if groups == nil {
+		groups = []uuid.UUID{}
+	}
+	if hosts == nil {
+		hosts = []uuid.UUID{}
+	}
 	return scanRollout(s.pool.QueryRow(ctx, `
-		INSERT INTO imaging_rollouts (tenant_id, bundle, version, bundle_url, description,
+		INSERT INTO imaging_rollouts (bundle, version, bundle_url, description,
 			target_groups, target_hosts, target_all, canary, batch_size, soak_seconds,
 			max_failures, window_start, window_end, window_days, created_by, created_by_name)
-		VALUES (`+s.ownerArgSQL()+`, $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		RETURNING `+rolloutCols,
 		r.Bundle, r.Version, r.BundleURL, r.Description,
-		r.TargetGroups, r.TargetHosts, r.TargetAll,
+		groups, hosts, r.TargetAll,
 		r.Canary, r.BatchSize, r.SoakSeconds, r.MaxFailures,
 		r.WindowStart, r.WindowEnd, r.WindowDays, by, r.CreatedByName))
 }

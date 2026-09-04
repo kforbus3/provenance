@@ -155,6 +155,19 @@ services:
       # browser uses. See docs/imaging.md.
       FLEET_ARTIFACT_DIR: ${FLEET_ARTIFACT_DIR:-/output}
       FLEET_CONTROL_URL: ${FLEET_CONTROL_URL:-}
+      # How often a machine's agent checks in. Sent in every reply, so changing
+      # it re-paces the whole fleet without touching a machine.
+      FLEET_AGENT_INTERVAL: ${FLEET_AGENT_INTERVAL:-300}
+      # Optional shared secret an agent must present to check in. Off by
+      # default: the first heartbeat arrives from a machine that has just been
+      # imaged and holds no credential. Set it when the control plane is
+      # reachable from a network that is not the provisioning one -- and set the
+      # SAME value in each machine's /etc/flipside/agent.conf, or they are
+      # rejected and simply stop reporting.
+      FLEET_AGENT_TOKEN: ${FLEET_AGENT_TOKEN:-}
+      # Whether machines a live rollout is waiting on are asked to check in now
+      # rather than on their own timer. Off, rollouts still work, only slower.
+      FLEET_IMAGING_NUDGE: ${FLEET_IMAGING_NUDGE:-true}
       FLEET_MAX_UPLOAD_BYTES: ${FLEET_MAX_UPLOAD_BYTES:-5368709120}
       # WireGuard overlay — managed-host enrollment uses these. Empty falls back
       # to the binary's defaults (see .env.example). FLEET_WG_JUMP_ENDPOINT MUST
@@ -213,6 +226,16 @@ services:
       - backups:/var/lib/fleet/backups
       - rdp-drive:/var/lib/fleet/rdp-drive
       - updates:/var/lib/fleet/updates
+      # The artefact library: built images and signed update bundles.
+      #
+      # A host bind, not a named volume, and the SAME directory the builder
+      # runner writes to. The runner starts sibling containers through the
+      # Docker socket, so their mounts resolve against the host filesystem --
+      # it necessarily writes to <project>/output there. A named volume here
+      # would give the backend a private empty directory and the two halves
+      # would never see each other's artefacts: every build would appear to
+      # succeed and the library would stay empty.
+      - ../../output:/output
     depends_on:
       postgres:
         condition: service_healthy
