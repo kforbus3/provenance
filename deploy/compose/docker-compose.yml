@@ -331,6 +331,9 @@ services:
       # bind-mounted into a build. Empty is discovered from the runner's own
       # /project mount, so the two cannot disagree.
       HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
+      # Whose /project mount to read the host path from. Must match the builder
+      # runner's container_name.
+      PROJECT_CONTAINER: blackfriars-builder-runner
       LOG_LEVEL: ${PROXY_LOG_LEVEL:-INFO}
     volumes:
       # Not :ro. A read-only bind of a unix socket restricts nothing about what
@@ -362,6 +365,10 @@ services:
       context: ../builder-runner
       dockerfile: Dockerfile
     image: blackfriars-builder-runner
+    # A fixed name so dockerproxy can inspect this container's /project mount and
+    # learn where the project lives on the host. Compose's generated name carries
+    # the project prefix and a replica index; the proxy needs one stable string.
+    container_name: blackfriars-builder-runner
     restart: unless-stopped
     environment:
       # Must match the backend's FLEET_BUILDER_RUNNER_TOKEN.

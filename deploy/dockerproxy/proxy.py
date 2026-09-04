@@ -49,7 +49,15 @@ LISTEN = os.environ.get("PROXY_SOCKET", "/shared/docker.sock")
 # needs.
 PROJECT_DIR = os.environ.get("HOST_PROJECT_DIR", "")
 # Which container to ask when HOST_PROJECT_DIR is not set (see project_root).
-WEBUI_CONTAINER = os.environ.get("WEBUI_CONTAINER", "debian-ab-webui")
+# The container whose /project mount tells us where the project lives on the
+# host. It is the builder runner here; it was the web UI in the project this
+# proxy came from, and the old name is still accepted so an existing deployment
+# does not break on the rename. Getting this wrong is not subtle but it is
+# misleading: discovery fails, every bind is refused, and every build dies with
+# a message about HOST_PROJECT_DIR rather than about a container name.
+PROJECT_CONTAINER = os.environ.get(
+    "PROJECT_CONTAINER",
+    os.environ.get("WEBUI_CONTAINER", "blackfriars-builder-runner"))
 # Image names a container may be created from. The builder and imager tags are
 # built locally by the UI itself; the compose stack's images are built from the
 # repo too. A container created from anything else is not a build.
@@ -200,6 +208,30 @@ def check_create(body: bytes) -> None:
 _project_root_cache: list[str] = []
 
 
+def _dechunk(body: bytes) -> bytes:
+    """Reassemble an HTTP/1.1 chunked body.
+
+    Only what this one call needs: sizes, no chunk extensions, no trailers.
+    A malformed stream returns what was decoded so far, which then fails to
+    parse -- the same safe direction as before, but now only for input that is
+    actually malformed rather than for every reply.
+    """
+    out = bytearray()
+    while True:
+        line, sep, rest = body.partition(b"\r\n")
+        if not sep:
+            break
+        try:
+            size = int(line.split(b";")[0].strip(), 16)
+        except ValueError:
+            break
+        if size == 0:
+            break
+        out += rest[:size]
+        body = rest[size:].lstrip(b"\r\n")
+    return bytes(out)
+
+
 def project_root() -> str:
     """The host path the project lives at, discovered rather than configured.
 
@@ -222,7 +254,7 @@ def project_root() -> str:
         sock.settimeout(5)
         sock.connect(UPSTREAM)
         with sock:
-            sock.sendall(f"GET /containers/{WEBUI_CONTAINER}/json HTTP/1.1\r\n"
+            sock.sendall(f"GET /containers/{PROJECT_CONTAINER}/json HTTP/1.1\r\n"
                          "Host: docker\r\nConnection: close\r\n\r\n".encode())
             raw = b""
             while True:
@@ -230,16 +262,25 @@ def project_root() -> str:
                 if not chunk:
                     break
                 raw += chunk
-        body = raw.partition(b"\r\n\r\n")[2]
-        # Connection: close, so the daemon answers without chunking; if it did
-        # chunk, json.loads fails and we fall through to refusing binds, which
-        # is the safe direction.
+        head, _, body = raw.partition(b"\r\n\r\n")
+        # The daemon chunks this reply even though we asked for Connection:
+        # close, so the body has to be de-chunked before it is JSON.
+        #
+        # This used to assume it would not, on the reasoning that a failure to
+        # parse falls through to refusing binds and is therefore "the safe
+        # direction". It is safe and it is also useless: Docker 29 chunks every
+        # time, so discovery never succeeded, every bind was refused, and every
+        # image build died pointing at HOST_PROJECT_DIR -- a message about
+        # configuration, for a parsing bug. Failing safe still has to fail
+        # visibly, or it is just failing.
+        if b"transfer-encoding: chunked" in head.lower():
+            body = _dechunk(body)
         spec = json.loads(body)
         for mount in spec.get("Mounts") or []:
             if mount.get("Destination") == "/project" and mount.get("Source"):
                 _project_root_cache.append(str(mount["Source"]))
                 log.info("discovered project root %s from %s",
-                         _project_root_cache[0], WEBUI_CONTAINER)
+                         _project_root_cache[0], PROJECT_CONTAINER)
                 return _project_root_cache[0]
     except (OSError, ValueError, KeyError) as exc:
         log.debug("could not discover the project root: %s", exc)
@@ -588,7 +629,7 @@ def main() -> int:
     if not PROJECT_DIR:
         log.info("HOST_PROJECT_DIR is unset; the project root will be read from "
                  "%s's own mounts on the first bind that needs checking.",
-                 WEBUI_CONTAINER)
+                 PROJECT_CONTAINER)
     try:
         os.unlink(LISTEN)
     except FileNotFoundError:
@@ -602,7 +643,7 @@ def main() -> int:
     log.info("images allowed: %s", IMAGE_ALLOW.pattern)
     log.info("privileged allowed for: %s", PRIVILEGED_ALLOW.pattern)
     log.info("host binds confined to: %s",
-             PROJECT_DIR or f"(discovered from {WEBUI_CONTAINER} on first use)")
+             PROJECT_DIR or f"(discovered from {PROJECT_CONTAINER} on first use)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
