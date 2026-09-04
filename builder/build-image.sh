@@ -248,7 +248,19 @@ die()  { echo -e "\033[0;31m[build] ERROR:\033[0m $*" >&2; exit 1; }
 # on a terminal they read as ordinary step markers. Emitted in addition to the
 # human log so neither consumer depends on parsing prose.
 BUILD_STEP=0
-BUILD_STEPS=14
+# The number of step() calls this run will actually make.
+#
+# Hardcoded at 14 until a real build reported "[progress] 15/14" -- steps had
+# been added over time and the constant was never moved, so the bar overran and
+# the label read as if the build had lost count. Derived now, because a hand-kept
+# total is a thing that goes stale silently: the only symptom is a progress bar,
+# which nobody treats as a bug worth chasing.
+#
+# 15 always run. The two GRUB branches are either/or, so they count once. The
+# other two depend on options that are known before anything is built.
+BUILD_STEPS=15
+[ -d "$OVERLAY_D" ] && [ -n "$(ls -A "$OVERLAY_D" 2>/dev/null)" ] && BUILD_STEPS=$((BUILD_STEPS + 1))
+[ -n "$RUN_SCRIPT" ] && BUILD_STEPS=$((BUILD_STEPS + 1))
 step() {
     BUILD_STEP=$((BUILD_STEP + 1))
     printf '[progress] %d/%d %s\n' "$BUILD_STEP" "$BUILD_STEPS" "$1"
