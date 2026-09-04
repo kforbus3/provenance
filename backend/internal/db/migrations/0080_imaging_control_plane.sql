@@ -61,9 +61,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_imaging_machines_host_unique
 
 -- A staged rollout of one bundle to a set of machines.
 --
--- Targets are Moorgate host groups, not a grouping of its own. That is the
+-- Targets are Blackfriars host groups, not a grouping of its own. That is the
 -- single largest simplification combining the two products buys: there was a
--- set of Flipside groups and a set of Moorgate groups naming the same machines,
+-- set of Flipside groups and a set of Blackfriars groups naming the same machines,
 -- and keeping both in step was work nobody would have done.
 CREATE TABLE IF NOT EXISTS imaging_rollouts (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -140,22 +140,48 @@ CREATE TABLE IF NOT EXISTS imaging_events (
 
 CREATE INDEX IF NOT EXISTS idx_imaging_events_machine ON imaging_events(machine_id, created_at DESC);
 
--- Row-level security, as every tenant-scoped table here has.
+-- Row-level security, through the helpers 0051 defines rather than by comparing
+-- the GUC directly.
+--
+-- Comparing it directly does not work, and fails in the configuration almost
+-- everyone runs. With multi-tenancy off the app sets app.tenant_id='bypass', and
+-- `'bypass'::uuid` raises invalid input syntax -- so a direct cast turns every
+-- read and every write on these tables into an error, on the default
+-- deployment. fleet_rls_visible() handles bypass, an unset value (deny, so a
+-- request that forgot to scope fails closed) and a real tenant id.
+--
+-- fleet_current_tenant() is the matching half for inserts: it resolves the
+-- tenant a new row belongs to, including for the background and bypass contexts
+-- a machine's heartbeat arrives in. Set as the column DEFAULT so nothing that
+-- writes here has to know about tenancy at all.
+ALTER TABLE imaging_machines ALTER COLUMN tenant_id SET DEFAULT fleet_current_tenant();
+ALTER TABLE imaging_rollouts ALTER COLUMN tenant_id SET DEFAULT fleet_current_tenant();
+ALTER TABLE imaging_events   ALTER COLUMN tenant_id SET DEFAULT fleet_current_tenant();
+
 ALTER TABLE imaging_machines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE imaging_rollouts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE imaging_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE imaging_events   ENABLE ROW LEVEL SECURITY;
+-- FORCE, as every other tenant-scoped table has: without it the table owner --
+-- which is the application role -- is exempt from its own policy, and the
+-- isolation is decorative.
+ALTER TABLE imaging_machines FORCE ROW LEVEL SECURITY;
+ALTER TABLE imaging_rollouts FORCE ROW LEVEL SECURITY;
+ALTER TABLE imaging_events   FORCE ROW LEVEL SECURITY;
 
+-- WITH CHECK as well as USING: USING filters what is read, WITH CHECK
+-- constrains what is written. A policy with only USING lets a row be written
+-- into another tenant even though it could never be read back.
 DROP POLICY IF EXISTS imaging_machines_tenant ON imaging_machines;
 CREATE POLICY imaging_machines_tenant ON imaging_machines
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+    USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id));
 
 DROP POLICY IF EXISTS imaging_rollouts_tenant ON imaging_rollouts;
 CREATE POLICY imaging_rollouts_tenant ON imaging_rollouts
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+    USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id));
 
 DROP POLICY IF EXISTS imaging_events_tenant ON imaging_events;
 CREATE POLICY imaging_events_tenant ON imaging_events
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+    USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id));
 
 -- imaging_rollout_machines has no tenant column of its own: it is reachable
 -- only through a rollout, which is scoped, and duplicating the column would be
