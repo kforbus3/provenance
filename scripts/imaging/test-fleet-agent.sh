@@ -119,24 +119,79 @@ printf '{"checkin_url":"%s/api/imaging/checkin","id":"aa:bb:cc:dd:ee:ff"}\n' "$B
 check "an older marker still reaches the server" \
       "$(wc -l < "$WORK/srv/requests" | tr -d ' ')" "2"
 
-echo "== the server can move the whole fleet to a different address =="
-# The way out of the imaging-address trap: the machines that can still reach the
-# old address are told the new one, and remember it.
-printf 'ok=true\naction=none\ncontrol_url=https://flipside.example.com\n' > "$WORK/srv/reply"
+echo "== the server can move the whole fleet, but only to an address that works =="
+#
+# This is the most dangerous thing the agent does, and it used to be done on
+# trust. The machine is told to discard the one address it is known to be able
+# to reach, in favour of one nobody has tried, by a server that cannot see this
+# machine's network. Get it wrong and the machine goes silent for good: it
+# cannot be corrected, because correcting it requires the address it just threw
+# away. Every machine does it on the same beat, so one wrong CONTROL_URL takes
+# the whole fleet and the recovery is a person visiting each one.
+#
+# This was not hypothetical. Running the real agent against a real server with a
+# CONTROL_URL that did not resolve stranded the machine in one beat.
+
+# A second live server, standing in for an address that genuinely works.
+python3 - "$WORK" <<'PY2' &
+import http.server, sys
+work = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("content-length") or 0))
+        with open(f"{work}/srv2/requests", "a") as f:
+            f.write(self.path + "\n")
+        body = b"ok=true\naction=none\n"
+        self.send_response(200)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(f"{work}/srv2/port", "w").write(str(srv.server_address[1]))
+srv.serve_forever()
+PY2
+SERVER2_PID=$!
+mkdir -p "$WORK/srv2"; : > "$WORK/srv2/requests"
+for _ in $(seq 1 50); do [ -s "$WORK/srv2/port" ] && break; sleep 0.1; done
+[ -s "$WORK/srv2/port" ] || { echo "the second stub never came up" >&2; exit 1; }
+BASE2="http://127.0.0.1:$(cat "$WORK/srv2/port")"
+
+# 1. An address that does NOT answer must be refused, and the machine must stay
+#    where it is. This is the case that used to brick the fleet.
+printf 'ok=true\naction=none\ncontrol_url=http://127.0.0.1:1\n' > "$WORK/srv/reply"
 "$AGENT" >/dev/null 2>&1
-check "the agent adopted the advertised address" \
-      "$(grep -c 'SERVER="https://flipside.example.com"' "$AB_AGENT_CONF")" "1"
-# ...and having adopted it, it must not keep talking to the old one.
+check "an unreachable address is NOT adopted" \
+      "$(grep -c 'SERVER="http://127.0.0.1:1"' "$AB_AGENT_CONF")" "0"
 before="$(wc -l < "$WORK/srv/requests" | tr -d ' ')"
 "$AGENT" >/dev/null 2>&1
-check "and stopped reporting to the old one" \
+check "and the machine keeps reporting to the one that works" \
+      "$(wc -l < "$WORK/srv/requests" | tr -d ' ')" "$((before + 1))"
+
+# 2. An address that DOES answer is adopted, so the escape from the
+#    imaging-address trap still works -- that is the whole point of the feature.
+printf 'ok=true\naction=none\ncontrol_url=%s\n' "$BASE2" > "$WORK/srv/reply"
+"$AGENT" >/dev/null 2>&1
+check "a reachable address IS adopted" \
+      "$(grep -c "SERVER=\"$BASE2\"" "$AB_AGENT_CONF")" "1"
+check "and the old one is kept as a fallback" \
+      "$(grep -c "FALLBACK=\"$BASE\"" "$AB_AGENT_CONF")" "1"
+before="$(wc -l < "$WORK/srv/requests" | tr -d ' ')"
+"$AGENT" >/dev/null 2>&1
+check "and it stopped reporting to the old one" \
       "$(wc -l < "$WORK/srv/requests" | tr -d ' ')" "$before"
 
+# 3. If the new address later stops answering, the fallback brings the machine
+#    back on its own rather than leaving it silent until somebody visits it.
+kill "$SERVER2_PID" 2>/dev/null; wait "$SERVER2_PID" 2>/dev/null || true
+"$AGENT" >/dev/null 2>&1
+check "a machine whose new address died falls back to the old one" \
+      "$(grep -c "SERVER=\"$BASE\"" "$AB_AGENT_CONF")" "1"
+
 echo "== --set-server is the manual way back =="
-# Stop advertising the new address first, or the agent correctly moves straight
-# back to it and the rest of this file talks to a server that does not exist.
 printf 'ok=true\naction=none\n' > "$WORK/srv/reply"
 "$AGENT" --set-server "$BASE" >/dev/null 2>&1
+before="$(wc -l < "$WORK/srv/requests" | tr -d ' ')"
 "$AGENT" >/dev/null 2>&1
 check "a hand-set server takes effect" \
       "$(wc -l < "$WORK/srv/requests" | tr -d ' ')" "$((before + 1))"
