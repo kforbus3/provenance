@@ -223,19 +223,28 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not load findings")
 		return
 	}
-	classifyRemediation(r.Context(), h.d.Store, scan.HostID, findings)
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"scan": scan, "findings": findings})
+	// Both annotations come from the host's inventory, so it is read once. The
+	// running kernel is what makes kernel findings readable: grype attributes them to
+	// whichever userspace helper shares the kernel's source package (see
+	// models.IsKernelSourceFinding), matched at THAT package's version — which is not
+	// necessarily the kernel the host booted.
+	kernel := annotateFindings(r.Context(), h.d.Store, scan.HostID, findings)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"scan": scan, "findings": findings, "kernelRelease": kernel,
+	})
 }
 
-// classifyRemediation annotates each finding with how to fix it on the host —
-// distinguishing an orphaned/obsolete package (remove it) from one an update fixes —
-// by cross-referencing the host's obsolete-package and pending-update inventory.
+// annotateFindings classifies HOW to fix each finding on the host — distinguishing
+// an orphaned/obsolete package (remove it) from one an update fixes — by
+// cross-referencing the host's obsolete-package and pending-update inventory, and
+// returns the host's running kernel release.
+//
 // Best-effort: if the host or its inventory can't be loaded, findings are left
-// unclassified rather than failing the request.
-func classifyRemediation(ctx context.Context, st *store.Store, hostID uuid.UUID, findings []models.VulnFinding) {
+// unclassified and the kernel release is empty rather than failing the request.
+func annotateFindings(ctx context.Context, st *store.Store, hostID uuid.UUID, findings []models.VulnFinding) string {
 	host, err := st.GetHost(ctx, hostID)
 	if err != nil || host.Inventory == nil {
-		return
+		return ""
 	}
 	obsolete, pending := map[string]bool{}, map[string]bool{}
 	for _, p := range host.Inventory.ObsoletePackages {
@@ -248,6 +257,7 @@ func classifyRemediation(ctx context.Context, st *store.Store, hostID uuid.UUID,
 	for i := range findings {
 		findings[i].Remediation = models.ClassifyRemediation(findings[i], obsolete, pending, updatesKnown)
 	}
+	return host.Inventory.KernelVersion
 }
 
 func (h *handler) dbStatus(w http.ResponseWriter, r *http.Request) {

@@ -77,6 +77,50 @@ in `.env.example`.
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
 See [deployment.md](./deployment.md).
 
+### The Vulnerabilities page leads with what can actually be fixed
+
+Ported from Moorgate v2.1.0, which shipped it separately; it belongs here too and
+Blackfriars has not had a release of its own to carry it.
+
+The roll-up was answering the wrong question. A fully-patched fleet rendered as a
+wall of red — one host showed **1,646 CVEs, 86 critical, 461 high** — while the
+only number that meant anything, **Fixable: 0**, sat in a small chip six columns
+to the right. Nothing was miscounted: on a patched Debian host roughly 60% of CVEs
+are `not-fixed` (acknowledged upstream, no patch shipped) and 40% are `wont-fix`
+(assessed and deliberately not fixed), and severity comes from **NVD**, not from
+the distribution — so "Critical, won't-fix" is normal. The page had no way to say
+so, and the figures it made prominent were the ones that never change.
+
+- **The roll-up splits into "Actionable now" and "Exposure (no fix available)."**
+  Scans record their severity breakdown scoped to the **fixable** subset, so the
+  table leads with fixable count, fixable critical/high and the worst *fixable*
+  CVSS; raw critical/high move right and render muted. A headline banner states
+  the fleet's position before any row is read.
+- **"Max CVSS" is replaced by "Worst fixable."** The old column read 10.0 on
+  essentially every Linux host — the worst NVD score of any CVE touching any
+  installed package — so it sorted nothing and said nothing.
+- **Kernel CVEs are attributed to the kernel.** Distribution trackers key on the
+  **source** package, so every binary built from a source inherits that source's
+  whole CVE list. Debian builds the kernel's userspace helpers — `cpupower`,
+  `linux-headers-*`, `linux-kbuild-*`, `linux-libc-dev` — from the same `linux`
+  source its tracker files kernel CVEs under, so the entire kernel CVE list was
+  matched against a CPU-frequency utility: 227 of one host's 547 critical+high
+  CVEs. The installed `linux-image-*` packages matched nothing at all, because
+  Debian's signed images build from `linux-signed-amd64`, which the tracker does
+  not key on. Findings now carry their source package; the drill-down groups on
+  it by default, labels these findings `kernel`, and shows the host's running
+  kernel beside the version grype actually matched.
+- The Ask assistant's roll-up leads with the same columns and explains that a
+  high critical count with zero fixable means there is nothing to patch.
+- The SDK's `VulnScan` gains `fixable`/`wontFix` (previously missing entirely)
+  and the four new fixable fields; `VulnFinding` gains `sourcePackage`.
+  Automation should gate on `fixableCritical` rather than `critical`.
+
+The migration is additive. Existing scan rows keep their values until re-scanned:
+the fixable severity counts read 0 — which is also what a patched host reports, so
+the roll-up stays honest — and findings show no source package, falling back to
+the binary name for grouping. **Re-scan to populate them.**
+
 The `FLEET_*` names, the `fleetd`/`fleetctl`/`fleet` binaries, the `.fleetup`
 bundle format and the container names are unchanged. The Go module path is now
 `github.com/kforbus3/blackfriars`.
