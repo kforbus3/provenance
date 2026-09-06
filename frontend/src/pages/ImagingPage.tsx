@@ -161,7 +161,8 @@ export function ImagingPage() {
       {tab === 1 && <RolloutsTab rollouts={rollouts} canManage={canManage}
                                  onSteer={(id, verb) => steer.mutate({ id, verb })}
                                  onCreated={refresh} setMsg={setMsg} />}
-      {tab === 2 && <ImagesTab images={images} dir={imageData?.dir ?? ""} canBuild={canBuild}
+      {tab === 2 && <ImagesTab images={images} dir={imageData?.dir ?? ""}
+                               imagerArches={imageData?.imagerArches ?? {}} canBuild={canBuild}
                                onChanged={refreshArtifacts} setMsg={setMsg} />}
       {tab === 3 && <BundlesTab data={bundleData} images={images} canBuild={canBuild}
                                 onChanged={refreshArtifacts} setMsg={setMsg} />}
@@ -756,6 +757,86 @@ function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
 
 // --- artefacts ---------------------------------------------------------------
 
+// Which architectures can actually be imaged. The imager is a kernel the target
+// machine executes, so an amd64 imager cannot boot an arm64 machine however it is
+// served — "built" is per architecture, not a single yes.
+function ImagerChips({ arches }: { arches: Record<string, boolean> }) {
+  const built = Object.keys(arches).filter((a) => arches[a]);
+  if (built.length === 0) return null;
+  return (
+    <Tooltip title="Architectures with a netboot imager built. A machine picks its own at boot from iPXE's ${buildarch}.">
+      <Stack direction="row" spacing={0.5}>
+        {built.map((a) => (
+          <Chip key={a} size="small" color="success" variant="outlined" label={`imager: ${a}`} />
+        ))}
+      </Stack>
+    </Tooltip>
+  );
+}
+
+// BuildImagerDialog builds the netboot imager: the kernel and initramfs a machine
+// downloads and executes in order to be imaged. Separate from an OS image build
+// because it takes no distribution, profile or credentials — only an architecture.
+function BuildImagerDialog({ open, arches, onClose, onStarted, setMsg }: {
+  open: boolean;
+  arches: Record<string, boolean>;
+  onClose: () => void;
+  onStarted: () => void;
+  setMsg: (m: Note) => void;
+}) {
+  const [arch, setArch] = useState("amd64");
+
+  const start = useMutation({
+    mutationFn: () => startBuild("imager", { arch }),
+    onSuccess: (job) => {
+      setMsg({ kind: "success", text: `Started: ${job.label}. Watch it on the Builds tab.` });
+      onStarted();
+      onClose();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>Build the netboot imager</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            The kernel and initramfs a machine downloads over TFTP and executes to be
+            imaged. Without one, PXE boots into nothing and the provisioning server
+            refuses to start.
+          </Typography>
+          <TextField
+            select size="small" label="Architecture" value={arch}
+            onChange={(e) => setArch(e.target.value)}
+            helperText={
+              arches[arch]
+                ? "Already built for this architecture — rebuilding replaces it."
+                : "The imager is a kernel, so it must match the machines it boots."
+            }
+          >
+            <MenuItem value="amd64">amd64</MenuItem>
+            <MenuItem value="arm64">arm64</MenuItem>
+          </TextField>
+          {arch === "arm64" && (
+            <Alert severity="info">
+              Built under emulation on an amd64 host, which is slow but works. amd64
+              lives at the top of the imager directory and arm64 in a subdirectory, so
+              both can be present and neither interferes.
+            </Alert>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={start.isPending} onClick={() => start.mutate()}>
+          {start.isPending ? "Starting…" : "Build"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function DiskChip() {
   const { data } = useQuery({ queryKey: ["imaging-disk"], queryFn: diskUsage, retry: false });
   if (!data) return null;
@@ -771,11 +852,12 @@ function DiskChip() {
   );
 }
 
-function ImagesTab({ images, dir, canBuild, onChanged, setMsg }: {
-  images: Image[]; dir: string; canBuild: boolean;
+function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
+  images: Image[]; dir: string; imagerArches: Record<string, boolean>; canBuild: boolean;
   onChanged: () => void; setMsg: (m: Note) => void;
 }) {
   const [building, setBuilding] = useState(false);
+  const [buildingImager, setBuildingImager] = useState(false);
   const remove = useMutation({
     mutationFn: (name: string) => deleteImage(name),
     onSuccess: () => { setMsg({ kind: "success", text: "Image deleted." }); onChanged(); },
@@ -790,9 +872,30 @@ function ImagesTab({ images, dir, canBuild, onChanged, setMsg }: {
             Build image
           </Button>
         )}
+        {canBuild && (
+          <Button variant="outlined" startIcon={<BuildIcon />} onClick={() => setBuildingImager(true)}>
+            Build netboot imager
+          </Button>
+        )}
+        <ImagerChips arches={imagerArches} />
         <Box flexGrow={1} />
         <DiskChip />
       </Stack>
+
+      {/* Without an imager there is nothing for a machine to PXE-boot, so an
+          image library on its own cannot deploy anything. Said here rather than
+          only in the provisioning preflight, which is read after a network has
+          been chosen and Start pressed. */}
+      {!imagerArches.amd64 && !imagerArches.arm64 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>No netboot imager has been built.</strong> It is the kernel and
+          initramfs a machine downloads and executes in order to be imaged at all —
+          without one, PXE boots into nothing and the provisioning server will refuse
+          to start. {canBuild
+            ? "Build it with the button above; it takes a few minutes."
+            : "Building it needs the Imaging.Build permission."}
+        </Alert>
+      )}
 
       {images.length === 0 ? (
         <Alert severity="info">
@@ -845,6 +948,9 @@ function ImagesTab({ images, dir, canBuild, onChanged, setMsg }: {
       )}
       <BuildImageDialog open={building} onClose={() => setBuilding(false)}
                         onStarted={onChanged} setMsg={setMsg} />
+      <BuildImagerDialog open={buildingImager} arches={imagerArches}
+                         onClose={() => setBuildingImager(false)}
+                         onStarted={onChanged} setMsg={setMsg} />
     </>
   );
 }

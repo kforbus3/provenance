@@ -14,6 +14,7 @@ import {
   getProvisioning, setProvisioningEnv, steerProvisioning, listAssignments, saveAssignments,
   type Assignment, type NetInterface,
 } from "../../api/imaging";
+import { rangeWithin } from "./net";
 
 // ProvisioningTab drives the PXE stack: pick the network the machines are on,
 // pick the image to write, start the server.
@@ -22,20 +23,6 @@ import {
 // that NIC alone, so they cannot reach — or disturb — any other network the host
 // is attached to, and getting it wrong is the failure that matters here: a
 // standalone DHCP server on the office LAN competes with the one already there.
-
-// Derive a lease range inside a NIC's own subnet, so standalone DHCP needs no
-// manual arithmetic from whoever is setting it up.
-export function rangeWithin(network: string, prefixlen: number) {
-  const base = network.split(".").map(Number);
-  if (base.length !== 4 || base.some((n) => Number.isNaN(n))) return null;
-  const size = 2 ** (32 - prefixlen);
-  if (size < 8) return null;
-  const at = (off: number) => {
-    const v = (((base[0] << 24) >>> 0) + (base[1] << 16) + (base[2] << 8) + base[3] + off) >>> 0;
-    return [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255].join(".");
-  };
-  return { start: at(Math.min(100, Math.floor(size / 4))), end: at(Math.min(200, size - 2)) };
-}
 
 export function ProvisioningTab({ images, canProvision, setMsg }: {
   images: string[];
