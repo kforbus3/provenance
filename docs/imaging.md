@@ -197,6 +197,18 @@ deployment simply does not include the privileged sidecar. A fleet that consumes
 images somebody else builds should not have to run one, nor invent a secret for
 a service it does not have.
 
+Also set **`HOST_PROJECT_DIR`** to this project's absolute path on the host. The
+runner starts sibling containers through the Docker socket, so the daemon
+resolves *their* bind mounts against the host filesystem rather than the
+runner's; the socket proxy uses the same value to bound what a build may mount.
+Left empty it is discovered from the runner's own `/project` mount, which is
+right whenever that mount exists.
+
+> **The profile is what makes the Provisioning tab work at all.** Without it
+> there is no PXE server to start, no host NICs to enumerate, and no builder — so
+> "Imaging → Provisioning" renders with an empty interface list. That is the
+> deployment being incomplete, not the page being broken.
+
 One build of a kind runs at a time. Two image builds share the output directory
 and the same builder tag, and the failure is not a clean error — it is two loop
 devices and a half-written artefact.
@@ -222,6 +234,48 @@ declining. So these SBOMs answer "what CVEs affect this image" and cannot answer
 "what licences am I shipping", which is the other half of why an SBOM gets asked
 for. Worth knowing before feeding one to a compliance tool and getting 201
 unknowns back.
+
+## Provisioning: choosing the network to image on
+
+**Imaging → Provisioning** is where a machine gets written in the first place. It
+is one choice with everything else derived from it: **which interface** the
+machines are on.
+
+That choice is the whole point of the page. DHCP and TFTP are bound to the NIC
+you pick and to nothing else, so they cannot reach — or disturb — any other
+network this host is attached to. The interface list marks the NIC carrying the
+default route as the **main LAN**, because a standalone DHCP server there
+competes with the one the network already has, and that is somebody else's
+outage rather than a message in this UI.
+
+Picking an interface fills in the rest:
+
+- **A NIC with no address** is the normal state of a dedicated provisioning port —
+  nothing on that segment hands out addresses because this server is what will.
+  It is offered a free subnet that does not overlap anything the host is already
+  on, and the server assigns the address to the NIC when it starts. Runtime only:
+  a reboot reverts it and starting again re-applies it, so the host's permanent
+  network configuration is never touched.
+- **A NIC that already has one** keeps it, and gets a lease range inside its own
+  subnet — starting a quarter of the way in and stopping short of broadcast.
+
+The page reads **status**, **preflight** and **configuration** in a single call
+because they are individually useless: "running" means something different when
+preflight is reporting that something else on the segment is already answering
+DHCP. Preflight runs *before* the stack starts, because the failures here are the
+quiet kind.
+
+**Per-machine images** underneath assign a MAC its own image; anything not listed
+gets the default. It is keyed on MAC rather than hostname because the machine has
+no hostname yet — that is the point of the exercise.
+
+Everything on this tab needs `Imaging.Provision`, which is deliberately separate
+from `Imaging.Manage`: this is the part that puts a DHCP server on a network.
+
+The **Overlay** tab beside it edits the files layered into an image at build time
+— unit files, configs, scripts. The mode matters as much as the content (`cp -a`
+preserves it, so a script that lands without its executable bit is a boot that
+does nothing), which is why it is editable and shown next to the size.
 
 ## The imaging run itself
 
