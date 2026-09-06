@@ -92,6 +92,26 @@ check("a registry path that merely contains an allowed name is refused",
       denied({"Image": "evil.example.com/debian-ab-builder"}))
 check("the builder itself is allowed", not denied({"Image": "debian-ab-builder:amd64"}))
 
+# The rename regression. Host-NIC discovery runs a throwaway container from the
+# RUNNER'S OWN image in the host network namespace; when the compose images were
+# renamed to `blackfriars-` and this allowlist was not, that create was refused,
+# the orchestrator swallowed the error, and the Provisioning page showed an empty
+# interface list — no interface to PXE on, and nothing saying why.
+check("the runner's own image is allowed (host-NIC discovery runs it)",
+      not denied({"Image": "blackfriars-builder-runner"}))
+check("the runner's own image is allowed with a tag",
+      not denied({"Image": "blackfriars-builder-runner:latest"}))
+check("the renamed proxy image is allowed",
+      not denied({"Image": "blackfriars-dockerproxy"}))
+# Allowing it to RUN must not have allowed it to run as root on the host: only
+# the builder and imager genuinely need loop devices and mounts.
+check("the runner may NOT be privileged",
+      denied({"Image": "blackfriars-builder-runner", "HostConfig": {"Privileged": True}}))
+check("a registry path merely containing the runner name is refused",
+      denied({"Image": "evil.example.com/blackfriars-builder-runner"}))
+check("a lookalike blackfriars image is refused",
+      denied({"Image": "blackfriars-backend"}))
+
 check("mounting / is refused",
       denied({"Image": "debian-ab-builder", "HostConfig": {"Binds": ["/:/host"]}}))
 check("mounting a host path outside the project is refused",
