@@ -219,7 +219,7 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	@echo "  Windows x86_64:      fleet-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
-test: backend-test frontend-test scanner-test ## Run all tests
+test: backend-test frontend-test scanner-test imaging-test ## Run all tests
 
 .PHONY: backend-test
 backend-test: ## Run Go unit + integration tests
@@ -241,6 +241,17 @@ frontend-test: ## Run frontend unit tests
 scanner-test: ## Run grype-scanner sidecar unit tests (parsing only; no grype/DB needed)
 	docker run --rm -v $(PWD)/deploy/grype-scanner:/src -w /src python:3.13-alpine \
 	  sh -c "pip install -q pytest fastapi && python -m pytest -q"
+
+.PHONY: imaging-test
+imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runner auth, preflight)
+	# These existed and nothing ran them. The proxy's rules in particular are only
+	# worth having if each refusal is still a refusal, and that quietly stops being
+	# true when somebody widens a pattern to make a build work again.
+	docker run --rm -v $(PWD)/deploy/dockerproxy:/src -w /src python:3.13-alpine \
+	  sh -c "python test_rules.py"
+	docker run --rm -v $(PWD)/deploy/builder-runner:/src -w /src python:3.13-alpine \
+	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
+	         python test_auth.py && python test_preflight.py"
 
 .PHONY: lint
 lint: fmt-check ## Run gofmt check + Go vet
