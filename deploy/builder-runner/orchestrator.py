@@ -436,27 +436,52 @@ def suggest_dhcp_range(ip: str, prefixlen: int) -> dict:
     }
 
 
+def docker_socket_path() -> str:
+    """The unix socket this runner talks to the daemon over, from DOCKER_HOST.
+
+    Returns "" for a non-unix DOCKER_HOST (tcp://, ssh://), where there is no
+    local path to test and the connection's health is not ours to assert.
+    """
+    host = os.environ.get("DOCKER_HOST", "").strip()
+    if not host:
+        return "/var/run/docker.sock"
+    if host.startswith("unix://"):
+        return host[len("unix://"):] or "/var/run/docker.sock"
+    return ""
+
+
 def preflight() -> list[str]:
     """Problems that would make builds fail, in plain language. Empty = ready."""
     problems: list[str] = []
     if not os.path.isfile(os.path.join(PROJ, "builder", "Dockerfile")):
         problems.append(
-            f"The repository is not mounted at {PROJ} in the web UI container "
-            f"({PROJ}/builder/Dockerfile is missing). Check the `:{PROJ}` volume in "
-            "webui/docker-compose.yml — if HOST_PROJECT_DIR is set in webui/.env it "
-            "must be the absolute host path of this checkout. Unset it to have the "
-            "path detected automatically, then re-run `docker compose up -d`."
+            f"The repository is not mounted at {PROJ} in the builder-runner "
+            f"container ({PROJ}/builder/Dockerfile is missing). Check the "
+            f"`../..:{PROJ}` volume on the builder-runner service in "
+            "deploy/compose/docker-compose.yml — if HOST_PROJECT_DIR is set in .env "
+            "it must be the absolute host path of this checkout. Unset it to have "
+            "the path detected automatically, then bring the stack up again."
         )
     if not host_project_dir():
         problems.append(
             "Could not determine the repository's path on the Docker host, so the "
             "builder container would get an unusable output mount. Set "
-            "HOST_PROJECT_DIR in webui/.env to this checkout's absolute host path."
+            "HOST_PROJECT_DIR in .env to this checkout's absolute host path."
         )
-    if not os.access("/var/run/docker.sock", os.W_OK):
+    # Check the socket this runner ACTUALLY uses, not a hard-coded path.
+    #
+    # It normally talks to the dockerproxy at /shared/docker.sock and never holds
+    # the raw socket at all, so testing /var/run/docker.sock reported a problem
+    # that was permanently present and permanently untrue — on a correctly
+    # deployed stack, which is the worst kind. A preflight that always complains
+    # is one people learn to scroll past, and the real entries here are the ones
+    # that stop a machine being imaged.
+    sock = docker_socket_path()
+    if sock and not os.access(sock, os.W_OK):
         problems.append(
-            "The Docker socket is not available at /var/run/docker.sock. The web UI "
-            "needs it to run the builder; check the volume in webui/docker-compose.yml."
+            f"The Docker socket is not available at {sock}. The builder runner needs "
+            "it to start build containers; check that the `imaging` profile is up "
+            "(the dockerproxy service provides it) in deploy/compose/docker-compose.yml."
         )
     # Images are several GiB each and nothing removes them, so an output
     # directory that has been in use for a while is the most likely reason a
