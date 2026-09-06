@@ -19,6 +19,8 @@ import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { listGroups } from "../api/admin";
 import { listHosts } from "../api/hosts";
+import { ProvisioningTab } from "./imaging/ProvisioningTab";
+import { OverlayTab } from "./imaging/OverlayTab";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
   forgetImaging, imagingNow, installOnMachine, listBuilds, listBundles, listImages,
@@ -69,6 +71,8 @@ export function ImagingPage() {
   const qc = useQueryClient();
   const canManage = useAuthStore((s) => s.has("Imaging.Manage"));
   const canBuild = useAuthStore((s) => s.has("Imaging.Build"));
+  // Its own permission: this is the part that puts a DHCP server on a network.
+  const canProvision = useAuthStore((s) => s.has("Imaging.Provision"));
   const [tab, setTab] = useState(0);
   const [msg, setMsg] = useState<Note>(null);
 
@@ -147,6 +151,8 @@ export function ImagingPage() {
         <Tab label={`Images${images.length ? ` (${images.length})` : ""}`} />
         <Tab label={`Bundles${bundleData ? ` (${bundleData.bundles.length})` : ""}`} />
         <Tab label={`Builds${builds.length ? ` (${builds.length})` : ""}`} />
+        <Tab label="Provisioning" />
+        <Tab label="Overlay" />
       </Tabs>
 
       {tab === 0 && <MachinesTab fleet={fleet} canManage={canManage}
@@ -161,6 +167,12 @@ export function ImagingPage() {
                                 onChanged={refreshArtifacts} setMsg={setMsg} />}
       {tab === 4 && <BuildsTab builds={builds} canBuild={canBuild}
                                onChanged={refreshArtifacts} setMsg={setMsg} />}
+      {/* IMAGE_FILE is a filename in the output directory, which is exactly what
+          Image.name is — the tab needs nothing else about an image. */}
+      {tab === 5 && <ProvisioningTab images={images.map((i) => i.name)} canProvision={canProvision}
+                                     setMsg={(text, kind) => setMsg({ kind: kind ?? "success", text })} />}
+      {tab === 6 && <OverlayTab canBuild={canBuild}
+                                setMsg={(text, kind) => setMsg({ kind: kind ?? "success", text })} />}
     </Box>
   );
 }

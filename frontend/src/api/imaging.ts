@@ -370,3 +370,133 @@ export async function imagingNow(): Promise<{ imaging: ImagingNow[]; active: num
 export async function forgetImaging(id: string) {
   await api.delete(`/api/v1/imaging/now/${encodeURIComponent(id)}`);
 }
+
+// --- The provisioning stack (PXE) --------------------------------------------
+//
+// The half of imaging that happens before a machine is anything at all: a NIC on
+// an isolated segment, a DHCP/TFTP server confined to it, and an image to write.
+// The sidecar owns the machinery; these are the controls for it.
+
+// NetInterface is one of the host's NICs, offered so nobody has to know their own
+// topology to answer "which network are the machines on".
+export interface NetInterface {
+  name: string;
+  ip: string;
+  prefixlen: number;
+  network: string;
+  netmask: string;
+  mac: string;
+  up: boolean;
+  carrier: boolean;
+  // Carries the host's default route — the main LAN, and the one NIC you almost
+  // never want a standalone DHCP server on.
+  default: boolean;
+}
+
+// A free subnet proposed for a NIC that has no address, which is the normal state
+// of a dedicated provisioning port: nothing on that segment hands out addresses,
+// because this server is what will.
+export interface ProvisioningSuggestion {
+  SERVER_IP?: string;
+  prefixlen?: number;
+  DHCP_NETMASK?: string;
+  PROXY_SUBNET?: string;
+  DHCP_RANGE_START?: string;
+  DHCP_RANGE_END?: string;
+}
+
+export interface ProvisioningStatus {
+  running: boolean;
+  detail?: string;
+}
+
+// The whole page in one call. Status and preflight are individually useless:
+// "running" means something different when preflight is reporting that something
+// else on the segment is already answering DHCP.
+export interface Provisioning {
+  env: Record<string, string>;
+  controlUrl?: string;
+  status?: ProvisioningStatus;
+  problems?: string[];
+  interfaces?: { interfaces: NetInterface[]; suggestion: ProvisioningSuggestion };
+}
+
+export async function getProvisioning(): Promise<Provisioning> {
+  const { data } = await api.get<Provisioning>("/api/v1/imaging/provisioning");
+  return data;
+}
+
+// Partial: only the keys sent are changed, so a caller need not round-trip
+// settings it does not understand.
+export async function setProvisioningEnv(env: Record<string, string>) {
+  const { data } = await api.put("/api/v1/imaging/provisioning/env", { env });
+  return data as { env: Record<string, string>; controlUrl?: string };
+}
+
+export async function steerProvisioning(verb: "up" | "down"): Promise<string> {
+  const { data } = await api.post(`/api/v1/imaging/provisioning/${verb}`);
+  return (data?.output as string) ?? "";
+}
+
+// Per-machine targeting: a MAC gets a specific image instead of the default one.
+// Machines not listed here get IMAGE_FILE.
+export interface Assignment {
+  mac: string;
+  image?: string;
+  hostname?: string;
+  name?: string;
+  [k: string]: unknown;
+}
+
+export async function listAssignments(): Promise<Assignment[]> {
+  const { data } = await api.get("/api/v1/imaging/assignments");
+  return (data.assignments ?? []) as Assignment[];
+}
+
+export async function saveAssignments(assignments: Assignment[]): Promise<Assignment[]> {
+  const { data } = await api.put("/api/v1/imaging/assignments", { assignments });
+  return (data.assignments ?? []) as Assignment[];
+}
+
+// --- Overlay files -----------------------------------------------------------
+//
+// Layered into an image at build time: unit files, configs, scripts. Edited here
+// because the person who decides what goes into an image is not always the person
+// with a shell on the machine that builds it.
+
+export interface OverlayFile {
+  path: string;
+  size: number;
+  // cp -a preserves the mode, so what is set here is what lands on the machine —
+  // which makes it part of the file, not a detail about it.
+  mode: string;
+  executable: boolean;
+}
+
+export async function listOverlay(): Promise<{ files: OverlayFile[]; root: string }> {
+  const { data } = await api.get("/api/v1/imaging/overlay");
+  return { files: data.files ?? [], root: data.root ?? "" };
+}
+
+// editable is false for a file too large or not UTF-8 to show; `reason` says which.
+export interface OverlayContent extends OverlayFile {
+  editable: boolean;
+  content?: string;
+  reason?: string;
+}
+
+export async function readOverlayFile(path: string): Promise<OverlayContent> {
+  const { data } = await api.get("/api/v1/imaging/overlay/file", { params: { path } });
+  return data as OverlayContent;
+}
+
+export async function writeOverlayFile(path: string, content: string, mode?: number) {
+  const body: Record<string, unknown> = { path, content };
+  if (mode !== undefined) body.mode = mode;
+  const { data } = await api.put("/api/v1/imaging/overlay/file", body);
+  return data as OverlayFile;
+}
+
+export async function deleteOverlayFile(path: string) {
+  await api.delete("/api/v1/imaging/overlay/file", { params: { path } });
+}

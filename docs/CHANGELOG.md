@@ -77,6 +77,41 @@ in `.env.example`.
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
 See [deployment.md](./deployment.md).
 
+### Provisioning and overlay files reach the UI
+
+The imaging backend and its sidecar carried the whole provisioning API — pick an
+interface, configure the PXE stack, start it, target a MAC at its own image, edit
+the overlay — and none of it had a page. `Imaging.Provision` existed as a
+permission that nothing in the interface could exercise.
+
+- **Imaging → Provisioning.** One choice with everything else derived from it:
+  which interface the machines are on. DHCP and TFTP bind to that NIC alone; the
+  list marks the NIC carrying the default route as the main LAN, because a
+  standalone DHCP server there competes with the one already on it. A NIC with no
+  address gets a proposed free subnet (assigned at runtime only, so a reboot
+  reverts it); one that has an address gets a lease range inside its own subnet.
+  Status, preflight and configuration load together because they are individually
+  useless. Per-machine images assign a MAC its own image — keyed on MAC because
+  the machine has no hostname yet.
+- **Imaging → Overlay.** The files layered into an image at build time, with their
+  modes: `cp -a` preserves the mode, so a script that lands without its executable
+  bit is a boot that does nothing.
+
+**Fixed: the socket proxy refused the runner its own image, and the symptom was an
+empty interface list.** Host NICs are enumerated by running a throwaway container
+from the runner's own image in the host network namespace. The compose images were
+renamed to `blackfriars-` and the proxy's allowlist was not, so that `docker run`
+was denied, the orchestrator swallowed the error, and Provisioning offered nothing
+to choose from and no reason why. The allowlist now covers both naming eras, and
+the runner's `_self_image()` fallback no longer names a Flipside container that
+does not exist here. Allowing it to *run* did not allow it to run privileged —
+that stays confined to the builder and imager.
+
+Deploying any of this needs the `imaging` profile (`docker compose --profile
+imaging up -d`) plus `FLEET_BUILDER_RUNNER_URL`, `FLEET_BUILDER_RUNNER_TOKEN` and
+`HOST_PROJECT_DIR`. Without them the build routes answer 501 and Provisioning has
+no server to start — the deployment being incomplete, not the page being broken.
+
 ### The Vulnerabilities page leads with what can actually be fixed
 
 Ported from Moorgate v2.1.0, which shipped it separately; it belongs here too and

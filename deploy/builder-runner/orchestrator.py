@@ -291,9 +291,12 @@ def _self_image() -> str:
             ["docker", "inspect", "--format", "{{.Config.Image}}", _self_container_id()],
             capture_output=True, text=True, timeout=15,
         )
-        return proc.stdout.strip() or "debian-ab-webui"
+        # The fallback is this stack's own runner image. It used to name the
+        # Flipside web UI, which does not exist here at all — so on the one path
+        # that reaches it, the helper `docker run` was guaranteed to fail.
+        return proc.stdout.strip() or "blackfriars-builder-runner"
     except (OSError, subprocess.SubprocessError):
-        return "debian-ab-webui"
+        return "blackfriars-builder-runner"
 
 
 # --------------------------- host interfaces ---------------------------
