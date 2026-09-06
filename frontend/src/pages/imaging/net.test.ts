@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rangeWithin } from "./ProvisioningTab";
+import { rangeWithin } from "./net";
 
 // The DHCP lease range is derived from the chosen NIC's own subnet so nobody has
 // to do the arithmetic by hand. Getting it wrong is not a cosmetic bug: a range

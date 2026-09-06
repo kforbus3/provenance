@@ -77,6 +77,23 @@ in `.env.example`.
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
 See [deployment.md](./deployment.md).
 
+### The netboot imager can be built
+
+`POST /imaging/builds/imager` existed, the sidecar's `/build/imager` existed, and
+the API client already typed `"imager"` as a valid build kind — but nothing in the
+interface ever called it. So the one artefact without which PXE cannot work at all
+could not be built here, and the provisioning preflight told you to go and build it
+on a page that had no such button.
+
+- **Imaging → Images → Build netboot imager**, with an architecture choice. The
+  imager is a kernel, so an amd64 one cannot boot an arm64 machine however it is
+  served; both can be built and neither interferes.
+- The Images tab now shows which architectures have an imager, and says so plainly
+  when none do — instead of leaving it to be found in the provisioning preflight
+  after a network has been chosen and Start pressed. `GET /imaging/images` gained
+  `imagerArches` for it, read from the artefact directory the same way the image
+  library already is.
+
 ### Provisioning and overlay files reach the UI
 
 The imaging backend and its sidecar carried the whole provisioning API — pick an
