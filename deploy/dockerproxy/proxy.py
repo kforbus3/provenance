@@ -61,9 +61,20 @@ PROJECT_CONTAINER = os.environ.get(
 # Image names a container may be created from. The builder and imager tags are
 # built locally by the UI itself; the compose stack's images are built from the
 # repo too. A container created from anything else is not a build.
+#
+# Both naming eras are listed on purpose. The build/imaging images are still
+# built under their `debian-ab-` names by builder/ and imager/ (the same reason
+# the on-disk paths in shipped images were never renamed), while the compose
+# stack's own containers were renamed to `blackfriars-`. Missing the second half
+# is not a subtle failure but it IS a silent one: the runner enumerates host
+# NICs by running a throwaway container FROM ITS OWN IMAGE in the host network
+# namespace, so with `blackfriars-builder-runner` absent, `docker run` was
+# refused, the exception was swallowed, and the Provisioning page offered an
+# empty interface list with nothing to explain why.
 IMAGE_ALLOW = re.compile(os.environ.get(
     "IMAGE_ALLOW",
-    r"^(debian-ab-(builder|imager|webui|dnsmasq|http|dockerproxy))(:[\w.\-]+)?$"))
+    r"^(debian-ab-(builder|imager|webui|dnsmasq|http|dockerproxy)"
+    r"|blackfriars-(builder-runner|dockerproxy))(:[\w.\-]+)?$"))
 # Only these images may be created with elevated privileges: the builder and the
 # imager genuinely need loop devices and mounts. Nothing else does, and a
 # privileged container is a host-root container.
