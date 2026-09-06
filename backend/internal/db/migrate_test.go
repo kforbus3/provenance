@@ -9,14 +9,21 @@ import (
 
 var migNameRe = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(_[a-z0-9]+)*\.sql$`)
 
-// knownDupOrdinals are migration number prefixes that historically ship two files.
-// They are harmless — the migrator applies each unique filename exactly once, in
-// lexical order (see Migrate) — but the set must NOT grow. Renumbering an
-// already-applied migration would change its schema_migrations key, so every
-// existing database would re-run it (and orphan the old record); a new migration
-// must instead take a fresh, unused ordinal. This test enforces that without forcing
-// a risky renumber of the historical collisions.
-var knownDupOrdinals = map[string]int{"0010": 2, "0011": 2, "0049": 2, "0050": 2}
+// knownDupOrdinals are migration number prefixes that ship two files. They are
+// harmless — the migrator applies each unique FILENAME exactly once, in lexical
+// order (see Migrate) — but the set must NOT grow for the usual reason: renumbering
+// an already-applied migration would change its schema_migrations key, so every
+// existing database would re-run it (and orphan the old record). A new migration
+// must instead take a fresh, unused ordinal.
+//
+// "0079" is the one entry here that is not merely historical. Blackfriars and
+// Moorgate forked from a common ancestor at 0078 and each took 0079 for unrelated
+// work — imaging permissions here, the vulnerability roll-up there — and both are
+// already applied on real databases. Renumbering either one now is precisely the
+// operation this test exists to prevent: it would re-run on the installations that
+// have it. They coexist instead, which the migrator handles because the key is the
+// full filename, not the ordinal.
+var knownDupOrdinals = map[string]int{"0010": 2, "0011": 2, "0049": 2, "0050": 2, "0079": 2}
 
 // TestMigrationsNamingAndOrdinals guards the migration set: every file follows the
 // NNNN_snake_case.sql convention, no two files collapse to the same schema_migrations

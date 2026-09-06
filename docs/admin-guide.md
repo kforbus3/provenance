@@ -958,17 +958,72 @@ the jump host, **tars its package databases** (`/etc/os-release` +
 NVD records, so distro sources (Debian/Ubuntu) that carry severity but not scores
 still get a numeric CVSS.
 
-Each finding records the CVE id, package, installed vs. fixed version, severity,
-CVSS score and vector, data source, and description; each scan row records
-per-severity counts and the max CVSS.
+Each finding records the CVE id, package, **source package**, installed vs. fixed
+version, severity, CVSS score and vector, data source, and description; each scan row
+records per-severity counts, the same counts scoped to the **fixable** subset, and
+both the max and max-fixable CVSS.
+
+### Reading the numbers
+
+A fully-patched Linux host still reports **thousands of CVEs**, hundreds of them
+rated Critical. This is normal and is not a sign the host is behind. Grype records
+what the distribution's security tracker says about each CVE:
+
+| Fix state | Meaning | Actionable? |
+|---|---|---|
+| `fixed` | A fixed version exists and this host is behind it | **Yes — this is the work** |
+| `not-fixed` | Acknowledged upstream; no fix has shipped yet | No, not today |
+| `wont-fix` | Assessed upstream and deliberately not fixed (Debian no-DSA) | Never |
+| `unknown` | No fix data | Undetermined |
+
+On a patched Debian host the split is roughly 60% `not-fixed` / 40% `wont-fix` with
+**zero** `fixed`. So:
+
+- **Read the "Actionable now" columns**, not the raw Critical/High counts. `Fixable
+  = 0` means there is nothing to patch; the criticals beside it have no fix
+  available. The raw counts measure *exposure*, which is real but is not work.
+- **Severity is NVD's, not the distribution's.** A CVE that Debian rates
+  "unimportant" and will never fix can still carry an NVD score of 9.8. That
+  combination — Critical severity, `wont-fix` state — is common and expected.
+- **Counts are distinct CVEs.** One source package builds many binaries and each
+  repeats the CVE; the roll-up counts the CVE once, and the findings drill-down
+  groups on the source package by default.
+
+### Kernel CVEs and source-package attribution
+
+Distribution CVE trackers key on the **source** package, so grype resolves each
+binary to its source before matching — and every binary built from that source
+inherits the source's whole CVE list.
+
+This is most visible with the kernel. Debian builds the kernel's userspace helpers
+(`cpupower`, `linux-headers-*`, `linux-kbuild-*`, `linux-libc-dev`) from the same
+`linux` source package its tracker files kernel CVEs under, so **the entire kernel
+CVE list is matched against those helpers** — on one sampled host, 227 of 547
+critical+high CVEs arrived attributed to a CPU-frequency utility. Meanwhile the
+installed `linux-image-*` packages match *nothing*, because Debian's signed images
+build from `linux-signed-amd64`, which the tracker does not key on.
+
+The findings are real — the kernel genuinely is affected — but the attribution is
+misleading, and the version matched is the helper's, not necessarily the kernel the
+host booted. The findings view therefore:
+
+- **groups on the source package** (toggle off to see per-binary rows),
+- **labels these findings `kernel`** with the packages they were matched through, and
+- **shows the host's running kernel** (from its inventory) alongside the version
+  grype actually matched, so the two can be compared.
+
+Patch and **reboot** the kernel to clear them; a kernel upgrade that has not been
+booted still reports the old kernel's CVEs.
 
 - Scan a **host** or a **whole group**, **on demand** or on a **schedule** (the
   `vulnscan` schedule kind, alongside scan/playbook — §8). Findings are
   **severity-gated notified** (§10) and audited; stale scans are reconciled on
   restart.
 - The **Vulnerabilities** page (nav, gated **`Host.Scan`**) shows a **fleet roll-up**
-  — max CVSS plus critical/high/medium counts per host — with a drill-in findings
-  table and live progress. CSV export is on **Reports** (§20).
+  split into **Actionable now** (fixable CVEs, fixable critical/high, worst fixable
+  CVSS) and **Exposure** (unfixed critical/high, won't-fix, total), above a drill-in
+  findings table and live progress. A headline banner states whether anything is
+  outstanding at all. CSV export is on **Reports** (§20).
 
 | Action | Endpoint |
 |--------|----------|

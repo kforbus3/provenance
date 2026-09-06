@@ -219,11 +219,17 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	@echo "  Windows x86_64:      fleet-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
-test: backend-test frontend-test ## Run all tests
+test: backend-test frontend-test scanner-test ## Run all tests
 
 .PHONY: backend-test
 backend-test: ## Run Go unit + integration tests
-	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
+	# Mount the REPO ROOT, not backend/. Several tests assert that committed
+	# artefacts outside the module have not drifted from the code (the enrollment
+	# teardown tests read ../../../scripts/fleet-unenroll.sh). With only backend/
+	# mounted those paths do not exist, so the tests failed here while passing under
+	# a native `go test` — a gate that fails for a reason unrelated to the change is
+	# a gate people learn to ignore.
+	docker run --rm -v $(PWD):/src -w /src/backend golang:1.26-alpine \
 	  sh -c "apk add --no-cache git gcc musl-dev openssh-client >/dev/null && GOFLAGS=-mod=mod go test ./..."
 
 .PHONY: frontend-test
@@ -231,10 +237,26 @@ frontend-test: ## Run frontend unit tests
 	docker run --rm -v $(PWD)/frontend:/app -w /app node:22-alpine \
 	  sh -c "npm ci && npm run test -- --run"
 
+.PHONY: scanner-test
+scanner-test: ## Run grype-scanner sidecar unit tests (parsing only; no grype/DB needed)
+	docker run --rm -v $(PWD)/deploy/grype-scanner:/src -w /src python:3.13-alpine \
+	  sh -c "pip install -q pytest fastapi && python -m pytest -q"
+
 .PHONY: lint
-lint: ## Run Go vet
+lint: fmt-check ## Run gofmt check + Go vet
 	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
 	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go vet ./..."
+
+.PHONY: fmt-check
+fmt-check: ## Fail if any Go file needs gofmt (CI enforces this; catch it before pushing)
+	@unformatted=$$(gofmt -l backend/cmd backend/internal sdk 2>/dev/null); \
+	if [ -n "$$unformatted" ]; then \
+	  echo "these files need gofmt (run: make fmt):"; echo "$$unformatted"; exit 1; \
+	fi
+
+.PHONY: fmt
+fmt: ## Rewrite Go files with gofmt
+	gofmt -w backend/cmd backend/internal sdk
 
 .PHONY: tidy
 tidy: ## Run go mod tidy and write go.sum back to the repo

@@ -29,6 +29,15 @@ export interface VulnScan {
   fixable: number;
   wontFix: number;
   maxCvss: number;
+  // The severity breakdown of the fixable subset — the roll-up's headline numbers.
+  // critical/high/medium above count every fix state, so they stay high on a fully
+  // patched host and cannot be read as outstanding work.
+  fixableCritical: number;
+  fixableHigh: number;
+  fixableMedium: number;
+  // Worst CVSS among fixable CVEs; 0 when nothing is fixable. maxCvss is 10.0 on
+  // virtually every Linux host and so tells you nothing.
+  fixableMaxCvss: number;
   startedAt?: string;
   finishedAt?: string;
   createdAt: string;
@@ -37,6 +46,11 @@ export interface VulnScan {
 export interface VulnFinding {
   cve: string;
   package: string;
+  // The source package the CVE was matched against. Distro CVE trackers key on the
+  // source, so one source repeats its CVEs across every binary it builds — grouping
+  // on this reports components rather than package rows. Absent on scans recorded
+  // before it was captured, and on CPE/Windows matches with no upstream.
+  sourcePackage?: string;
   installedVersion: string;
   fixedVersion?: string;
   fixState?: FixState;
@@ -49,6 +63,44 @@ export interface VulnFinding {
   // package installed but in no repo — purge it), "unavailable" (fix exists upstream but
   // not offered here: held / no-DSA / needs OS upgrade), or "" (undetermined).
   remediation?: string;
+}
+
+// --- Component attribution ----------------------------------------------
+//
+// Distro CVE trackers key on the SOURCE package, so grype resolves a binary to its
+// source before matching. Two consequences the UI has to handle:
+//
+//  - One source fans its CVEs out across every binary it builds, so the findings
+//    list repeats each CVE per binary. Grouping on the source reports components.
+//  - Debian ships the kernel's userspace helpers (cpupower, headers, kbuild,
+//    libc-dev) from the `linux` source that kernel CVEs are tracked under, so the
+//    entire kernel CVE list arrives attributed to those helpers — while the actual
+//    linux-image-* packages match nothing, because Debian's signed images build
+//    from linux-signed-amd64, which the tracker does not key on. The findings are
+//    real; the attribution is not.
+
+const KERNEL_SOURCES = new Set([
+  "linux", "linux-signed", "linux-signed-amd64", "linux-signed-arm64", "linux-latest",
+  "kernel", "kernel-rt",
+]);
+
+// The binary packages that ARE the kernel, as opposed to helpers built beside it.
+const KERNEL_BINARY_PREFIXES = ["linux-image", "kernel-core", "kernel-modules", "kernel-uek"];
+
+// isKernelSourceFinding reports whether a finding is a kernel CVE that landed on a
+// non-kernel binary package. Mirrors models.IsKernelSourceFinding on the backend.
+export function isKernelSourceFinding(f: VulnFinding): boolean {
+  const src = (f.sourcePackage ?? "").trim().toLowerCase();
+  if (!KERNEL_SOURCES.has(src)) return false;
+  const pkg = (f.package ?? "").trim().toLowerCase();
+  return !KERNEL_BINARY_PREFIXES.some((p) => pkg.startsWith(p));
+}
+
+// vulnComponent is the name a finding should be reported under: its source package
+// when known, else the binary package (scans predating source capture, CPE matches).
+export function vulnComponent(f: VulnFinding): string {
+  const src = (f.sourcePackage ?? "").trim();
+  return src !== "" ? src : f.package;
 }
 
 export async function triggerVulnScan(
@@ -75,8 +127,16 @@ export async function latestVulnScans(): Promise<VulnScan[]> {
   return data.scans ?? [];
 }
 
-export async function getVulnScan(id: string): Promise<{ scan: VulnScan; findings: VulnFinding[] }> {
-  const { data } = await api.get<{ scan: VulnScan; findings: VulnFinding[] }>(`/api/v1/vuln-scans/${id}`);
+// kernelRelease is the host's running kernel (from its inventory), sent alongside
+// the findings because kernel CVEs arrive attributed to whichever userspace helper
+// shares the kernel's source package — at THAT package's version, which need not be
+// the kernel the host booted. Empty when the host has no collected inventory.
+export async function getVulnScan(
+  id: string,
+): Promise<{ scan: VulnScan; findings: VulnFinding[]; kernelRelease?: string }> {
+  const { data } = await api.get<{ scan: VulnScan; findings: VulnFinding[]; kernelRelease?: string }>(
+    `/api/v1/vuln-scans/${id}`,
+  );
   return data;
 }
 

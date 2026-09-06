@@ -92,6 +92,33 @@ def _best_cvss(cvss_list):
     return round(best_score, 1), best_vec
 
 
+def _source_package(a: dict) -> str:
+    """The SOURCE package an artifact was built from, or "" if not reported.
+
+    Distro CVE trackers key on the source package, so grype matches a binary by
+    resolving it to its source first: every binary built from `linux` inherits the
+    entire kernel CVE list, and eight binaries from one source repeat the same CVE
+    eight times. Carrying the source through is what lets the UI group those and
+    name what is actually vulnerable.
+
+    Three shapes, newest first: syft's `upstreams` (current), the dpkg metadata
+    `source` field, and an rpm `sourceRpm` filename that has to be trimmed back to
+    a bare name (`glibc-2.39-5.el9.src.rpm` -> `glibc`).
+    """
+    for u in a.get("upstreams") or []:
+        if (u.get("name") or "").strip():
+            return u["name"].strip()
+    meta = a.get("metadata") or {}
+    if (meta.get("source") or "").strip():
+        return meta["source"].strip()
+    srpm = (meta.get("sourceRpm") or "").strip()
+    if srpm:
+        # Strip .src.rpm, then the trailing -version-release the filename carries.
+        stem = srpm[: -len(".src.rpm")] if srpm.endswith(".src.rpm") else srpm
+        return stem.rsplit("-", 2)[0] if stem.count("-") >= 2 else stem
+    return ""
+
+
 def _normalize(g: dict) -> dict:
     findings = []
     for m in g.get("matches", []) or []:
@@ -118,6 +145,7 @@ def _normalize(g: dict) -> dict:
             "cve": v.get("id", ""),
             "severity": v.get("severity") or "Unknown",
             "package": a.get("name", ""),
+            "sourcePackage": _source_package(a),
             "installedVersion": a.get("version", ""),
             "fixedVersion": fixed,
             "fixState": state or "unknown",

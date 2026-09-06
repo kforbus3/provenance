@@ -14,9 +14,9 @@ import { listHosts } from "../api/hosts";
 import { listGroups } from "../api/admin";
 import {
   triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan, clearFailedVulnScans,
-  downloadScanSbom,
+  downloadScanSbom, isKernelSourceFinding, vulnComponent,
   vulnDbStatus, vulnDbUpdate, vulnDbImport, msrcStatus, msrcUpdate, msrcImport, type VulnFinding,
-  type FixState,
+  type FixState, type VulnScan,
 } from "../api/vulnscan";
 
 const SEV_COLOR: Record<string, "error" | "warning" | "info" | "default"> = {
@@ -58,7 +58,7 @@ export function VulnerabilitiesPage() {
   });
 
   return (
-    <Box sx={{ maxWidth: 1150 }}>
+    <Box sx={{ maxWidth: 1280 }}>
       <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h5">Vulnerabilities</Typography>
@@ -95,18 +95,50 @@ export function VulnerabilitiesPage() {
       )}
 
       <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Fleet roll-up (latest scan per host)</Typography>
+      <FleetHeadline scans={rollup} />
       <Paper variant="outlined" sx={{ overflowX: "auto" }}>
         <Table size="small">
           <TableHead>
+            {/* Two header rows so the split is impossible to miss: everything under
+                "Actionable now" is work, everything under "Exposure (no fix
+                available)" is not. Reading the old table top-to-bottom gave the
+                opposite impression — the reddest numbers were the ones nobody
+                could do anything about. */}
+            <TableRow>
+              <TableCell />
+              <TableCell align="center" colSpan={4} sx={{ borderLeft: 1, borderColor: "divider" }}>
+                <Typography variant="caption" sx={{ fontWeight: 700 }}>Actionable now</Typography>
+              </TableCell>
+              <TableCell align="center" colSpan={3} sx={{ borderLeft: 1, borderColor: "divider" }}>
+                <Typography variant="caption" color="text.secondary">Exposure (no fix available)</Typography>
+              </TableCell>
+              <TableCell />
+            </TableRow>
             <TableRow>
               <TableCell>Host</TableCell>
-              <TableCell align="right">Max CVSS</TableCell>
-              <TableCell align="right">Critical</TableCell>
-              <TableCell align="right">High</TableCell>
-              <TableCell align="right">Medium</TableCell>
-              <TableCell align="right">
-                <Tooltip title="CVEs with an available fix — the actionable subset you can patch right now. Zero means this host is fully patched and everything below is upstream-unfixed.">
+              <TableCell align="right" sx={{ borderLeft: 1, borderColor: "divider" }}>
+                <Tooltip title="CVEs with an available fix — what you can patch right now. Zero means this host is fully patched; everything to the right is unfixed upstream, not a missed patch.">
                   <span>Fixable</span>
+                </Tooltip>
+              </TableCell>
+              <TableCell align="right">
+                <Tooltip title="Fixable CVEs rated Critical. This is the number to act on — not the raw Critical count, which includes CVEs no upgrade will ever clear.">
+                  <span>Crit</span>
+                </Tooltip>
+              </TableCell>
+              <TableCell align="right">
+                <Tooltip title="Fixable CVEs rated High.">
+                  <span>High</span>
+                </Tooltip>
+              </TableCell>
+              <TableCell align="right">
+                <Tooltip title="Worst CVSS among the FIXABLE CVEs — how urgent today's patching is. (Plain max CVSS is 10.0 on essentially every Linux host, so it said nothing.)">
+                  <span>Worst</span>
+                </Tooltip>
+              </TableCell>
+              <TableCell align="right" sx={{ borderLeft: 1, borderColor: "divider" }}>
+                <Tooltip title="Critical and High CVEs with no fix available: acknowledged upstream but unpatched, or assessed and deliberately not fixed. Real exposure, but not work you can do today.">
+                  <span>Unfixed C / H</span>
                 </Tooltip>
               </TableCell>
               <TableCell align="right">
@@ -126,21 +158,33 @@ export function VulnerabilitiesPage() {
             {rollup.map((s) => (
               <TableRow key={s.id} hover sx={{ cursor: "pointer" }} onClick={() => setFindingsScan(s.id)}>
                 <TableCell>{s.hostname}</TableCell>
-                <TableCell align="right">
-                  <Chip size="small" color={cvssColor(s.maxCvss)} label={s.maxCvss.toFixed(1)} />
-                </TableCell>
-                <TableCell align="right">{s.critical > 0 ? <Chip size="small" color="error" label={s.critical} /> : "—"}</TableCell>
-                <TableCell align="right">{s.high > 0 ? <Chip size="small" color="error" variant="outlined" label={s.high} /> : "—"}</TableCell>
-                <TableCell align="right">{s.medium > 0 ? <Chip size="small" color="warning" label={s.medium} /> : "—"}</TableCell>
-                <TableCell align="right">
+                <TableCell align="right" sx={{ borderLeft: 1, borderColor: "divider" }}>
                   {s.fixable > 0
                     ? <Chip size="small" color="info" label={s.fixable} />
                     : <Chip size="small" color="success" variant="outlined" label="0" />}
                 </TableCell>
                 <TableCell align="right">
+                  {s.fixableCritical > 0 ? <Chip size="small" color="error" label={s.fixableCritical} /> : "—"}
+                </TableCell>
+                <TableCell align="right">
+                  {s.fixableHigh > 0 ? <Chip size="small" color="error" variant="outlined" label={s.fixableHigh} /> : "—"}
+                </TableCell>
+                <TableCell align="right">
+                  {s.fixableMaxCvss > 0
+                    ? <Chip size="small" color={cvssColor(s.fixableMaxCvss)} label={s.fixableMaxCvss.toFixed(1)} />
+                    : <Typography variant="body2" color="text.secondary">—</Typography>}
+                </TableCell>
+                <TableCell align="right" sx={{ borderLeft: 1, borderColor: "divider" }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {s.critical - s.fixableCritical} / {s.high - s.fixableHigh}
+                  </Typography>
+                </TableCell>
+                <TableCell align="right">
                   <Typography variant="body2" color="text.secondary">{s.wontFix > 0 ? s.wontFix : "—"}</Typography>
                 </TableCell>
-                <TableCell align="right">{s.total}</TableCell>
+                <TableCell align="right">
+                  <Typography variant="body2" color="text.secondary">{s.total}</Typography>
+                </TableCell>
                 <TableCell>{formatDateTime(s.createdAt)}</TableCell>
               </TableRow>
             ))}
@@ -158,6 +202,46 @@ export function VulnerabilitiesPage() {
       {scanOpen && <ScanDialog onClose={() => setScanOpen(false)} onStarted={() => { setScanOpen(false); refresh(); }} />}
       {findingsScan && <FindingsDialog scanId={findingsScan} onClose={() => setFindingsScan(null)} />}
     </Box>
+  );
+}
+
+// FleetHeadline answers the page's actual question — "is there anything to do?" —
+// before any row is read. Without it the eye lands on the biggest red number in the
+// table, which on a patched fleet is the count of CVEs nobody can fix.
+function FleetHeadline({ scans }: { scans: VulnScan[] }) {
+  if (scans.length === 0) return null;
+  const sum = (pick: (s: VulnScan) => number) => scans.reduce((n, s) => n + pick(s), 0);
+  const fixable = sum((s) => s.fixable);
+  const fixableCrit = sum((s) => s.fixableCritical);
+  const fixableHigh = sum((s) => s.fixableHigh);
+  const unfixedCrit = sum((s) => s.critical - s.fixableCritical);
+  const affected = scans.filter((s) => s.fixable > 0).length;
+  // The newest scan in the roll-up: every row is one host's latest, so the most
+  // recent of them is how fresh the picture as a whole is.
+  const scanned = scans.reduce((a, s) => (s.createdAt > a ? s.createdAt : a), scans[0].createdAt);
+
+  return (
+    <Alert severity={fixable === 0 ? "success" : fixableCrit > 0 ? "error" : "warning"} sx={{ mb: 2 }}>
+      {fixable === 0 ? (
+        <>
+          <strong>Nothing outstanding.</strong> No fixable CVEs across {scans.length} host
+          {scans.length > 1 ? "s" : ""}. The {unfixedCrit.toLocaleString()} critical CVEs below have no
+          fix available — they are unpatched or won't-fix upstream, not missed patches.
+        </>
+      ) : (
+        <>
+          <strong>{fixable.toLocaleString()} fixable CVE{fixable > 1 ? "s" : ""}</strong> on {affected} of{" "}
+          {scans.length} hosts
+          {fixableCrit > 0 || fixableHigh > 0
+            ? ` — ${fixableCrit} critical, ${fixableHigh} high.`
+            : " (none critical or high)."}{" "}
+          A further {unfixedCrit.toLocaleString()} critical CVEs have no fix available.
+        </>
+      )}{" "}
+      <Typography variant="caption" color="text.secondary" component="span">
+        Latest scan {formatDateTime(scanned)}.
+      </Typography>
+    </Alert>
   );
 }
 
@@ -375,18 +459,65 @@ function FixStateChip({ value }: { value: FixState }) {
   }
 }
 
+// A finding merged across every binary package its source builds. One row per
+// (CVE, component) instead of one per (CVE, binary): the same CVE repeated against
+// libcpupower1 and linux-cpupower is one vulnerability in one component, and
+// listing it twice is what made a patched host's drill-down look endless.
+interface GroupedFinding extends VulnFinding {
+  component: string;
+  packages: string[];
+  kernel: boolean;
+}
+
+function groupByComponent(findings: VulnFinding[]): GroupedFinding[] {
+  const by = new Map<string, GroupedFinding>();
+  for (const f of findings) {
+    const component = vulnComponent(f);
+    const key = `${f.cve} ${component}`;
+    const g = by.get(key);
+    if (!g) {
+      by.set(key, {
+        ...f, component, packages: [f.package], kernel: isKernelSourceFinding(f),
+      });
+      continue;
+    }
+    if (!g.packages.includes(f.package)) g.packages.push(f.package);
+    // Merge the way the backend's summary does, so the drill-down and the roll-up
+    // cannot disagree: worst severity and score, most actionable fix state.
+    if (f.cvssScore > g.cvssScore) g.cvssScore = f.cvssScore;
+    if (SEV_RANK.indexOf(f.severity) >= 0 && SEV_RANK.indexOf(f.severity) < SEV_RANK.indexOf(g.severity)) {
+      g.severity = f.severity;
+    }
+    if (FIX_RANK.indexOf(fixStateOf(f)) < FIX_RANK.indexOf(fixStateOf(g))) {
+      g.fixState = fixStateOf(f);
+      g.fixedVersion = f.fixedVersion;
+      g.installedVersion = f.installedVersion;
+      g.remediation = f.remediation;
+    }
+  }
+  return [...by.values()].sort((a, b) => b.cvssScore - a.cvssScore || a.cve.localeCompare(b.cve));
+}
+
+const SEV_RANK = ["Critical", "High", "Medium", "Low", "Negligible", "Unknown"];
+const FIX_RANK: FixState[] = ["fixed", "not-fixed", "wont-fix", "unknown"];
+
 function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => void }) {
   const { data, isLoading } = useQuery({ queryKey: ["vuln-scan", scanId], queryFn: () => getVulnScan(scanId) });
   const [sbomBusy, setSbomBusy] = useState(false);
   const [sbomError, setSbomError] = useState(false);
   const scan = data?.scan;
   const findings = data?.findings ?? [];
+  const kernelRelease = data?.kernelRelease ?? "";
 
   const [fixableOnly, setFixableOnly] = useState(false);
   const [hideWontFix, setHideWontFix] = useState(false);
+  const [grouped, setGrouped] = useState(true);
   const [sevs, setSevs] = useState<string[]>(SEV_DEFAULT);
   const sevSet = new Set(sevs.map((s) => s.toLowerCase()));
-  const shown = findings.filter(
+  const rows: GroupedFinding[] = grouped
+    ? groupByComponent(findings)
+    : findings.map((f) => ({ ...f, component: vulnComponent(f), packages: [f.package], kernel: isKernelSourceFinding(f) }));
+  const shown = rows.filter(
     (f) =>
       sevSet.has((f.severity || "unknown").toLowerCase()) &&
       (!fixableOnly || fixStateOf(f) === "fixed") &&
@@ -395,11 +526,21 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
   // The findings list is per CVE-on-package; the scan's total counts CVEs. Show both
   // so "72 CVEs / 154 rows" doesn't read as an inconsistency.
   const distinctShown = new Set(shown.map((f) => f.cve)).size;
+  // Kernel CVEs that arrived attributed to a userspace helper. Worth calling out
+  // explicitly: on a stock Debian host these are routinely the single largest block
+  // of criticals, and nothing about the package name says "kernel".
+  const kernelRows = shown.filter((f) => f.kernel);
+  const kernelMatchedAt = kernelRows[0]?.installedVersion ?? "";
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="lg">
       <DialogTitle>
-        {scan ? `${scan.hostname} — ${scan.total} CVEs, ${scan.fixable} fixable` : "Findings"}
+        {scan
+          ? `${scan.hostname} — ${scan.fixable} fixable of ${scan.total} CVEs` +
+            (scan.fixableCritical + scan.fixableHigh > 0
+              ? ` (${scan.fixableCritical} critical, ${scan.fixableHigh} high)`
+              : "")
+          : "Findings"}
       </DialogTitle>
       <DialogContent>
         {isLoading && <CircularProgress size={20} />}
@@ -407,12 +548,24 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
           <Typography variant="caption" color="text.secondary">
             Scanned {formatDateTime(scan.createdAt)}
             {scan.dbBuiltAt ? ` · CVE DB built ${formatDateTime(scan.dbBuiltAt)}` : ""}
-            {" · "}{scan.fixable} of {scan.total} CVEs have an available fix
+            {kernelRelease ? ` · running kernel ${kernelRelease}` : ""}
             {scan.wontFix > 0 ? ` · ${scan.wontFix} marked won't-fix upstream` : ""}
             {scan.fixable === 0 && scan.total > 0
               ? " — nothing outstanding: every remaining CVE is unfixed upstream, not a missed patch."
               : ""}
           </Typography>
+        )}
+        {kernelRows.length > 0 && (
+          <Alert severity="info" sx={{ mt: 1 }}>
+            <strong>{kernelRows.length} of these are Linux kernel CVEs.</strong> They are listed against{" "}
+            {[...new Set(kernelRows.map((f) => f.packages.join(", ")))].slice(0, 3).join(", ")} because the
+            distribution builds those helpers from the same <code>linux</code> source package its security
+            tracker files kernel CVEs under — so grype matches the whole kernel CVE list against them, at{" "}
+            {kernelMatchedAt ? <code>{kernelMatchedAt}</code> : "that package's version"}
+            {kernelRelease ? <> while the host is running <code>{kernelRelease}</code></> : null}. The
+            vulnerabilities are real and concern the kernel, not the helper package; patch and reboot the
+            kernel to clear them.
+          </Alert>
         )}
         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" sx={{ mt: 1 }}>
           <FormControlLabel
@@ -423,6 +576,12 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
             control={<Switch size="small" checked={hideWontFix} onChange={(e) => setHideWontFix(e.target.checked)} />}
             label="Hide won't-fix"
           />
+          <Tooltip title="One row per CVE and source package instead of one per binary package. A source package builds many binaries and each repeats the same CVE, so ungrouped lists run roughly twice as long without saying anything more.">
+            <FormControlLabel
+              control={<Switch size="small" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />}
+              label="Group by component"
+            />
+          </Tooltip>
           <ToggleButtonGroup
             size="small" value={sevs} onChange={(_, v) => setSevs(v as string[])}
             aria-label="severity filter"
@@ -432,7 +591,8 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
             ))}
           </ToggleButtonGroup>
           <Typography variant="caption" color="text.secondary">
-            showing {shown.length} of {findings.length} package findings ({distinctShown} distinct CVEs)
+            showing {shown.length} of {rows.length} {grouped ? "component findings" : "package findings"}{" "}
+            ({distinctShown} distinct CVEs)
           </Typography>
         </Stack>
         <Divider sx={{ my: 1 }} />
@@ -443,15 +603,15 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                 <TableCell>Severity</TableCell>
                 <TableCell align="right">CVSS</TableCell>
                 <TableCell>CVE</TableCell>
-                <TableCell>Package</TableCell>
+                <TableCell>{grouped ? "Component" : "Package"}</TableCell>
                 <TableCell>Installed</TableCell>
                 <TableCell>Fixed in</TableCell>
                 <TableCell>Fix</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {shown.map((f: VulnFinding, i) => (
-                <TableRow key={`${f.cve}-${f.package}-${i}`}>
+              {shown.map((f, i) => (
+                <TableRow key={`${f.cve}-${f.component}-${i}`}>
                   <TableCell><Chip size="small" color={SEV_COLOR[f.severity] ?? "default"} label={f.severity} /></TableCell>
                   <TableCell align="right">{f.cvssScore > 0 ? f.cvssScore.toFixed(1) : "—"}</TableCell>
                   <TableCell>
@@ -459,7 +619,21 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                       <a href={f.dataSource} target="_blank" rel="noopener noreferrer">{f.cve}</a>
                     ) : f.cve}
                   </TableCell>
-                  <TableCell>{f.package}</TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
+                      <span>{grouped ? f.component : f.package}</span>
+                      {f.kernel && (
+                        <Tooltip title={`A kernel CVE. The distribution builds ${f.packages.join(", ")} from the ${f.component} source package that kernel CVEs are tracked under, so it is matched here — the kernel is what is affected.`}>
+                          <Chip size="small" variant="outlined" color="warning" label="kernel" />
+                        </Tooltip>
+                      )}
+                      {grouped && f.packages.length > 1 && (
+                        <Tooltip title={f.packages.join(", ")}>
+                          <Chip size="small" variant="outlined" label={`${f.packages.length} pkgs`} />
+                        </Tooltip>
+                      )}
+                    </Stack>
+                  </TableCell>
                   <TableCell><code>{f.installedVersion}</code></TableCell>
                   <TableCell>{f.fixedVersion ? <code>{f.fixedVersion}</code> : <FixStateChip value={fixStateOf(f)} />}</TableCell>
                   <TableCell><RemediationChip value={f.remediation} /></TableCell>
