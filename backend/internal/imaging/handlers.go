@@ -256,8 +256,12 @@ func (h *handler) images(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not read the image library")
 		return
 	}
+	// imagerArches travels with the image library because the two are read
+	// together: an image is not deployable without an imager to write it, and
+	// finding that out from the provisioning preflight — after choosing a network
+	// and pressing Start — is late.
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"images": out, "dir": h.svc.artifactDir()})
+		"images": out, "dir": h.svc.artifactDir(), "imagerArches": h.svc.ImagerArches()})
 }
 
 // bundles also reports how many machines are running each version, because the

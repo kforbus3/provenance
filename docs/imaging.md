@@ -235,6 +235,28 @@ declining. So these SBOMs answer "what CVEs affect this image" and cannot answer
 for. Worth knowing before feeding one to a compliance tool and getting 201
 unknowns back.
 
+## The netboot imager
+
+Before any machine can be imaged there has to be something for it to boot. The
+**netboot imager** is a kernel and initramfs the machine downloads over TFTP and
+executes; it is what writes the image to the disk. Without one, PXE boots into
+nothing, and the provisioning preflight refuses to start the server.
+
+Build it from **Imaging → Images → Build netboot imager**. It is separate from an
+OS image build because it takes no distribution, profile or credentials — only an
+architecture.
+
+It is **per architecture**, because the imager *is* a kernel: an amd64 imager
+cannot boot an arm64 machine however it is served. Building an arm64 image is only
+half of supporting arm64 and this is the other half. amd64 lives at the top of the
+imager directory, where it always has, so a server predating arm64 support keeps
+working untouched; other architectures get a subdirectory. A machine picks its own
+at boot from iPXE's `${buildarch}`, so both can be present and neither interferes.
+
+The Images tab shows which architectures have one, and says so plainly when none
+do — rather than leaving it to be discovered from the provisioning preflight after
+a network has been chosen and Start pressed.
+
 ## Provisioning: choosing the network to image on
 
 **Imaging → Provisioning** is where a machine gets written in the first place. It

@@ -82,6 +82,35 @@ func (s *Service) artifactDir() string {
 
 func (s *Service) bundleDir() string { return filepath.Join(s.artifactDir(), "bundles") }
 
+// ImagerArches reports which architectures have a netboot imager built.
+//
+// The imager is the kernel and initramfs a machine downloads and executes to be
+// imaged at all, so without one PXE boots into nothing — which is why the
+// provisioning preflight refuses to start the server without it. It is per
+// architecture because the imager IS a kernel: an amd64 imager cannot boot an
+// arm64 machine however it is served.
+//
+// amd64 lives at the top of the imager directory, where it always has, so a
+// server predating arm64 support keeps working untouched; other architectures
+// get a subdirectory. A machine picks its own at boot from iPXE's ${buildarch},
+// so both can be present and neither interferes.
+func (s *Service) ImagerArches() map[string]bool {
+	built := func(dir string) bool {
+		for _, f := range []string{"vmlinuz", "initramfs.img"} {
+			st, err := os.Stat(filepath.Join(dir, f))
+			if err != nil || st.IsDir() {
+				return false
+			}
+		}
+		return true
+	}
+	base := filepath.Join(s.artifactDir(), "imager")
+	return map[string]bool{
+		"amd64": built(base),
+		"arm64": built(filepath.Join(base, "arm64")),
+	}
+}
+
 // Images lists the built image library, newest first.
 func (s *Service) Images() ([]Image, error) {
 	entries, err := os.ReadDir(s.artifactDir())

@@ -126,9 +126,22 @@ export async function listMachines(): Promise<MachineList> {
   };
 }
 
-export async function listImages(): Promise<{ images: Image[]; dir: string }> {
+// imagerArches travels with the image library because the two are read together:
+// an image is not deployable without a netboot imager to write it, and finding
+// that out from the provisioning preflight — after choosing a network and pressing
+// Start — is late. The imager IS a kernel, so it is per architecture: an amd64
+// imager cannot boot an arm64 machine however it is served.
+export async function listImages(): Promise<{
+  images: Image[];
+  dir: string;
+  imagerArches: Record<string, boolean>;
+}> {
   const { data } = await api.get("/api/v1/imaging/images");
-  return { images: data.images ?? [], dir: data.dir ?? "" };
+  return {
+    images: data.images ?? [],
+    dir: data.dir ?? "",
+    imagerArches: data.imagerArches ?? {},
+  };
 }
 
 export async function listBundles(): Promise<{
