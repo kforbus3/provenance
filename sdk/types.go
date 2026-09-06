@@ -152,30 +152,45 @@ type TokenInput struct {
 
 // VulnScan is a vulnerability scan of one host, with severity rollups.
 type VulnScan struct {
-	ID         string     `json:"id"`
-	HostID     string     `json:"hostId"`
-	Hostname   string     `json:"hostname,omitempty"`
-	Requester  string     `json:"requester"`
-	Scheduled  bool       `json:"scheduled"`
-	Status     string     `json:"status"` // pending|running|completed|failed
-	Error      string     `json:"error,omitempty"`
-	Total      int        `json:"total"`
-	Critical   int        `json:"critical"`
-	High       int        `json:"high"`
-	Medium     int        `json:"medium"`
-	Low        int        `json:"low"`
-	Negligible int        `json:"negligible"`
-	Unknown    int        `json:"unknown"`
-	MaxCVSS    float64    `json:"maxCvss"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	CreatedAt  time.Time  `json:"createdAt"`
+	ID         string  `json:"id"`
+	HostID     string  `json:"hostId"`
+	Hostname   string  `json:"hostname,omitempty"`
+	Requester  string  `json:"requester"`
+	Scheduled  bool    `json:"scheduled"`
+	Status     string  `json:"status"` // pending|running|completed|failed
+	Error      string  `json:"error,omitempty"`
+	Total      int     `json:"total"`
+	Critical   int     `json:"critical"`
+	High       int     `json:"high"`
+	Medium     int     `json:"medium"`
+	Low        int     `json:"low"`
+	Negligible int     `json:"negligible"`
+	Unknown    int     `json:"unknown"`
+	MaxCVSS    float64 `json:"maxCvss"`
+	// Fixable is the actionable subset: CVEs with a fix available now. WontFix are
+	// those the distribution assessed and will never fix. The Fixable* severity
+	// counts break the actionable subset down — automation should gate on those
+	// rather than on Critical/High, which count every CVE regardless of whether a
+	// fix exists and stay high on a fully-patched host.
+	Fixable         int        `json:"fixable"`
+	WontFix         int        `json:"wontFix"`
+	FixableCritical int        `json:"fixableCritical"`
+	FixableHigh     int        `json:"fixableHigh"`
+	FixableMedium   int        `json:"fixableMedium"`
+	FixableMaxCVSS  float64    `json:"fixableMaxCvss"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
 }
 
 // VulnFinding is one CVE affecting one installed package.
 type VulnFinding struct {
-	CVE              string  `json:"cve"`
-	Package          string  `json:"package"`
+	CVE     string `json:"cve"`
+	Package string `json:"package"`
+	// SourcePackage is the source package the CVE was matched against. Distro
+	// trackers key on the source, so one source repeats its CVEs across every binary
+	// it builds — group on this to count components rather than package rows.
+	SourcePackage    string  `json:"sourcePackage,omitempty"`
 	InstalledVersion string  `json:"installedVersion"`
 	FixedVersion     string  `json:"fixedVersion,omitempty"`
 	Severity         string  `json:"severity"`

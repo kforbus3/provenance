@@ -711,9 +711,18 @@ type VulnScan struct {
 	Fixable    int        `json:"fixable"`
 	WontFix    int        `json:"wontFix"`
 	MaxCVSS    float64    `json:"maxCvss"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	CreatedAt  time.Time  `json:"createdAt"`
+	// The severity breakdown of the FIXABLE subset — the CVEs an upgrade clears
+	// today. These are the roll-up's headline numbers; Critical/High/Medium above
+	// count every fix state and so stay high on a fully-patched host.
+	FixableCritical int `json:"fixableCritical"`
+	FixableHigh     int `json:"fixableHigh"`
+	FixableMedium   int `json:"fixableMedium"`
+	// FixableMaxCVSS is the worst score among fixable CVEs — 0 when none are.
+	// MaxCVSS is 10.0 on virtually every Linux host and so discriminates nothing.
+	FixableMaxCVSS float64    `json:"fixableMaxCvss"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
 }
 
 // VulnFinding is one CVE affecting one installed package.
@@ -741,8 +750,14 @@ type MSRCEntry struct {
 }
 
 type VulnFinding struct {
-	CVE              string `json:"cve"`
-	Package          string `json:"package"`
+	CVE     string `json:"cve"`
+	Package string `json:"package"`
+	// SourcePackage is the source/upstream package grype resolved Package to before
+	// matching. Distro trackers key on the source, so one source fans its CVEs out
+	// across every binary it builds — grouping on this collapses that repetition and
+	// names the component that is actually vulnerable. Empty on scans recorded
+	// before it was captured, and on matches with no upstream (CPE/Windows paths).
+	SourcePackage    string `json:"sourcePackage,omitempty"`
 	InstalledVersion string `json:"installedVersion"`
 	FixedVersion     string `json:"fixedVersion,omitempty"`
 	// FixState is the scanner's verdict on whether a fix exists at all — one of the
@@ -808,6 +823,59 @@ func MoreActionableFixState(a, b string) string {
 		return b
 	}
 	return a
+}
+
+// kernelSources are the source packages distributions track kernel CVEs under.
+// Debian and Ubuntu both use `linux` (with signed/hwe variants building from it);
+// RPM distributions use `kernel`.
+var kernelSources = map[string]bool{
+	"linux": true, "linux-signed": true, "linux-signed-amd64": true,
+	"linux-signed-arm64": true, "linux-latest": true,
+	"kernel": true, "kernel-rt": true,
+}
+
+// kernelBinaryPrefixes are the binary packages that ARE the kernel — as opposed to
+// the userspace helpers built from the same source, which merely inherit its CVEs.
+var kernelBinaryPrefixes = []string{"linux-image", "kernel-core", "kernel-modules", "kernel-uek"}
+
+// IsKernelSourceFinding reports whether a finding is a KERNEL CVE that grype
+// attributed to a non-kernel binary package.
+//
+// This is the single largest distortion in a Linux roll-up. Debian ships the
+// kernel's userspace helpers — cpupower, the headers, kbuild, libc-dev — from the
+// same `linux` source package the security tracker keys kernel CVEs on, so grype
+// matches every kernel CVE against them. On a sampled host, libcpupower1 and
+// linux-cpupower carried 227 of 547 critical+high CVEs while the actual
+// linux-image-* packages matched nothing at all (Debian's signed images build from
+// linux-signed-amd64, which the tracker does not key on). The result is a real list
+// of kernel vulnerabilities filed under a CPU-frequency utility, evaluated at
+// whatever version that helper happens to sit at rather than the running kernel's.
+//
+// The findings are not false — the kernel really is affected — so they are labelled
+// rather than dropped. Callers use this to attribute them to the kernel and to show
+// which version was actually matched.
+func IsKernelSourceFinding(f VulnFinding) bool {
+	src := strings.ToLower(strings.TrimSpace(f.SourcePackage))
+	if !kernelSources[src] {
+		return false
+	}
+	pkg := strings.ToLower(strings.TrimSpace(f.Package))
+	for _, p := range kernelBinaryPrefixes {
+		if strings.HasPrefix(pkg, p) {
+			return false // the kernel itself: correctly attributed already
+		}
+	}
+	return true
+}
+
+// VulnComponent returns the name a finding should be reported under: the source
+// package when one is known, falling back to the binary package for scans recorded
+// before source capture and for CPE matches that have no upstream.
+func VulnComponent(f VulnFinding) string {
+	if s := strings.TrimSpace(f.SourcePackage); s != "" {
+		return s
+	}
+	return f.Package
 }
 
 // Remediation categories for a vulnerability finding on a host.

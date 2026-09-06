@@ -556,19 +556,36 @@ func summarize(findings []models.VulnFinding) (store.VulnSummary, []models.VulnF
 		if a.cvss > sum.MaxCVSS {
 			sum.MaxCVSS = a.cvss
 		}
+		fixable := a.fixState == models.FixStateFixed
 		switch a.fixState {
 		case models.FixStateFixed:
 			sum.Fixable++
+			if a.cvss > sum.FixableMaxCVSS {
+				sum.FixableMaxCVSS = a.cvss
+			}
 		case models.FixStateWontFix:
 			sum.WontFix++
 		}
+		// Severity is counted twice: once over everything (the raw exposure) and
+		// once over the fixable subset only. A fully-patched host legitimately
+		// carries hundreds of unfixed-upstream criticals, so the raw counts cannot
+		// be the headline — the fixable ones are the work.
 		switch strings.ToLower(a.severity) {
 		case "critical":
 			sum.Critical++
+			if fixable {
+				sum.FixableCritical++
+			}
 		case "high":
 			sum.High++
+			if fixable {
+				sum.FixableHigh++
+			}
 		case "medium":
 			sum.Medium++
+			if fixable {
+				sum.FixableMedium++
+			}
 		case "low":
 			sum.Low++
 		case "negligible":

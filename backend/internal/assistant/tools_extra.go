@@ -454,17 +454,33 @@ func (s *Service) runVulnerabilities(ctx context.Context, raw json.RawMessage, w
 		if len(scans) == 0 {
 			return nil, map[string]any{"count": 0, "scans": []any{}, "note": "no completed vulnerability scans on any accessible host"}
 		}
+		// Lead with the fixable breakdown. "Critical" over every fix state is not a
+		// measure of outstanding work — a fully-patched Debian host reports hundreds
+		// of criticals that no upgrade will ever clear — so the actionable columns
+		// come first and the raw exposure follows as context.
 		tbl := &AssistantTable{
-			Title:   "Vulnerability posture",
-			Columns: []TableColumn{{Label: "Host"}, {Label: "Fixable"}, {Label: "Critical"}, {Label: "High"}, {Label: "Medium"}, {Label: "Won't fix"}, {Label: "Total CVEs"}, {Label: "Scanned", Kind: "time"}},
+			Title: "Vulnerability posture",
+			Columns: []TableColumn{{Label: "Host"}, {Label: "Fixable critical"}, {Label: "Fixable high"},
+				{Label: "Fixable total"}, {Label: "Unfixed critical"}, {Label: "Unfixed high"},
+				{Label: "Won't fix"}, {Label: "Total CVEs"}, {Label: "Scanned", Kind: "time"}},
 		}
+		var fixable, fixableCrit int
 		for _, v := range scans {
+			fixable += v.Fixable
+			fixableCrit += v.FixableCritical
 			tbl.Rows = append(tbl.Rows, []string{
-				v.Hostname, fmt.Sprint(v.Fixable), fmt.Sprint(v.Critical), fmt.Sprint(v.High),
-				fmt.Sprint(v.Medium), fmt.Sprint(v.WontFix), fmt.Sprint(v.Total), tableTimePtr(v.FinishedAt),
+				v.Hostname, fmt.Sprint(v.FixableCritical), fmt.Sprint(v.FixableHigh), fmt.Sprint(v.Fixable),
+				fmt.Sprint(v.Critical - v.FixableCritical), fmt.Sprint(v.High - v.FixableHigh),
+				fmt.Sprint(v.WontFix), fmt.Sprint(v.Total), tableTimePtr(v.FinishedAt),
 			})
 		}
-		return tbl, map[string]any{"count": len(scans), "scans": scans}
+		return tbl, map[string]any{
+			"count": len(scans), "scans": scans,
+			"fixableTotal": fixable, "fixableCritical": fixableCrit,
+			"note": "Counts are distinct CVEs. 'Fixable' is the only actionable subset — a patched " +
+				"host still reports many unfixed-upstream criticals, so a high Critical count with " +
+				"zero fixable means there is nothing to patch, not that the host is behind.",
+		}
 	}
 
 	// Per-host findings: latest completed scan for the host.
