@@ -1591,6 +1591,24 @@ def server_up() -> str:
             os.makedirs(os.path.join(settings.output_dir, d), exist_ok=True)
         except OSError:
             pass
+    # Re-render the per-machine boot scripts from the stored assignments.
+    #
+    # They are written once, when an assignment is saved, and then never again --
+    # so a change to the script TEMPLATE reached only machines assigned after it.
+    # The console-ordering fix landed and every already-assigned machine kept
+    # booting with the old command line, which is the kind of "fixed it, still
+    # broken" that costs an evening. Starting the stack is the natural moment to
+    # bring them up to date.
+    #
+    # Best-effort: an assignment naming an image that has since been deleted
+    # raises, and refusing to start the PXE server over one stale row would be a
+    # worse outcome than leaving that row's script as it was.
+    try:
+        write_assignments(read_assignments())
+    except Exception as exc:  # noqa: BLE001
+        # print, not a logger: this module has none, and a NameError inside an
+        # except block would replace the real reason with a worse one.
+        print(f"[orchestrator] could not re-render per-machine boot scripts: {exc}")
     return (_compose("up", "-d", "--build").stderr or "started").strip()
 
 
