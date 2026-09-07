@@ -335,6 +335,19 @@ services:
       # runner's container_name.
       PROJECT_CONTAINER: blackfriars-builder-runner
       LOG_LEVEL: ${PROXY_LOG_LEVEL:-INFO}
+      # Cross-architecture builds (an arm64 image on an amd64 host) need a qemu
+      # interpreter registered with binfmt_misc. Off by default: registering it
+      # means running a THIRD-PARTY image as host root, and everything else this
+      # proxy permits is built from this repository.
+      #
+      # Prefer registering the interpreters on the host instead — it persists
+      # across reboots, which this does not, and needs no exception here:
+      #     sudo apt install qemu-user-static binfmt-support
+      #
+      # Set BINFMT_ALLOW=1 to let each build do it instead. Pin BINFMT_IMAGE to a
+      # digest if you do.
+      BINFMT_ALLOW: ${BINFMT_ALLOW:-}
+      BINFMT_IMAGE: ${BINFMT_IMAGE:-tonistiigi/binfmt}
     volumes:
       # Not :ro. A read-only bind of a unix socket restricts nothing about what
       # can be done through it -- the confinement is the allowlist, and
@@ -384,6 +397,10 @@ services:
       # Set to unix:///var/run/docker.sock (and mount it) only if the allowlist
       # ever refuses something a build legitimately needs.
       DOCKER_HOST: ${DOCKER_HOST:-unix:///shared/docker.sock}
+      # The same value the socket proxy is given. The runner runs this image and
+      # the proxy decides whether it may; if the two disagree the build is refused
+      # with a message naming an image nobody configured.
+      BINFMT_IMAGE: ${BINFMT_IMAGE:-tonistiigi/binfmt}
     # The runner does not hold the raw socket either. It talks to dockerproxy,
     # which passes an allowlist of the calls a build actually makes and refuses
     # the rest. Two layers, because the runner runs shell that interpolates
