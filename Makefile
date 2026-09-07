@@ -251,7 +251,7 @@ imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runne
 	  sh -c "python test_rules.py"
 	docker run --rm -v $(PWD)/deploy/builder-runner:/src -w /src python:3.13-alpine \
 	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
-	         python test_auth.py && python test_preflight.py"
+	         python test_auth.py && python test_preflight.py && python test_binfmt.py"
 
 .PHONY: lint
 lint: fmt-check ## Run gofmt check + Go vet
