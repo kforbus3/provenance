@@ -412,6 +412,18 @@ services:
       - dockerproxy:/shared
       # The project, for the builder context, overlay.d, and output/.
       - ../..:/project
+      # The HOST's binfmt_misc registrations, read-only, so a cross-architecture
+      # build can tell whether the qemu interpreter it needs is already there.
+      #
+      # It has to be the host's: this container has its own /proc, where
+      # /proc/sys/fs/binfmt_misc is empty no matter what the host has registered.
+      # Reading that instead would conclude "not registered" on a host where
+      # `apt install qemu-user-static` had already made the build work, and refuse
+      # to run it.
+      #
+      # Read-only — the container reads what is registered and cannot register
+      # anything, which is the whole point of the check.
+      - /proc/sys/fs/binfmt_misc:/host/binfmt_misc:ro
     deploy:
       resources:
         limits:
