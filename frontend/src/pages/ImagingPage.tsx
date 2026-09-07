@@ -1143,6 +1143,15 @@ function BuildLogDialog({ id, onClose }: { id: string | null; onClose: () => voi
  * shipping an image whose state manifest is wrong, which is otherwise a thing
  * discovered at a boot prompt.
  */
+// Why you would pick each. The trade-off is always the same one: what has to be
+// present at boot for the machine to come up on its own.
+const UNLOCK_HELP: Record<string, string> = {
+  keyfile: "Boots unattended anywhere. The key is in the initramfs, which is not encrypted.",
+  tpm2: "Boots unattended, and only on this machine — the key is sealed to its TPM. Enrolled on first boot.",
+  tang: "Boots unattended while it can reach the Tang server. Off that network, it needs the passphrase.",
+  passphrase: "Someone types it at every boot. No unattended reboots.",
+};
+
 function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
   open: boolean; onClose: () => void; onStarted: () => void; setMsg: (m: Note) => void;
 }) {
@@ -1158,13 +1167,20 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
   const [sshKey, setSshKey] = useState("");
   const [encrypt, setEncrypt] = useState(false);
   const [luks, setLuks] = useState("");
+  // keyfile is the builder's own default: it is the only method that both boots
+  // unattended and needs nothing else present (no TPM, no Tang server).
+  const [unlock, setUnlock] = useState<"passphrase" | "keyfile" | "tpm2" | "tang">("keyfile");
+  const [tangUrl, setTangUrl] = useState("");
 
   const start = useMutation({
     mutationFn: () => startBuild("image", {
       distro, suite, arch, hostname: hostname.trim(), username,
       password: password || "debian", profile, secureBoot,
       packages: packages.trim(), sshKey: sshKey.trim(),
-      encrypt, luksPassphrase: encrypt ? luks : "",
+      encrypt,
+      luksPassphrase: encrypt ? luks : "",
+      unlock: encrypt ? unlock : undefined,
+      tangUrl: encrypt && unlock === "tang" ? tangUrl.trim() : undefined,
     }),
     onSuccess: (job) => {
       setMsg({ kind: "success", text: `Started: ${job.label}. Watch it on the Builds tab.` });
@@ -1231,9 +1247,42 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
             control={<Switch checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} />}
             label="Encrypt the root filesystem (LUKS)" />
           {encrypt && (
-            <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
-                       onChange={(e) => setLuks(e.target.value)}
-                       helperText="Also travels in the environment, not on a command line" />
+            <>
+              {/* What unlocks the disk unattended. The passphrase below is enrolled
+                  for recovery in every case — this decides what else is. */}
+              <TextField select fullWidth size="small" label="Unlock method" value={unlock}
+                         onChange={(e) => setUnlock(e.target.value as typeof unlock)}
+                         helperText={UNLOCK_HELP[unlock]}>
+                <MenuItem value="keyfile">Keyfile in the initramfs (default)</MenuItem>
+                <MenuItem value="tpm2">TPM2 — sealed to the machine</MenuItem>
+                <MenuItem value="tang">Tang — released by a network server</MenuItem>
+                <MenuItem value="passphrase">Passphrase at every boot</MenuItem>
+              </TextField>
+              {unlock === "tang" && (
+                <TextField fullWidth size="small" label="Tang server URL" value={tangUrl}
+                           onChange={(e) => setTangUrl(e.target.value)}
+                           placeholder="http://tang.example.lan"
+                           helperText="Required for Tang. The machine must reach this at every boot; the root filesystem is mounted _netdev so networking comes up first." />
+              )}
+              {unlock === "keyfile" && (
+                <Alert severity="info">
+                  The key lives in the initramfs, which is <strong>not</strong> encrypted.
+                  This protects the disk at rest — a drive pulled out of the machine — not
+                  the machine itself in someone else's hands. TPM2 binds the key to this
+                  machine instead.
+                </Alert>
+              )}
+              {unlock === "passphrase" && (
+                <Alert severity="warning">
+                  Every boot stops for a typed passphrase, so the machine cannot reboot
+                  unattended — including after an A/B update. Fine for a workstation,
+                  usually wrong for a server.
+                </Alert>
+              )}
+              <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
+                         onChange={(e) => setLuks(e.target.value)}
+                         helperText="Enrolled for recovery whatever the unlock method — keep it. Travels in the environment, not on a command line." />
+            </>
           )}
           <Typography variant="caption" color="text.secondary">
             The build runs in a privileged container in the builder-runner sidecar and takes

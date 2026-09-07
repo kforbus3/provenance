@@ -235,6 +235,74 @@ declining. So these SBOMs answer "what CVEs affect this image" and cannot answer
 for. Worth knowing before feeding one to a compliance tool and getting 201
 unknowns back.
 
+## Building for another architecture
+
+Building an arm64 image (or imager) on an amd64 host runs arm64 binaries under
+qemu, which the kernel only does once a `binfmt_misc` interpreter is registered.
+Docker does not do that on its own, and without it the build dies inside a
+Dockerfile `RUN` with a bare **`exec format error`** that says nothing about the
+cause.
+
+Register the interpreters **on the host, once**:
+
+```bash
+sudo apt install qemu-user-static binfmt-support
+```
+
+This is the recommended route and the default assumption. It persists across
+reboots, and it needs no exception in the Docker socket proxy.
+
+The alternative is to let each build register them itself, using the third-party
+`tonistiigi/binfmt` image. That image runs **as host root**, and everything else
+the socket proxy permits is built from this repository — so it is **off by
+default** and has to be turned on deliberately:
+
+```
+BINFMT_ALLOW=1
+BINFMT_IMAGE=tonistiigi/binfmt@sha256:<digest>   # pin it if you enable it
+```
+
+Note this registration only survives until the host reboots, which the package
+route does not have to.
+
+Either way the build now **stops** when no interpreter is available, and says
+which of the two remedies to apply. It used to warn and carry on, so the real
+failure arrived minutes later as `exec format error` inside a Dockerfile — a
+message about the wrong thing entirely.
+
+## Disk encryption and how it unlocks
+
+Ticking **Encrypt the root filesystem (LUKS)** always enrols the passphrase you
+give as a recovery slot. The **unlock method** decides what *else* can open the
+disk, and the trade-off is always the same one: what has to be present at boot
+for the machine to come up on its own.
+
+| method | boots unattended | needs |
+| --- | --- | --- |
+| `keyfile` (default) | yes, anywhere | nothing — the key is in the initramfs |
+| `tpm2` | yes, on that machine only | a TPM; enrolled on first boot |
+| `tang` | yes, on that network | a reachable Tang server |
+| `passphrase` | **no** | somebody at the console, every boot |
+
+**`keyfile` protects the disk at rest, not the machine.** The initramfs is not
+encrypted, so the key can be read off a drive by anyone holding the machine. It
+defends against a disk pulled out of a rack, which is the common case; `tpm2`
+defends against the machine itself walking, because the key is sealed to that
+TPM and means nothing anywhere else.
+
+**`tang` mounts the root filesystem `_netdev`**, so networking comes up before
+the disk. Off that network the machine falls back to asking for the passphrase —
+which is exactly the intended behaviour for a laptop, and a surprise for a server
+in a rack whose Tang server is down.
+
+**`passphrase` cannot reboot unattended**, including after an A/B update. That
+makes it the wrong choice for anything the rollout engine manages.
+
+TPM2 and Tang enrol on the machine's *first boot* rather than at build time, since
+neither the TPM nor the network exists in the builder. Until that enrolment runs,
+the passphrase is the only thing that opens the disk — so a machine that fails
+first boot is recovered with it.
+
 ## The netboot imager
 
 Before any machine can be imaged there has to be something for it to boot. The

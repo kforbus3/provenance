@@ -176,5 +176,54 @@ try:
 except proxy.Denied:
     check("a HostConfig that is not an object is refused", True)
 
+print("== the binfmt registrar is OFF by default ==")
+# It is a third-party image from Docker Hub run as host root. Everything else this
+# proxy will run is built from this repository, and that exception should never
+# arrive without somebody choosing it.
+check("the binfmt image is refused by default", denied({"Image": "tonistiigi/binfmt"}))
+check("and may not run privileged by default",
+      denied({"Image": "tonistiigi/binfmt", "HostConfig": {"Privileged": True}}))
+check("pulling it is refused by default",
+      not proxy.allowed("POST", "/v1.45/images/create?fromImage=tonistiigi/binfmt"))
+
+print("== enabled, it is permitted and nothing else is ==")
+proxy.BINFMT_ALLOW = True
+proxy.BINFMT_IMAGE = "tonistiigi/binfmt"
+try:
+    check("the binfmt image may now run", not denied({"Image": "tonistiigi/binfmt"}))
+    check("and may run privileged, which is what it is for",
+          not denied({"Image": "tonistiigi/binfmt", "HostConfig": {"Privileged": True}}))
+    # docker run pulls what it does not have, so without this the setting would
+    # fail at the pull instead of the create -- applied-looking and not applied.
+    check("pulling exactly it is permitted",
+          proxy.allowed("POST", "/v1.45/images/create?fromImage=tonistiigi/binfmt"))
+    check("with a tag split across fromImage and tag",
+          proxy.allowed("POST", "/v1.45/images/create?fromImage=tonistiigi/binfmt&tag=latest"))
+    # Enabling one image must not become a general pull capability.
+    check("pulling anything else is still refused",
+          not proxy.allowed("POST", "/v1.45/images/create?fromImage=alpine"))
+    check("a lookalike registry path is refused",
+          denied({"Image": "evil.example.com/tonistiigi/binfmt"}))
+    check("a tagged lookalike is refused",
+          denied({"Image": "tonistiigi/binfmt-evil"}))
+    check("and the enabled name does not widen privilege for others",
+          denied({"Image": "debian-ab-http", "HostConfig": {"Privileged": True}}))
+
+    # Pinning by digest is the recommended form; the daemon sends the digest in
+    # `tag`, joined with '@' rather than ':'.
+    proxy.BINFMT_IMAGE = "tonistiigi/binfmt@sha256:" + "a" * 64
+    check("a digest-pinned image matches when split across the two parameters",
+          proxy.allowed("POST", "/v1.45/images/create?fromImage=tonistiigi/binfmt&tag=sha256:" + "a" * 64))
+    check("and the unpinned name is then refused",
+          denied({"Image": "tonistiigi/binfmt"}))
+finally:
+    proxy.BINFMT_ALLOW = False
+    proxy.BINFMT_IMAGE = "tonistiigi/binfmt"
+
+print("== turning it back off closes it again ==")
+check("refused once disabled", denied({"Image": "tonistiigi/binfmt"}))
+check("pull refused once disabled",
+      not proxy.allowed("POST", "/v1.45/images/create?fromImage=tonistiigi/binfmt"))
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)
