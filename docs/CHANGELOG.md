@@ -77,6 +77,19 @@ in `.env.example`.
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
 See [deployment.md](./deployment.md).
 
+### Encrypted images can say how they unlock
+
+`--unlock` has always taken `passphrase | keyfile | tpm2 | tang`, the sidecar has
+always passed it through, and the API client already had the field — the build
+dialog just never offered it, so every encrypted image was built with the default
+keyfile whether that was wanted or not.
+
+The dialog now asks, and says what each choice costs: `keyfile` boots unattended
+anywhere but keeps the key in an unencrypted initramfs; `tpm2` seals it to the
+machine; `tang` needs the network it was enrolled against; `passphrase` cannot
+reboot unattended at all, which makes it the wrong choice for anything a rollout
+manages. Tang additionally takes its server URL, which the builder requires.
+
 ### The netboot imager can be built
 
 `POST /imaging/builds/imager` existed, the sidecar's `/build/imager` existed, and
