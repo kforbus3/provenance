@@ -1,6 +1,7 @@
 package imaging
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,9 @@ func mountBuilds(r chi.Router, h *handler) {
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/overlay/file", h.overlayRead)
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Put("/imaging/overlay/file", h.overlayWrite)
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/overlay/file", h.overlayDelete)
+	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/overlay/download", h.overlayDownload)
+	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Post("/imaging/overlay/move", h.overlayMove)
+	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Post("/imaging/overlay/chmod", h.overlayChmod)
 
 	// The provisioning stack. Its own permission: this is the part that
 	// reconfigures a network segment, and the blast radius of a wrong DHCP range
@@ -294,7 +298,11 @@ func (h *handler) overlayRead(w http.ResponseWriter, r *http.Request) {
 type overlayWriteReq struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
-	Mode    *int   `json:"mode"`
+	// ContentBase64 carries a file that is not text. Uploads use it for
+	// everything, because a browser reading a file cannot know whether what it
+	// holds is UTF-8 and guessing wrong corrupts the file silently.
+	ContentBase64 string `json:"contentBase64"`
+	Mode          *int   `json:"mode"`
 }
 
 func (h *handler) overlayWrite(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +310,7 @@ func (h *handler) overlayWrite(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	out, err := h.svc.OverlayWrite(r.Context(), req.Path, req.Content, req.Mode)
+	out, err := h.svc.OverlayWrite(r.Context(), req.Path, req.Content, req.ContentBase64, req.Mode)
 	if err != nil {
 		fail(w, err)
 		return
@@ -310,7 +318,69 @@ func (h *handler) overlayWrite(w http.ResponseWriter, r *http.Request) {
 	// The content is not audited, only that it changed and by whom. An overlay
 	// file is routinely a config carrying a token or a key, and an audit log is
 	// read by more people than the thing it describes.
-	h.audit(r, "imaging.overlay.write", req.Path, map[string]any{"bytes": len(req.Content)})
+	//
+	// Base64 length is reported as the decoded size, so the number means the same
+	// thing whichever way the file arrived.
+	size := len(req.Content)
+	if req.ContentBase64 != "" {
+		size = base64.StdEncoding.DecodedLen(len(req.ContentBase64))
+	}
+	h.audit(r, "imaging.overlay.write", req.Path, map[string]any{"bytes": size})
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// overlayDownload returns a file's bytes for anything the editor cannot show —
+// a binary, or something too large to open in a browser.
+func (h *handler) overlayDownload(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.OverlayDownload(r.Context(), r.URL.Query().Get("path"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+type overlayMoveReq struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// overlayMove renames a file within the overlay. Both paths are resolved against
+// the overlay root by the sidecar, so neither can name somewhere else.
+func (h *handler) overlayMove(w http.ResponseWriter, r *http.Request) {
+	var req overlayMoveReq
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	out, err := h.svc.OverlayMove(r.Context(), req.From, req.To)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	h.audit(r, "imaging.overlay.move", req.From, map[string]any{"to": req.To})
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+type overlayChmodReq struct {
+	Path string `json:"path"`
+	Mode int    `json:"mode"`
+}
+
+// overlayChmod sets a file's mode. It is its own operation because a browser
+// cannot read a file's permissions when uploading it — so a folder of scripts
+// arrives without its executable bits, and setting them is the step that makes
+// the difference between a boot that runs them and one that does not.
+func (h *handler) overlayChmod(w http.ResponseWriter, r *http.Request) {
+	var req overlayChmodReq
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	out, err := h.svc.OverlayChmod(r.Context(), req.Path, req.Mode)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	h.audit(r, "imaging.overlay.chmod", req.Path, map[string]any{"mode": req.Mode})
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 

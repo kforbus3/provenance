@@ -157,6 +157,29 @@ on a page that had no such button.
   `imagerArches` for it, read from the artefact directory the same way the image
   library already is.
 
+### The overlay takes uploads, including binaries and whole folders
+
+The Overlay tab could only create and edit text typed into the browser. That was
+not merely a missing button: the write path was `content: str`, so a certificate,
+a compiled tool or a firmware blob — the things an overlay is *for* — could not be
+put in an image at all.
+
+- **Upload files, or a whole folder** with its tree kept beneath a chosen path.
+- **Download** anything, including what the editor cannot open.
+- **Rename/move** and **change mode**, which the sidecar has always supported and
+  nothing exposed.
+- Bytes travel **base64 in JSON**, in both directions and for every upload rather
+  than only ones that look binary: a browser cannot know whether a file is UTF-8,
+  and guessing wrong corrupts it silently. It also keeps the sidecar, the Go proxy
+  and the browser on one contract instead of adding multipart to all three.
+- 16 MiB cap each way (`MAX_OVERLAY_BYTES`). Uploads run one at a time, so the
+  count is honest and a refusal stops the run instead of leaving a half-written
+  tree with no indication of which half.
+
+The mode is its own operation because **a browser cannot read a file's
+permissions**: an uploaded folder of scripts arrives unexecutable, and `cp -a`
+preserves that onto every machine built from the image.
+
 ### Provisioning and overlay files reach the UI
 
 The imaging backend and its sidecar carried the whole provisioning API — pick an
