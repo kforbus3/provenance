@@ -221,6 +221,33 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 .PHONY: test
 test: backend-test frontend-test scanner-test imaging-test ## Run all tests
 
+.PHONY: smoke
+smoke: ## Build a real initramfs and check what is actually in it (rpm family, ~5 min)
+	# The gate the static checks cannot be. `make imaging-test` reads the build
+	# scripts; this one RUNS the part of them that has produced every expensive
+	# bug in the RHEL work, and asks the artefact what it contains.
+	#
+	# An initramfs missing a hook, a module or its crypttab builds cleanly,
+	# produces a valid image, and fails at boot on a machine that is no longer in
+	# front of you. A full image build takes half an hour, so those bugs were
+	# being found one per build. This reproduces just the initramfs assembly --
+	# same bootstrap, same overlay files, same dracut invocation, in a chroot as
+	# the real build does -- in a few minutes, with no loop device, no LUKS and
+	# no bootloader.
+	#
+	# Not in GitHub Actions: these are private repos with metered Actions turned
+	# off, so CI here is a target you run before pushing, like `make lint`.
+	#
+	# --privileged for the bind mounts the chroot needs. linux/amd64 because the
+	# rpm family's packages are, and an emulated bootstrap would take longer than
+	# the thing it is checking.
+	docker run --rm --privileged --platform=linux/amd64 \
+	  --ulimit nofile=65536:65536 \
+	  -v $(PWD)/builder:/builder:ro almalinux:9 \
+	  bash /builder/smoke/initramfs-smoke.sh $(SMOKE_SUITE)
+
+SMOKE_SUITE ?= 9
+
 .PHONY: backend-test
 backend-test: ## Run Go unit + integration tests
 	# Mount the REPO ROOT, not backend/. Several tests assert that committed

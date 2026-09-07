@@ -2282,8 +2282,16 @@ else
     # module name appears in the module list whether or not any hook was
     # installed under a name dracut will source. That check could not fail, which
     # is why nothing noticed that the hook never ran.
+    # A herestring, NOT `printf ... | grep -q`. With `set -o pipefail` (line 14)
+    # that pipeline reports FAILURE even when the pattern matches: grep -q exits
+    # the moment it finds one, printf takes SIGPIPE on the rest of a 200KB
+    # listing, and pipefail surfaces printf's status as the pipeline's. The
+    # checks below then fail on a perfectly good initramfs -- which is exactly
+    # what happened, and cost a build: the hooks were present and this said they
+    # were not. The listing is already in a variable, so there is no reason for a
+    # pipe at all.
     _initrd_files="$(chroot "$MNT" lsinitrd "/boot/initramfs-${KVER_FOR_DRACUT}.img" 2>/dev/null || true)"
-    if ! printf '%s' "$_initrd_files" | grep -qE "hooks/pre-pivot/.*ab-overlay\.sh"; then
+    if ! grep -qE "hooks/pre-pivot/.*ab-overlay\.sh" <<<"$_initrd_files"; then
         die "the generated initramfs has no runnable A/B overlay hook
     (looked for hooks/pre-pivot/*ab-overlay.sh). dracut sources only *.sh from a
     hook directory, so a hook installed under any other name is inert. Without it
@@ -2296,19 +2304,19 @@ else
     # initramfs cannot open a LUKS volume is not a degraded image, it is a brick,
     # and it is a clean build right up until someone boots it.
     if [ "$ENCRYPT" = true ]; then
-        if ! printf '%s' "$_initrd_files" | grep -qE "cryptsetup|/crypt"; then
+        if ! grep -qE "cryptsetup|/crypt" <<<"$_initrd_files"; then
             die "this image is encrypted but the generated initramfs has no crypt
     support in it, so nothing can unlock the root filesystem at boot. The machine
     would reach an emergency shell every time."
         fi
         # And the rule it unlocks BY. crypt support with no crypttab is an
         # initramfs that can open LUKS containers and does not know which ones.
-        if ! printf '%s' "$_initrd_files" | grep -qE "etc/crypttab"; then
+        if ! grep -qE "etc/crypttab" <<<"$_initrd_files"; then
             die "the initramfs has crypt support but no /etc/crypttab, so nothing
     tells it which volumes to unlock. --no-hostonly means dracut does not copy the
     file; --install /etc/crypttab is what puts it there."
         fi
-        if ! printf '%s' "$_initrd_files" | grep -qE "hooks/initqueue/settled/.*ab-luks-key\.sh"; then
+        if ! grep -qE "hooks/initqueue/settled/.*ab-luks-key\.sh" <<<"$_initrd_files"; then
             die "the generated initramfs has no runnable LUKS bootstrap-key hook
     (looked for hooks/initqueue/settled/*ab-luks-key.sh). Without it the machine
     cannot fetch its own key from the BOOT partition and every boot stops at a
