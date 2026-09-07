@@ -101,3 +101,66 @@ func TestImagerArchesSurvivesAMissingOutputDir(t *testing.T) {
 		t.Errorf("ImagerArches() = %v, want both false", got)
 	}
 }
+
+// The artefact name arrives from a URL and ends at os.Open, so a separator or a
+// `..` in it is the whole attack. filepath.Base alone is not enough: it would
+// turn "../../etc/shadow" into "shadow" and serve a file that happens to exist
+// under that name in the output directory.
+func TestArtifactPathRefusesAnythingButAPlainName(t *testing.T) {
+	s, dir := svcWithOutput(t)
+	touch(t, filepath.Join(dir, "real.img"))
+	// A file outside the output directory, which none of these may reach.
+	outside := filepath.Join(filepath.Dir(dir), "secret.img")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, bad := range []string{
+		"../secret.img", "../../etc/shadow", "/etc/shadow",
+		"sub/real.img", "./real.img", "..", ".", "",
+		"real.img/../../secret.img",
+	} {
+		if _, err := s.ImagePath(bad); err == nil {
+			t.Errorf("ImagePath(%q) succeeded; it must be refused", bad)
+		}
+	}
+
+	got, err := s.ImagePath("real.img")
+	if err != nil {
+		t.Fatalf("ImagePath(real.img) = %v, want it to resolve", err)
+	}
+	if got != filepath.Join(dir, "real.img") {
+		t.Errorf("ImagePath resolved to %q", got)
+	}
+}
+
+// Only things that look like images. The output directory also holds keys,
+// signing material and the provisioning server's env file, and a download route
+// that served any filename in it would serve those.
+func TestArtifactPathRefusesNonImages(t *testing.T) {
+	s, dir := svcWithOutput(t)
+	for _, f := range []string{"rauc-keys", ".env", "server.key", "notes.txt"} {
+		touch(t, filepath.Join(dir, f))
+		if _, err := s.ImagePath(f); err == nil {
+			t.Errorf("ImagePath(%q) succeeded; only images may be downloaded", f)
+		}
+	}
+}
+
+// An image built before SBOMs existed has the image and not the sidecar. That is
+// a different answer from "no such image" and must not read as one.
+func TestSBOMPathIsSeparateFromTheImage(t *testing.T) {
+	s, dir := svcWithOutput(t)
+	touch(t, filepath.Join(dir, "a.img"))
+	if _, err := s.SBOMPath("a.img"); err == nil {
+		t.Error("SBOMPath succeeded with no .spdx.json present")
+	}
+	touch(t, filepath.Join(dir, "a.img.spdx.json"))
+	got, err := s.SBOMPath("a.img")
+	if err != nil {
+		t.Fatalf("SBOMPath = %v, want it to resolve once the sidecar exists", err)
+	}
+	if filepath.Base(got) != "a.img.spdx.json" {
+		t.Errorf("SBOMPath resolved to %q", got)
+	}
+}

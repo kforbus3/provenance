@@ -238,3 +238,46 @@ func firstField(s string) string {
 	}
 	return f[0]
 }
+
+// artifactPath resolves a named artefact inside the output directory, refusing
+// anything that is not a plain filename in it.
+//
+// The name arrives from a URL and ends at os.Open, so a separator or a `..` in it
+// is the whole attack. filepath.Base is not enough on its own -- it would turn
+// "../../etc/shadow" into "shadow" and serve a file that happens to exist -- so
+// the name is required to be unchanged by Base, and the joined path is required
+// to still be inside the directory.
+func (s *Service) artifactPath(name, suffix string) (string, error) {
+	clean := filepath.Base(strings.TrimSpace(name))
+	if clean != strings.TrimSpace(name) || clean == "" || clean == "." || clean == ".." {
+		return "", fmt.Errorf("invalid artefact name")
+	}
+	if !isImage(clean) {
+		return "", fmt.Errorf("invalid artefact name")
+	}
+	dir := s.artifactDir()
+	full := filepath.Join(dir, clean+suffix)
+	if !strings.HasPrefix(filepath.Clean(full), filepath.Clean(dir)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid artefact name")
+	}
+	st, err := os.Stat(full)
+	if err != nil {
+		return "", fmt.Errorf("no such artefact")
+	}
+	if st.IsDir() {
+		return "", fmt.Errorf("no such artefact")
+	}
+	return full, nil
+}
+
+// ImagePath is the built image itself, for download.
+func (s *Service) ImagePath(name string) (string, error) { return s.artifactPath(name, "") }
+
+// SBOMPath is an image's SPDX bill of materials.
+//
+// Written beside the image by make-sbom.sh at build time. It is evidence: an
+// image nothing can answer a CVE question about later is an image nobody can
+// defend, and evidence that cannot be got out of the tool is not much use.
+func (s *Service) SBOMPath(name string) (string, error) {
+	return s.artifactPath(name, ".spdx.json")
+}
