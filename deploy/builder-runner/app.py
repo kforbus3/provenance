@@ -36,6 +36,7 @@ import base64
 import binascii
 import hmac
 import logging
+import subprocess
 import os
 import stat
 
@@ -461,3 +462,36 @@ def overlay_chmod(req: OverlayChmod):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="no such file") from exc
+
+
+# --------------------------- imaging key backup ---------------------------
+# Metadata only. There is deliberately no route that returns key material: a
+# signing key fetchable over HTTP is one whose custody is whoever holds a session
+# cookie, and this one cannot be regenerated.
+
+
+@app.get("/keys/status", dependencies=guarded)
+def keys_status():
+    return orch.key_backup_status()
+
+
+@app.post("/keys/backup", dependencies=guarded)
+def keys_backup():
+    try:
+        return orch.key_backup_create()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/keys/inspect", dependencies=guarded)
+def keys_inspect(name: str):
+    try:
+        return orch.key_backup_inspect(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

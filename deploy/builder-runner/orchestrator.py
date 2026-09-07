@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -1550,3 +1551,140 @@ def server_clients() -> list[dict]:
     for ip, event in by_ip.items():
         seen[ip] = {"mac": "—", "ip": ip, "event": event, "last": ""}
     return [e for e in seen.values() if e["event"] != "imaged"]
+
+
+# --------------------------- imaging key backup ---------------------------
+# What the database backup cannot hold: the RAUC signing key, the MAC->hostname
+# assignments, and the provisioning stack's configuration.
+#
+# The key never leaves the host. These calls report on it and produce an archive
+# BESIDE it; nothing here returns key material, and there is deliberately no
+# download route. A signing key that can be fetched over HTTP is a signing key
+# whose custody is whoever holds a session cookie -- and losing this one means no
+# deployed machine can ever be updated again, while leaking it means anyone can
+# sign an update every one of them installs without complaint.
+
+KEY_BACKUP_SCRIPT = os.path.join(PROJ, "scripts", "imaging", "imaging-keys-backup.sh")
+
+# Mirrors the script's own PATHS. Kept in step by the test that reads both.
+KEY_BACKUP_PATHS = (
+    ("output/rauc-keys", "the update signing key and its certificate — irreplaceable"),
+    ("output/hosts/assignments.json", "which MAC gets which hostname when it is imaged"),
+    ("server/.env", "the provisioning stack's network configuration"),
+)
+
+# Where archives are written and looked for. Inside the project, because that is
+# what the runner has mounted, and beside the thing being backed up rather than
+# somewhere a later cleanup would not think to look.
+def key_backup_dir() -> str:
+    return os.path.join(PROJ, "output", "key-backups")
+
+
+def key_backup_status() -> dict:
+    """What would be backed up, whether it is there, and what backups exist."""
+    items = []
+    for rel, why in KEY_BACKUP_PATHS:
+        full = os.path.join(PROJ, rel)
+        present = os.path.exists(full)
+        size = 0
+        if present:
+            if os.path.isdir(full):
+                for dirpath, _d, files in os.walk(full):
+                    for fn in files:
+                        try:
+                            size += os.path.getsize(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+            else:
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    pass
+        items.append({"path": rel, "why": why, "present": present, "size": size})
+
+    backups = []
+    d = key_backup_dir()
+    if os.path.isdir(d):
+        for fn in sorted(os.listdir(d), reverse=True):
+            if not fn.endswith(".tar.gz"):
+                continue
+            full = os.path.join(d, fn)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            backups.append({
+                "name": fn,
+                "size": st.st_size,
+                "created": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                                   .isoformat(timespec="seconds"),
+            })
+
+    # The signing key is the one that cannot be regenerated, so its absence from
+    # every backup is the fact worth surfacing rather than a count of files.
+    have_key = any(i["path"] == "output/rauc-keys" and i["present"] for i in items)
+    return {
+        "items": items,
+        "backups": backups,
+        "dir": d,
+        "haveSigningKey": have_key,
+        "scriptPresent": os.path.isfile(KEY_BACKUP_SCRIPT),
+    }
+
+
+def _safe_backup_name(name: str) -> str:
+    """A backup filename, refusing anything that is not one.
+
+    It arrives from a browser and is joined to a directory, so a separator or a
+    `..` in it is the whole attack.
+    """
+    clean = os.path.basename(str(name or "").strip())
+    if clean != str(name or "").strip() or not clean.endswith(".tar.gz"):
+        raise ValueError("not a backup archive name")
+    return clean
+
+
+def key_backup_create() -> dict:
+    """Run the script, leaving the archive on the host. Returns its metadata."""
+    if not os.path.isfile(KEY_BACKUP_SCRIPT):
+        raise FileNotFoundError("the backup script is not in this checkout")
+    d = key_backup_dir()
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    name = f"imaging-keys-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    dest = os.path.join(d, name)
+    proc = subprocess.run(["bash", KEY_BACKUP_SCRIPT, "backup", dest],
+                          capture_output=True, text=True, timeout=300)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "backup failed").strip()[:500])
+    st = os.stat(dest)
+    h = hashlib.sha256()
+    with open(dest, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return {
+        "name": name,
+        "size": st.st_size,
+        "sha256": h.hexdigest(),
+        "path": dest,
+        # The script says so on stdout when the key is absent; carried through
+        # because "a backup was written" and "a backup with the key in it was
+        # written" are different facts and only one of them is reassuring.
+        "output": (proc.stdout or "").strip()[:4000],
+    }
+
+
+def key_backup_inspect(name: str) -> dict:
+    """The names inside an archive. Names only -- never contents."""
+    clean = _safe_backup_name(name)
+    full = os.path.join(key_backup_dir(), clean)
+    if not os.path.isfile(full):
+        raise FileNotFoundError("no such backup")
+    proc = subprocess.run(["tar", "-tzf", full], capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError("not a readable archive")
+    entries = [l for l in proc.stdout.splitlines() if l.strip()]
+    return {
+        "name": clean,
+        "entries": entries,
+        "containsSigningKey": any("rauc-keys/key.pem" in e for e in entries),
+    }

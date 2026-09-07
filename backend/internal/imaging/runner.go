@@ -399,3 +399,37 @@ func (s *Service) OverlayChmod(ctx context.Context, path string, mode int) (map[
 func (s *Service) OverlayDelete(ctx context.Context, path string) error {
 	return s.runner(ctx, http.MethodDelete, "/overlay/file?path="+url.QueryEscape(path), nil, nil)
 }
+
+// --- imaging key backup -------------------------------------------------
+//
+// What the database backup cannot hold: the RAUC signing key, the MAC→hostname
+// assignments, and the provisioning stack's configuration.
+//
+// Metadata only, in both directions. The key never crosses this boundary and
+// there is no download route on purpose — a signing key fetchable over HTTP is
+// one whose custody is whoever holds a session cookie, and losing this one means
+// no deployed machine can ever be updated again.
+
+func (s *Service) KeyBackupStatus(ctx context.Context) (map[string]any, error) {
+	var out map[string]any
+	if err := s.runner(ctx, http.MethodGet, "/keys/status", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Service) KeyBackupCreate(ctx context.Context) (map[string]any, error) {
+	var out map[string]any
+	if err := s.runner(ctx, http.MethodPost, "/keys/backup", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Service) KeyBackupInspect(ctx context.Context, name string) (map[string]any, error) {
+	var out map[string]any
+	if err := s.runner(ctx, http.MethodGet, "/keys/inspect?name="+url.QueryEscape(name), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

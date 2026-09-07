@@ -104,6 +104,35 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### The imaging keys have a backup page, and the key stays on the host
+
+The RAUC signing key, the MAC→hostname assignments and the provisioning stack's
+configuration are files, not rows, so the encrypted database backup does not and
+cannot contain them. There was a script and no page.
+
+**Imaging → Keys** shows what exists and what does not, writes an archive, and
+lists what is in one. It says plainly when there is no signing key at all —
+because if this server ever had one, a backup taken now would not contain it, and
+machines already deployed accept only bundles signed by the original.
+
+**The archive is written on the server and stays there.** There is deliberately
+no download: a signing key fetchable over HTTP is one whose custody is whoever
+holds a session cookie, and losing this key means no deployed machine can ever be
+updated again — not "until we re-key", ever, because each verifies against a
+certificate baked into its own image. Copy it off with `scp`, as a decision
+rather than a click. Inspecting an archive returns entry *names* only.
+
+**Restore is not here either**, and that is not an omission: the moment you need
+it is the moment this server is not running, so it stays as
+`scripts/imaging/imaging-keys-backup.sh restore` on the host. A button that only
+works when you do not need it is not a recovery procedure.
+
+Also raised the minimum root slot for the RPM family from 2560 MiB to 5120. It
+was inheriting Debian's floor, and the RAUC build installs a whole toolchain into
+the slot before removing it — transient, but it has to fit. A 3 GiB slot ran out
+partway through and failed as "No space left on device": a true message about the
+wrong thing.
+
 ### Images and their SBOMs can be downloaded
 
 The Images tab showed "N packages" for an image with a bill of materials and gave
