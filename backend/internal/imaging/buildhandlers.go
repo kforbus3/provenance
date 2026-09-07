@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -34,6 +36,11 @@ func mountBuilds(r chi.Router, h *handler) {
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/images/{name}", h.deleteImage)
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/bundles/{name}", h.deleteBundle)
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/disk", h.disk)
+	// Downloads. Imaging.View, not Build: reading an artefact is not producing
+	// one, and the person who has to hand an SBOM to an auditor is not
+	// necessarily the person allowed to start a build.
+	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images/{name}/download", h.downloadImage)
+	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images/{name}/sbom", h.downloadSBOM)
 
 	// The build overlay: files layered into an image.
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/overlay", h.overlayList)
@@ -392,6 +399,54 @@ func (h *handler) overlayDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "imaging.overlay.delete", path, nil)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// serveArtifact streams a file from the output directory as an attachment.
+//
+// Streamed with http.ServeFile rather than read into memory: an image is several
+// gigabytes, and reading one into a buffer to hand it to a browser is how a
+// backend with plenty of memory runs out of it.
+func (h *handler) serveArtifact(w http.ResponseWriter, r *http.Request, path, filename, contentType string) {
+	f, err := os.Open(path)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such artefact")
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the artefact")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	http.ServeContent(w, r, filename, st.ModTime(), f)
+}
+
+func (h *handler) downloadImage(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	path, err := h.svc.ImagePath(name)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	h.audit(r, "imaging.image.download", name, nil)
+	h.serveArtifact(w, r, path, filepath.Base(path), "application/octet-stream")
+}
+
+func (h *handler) downloadSBOM(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	path, err := h.svc.SBOMPath(name)
+	if err != nil {
+		// Distinguished from a missing image: an image built before SBOMs existed
+		// has one and not the other, and "no such image" would send somebody
+		// looking for the wrong thing.
+		httpx.WriteError(w, http.StatusNotFound,
+			"no SBOM for that image — it may predate SBOM generation")
+		return
+	}
+	h.audit(r, "imaging.sbom.download", name, nil)
+	h.serveArtifact(w, r, path, filepath.Base(path), "application/spdx+json")
 }
 
 // --- the provisioning stack --------------------------------------------------
