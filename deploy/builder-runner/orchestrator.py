@@ -725,9 +725,15 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     # the same suite do not overwrite one another in /output.
     out_name = image_output_name(opts)
     # `-e VAR` (no value) makes the docker CLI forward VAR from its own env.
+    # An RPM image needs an RPM builder: `dnf --installroot` is the bootstrap, and
+    # there is no dnf in the Debian one. A TAG rather than a second image name, so
+    # the socket proxy's allowlist -- which already matches debian-ab-builder with
+    # any tag -- needs no widening for an image this repository builds itself.
+    dockerfile, fam = builder_image_for(opts.get("distro", "debian"))
+    builder_tag = f"debian-ab-builder:{fam}-{arch}"
     script = (
         _binfmt_prelude(arch)
-        + _docker_build("builder", f"debian-ab-builder:{arch}", platform)
+        + _docker_build("builder", builder_tag, platform, dockerfile=dockerfile)
         + "echo '--- starting image build ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
         + f"--privileged --platform={platform} -v {_q(host_output_dir())}:/output "
@@ -735,7 +741,7 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         # being customized with.
         + f"-v {_q(host_overlay_dir())}:/overlay.d:ro "
         + "-e PASSWORD -e LUKS_PASS "
-        + f"debian-ab-builder:{arch} {' '.join(_q(a) for a in args)} --output {_q('/output/' + out_name)}\n"
+        + f"{builder_tag} {' '.join(_q(a) for a in args)} --output {_q('/output/' + out_name)}\n"
     )
     label = f"Build {distro}/{suite} {arch} image ({opts.get('hostname', f'{distro}-ab')})"
     return ["bash", "-c", script], label, env
@@ -821,8 +827,33 @@ def _binfmt_prelude(arch: str) -> str:
     )
 
 
+# Which builder image a distribution needs. The bootstrap step is the reason:
+# `dnf --installroot` needs a working dnf and the rpm it drives, and Debian's
+# packaged dnf pointed at a RHEL release is the fragile path -- one that fails
+# after twenty minutes of partitioning and encryption have already happened.
+#
+# Kept in step with build-image.sh's own FAMILY resolution by having exactly one
+# list of RPM distributions, here and there. They disagree only if somebody adds
+# a distribution to one and not the other, which is what the test asserts.
+RPM_DISTROS = ("almalinux", "rocky", "rhel")
+
+
+def builder_image_for(distro: str) -> tuple[str, str]:
+    """(dockerfile, image tag prefix) for a distribution's builder.
+
+    The tag rather than a new image NAME is deliberate: the socket proxy's
+    allowlist matches `debian-ab-builder` with any tag, and both builders are
+    images this repository builds from its own Dockerfiles -- the same trust
+    class. A new name would mean widening that allowlist for something it already
+    covers.
+    """
+    if str(distro).strip().lower() in RPM_DISTROS:
+        return "Dockerfile.rpm", "rpm"
+    return "Dockerfile", "deb"
+
+
 def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64",
-                  build_args: str = "") -> str:
+                  build_args: str = "", dockerfile: str = "") -> str:
     """Shell prelude that builds one of the repo's images.
 
     The build CONTEXT is a path inside this container (the docker CLI tars it up
@@ -835,6 +866,7 @@ def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64",
         "set -eo pipefail\n"
         f"echo '--- building {subdir} image ---'\n"
         f"docker build --progress=plain --platform={platform} "
+        f"{'-f ' + _q(PROJ + '/' + subdir + '/' + dockerfile) + ' ' if dockerfile else ''}"
         f"{build_args + ' ' if build_args else ''}-t {tag} {_q(PROJ + '/' + subdir)}\n"
     )
 
@@ -894,14 +926,21 @@ def build_bundle_cmd(image: str, version: str = "", description: str = "",
     # The passphrase travels in the environment, never on a command line where
     # it would show up in `ps` and in the job's stored metadata.
     env = {"LUKS_PASS": ""} if not encrypted else {}
+    # The DEB builder, whatever family the image inside the bundle came from.
+    # Bundling opens the image, repacks the root slot and signs it with rauc --
+    # and rauc is a package here and is NOT packaged for the RPM family at all
+    # (it is built from source inside an RPM image, which is a different thing
+    # from having it on the builder). Nothing in this step is distribution
+    # specific, so the builder that has the tool is the one that runs it.
+    bundler_tag = "debian-ab-builder:deb-amd64"
     script = (
-        _docker_build("builder", "debian-ab-builder:amd64")
+        _docker_build("builder", bundler_tag, dockerfile="Dockerfile")
         + "echo '--- building update bundle ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
         + "--privileged --platform=linux/amd64 "
         + f"-v {_q(host_output_dir())}:/output "
         + ("-e LUKS_PASS " if encrypted else "")
-        + "--entrypoint /build/make-bundle.sh debian-ab-builder:amd64 "
+        + f"--entrypoint /build/make-bundle.sh {bundler_tag} "
         + " ".join(_q(a) for a in args) + "\n"
     )
     return ["bash", "-c", script], f"Build update bundle from {image}", env

@@ -1,0 +1,76 @@
+# Builder image: produces an AlmaLinux or Rocky A/B disk image.
+# Must be run with --privileged (loop devices, mounts) and an /output volume.
+#
+# A separate image from the Debian builder, not a package added to it. The
+# bootstrap step is `dnf --installroot`, which needs a working dnf AND the rpm it
+# drives; Debian does package dnf, but pointing it at a RHEL release with that
+# rpm and those GPG keys is the fragile path, and it fails at the point where
+# twenty minutes of partitioning and encryption have already happened. Building
+# RPM images from an RPM host is the answer that does not need a caveat.
+#
+# Everything after the bootstrap is the same script as the Debian family runs --
+# see build-image.sh, which branches on FAMILY rather than being copied.
+FROM rockylinux:9
+
+# CRB (CodeReady Builder) is not enabled by default and carries several of the
+# tools below. EPEL is enabled first because that is what makes CRB's name
+# resolvable on the rebuilds.
+RUN dnf -y install epel-release dnf-plugins-core \
+    && (dnf config-manager --set-enabled crb || dnf config-manager --set-enabled powertools || true) \
+    && dnf -y install --setopt=install_weak_deps=False \
+        dnf \
+        rpm \
+        parted \
+        gdisk \
+        dosfstools \
+        e2fsprogs \
+        cryptsetup \
+        rsync \
+        zstd \
+        gzip \
+        grub2-tools \
+        ca-certificates \
+        squashfs-tools \
+        # dracut, so the tests can look inside a built initramfs with lsinitrd.
+        # The config saying no key is baked in is not the same claim as the
+        # initramfs not containing one, and only the second one boots.
+        dracut \
+        openssl \
+        kmod \
+        util-linux \
+        which \
+        tar \
+    && if [ "$(rpm -E %{_arch})" = "x86_64" ]; then \
+           dnf -y install --setopt=install_weak_deps=False grub2-pc-modules || true; \
+       fi \
+    && dnf clean all
+
+# There is deliberately no qemu-user-static here, and none is needed.
+#
+# It is not packaged for this family at all -- not in base, not in EPEL. It does
+# not have to be: the host registers its interpreters with binfmt_misc's `F`
+# flag, which opens the interpreter file at REGISTRATION time, so the kernel
+# holds it open for every namespace afterwards. A container therefore executes
+# foreign binaries without the emulator being inside it, which is why
+# `docker run --platform linux/arm64` works on a host that has run
+# `apt install qemu-user-static` and nothing else.
+#
+# The Debian builder installs it anyway, and that is a belt-and-braces its
+# package set happens to allow rather than something the mechanism requires.
+
+# parted shells out to `udevadm settle` after every partition change. No udev
+# daemon runs in a container, so the real thing would be a no-op at best -- but
+# without it parted prints "udevadm: not found" for each call, burying the build
+# log in noise. Settling is handled explicitly instead: build-image.sh polls
+# sysfs and creates the partition nodes itself. Installing systemd-udev to get
+# the binary is not an option here; it pulls in all of systemd.
+RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/sbin/udevadm \
+    && chmod +x /usr/local/sbin/udevadm
+
+WORKDIR /build
+COPY build-image.sh make-bundle.sh make-sbom.sh /build/
+COPY overlay /build/overlay
+RUN chmod +x /build/build-image.sh /build/make-bundle.sh /build/make-sbom.sh
+
+VOLUME /output
+ENTRYPOINT ["/build/build-image.sh"]
