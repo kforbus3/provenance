@@ -112,9 +112,12 @@ The cause was four hundred lines earlier: the socket proxy refused
 and carried on** into a failure that says nothing about binfmt.
 
 - The build now **aborts** when no interpreter is registered, naming both
-  remedies. It also checks `/proc/sys/fs/binfmt_misc` first, so a host that
-  already has them registered — Debian's `qemu-user-static` does, permanently —
-  skips the step entirely rather than needing any exception.
+  remedies. It checks the **host's** registrations first — through a read-only
+  bind of `/proc/sys/fs/binfmt_misc` at `/host/binfmt_misc` — so a host that
+  already has them, as Debian's `qemu-user-static` does permanently, skips the
+  step and needs no exception at all. The bind is required rather than tidy: a
+  container's own view of that directory is empty whatever the host registered,
+  so without it the check refused to build on a correctly configured host.
 - Automatic registration is now available but **off by default**
   (`BINFMT_ALLOW=1`, with `BINFMT_IMAGE` pinnable to a digest). It stays off by
   default because it means running a third-party Docker Hub image as host root,
