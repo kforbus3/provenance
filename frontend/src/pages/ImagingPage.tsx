@@ -1355,8 +1355,11 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
             label="Encrypt the root filesystem (LUKS)" />
           {encrypt && (
             <>
-              {/* What unlocks the disk unattended. The passphrase below is enrolled
-                  for recovery in every case — this decides what else is. */}
+              {/* What unlocks the disk unattended. This decides what else is
+                  enrolled as a LUKS keyslot besides the passphrase — it does not
+                  decide whether the passphrase is stored on this server. That is
+                  the toggle further down, and the two together are what make a
+                  laptop build different from a server one. */}
               <TextField select fullWidth size="small" label="Unlock method" value={unlock}
                          onChange={(e) => setUnlock(e.target.value as typeof unlock)}
                          helperText={UNLOCK_HELP[unlock]}>
@@ -1398,9 +1401,33 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
                   never saved looks exactly like a success.
                 </Alert>
               ) : (
-                <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
-                           onChange={(e) => setLuks(e.target.value)}
-                           helperText="Enrolled for recovery whatever the unlock method — keep it somewhere you will still have it when a machine will not boot. Travels in the environment, not on a command line." />
+                <>
+                  <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
+                             onChange={(e) => setLuks(e.target.value)}
+                             helperText="Enrolled as a LUKS keyslot so it always opens the disk. Travels in the environment, not on a command line." />
+                  {/* The off state is a security property, not the absence of a
+                      feature, and it has to say so. Read as "we did not bother to
+                      store it" this looks like a gap; read correctly it is the
+                      only configuration where compromising this server does not
+                      also hand over the disks. */}
+                  <Alert severity="warning">
+                    <strong>This passphrase is not stored anywhere on this server.</strong> Not
+                    in Credentials, not in a connected secrets manager, not in the audit log.
+                    It is handed to the builder and forgotten.
+                    {unlock === "passphrase" ? (
+                      <> With <em>Passphrase at every boot</em> above, that is the whole
+                        point: the machine holds no key, and neither does this server, so
+                        a stolen laptop and a compromised control plane are each useless
+                        on their own. Someone has to type this.</>
+                    ) : (
+                      <> Note that the unlock method above still puts a key on the
+                        machine, so this alone does not make a stolen machine safe —
+                        pair it with <em>Passphrase at every boot</em> for that.</>
+                    )}
+                    {" "}Keep it somewhere you will still have it when a machine will not
+                    boot, because nothing here can recover it for you.
+                  </Alert>
+                </>
               )}
             </>
           )}

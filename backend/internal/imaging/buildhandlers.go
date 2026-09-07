@@ -113,7 +113,7 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 	// the build is abandoned if it cannot be. See passphrase.go: an encrypted
 	// image whose key was never persisted looks exactly like a success.
 	var generated *GeneratedPassphrase
-	if kind == "image" && truthy(body["encrypt"]) && truthy(body["generatePassphrase"]) {
+	if shouldFilePassphrase(kind, body) {
 		p := auth.MustPrincipal(r)
 		name := h.svc.FreeImageName(imageBaseName(body))
 		meta := map[string]string{
@@ -171,6 +171,27 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, job)
+}
+
+// shouldFilePassphrase decides whether this build's LUKS passphrase is generated
+// and stored on this server, or whether the operator supplies one that is used
+// and then forgotten.
+//
+// Named rather than left inline because the false branch is a security property
+// somebody relies on, not merely a feature being off. An operator building a
+// laptop image turns "generate and store" off precisely so that compromising
+// this server does not also hand over the disks -- so a change that made this
+// file the passphrase anyway would break a promise the build dialog makes in
+// as many words, and would do it silently, in a direction no build failure
+// would ever reveal.
+//
+// All three conditions matter. Only image builds have a root filesystem to
+// encrypt; an unencrypted build has no passphrase to file; and generatePassphrase
+// is the operator's explicit ask. Anything missing means store nothing.
+func shouldFilePassphrase(kind string, body map[string]any) bool {
+	return kind == "image" &&
+		truthy(body["encrypt"]) &&
+		truthy(body["generatePassphrase"])
 }
 
 // truthy reads a JSON boolean that may have arrived as a bool or as a string.
