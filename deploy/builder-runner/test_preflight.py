@@ -18,7 +18,12 @@ os.environ.setdefault("PROJECT_DIR", "/project")
 failures = []
 
 
+checks_run = 0
+
+
 def check(name, cond):
+    global checks_run
+    checks_run += 1
     print(f"  {'PASS' if cond else 'FAIL'}  {name}")
     if not cond:
         failures.append(name)
@@ -52,5 +57,39 @@ check("ssh:// yields no path either",
 check("unix:// with nothing after it falls back",
       socket_path_with("unix://") == "/var/run/docker.sock")
 
-print(f"\n{4 + 3 - len(failures)} passed, {len(failures)} failed")
+
+
+import orchestrator as orch  # noqa: E402
+
+print("== a duplicate server IP is a named problem, not a packet capture ==")
+# The probe itself needs a raw socket and a live segment, so the wiring is what
+# is pinned here: a claimant reported by the probe MUST surface as a preflight
+# problem naming the MAC, and a clean probe must add nothing. The afternoon this
+# encodes: an old provisioning server still held the address, every PXE boot
+# died on a connection reset, and nothing in any log on this host said why.
+_orig = orch.probe_duplicate_ip
+orch.probe_duplicate_ip = lambda iface, ip: ["bc:24:11:3a:00:e7"]
+_probs = orch.provisioning_preflight({"INTERFACE": "ens19", "SERVER_IP": "192.168.50.1",
+                                      "MODE": "dhcp", "DHCP_RANGE_START": "192.168.50.100",
+                                      "DHCP_RANGE_END": "192.168.50.200", "IMAGE_FILE": ""})
+check("a claimant surfaces as a problem",
+      any("bc:24:11:3a:00:e7" in p for p in _probs))
+check("the problem says what to do about it",
+      any("Power it off" in p for p in _probs))
+
+orch.probe_duplicate_ip = lambda iface, ip: []
+_probs = orch.provisioning_preflight({"INTERFACE": "ens19", "SERVER_IP": "192.168.50.1",
+                                      "MODE": "dhcp", "DHCP_RANGE_START": "192.168.50.100",
+                                      "DHCP_RANGE_END": "192.168.50.200", "IMAGE_FILE": ""})
+check("a clean probe adds nothing", not any("answering for" in p for p in _probs))
+orch.probe_duplicate_ip = _orig
+
+print("== the inline ARP prober is valid python ==")
+try:
+    compile(orch._ARP_PROBE_PY, "<arp-probe>", "exec")
+    check("compiles", True)
+except SyntaxError as e:
+    check(f"compiles ({e})", False)
+
+print(f"\n{checks_run - len(failures)} passed, {len(failures)} failed")
 sys.exit(1 if failures else 0)

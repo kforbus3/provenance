@@ -1167,6 +1167,85 @@ def control_url() -> str:
         return ""
 
 
+# The ARP probe that runs inside a throwaway host-network container. Inline so
+# the runner image needs no extra tools: pure stdlib, AF_PACKET, ~2 seconds.
+#
+# It is a duplicate-address-detection probe: sender IP 0.0.0.0, so a host that
+# legitimately holds the address still answers, and OUR OWN host answering for
+# its own interface is expected -- which is why replies from local MACs are
+# filtered out. Anything left is a second machine claiming the server's address.
+_ARP_PROBE_PY = r"""
+import os, socket, struct, sys, time
+iface, ip = sys.argv[1], sys.argv[2]
+def macs():
+    out = set()
+    for d in os.listdir("/sys/class/net"):
+        try:
+            out.add(open(f"/sys/class/net/{d}/address").read().strip().lower())
+        except OSError:
+            pass
+    return out
+local = macs()
+my = open(f"/sys/class/net/{iface}/address").read().strip()
+mymac = bytes.fromhex(my.replace(":", ""))
+target = socket.inet_aton(ip)
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+s.bind((iface, 0))
+s.settimeout(0.3)
+frame = (b"\xff" * 6 + mymac + b"\x08\x06"
+         + struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1)
+         + mymac + b"\x00" * 4          # sender: our MAC, IP 0.0.0.0 (DAD)
+         + b"\x00" * 6 + target)        # target: the probed IP
+seen = set()
+end = time.time() + 2.0
+nxt = 0.0
+while time.time() < end:
+    if time.time() >= nxt:
+        s.send(frame); nxt = time.time() + 0.7
+    try:
+        pkt = s.recv(2048)
+    except socket.timeout:
+        continue
+    if len(pkt) < 42 or pkt[20:22] != b"\x00\x02":
+        continue                        # not an ARP reply
+    smac = pkt[22:28].hex(":")
+    sip = socket.inet_ntoa(pkt[28:32])
+    if sip == ip and smac not in local:
+        seen.add(smac)
+for m in sorted(seen):
+    print(m)
+"""
+
+
+def probe_duplicate_ip(iface: str, ip: str) -> list[str]:
+    """MACs of OTHER machines answering ARP for `ip` on `iface`.
+
+    Exists because of an afternoon lost to exactly this: a predecessor
+    provisioning server was still running on the segment with the same address,
+    machines completed their TCP handshake with it and sent their next packet to
+    us, and every PXE boot died on a connection reset that no log on this host
+    could explain. dnsmasq, TFTP and HTTP all checked out individually -- the
+    only witness was a packet capture. An ARP probe finds the same fact in two
+    seconds, before the stack starts.
+
+    Empty list = the address is unclaimed or only ours. Errors also return
+    empty: the probe is advisory, and refusing to start the stack because the
+    probe infrastructure hiccupped would be a worse failure than the one it
+    detects.
+    """
+    if not iface or not ip:
+        return []
+    try:
+        proc = subprocess.run(
+            ["docker", "run", "--rm", "--network", "host", "--cap-add", "NET_RAW",
+             _self_image(), "python3", "-c", _ARP_PROBE_PY, iface, ip],
+            capture_output=True, text=True, timeout=30,
+        )
+        return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    except Exception:
+        return []
+
+
 def provisioning_preflight(cfg: dict | None = None) -> list[str]:
     """What still stands between the current config and a working PXE boot.
 
@@ -1198,6 +1277,21 @@ def provisioning_preflight(cfg: dict | None = None) -> list[str]:
         )
     if not cfg.get("SERVER_IP"):
         problems.append("No server IP — pick a provisioning interface to fill it in.")
+    else:
+        # Nobody else may hold the server's address. When a second machine does
+        # -- a predecessor provisioning server left running is how it actually
+        # happens -- every boot is a coin toss: DHCP and TFTP resolve to one
+        # claimant, the HTTP handshake to the other, and the machine dies on a
+        # connection reset that none of this host's logs can explain. The only
+        # other witness to that failure is a packet capture.
+        for mac in probe_duplicate_ip(cfg.get("INTERFACE", ""), cfg["SERVER_IP"]):
+            problems.append(
+                f"Another machine ({mac}) is answering for {cfg['SERVER_IP']} on "
+                f"{cfg.get('INTERFACE')}. Machines will intermittently boot from it "
+                "instead of this server and fail with connection resets. Power it "
+                "off — it is likely an old provisioning server — or move this "
+                "stack to a different subnet."
+            )
 
     if cfg.get("MODE", "dhcp") == "dhcp":
         if not (cfg.get("DHCP_RANGE_START") and cfg.get("DHCP_RANGE_END")):
