@@ -1474,6 +1474,20 @@ def server_status() -> dict:
 
 
 def server_up() -> str:
+    # Create the directories the HTTP container symlinks into, BEFORE starting it.
+    #
+    # /data is the output directory mounted read-only, so nothing inside that
+    # container can create them -- and its entrypoint used to try, fail, and
+    # crash-loop nginx on a deployment where no assignment had ever been saved.
+    # `hosts/` was only ever created by write_assignments(), so a fresh install
+    # that had not yet assigned a per-machine image had no PXE server at all: the
+    # machine got a DHCP lease, appeared in the UI, and could never fetch an
+    # imager. Cheap to do here, and this is the one process that can.
+    for d in ("hosts", "bundles"):
+        try:
+            os.makedirs(os.path.join(settings.output_dir, d), exist_ok=True)
+        except OSError:
+            pass
     return (_compose("up", "-d", "--build").stderr or "started").strip()
 
 

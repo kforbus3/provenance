@@ -6,7 +6,16 @@ set -eu
 : "${IMAGE_FILE:?Set IMAGE_FILE to the image filename in ./output (e.g. debian-trixie-ab.img.zst)}"
 ACTION="${ACTION:-reboot}"
 
-mkdir -p /srv/http /data/hosts
+mkdir -p /srv/http
+# /data is mounted read-only, so these can only be created from outside the
+# container -- server_up() does it before starting the stack. Failure here is
+# tolerated deliberately: the symlink below still resolves once the directory
+# appears, and a missing one 404s per request, which is what the comment on that
+# line has always claimed. Without `|| true` the mkdir fails on the read-only
+# mount, `set -e` kills the entrypoint, and nginx crash-loops -- so the PXE
+# server was down entirely on any deployment where no assignment had ever been
+# saved, which is every new one.
+mkdir -p /data/hosts 2>/dev/null || true
 # /data is the mounted ./output directory (images at the root, imager/ inside).
 ln -sfn /data        /srv/http/images
 ln -sfn /data/imager /srv/http/imager
