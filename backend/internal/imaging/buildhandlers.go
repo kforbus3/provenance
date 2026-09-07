@@ -59,6 +59,13 @@ func mountBuilds(r chi.Router, h *handler) {
 	r.With(h.d.Auth.RequirePermission("Imaging.Provision")).Post("/imaging/provisioning/{verb}", h.steerProvisioning)
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/assignments", h.assignments)
 	r.With(h.d.Auth.RequirePermission("Imaging.Provision")).Put("/imaging/assignments", h.setAssignments)
+
+	// The key backup. Imaging.Build to read what state exists, Imaging.Provision
+	// to create an archive of it — the same permission that already governs the
+	// provisioning stack's own configuration, which is half of what is in it.
+	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Get("/imaging/keys", h.keyStatus)
+	r.With(h.d.Auth.RequirePermission("Imaging.Provision")).Post("/imaging/keys/backup", h.keyBackup)
+	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Get("/imaging/keys/inspect", h.keyInspect)
 }
 
 // fail turns a runner error into a response.
@@ -447,6 +454,37 @@ func (h *handler) downloadSBOM(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "imaging.sbom.download", name, nil)
 	h.serveArtifact(w, r, path, filepath.Base(path), "application/spdx+json")
+}
+
+func (h *handler) keyStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.KeyBackupStatus(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) keyBackup(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.KeyBackupCreate(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	// The archive's name and digest, never its contents. Auditing that somebody
+	// made a copy of the signing key is the point of the entry.
+	h.audit(r, "imaging.keys.backup", asString(out["name"]),
+		map[string]any{"sha256": out["sha256"], "size": out["size"]})
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) keyInspect(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.KeyBackupInspect(r.Context(), r.URL.Query().Get("name"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // --- the provisioning stack --------------------------------------------------
