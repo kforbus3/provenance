@@ -2325,6 +2325,41 @@ else
     fi
 fi
 
+# The ESP stub every signed GRUB needs, wherever its prefix happens to point.
+#
+# A vendor-signed GRUB has its prefix compiled in and cannot be told otherwise
+# without rebuilding it -- which would mean signing it, which is the thing being
+# avoided. It looks for $prefix/grub.cfg on the partition it was loaded from, so
+# that file has to exist and hand off to the real configuration on BOOT.
+#
+# Written for every distribution's prefix rather than this build's, because the
+# prefix is baked into a binary this build did not produce, and five 400-byte
+# files cost nothing next to a machine that stops at a `grub rescue>` prompt
+# because the one that was written was the other one.
+write_esp_stubs() {
+    local prefix_dir
+    for prefix_dir in debian ubuntu almalinux rocky redhat; do
+        mkdir -p "$BOOTMNT/efi/EFI/$prefix_dir"
+        cat > "$BOOTMNT/efi/EFI/$prefix_dir/grub.cfg" <<STUB
+# Written by the Flipside image builder. Not the real configuration.
+#
+# Everything that decides what boots -- slot order, try counters, the recovery
+# entries -- lives on the BOOT partition, which is also where an update writes.
+# Keeping the real file there means this one never has to change.
+search --no-floppy --label BOOT --set=root
+if [ -e (\$root)/$GRUBDIR/grub.cfg ]; then
+    set prefix=(\$root)/$GRUBDIR
+    configfile (\$root)/$GRUBDIR/grub.cfg
+else
+    echo "Flipside: no /$GRUBDIR/grub.cfg on the partition labelled BOOT."
+    echo "The ESP was found and this stub ran, so firmware and shim are fine;"
+    echo "the BOOT partition is missing, unlabelled, or its config was removed."
+    sleep 30
+fi
+STUB
+    done
+}
+
 if [ "$GRUB_BIOS" = 1 ]; then
     step "Installing GRUB (BIOS + UEFI) and writing A/B config"
     chroot "$MNT" "$GRUB_INSTALL" --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
@@ -2333,16 +2368,56 @@ else
 fi
 # --removable puts GRUB at the firmware's fallback path -- BOOTX64.EFI on amd64,
 # BOOTAA64.EFI on arm64 -- so any UEFI firmware boots it without an NVRAM entry.
-# Required for mass imaging, where NVRAM cannot be prepared per machine. Secure
-# Boot must be disabled.
-chroot "$MNT" "$GRUB_INSTALL" --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi \
-    --boot-directory=/boot --removable --no-nvram
+# Required for mass imaging, where NVRAM cannot be prepared per machine.
+#
+# The rpm family does not do this, and it is not a naming difference. Red Hat
+# patches grub2-install to REFUSE an EFI target outright:
+#
+#   grub2-install: error: This utility should not be used for EFI platforms
+#   because it does not support UEFI Secure Boot.
+#
+# The refusal is the correct behaviour and the reason is the whole design of
+# this family's boot chain: the EFI bootloader is a PREBUILT, VENDOR-SIGNED
+# binary shipped by grub2-efi-x64, already sitting on the ESP at
+# /boot/efi/EFI/<distro>/grubx64.efi. Generating one locally -- which is what
+# --force would do -- produces an unsigned image that no machine with Secure
+# Boot enabled will run, trading the one property this family gives for free.
+#
+# So for rpm the ESP is populated from those packaged binaries instead, just
+# below. BIOS is unaffected: grub2-install --target=i386-pc is not patched and
+# has already run above.
+if [ "$FAMILY" = deb ]; then
+    chroot "$MNT" "$GRUB_INSTALL" --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi \
+        --boot-directory=/boot --removable --no-nvram
+else
+    # The packaged binaries land on the ESP when the package is installed, which
+    # happened in the chroot with /boot/efi already mounted. Verify rather than
+    # assume: if they are not there, nothing else in this build puts a UEFI
+    # bootloader on the disk and the image simply does not boot on UEFI.
+    _esp_src="$MNT/boot/efi/EFI/$DISTRO"
+    [ -f "$_esp_src/$SB_GRUB" ] || die "no packaged UEFI bootloader at
+    $_esp_src/$SB_GRUB. This family installs it from grub2-efi-* rather than
+    generating one, so without it the image has no UEFI boot path at all.
+    Check that $GRUB_PKGS installed successfully."
+    # The fallback path, so firmware boots it with no NVRAM entry. If Secure Boot
+    # is in play the block below overwrites BOOTX64.EFI with shim, which then
+    # chain-loads this same grubx64.efi -- so this is correct either way and the
+    # image still boots when the shim is unavailable or Secure Boot is off.
+    install -D -m0644 "$_esp_src/$SB_GRUB" "$BOOTMNT/efi/EFI/BOOT/$SB_GRUB_NAME"
+    install -D -m0644 "$_esp_src/$SB_GRUB" "$BOOTMNT/efi/EFI/BOOT/$SB_BOOT_NAME"
+    # The stub the packaged GRUB will look for. Written here rather than only in
+    # the Secure Boot block below, because this bootloader is on the ESP whether
+    # Secure Boot is on, off, or unavailable -- and without the stub it reaches a
+    # `grub rescue>` prompt in every one of those cases.
+    write_esp_stubs
+    log "UEFI: installed the distribution's signed GRUB at the removable path"
+fi
 
 # --- UEFI Secure Boot --------------------------------------------------------
 #
-# grub-install has just written its own unsigned GRUB to the removable path.
-# Under Secure Boot the firmware refuses to run it, which is why every previous
-# release said "disable Secure Boot" -- and on a lot of estates that is a policy
+# On the deb family grub-install has just written its own UNSIGNED GRUB to the
+# removable path, and under Secure Boot the firmware refuses to run it -- which
+# is why every previous release said "disable Secure Boot" -- and on a lot of estates that is a policy
 # no, not an inconvenience: the machines this project images for desktops and
 # laptops are exactly the ones where it is mandated.
 #
@@ -2415,27 +2490,7 @@ if [ "$SECURE_BOOT" != off ]; then
         # distribution, it is baked into a binary this build does not produce,
         # and two 200-byte files cost nothing next to a machine that drops to a
         # GRUB rescue prompt because the one that was written was the other one.
-        for prefix_dir in debian ubuntu almalinux rocky redhat; do
-            mkdir -p "$BOOTMNT/efi/EFI/$prefix_dir"
-            cat > "$BOOTMNT/efi/EFI/$prefix_dir/grub.cfg" <<STUB
-# Written by the Flipside image builder. Not the real configuration.
-#
-# The distribution's signed GRUB looks here because its prefix is compiled in.
-# Everything that decides what boots -- slot order, try counters, the recovery
-# entries -- lives on the BOOT partition, which is also where an update writes.
-# Keeping the real file there means this one never has to change.
-search --no-floppy --label BOOT --set=root
-if [ -e (\$root)/$GRUBDIR/grub.cfg ]; then
-    set prefix=(\$root)/$GRUBDIR
-    configfile (\$root)/$GRUBDIR/grub.cfg
-else
-    echo "Flipside: no /$GRUBDIR/grub.cfg on the partition labelled BOOT."
-    echo "The ESP was found and this stub ran, so firmware and shim are fine;"
-    echo "the BOOT partition is missing, unlabelled, or its config was removed."
-    sleep 30
-fi
-STUB
-        done
+        write_esp_stubs
         SECURE_BOOT_ACTIVE=true
         log "Secure Boot: shim + signed GRUB installed at the removable path"
     elif [ "$SECURE_BOOT" = on ]; then

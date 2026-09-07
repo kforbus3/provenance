@@ -222,7 +222,7 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 test: backend-test frontend-test scanner-test imaging-test ## Run all tests
 
 .PHONY: smoke
-smoke: ## Build a real initramfs and check what is actually in it (rpm family, ~5 min)
+smoke: ## Build a real initramfs + bootloader and check what is actually in them (rpm, ~8 min)
 	# The gate the static checks cannot be. `make imaging-test` reads the build
 	# scripts; this one RUNS the part of them that has produced every expensive
 	# bug in the RHEL work, and asks the artefact what it contains.
@@ -245,6 +245,14 @@ smoke: ## Build a real initramfs and check what is actually in it (rpm family, ~
 	  --ulimit nofile=65536:65536 \
 	  -v $(PWD)/builder:/builder:ro almalinux:9 \
 	  bash /builder/smoke/initramfs-smoke.sh $(SMOKE_SUITE)
+	# The bootloader is the LAST step of a full build, so a mistake there costs
+	# the whole thirty minutes to find. It is also where the two families differ
+	# most: Red Hat patches grub2-install to refuse EFI outright, because the
+	# signed bootloader ships in the package rather than being generated.
+	docker run --rm --privileged --platform=linux/amd64 \
+	  --ulimit nofile=65536:65536 \
+	  -v $(PWD)/builder:/builder:ro almalinux:9 \
+	  bash /builder/smoke/bootloader-smoke.sh $(SMOKE_SUITE)
 
 SMOKE_SUITE ?= 9
 
