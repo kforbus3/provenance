@@ -21,6 +21,7 @@ import { listGroups } from "../api/admin";
 import { listHosts } from "../api/hosts";
 import { ProvisioningTab } from "./imaging/ProvisioningTab";
 import { OverlayTab } from "./imaging/OverlayTab";
+import { distroFamily, DEFAULT_SUITE, RPM_SUITES } from "./imaging/distro";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
   forgetImaging, imagingNow, installOnMachine, listBuilds, listBundles, listImages,
@@ -1209,12 +1210,31 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
         <Stack spacing={2} sx={{ mt: 1 }}>
           <Stack direction="row" spacing={2}>
             <TextField select fullWidth label="Distribution" value={distro}
-                       onChange={(e) => setDistro(e.target.value)}>
+                       onChange={(e) => {
+                         const d = e.target.value;
+                         setDistro(d);
+                         // The suite follows the distribution. Leaving the old one
+                         // behind is a build the builder refuses, and the reason
+                         // would arrive minutes later from a container.
+                         setSuite(DEFAULT_SUITE[d] ?? "");
+                       }}>
               <MenuItem value="debian">Debian</MenuItem>
               <MenuItem value="ubuntu">Ubuntu</MenuItem>
+              <MenuItem value="almalinux">AlmaLinux</MenuItem>
+              <MenuItem value="rocky">Rocky Linux</MenuItem>
             </TextField>
-            <TextField fullWidth label="Suite" value={suite}
-                       onChange={(e) => setSuite(e.target.value)} placeholder="trixie" />
+            {distroFamily(distro) === "rpm" ? (
+              <TextField select fullWidth label="Release" value={suite}
+                         onChange={(e) => setSuite(e.target.value)}
+                         helperText="Major version — this family has no codenames">
+                {RPM_SUITES.map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+              </TextField>
+            ) : (
+              <TextField fullWidth label="Suite" value={suite}
+                         onChange={(e) => setSuite(e.target.value)}
+                         placeholder={DEFAULT_SUITE[distro] ?? "trixie"}
+                         helperText="Codename, e.g. trixie or noble" />
+            )}
             <TextField select fullWidth label="Architecture" value={arch}
                        onChange={(e) => setArch(e.target.value)}
                        helperText="Built natively, not emulated">
@@ -1222,6 +1242,16 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
               <MenuItem value="arm64">arm64</MenuItem>
             </TextField>
           </Stack>
+          {distroFamily(distro) === "rpm" && (
+            <Alert severity="info">
+              RPM images are newly supported and <strong>have not been booted on real
+              hardware yet</strong>. RAUC has no package on this family, so it is built
+              from source inside the image, and the A/B root runs from dracut modules
+              rather than initramfs-tools. Both ways that can be wrong are recoverable
+              and loud — a passphrase prompt at boot, or a read-only root — rather than
+              a machine that will not start.
+            </Alert>
+          )}
           <Stack direction="row" spacing={2}>
             <TextField fullWidth label="Hostname" value={hostname}
                        onChange={(e) => setHostname(e.target.value)}
