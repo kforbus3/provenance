@@ -104,6 +104,30 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### Formatting probes what mke2fs knows instead of assuming
+
+A Rocky build died at *Formatting filesystems* with
+`Invalid filesystem option set: ^orphan_file,^metadata_csum_seed`.
+
+Those two features are disabled deliberately — older GRUB cannot read them, so
+`grub-install` fails with a bare "unknown filesystem". But the list was written
+for Debian trixie's e2fsprogs 1.47. Rocky 9 ships **1.46.5, which predates
+`orphan_file` entirely**, and mke2fs rejects a feature name it does not
+recognise. So "make the image readable by older tooling" became "cannot format a
+filesystem at all" on precisely that older tooling.
+
+Each feature is now probed with `mke2fs -n` against a throwaway sparse file and
+kept only if this mke2fs knows it. A feature it has never heard of is one it also
+cannot enable, so dropping it is not a compromise — the reason for disabling it
+does not exist there. Debian selects both, exactly as before; Rocky selects
+`metadata_csum_seed` alone. Verified on both.
+
+Also: `glibc-gconv-extra` in the RPM builder. RHEL 9 split the CP850 iconv
+converter out of glibc, so every `mkfs.vfat` printed two "Cannot initialize
+conversion from codepage 850" lines and fell back to an internal table — harmless
+in itself, and exactly the sort of expected noise a real error hides behind three
+hundred lines later.
+
 ### RPM images build in an RPM builder
 
 A Rocky build partitioned the disk, set up LUKS, formatted, mounted — and then

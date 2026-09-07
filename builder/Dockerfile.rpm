@@ -40,6 +40,12 @@ RUN dnf -y install epel-release dnf-plugins-core \
         util-linux \
         which \
         tar \
+        # mkfs.vfat converts the volume label through iconv, and RHEL 9 split the
+        # CP850 converter out of glibc. Without this every format prints two
+        # "Cannot initialize conversion from codepage 850" lines and falls back to
+        # an internal table -- harmless, and exactly the kind of expected noise a
+        # real error hides behind three hundred lines later.
+        glibc-gconv-extra \
     && if [ "$(rpm -E %{_arch})" = "x86_64" ]; then \
            dnf -y install --setopt=install_weak_deps=False grub2-pc-modules || true; \
        fi \
