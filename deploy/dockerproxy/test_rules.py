@@ -62,6 +62,30 @@ for method, path in [
 ]:
     check(f"{method} {path}", proxy.allowed(method, path))
 
+print("== compose can recreate a container, but not steal a trusted name ==")
+# Compose renames the old container out of the way before creating its
+# replacement. Without this route ANY `compose up` that replaces a container
+# fails halfway -- which took the PXE HTTP server down and left a container
+# stuck in Created.
+check("POST /containers/abc/rename is allowed",
+      proxy.allowed("POST", "/v1.45/containers/abc/rename?name=old_http"))
+
+def renamed_to(name):
+    try:
+        proxy.check_rename(f"/v1.45/containers/abc/rename?name={name}")
+        return False
+    except proxy.Denied:
+        return True
+
+# The one thing rename must not do. The proxy resolves the runner BY NAME to
+# learn where the project lives, and the project root is what every bind-mount
+# check is measured against -- so a container able to claim that name could
+# move the goalposts for all of them.
+for protected in ("blackfriars-builder-runner", "fleet-terminal-dockerproxy-1"):
+    check(f"cannot rename INTO {protected}", renamed_to(protected))
+    check(f"  ... nor with a leading slash", renamed_to("/" + protected))
+check("an ordinary name is still fine", not renamed_to("debian-ab-http"))
+
 print("== the ways out of a container are not ==")
 for method, path in [
     # Each of these is a documented container escape when the socket is raw.

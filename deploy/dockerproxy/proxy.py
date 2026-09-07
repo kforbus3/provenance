@@ -147,6 +147,12 @@ RULES: list[tuple[str, re.Pattern[str]]] = [
     # container's existing stdio; exec starts a new process of the caller's
     # choosing inside any container on the host. The second is the escape.
     ("POST",   re.compile(r"^/(v[\d.]+/)?containers/[\w.\-]+/attach$")),
+    # Rename. Compose recreates a container by renaming the old one out of the
+    # way first, so without this ANY `compose up` that replaces a container fails
+    # halfway and leaves a half-built stack behind -- which is exactly what it
+    # did to the provisioning stack. Constrained below: the name it renames TO
+    # may not be one this proxy trusts by name.
+    ("POST",   re.compile(r"^/(v[\d.]+/)?containers/[\w.\-]+/rename$")),
     ("DELETE", re.compile(r"^/(v[\d.]+/)?containers/[\w.\-]+$")),
 
     # Images: build them, list them, and remove the ones we built.
@@ -220,6 +226,28 @@ def _binfmt_pull(method: str, path: str) -> bool:
     else:
         candidate = from_image
     return candidate == BINFMT_IMAGE or from_image == BINFMT_IMAGE
+
+
+# Names this proxy resolves by NAME rather than by id, and therefore trusts.
+# _self_image()/the project-dir discovery inspect the runner by its fixed name,
+# so a container able to take that name could tell the proxy where the project
+# lives -- and the project root is what bind-mount validation is measured
+# against. Renaming is otherwise harmless, so the rule is narrow: rename freely,
+# just never INTO one of these.
+PROTECTED_NAMES = {"blackfriars-builder-runner", "fleet-terminal-dockerproxy-1"}
+
+_RENAME = re.compile(r"^/(v[\d.]+/)?containers/[\w.\-]+/rename$")
+
+
+def check_rename(path: str) -> None:
+    """Refuse a rename that would claim a name the proxy trusts."""
+    head, _, query = path.partition("?")
+    if not _RENAME.match(head):
+        return
+    want = (urllib.parse.parse_qs(query).get("name") or [""])[0].lstrip("/")
+    if want in PROTECTED_NAMES:
+        raise Denied(f"a container may not be renamed to {want!r}; that name is "
+                     "how this proxy identifies a trusted container")
 
 
 def allowed(method: str, path: str) -> bool:
@@ -595,6 +623,13 @@ class Handler(socketserver.BaseRequestHandler):
         if not allowed(method, path):
             log.warning("DENY %s %s (not on the allowlist)", method, bare)
             self._safe(refuse, client, f"{method} {bare} is not on the allowlist")
+            return
+
+        try:
+            check_rename(path)
+        except Denied as exc:
+            log.warning("DENY %s %s (%s)", method, bare, exc)
+            self._safe(refuse, client, str(exc))
             return
 
         if INSPECT.match(bare):
