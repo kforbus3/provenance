@@ -658,10 +658,39 @@ case "$DISTRO" in
         # The release package carries the repo definitions and the GPG keys, so
         # it is what makes an empty installroot into a distribution. Its name is
         # the only thing that differs between these three.
+        # The release package, and where to get it from.
+        #
+        # It cannot come from the builder's own repositories: a Rocky builder has
+        # no almalinux-release and never will, so bootstrapping Alma from it fails
+        # with "No match for argument: almalinux-release". The builder's
+        # distribution should not decide which distributions it can build, so the
+        # bootstrap repository points at the TARGET's mirror and the release
+        # package comes from there.
         case "$DISTRO" in
-            almalinux) RELEASE_PKG="almalinux-release";;
-            rocky)     RELEASE_PKG="rocky-release";;
-            rhel)      RELEASE_PKG="redhat-release";;
+            almalinux)
+                # TWO packages, not one. AlmaLinux splits the repository
+                # definitions out into almalinux-repos, and installing the release
+                # package alone fails with "nothing provides almalinux-repos" --
+                # so the installroot would have a distribution identity and no
+                # repositories to install the distribution from.
+                RELEASE_PKG="almalinux-release almalinux-repos"
+                BOOTSTRAP_BASE="https://repo.almalinux.org/almalinux"
+                ;;
+            rocky)
+                # Rocky ships its repo definitions inside rocky-release.
+                RELEASE_PKG="rocky-release"
+                BOOTSTRAP_BASE="https://dl.rockylinux.org/pub/rocky"
+                ;;
+            rhel)
+                # No public mirror to bootstrap from; RHEL needs an entitled one.
+                RELEASE_PKG="redhat-release"
+                BOOTSTRAP_BASE=""
+                ;;
+        esac
+        # RPM arch names, which differ from this script's own vocabulary.
+        case "$ARCH" in
+            amd64) RPM_ARCH="x86_64";;
+            arm64) RPM_ARCH="aarch64";;
         esac
         # Empty by default: dnf reads the mirror list out of the release package,
         # which is what handles mirror selection and failover. A MIRROR here is
@@ -1014,15 +1043,49 @@ else
     # the whole package install below, is verified normally. Installing the
     # release package on its own first, rather than alongside everything else,
     # is what keeps that window to one package.
-    RPM_REPO_ARGS=""
-    [ -n "$MIRROR" ] && RPM_REPO_ARGS="--setopt=baseurl=$MIRROR"
+    # A repository defined here, not one of the builder's. --repofrompath is what
+    # makes the builder's own distribution irrelevant to which distributions it
+    # can build.
+    BOOTSTRAP_URL="${MIRROR:-$BOOTSTRAP_BASE/$SUITE/BaseOS/$RPM_ARCH/os}"
+    [ -n "$BOOTSTRAP_URL" ] || die "no bootstrap mirror for $DISTRO — pass --mirror with a BaseOS repository URL"
+    RPM_REPO_ARGS="--repofrompath=abbootstrap,$BOOTSTRAP_URL --disablerepo=* --enablerepo=abbootstrap"
     dnf -y --installroot="$MNT" --releasever="$SUITE" \
         --setopt=install_weak_deps=False --nogpgcheck $RPM_REPO_ARGS \
-        install "$RELEASE_PKG" \
-        || die "could not bootstrap $DISTRO $SUITE — is the release package name right, and is the mirror reachable?"
-    # Now the keys are in place, so everything else is verified.
+        install $RELEASE_PKG \
+        || die "could not bootstrap $DISTRO $SUITE from $BOOTSTRAP_URL.
+    Check the mirror is reachable and that $SUITE is a release it carries for $RPM_ARCH."
+
+    # The release package put its GPG keys INSIDE the installroot, but the repo
+    # definitions reference them as file:///etc/pki/rpm-gpg/..., and dnf resolves
+    # a file:// URI against the BUILDER's root -- not the installroot it is
+    # populating. So the next transaction looks for the key where it is not:
+    #
+    #   Curl error (37): Couldn't read a file:// file for
+    #   file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10
+    #
+    # Copying them out is what makes the URI resolve, and importing them into the
+    # installroot's own rpmdb is what makes the packages actually checked against
+    # them. Both, because either alone is a transaction that either cannot read
+    # the key or does not verify with it.
+    #
+    # This is also what lets one builder build any release of any RPM distro: the
+    # keys come from the release package each time rather than from whatever the
+    # builder happens to ship. Building Rocky 10 on a Rocky 9 builder is exactly
+    # the case that found this, and it is the normal case, not an odd one.
+    mkdir -p /etc/pki/rpm-gpg
+    cp -a "$MNT"/etc/pki/rpm-gpg/. /etc/pki/rpm-gpg/ 2>/dev/null || true
+    rpm --root="$MNT" --import "$MNT"/etc/pki/rpm-gpg/RPM-GPG-KEY-* 2>/dev/null || true
+
+    # Now the keys are in place, so everything else is verified. Verified for
+    # real: with the wrong key present this transaction is refused, which is the
+    # only thing that makes the --nogpgcheck above a one-package window rather
+    # than a habit.
+    # No $RPM_REPO_ARGS here: the release package has just defined the real
+    # repositories inside the installroot, and those are the ones with the whole
+    # distribution in them. The bootstrap repo was BaseOS alone and exists only to
+    # get that package.
     dnf -y --installroot="$MNT" --releasever="$SUITE" \
-        --setopt=install_weak_deps=False $RPM_REPO_ARGS \
+        --setopt=install_weak_deps=False \
         install dnf systemd passwd \
         || die "could not install the base system into the installroot"
 fi
