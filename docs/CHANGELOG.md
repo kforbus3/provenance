@@ -104,6 +104,21 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### AlmaLinux and Rocky are selectable in the build dialog
+
+The builder has understood them for two releases; the dropdown still offered only
+Debian and Ubuntu, so the only way to build one was the API.
+
+The **release field follows the distribution**. Switching to Rocky and leaving
+`trixie` in the box is a build the builder refuses, and the reason would arrive
+minutes later from a container — so the suite changes with the choice, and for the
+RPM family it becomes a list (8/9/10, the closed set the builder validates
+against) rather than free text. The wrong answer is unreachable instead of merely
+discouraged.
+
+Choosing one also says, in the dialog, that RPM images have not been booted on
+real hardware yet — before a twenty-minute build rather than after it.
+
 ### The A/B root boots under dracut, so RHEL images are buildable
 
 The RPM family could bootstrap, install packages and build RAUC, but the A/B root
