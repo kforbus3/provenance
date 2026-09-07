@@ -1533,7 +1533,14 @@ iseq ${{buildarch}} arm64 && set imgdir imager/arm64 || set imgdir imager
 
 # || goto noimager on both: a missing or unreachable imager should say so and
 # reboot, not abort the script and drop the machine at an iPXE prompt.
-kernel http://{ip}/${{imgdir}}/vmlinuz imager.url=http://{ip}/images/{a['image']} imager.action={action} imager.compress=auto{host_arg}{control_arg} console=tty0 console=ttyS0,115200 || goto noimager
+    # console=ttyS0 FIRST, tty0 LAST. The kernel sends printk to every console=
+    # it is given, but /dev/console -- which is where the imager's own output
+    # goes -- is the LAST one listed. With tty0 first, everything the imager says
+    # went to the serial port, and an operator watching the screen saw the kernel
+    # messages stop after "Run /init as init process" and nothing ever again.
+    # A machine imaging perfectly and a machine wedged look identical that way,
+    # and this cost an evening of chasing a hang that was not happening.
+kernel http://{ip}/${{imgdir}}/vmlinuz imager.url=http://{ip}/images/{a['image']} imager.action={action} imager.compress=auto{host_arg}{control_arg} console=ttyS0,115200 console=tty0 || goto noimager
 initrd http://{ip}/${{imgdir}}/initramfs.img || goto noimager
 boot
 

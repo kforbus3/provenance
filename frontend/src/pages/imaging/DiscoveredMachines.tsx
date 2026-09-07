@@ -5,7 +5,7 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AddTaskIcon from "@mui/icons-material/AddTask";
 import { useQuery } from "@tanstack/react-query";
-import { listProvisioningClients, type ProvisioningClient } from "../../api/imaging";
+import { listProvisioningClients, imagingNow, type ProvisioningClient } from "../../api/imaging";
 
 // Machines currently on the provisioning network.
 //
@@ -50,6 +50,28 @@ export function DiscoveredMachines({ onAssign, assignedMacs, canProvision }: {
   // Polled, because a machine you have just powered on should appear without
   // the reader wondering whether to reload the page. Short, because the whole
   // window this reads is only fifteen minutes wide.
+  // What each machine says about ITSELF, which beats what the PXE server's logs
+  // can infer. nginx writes an access-log line only when a request COMPLETES, so
+  // a machine forty minutes into a 2 GB image download has produced no new log
+  // line since it fetched the imager -- and the derived state sat on "booting
+  // imager" for the whole write. The machine, meanwhile, is posting its phase
+  // and percentage to /api/imaging/report the entire time.
+  const { data: live } = useQuery({
+    queryKey: ["imaging-now-inline"],
+    queryFn: imagingNow,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  });
+  const reported = new Map<string, { phase: string; percent: number; state: string }>();
+  for (const r of live?.imaging ?? []) {
+    // The registry is keyed by whatever the imager reported; normalise so a
+    // hyphenated MAC still matches dnsmasq's colon-separated one.
+    const key = String(r.id || "").toLowerCase().replace(/-/g, ":");
+    if (key) reported.set(key, { phase: r.phase, percent: r.percent, state: r.state });
+  }
+
   const { data: clients = [], isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["provisioning-clients"],
     queryFn: listProvisioningClients,
@@ -109,6 +131,7 @@ export function DiscoveredMachines({ onAssign, assignedMacs, canProvision }: {
           </TableHead>
           <TableBody>
             {clients.map((c: ProvisioningClient) => {
+              const self = reported.get((c.mac || "").toLowerCase());
               const style = EVENT_STYLE[c.event];
               // A MAC dnsmasq never saw — the LAN's own DHCP answered and only
               // the HTTP fetch reached us. Real, and not assignable by MAC.
@@ -121,11 +144,28 @@ export function DiscoveredMachines({ onAssign, assignedMacs, canProvision }: {
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace", fontSize: 13 }}>{c.ip || "—"}</TableCell>
                   <TableCell>
-                    <Tooltip title={style?.help ?? ""}>
-                      <Chip size="small" variant="outlined"
-                            color={style?.color ?? "default"}
-                            label={c.event || "seen"} />
-                    </Tooltip>
+                    {self ? (
+                      // The machine's own words. "stalled" is not a failure --
+                      // the imager reports on phase changes, and writing a large
+                      // image to a slow disk is a long, normal silence.
+                      <Tooltip title={self.state === "stalled"
+                        ? "No update for a while. Normal during a long write — the imager reports when the phase changes, not on a timer."
+                        : "Reported by the machine itself"}>
+                        <Chip size="small" variant="outlined"
+                              color={self.state === "failed" ? "error"
+                                : self.state === "done" ? "success"
+                                : self.state === "stalled" ? "warning" : "info"}
+                              label={self.percent > 0
+                                ? `${self.phase} ${Math.round(self.percent)}%`
+                                : self.phase} />
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title={style?.help ?? ""}>
+                        <Chip size="small" variant="outlined"
+                              color={style?.color ?? "default"}
+                              label={c.event || "seen"} />
+                      </Tooltip>
+                    )}
                   </TableCell>
                   <TableCell align="right">
                     {already ? (

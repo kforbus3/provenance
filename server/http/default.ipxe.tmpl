@@ -16,7 +16,11 @@ echo
 # needing to know or care what is on the network.
 iseq ${buildarch} arm64 && set imgdir imager/arm64 || set imgdir imager
 
-kernel http://${SERVER_IP}/${imgdir}/vmlinuz imager.url=http://${SERVER_IP}/images/${IMAGE_FILE} imager.action=${ACTION} imager.compress=auto${CONTROL_ARG} console=tty0 console=ttyS0,115200 || goto noimager
+# console=ttyS0 FIRST, tty0 LAST: the kernel prints to every console listed, but
+# /dev/console -- where the imager writes -- is the LAST one. Reversed, the
+# operator watching the screen sees nothing after the kernel hands off to /init,
+# and a machine imaging normally is indistinguishable from one that has hung.
+kernel http://${SERVER_IP}/${imgdir}/vmlinuz imager.url=http://${SERVER_IP}/images/${IMAGE_FILE} imager.action=${ACTION} imager.compress=auto${CONTROL_ARG} console=ttyS0,115200 console=tty0 || goto noimager
 initrd http://${SERVER_IP}/${imgdir}/initramfs.img || goto noimager
 boot
 
