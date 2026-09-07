@@ -249,9 +249,16 @@ imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runne
 	# true when somebody widens a pattern to make a build work again.
 	docker run --rm -v $(PWD)/deploy/dockerproxy:/src -w /src python:3.13-alpine \
 	  sh -c "python test_rules.py"
-	docker run --rm -v $(PWD)/deploy/builder-runner:/src -w /src python:3.13-alpine \
+	# Mount the REPO ROOT, not deploy/builder-runner. test_builder_image.py checks
+	# that the orchestrator's list of RPM distributions still agrees with
+	# build-image.sh's own FAMILY case -- they disagree only when somebody adds a
+	# distribution to one and not the other, which is exactly how the Rocky build
+	# came to run in a builder with no dnf in it. With only the sidecar mounted
+	# the script is not there to compare against, and a cross-check that cannot
+	# see the other side is a test that cannot fail.
+	docker run --rm -v $(PWD):/src -w /src/deploy/builder-runner python:3.13-alpine \
 	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
-	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py"
+	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py"
 
 .PHONY: lint
 lint: fmt-check ## Run gofmt check + Go vet
