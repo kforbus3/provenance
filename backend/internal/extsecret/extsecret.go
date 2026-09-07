@@ -25,6 +25,36 @@ type Provider interface {
 	Health(ctx context.Context) error
 }
 
+// Writer is a Provider that can also create secrets, not only read them.
+//
+// Separate from Provider because reading and writing are different trust levels:
+// brokering an organization's existing secrets needs a read-only token, and a
+// deployment that only does that should not be asked for a writable one. Callers
+// type-assert for this and fall back when it is absent.
+//
+// The one thing Fleet writes is a LUKS recovery passphrase it generated itself
+// for an image it is about to build — a secret that has no other copy anywhere,
+// which is exactly the case where "we do not become a second copy of record" does
+// not apply.
+type Writer interface {
+	Provider
+	// Store writes fields at ref, creating it. Implementations must not silently
+	// overwrite an existing secret: a recovery passphrase written over another
+	// image's is a machine in the field whose key is gone.
+	Store(ctx context.Context, ref string, fields map[string]string) error
+}
+
+// StoreIfWritable writes through p when it supports writing, and reports whether
+// it did. A provider configured read-only is not an error here — the caller has a
+// local vault to fall back to.
+func StoreIfWritable(ctx context.Context, p Provider, ref string, fields map[string]string) (bool, error) {
+	w, ok := p.(Writer)
+	if !ok {
+		return false, nil
+	}
+	return true, w.Store(ctx, ref, fields)
+}
+
 // Config selects and configures the external secrets-manager provider. Populated from
 // the environment by internal/config.
 type Config struct {
