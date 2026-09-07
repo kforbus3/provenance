@@ -345,13 +345,52 @@ func (s *Service) OverlayRead(ctx context.Context, path string) (map[string]any,
 	return out, nil
 }
 
-func (s *Service) OverlayWrite(ctx context.Context, path, content string, mode *int) (map[string]any, error) {
+func (s *Service) OverlayWrite(ctx context.Context, path, content, contentBase64 string, mode *int) (map[string]any, error) {
 	var out map[string]any
-	body := map[string]any{"path": path, "content": content}
+	body := map[string]any{"path": path}
+	// One or the other, never both: sending both would leave which one wins to
+	// the far end, and the answer would be invisible until a file came back wrong.
+	if contentBase64 != "" {
+		body["contentBase64"] = contentBase64
+	} else {
+		body["content"] = content
+	}
 	if mode != nil {
 		body["mode"] = *mode
 	}
 	if err := s.runner(ctx, http.MethodPut, "/overlay/file", body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// OverlayDownload returns a file's bytes, base64-encoded — the same encoding the
+// write side takes, so a binary round-trips byte-identical rather than through a
+// decode that would have to guess at an encoding.
+func (s *Service) OverlayDownload(ctx context.Context, path string) (map[string]any, error) {
+	var out map[string]any
+	if err := s.runner(ctx, http.MethodGet, "/overlay/download?path="+url.QueryEscape(path), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Service) OverlayMove(ctx context.Context, from, to string) (map[string]any, error) {
+	var out map[string]any
+	// src/dst, which is what the sidecar's model declares. Sending from/to would
+	// be dropped by its extra="ignore" and fail as a missing required field —
+	// with a message about src, naming something the caller never sent.
+	body := map[string]any{"src": from, "dst": to}
+	if err := s.runner(ctx, http.MethodPost, "/overlay/move", body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Service) OverlayChmod(ctx context.Context, path string, mode int) (map[string]any, error) {
+	var out map[string]any
+	body := map[string]any{"path": path, "mode": mode}
+	if err := s.runner(ctx, http.MethodPost, "/overlay/chmod", body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
