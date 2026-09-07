@@ -1182,10 +1182,12 @@ def provisioning_preflight(cfg: dict | None = None) -> list[str]:
             "The netboot imager has not been built. Build it on the Build Image "
             "page — machines download its kernel and initramfs to boot."
         )
+    # An empty image is a mode, not a mistake: every machine must then be given
+    # one explicitly, and anything that PXE-boots without an assignment is held
+    # rather than imaged. Reporting it as a problem would make the safer of the
+    # two configurations look like the broken one.
     image = cfg.get("IMAGE_FILE", "")
-    if not image:
-        problems.append("No image selected to deploy.")
-    elif not os.path.isfile(os.path.join(settings.output_dir, image)):
+    if image and not os.path.isfile(os.path.join(settings.output_dir, image)):
         problems.append(f"The selected image '{image}' is not in the image library.")
 
     if not cfg.get("INTERFACE"):

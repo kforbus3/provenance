@@ -54,6 +54,20 @@ export function DiscoveredMachines({ onAssign, assignedMacs, canProvision }: {
     queryKey: ["provisioning-clients"],
     queryFn: listProvisioningClients,
     refetchInterval: 5000,
+    // Keep polling while the tab is in the background. The whole workflow is
+    // "power the machine on, watch it boot, come back here", so the tab is
+    // hidden for exactly the period this list needs to be updating -- and
+    // without this, React Query pauses the interval and you return to a stale
+    // list that a page reload was the only way to clear.
+    refetchIntervalInBackground: true,
+    // And refetch the moment the tab is focused, overriding the app-wide
+    // default of false. Coming back to this page IS the request to see what is
+    // on the network now.
+    refetchOnWindowFocus: true,
+    // Never serve this from cache: a list of who is booting right now is stale
+    // the moment it is stored.
+    staleTime: 0,
+    gcTime: 0,
   });
 
   return (

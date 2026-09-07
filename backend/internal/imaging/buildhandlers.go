@@ -600,6 +600,11 @@ func (h *handler) provisioningClients(w http.ResponseWriter, r *http.Request) {
 	if clients == nil {
 		clients = []map[string]any{}
 	}
+	// This is polled, and every answer is about the last few seconds. A cached
+	// copy is not a stale optimisation here, it is the wrong answer -- a machine
+	// that has just booted and is not shown looks like a machine the server
+	// cannot see.
+	w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"clients": clients})
 }
 

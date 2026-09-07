@@ -234,8 +234,19 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
               value={images.includes(cfg.IMAGE_FILE) ? cfg.IMAGE_FILE : ""}
               onChange={(e) => set("IMAGE_FILE", e.target.value)}
               disabled={!canProvision}
-              helperText={images.length === 0 ? "No images built yet — build one first." : " "}
+              helperText={images.length === 0
+                ? "No images built yet — build one first."
+                : cfg.IMAGE_FILE
+                  ? "Anything without its own assignment gets this."
+                  : "No default: every machine must be assigned an image individually."}
             >
+              {/* Blank is a real choice, not an empty state. With no default,
+                  a machine that PXE-boots without an assignment is held and
+                  told so, and its disk is not touched — which is what you want
+                  on a segment carrying machines you have not decided about. */}
+              <MenuItem value="">
+                <em>None — hold every machine until it is assigned</em>
+              </MenuItem>
               {images.map((n) => <MenuItem key={n} value={n}>{n}</MenuItem>)}
             </TextField>
           </Grid>
@@ -284,7 +295,7 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
               </Typography>
             )}
             <Typography variant="caption" display="block">
-              • write <code>{cfg.IMAGE_FILE || "(no image selected)"}</code> to each
+              • write <code>{cfg.IMAGE_FILE || "nothing — no default image is set"}</code> to each
               machine, then {cfg.ACTION || "reboot"}
             </Typography>
           </Paper>
@@ -385,8 +396,13 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="subtitle2">Per-machine images</Typography>
           <Typography variant="body2" color="text.secondary">
-            A MAC listed here gets its own image instead of the default above. Anything
-            not listed gets <code>{cfg.IMAGE_FILE || "the default image"}</code>.
+            A MAC listed here gets its own image instead of the default above.
+            {cfg.IMAGE_FILE
+              ? <> Anything not listed gets <code>{cfg.IMAGE_FILE}</code>.</>
+              : <> With no default set, anything not listed is <strong>held</strong>: it
+                  reports its MAC, its disk is untouched, and it picks up an image
+                  within {cfg.RETRY_SECONDS || "30"}s of one being assigned — no second
+                  power cycle.</>}
           </Typography>
         </Box>
         <Button

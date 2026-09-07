@@ -3,7 +3,12 @@
 set -eu
 
 : "${SERVER_IP:?Set SERVER_IP to the IP address of the provisioning server}"
-: "${IMAGE_FILE:?Set IMAGE_FILE to the image filename in ./output (e.g. debian-trixie-ab.img.zst)}"
+# IMAGE_FILE is optional, and leaving it empty is a deliberate mode rather than
+# a misconfiguration: no default image means a machine that has not been given
+# one explicitly is held instead of imaged. That is what you want when the
+# segment carries machines you have not decided about yet -- the cost of a
+# default is that anything which PXE-boots by accident gets its disk rewritten.
+IMAGE_FILE="${IMAGE_FILE:-}"
 ACTION="${ACTION:-reboot}"
 
 mkdir -p /srv/http
@@ -31,6 +36,14 @@ ln -sfn /data/bundles /srv/http/bundles
 #   image (default) — the default image, i.e. plug in a switch and image it all
 #   hold            — discovery: print the MAC, touch nothing, retry
 RETRY_SECONDS="${RETRY_SECONDS:-30}"
+# No default image means hold, whatever UNASSIGNED says. Deriving it here rather
+# than asking the UI to keep two fields in step: the alternative is a server
+# configured to image every unassigned machine with an image that is not set,
+# which renders a boot script pointing at an empty filename and fails on the
+# machine rather than here.
+if [ -z "$IMAGE_FILE" ]; then
+    UNASSIGNED=hold
+fi
 case "${UNASSIGNED:-image}" in
     hold) FALLBACK="unassigned.ipxe";;
     *)    FALLBACK="default.ipxe";;
