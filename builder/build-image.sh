@@ -419,17 +419,12 @@ fi
 
 # --- Resolve the distro FAMILY ------------------------------------------------
 #
-# NOT YET COMPLETE FOR rpm. Everything up to and including the initramfs is
-# ported -- bootstrap, packages, RAUC built from source, GRUB, Secure Boot -- but
-# the A/B ROOT ITSELF is not. It is implemented as initramfs-tools scripts
-# (overlay/etc/initramfs-tools, ~770 lines) and dracut is a different module
-# system: different install step, different hook points, different helpers.
-#
-# Until those are ported, an RPM build would produce an image that installs
-# perfectly and then boots without its overlay root -- read-only, no A/B, no slot
-# selection -- which is the failure that looks like a success until a machine is
-# in a rack. So it is refused, at the point of knowledge, rather than built.
-# See ab_root_unsupported below.
+# The A/B root itself is shared between the families rather than reimplemented:
+# the same two scripts run under both harnesses (see /usr/lib/ab/initramfs), with
+# initramfs-tools invoking them from local-bottom/init-premount and dracut from
+# its own modules in usr/lib/dracut/modules.d. What differs between the harnesses
+# is how a script gets INTO the initramfs and what the mounted root is called --
+# not what the script does.
 #
 # Everything below branches on the family rather than on the distro: the
 # difference between Debian and Ubuntu is a mirror and two package names, while
@@ -446,24 +441,22 @@ case "$DISTRO" in
     *) die "--distro must be debian, ubuntu, almalinux or rocky (got '$DISTRO')";;
 esac
 
-# The A/B overlay root and the initramfs LUKS key are initramfs-tools scripts.
-# There is no dracut equivalent in this image yet, so refuse rather than build
-# something that boots without the thing that makes it an A/B image.
+# RPM images are new. The A/B overlay root and the LUKS bootstrap key now have
+# dracut modules (usr/lib/dracut/modules.d), and the script behind each is the
+# same one the deb family runs -- but no RPM image has been booted on real
+# hardware yet, and a hook that runs at the wrong moment is not something a build
+# can detect.
 #
-# Set AB_ROOT_INCOMPLETE_OK=1 to build anyway. That is for working ON this port,
-# not for producing an image to deploy: what comes out has no overlay root.
-if [ "$FAMILY" = rpm ] && [ "${AB_ROOT_INCOMPLETE_OK:-0}" != 1 ]; then
-    die "$DISTRO images are not finished yet.
-
-    Ported and working: dnf bootstrap, package install, RAUC built from source
-    (there is no rauc RPM in base or EPEL), GRUB, Secure Boot, dracut initramfs.
-
-    Not ported: the A/B overlay root and the initramfs LUKS key, which are
-    initramfs-tools scripts and need dracut modules. Without them this would
-    build an image that installs fine and then boots read-only with no slot
-    selection -- working, until you need to roll back.
-
-    Building one anyway, to work on that port:  AB_ROOT_INCOMPLETE_OK=1"
+# Said out loud rather than refused, because both ways this can be wrong are
+# recoverable rather than fatal: a mis-ordered LUKS hook falls back to prompting
+# for the passphrase, and a missing overlay boots the slot read-only, which
+# `ab.state=off` does deliberately. Neither leaves a machine that will not start.
+if [ "$FAMILY" = rpm ]; then
+    log "NOTE: $DISTRO images are newly supported and have not been booted on real
+    hardware yet. The A/B overlay and LUKS-key dracut modules are included and the
+    initramfs is checked for them, but if either hook runs at the wrong moment the
+    symptoms are a passphrase prompt at boot (LUKS) or a read-only root with no
+    slot selection (overlay) -- both recoverable, neither silent."
 fi
 # --- Resolve the build profile -----------------------------------------------
 #
@@ -1387,13 +1380,38 @@ fi
 
 step "Applying overlay files (RAUC, GRUB, first-boot expand, LUKS enroll)"
 cp -a "$OVERLAY_DIR"/etc/. "$MNT/etc/"
-# initramfs-tools silently ignores a script that is not executable, which would
-# leave the root overlay off with nothing in the log to say why.
-chmod 0755 "$MNT/etc/initramfs-tools/scripts/local-bottom/ab-overlay" \
-           "$MNT/etc/initramfs-tools/scripts/init-premount/ab-luks-key" \
-           "$MNT/etc/initramfs-tools/hooks/ab-luks-key" \
-           "$MNT/etc/initramfs-tools/hooks/ab-overlay" 2>/dev/null || true
 cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
+
+# The two boot scripts live at /usr/lib/ab/initramfs and are shared by both
+# initramfs harnesses -- dracut's module-setup.sh installs them from there, and
+# initramfs-tools needs them under its own tree, so for that family they are
+# placed rather than duplicated in the repository. One source: this is the code
+# that decides whether a machine's writable state exists, and two copies would
+# diverge exactly once, on whichever family nobody had booted lately.
+if [ "$FAMILY" = deb ]; then
+    mkdir -p "$MNT/etc/initramfs-tools/scripts/local-bottom" \
+             "$MNT/etc/initramfs-tools/scripts/init-premount"
+    cp "$MNT/usr/lib/ab/initramfs/ab-overlay" \
+       "$MNT/etc/initramfs-tools/scripts/local-bottom/ab-overlay"
+    cp "$MNT/usr/lib/ab/initramfs/ab-luks-key" \
+       "$MNT/etc/initramfs-tools/scripts/init-premount/ab-luks-key"
+    # initramfs-tools silently ignores a script that is not executable, which
+    # would leave the root overlay off with nothing in the log to say why.
+    chmod 0755 "$MNT/etc/initramfs-tools/scripts/local-bottom/ab-overlay" \
+               "$MNT/etc/initramfs-tools/scripts/init-premount/ab-luks-key" \
+               "$MNT/etc/initramfs-tools/hooks/ab-luks-key" \
+               "$MNT/etc/initramfs-tools/hooks/ab-overlay" 2>/dev/null || true
+else
+    # dracut reads its modules from here; the hook scripts are installed by their
+    # module-setup.sh at initramfs build time. The initramfs-tools tree is not
+    # copied into an RPM image -- it would be inert, and inert files in /etc are
+    # how somebody later concludes the wrong harness is in use.
+    rm -rf "$MNT/etc/initramfs-tools"
+    chmod 0755 "$MNT/usr/lib/dracut/modules.d/90ab-overlay/module-setup.sh" \
+               "$MNT/usr/lib/dracut/modules.d/91ab-luks-key/module-setup.sh" 2>/dev/null || true
+fi
+chmod 0755 "$MNT/usr/lib/ab/initramfs/ab-overlay" \
+           "$MNT/usr/lib/ab/initramfs/ab-luks-key" 2>/dev/null || true
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
 # On an encrypted image the partition IS the LUKS container, so leaving RAUC
@@ -1793,8 +1811,21 @@ else
     # machine would find no initrd for the kernel it actually boots.
     KVER_FOR_DRACUT="$(ls "$MNT/lib/modules" 2>/dev/null | head -1)"
     [ -n "$KVER_FOR_DRACUT" ] || die "no kernel modules directory in the image; the kernel package did not install"
+    # --add, rather than trusting check() to opt them in. An A/B image whose
+    # initramfs quietly lacks the overlay module boots read-only with nothing in
+    # the log to say why, and that is the whole failure this module exists to
+    # prevent -- so inclusion is stated, not inferred.
     chroot "$MNT" dracut --force --kver "$KVER_FOR_DRACUT" \
+        --add "ab-overlay ab-luks-key" \
         "/boot/initramfs-${KVER_FOR_DRACUT}.img"
+    # dracut does not fail when a module it was told to add contributed nothing,
+    # so the initramfs is asked afterwards whether the hook is actually in it.
+    if ! chroot "$MNT" lsinitrd "/boot/initramfs-${KVER_FOR_DRACUT}.img" 2>/dev/null \
+            | grep -q "ab-overlay"; then
+        die "the generated initramfs does not contain the A/B overlay hook.
+    Without it the machine boots read-only with no slot selection, which looks
+    like a working image until you need to roll back."
+    fi
 fi
 
 if [ "$GRUB_BIOS" = 1 ]; then

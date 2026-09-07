@@ -30,8 +30,8 @@
 # bad image -- at the cost of the two slots no longer sharing anything the
 # overlay covers. See BUILDER.md#a-separate-upper-layer-per-slot.
 #
-# Runs in local-bottom, after the root slot is mounted at $rootmnt and before
-# the switch to it. Add ab.state=off (ab.overlay=off) to the kernel command line
+# Runs after the root slot is mounted and before the switch to it --
+# local-bottom under initramfs-tools, pre-pivot under dracut. Add ab.state=off (ab.overlay=off) to the kernel command line
 # to boot the slot untouched, which is the escape hatch if the writable state
 # ever goes bad.
 PREREQ=""
@@ -41,6 +41,19 @@ case "${1:-}" in
 esac
 
 [ -r /scripts/functions ] && . /scripts/functions
+
+# One script, two initramfs harnesses.
+#
+# initramfs-tools calls the mounted root slot $rootmnt and runs this from
+# local-bottom; dracut calls it $NEWROOT and runs it from pre-pivot. Both mean
+# "the root filesystem is mounted here and we have not switched to it yet",
+# which is the only thing the 600 lines below need to know.
+#
+# Reconciled here rather than by keeping a copy per harness: this is the code
+# that decides whether a machine's writable state exists, and two copies of it
+# would diverge exactly once and only be found on the family nobody had booted
+# lately.
+[ -n "${rootmnt:-}" ] || rootmnt="${NEWROOT:-/sysroot}"
 
 msg() { echo "ab-overlay: $*" > /dev/kmsg 2>/dev/null || echo "ab-overlay: $*"; }
 
