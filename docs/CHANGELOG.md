@@ -104,6 +104,35 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### The A/B root boots under dracut, so RHEL images are buildable
+
+The RPM family could bootstrap, install packages and build RAUC, but the A/B root
+itself was initramfs-tools scripts with no dracut equivalent — so the build
+refused rather than produce an image that boots read-only with no rollback.
+
+The two boot scripts are now **shared between both harnesses** rather than
+reimplemented. They moved to `/usr/lib/ab/initramfs/`, and one line reconciles the
+only difference that reaches them: initramfs-tools calls the mounted root
+`$rootmnt`, dracut calls it `$NEWROOT`. New dracut modules `90ab-overlay`
+(`pre-pivot`) and `91ab-luks-key` (`initqueue/settled`) install them, the way the
+`hooks/` scripts do on the other side.
+
+- `initqueue/settled` for the key because `pre-trigger` is too early (no devices
+  yet, so the `blkid` that finds the BOOT partition finds nothing) and
+  `pre-mount` too late (the unlock is what the initqueue is already waiting for).
+- The build now **checks the generated initramfs actually contains the hook** and
+  fails if not. dracut does not error when a module it was told to add
+  contributed nothing.
+- Verified against real dracut on Rocky 9: both modules are discovered, an
+  initramfs generates, and the hooks land at `pre-pivot/90-ab-overlay` and
+  `initqueue/settled/10-ab-luks-key` with `rm`, `cp`, `blkid` and `mount` present.
+  The Debian harness was re-checked with the shared scripts in place.
+
+RPM builds now proceed, with a build-time note that no such image has been booted
+on hardware yet — both failure modes are recoverable (a passphrase prompt, or a
+read-only root, which `ab.state=off` does on purpose) rather than a machine that
+will not start.
+
 ### Cross-architecture builds fail with the reason, and can be enabled
 
 An arm64 imager build died with `exec format error` inside a Dockerfile `RUN`.

@@ -30,15 +30,35 @@ case "$1" in
     prereqs) prereqs; exit 0;;
 esac
 
-. /scripts/functions
+# One script, two initramfs harnesses. initramfs-tools provides
+# log_warning_msg from /scripts/functions; dracut provides warn from
+# /lib/dracut-lib.sh. Whichever is present is used, and if neither is, the
+# message still reaches the console -- every path here is a fallback to a
+# passphrase prompt, and a fallback nobody is told about is the bad night.
+if [ -r /scripts/functions ]; then
+    . /scripts/functions
+elif [ -r /lib/dracut-lib.sh ]; then
+    . /lib/dracut-lib.sh
+    log_warning_msg() { warn "$@"; }
+else
+    log_warning_msg() { echo "ab-luks-key: $*" >&2; }
+fi
+
+# dracut keeps the crypttab it generated at /etc/crypttab inside the initramfs;
+# initramfs-tools puts the cryptroot copy at /cryptroot/crypttab. Look for
+# whichever exists rather than assuming, because "no crypttab" and "a crypttab
+# somewhere else" both look like an unencrypted image from here -- and the
+# second one would skip fetching a key that is genuinely needed.
+CRYPTTAB=/cryptroot/crypttab
+[ -f "$CRYPTTAB" ] || CRYPTTAB=/etc/crypttab
 
 DEST=/cryptkey/luks.key
 MNT=/ab-bootpart
 
 # Nothing to do on an unencrypted image, or once tpm2/tang enrolment has reaped
 # the bootstrap key and rewritten crypttab to use clevis.
-[ -f /cryptroot/crypttab ] || exit 0
-grep -q "$DEST" /cryptroot/crypttab 2>/dev/null || exit 0
+[ -f "$CRYPTTAB" ] || exit 0
+grep -q "$DEST" "$CRYPTTAB" 2>/dev/null || exit 0
 
 mkdir -p "$MNT" "$(dirname "$DEST")"
 chmod 0700 "$(dirname "$DEST")"

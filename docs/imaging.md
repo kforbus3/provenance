@@ -305,20 +305,41 @@ The bootstrap installs the release package **first, on its own, with
 *inside* that package, so there is nothing to verify against until it lands;
 installing it alone is what keeps that window to one package.
 
-> ### RPM images are not finished
->
-> Ported and working: the bootstrap, package install, RAUC from source, GRUB,
-> Secure Boot and the dracut initramfs.
->
-> **Not ported: the A/B overlay root and the initramfs LUKS key.** Those are
-> initramfs-tools scripts (`overlay/etc/initramfs-tools`, ~770 lines) and dracut
-> is a different module system — different install step, different hook points,
-> different helpers.
->
-> An RPM build is therefore **refused**, rather than producing an image that
-> installs perfectly and then boots read-only with no slot selection and no
-> rollback: working, until you need it not to be. `AB_ROOT_INCOMPLETE_OK=1`
-> builds one anyway, for working on the port — not for deploying.
+### The A/B root across both initramfs harnesses
+
+The two boot scripts — the overlay root and the LUKS bootstrap key — live at
+`/usr/lib/ab/initramfs/` and are **shared**, not reimplemented per family:
+
+| | initramfs-tools | dracut |
+| --- | --- | --- |
+| overlay root | `scripts/local-bottom` | `pre-pivot` hook, `90ab-overlay` |
+| LUKS key | `scripts/init-premount` | `initqueue/settled`, `91ab-luks-key` |
+| what installs it | `hooks/` | `module-setup.sh` |
+| the mounted root | `$rootmnt` | `$NEWROOT` |
+
+Only the last row reaches the scripts, and one line reconciles it. This is the
+code that decides whether a machine's writable state exists at all; two copies
+would diverge exactly once, on whichever family nobody had booted lately.
+
+`initqueue/settled` for the LUKS key is a deliberate choice. `pre-trigger` is too
+early — udev has not enumerated anything, so the `blkid` that finds the BOOT
+partition finds nothing and every boot falls back to prompting. `pre-mount` is too
+late — the root device, and so the unlock, is what the initqueue is already
+waiting for. `settled` is where devices exist and the unlock has not yet given up.
+
+The build **verifies** the hook is in the generated initramfs (`lsinitrd | grep
+ab-overlay`) and fails if it is not: dracut does not error when a module it was
+told to add contributed nothing, and an image missing that hook boots read-only
+with no slot selection — which looks like a working image until you need to roll
+back.
+
+> **RPM images have not been booted on real hardware.** The modules are included
+> and the initramfs is checked for them, but a hook that runs at the wrong moment
+> is not something a build can detect. Both ways this can be wrong are
+> recoverable rather than fatal: a mis-ordered LUKS hook falls back to a
+> passphrase prompt, and a missing overlay boots the slot read-only — which is
+> what `ab.state=off` does deliberately. Neither leaves a machine that will not
+> start.
 
 ## Building for another architecture
 
