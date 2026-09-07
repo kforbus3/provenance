@@ -1061,7 +1061,7 @@ cleanup() {
     # trap that gets this wrong. They are nested under $MNT and must come off
     # before $MNT itself, or the final umount fails and the loop device stays
     # attached -- which is how a failed build leaves the host with a leaked loop.
-    for m in var/cache/apt/archives var/cache/dnf dev proc sys boot/efi boot var/lib/overlay; do # family-ok: both families' cache paths on purpose; each is mountpoint-guarded
+    for m in etc/resolv.conf var/cache/apt/archives var/cache/dnf dev proc sys boot/efi boot var/lib/overlay; do # family-ok: both families' cache paths on purpose; each is mountpoint-guarded
         mountpoint -q "$MNT/$m" && umount "$MNT/$m"
     done
     mountpoint -q "$WORK/b" && umount "$WORK/b"
@@ -1549,6 +1549,29 @@ fi
 mkdir -p "$PKGCACHE" "$PKGCACHE_MNT"
 mount --bind "$PKGCACHE" "$PKGCACHE_MNT"
 
+# DNS for the package install, which runs INSIDE the image.
+#
+# A chroot keeps the builder's network namespace but not its /etc, so the
+# resolver config has to be there or nothing resolves. debootstrap copies the
+# builder's in by itself; `dnf --installroot` does not, so the rpm family had no
+# /etc/resolv.conf at all and every chroot transaction died on
+# "Could not resolve host: mirrors.almalinux.org".
+#
+# Bind-mounted, NOT copied, and that half matters for the family that already
+# worked: debootstrap's copy is left behind in the finished image, so every
+# Debian image built here has shipped the BUILDER's nameserver as a static file
+# -- on this host, the build container sees the LAN's resolver and a `search`
+# domain, so the images work on that subnet and have no DNS anywhere else.
+# systemd-resolved never corrects it, because it only takes over /etc/resolv.conf
+# when that path is a symlink. A bind mount leaves nothing to ship.
+#
+# Removed first: the file may be a regular file (debootstrap's copy) or a
+# dangling symlink into /run (what systemd-resolved's package leaves), and a bind
+# mount onto a dangling symlink fails.
+rm -f "$MNT/etc/resolv.conf"
+: > "$MNT/etc/resolv.conf"
+mount --bind /etc/resolv.conf "$MNT/etc/resolv.conf"
+
 if [ "$FAMILY" = rpm ]; then
 cat > "$MNT/tmp/setup.sh" <<CHROOT
 set -euo pipefail
@@ -1695,6 +1718,13 @@ rm -f "$MNT/tmp/setup.sh"
 # were still failing earlier than this and no deb image had been built since.
 umount "$PKGCACHE_MNT"
 rm -rf "$PKGCACHE"
+# The resolver goes back to being systemd-resolved's, which both families
+# enable. A symlink rather than a file, because that is the only form resolved
+# will manage -- so the deployed machine uses the DNS its own DHCP lease gives
+# it instead of whatever the builder happened to be pointed at.
+umount "$MNT/etc/resolv.conf"
+rm -f "$MNT/etc/resolv.conf"
+ln -sf ../run/systemd/resolve/stub-resolv.conf "$MNT/etc/resolv.conf"
 
 # Every machine imaged from this build must get its own identity. Blank the
 # machine-id and drop the build-time SSH host keys; machine-identity.service

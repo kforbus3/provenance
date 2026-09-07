@@ -224,5 +224,75 @@ def check_state_models():
     return 0
 
 
+def check_chroot_resolver():
+    """The chroot package install must have DNS, and the image must not keep it.
+
+    This is the bug class the guard scan above CANNOT see, and it is worth being
+    explicit about the limit: that scan finds Debian-only code running for the
+    rpm family. It cannot find Debian-only *behaviour with no rpm counterpart* --
+    something debootstrap does implicitly that `dnf --installroot` does not.
+
+    Here that was /etc/resolv.conf. debootstrap copies the builder's into the
+    target; dnf leaves none, so every chroot transaction on an rpm build died on
+    "Could not resolve host". Verified on the build host: after
+    `dnf --installroot`, the root has no resolv.conf and `chroot ... dnf makecache`
+    exits 1; with the bind mount it exits 0.
+
+    The second assertion is the one that matters for the family that already
+    worked. debootstrap's copy is LEFT in the finished image, so Debian images
+    shipped the builder's nameserver as a static file -- fine on the subnet the
+    builder is on, no DNS anywhere else, and systemd-resolved never corrects it
+    because it only manages /etc/resolv.conf when that path is a symlink.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    sh = os.path.join(here, "..", "..", "builder", "build-image.sh")
+    if not os.path.exists(sh):
+        print("  FAIL  build-image.sh not found")
+        return 1
+    body = open(sh, encoding="utf-8").read()
+    code = "\n".join(
+        "" if ln.lstrip().startswith("#") else ln for ln in body.splitlines()
+    )
+
+    print("== DNS for the chroot package install ==")
+    bad = 0
+
+    mount_at = code.find('mount --bind /etc/resolv.conf')
+    if mount_at == -1:
+        print("  FAIL  nothing bind-mounts a resolver into the chroot; an rpm build "
+              "cannot resolve its mirror")
+        bad = 1
+    else:
+        print("  PASS  a resolver is bind-mounted into the chroot")
+
+    # Before the install that needs it. The chroot runs setup.sh.
+    install_at = code.find('chroot "$MNT" bash /tmp/setup.sh')
+    if mount_at != -1 and install_at != -1 and mount_at > install_at:
+        print("  FAIL  the resolver is mounted AFTER the chroot install that needs it")
+        bad = 1
+    elif mount_at != -1 and install_at != -1:
+        print("  PASS  it is in place before the chroot install")
+
+    # And the image must not ship it.
+    if 'umount "$MNT/etc/resolv.conf"' not in code:
+        print("  FAIL  the bind mount is never removed, so the builder's nameservers "
+              "would ship inside the image")
+        bad = 1
+    elif "stub-resolv.conf" not in code:
+        print("  FAIL  resolv.conf is not restored to systemd-resolved's symlink, so "
+              "the deployed machine ignores its own DHCP-provided DNS")
+        bad = 1
+    else:
+        print("  PASS  it is removed afterwards and replaced with resolved's symlink")
+
+    # A plain copy would reintroduce exactly the bug the bind mount avoids.
+    if re.search(r'cp\s+[^\n]*\s/etc/resolv\.conf\s+"?\$MNT', code):
+        print("  FAIL  resolv.conf is COPIED into the image somewhere; that bakes the "
+              "builder's nameserver into every machine")
+        bad = 1
+
+    return bad
+
+
 if __name__ == "__main__":
-    sys.exit(main() | check_state_models())
+    sys.exit(main() | check_state_models() | check_chroot_resolver())
