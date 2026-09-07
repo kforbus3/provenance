@@ -256,6 +256,11 @@ export interface BuildJob {
 }
 
 export interface ImageBuildRequest {
+  // The output filename. Omitted, the builder picks distro-suite-arch-ab and a
+  // free suffix; given, it is honoured and refused if taken. It matters beyond
+  // tidiness: the image a machine was made from is what a bundle for it must be
+  // built from, and a LUKS recovery passphrase is filed under this name.
+  name?: string;
   distro?: string;
   suite?: string;
   arch?: string;

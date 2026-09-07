@@ -437,6 +437,52 @@ neither the TPM nor the network exists in the builder. Until that enrolment runs
 the passphrase is the only thing that opens the disk — so a machine that fails
 first boot is recovered with it.
 
+## Every build option, and where it is reachable
+
+The build dialog exposes everything `build-image.sh` takes. That has not always
+been true — options were added to the builder, modelled in the sidecar, typed in
+the API client, and then not given a control, so the only way to reach them was
+the API. **If you add a builder flag, add the control in the same change.**
+
+| | flag | in the dialog |
+| --- | --- | --- |
+| distribution / release / arch | `--distro --suite --arch` | Distribution row |
+| image name | `--name` | Image name |
+| profile, desktop | `--profile --desktop` | Profile row |
+| hostname, user, password | `--hostname --username --password` | Identity row |
+| SSH key, key-only | `--ssh-pubkey --ssh-key-only` | Identity / Customization |
+| extra packages | `--packages` | Extra packages |
+| Secure Boot | `--secure-boot` | Profile row |
+| encryption + unlock + Tang | `--encrypt --unlock --tang-url` | Encryption |
+| image / root size, compression | `--image-size --root-size --compress` | Storage |
+| writable-state model | `--state-model` | Writable state |
+| per-slot upper layer | `--slot-private-upper` | Writable state |
+| persist / slot-private / volatile / reset / keep / own | `--persist --slot-private --volatile --reset-on-update --keep-path --own-path` | Writable state |
+| customization script | `--run-script` | Customization |
+
+### Writable state
+
+The root slot is read-only and an A/B update replaces it wholesale, so anything
+written there is destroyed by the next update. This section is what survives
+instead, and it is **fixed at build time**: a machine records the layout it was
+imaged with and refuses a change at boot, because a layout that moved under a
+running system is a system whose data is somewhere it is not looking.
+
+- **model** — `overlay` puts one overlay over the whole root, which is what every
+  image built before this existed gets. `paths` keeps the root read-only and makes
+  only the enumerated paths writable.
+- **per-slot upper layer** — each slot gets `upper-A`/`upper-B` rather than
+  sharing one, so a configuration change made under A cannot follow you into B.
+  Booting the other slot then recovers from a bad *edit*, not only a bad image —
+  at the cost of the slots no longer sharing anything the overlay covers.
+- **the path directives** — shared across slots, private to each slot, discarded
+  on reboot, reset when the slot changes, held back from that reset, and owned by
+  the image.
+
+Paths must be **absolute**. The builder silently skips anything else, so the
+dialog refuses to submit instead: a skipped directive is a setting that looks
+accepted and is not in the image, and it is found on a machine.
+
 ## The netboot imager
 
 Before any machine can be imaged there has to be something for it to boot. The
