@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import socket
+import urllib.parse
 import socketserver
 import sys
 import threading
@@ -79,6 +80,32 @@ IMAGE_ALLOW = re.compile(os.environ.get(
 # imager genuinely need loop devices and mounts. Nothing else does, and a
 # privileged container is a host-root container.
 PRIVILEGED_ALLOW = re.compile(r"^debian-ab-(builder|imager)(:[\w.\-]+)?$")
+
+# Cross-architecture builds need a qemu interpreter registered with binfmt_misc,
+# which `tonistiigi/binfmt` does from a privileged container. It is OFF by default
+# and deliberately so: it is a THIRD-PARTY image pulled from Docker Hub, run as
+# host root, and everything else this proxy will run is built from this
+# repository. Allowing it by default would mean the one exception to that rule
+# arrived without anybody choosing it.
+#
+# The alternative needs no exception at all — register the interpreters on the
+# host once (`apt install qemu-user-static binfmt-support`), which persists across
+# reboots and keeps this proxy's guarantee intact. Set BINFMT_ALLOW=1 only if you
+# would rather each cross build do it for you.
+#
+# Pinning by digest is supported and recommended when it is enabled:
+#   BINFMT_IMAGE=tonistiigi/binfmt@sha256:<digest>
+BINFMT_ALLOW = os.environ.get("BINFMT_ALLOW", "").strip().lower() in ("1", "true", "yes")
+BINFMT_IMAGE = os.environ.get("BINFMT_IMAGE", "tonistiigi/binfmt").strip()
+
+
+def _binfmt_permitted(image: str) -> bool:
+    """Whether `image` is the binfmt registrar and it has been explicitly enabled.
+
+    Exact match, not a pattern: the point of naming one image is that it is one
+    image, and a regex here would be a way for a lookalike to arrive later.
+    """
+    return BINFMT_ALLOW and bool(BINFMT_IMAGE) and image == BINFMT_IMAGE
 
 log = logging.getLogger("dockerproxy")
 
@@ -162,9 +189,44 @@ class Denied(Exception):
     pass
 
 
+_IMAGES_CREATE = re.compile(r"^/(v[\d.]+/)?images/create$")
+
+
+def _binfmt_pull(method: str, path: str) -> bool:
+    """Whether this is the pull of the enabled binfmt image, and nothing else.
+
+    /images/create is otherwise absent from RULES on purpose — it is "pull and
+    run any image from anywhere". But `docker run` pulls what it does not have,
+    so enabling BINFMT_ALLOW without this would fail on the pull instead of on
+    the create: a setting that looks applied and is not, which is worse than one
+    that is plainly off.
+
+    The image is matched exactly against `fromImage`, and `tag` is folded in
+    because the daemon splits `repo:tag` across the two parameters.
+    """
+    if not BINFMT_ALLOW or method != "POST":
+        return False
+    head, _, query = path.partition("?")
+    if not _IMAGES_CREATE.match(head):
+        return False
+    params = urllib.parse.parse_qs(query)
+    from_image = (params.get("fromImage") or [""])[0]
+    tag = (params.get("tag") or [""])[0]
+    # A digest tag joins with '@'; a name tag with ':'. Anything else is neither.
+    if tag.startswith("sha256:"):
+        candidate = f"{from_image}@{tag}"
+    elif tag:
+        candidate = f"{from_image}:{tag}"
+    else:
+        candidate = from_image
+    return candidate == BINFMT_IMAGE or from_image == BINFMT_IMAGE
+
+
 def allowed(method: str, path: str) -> bool:
     bare = path.split("?", 1)[0]
-    return any(m == method and p.match(bare) for m, p in RULES)
+    if any(m == method and p.match(bare) for m, p in RULES):
+        return True
+    return _binfmt_pull(method, path)
 
 
 def check_create(body: bytes) -> None:
@@ -183,14 +245,22 @@ def check_create(body: bytes) -> None:
         raise Denied("container create body is not an object")
 
     image = str(spec.get("Image") or "")
-    if not IMAGE_ALLOW.match(image):
-        raise Denied(f"image {image!r} is not one this proxy will run")
+    if not IMAGE_ALLOW.match(image) and not _binfmt_permitted(image):
+        extra = ""
+        if BINFMT_IMAGE and image == BINFMT_IMAGE:
+            extra = (" — cross-architecture builds need it, but it is a third-party "
+                     "privileged image and is off by default. Either register the qemu "
+                     "interpreters on the host once (apt install qemu-user-static "
+                     "binfmt-support), or set BINFMT_ALLOW=1 on the dockerproxy service.")
+        raise Denied(f"image {image!r} is not one this proxy will run{extra}")
 
     host = spec.get("HostConfig") or {}
     if not isinstance(host, dict):
         raise Denied("HostConfig is not an object")
 
-    if host.get("Privileged") and not PRIVILEGED_ALLOW.match(image):
+    # The binfmt registrar installs kernel interpreters, which is exactly what
+    # needs privilege; it is only reachable here when explicitly enabled above.
+    if host.get("Privileged") and not PRIVILEGED_ALLOW.match(image) and not _binfmt_permitted(image):
         raise Denied(f"{image!r} may not run privileged")
 
     # Binds arrive as "src:dst" or "src:dst:opts", and also as Mounts[] in

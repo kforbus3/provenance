@@ -18,6 +18,12 @@ from jobs import JOB_TOKEN, container_name
 
 PROJ = settings.project_dir       # path to the repo inside this container
 
+# The image that registers qemu interpreters for cross-architecture builds. Read
+# from the same environment variable the socket proxy reads, so the image this
+# tries to run and the image that proxy will permit cannot drift apart — they are
+# the same string or the build is refused with a message about the wrong one.
+BINFMT_IMAGE = os.environ.get("BINFMT_IMAGE", "tonistiigi/binfmt").strip() or "tonistiigi/binfmt"
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -770,11 +776,37 @@ def _binfmt_prelude(arch: str) -> str:
     want = {"amd64": "x86_64", "arm64": "aarch64"}.get(arch, "")
     if not want:
         return ""
+    # Two ways the interpreter can already be there, and both are checked before
+    # anything is run: the host may have it registered permanently (Debian's
+    # qemu-user-static does this, and it survives reboots, which the container
+    # method does not), or a previous build may have registered it this boot.
+    #
+    # If it is missing, this ABORTS rather than warning. It used to warn and carry
+    # on, and the build then died forty lines later inside a Dockerfile RUN with a
+    # bare "exec format error" -- a message about the wrong thing entirely, at a
+    # point that gave no hint the cause was a missing binfmt handler noticed
+    # minutes earlier. Failing here costs the same build and says why.
+    handler = {"amd64": "qemu-x86_64", "arm64": "qemu-aarch64"}[arch]
     return (
         f'if [ "$(uname -m)" != "{want}" ]; then\n'
-        f"  echo '--- registering qemu-{want} so {arch} can be built on this host ---'\n"
-        f"  docker run --privileged --rm tonistiigi/binfmt --install {arch} \\\n"
-        f"    || echo 'WARNING: could not register binfmt; an {arch} build will fail here.'\n"
+        f'  if [ -e /proc/sys/fs/binfmt_misc/{handler} ]; then\n'
+        f"    echo '--- {handler} already registered on this host ---'\n"
+        "  else\n"
+        f"    echo '--- registering {handler} so {arch} can be built on this host ---'\n"
+        f"    docker run --privileged --rm {_q(BINFMT_IMAGE)} --install {arch} || {{\n"
+        f"      echo 'ERROR: {arch} cannot be built on this host: no {handler} binfmt handler'\n"
+        "      echo '       is registered, and registering one was refused.'\n"
+        "      echo ''\n"
+        "      echo '       Either register the interpreters on the host once, which persists'\n"
+        "      echo '       across reboots and needs no exception in the Docker socket proxy:'\n"
+        "      echo ''\n"
+        "      echo '           sudo apt install qemu-user-static binfmt-support'\n"
+        "      echo ''\n"
+        f"      echo '       or set BINFMT_ALLOW=1 on the dockerproxy service to let each build'\n"
+        f"      echo '       register it with the third-party {BINFMT_IMAGE} image.'\n"
+        "      exit 1\n"
+        "    }\n"
+        "  fi\n"
         "fi\n"
     )
 
