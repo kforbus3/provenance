@@ -82,6 +82,11 @@ COMPRESS="${COMPRESS:-zstd}"
 # Encryption
 ENCRYPT="${ENCRYPT:-false}"
 UNLOCK="${UNLOCK:-keyfile}"             # passphrase | keyfile | tpm2 | tang
+# RAUC is built from source on the RPM family -- there is no package for it in
+# base or EPEL. Pinned rather than tracking a branch: this is the component that
+# decides whether a machine can be updated at all, and it should change when
+# somebody chooses to change it.
+RAUC_VERSION="${RAUC_VERSION:-v1.13}"
 LUKS_PASS="${LUKS_PASS:-}"
 TANG_URL="${TANG_URL:-}"
 # Which TPM PCRs a tpm2 binding is sealed against. 7 is the Secure Boot policy
@@ -94,8 +99,9 @@ TPM2_PCRS="${TPM2_PCRS:-7}"
 usage() {
     cat <<EOF
 Usage: $0 [options]
-  --distro NAME           debian|ubuntu (default: auto-detect from --suite)
-  --suite NAME            Debian/Ubuntu suite (default: $SUITE; e.g. trixie, bookworm, noble, jammy)
+  --distro NAME           debian|ubuntu|almalinux|rocky (default: auto-detect from --suite)
+  --suite NAME            Debian/Ubuntu codename, or an RPM major version
+                          (default: $SUITE; e.g. trixie, bookworm, noble, jammy, 9, 10)
   --arch ARCH             Architecture (default: $ARCH)
   --mirror URL            APT mirror (default: distro's primary mirror)
   --hostname NAME         Image hostname (default: $HOSTNAME_)
@@ -301,7 +307,11 @@ persist /srv
 persist /opt
 persist /usr/local
 persist /var"
-        RESET_PATHS="/var/lib/dpkg /var/lib/apt /var/cache/apt"
+        if [ "$FAMILY" = rpm ]; then
+            RESET_PATHS="/var/lib/rpm /var/lib/dnf /var/cache/dnf"
+        else
+            RESET_PATHS="/var/lib/dpkg /var/lib/apt /var/cache/apt"
+        fi
         KEEP_PATHS=""
         ;;
     appliance)
@@ -398,8 +408,62 @@ fi
 if [ -z "$DISTRO" ]; then
     case "$SUITE" in
         bionic|focal|jammy|noble|oracular|plucky|questing|resolute) DISTRO=ubuntu;;
+        # An RPM suite is a bare major version. "9" is not a Debian codename and
+        # never will be, so it is unambiguous -- but the default stays Debian, so
+        # an unrecognised codename fails as a Debian suite rather than silently
+        # becoming something else.
+        8|9|10) DISTRO=almalinux;;
         *) DISTRO=debian;;
     esac
+fi
+
+# --- Resolve the distro FAMILY ------------------------------------------------
+#
+# NOT YET COMPLETE FOR rpm. Everything up to and including the initramfs is
+# ported -- bootstrap, packages, RAUC built from source, GRUB, Secure Boot -- but
+# the A/B ROOT ITSELF is not. It is implemented as initramfs-tools scripts
+# (overlay/etc/initramfs-tools, ~770 lines) and dracut is a different module
+# system: different install step, different hook points, different helpers.
+#
+# Until those are ported, an RPM build would produce an image that installs
+# perfectly and then boots without its overlay root -- read-only, no A/B, no slot
+# selection -- which is the failure that looks like a success until a machine is
+# in a rack. So it is refused, at the point of knowledge, rather than built.
+# See ab_root_unsupported below.
+#
+# Everything below branches on the family rather than on the distro: the
+# difference between Debian and Ubuntu is a mirror and two package names, while
+# the difference between either and AlmaLinux is the bootstrapper, the package
+# manager, the initramfs generator and the bootloader's name. Two variables kept
+# apart because they answer different questions.
+#
+# The A/B layout, partitioning, LUKS, the state manifest, the update keyring and
+# the per-slot kernel staging are the same either way, which is why this is one
+# script with branches rather than two scripts that would drift.
+case "$DISTRO" in
+    debian|ubuntu)        FAMILY=deb;;
+    almalinux|rocky|rhel) FAMILY=rpm;;
+    *) die "--distro must be debian, ubuntu, almalinux or rocky (got '$DISTRO')";;
+esac
+
+# The A/B overlay root and the initramfs LUKS key are initramfs-tools scripts.
+# There is no dracut equivalent in this image yet, so refuse rather than build
+# something that boots without the thing that makes it an A/B image.
+#
+# Set AB_ROOT_INCOMPLETE_OK=1 to build anyway. That is for working ON this port,
+# not for producing an image to deploy: what comes out has no overlay root.
+if [ "$FAMILY" = rpm ] && [ "${AB_ROOT_INCOMPLETE_OK:-0}" != 1 ]; then
+    die "$DISTRO images are not finished yet.
+
+    Ported and working: dnf bootstrap, package install, RAUC built from source
+    (there is no rauc RPM in base or EPEL), GRUB, Secure Boot, dracut initramfs.
+
+    Not ported: the A/B overlay root and the initramfs LUKS key, which are
+    initramfs-tools scripts and need dracut modules. Without them this would
+    build an image that installs fine and then boots read-only with no slot
+    selection -- working, until you need to roll back.
+
+    Building one anyway, to work on that port:  AB_ROOT_INCOMPLETE_OK=1"
 fi
 # --- Resolve the build profile -----------------------------------------------
 #
@@ -430,7 +494,13 @@ case "$PROFILE" in
         # Anything beyond this belongs in --packages, not baked into the
         # profile -- and notably NOT qemu-guest-agent: these images deploy to
         # real machines as often as VMs.
-        PROFILE_PACKAGES="rsync htop less nano tmux"
+        if [ "$FAMILY" = rpm ]; then
+            # Same five tools. less and nano are not in a minimal RPM install
+            # either, and htop is in EPEL, which the RAUC build enables anyway.
+            PROFILE_PACKAGES="rsync htop less nano tmux"
+        else
+            PROFILE_PACKAGES="rsync htop less nano tmux"
+        fi
         ;;
     desktop)
         DESKTOP_ENV="${DESKTOP_ENV:-gnome}"
@@ -441,9 +511,15 @@ case "$PROFILE" in
         case "$DISTRO" in
             debian) DE_AVAILABLE="gnome kde xfce mate cinnamon lxqt";;
             ubuntu) DE_AVAILABLE="gnome kde xfce mate lxqt";;
-            *) die "--distro must be debian or ubuntu (got '$DISTRO')";;
+            # What this family ships as groups. Fewer than Debian offers, and
+            # naming one it does not have fails inside the chroot rather than here.
+            almalinux|rocky|rhel) DE_AVAILABLE="gnome kde xfce";;
+            *) die "--distro must be debian, ubuntu, almalinux or rocky (got '$DISTRO')";;
         esac
         case "$DISTRO/$DESKTOP_ENV" in
+            almalinux/gnome|rocky/gnome|rhel/gnome) DESKTOP_META="Workstation";;
+            almalinux/kde|rocky/kde|rhel/kde)       DESKTOP_META="KDE Plasma Workspaces";;
+            almalinux/xfce|rocky/xfce|rhel/xfce)    DESKTOP_META="Xfce";;
             debian/gnome)    DESKTOP_META="task-gnome-desktop";;
             debian/kde)      DESKTOP_META="task-kde-desktop";;
             debian/xfce)     DESKTOP_META="task-xfce-desktop";;
@@ -530,10 +606,24 @@ esac
 # binfmt_misc on the host; the builder image ships the static qemu binaries but
 # cannot register them itself. Checked here so the failure is one clear line
 # rather than "Exec format error" a thousand lines into debootstrap.
-if [ "$ARCH" != "$(dpkg --print-architecture)" ]; then
+# host_arch reports the builder's own architecture in this script's vocabulary
+# (amd64/arm64). `dpkg --print-architecture` was the only way this was asked, and
+# there is no dpkg in an RPM builder -- the check would have died on the probe
+# rather than on the thing it was probing for.
+host_arch() {
+    case "$(uname -m)" in
+        x86_64)  echo amd64;;
+        aarch64) echo arm64;;
+        *)       uname -m;;
+    esac
+}
+HOST_ARCH="$(host_arch)"
+if [ "$ARCH" != "$HOST_ARCH" ]; then
     if [ ! -e "/proc/sys/fs/binfmt_misc/qemu-${QEMU_ARCH}" ]; then
-        die "building $ARCH on $(dpkg --print-architecture) needs binfmt support.
-    Run once on the host:  docker run --privileged --rm tonistiigi/binfmt --install all"
+        die "building $ARCH on $HOST_ARCH needs binfmt support.
+    Register the interpreters on the build host once:
+        Debian/Ubuntu:  apt install qemu-user-static binfmt-support
+        or:             docker run --privileged --rm tonistiigi/binfmt --install all"
     fi
     log "Cross-building $ARCH via qemu-${QEMU_ARCH} (binfmt registered)"
 fi
@@ -558,7 +648,34 @@ case "$DISTRO" in
             ln -s gutsy "/usr/share/debootstrap/scripts/$SUITE"
         fi
         ;;
-    *) die "--distro must be debian or ubuntu";;
+    almalinux|rocky|rhel)
+        # The suite IS the major version for this family: there are no codenames,
+        # and dnf wants --releasever. Default to the current stable rather than
+        # guessing from a codename that does not exist.
+        case "$SUITE" in
+            ''|stable) SUITE=9;;
+        esac
+        case "$SUITE" in
+            8|9|10) ;;
+            *) die "--suite for $DISTRO must be a major version (8, 9 or 10), got '$SUITE'";;
+        esac
+        # One kernel package, named the same on every RPM distro, for every
+        # architecture -- none of Debian's linux-image-<arch>/-generic split.
+        KERNEL_PKG="kernel"
+        # The release package carries the repo definitions and the GPG keys, so
+        # it is what makes an empty installroot into a distribution. Its name is
+        # the only thing that differs between these three.
+        case "$DISTRO" in
+            almalinux) RELEASE_PKG="almalinux-release";;
+            rocky)     RELEASE_PKG="rocky-release";;
+            rhel)      RELEASE_PKG="redhat-release";;
+        esac
+        # Empty by default: dnf reads the mirror list out of the release package,
+        # which is what handles mirror selection and failover. A MIRROR here is
+        # for a local mirror and overrides that.
+        MIRROR="${MIRROR:-}"
+        DEBOOTSTRAP_OPTS=""
+        ;;
 esac
 # A build with no version given still gets one. An unversioned image is one the
 # control plane cannot reason about: a rollout finishes when every machine
@@ -579,9 +696,17 @@ esac
 # Additive either way -- with Secure Boot switched off in firmware, an image
 # carrying shim boots exactly as it did before, and the BIOS path is untouched.
 SB_SETUP=""
+# The installer command differs, the policy does not. Templating the command
+# keeps the three secure-boot modes -- and the reasoning about them -- in one
+# place instead of two copies that would drift.
+if [ "$FAMILY" = rpm ]; then
+    PKG_INSTALL="dnf -y install --setopt=install_weak_deps=False"
+else
+    PKG_INSTALL="apt-get install -y --no-install-recommends"
+fi
 case "$SECURE_BOOT" in
-    on)   SB_SETUP="apt-get install -y --no-install-recommends ${SB_PKGS}";;
-    auto) SB_SETUP="apt-get install -y --no-install-recommends ${SB_PKGS} || \
+    on)   SB_SETUP="${PKG_INSTALL} ${SB_PKGS}";;
+    auto) SB_SETUP="${PKG_INSTALL} ${SB_PKGS} || \
               echo 'NOTE: no signed shim/GRUB in this suite; Secure Boot will be unsupported' >&2";;
 esac
 # Minimum workable root slot, measured per distro. Ubuntu's linux-image-generic
@@ -626,6 +751,37 @@ case "$OUTPUT" in /*) ;; *) OUTPUT="/output/${OUTPUT}";; esac
 # older suites it ships inside systemd itself.
 RESOLVED_PKG="systemd-resolved"
 case "$SUITE" in bionic|focal|jammy) RESOLVED_PKG="";; esac
+
+# --- family package names -----------------------------------------------------
+#
+# The arch block above named the Debian packages, because that is the only
+# vocabulary it had. Rename them here, where the family is known. Kept in one
+# place rather than spread through the arch cases so that adding an architecture
+# and adding a distribution stay separate jobs.
+if [ "$FAMILY" = rpm ]; then
+    case "$ARCH" in
+        amd64)
+            # grub2-pc is BIOS, grub2-efi-x64 + efibootmgr is UEFI. Both, because
+            # the image does not know which firmware the machine it lands on has,
+            # and the whole point is that it lands on machines.
+            GRUB_PKGS="grub2-pc grub2-efi-x64 grub2-tools efibootmgr"
+            SB_PKGS="shim-x64 grub2-efi-x64"
+            ;;
+        arm64)
+            # No BIOS on arm64, so no grub2-pc.
+            GRUB_PKGS="grub2-efi-aa64 grub2-tools efibootmgr"
+            SB_PKGS="shim-aa64 grub2-efi-aa64"
+            ;;
+    esac
+    # Present and named the same across this family.
+    RESOLVED_PKG="systemd-resolved"
+    # grub2-install, not grub-install. Same program, different name, and calling
+    # the wrong one fails with "command not found" at the point where the image
+    # gets its bootloader -- the last step, after everything expensive.
+    GRUB_INSTALL="grub2-install"
+else
+    GRUB_INSTALL="grub-install"
+fi
 
 # --- Validate options ---
 if [ "$SSH_KEY_ONLY" = true ] && [ -z "$SSH_PUBKEY" ]; then
@@ -824,9 +980,34 @@ mount "$P_ESP" "$BOOTMNT/efi"
 mount "$DEV_OVL" "$MNT/var/lib/overlay"
 
 step "Bootstrapping $OS_PRETTY $SUITE ($ARCH)"
-debootstrap --arch="$ARCH" --variant=minbase $DEBOOTSTRAP_OPTS \
-    --include=systemd-sysv,ifupdown,netbase \
-    "$SUITE" "$MNT" "$MIRROR"
+if [ "$FAMILY" = deb ]; then
+    debootstrap --arch="$ARCH" --variant=minbase $DEBOOTSTRAP_OPTS \
+        --include=systemd-sysv,ifupdown,netbase \
+        "$SUITE" "$MNT" "$MIRROR"
+else
+    # dnf --installroot is this family's debootstrap. The release package is what
+    # turns an empty directory into a distribution: it carries the repository
+    # definitions and, more importantly, the GPG keys those repositories are
+    # verified against.
+    #
+    # --nogpgcheck applies to THIS transaction only, and only because the keys
+    # arrive inside the very package being installed -- there is nothing to
+    # verify against until it lands. Every transaction after this one, including
+    # the whole package install below, is verified normally. Installing the
+    # release package on its own first, rather than alongside everything else,
+    # is what keeps that window to one package.
+    RPM_REPO_ARGS=""
+    [ -n "$MIRROR" ] && RPM_REPO_ARGS="--setopt=baseurl=$MIRROR"
+    dnf -y --installroot="$MNT" --releasever="$SUITE" \
+        --setopt=install_weak_deps=False --nogpgcheck $RPM_REPO_ARGS \
+        install "$RELEASE_PKG" \
+        || die "could not bootstrap $DISTRO $SUITE — is the release package name right, and is the mirror reachable?"
+    # Now the keys are in place, so everything else is verified.
+    dnf -y --installroot="$MNT" --releasever="$SUITE" \
+        --setopt=install_weak_deps=False $RPM_REPO_ARGS \
+        install dnf systemd passwd \
+        || die "could not install the base system into the installroot"
+fi
 
 step "Binding pseudo-filesystems for chroot"
 mount --bind /dev "$MNT/dev"
@@ -893,7 +1074,14 @@ EOF
 # --- crypttab + key material (before installing the initramfs) ---
 CRYPT_PACKAGES=""
 if [ "$ENCRYPT" = true ]; then
-    CRYPT_PACKAGES="cryptsetup cryptsetup-initramfs"
+    if [ "$FAMILY" = rpm ]; then
+        # dracut ships the crypt module itself, so there is no separate hook
+        # package to install -- cryptsetup-initramfs is initramfs-tools' and has
+        # no counterpart here.
+        CRYPT_PACKAGES="cryptsetup"
+    else
+        CRYPT_PACKAGES="cryptsetup cryptsetup-initramfs"
+    fi
     # Both auto-unlock methods go through clevis, because clevis-initramfs is
     # the only one of the available mechanisms that Debian's initramfs-tools
     # can call at unlock time. tpm2 used to use systemd-cryptenroll and write
@@ -905,8 +1093,15 @@ if [ "$ENCRYPT" = true ]; then
     # libtss2-tcti-device0, which no longer exists in trixie and installs today
     # only through a transitional Provides on libtss2-tcti-device0t64 -- a name
     # that will rot. Depending on clevis-tpm2 is the durable spelling.
-    [ "$UNLOCK" = tpm2 ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs clevis-tpm2 tpm2-tools"
-    [ "$UNLOCK" = tang ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs curl"
+    if [ "$FAMILY" = rpm ]; then
+        # clevis-dracut rather than clevis-initramfs, and clevis-pin-tpm2 carries
+        # the TPM2 pin on this family.
+        [ "$UNLOCK" = tpm2 ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-dracut clevis-pin-tpm2 tpm2-tools"
+        [ "$UNLOCK" = tang ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-dracut curl"
+    else
+        [ "$UNLOCK" = tpm2 ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs clevis-tpm2 tpm2-tools"
+        [ "$UNLOCK" = tang ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs curl"
+    fi
 
     if [ "$USE_KEYFILE" = true ]; then
         # Bootstrap unlock. For tpm2/tang this only bootstraps the first boot;
@@ -1004,9 +1199,16 @@ fi
 # for anyone who deliberately re-enables networkd.
 DESKTOP_SETUP=""
 if [ "$PROFILE" = desktop ]; then
-    DESKTOP_SETUP="apt-get install -y ${DESKTOP_PACKAGES}
+    if [ "$FAMILY" = rpm ]; then
+        # Groups, not metapackages: this family expresses "a desktop" as a group.
+        DESKTOP_SETUP="dnf -y group install ${DESKTOP_PACKAGES}
 systemctl set-default graphical.target
 systemctl disable systemd-networkd"
+    else
+        DESKTOP_SETUP="apt-get install -y ${DESKTOP_PACKAGES}
+systemctl set-default graphical.target
+systemctl disable systemd-networkd"
+    fi
 fi
 
 step "Installing kernel, bootloader, and tooling in chroot"
@@ -1015,10 +1217,91 @@ step "Installing kernel, bootloader, and tooling in chroot"
 # alongside the unpacked files is enough on its own to exhaust a 3 GiB slot —
 # initramfs generation then dies with a bare "No space left on device". The
 # cache lives on the builder's own filesystem instead and is discarded after.
-APTCACHE="$WORK/aptcache"
-mkdir -p "$APTCACHE" "$MNT/var/cache/apt/archives"
-mount --bind "$APTCACHE" "$MNT/var/cache/apt/archives"
+if [ "$FAMILY" = deb ]; then
+    PKGCACHE="$WORK/aptcache"
+    mkdir -p "$PKGCACHE" "$MNT/var/cache/apt/archives"
+    mount --bind "$PKGCACHE" "$MNT/var/cache/apt/archives"
+else
+    # Same reasoning, different directory: dnf's cache is as large as apt's and
+    # would come out of the same slot.
+    PKGCACHE="$WORK/dnfcache"
+    mkdir -p "$PKGCACHE" "$MNT/var/cache/dnf"
+    mount --bind "$PKGCACHE" "$MNT/var/cache/dnf"
+fi
 
+if [ "$FAMILY" = rpm ]; then
+cat > "$MNT/tmp/setup.sh" <<CHROOT
+set -euo pipefail
+
+# dracut, not initramfs-tools: it is what an RPM distribution generates an initrd
+# with, and the kernel package expects it to be there.
+dnf -y install --setopt=install_weak_deps=False \
+    ${KERNEL_PKG} dracut ${GRUB_PKGS} \
+    openssh-server sudo ca-certificates curl \
+    ${RESOLVED_PKG} cloud-utils-growpart gdisk parted e2fsprogs \
+    ${CRYPT_PACKAGES} ${PROFILE_PACKAGES} ${EXTRA_PACKAGES}
+
+# --- RAUC, built from source -------------------------------------------------
+#
+# There is no rauc package for this family: not in base, not in EPEL. Verified,
+# not assumed -- \`dnf list rauc\` on a stock Rocky 9 with EPEL enabled returns
+# "No matching Packages". So the A/B update mechanism, which is the whole point
+# of the image, has to be built.
+#
+# It is built INSIDE the image and then the toolchain is removed, rather than
+# built on the builder and copied in: rauc links against this distribution's
+# glib, openssl, curl and libnl, and a binary built elsewhere would be linked
+# against another distribution's versions of all four.
+#
+# CRB (CodeReady Builder) carries meson, ninja and several -devel packages and is
+# not enabled by default. EPEL is needed for its own reasons and enabling it
+# first is what makes CRB's name resolvable on all of these.
+dnf -y install epel-release || true
+dnf -y install 'dnf-command(config-manager)' || true
+dnf config-manager --set-enabled crb 2>/dev/null || \
+    dnf config-manager --set-enabled powertools 2>/dev/null || true
+
+RAUC_BUILD_PKGS="meson ninja-build gcc git glib2-devel openssl-devel libcurl-devel \
+    json-glib-devel dbus-devel systemd-devel libnl3-devel libfdisk-devel"
+dnf -y install --setopt=install_weak_deps=False \$RAUC_BUILD_PKGS
+
+git clone --depth 1 --branch "${RAUC_VERSION}" https://github.com/rauc/rauc.git /tmp/rauc
+cd /tmp/rauc
+meson setup build --prefix=/usr -Dsystemd=enabled -Dservice=true
+ninja -C build
+ninja -C build install
+cd /
+rm -rf /tmp/rauc
+
+# The same check the deb path makes, and for the same reason: without the D-Bus
+# service file, "rauc install" and "rauc status" both fail with "de.pengutronix.rauc
+# was not provided by any .service files" -- so the machine can never be updated,
+# and nothing says why until somebody tries.
+if [ ! -e /usr/share/dbus-1/system-services/de.pengutronix.rauc.service ]; then
+    echo "ERROR: RAUC built but its D-Bus service file is missing; this image could never be updated" >&2
+    exit 1
+fi
+rauc --version
+
+# The toolchain is build-time only. Left in, it is several hundred megabytes of
+# compiler in every image and a larger attack surface on every machine.
+dnf -y remove \$RAUC_BUILD_PKGS || true
+dnf -y autoremove || true
+dnf clean all
+
+${SB_SETUP}
+
+systemctl enable sshd systemd-networkd systemd-resolved
+
+${DESKTOP_SETUP}
+
+# wheel, not sudo: this family's sudoers grants %wheel, and a user in a group
+# that grants nothing is a machine nobody can escalate on.
+useradd -m -s /bin/bash -G wheel "${USERNAME}"
+echo "${USERNAME}:${PASSWORD}" | chpasswd
+passwd -l root
+CHROOT
+else
 cat > "$MNT/tmp/setup.sh" <<CHROOT
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -1057,6 +1340,7 @@ useradd -m -s /bin/bash -G sudo "${USERNAME}"
 echo "${USERNAME}:${PASSWORD}" | chpasswd
 passwd -l root
 CHROOT
+fi
 if ! chroot "$MNT" bash /tmp/setup.sh; then
     used="$(df -Pm "$MNT" | awk 'NR==2 {print $3}')"
     avail="$(df -Pm "$MNT" | awk 'NR==2 {print $4}')"
@@ -1317,8 +1601,23 @@ MOTD
 # individual hooks does not: kernel hooks, package postinsts, and anyone typing
 # it by hand all get the same answer.
 mkdir -p "$MNT/usr/local/sbin"
-chroot "$MNT" dpkg-divert --local --rename --add /usr/sbin/update-grub >/dev/null
-cat > "$MNT/usr/sbin/update-grub" <<'NOGRUB'
+if [ "$FAMILY" = deb ]; then
+    chroot "$MNT" dpkg-divert --local --rename --add /usr/sbin/update-grub >/dev/null
+    NOGRUB_PATH="$MNT/usr/sbin/update-grub"
+else
+    # No dpkg-divert here. The equivalent caller is grub2-mkconfig, which this
+    # family's kernel install runs through /etc/kernel/postinst.d and through
+    # kernel-install; the real binary is moved aside by hand and the stub takes
+    # its name, which covers every caller the same way the divert does.
+    #
+    # grub2-mkconfig, not update-grub: the name is different, so a divert of a
+    # name that does not exist here would have silently protected nothing.
+    if [ -e "$MNT/usr/sbin/grub2-mkconfig" ] && [ ! -e "$MNT/usr/sbin/grub2-mkconfig.distrib" ]; then
+        mv "$MNT/usr/sbin/grub2-mkconfig" "$MNT/usr/sbin/grub2-mkconfig.distrib"
+    fi
+    NOGRUB_PATH="$MNT/usr/sbin/grub2-mkconfig"
+fi
+cat > "$NOGRUB_PATH" <<'NOGRUB'
 #!/bin/sh
 # Deliberately does nothing. This is an A/B image: /boot/grub/grub.cfg is part
 # of the image and is replaced by re-imaging, not regenerated on the machine.
@@ -1484,11 +1783,23 @@ fi
 # encrypted images, which would have left every unencrypted image booting
 # without the overlay and no clue as to why.
 log "Rebuilding initramfs (root overlay, and cryptsetup where enabled)"
-chroot "$MNT" update-initramfs -u
+if [ "$FAMILY" = deb ]; then
+    chroot "$MNT" update-initramfs -u
+else
+    # dracut is told the kernel version explicitly. Left to itself it uses the
+    # RUNNING kernel's version, which in a chroot on a build host is the BUILD
+    # HOST's kernel -- so it would generate an initramfs for a kernel that is not
+    # in this image, name it after a version this image does not have, and the
+    # machine would find no initrd for the kernel it actually boots.
+    KVER_FOR_DRACUT="$(ls "$MNT/lib/modules" 2>/dev/null | head -1)"
+    [ -n "$KVER_FOR_DRACUT" ] || die "no kernel modules directory in the image; the kernel package did not install"
+    chroot "$MNT" dracut --force --kver "$KVER_FOR_DRACUT" \
+        "/boot/initramfs-${KVER_FOR_DRACUT}.img"
+fi
 
 if [ "$GRUB_BIOS" = 1 ]; then
     step "Installing GRUB (BIOS + UEFI) and writing A/B config"
-    chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
+    chroot "$MNT" "$GRUB_INSTALL" --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
 else
     step "Installing GRUB (UEFI) and writing A/B config"
 fi
@@ -1496,7 +1807,7 @@ fi
 # BOOTAA64.EFI on arm64 -- so any UEFI firmware boots it without an NVRAM entry.
 # Required for mass imaging, where NVRAM cannot be prepared per machine. Secure
 # Boot must be disabled.
-chroot "$MNT" grub-install --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi \
+chroot "$MNT" "$GRUB_INSTALL" --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi \
     --boot-directory=/boot --removable --no-nvram
 
 # --- UEFI Secure Boot --------------------------------------------------------

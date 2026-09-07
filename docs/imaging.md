@@ -279,6 +279,47 @@ machine imaged from that image accepts the same passphrase on any encrypted
 partition — rotating it means re-imaging, or `cryptsetup luksChangeKey` per
 machine.
 
+## Building for another distribution family
+
+The builder handles two families. Which one is chosen follows from `--distro`:
+
+| family | distros | bootstrap | initramfs | bootloader |
+| --- | --- | --- | --- | --- |
+| `deb` | debian, ubuntu | `debootstrap` | initramfs-tools | `grub-install` |
+| `rpm` | almalinux, rocky, rhel | `dnf --installroot` | dracut | `grub2-install` |
+
+For the RPM family `--suite` is a **major version** (`9`, `10`), not a codename —
+there are no codenames, and dnf wants `--releasever`.
+
+**RAUC is built from source there.** There is no `rauc` package in base or EPEL —
+checked, not assumed: `dnf list rauc` on a stock Rocky 9 with EPEL enabled returns
+*No matching Packages*. Since RAUC is what makes an image A/B-updatable, it is
+built inside the image (pinned by `RAUC_VERSION`, default `v1.13`) and the
+toolchain removed afterwards. It is built *in* the image rather than on the
+builder because it links against that distribution's glib, openssl, curl and
+libnl; a binary built elsewhere would be linked against another distribution's
+versions of all four. CRB (CodeReady Builder) is enabled for meson and ninja.
+
+The bootstrap installs the release package **first, on its own, with
+`--nogpgcheck`**, and everything after it verified normally. The keys arrive
+*inside* that package, so there is nothing to verify against until it lands;
+installing it alone is what keeps that window to one package.
+
+> ### RPM images are not finished
+>
+> Ported and working: the bootstrap, package install, RAUC from source, GRUB,
+> Secure Boot and the dracut initramfs.
+>
+> **Not ported: the A/B overlay root and the initramfs LUKS key.** Those are
+> initramfs-tools scripts (`overlay/etc/initramfs-tools`, ~770 lines) and dracut
+> is a different module system — different install step, different hook points,
+> different helpers.
+>
+> An RPM build is therefore **refused**, rather than producing an image that
+> installs perfectly and then boots read-only with no slot selection and no
+> rollback: working, until you need it not to be. `AB_ROOT_INCOMPLETE_OK=1`
+> builds one anyway, for working on the port — not for deploying.
+
 ## Building for another architecture
 
 Building an arm64 image (or imager) on an amd64 host runs arm64 binaries under
