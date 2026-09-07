@@ -77,6 +77,26 @@ in `.env.example`.
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
 See [deployment.md](./deployment.md).
 
+### Cross-architecture builds fail with the reason, and can be enabled
+
+An arm64 imager build died with `exec format error` inside a Dockerfile `RUN`.
+The cause was four hundred lines earlier: the socket proxy refused
+`tonistiigi/binfmt`, which registers the qemu interpreter, and the build **warned
+and carried on** into a failure that says nothing about binfmt.
+
+- The build now **aborts** when no interpreter is registered, naming both
+  remedies. It also checks `/proc/sys/fs/binfmt_misc` first, so a host that
+  already has them registered — Debian's `qemu-user-static` does, permanently —
+  skips the step entirely rather than needing any exception.
+- Automatic registration is now available but **off by default**
+  (`BINFMT_ALLOW=1`, with `BINFMT_IMAGE` pinnable to a digest). It stays off by
+  default because it means running a third-party Docker Hub image as host root,
+  and everything else the proxy permits is built from this repository.
+- Enabling it also permits pulling exactly that image and nothing else.
+  `/images/create` is otherwise absent from the proxy's rules on purpose, and
+  without this the setting would have failed at the pull instead of the create —
+  looking applied while doing nothing.
+
 ### Encrypted images can say how they unlock
 
 `--unlock` has always taken `passphrase | keyfile | tpm2 | tang`, the sidecar has
