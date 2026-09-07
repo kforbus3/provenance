@@ -283,6 +283,14 @@ export interface ImageBuildRequest {
   unlock?: "passphrase" | "keyfile" | "tpm2" | "tang";
   luksPassphrase?: string;
   tangUrl?: string;
+  // Generate this build's recovery passphrase and file it before the build
+  // starts, instead of typing one. It goes to the external secrets manager when
+  // one is connected, otherwise into Fleet's own credential vault; either way a
+  // credential record is created so it is found the same way.
+  //
+  // The build is refused if the passphrase cannot be stored — an encrypted image
+  // whose key was never persisted looks exactly like a success.
+  generatePassphrase?: boolean;
   stateModel?: string;
   slotPrivateUpper?: boolean;
   persistPaths?: string;
@@ -302,10 +310,19 @@ export interface BundleBuildRequest {
   luksPassphrase?: string;
 }
 
+// A build started with generatePassphrase also reports where the recovery key
+// went, so the operator is told rather than having to go looking.
+export interface StartedBuild extends BuildJob {
+  passphraseStoredIn?: "external" | "vault";
+  passphraseStoredAt?: string;
+  passphraseSecretId?: string;
+  imageName?: string;
+}
+
 export async function startBuild(
   kind: "image" | "bundle" | "imager",
   body: ImageBuildRequest | BundleBuildRequest | { arch?: string },
-): Promise<BuildJob> {
+): Promise<StartedBuild> {
   const { data } = await api.post(`/api/v1/imaging/builds/${kind}`, body);
   return data;
 }

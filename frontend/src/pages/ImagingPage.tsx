@@ -1171,6 +1171,9 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
   // unattended and needs nothing else present (no TPM, no Tang server).
   const [unlock, setUnlock] = useState<"passphrase" | "keyfile" | "tpm2" | "tang">("keyfile");
   const [tangUrl, setTangUrl] = useState("");
+  // Generating beats typing: it is 256 bits of random rather than something
+  // memorable, and it is filed automatically instead of ending up in a note.
+  const [genPass, setGenPass] = useState(true);
 
   const start = useMutation({
     mutationFn: () => startBuild("image", {
@@ -1181,9 +1184,18 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
       luksPassphrase: encrypt ? luks : "",
       unlock: encrypt ? unlock : undefined,
       tangUrl: encrypt && unlock === "tang" ? tangUrl.trim() : undefined,
+      generatePassphrase: encrypt ? genPass : undefined,
     }),
     onSuccess: (job) => {
-      setMsg({ kind: "success", text: `Started: ${job.label}. Watch it on the Builds tab.` });
+      const where = job.passphraseStoredIn === "external"
+        ? `Recovery passphrase filed in the secrets manager at ${job.passphraseStoredAt}.`
+        : job.passphraseStoredIn === "vault"
+          ? `Recovery passphrase filed in Credentials as ${job.passphraseStoredAt}.`
+          : "";
+      setMsg({
+        kind: "success",
+        text: `Started: ${job.label}. Watch it on the Builds tab.${where ? " " + where : ""}`,
+      });
       onStarted();
       onClose();
     },
@@ -1279,9 +1291,22 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
                   usually wrong for a server.
                 </Alert>
               )}
-              <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
-                         onChange={(e) => setLuks(e.target.value)}
-                         helperText="Enrolled for recovery whatever the unlock method — keep it. Travels in the environment, not on a command line." />
+              <FormControlLabel
+                control={<Switch checked={genPass} onChange={(e) => setGenPass(e.target.checked)} />}
+                label="Generate the recovery passphrase and store it" />
+              {genPass ? (
+                <Alert severity="info">
+                  A 256-bit passphrase is generated and filed <strong>before</strong> the
+                  build starts — in your external secrets manager if one is connected,
+                  otherwise in Credentials under <code>imaging/</code>. If it cannot be
+                  stored the build does not run: an encrypted image whose recovery key was
+                  never saved looks exactly like a success.
+                </Alert>
+              ) : (
+                <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
+                           onChange={(e) => setLuks(e.target.value)}
+                           helperText="Enrolled for recovery whatever the unlock method — keep it somewhere you will still have it when a machine will not boot. Travels in the environment, not on a command line." />
+              )}
             </>
           )}
           <Typography variant="caption" color="text.secondary">

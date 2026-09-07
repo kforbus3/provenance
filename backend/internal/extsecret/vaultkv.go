@@ -1,6 +1,7 @@
 package extsecret
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -148,5 +149,59 @@ func toString(v any) string {
 		return ""
 	default:
 		return fmt.Sprint(t)
+	}
+}
+
+// Store writes fields to a KV v2 path, refusing to overwrite an existing secret.
+//
+// `cas: 0` is KV v2's compare-and-set for "create only": the write succeeds only
+// if nothing is there, and returns 400 otherwise. That check has to be the
+// store's rather than a read-then-write here, because between a read and a write
+// another build could file its own passphrase at the same path — and the value
+// this would then destroy is the only copy of a recovery key for machines already
+// in the field. Vault decides, atomically, or nobody does.
+//
+// cas requires check-and-set to be enabled on the mount. Where it is not, Vault
+// ignores the parameter rather than failing, so a mount without it degrades to
+// last-write-wins; the caller's ref is unique per image, which is what keeps that
+// from mattering in practice.
+func (v *vaultKV) Store(ctx context.Context, ref string, fields map[string]string) error {
+	mountPath, _ := splitRef(ref)
+	mount, path, err := splitMountPath(mountPath)
+	if err != nil {
+		return err
+	}
+	data := make(map[string]any, len(fields))
+	for k, val := range fields {
+		data[k] = val
+	}
+	body, err := json.Marshal(map[string]any{
+		"data":    data,
+		"options": map[string]any{"cas": 0},
+	})
+	if err != nil {
+		return err
+	}
+	u := v.addr + "/v1/" + mount + "/data/" + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Vault-Token", v.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("extsecret(vault-kv): write failed: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	switch {
+	case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent:
+		return nil
+	case resp.StatusCode == http.StatusBadRequest && strings.Contains(string(rb), "check-and-set"):
+		return fmt.Errorf("extsecret(vault-kv): %s already exists; refusing to overwrite it", mountPath)
+	default:
+		return fmt.Errorf("extsecret(vault-kv): write %s -> HTTP %d: %s",
+			mountPath, resp.StatusCode, strings.TrimSpace(string(rb)))
 	}
 }

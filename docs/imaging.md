@@ -235,6 +235,50 @@ declining. So these SBOMs answer "what CVEs affect this image" and cannot answer
 for. Worth knowing before feeding one to a compliance tool and getting 201
 unknowns back.
 
+## The recovery passphrase
+
+Ticking **Generate the recovery passphrase and store it** (on by default for an
+encrypted build) generates 256 bits of random and files it **before the build
+starts**.
+
+That ordering is the whole point. Storing it afterwards means a write that fails —
+an expired token, a sealed store, a network blip — has already produced an
+encrypted image that nobody holds the recovery key for, and nothing about that
+image says so. Storing first can only leave an unused secret behind if the build
+then fails, which costs nothing and is visible in the credential list. **If the
+passphrase cannot be stored, the build is not started.**
+
+Where it goes:
+
+- **An external secrets manager, when one is connected** — HashiCorp Vault KV v2
+  or AWS Secrets Manager, from `FLEET_EXTSECRET_*`. An organization that already
+  has a secrets manager should not need a second copy of record. The path is
+  `FLEET_IMAGING_SECRET_PREFIX` (default `secret/blackfriars/images`) plus the
+  image name.
+- **Fleet's own credential vault otherwise**, sealed at rest, under
+  `imaging/luks/<image>`.
+
+Either way a credential record is created, so the passphrase is found the same way
+in **Credentials** whichever backend holds the material — an external-backed record
+simply carries a reference instead of a sealed blob.
+
+Neither backend will **overwrite** an existing entry: Vault writes with `cas: 0`
+and AWS uses `CreateSecret`, so a name already in use is refused rather than
+replaced. The value that would be destroyed is the only copy of a recovery key for
+machines already in the field.
+
+**The image name is settled before the build**, because that is what the secret is
+filed under. The backend picks the free name itself — it reads the same output
+directory the image library comes from — and passes it explicitly, rather than
+letting the builder choose one the backend cannot see until the build is already
+running.
+
+To recover a machine that will not boot: find `imaging/luks/<image>` in
+Credentials, or read the reference straight from your secrets manager. Every
+machine imaged from that image accepts the same passphrase on any encrypted
+partition — rotating it means re-imaging, or `cryptsetup luksChangeKey` per
+machine.
+
 ## Building for another architecture
 
 Building an arm64 image (or imager) on an amd64 host runs arm64 binaries under

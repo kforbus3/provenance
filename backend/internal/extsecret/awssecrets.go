@@ -106,3 +106,39 @@ func (a *awsSecrets) call(ctx context.Context, target string, body any, out any)
 	}
 	return nil
 }
+
+// Store creates a secret with CreateSecret, which fails if the name already
+// exists rather than adding a version to it.
+//
+// CreateSecret and not PutSecretValue on purpose: PutSecretValue would append a
+// new version to whatever is already there, and the thing already there would be
+// another image's LUKS recovery passphrase. A new version does not destroy the
+// old one in Secrets Manager, but it does change what a plain read returns — so
+// the recovery key for machines in the field would silently stop being the one
+// this path hands back.
+//
+// The fields are stored as a JSON object in SecretString, matching how Fetch
+// reads them back ("secret-id#field").
+func (a *awsSecrets) Store(ctx context.Context, ref string, fields map[string]string) error {
+	secretID, _ := splitRef(ref)
+	if strings.TrimSpace(secretID) == "" {
+		return fmt.Errorf("extsecret(aws-secrets): a secret id is required")
+	}
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var out struct {
+		ARN string `json:"ARN"`
+	}
+	body := map[string]string{"Name": secretID, "SecretString": string(payload)}
+	if err := a.call(ctx, "secretsmanager.CreateSecret", body, &out); err != nil {
+		// The API's own name for "it is already there"; surfaced as the same
+		// refusal the Vault path gives so the caller can treat them alike.
+		if strings.Contains(err.Error(), "ResourceExistsException") {
+			return fmt.Errorf("extsecret(aws-secrets): %s already exists; refusing to overwrite it", secretID)
+		}
+		return err
+	}
+	return nil
+}
