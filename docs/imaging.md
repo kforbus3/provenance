@@ -303,7 +303,28 @@ versions of all four. CRB (CodeReady Builder) is enabled for meson and ninja.
 The bootstrap installs the release package **first, on its own, with
 `--nogpgcheck`**, and everything after it verified normally. The keys arrive
 *inside* that package, so there is nothing to verify against until it lands;
-installing it alone is what keeps that window to one package.
+installing it alone is what keeps that window to one package. It is a real window
+and not a formality: with the wrong key in place the second transaction is
+refused.
+
+Two things about that first step are not obvious:
+
+- **It comes from the target's mirror, not the builder's repositories.** A Rocky
+  builder has no `almalinux-release` and never will, so the bootstrap defines its
+  own repository with `--repofrompath` pointing at the distribution being built.
+  The builder's own distribution therefore decides nothing about which
+  distributions it can build.
+- **The keys are handed over explicitly.** The release package puts them inside
+  the installroot, but the repo definitions reference them as
+  `file:///etc/pki/rpm-gpg/...`, and dnf resolves a `file://` URI against the
+  *builder's* root. They are copied out so the URI resolves and imported into the
+  installroot's rpmdb so packages are checked against them. Building Rocky 10 on
+  a Rocky 9 builder is what found this, and it is the normal case.
+
+AlmaLinux needs **two** packages — it splits repository definitions into
+`almalinux-repos` — where Rocky ships them inside `rocky-release`. Installing only
+the release package leaves an installroot with a distribution identity and no
+repositories to install the distribution from.
 
 ### The A/B root across both initramfs harnesses
 

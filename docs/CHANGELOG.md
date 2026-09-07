@@ -104,6 +104,31 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### The bootstrap no longer depends on the builder's own distribution
+
+Three failures in the same step, each hidden behind the last.
+
+- **`Couldn't open file /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10`.** The release
+  package puts its keys inside the installroot, but the repo definitions
+  reference them as `file:///etc/pki/rpm-gpg/...` and dnf resolves a `file://`
+  URI against the **builder's** root. They are now copied out so the URI
+  resolves, and imported into the installroot's rpmdb so packages are actually
+  checked against them. My earlier check built Rocky 9 on a Rocky 9 builder,
+  where the key happened to exist on both sides — which is why this got through.
+- **`No match for argument: almalinux-release`.** A Rocky builder has no such
+  package. The bootstrap now defines its own repository with `--repofrompath`
+  pointing at the *target* distribution's mirror, so the builder's own
+  distribution decides nothing about which distributions it can build.
+- **`nothing provides almalinux-repos`.** AlmaLinux splits repository
+  definitions out of its release package; Rocky ships them inside. Installing
+  only the release package left an installroot with a distribution identity and
+  no repositories to install the distribution from.
+
+Verified from one Rocky builder: AlmaLinux 9.8, Rocky 9.8 and Rocky 10.2 all
+bootstrap and complete their GPG-verified second transaction. Verification is
+real rather than nominal — with the wrong key in place, that transaction is
+refused.
+
 ### Formatting probes what mke2fs knows instead of assuming
 
 A Rocky build died at *Formatting filesystems* with
