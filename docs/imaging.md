@@ -314,6 +314,13 @@ which of the two remedies to apply. It used to warn and carry on, so the real
 failure arrived minutes later as `exec format error` inside a Dockerfile — a
 message about the wrong thing entirely.
 
+The check reads the **host's** registrations, which the builder-runner sees
+through a read-only bind of `/proc/sys/fs/binfmt_misc` at `/host/binfmt_misc`.
+That mount is not decoration: a container's own `/proc/sys/fs/binfmt_misc` is
+empty whatever the host has registered, so reading it would refuse to build on a
+host where `qemu-user-static` had already made the build work — reporting the
+correct configuration as the broken one.
+
 ## Disk encryption and how it unlocks
 
 Ticking **Encrypt the root filesystem (LUKS)** always enrols the passphrase you

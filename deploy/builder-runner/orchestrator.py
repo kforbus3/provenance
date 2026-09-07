@@ -24,6 +24,11 @@ PROJ = settings.project_dir       # path to the repo inside this container
 # the same string or the build is refused with a message about the wrong one.
 BINFMT_IMAGE = os.environ.get("BINFMT_IMAGE", "tonistiigi/binfmt").strip() or "tonistiigi/binfmt"
 
+# Where the host's binfmt_misc registrations are bind-mounted read-only. See the
+# builder-runner service in deploy/compose/docker-compose.yml: this container's own
+# /proc/sys/fs/binfmt_misc is empty regardless of what the host has registered.
+BINFMT_VIEW = os.environ.get("BINFMT_VIEW", "/host/binfmt_misc").rstrip("/")
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -789,7 +794,12 @@ def _binfmt_prelude(arch: str) -> str:
     handler = {"amd64": "qemu-x86_64", "arm64": "qemu-aarch64"}[arch]
     return (
         f'if [ "$(uname -m)" != "{want}" ]; then\n'
-        f'  if [ -e /proc/sys/fs/binfmt_misc/{handler} ]; then\n'
+        # The HOST's registrations, bind-mounted read-only. This container's own
+        # /proc/sys/fs/binfmt_misc is empty whatever the host has registered, so
+        # reading that would refuse to build on a host where qemu-user-static had
+        # already made the build work. The unmounted path is still checked so a
+        # deployment predating that mount is no worse off than before.
+        f'  if [ -e {BINFMT_VIEW}/{handler} ] || [ -e /proc/sys/fs/binfmt_misc/{handler} ]; then\n'
         f"    echo '--- {handler} already registered on this host ---'\n"
         "  else\n"
         f"    echo '--- registering {handler} so {arch} can be built on this host ---'\n"
