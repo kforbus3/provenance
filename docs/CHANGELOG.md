@@ -104,6 +104,36 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### RPM images build in an RPM builder
+
+A Rocky build partitioned the disk, set up LUKS, formatted, mounted — and then
+died on `dnf: command not found`, twenty minutes in, at the first step that was
+actually distribution-specific. `build-image.sh` had grown an rpm family and the
+orchestrator was still running the Debian builder for every build.
+
+- New `builder/Dockerfile.rpm`, a Rocky-based builder. Separate rather than
+  adding dnf to the Debian one: Debian does package dnf, but pointing it at a
+  RHEL release with that rpm and those GPG keys is the fragile path, and it fails
+  exactly where the old one did.
+- Selected by **tag** (`debian-ab-builder:rpm-amd64`), not a new image name. The
+  socket proxy already matches `debian-ab-builder` with any tag and allows it
+  privileged; a new name would mean widening that allowlist for an image the
+  repository already builds itself.
+- Bundle building stays on the deb builder, whatever family the image came from:
+  it signs with `rauc`, which is a package there and is **not packaged at all**
+  for the RPM family.
+- **No `qemu-user-static` in the RPM builder**, and none is needed — it is not
+  packaged for this family, and the host's binfmt registration uses the `F` flag,
+  which opens the interpreter at registration time so containers execute foreign
+  binaries without the emulator inside them.
+
+16 tests, including a cross-check that the orchestrator's list of RPM
+distributions still agrees with `build-image.sh`'s own `FAMILY` case — they
+disagree only when somebody adds a distribution to one and not the other, which
+is precisely how this broke. `make imaging-test` mounts the repo root so that
+check can see both sides; a cross-check that cannot see the other side is a test
+that cannot fail.
+
 ### AlmaLinux and Rocky are selectable in the build dialog
 
 The builder has understood them for two releases; the dropdown still offered only
