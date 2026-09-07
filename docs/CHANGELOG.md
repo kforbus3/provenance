@@ -104,6 +104,25 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### The build dialog exposes every option the builder takes
+
+An audit rather than another single fix. `build-image.sh` accepts 40-odd flags;
+the sidecar modelled them, the Go layer forwarded them, the API client typed
+them — and the dialog sent **twelve**. Everything else was reachable only from
+the API, which is not a feature anybody has.
+
+Added: **image name**, **image and root slot size**, **compression**, **desktop
+environment**, **SSH key-only**, **customization script**, and the whole
+**writable-state** section — model, per-slot upper layer, and all six path
+directives (persist, slot-private, volatile, reset-on-update, keep, own).
+
+Paths must be absolute and the dialog now refuses to submit otherwise. The
+builder *silently skips* a non-absolute path, so a typo was a setting that looked
+accepted, was not in the image, and would be discovered on a machine.
+
+docs/imaging.md now carries the flag-to-control table, so the next flag added has
+somewhere obvious to be listed — and something to be checked against.
+
 ### The bootstrap no longer depends on the builder's own distribution
 
 Three failures in the same step, each hidden behind the last.
