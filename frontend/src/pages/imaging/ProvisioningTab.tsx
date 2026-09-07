@@ -10,6 +10,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DiscoveredMachines } from "./DiscoveredMachines";
 import {
   getProvisioning, setProvisioningEnv, steerProvisioning, listAssignments, saveAssignments,
   type Assignment, type NetInterface,
@@ -360,6 +361,25 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
       </Paper>
 
       <Divider sx={{ my: 2 }} />
+
+      {/* Above the assignment table on purpose: the usual order of work is
+          "boot the machine, see it appear, give it an image", and the thing you
+          do first should be the thing you read first. */}
+      <DiscoveredMachines
+        canProvision={canProvision}
+        assignedMacs={new Set(rowsShown.map((a) => (a.mac || "").toLowerCase()))}
+        onAssign={(mac) => {
+          const current = rowsShown;
+          // Reuse an empty row if the reader already added one, rather than
+          // leaving a blank line above the machine they just clicked.
+          const blank = current.findIndex((a) => !a.mac);
+          const next = blank >= 0
+            ? current.map((a, i) => (i === blank ? { ...a, mac } : a))
+            : [...current, { mac, image: "", hostname: "", name: "" }];
+          setRows(next);
+          setMsg(`Added ${mac}. Choose an image for it below, then Save.`);
+        }}
+      />
 
       <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
         <Box sx={{ flexGrow: 1 }}>

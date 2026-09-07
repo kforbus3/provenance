@@ -429,14 +429,18 @@ def suggest_provisioning_net(interfaces: list[dict] | None = None) -> dict:
         net = ipaddress.ip_network(cand)
         if any(net.overlaps(t) for t in taken):
             continue
-        return {
+        # The range comes from suggest_dhcp_range rather than being computed
+        # again here. It used to be a second copy that hardcoded +100/+200,
+        # which is right for a /24 and produces addresses outside the subnet
+        # for anything smaller -- a lease range dnsmasq refuses to start with.
+        # Two implementations of one piece of arithmetic drift exactly once,
+        # and only one of them was the one with the size check.
+        out = {
             "SERVER_IP": str(net.network_address + 1),
             "prefixlen": net.prefixlen,
-            "DHCP_NETMASK": str(net.netmask),
-            "PROXY_SUBNET": str(net.network_address),
-            "DHCP_RANGE_START": str(net.network_address + 100),
-            "DHCP_RANGE_END": str(net.network_address + 200),
         }
+        out.update(suggest_dhcp_range(str(net.network_address + 1), net.prefixlen))
+        return out
     return {}
 
 

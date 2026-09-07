@@ -502,6 +502,22 @@ export interface Assignment {
   [k: string]: unknown;
 }
 
+// A machine seen on the provisioning network in the last few minutes, as the
+// PXE stack's own logs describe it. Not a database row: this is "who is waiting
+// right now", and a machine that has finished and rebooted into its image drops
+// off because it is no longer waiting for one.
+export interface ProvisioningClient {
+  mac: string;
+  ip: string;
+  event: string;
+  last: string;
+}
+
+export async function listProvisioningClients(): Promise<ProvisioningClient[]> {
+  const { data } = await api.get("/api/v1/imaging/provisioning/clients");
+  return (data.clients ?? []) as ProvisioningClient[];
+}
+
 export async function listAssignments(): Promise<Assignment[]> {
   const { data } = await api.get("/api/v1/imaging/assignments");
   return (data.assignments ?? []) as Assignment[];

@@ -25,7 +25,7 @@ weaker copy would be the one that mattered.
     DELETE /images/{name}, /bundles/{name}
     GET/PUT  /server/env              provisioning stack configuration
     POST /server/{up,down}            start and stop it
-    GET  /server/{status,preflight,interfaces}
+    GET  /server/{status,preflight,interfaces,clients}
     GET/PUT  /assignments             MAC -> hostname imaging assignments
     GET/PUT/DELETE /overlay...        files layered into a build
 """
@@ -314,6 +314,23 @@ def server_preflight():
 def server_interfaces():
     ifaces = orch.list_interfaces()
     return {"interfaces": ifaces, "suggestion": orch.suggest_provisioning_net(ifaces)}
+
+
+@app.get("/server/clients", dependencies=guarded)
+def server_clients():
+    """Machines on the provisioning network right now.
+
+    This is how you assign an image to a machine WITHOUT knowing its MAC in
+    advance: PXE-boot it on the provisioning network, and it appears here with
+    the MAC it announced. Reading it out of the rack, or out of a hypervisor's
+    settings page, is the workflow this replaces.
+
+    orchestrator.server_clients() has existed since the provisioning stack was
+    brought across, and nothing called it -- no route here, none in the backend,
+    nothing in the UI. The capability was present and unreachable, which from
+    the outside is indistinguishable from missing.
+    """
+    return {"clients": orch.server_clients()}
 
 
 # ------------------------------- assignments ---------------------------------

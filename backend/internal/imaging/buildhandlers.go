@@ -57,6 +57,11 @@ func mountBuilds(r chi.Router, h *handler) {
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/provisioning", h.provisioning)
 	r.With(h.d.Auth.RequirePermission("Imaging.Provision")).Put("/imaging/provisioning/env", h.setProvisioningEnv)
 	r.With(h.d.Auth.RequirePermission("Imaging.Provision")).Post("/imaging/provisioning/{verb}", h.steerProvisioning)
+	// Who is on the provisioning network now. View, not Provision: seeing which
+	// machines are waiting is what tells you whether the network is even wired
+	// correctly, and refusing that to someone who can already see the stack's
+	// configuration protects nothing.
+	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/provisioning/clients", h.provisioningClients)
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/assignments", h.assignments)
 	r.With(h.d.Auth.RequirePermission("Imaging.Provision")).Put("/imaging/assignments", h.setAssignments)
 
@@ -582,6 +587,20 @@ func (h *handler) steerProvisioning(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "imaging.provisioning."+verb, "server", nil)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out})
+}
+
+func (h *handler) provisioningClients(w http.ResponseWriter, r *http.Request) {
+	clients, err := h.svc.ProvisioningClients(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	// Never null: the UI distinguishes "nobody is booting" from "this call did
+	// not work", and a null array renders as neither.
+	if clients == nil {
+		clients = []map[string]any{}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"clients": clients})
 }
 
 func (h *handler) assignments(w http.ResponseWriter, r *http.Request) {

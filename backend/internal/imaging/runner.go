@@ -275,6 +275,29 @@ func (s *Service) ProvisioningPreflight(ctx context.Context) ([]string, error) {
 	return out.Problems, nil
 }
 
+// ProvisioningClients is who is on the provisioning network right now.
+//
+// The point of it is assigning an image to a machine WITHOUT knowing its MAC in
+// advance: PXE-boot the machine on that network and it appears here, announcing
+// its own address. The alternative is reading a MAC off a sticker in a rack or
+// out of a hypervisor's settings page, for every machine, before you can do
+// anything with it.
+//
+// Not persisted, and deliberately: this answers "who is waiting right now",
+// derived from the provisioning stack's own logs over a short window. A machine
+// that has finished and rebooted into its image drops off, because it is no
+// longer waiting for an assignment. What happened historically is the audit log
+// and the machines table, which are different questions.
+func (s *Service) ProvisioningClients(ctx context.Context) ([]map[string]any, error) {
+	var out struct {
+		Clients []map[string]any `json:"clients"`
+	}
+	if err := s.runner(ctx, http.MethodGet, "/server/clients", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Clients, nil
+}
+
 func (s *Service) ProvisioningInterfaces(ctx context.Context) (map[string]any, error) {
 	var out map[string]any
 	if err := s.runner(ctx, http.MethodGet, "/server/interfaces", nil, &out); err != nil {
