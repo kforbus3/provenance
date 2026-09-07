@@ -22,6 +22,10 @@ import { listHosts } from "../api/hosts";
 import { ProvisioningTab } from "./imaging/ProvisioningTab";
 import { OverlayTab } from "./imaging/OverlayTab";
 import { distroFamily, DEFAULT_SUITE, RPM_SUITES } from "./imaging/distro";
+import { WritableState } from "./imaging/WritableState";
+import {
+  WRITABLE_STATE_DEFAULT, invalidPaths, type WritableStateValue,
+} from "./imaging/writable-state";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
   forgetImaging, imagingNow, installOnMachine, listBuilds, listBundles, listImages,
@@ -1175,6 +1179,23 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
   // Generating beats typing: it is 256 bits of random rather than something
   // memorable, and it is filed automatically instead of ending up in a note.
   const [genPass, setGenPass] = useState(true);
+  const [name, setName] = useState("");
+  const [imageSize, setImageSize] = useState("");
+  const [rootSize, setRootSize] = useState("");
+  const [compress, setCompress] = useState("zstd");
+  const [desktop, setDesktop] = useState("gnome");
+  const [sshKeyOnly, setSshKeyOnly] = useState(false);
+  const [runScript, setRunScript] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const [wstate, setWstate] = useState<WritableStateValue>(WRITABLE_STATE_DEFAULT);
+
+  // The builder silently skips a path directive that is not absolute, so a typo
+  // would be a setting that appears to have been accepted and is simply not in
+  // the image. Cheaper to refuse than to discover on a machine.
+  const badPaths = [
+    wstate.persistPaths, wstate.slotPrivatePaths, wstate.volatilePaths,
+    wstate.resetPaths, wstate.keepPaths, wstate.ownPaths,
+  ].flatMap(invalidPaths);
 
   const start = useMutation({
     mutationFn: () => startBuild("image", {
@@ -1186,6 +1207,16 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
       unlock: encrypt ? unlock : undefined,
       tangUrl: encrypt && unlock === "tang" ? tangUrl.trim() : undefined,
       generatePassphrase: encrypt ? genPass : undefined,
+      // Only sent when given: the builder's own defaults are better than a
+      // number this dialog invented, and "0" does not mean "unset" to it.
+      name: name.trim() || undefined,
+      imageSize: imageSize.trim() || undefined,
+      rootSize: rootSize.trim() ? Number(rootSize) : undefined,
+      compress,
+      desktop: profile === "desktop" ? desktop : undefined,
+      sshKeyOnly: sshKeyOnly || undefined,
+      runScript: runScript.trim() || undefined,
+      ...wstate,
     }),
     onSuccess: (job) => {
       const where = job.passphraseStoredIn === "external"
@@ -1242,6 +1273,13 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
               <MenuItem value="arm64">arm64</MenuItem>
             </TextField>
           </Stack>
+          <TextField
+            fullWidth size="small" label="Image name (optional)" value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={`${distro}-${suite}-${arch}-ab`}
+            InputProps={{ style: { fontFamily: "monospace" } }}
+            helperText="Left empty, a free name is chosen so a rebuild cannot overwrite an existing image — and with it the recovery passphrase filed under that name."
+          />
           {distroFamily(distro) === "rpm" && (
             <Alert severity="info">
               RPM images are newly supported and <strong>have not been booted on real
@@ -1270,6 +1308,18 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
               <MenuItem value="server">server</MenuItem>
               <MenuItem value="desktop">desktop</MenuItem>
             </TextField>
+            {profile === "desktop" && (
+              <TextField select fullWidth label="Desktop" value={desktop}
+                         onChange={(e) => setDesktop(e.target.value)}
+                         helperText={distroFamily(distro) === "rpm"
+                           ? "Installed as a group"
+                           : "Installed as a task- metapackage"}>
+                {(distroFamily(distro) === "rpm"
+                  ? ["gnome", "kde", "xfce"]
+                  : ["gnome", "kde", "xfce", "mate", "cinnamon", "lxqt"]
+                ).map((d) => <MenuItem key={d} value={d}>{d}</MenuItem>)}
+              </TextField>
+            )}
             <TextField select fullWidth label="Secure Boot" value={secureBoot}
                        onChange={(e) => setSecureBoot(e.target.value)}
                        helperText="auto: on where the distribution's signed chain is available">
@@ -1339,6 +1389,66 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
               )}
             </>
           )}
+          <Divider />
+          <Button size="small" sx={{ alignSelf: "flex-start" }}
+                  onClick={() => setAdvanced((a) => !a)}>
+            {advanced ? "Hide" : "Show"} storage, writable state and customization
+          </Button>
+
+          {advanced && (
+            <Stack spacing={3} sx={{ pl: 1, borderLeft: 2, borderColor: "divider" }}>
+              <Stack spacing={2}>
+                <Typography variant="subtitle2">Storage</Typography>
+                <Stack direction="row" spacing={2}>
+                  <TextField
+                    fullWidth size="small" label="Image size (GiB)" value={imageSize}
+                    onChange={(e) => setImageSize(e.target.value)} placeholder="auto"
+                    helperText="Empty = sized to fit. The overlay expands to fill the disk on first boot regardless."
+                  />
+                  <TextField
+                    fullWidth size="small" label="Root slot size (MiB)" value={rootSize}
+                    onChange={(e) => setRootSize(e.target.value)} placeholder="auto"
+                    helperText="Each of the two slots. Too small and the build dies part-way through installing packages."
+                  />
+                  <TextField
+                    select fullWidth size="small" label="Compression" value={compress}
+                    onChange={(e) => setCompress(e.target.value)}
+                    helperText="Of the finished image, for storage and transfer"
+                  >
+                    <MenuItem value="zstd">zstd</MenuItem>
+                    <MenuItem value="gzip">gzip</MenuItem>
+                    <MenuItem value="none">none</MenuItem>
+                  </TextField>
+                </Stack>
+              </Stack>
+
+              <WritableState value={wstate} onChange={setWstate} />
+
+              <Stack spacing={2}>
+                <Typography variant="subtitle2">Customization</Typography>
+                <FormControlLabel
+                  control={<Switch checked={sshKeyOnly}
+                                   onChange={(e) => setSshKeyOnly(e.target.checked)} />}
+                  label="SSH by key only — disable password authentication"
+                />
+                {sshKeyOnly && !sshKey.trim() && (
+                  <Alert severity="warning">
+                    Key-only with no key is a machine nobody can log into. The builder
+                    refuses this combination.
+                  </Alert>
+                )}
+                <TextField
+                  fullWidth multiline minRows={4} size="small"
+                  label="Customization script" value={runScript}
+                  onChange={(e) => setRunScript(e.target.value)}
+                  placeholder={"#!/bin/sh\n# runs in the image's chroot, after packages"}
+                  InputProps={{ style: { fontFamily: "monospace", fontSize: 13 } }}
+                  helperText="Runs inside the image near the end of the build. A non-zero exit fails the build."
+                />
+              </Stack>
+            </Stack>
+          )}
+
           <Typography variant="caption" color="text.secondary">
             The build runs in a privileged container in the builder-runner sidecar and takes
             tens of minutes. One image build runs at a time: two share the output directory,
@@ -1347,8 +1457,14 @@ function BuildImageDialog({ open, onClose, onStarted, setMsg }: {
         </Stack>
       </DialogContent>
       <DialogActions>
+        {badPaths.length > 0 && (
+          <Typography variant="caption" color="error" sx={{ flexGrow: 1, pl: 1 }}>
+            Writable-state paths must be absolute: {badPaths.join(", ")}
+          </Typography>
+        )}
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={start.isPending}
+        <Button variant="contained"
+                disabled={start.isPending || badPaths.length > 0 || (sshKeyOnly && !sshKey.trim())}
                 onClick={() => start.mutate()}>Build</Button>
       </DialogActions>
     </Dialog>

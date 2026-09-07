@@ -1,0 +1,114 @@
+import { Alert, Grid, MenuItem, Stack, Switch, FormControlLabel, TextField, Typography } from "@mui/material";
+import { invalidPaths, type WritableStateValue } from "./writable-state";
+
+// The writable-state section of the build dialog.
+//
+// This is what decides where a machine's writes go, and it is the part of an
+// image you cannot change afterwards: a machine records the layout it was imaged
+// with and refuses a change at boot, because a layout that moved under a running
+// system is a system whose data is somewhere it is not looking.
+//
+// The default — one overlay over the whole root — is what every image built
+// before this existed gets, and is what an image with no manifest still gets.
+// Everything here is a departure from it, so each control says what it costs.
+
+export function WritableState({ value, onChange }: {
+  value: WritableStateValue;
+  onChange: (v: WritableStateValue) => void;
+}) {
+  const set = <K extends keyof WritableStateValue>(k: K, v: WritableStateValue[K]) =>
+    onChange({ ...value, [k]: v });
+
+  const pathField = (
+    k: keyof WritableStateValue,
+    label: string,
+    helper: string,
+    placeholder: string,
+  ) => {
+    const bad = invalidPaths(String(value[k]));
+    return (
+      <Grid item xs={12} sm={6}>
+        <TextField
+          fullWidth size="small" label={label} value={value[k] as string}
+          onChange={(e) => set(k, e.target.value as never)}
+          placeholder={placeholder}
+          error={bad.length > 0}
+          InputProps={{ style: { fontFamily: "monospace", fontSize: 13 } }}
+          helperText={bad.length > 0
+            ? `Must be absolute paths — the builder skips ${bad.join(", ")}`
+            : helper}
+        />
+      </Grid>
+    );
+  };
+
+  return (
+    <Stack spacing={2}>
+      <Typography variant="subtitle2">Writable state</Typography>
+      <Typography variant="body2" color="text.secondary">
+        Where a machine's writes go. The root slot is read-only and is replaced
+        wholesale by an A/B update, so anything written there would be destroyed by
+        the next one — this is what survives instead. Space-separated absolute paths.
+      </Typography>
+
+      <Grid container spacing={2}>
+        <Grid item xs={12} sm={6}>
+          <TextField
+            select fullWidth size="small" label="Model" value={value.stateModel}
+            onChange={(e) => set("stateModel", e.target.value)}
+            helperText={value.stateModel === "overlay"
+              ? "One overlay over the whole root. Every write lands on the overlay partition."
+              : "The root stays read-only and only the paths below are writable."}
+          >
+            <MenuItem value="overlay">overlay — the whole root is writable</MenuItem>
+            <MenuItem value="paths">paths — read-only root, enumerated writable paths</MenuItem>
+          </TextField>
+        </Grid>
+
+        <Grid item xs={12} sm={6}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={value.slotPrivateUpper}
+                onChange={(e) => set("slotPrivateUpper", e.target.checked)}
+              />
+            }
+            label="Give each slot its own upper layer"
+          />
+        </Grid>
+
+        {value.slotPrivateUpper && (
+          <Grid item xs={12}>
+            <Alert severity="info">
+              Each slot gets its own <code>upper-A</code> / <code>upper-B</code> instead of
+              sharing one. A configuration change made while running A cannot follow you
+              into B — so booting the other slot recovers from a bad <em>edit</em>, not only
+              a bad image. The cost is that the two slots stop sharing anything the overlay
+              covers. This is recorded in the image and <strong>cannot be changed by an
+              update</strong>: a machine refuses a layout change at boot.
+            </Alert>
+          </Grid>
+        )}
+
+        {pathField("persistPaths", "Shared across slots",
+          "Survives updates and is the same in both slots — /home, /var/log.",
+          "/home /var/log")}
+        {pathField("slotPrivatePaths", "Private to each slot",
+          "Survives updates but each slot has its own copy.",
+          "/etc/machine-state")}
+        {pathField("volatilePaths", "Discarded on reboot",
+          "tmpfs — nothing written here outlives the boot.",
+          "/tmp /var/tmp")}
+        {pathField("resetPaths", "Reset when the slot changes",
+          "Cleared on an A/B update, so stale state cannot cross a release.",
+          "/var/cache")}
+        {pathField("keepPaths", "Held back from that reset",
+          "Exceptions to the line above, kept across the update.",
+          "/var/cache/keepme")}
+        {pathField("ownPaths", "Also owned by the image",
+          "Replaced by the image on update rather than preserved.",
+          "/opt/app")}
+      </Grid>
+    </Stack>
+  );
+}
