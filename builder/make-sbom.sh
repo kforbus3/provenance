@@ -64,18 +64,48 @@ CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # dpkg, so this works without entering the chroot -- which matters because the
 # slot may be from a different architecture, and because a bundle's source slot
 # is mounted read-only.
+# Which database this root actually has. An rpm root has no var/lib/dpkg, and
+# dying on that meant every RHEL image shipped with no SBOM at all -- swallowed
+# by the caller's `|| warn`, so the sidecar said `"packages": 0, "sbom": "none"`
+# and the API then told an auditor the image "may predate SBOM generation",
+# which was false.
+PKGDB=""
+[ -d "$ROOT/var/lib/dpkg" ] && PKGDB=deb
+[ -d "$ROOT/var/lib/rpm" ]  && PKGDB=rpm
+[ -n "$PKGDB" ] || die "$ROOT has neither a dpkg database (var/lib/dpkg) nor an
+rpm one (var/lib/rpm), so its packages cannot be enumerated"
 ADMINDIR="$ROOT/var/lib/dpkg"
-[ -d "$ADMINDIR" ] || die "$ROOT has no dpkg database at var/lib/dpkg"
 
 TSV="${OUT}.packages.tsv"
 # -f with an explicit status filter: dpkg-query lists packages that are merely
 # `deinstall`ed (config files left behind) as well as installed ones, and an
 # SBOM that names software which is not present is worse than no SBOM. `${db:Status-Status}`
 # is the field that separates them.
-dpkg-query --admindir="$ADMINDIR" -W \
-    -f='${db:Status-Status}\t${Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\n' \
-    2>/dev/null | awk -F'\t' 'BEGIN{OFS="\t"} $1=="installed" {print $2,$3,$4,$5,$6}' \
-    | sort > "$TSV.tmp"
+if [ "$PKGDB" = deb ]; then
+    dpkg-query --admindir="$ADMINDIR" -W \
+        -f='${db:Status-Status}\t${Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\n' \
+        2>/dev/null | awk -F'\t' 'BEGIN{OFS="\t"} $1=="installed" {print $2,$3,$4,$5,$6}' \
+        | sort > "$TSV.tmp"
+else
+    # Same five columns, so everything downstream is unchanged. rpm's own
+    # --root reads the target database with the builder's rpm, exactly as
+    # dpkg-query --admindir does above; an installed rpm has no "deinstalled"
+    # state to filter out. %{SOURCERPM} is name-version-release.src.rpm, so the
+    # source name and version are cut back out of it.
+    command -v rpm >/dev/null 2>&1 || die "this root is rpm-based but the builder
+has no rpm binary to read its database with"
+    rpm --root "$ROOT" -qa \
+        --qf '%{NAME}\t%{EVR}\t%{ARCH}\t%{SOURCERPM}\n' 2>/dev/null \
+        | awk -F'\t' 'BEGIN{OFS="\t"} {
+            src=$4; sub(/\.src\.rpm$/,"",src);
+            sv=src; sn=src;
+            # trailing -<version>-<release> is the source version; the rest is the name
+            if (match(src, /-[^-]+-[^-]+$/)) {
+                sn=substr(src,1,RSTART-1); sv=substr(src,RSTART+1);
+            } else { sv=$2 }
+            print $1,$2,$3,sn,sv
+        }' | sort > "$TSV.tmp"
+fi
 
 COUNT="$(wc -l < "$TSV.tmp" | tr -d ' ')"
 [ "$COUNT" -gt 0 ] || die "dpkg reported no installed packages in $ROOT -- refusing to \
@@ -97,15 +127,25 @@ fi
 # [a-z0-9-]. None of that needs JSON escaping. Anything else is a package this
 # tool does not understand well enough to describe, so it is dropped loudly
 # rather than emitted into a document that then fails to parse at the far end.
+# The purl namespace is the distribution, and for anything unrecognised the
+# package TYPE still has to be right. Rewriting every unknown distro to "debian"
+# made an AlmaLinux image's SBOM claim pkg:deb/debian/... for rpm packages --
+# a document that parses and is wrong, which is the worst kind for an auditor.
 NAMESPACE="$DISTRO"
-case "$DISTRO" in debian|ubuntu) ;; *) NAMESPACE="debian";; esac
+PURL_TYPE=deb
+if [ "$PKGDB" = rpm ]; then
+    PURL_TYPE=rpm
+    case "$DISTRO" in almalinux|rocky|rhel) ;; *) NAMESPACE="rhel";; esac
+else
+    case "$DISTRO" in debian|ubuntu) ;; *) NAMESPACE="debian";; esac
+fi
 
 emit_awk() {
-    awk -F'\t' -v ns="$NAMESPACE" -v mode="$1" -v created="$CREATED" \
+    awk -F'\t' -v ns="$NAMESPACE" -v pt="$PURL_TYPE" -v mode="$1" -v created="$CREATED" \
         -v docname="$NAME" -v docver="$VERSION" -v docarch="$ARCH" \
         -v suite="$SUITE" -v distro="$DISTRO" '
     function ok(s) { return s ~ /^[A-Za-z0-9][A-Za-z0-9.+:~_-]*$/ }
-    function purl(p, v, a) { return "pkg:deb/" ns "/" p "@" v "?arch=" a }
+    function purl(p, v, a) { return "pkg:" pt "/" ns "/" p "@" v "?arch=" a }
     BEGIN {
         n = 0
         if (mode == "spdx") {

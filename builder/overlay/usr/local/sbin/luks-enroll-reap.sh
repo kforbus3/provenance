@@ -39,7 +39,25 @@ fi
 # it exists precisely because no initramfs carries a key any more -- without it
 # this check would call every initramfs keyless and destroy the keyslot on a
 # boot the bootstrap key had just unlocked, which is the tpm2 bug returning.
-LISTING="$(lsinitramfs "$BOOTED_INITRD" 2>/dev/null)"
+# Same harness split as luks-enroll.sh: dracut on the RHEL family, and its
+# lister is lsinitrd. Getting this wrong is not loud -- an empty listing takes
+# the "cannot read the initramfs" branch below and leaves the bootstrap keyslot
+# in place forever, so a machine that really did bind its TPM keeps a plaintext
+# key on the unencrypted BOOT partition and nothing ever says so.
+if command -v lsinitramfs >/dev/null 2>&1; then
+    INITRD_LIST=lsinitramfs
+    rebuild_initrd() { update-initramfs -u; }
+elif command -v lsinitrd >/dev/null 2>&1; then
+    INITRD_LIST=lsinitrd
+    rebuild_initrd() {
+        dracut --force --no-hostonly --no-hostonly-cmdline \
+               --kver "$(uname -r)" "/boot/initramfs-$(uname -r).img"
+    }
+else
+    log "no initramfs lister (lsinitramfs or lsinitrd); leaving the key in place"
+    exit 0
+fi
+LISTING="$("$INITRD_LIST" "$BOOTED_INITRD" 2>/dev/null)"
 if [ -z "$LISTING" ]; then
     log "cannot read the initramfs this machine booted; leaving the key in place"
     exit 0
@@ -110,7 +128,7 @@ rm -rf "$BACKUP"
 # The initramfs was already rebuilt without the keyfile in phase 1, so this is
 # only to drop the KEYFILE_PATTERN line and leave no stale copy behind. Both
 # slots, for the same reason phase 1 did it.
-update-initramfs -u >/dev/null 2>&1 || log "WARNING: could not rebuild the initramfs"
+rebuild_initrd >/dev/null 2>&1 || log "WARNING: could not rebuild the initramfs"
 /usr/local/sbin/ab-sync-boot.sh --slot both >/dev/null 2>&1 || \
     log "WARNING: could not update the slot initramfs copies"
 

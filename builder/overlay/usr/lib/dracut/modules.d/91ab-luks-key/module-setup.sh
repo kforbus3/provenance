@@ -36,7 +36,20 @@ install() {
     #
     # settled is the point where both are true: devices are enumerated, and the
     # initqueue is still retrying the unlock it has not managed yet.
-    inst_hook initqueue/settled 10 /usr/lib/ab/initramfs/ab-luks-key
+    #
+    # A wrapper ending in .sh, not inst_hook: dracut sources only *.sh from a
+    # hook directory, and inst_hook would install this as "10ab-luks-key" -- in
+    # the image and never executed, so every encrypted machine fell back to
+    # prompting for a passphrase that nobody was there to type. The wrapper runs
+    # the script as a child because it exits 0 on its ordinary paths, and
+    # sourcing that would end dracut's init. See 90ab-overlay for the same note.
+    inst_script /usr/lib/ab/initramfs/ab-luks-key /usr/lib/ab/initramfs/ab-luks-key
+    mkdir -p "${initdir}/lib/dracut/hooks/initqueue/settled"
+    {
+        echo '#!/bin/sh'
+        echo '/usr/lib/ab/initramfs/ab-luks-key'
+    } > "${initdir}/lib/dracut/hooks/initqueue/settled/10-ab-luks-key.sh"
+    chmod 0755 "${initdir}/lib/dracut/hooks/initqueue/settled/10-ab-luks-key.sh"
 
     # The marker the enrolment reaper reads, written only when crypttab still
     # points at the bootstrap key -- exactly when the hook above does anything.

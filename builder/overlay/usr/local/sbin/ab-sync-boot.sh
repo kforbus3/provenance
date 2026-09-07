@@ -53,9 +53,23 @@ case "$SLOT" in A) OTHER=B;; B) OTHER=A;; esac
 
 KVER="${KVER:-$(uname -r)}"
 SRC_K="/boot/vmlinuz-${KVER}"
-SRC_I="/boot/initrd.img-${KVER}"
 [ -f "$SRC_K" ] || { echo "ab-sync-boot: no $SRC_K" >&2; exit 1; }
-[ -f "$SRC_I" ] || { echo "ab-sync-boot: no $SRC_I" >&2; exit 1; }
+
+# Both spellings, because the two initramfs harnesses disagree: initramfs-tools
+# writes initrd.img-<ver>, dracut writes initramfs-<ver>.img. This script is the
+# only thing that copies a regenerated initramfs into the slots GRUB actually
+# loads, so knowing only Debian's name meant every in-place rebuild on an RHEL
+# machine was silently ignored at the next boot -- including the one
+# luks-enroll.sh performs after binding the TPM, which it guards with `|| revert`.
+SRC_I=""
+for _c in "/boot/initrd.img-${KVER}" "/boot/initramfs-${KVER}.img"; do
+    [ -f "$_c" ] && { SRC_I="$_c"; break; }
+done
+[ -n "$SRC_I" ] || {
+    echo "ab-sync-boot: no initramfs for ${KVER} (looked for /boot/initrd.img-${KVER}" >&2
+    echo "               and /boot/initramfs-${KVER}.img)" >&2
+    exit 1
+}
 
 # Written alongside and renamed into place: a half-copied kernel in the slot's
 # directory is a machine that does not boot, and this runs on a live system

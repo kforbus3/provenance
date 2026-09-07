@@ -13,7 +13,11 @@
 # neither this nor grub.cfg writes to /boot.
 set -u
 
-GRUBENV=/boot/grub/grubenv
+# Family-neutral grubenv location and tool. See the library for why this is
+# resolved at runtime rather than hard-coded.
+# shellcheck source=/dev/null
+. /usr/lib/ab/grubenv-lib.sh
+ab_grubenv_init || exit 1
 
 # The booted slot comes from the kernel command line (rauc.slot=A|B), with the
 # root= label as a fallback.
@@ -46,8 +50,8 @@ fi
 # following an update is every boot. Skipping the write keeps an ordinary boot
 # from touching /boot at all -- grub.cfg no longer writes either -- so the
 # shared BOOT partition is read-only in practice between updates.
-if [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_PROVEN=//p")" = "1" ] &&
-   [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_TRY=//p")" = "0" ]; then
+if [ "$("$GRUB_EDITENV" "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_PROVEN=//p")" = "1" ] &&
+   [ "$("$GRUB_EDITENV" "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_TRY=//p")" = "0" ]; then
     echo "ab-mark-good: slot $SLOT was already proven; nothing to do"
     exit 0
 fi
@@ -56,7 +60,7 @@ fi
 # _TRY clears the probation this boot was under; _OK is what RAUC reads to
 # decide a slot is usable at all, and setting only the counter leaves RAUC
 # convinced every slot is bad.
-if ! grub-editenv "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1" "${SLOT}_PROVEN=1"; then
+if ! "$GRUB_EDITENV" "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1" "${SLOT}_PROVEN=1"; then
     echo "ab-mark-good: could not write $GRUBENV (is /boot read-only?)" >&2
     echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
     exit 1
@@ -67,7 +71,7 @@ fi
 # that still exit 0 -- and the symptom of believing a failed write is a machine
 # that changes slots by itself on the next reboot, which is not a thing anyone
 # traces back to here.
-_after="$(grub-editenv "$GRUBENV" list 2>/dev/null)"
+_after="$("$GRUB_EDITENV" "$GRUBENV" list 2>/dev/null)"
 if [ "$(printf '%s\n' "$_after" | sed -n "s/^${SLOT}_TRY=//p")" != "0" ] ||
    [ "$(printf '%s\n' "$_after" | sed -n "s/^${SLOT}_PROVEN=//p")" != "1" ]; then
     echo "ab-mark-good: ${SLOT}_TRY/${SLOT}_PROVEN did not stick after writing $GRUBENV" >&2

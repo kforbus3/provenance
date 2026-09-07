@@ -53,5 +53,26 @@ install() {
     #
     # 90, so it runs after anything that assembles the devices the overlay lives
     # on and before the ordinary cleanup hooks.
-    inst_hook pre-pivot 90 /usr/lib/ab/initramfs/ab-overlay
+    #
+    # NOT inst_hook, and the reason is not style. inst_hook names the installed
+    # file "<prio><basename>" -- here "90ab-overlay" -- while dracut's hook runner
+    # sources only files matching *.sh. The hook was installed into every image
+    # and never once ran: no overlay root, no slot selection, and a build that
+    # reported success because "ab-overlay" appears in lsinitrd's module list
+    # whether or not anything executes it.
+    #
+    # A wrapper that EXECUTES rather than a script renamed to *.sh, because hooks
+    # are sourced: this script calls `exit 0` on its ordinary paths (booting the
+    # slot directly, overlay disabled on the cmdline), and sourcing that would
+    # end dracut's init instead of the script. Running it as a child keeps its
+    # exit status its own. The shared script also cannot simply be renamed --
+    # initramfs-tools skips run-parts filenames containing a dot, so a .sh suffix
+    # would break the other family.
+    inst_script /usr/lib/ab/initramfs/ab-overlay /usr/lib/ab/initramfs/ab-overlay
+    mkdir -p "${initdir}/lib/dracut/hooks/pre-pivot"
+    {
+        echo '#!/bin/sh'
+        echo '/usr/lib/ab/initramfs/ab-overlay'
+    } > "${initdir}/lib/dracut/hooks/pre-pivot/90-ab-overlay.sh"
+    chmod 0755 "${initdir}/lib/dracut/hooks/pre-pivot/90-ab-overlay.sh"
 }

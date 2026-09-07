@@ -102,8 +102,30 @@ if [ -n "${FREE:-}" ] && [ "$FREE" -lt "$NEED" ]; then
     sleep 10
 fi
 
-echo "[run] building builder image…"
-docker build --platform="$PLATFORM" -t "debian-ab-builder:${ARCH}" "$HERE"
+# Which builder image, decided the same way the web UI's orchestrator decides it.
+# The rpm family bootstraps with `dnf --installroot`, and there is no dnf in the
+# Debian builder -- so building a Rocky image here used to partition the disk, set
+# up LUKS, format, mount, and then die twenty minutes in on `dnf: command not
+# found`. deploy/builder-runner/test_builder_image.py pins that same mapping for
+# the API path; this is the CLI path and it is not a second-class one.
+BUILDER_DOCKERFILE="Dockerfile"
+BUILDER_TAG="debian-ab-builder:deb-${ARCH}"
+_prev=""
+for _a in "$@"; do
+    if [ "$_prev" = "--distro" ]; then
+        case "$_a" in
+            almalinux|rocky|rhel)
+                BUILDER_DOCKERFILE="Dockerfile.rpm"
+                BUILDER_TAG="debian-ab-builder:rpm-${ARCH}"
+                ;;
+        esac
+    fi
+    _prev="$_a"
+done
+
+echo "[run] building builder image ($BUILDER_DOCKERFILE)…"
+docker build --platform="$PLATFORM" -f "$HERE/$BUILDER_DOCKERFILE" \
+    -t "$BUILDER_TAG" "$HERE"
 
 echo "[run] building A/B image into $OUT …"
 # overlay.d and any --run-script have to be visible inside the container, so
@@ -115,7 +137,7 @@ docker run --rm --privileged \
     --platform="$PLATFORM" \
     -v "$OUT":/output \
     -v "$CUSTOM":/overlay.d:ro \
-    "debian-ab-builder:${ARCH}" "$@"
+    "$BUILDER_TAG" "$@"
 
 echo "[run] artifacts:"
 ls -lh "$OUT"

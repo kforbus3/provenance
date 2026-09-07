@@ -153,12 +153,27 @@ done
 if [ -n "$BOOT_PART" ]; then
     mkdir -p "$WORK/bootsrc" "$WORK/bundle"
     if mount -o ro "$BOOT_PART" "$WORK/bootsrc" 2>/dev/null; then
-        _kv="$(ls "$WORK/bootsrc" | sed -n 's/^vmlinuz-//p' | head -1)"
-        if [ -n "$_kv" ]; then
+        # The rescue entry sorts first on the rpm family and is not the kernel
+        # this image boots.
+        _kv="$(ls "$WORK/bootsrc" | sed -n 's/^vmlinuz-//p' | grep -v '^0-rescue' | head -1)"
+        # Both initramfs spellings: initramfs-tools writes initrd.img-<ver>,
+        # dracut writes initramfs-<ver>.img. Knowing only the first meant no rpm
+        # image could produce a bundle at all -- under `set -e` the cp failed and
+        # took the whole thing with it, discovered only after a 30-minute build,
+        # and the update path is the entire reason the A/B layout exists.
+        _initrd=""
+        for _c in "$WORK/bootsrc/initrd.img-$_kv" "$WORK/bootsrc/initramfs-$_kv.img"; do
+            [ -n "$_kv" ] && [ -f "$_c" ] && { _initrd="$_c"; break; }
+        done
+        if [ -n "$_kv" ] && [ -n "$_initrd" ]; then
             mkdir -p "$WORK/bootfiles"
-            cp "$WORK/bootsrc/vmlinuz-$_kv"    "$WORK/bootfiles/vmlinuz"
-            cp "$WORK/bootsrc/initrd.img-$_kv" "$WORK/bootfiles/initrd.img"
+            cp "$WORK/bootsrc/vmlinuz-$_kv" "$WORK/bootfiles/vmlinuz"
+            cp "$_initrd"                   "$WORK/bootfiles/initrd.img"
             log "Including kernel $_kv in the bundle"
+        elif [ -n "$_kv" ]; then
+            log "WARNING: kernel $_kv is on the BOOT partition but no matching"
+            log "         initramfs (looked for initrd.img-$_kv and initramfs-$_kv.img);"
+            log "         the bundle will update userspace only"
         else
             log "WARNING: no kernel on the source image's BOOT partition; the bundle"
             log "         will update userspace only"

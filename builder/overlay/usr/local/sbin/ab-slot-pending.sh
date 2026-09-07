@@ -23,7 +23,11 @@
 # install log instead, and ab-update.sh repeats the call for the same reason.
 set -u
 
-GRUBENV=/boot/grub/grubenv
+# Family-neutral grubenv location and tool. See the library for why this is
+# resolved at runtime rather than hard-coded.
+# shellcheck source=/dev/null
+. /usr/lib/ab/grubenv-lib.sh
+ab_grubenv_init || exit 1
 
 # Which slot was written. RAUC exports the running slot's bootname; with exactly
 # two slots the target is the other one, which avoids depending on the spelling
@@ -56,7 +60,7 @@ fi
 # _TRY=0 as well as _PROVEN=0: the slot may still be carrying a spent counter
 # from the last time it was on probation, and a slot that is unproven with its
 # counter already at 1 is one grub.cfg will refuse to boot at all.
-if ! grub-editenv "$GRUBENV" set "${TARGET}_PROVEN=0" "${TARGET}_TRY=0"; then
+if ! "$GRUB_EDITENV" "$GRUBENV" set "${TARGET}_PROVEN=0" "${TARGET}_TRY=0"; then
     echo "ab-slot-pending: could not write $GRUBENV" >&2
     echo "ab-slot-pending: slot $TARGET will boot WITHOUT an automatic fallback" >&2
     exit 0
@@ -65,7 +69,7 @@ fi
 # Read back, for the same reason ab-mark-good does: a write that silently did
 # not happen means an update installs, boots, fails, and never rolls back --
 # and nothing would have said so at the one moment someone was watching.
-if [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${TARGET}_PROVEN=//p")" != "0" ]; then
+if [ "$("$GRUB_EDITENV" "$GRUBENV" list 2>/dev/null | sed -n "s/^${TARGET}_PROVEN=//p")" != "0" ]; then
     echo "ab-slot-pending: ${TARGET}_PROVEN did not stick after writing $GRUBENV" >&2
     echo "ab-slot-pending: slot $TARGET will boot WITHOUT an automatic fallback" >&2
     exit 0

@@ -58,10 +58,18 @@ export function WritableState({ value, onChange }: {
             onChange={(e) => set("stateModel", e.target.value)}
             helperText={value.stateModel === "overlay"
               ? "One overlay over the whole root. Every write lands on the overlay partition."
-              : "The root stays read-only and only the paths below are writable."}
+              : value.stateModel === "appliance"
+                ? "Read-only root with the smallest writable set the system needs to run."
+                : "The root stays read-only and only the paths below are writable."}
           >
+            {/* These values go straight to build-image.sh --state-model, which
+                accepts overlay|stateful|appliance. "paths" was offered here and
+                is not one of them, so choosing it failed the build outright with
+                "unknown model 'paths'" -- the non-default option had never once
+                produced an image. */}
             <MenuItem value="overlay">overlay — the whole root is writable</MenuItem>
-            <MenuItem value="paths">paths — read-only root, enumerated writable paths</MenuItem>
+            <MenuItem value="stateful">stateful — read-only root, enumerated writable paths</MenuItem>
+            <MenuItem value="appliance">appliance — read-only root, minimal writable state</MenuItem>
           </TextField>
         </Grid>
 

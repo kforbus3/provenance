@@ -70,8 +70,14 @@ EXTRA_MOUNTS=""                          # from --persist/--slot-private/--volat
 # Cleared from the writable state on a slot change. Everything the distribution
 # owns: a copy of these from the previous release would shadow the one the
 # update just installed, and nothing in the running system would say so.
-RESET_PATHS="/usr /bin /sbin /lib /lib32 /lib64 /libx32 /boot
-             /var/lib/dpkg /var/lib/apt /var/cache/apt"
+# The package-database directories are appended once the family is known, a few
+# hundred lines down -- they are the one part of this list that differs, and
+# naming only Debian's here meant an rpm machine kept the PREVIOUS release's
+# /var/lib/rpm on the overlay after an update, shadowing the database that came
+# with the new slot. `rpm -qa` would then describe software that is not
+# installed, which is precisely the failure this list exists to prevent, and it
+# is silent.
+RESET_PATHS="/usr /bin /sbin /lib /lib32 /lib64 /libx32 /boot"
 # Held back from that clearing. /usr/local sits inside /usr but is reserved by
 # the FHS for locally installed software, so it is the machine's, not the
 # image's -- clearing /usr wholesale used to take it, and a script left in
@@ -307,6 +313,34 @@ step() {
     log "$1"
 }
 
+# --- Resolve the distro FAMILY ------------------------------------------------
+#
+# The A/B root itself is shared between the families rather than reimplemented:
+# the same two scripts run under both harnesses (see /usr/lib/ab/initramfs), with
+# initramfs-tools invoking them from local-bottom/init-premount and dracut from
+# its own modules in usr/lib/dracut/modules.d. What differs between the harnesses
+# is how a script gets INTO the initramfs and what the mounted root is called --
+# not what the script does.
+#
+# Everything below branches on the family rather than on the distro: the
+# difference between Debian and Ubuntu is a mirror and two package names, while
+# the difference between either and AlmaLinux is the bootstrapper, the package
+# manager, the initramfs generator and the bootloader's name. Two variables kept
+# apart because they answer different questions.
+#
+# The A/B layout, partitioning, LUKS, the state manifest, the update keyring and
+# the per-slot kernel staging are the same either way, which is why this is one
+# script with branches rather than two scripts that would drift.
+case "$DISTRO" in
+    debian|ubuntu)        FAMILY=deb;;
+    almalinux|rocky|rhel) FAMILY=rpm;;
+    *) die "--distro must be debian, ubuntu, almalinux or rocky (got '$DISTRO')";;
+esac
+
+# Resolved BEFORE the writable-state layout below, which branches on it.
+# It used to sit 130 lines further down, so `--state-model stateful` read
+# $FAMILY before it existed and died on `FAMILY: unbound variable` -- for
+# every distribution, making that model unreachable from the day it shipped.
 # --- Resolve the writable-state layout --------------------------------------
 #
 # Validated here, before anything is built, because every one of these mistakes
@@ -451,29 +485,6 @@ if [ -z "$DISTRO" ]; then
     esac
 fi
 
-# --- Resolve the distro FAMILY ------------------------------------------------
-#
-# The A/B root itself is shared between the families rather than reimplemented:
-# the same two scripts run under both harnesses (see /usr/lib/ab/initramfs), with
-# initramfs-tools invoking them from local-bottom/init-premount and dracut from
-# its own modules in usr/lib/dracut/modules.d. What differs between the harnesses
-# is how a script gets INTO the initramfs and what the mounted root is called --
-# not what the script does.
-#
-# Everything below branches on the family rather than on the distro: the
-# difference between Debian and Ubuntu is a mirror and two package names, while
-# the difference between either and AlmaLinux is the bootstrapper, the package
-# manager, the initramfs generator and the bootloader's name. Two variables kept
-# apart because they answer different questions.
-#
-# The A/B layout, partitioning, LUKS, the state manifest, the update keyring and
-# the per-slot kernel staging are the same either way, which is why this is one
-# script with branches rather than two scripts that would drift.
-case "$DISTRO" in
-    debian|ubuntu)        FAMILY=deb;;
-    almalinux|rocky|rhel) FAMILY=rpm;;
-    *) die "--distro must be debian, ubuntu, almalinux or rocky (got '$DISTRO')";;
-esac
 
 # --- CPU baseline ------------------------------------------------------------
 #
@@ -493,6 +504,13 @@ esac
 cpu_level() {
     # The levels are cumulative and defined by the psABI. Only x86 has them.
     local f="/proc/cpuinfo" lvl=1
+    # No flags line at all means this is not an x86 CPU, so the question does not
+    # apply -- an arm64 builder producing an amd64 image runs the target's binaries
+    # under emulation and never executes them on this processor. Distinguished
+    # from "x86 but too old" (0) because they need opposite answers: unknown must
+    # not fail the build, and used to, since the flag scan below found nothing on
+    # an arm64 host and reported the oldest possible x86.
+    grep -q "^flags" "$f" 2>/dev/null || { echo -1; return; }
     grep -q " lm " "$f" 2>/dev/null || { echo 0; return; }
     for x in cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3; do
         grep -qm1 " $x " "$f" 2>/dev/null || { echo 1; return; }
@@ -520,8 +538,17 @@ fi
 
 if [ "$ARCH" = amd64 ] && [ "$REQUIRED_CPU_LEVEL" -gt 1 ]; then
     HAVE_CPU_LEVEL="$(cpu_level)"
-    if [ "$HAVE_CPU_LEVEL" -lt "$REQUIRED_CPU_LEVEL" ]; then
-        _model="$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed "s/^ *//")"
+    if [ "$HAVE_CPU_LEVEL" -lt 0 ]; then
+        warn "not an x86 build host, so the $DISTRO $SUITE CPU baseline
+    (x86-64-v${REQUIRED_CPU_LEVEL}) cannot be checked here. The image will build under
+    emulation; whether it RUNS is a property of the machines you deploy it to."
+    elif [ "$HAVE_CPU_LEVEL" -lt "$REQUIRED_CPU_LEVEL" ]; then
+        # `|| true` on both: a build host whose /proc/cpuinfo has no "model name"
+        # line makes this pipeline fail, and under `set -e -o pipefail` a failed
+        # assignment ends the script -- before the die below can say anything. The
+        # symptom was a build that exited 1 having printed nothing at all, which is
+        # the worst possible output from a check whose entire job is to explain.
+        _model="$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed "s/^ *//" || true)"
         _missing=""
         for x in avx avx2 bmi1 bmi2 fma movbe abm; do
             grep -qm1 " $x " /proc/cpuinfo 2>/dev/null || _missing="$_missing $x"
@@ -539,7 +566,8 @@ if [ "$ARCH" = amd64 ] && [ "$REQUIRED_CPU_LEVEL" -gt 1 ]; then
     a v3 image would need v3 themselves, so this is the fleet's constraint as
     much as the builder's."
     fi
-    log "CPU baseline: x86-64-v${HAVE_CPU_LEVEL} available, v${REQUIRED_CPU_LEVEL} required"
+    [ "$HAVE_CPU_LEVEL" -ge 0 ] && \
+        log "CPU baseline: x86-64-v${HAVE_CPU_LEVEL} available, v${REQUIRED_CPU_LEVEL} required"
 fi
 
 # RPM images are new. The A/B overlay root and the LUKS bootstrap key now have
@@ -889,29 +917,87 @@ case "$SUITE" in bionic|focal|jammy) RESOLVED_PKG="";; esac
 # vocabulary it had. Rename them here, where the family is known. Kept in one
 # place rather than spread through the arch cases so that adding an architecture
 # and adding a distribution stay separate jobs.
+# The package database, whose location is the one family-specific part of the
+# distribution-owned paths cleared on a slot change. Appended rather than
+# branched into the list above because that list is built before the arguments
+# naming the distribution have been parsed. The `stateful` and `appliance`
+# models replace RESET_PATHS wholesale below and set their own.
+if [ "$FAMILY" = rpm ]; then
+    RESET_PATHS="$RESET_PATHS /var/lib/rpm /var/lib/dnf /var/cache/dnf"
+else
+    RESET_PATHS="$RESET_PATHS /var/lib/dpkg /var/lib/apt /var/cache/apt"
+fi
+
+# How this image's initramfs reaches the shared A/B scripts, for the state
+# manifest that ships inside the image. Naming the other family's harness in a
+# file left in /etc is how somebody later concludes the wrong one is in use --
+# which the rpm branch's own `rm -rf /etc/initramfs-tools` exists to prevent.
+if [ "$FAMILY" = rpm ]; then
+    AB_HOOK_DESC="dracut hooks (usr/lib/dracut/modules.d/90ab-overlay)"
+else
+    AB_HOOK_DESC="initramfs-tools (etc/initramfs-tools/scripts/local-bottom/ab-overlay)"
+fi
+
 if [ "$FAMILY" = rpm ]; then
     case "$ARCH" in
         amd64)
             # grub2-pc is BIOS, grub2-efi-x64 + efibootmgr is UEFI. Both, because
             # the image does not know which firmware the machine it lands on has,
             # and the whole point is that it lands on machines.
-            GRUB_PKGS="grub2-pc grub2-efi-x64 grub2-tools efibootmgr"
+            #
+            # grub2-efi-x64-modules is not optional and not implied. The plain
+            # grub2-efi-x64 package ships ZERO files under /usr/lib/grub -- it is
+            # only the prebuilt signed binary -- so grub2-install has no
+            # x86_64-efi/modinfo.sh to read and dies at the last step of the
+            # build. `install_weak_deps=False` means it can never arrive by
+            # accident. Verified with `dnf repoquery -l` on almalinux:9.
+            GRUB_PKGS="grub2-pc grub2-efi-x64 grub2-efi-x64-modules grub2-tools efibootmgr"
             SB_PKGS="shim-x64 grub2-efi-x64"
+            # Where this family's signed chain actually lives. The packages install
+            # straight onto the ESP rather than into /usr/lib/shim as Debian's do,
+            # and the names carry no ".signed" suffix.
+            SB_SHIM="shimx64.efi"
+            SB_GRUB="grubx64.efi"
+            SB_MM="mmx64.efi"
+            SB_GRUB_DIR=""            # not used on this family; the ESP is the source
             ;;
         arm64)
             # No BIOS on arm64, so no grub2-pc.
-            GRUB_PKGS="grub2-efi-aa64 grub2-tools efibootmgr"
+            GRUB_PKGS="grub2-efi-aa64 grub2-efi-aa64-modules grub2-tools efibootmgr"
             SB_PKGS="shim-aa64 grub2-efi-aa64"
+            SB_SHIM="shimaa64.efi"
+            SB_GRUB="grubaa64.efi"
+            SB_MM="mmaa64.efi"
+            SB_GRUB_DIR=""
             ;;
     esac
     # Present and named the same across this family.
     RESOLVED_PKG="systemd-resolved"
+    # systemd-networkd is NOT PACKAGED for this family -- `dnf provides
+    # */systemd-networkd.service` finds nothing on AlmaLinux 9. NetworkManager is
+    # how these distributions do DHCP, so that is what gets installed and enabled,
+    # and the networkd .network file is not written at all. Enabling a unit that
+    # does not exist would fail the chroot script; making that failure non-fatal
+    # would be worse, shipping a machine with no DHCP client and SSH as the only
+    # way in.
+    NETWORK_PKG="NetworkManager"
+    NETWORK_UNIT="NetworkManager"
     # grub2-install, not grub-install. Same program, different name, and calling
     # the wrong one fails with "command not found" at the point where the image
     # gets its bootloader -- the last step, after everything expensive.
     GRUB_INSTALL="grub2-install"
+    # /boot/grub2, not /boot/grub, and grub2-editenv, not grub-editenv. Every
+    # place that writes grub.cfg or touches grubenv has to use these: the core
+    # image grub2-install produces has prefix=($root)/grub2 baked in, so writing
+    # the config to /boot/grub gives a clean build and a `grub rescue>` prompt.
+    GRUBDIR="grub2"
+    GRUB_EDITENV="grub2-editenv"
 else
     GRUB_INSTALL="grub-install"
+    GRUBDIR="grub"
+    GRUB_EDITENV="grub-editenv"
+    NETWORK_PKG=""
+    NETWORK_UNIT="systemd-networkd"
 fi
 
 # --- Validate options ---
@@ -968,10 +1054,14 @@ MAPPERS=()
 cleanup() {
     set +e
     mountpoint -q "$MNT/dev/pts" && umount "$MNT/dev/pts"
-    # var/cache/apt/archives is the APT cache bind mount; it is nested under
-    # $MNT and must come off before $MNT itself, or the final umount fails and
-    # the loop device stays attached.
-    for m in var/cache/apt/archives dev proc sys boot/efi boot var/lib/overlay; do
+    # The first two are the package-cache bind mount -- apt's for the deb family,
+    # dnf's for the rpm one. Both are listed rather than the one this build used,
+    # because cleanup runs on paths that may not be mounted anyway (mountpoint -q
+    # guards each) and because a trap that has to know which family it is in is a
+    # trap that gets this wrong. They are nested under $MNT and must come off
+    # before $MNT itself, or the final umount fails and the loop device stays
+    # attached -- which is how a failed build leaves the host with a leaked loop.
+    for m in var/cache/apt/archives var/cache/dnf dev proc sys boot/efi boot var/lib/overlay; do # family-ok: both families' cache paths on purpose; each is mountpoint-guarded
         mountpoint -q "$MNT/$m" && umount "$MNT/$m"
     done
     mountpoint -q "$WORK/b" && umount "$WORK/b"
@@ -1239,27 +1329,48 @@ LABEL=overlay              /var/lib/overlay   ext4   defaults,nofail 0     2
 tmpfs                      /tmp               tmpfs  defaults       0      0
 EOF
 
-if [ "$DISTRO" = ubuntu ]; then
-    cat > "$MNT/etc/apt/sources.list" <<EOF
+# Repository configuration, which is the one piece of base config that has no
+# common spelling between the families.
+#
+# The rpm family needs nothing written here: the distribution's *-release package
+# installed during the bootstrap ships /etc/yum.repos.d/*.repo already, pointing
+# at the vendor mirrorlist and resolving $releasever from the /etc/os-release
+# that came with it. Writing apt's file for that family is not merely useless --
+# an rpm root has no /etc/apt at all, so the redirect dies and takes the build
+# with it, which is exactly what it did.
+if [ "$FAMILY" = deb ]; then
+    if [ "$DISTRO" = ubuntu ]; then
+        cat > "$MNT/etc/apt/sources.list" <<EOF
 deb $MIRROR $SUITE main universe
 deb $MIRROR ${SUITE}-updates main universe
 deb http://security.ubuntu.com/ubuntu ${SUITE}-security main universe
 EOF
-else
-    cat > "$MNT/etc/apt/sources.list" <<EOF
+    else
+        cat > "$MNT/etc/apt/sources.list" <<EOF
 deb $MIRROR $SUITE main contrib non-free-firmware
 deb $MIRROR ${SUITE}-updates main contrib non-free-firmware
 deb http://security.debian.org/debian-security ${SUITE}-security main contrib non-free-firmware
 EOF
+    fi
 fi
 
-cat > "$MNT/etc/systemd/network/10-dhcp.network" <<EOF
+# DHCP on every wired interface. networkd for the deb family; the rpm family has
+# no systemd-networkd package at all (not a different name -- `dnf provides
+# */systemd-networkd.service` finds nothing on el9), so NetworkManager does it,
+# and its default behaviour for an unconfigured wired device is already DHCP.
+#
+# Writing the .network file for both families and enabling networkd on neither
+# would leave an rpm machine with no DHCP client, unreachable over the SSH that
+# is the only way into it.
+if [ "$FAMILY" = deb ]; then
+    cat > "$MNT/etc/systemd/network/10-dhcp.network" <<EOF
 [Match]
 Name=en* eth*
 
 [Network]
 DHCP=yes
 EOF
+fi
 
 # --- crypttab + key material (before installing the initramfs) ---
 CRYPT_PACKAGES=""
@@ -1354,14 +1465,22 @@ if [ "$ENCRYPT" = true ]; then
     # (/lib/cryptsetup/functions, _resolve_device_spec), so it works this early.
     # system.conf already addressed the slots this way; this is the same rule --
     # nothing unique to one disk belongs in an image that gets copied.
+    # The option that marks an entry for the initramfs is spelled differently by
+    # the two harnesses: initramfs-tools reads `initramfs`, systemd-cryptsetup
+    # (which is what dracut uses) reads `x-initrd.attach`. Both are emitted -- each
+    # ignores the other's as an unknown option -- rather than branching, so the
+    # file is identical on both families and there is one less thing to keep in
+    # step. Without the systemd spelling an encrypted RHEL machine reaches the
+    # dracut emergency shell with no unlock rule at all.
+    CRYPTOPTS="luks,discard,initramfs,x-initrd.attach"
     cat > "$MNT/etc/crypttab" <<EOF
 # <name>          <device>                 <keyfile>     <options>
 #
 # Addressed by partition label so this file is true on any machine imaged from
 # any build. Do not "fix" these to UUIDs: see build-image.sh for what that costs.
-luks-rootfs-a     PARTLABEL=rootfs-a       $KEYREF_A     luks,discard,initramfs$NETOPT
-luks-rootfs-b     PARTLABEL=rootfs-b       $KEYREF_B     luks,discard,initramfs$NETOPT
-luks-overlay      PARTLABEL=overlay        $KEYREF_OVL   luks,discard,initramfs$NETOPT
+luks-rootfs-a     PARTLABEL=rootfs-a       $KEYREF_A     $CRYPTOPTS$NETOPT
+luks-rootfs-b     PARTLABEL=rootfs-b       $KEYREF_B     $CRYPTOPTS$NETOPT
+luks-overlay      PARTLABEL=overlay        $KEYREF_OVL   $CRYPTOPTS$NETOPT
 EOF
 fi
 
@@ -1391,9 +1510,16 @@ DESKTOP_SETUP=""
 if [ "$PROFILE" = desktop ]; then
     if [ "$FAMILY" = rpm ]; then
         # Groups, not metapackages: this family expresses "a desktop" as a group.
-        DESKTOP_SETUP="dnf -y group install ${DESKTOP_PACKAGES}
-systemctl set-default graphical.target
-systemctl disable systemd-networkd"
+        #
+        # $DESKTOP_META quoted and on its own, NOT $DESKTOP_PACKAGES. The group
+        # names here are multi-word ("KDE Plasma Workspaces"), so an unquoted
+        # expansion word-splits into "Module or Group 'Plasma' does not exist" --
+        # and DESKTOP_PACKAGES has Debian's `network-manager` appended to it,
+        # which is neither a group nor the right spelling of the package on this
+        # family. NetworkManager is already installed and enabled for every rpm
+        # image, so there is nothing extra to add here.
+        DESKTOP_SETUP="dnf -y group install \"${DESKTOP_META}\"
+systemctl set-default graphical.target"
     else
         DESKTOP_SETUP="apt-get install -y ${DESKTOP_PACKAGES}
 systemctl set-default graphical.target
@@ -1407,17 +1533,21 @@ step "Installing kernel, bootloader, and tooling in chroot"
 # alongside the unpacked files is enough on its own to exhaust a 3 GiB slot —
 # initramfs generation then dies with a bare "No space left on device". The
 # cache lives on the builder's own filesystem instead and is discarded after.
+# PKGCACHE_MNT is remembered rather than re-derived at teardown. The teardown
+# used to name the apt path outright, so an rpm build -- which binds the dnf
+# directory instead -- tried to unmount something that was never mounted and
+# died there, right after the longest step in the build.
 if [ "$FAMILY" = deb ]; then
     PKGCACHE="$WORK/aptcache"
-    mkdir -p "$PKGCACHE" "$MNT/var/cache/apt/archives"
-    mount --bind "$PKGCACHE" "$MNT/var/cache/apt/archives"
+    PKGCACHE_MNT="$MNT/var/cache/apt/archives"
 else
     # Same reasoning, different directory: dnf's cache is as large as apt's and
     # would come out of the same slot.
     PKGCACHE="$WORK/dnfcache"
-    mkdir -p "$PKGCACHE" "$MNT/var/cache/dnf"
-    mount --bind "$PKGCACHE" "$MNT/var/cache/dnf"
+    PKGCACHE_MNT="$MNT/var/cache/dnf"
 fi
+mkdir -p "$PKGCACHE" "$PKGCACHE_MNT"
+mount --bind "$PKGCACHE" "$PKGCACHE_MNT"
 
 if [ "$FAMILY" = rpm ]; then
 cat > "$MNT/tmp/setup.sh" <<CHROOT
@@ -1425,11 +1555,18 @@ set -euo pipefail
 
 # dracut, not initramfs-tools: it is what an RPM distribution generates an initrd
 # with, and the kernel package expects it to be there.
+#
+# The profile and caller-supplied packages are NOT in this transaction. The
+# server profile asks for htop, which is in EPEL only (confirmed: it is in no
+# base el9 repository), and EPEL is not enabled until the RAUC section below --
+# so putting them here failed the whole first transaction with "Unable to find a
+# match: htop", naming a monitoring tool for what was really an ordering
+# mistake. They are installed after EPEL and CRB instead.
 dnf -y install --setopt=install_weak_deps=False \
     ${KERNEL_PKG} dracut ${GRUB_PKGS} \
     openssh-server sudo ca-certificates curl \
-    ${RESOLVED_PKG} cloud-utils-growpart gdisk parted e2fsprogs \
-    ${CRYPT_PACKAGES} ${PROFILE_PACKAGES} ${EXTRA_PACKAGES}
+    ${RESOLVED_PKG} ${NETWORK_PKG} cloud-utils-growpart gdisk parted e2fsprogs \
+    ${CRYPT_PACKAGES}
 
 # --- RAUC, built from source -------------------------------------------------
 #
@@ -1450,6 +1587,14 @@ dnf -y install epel-release || true
 dnf -y install 'dnf-command(config-manager)' || true
 dnf config-manager --set-enabled crb 2>/dev/null || \
     dnf config-manager --set-enabled powertools 2>/dev/null || true
+
+# Now that EPEL is on, the packages that needed it. Held back from the base
+# transaction above rather than moving EPEL earlier, because the base system
+# should not depend on a third-party repository being reachable.
+if [ -n "${PROFILE_PACKAGES}${EXTRA_PACKAGES}" ]; then
+    dnf -y install --setopt=install_weak_deps=False \
+        ${PROFILE_PACKAGES} ${EXTRA_PACKAGES}
+fi
 
 RAUC_BUILD_PKGS="meson ninja-build gcc git glib2-devel openssl-devel libcurl-devel \
     json-glib-devel dbus-devel systemd-devel libnl3-devel libfdisk-devel"
@@ -1481,7 +1626,7 @@ dnf clean all
 
 ${SB_SETUP}
 
-systemctl enable sshd systemd-networkd systemd-resolved
+systemctl enable sshd ${NETWORK_UNIT} systemd-resolved
 
 ${DESKTOP_SETUP}
 
@@ -1540,11 +1685,16 @@ ${avail} MiB free in a ${ROOT_SIZE} MiB slot).
 Rebuild with a larger --root-size — $OS_PRETTY $SUITE needs about ${MIN_ROOT} MiB \
 for the base system, kernel and initramfs before any extra packages."
     fi
-    die "package installation failed in the chroot (see the apt/dpkg output above)"
+    die "package installation failed in the chroot (see the package manager output above)"
 fi
 rm -f "$MNT/tmp/setup.sh"
-umount "$MNT/var/cache/apt/archives"
-rm -rf "$APTCACHE"
+# $PKGCACHE, not $APTCACHE. The rpm work renamed the variable where it is set
+# and missed it here, and `set -u` turns a stale name into a fatal at exactly
+# this line -- for BOTH families, so every build has been dying here since,
+# immediately after the longest step. Nothing caught it because the rpm builds
+# were still failing earlier than this and no deb image had been built since.
+umount "$PKGCACHE_MNT"
+rm -rf "$PKGCACHE"
 
 # Every machine imaged from this build must get its own identity. Blank the
 # machine-id and drop the build-time SSH host keys; machine-identity.service
@@ -1573,6 +1723,20 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
 EOF
+    # A drop-in only counts if sshd_config Includes the directory, and EL8's
+    # openssh 8.0p1 does not -- the Include arrives in EL9. Without this the
+    # build logs "Disabling SSH password authentication", ships the file, and
+    # every machine still accepts the build-time password. A hardening step that
+    # silently does nothing is worse than one that was never offered.
+    if ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' \
+            "$MNT/etc/ssh/sshd_config" 2>/dev/null; then
+        # First line: sshd takes the FIRST value of a keyword, so an Include
+        # placed after an existing PasswordAuthentication would lose to it.
+        sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "$MNT/etc/ssh/sshd_config" \
+            || die "--ssh-key-only: could not make sshd read the drop-in, and the
+    image would ship with password authentication still enabled."
+        log "Added the sshd_config.d Include (this release of sshd lacked it)"
+    fi
 fi
 
 step "Applying overlay files (RAUC, GRUB, first-boot expand, LUKS enroll)"
@@ -1603,7 +1767,7 @@ else
     # module-setup.sh at initramfs build time. The initramfs-tools tree is not
     # copied into an RPM image -- it would be inert, and inert files in /etc are
     # how somebody later concludes the wrong harness is in use.
-    rm -rf "$MNT/etc/initramfs-tools"
+    rm -rf "$MNT/etc/initramfs-tools" # family-ok: removing the OTHER family's tree is the point
     chmod 0755 "$MNT/usr/lib/dracut/modules.d/90ab-overlay/module-setup.sh" \
                "$MNT/usr/lib/dracut/modules.d/91ab-luks-key/module-setup.sh" 2>/dev/null || true
 fi
@@ -1611,6 +1775,20 @@ chmod 0755 "$MNT/usr/lib/ab/initramfs/ab-overlay" \
            "$MNT/usr/lib/ab/initramfs/ab-luks-key" 2>/dev/null || true
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
+# RAUC reads and writes the boot environment itself, so it needs the same path
+# the bootloader was installed with. The shipped file names Debian's; left
+# uncorrected, RAUC on an RHEL machine reads an env block GRUB never looks at,
+# reports every slot "boot status: bad", and refuses to mark one primary -- an
+# update that installs and can then never be activated.
+sed -i "s#^grubenv=.*#grubenv=/boot/${GRUBDIR}/grubenv#" "$MNT/etc/rauc/system.conf"
+if [ "$FAMILY" = rpm ]; then
+    # RAUC's grub backend execs `grub-editenv` by that exact name, and this family
+    # ships only grub2-editenv. The shipped ab-* scripts resolve the name at
+    # runtime (see usr/lib/ab/grubenv-lib.sh), but RAUC is a compiled binary and
+    # cannot be taught, so the name has to exist. Without it every update
+    # installs and then cannot be marked primary.
+    ln -sf grub2-editenv "$MNT/usr/bin/grub-editenv"
+fi
 # On an encrypted image the partition IS the LUKS container, so leaving RAUC
 # pointed at /dev/disk/by-partlabel/rootfs-* would have it make a filesystem
 # straight over the LUKS header -- destroying the slot rather than updating
@@ -1698,7 +1876,8 @@ $(printf '%s\n' "$MOUNT_DIRECTIVES" | grep -v '^[[:space:]]*$')
 EOF
 {
     echo "# Generated by build-image.sh -- how this image lays out writable state."
-    echo "# Applied by /etc/initramfs-tools/scripts/local-bottom/ab-overlay at boot."
+    echo "# Applied at boot by /usr/lib/ab/initramfs/ab-overlay, which this image's"
+    echo "# initramfs runs from ${AB_HOOK_DESC}."
     echo "model $STATE_MODEL"
     # Emitted only when it is not the default, so the manifest on an ordinary
     # image reads exactly as it always has -- and so the line's presence is
@@ -1832,27 +2011,46 @@ else
     fi
     NOGRUB_PATH="$MNT/usr/sbin/grub2-mkconfig"
 fi
-cat > "$NOGRUB_PATH" <<'NOGRUB'
+# $NOGRUB_NAME so the message names the binary the caller actually invoked;
+# hard-coding "update-grub" made the stub claim to be a command that does not
+# exist on this family.
+NOGRUB_NAME="$(basename "$NOGRUB_PATH")"
+cat > "$NOGRUB_PATH" <<NOGRUB
 #!/bin/sh
-# Deliberately does nothing. This is an A/B image: /boot/grub/grub.cfg is part
+# Deliberately does nothing. This is an A/B image: the bootloader config is part
 # of the image and is replaced by re-imaging, not regenerated on the machine.
 # Regenerating it would drop slot selection, the rauc.slot= parameters and the
 # recovery entries, leaving a machine that boots -- until you need to roll back.
 #
-# The real one is still there as /usr/sbin/update-grub.distrib if you genuinely
+# The real one is still there as /usr/sbin/${NOGRUB_NAME}.distrib if you genuinely
 # need it, but expect to re-image afterwards.
-echo "update-grub: skipped; this is an A/B image whose grub.cfg is managed by the image." >&2
+echo "${NOGRUB_NAME}: skipped; this is an A/B image whose grub config is managed by the image." >&2
 exit 0
 NOGRUB
-chmod 0755 "$MNT/usr/sbin/update-grub"
+# $NOGRUB_PATH, not the hard-coded Debian path -- which does not exist on the rpm
+# family, so `set -e` ended the build here. And the chmod is load-bearing either
+# way: `cat >` creates the stub 0644, so every caller would get "Permission
+# denied" instead of the intended no-op.
+chmod 0755 "$NOGRUB_PATH"
 
 # A kernel installed by apt is inert here -- GRUB boots the slot's own copy,
 # which only a bundle replaces. The hook does not wire the two together on
 # purpose: a kernel swapped in underneath a running slot would no longer match
 # the root filesystem it was built against. It says so instead, because the
 # alternative is a machine that reboots on the old kernel with no explanation.
-install -m0755 "$OVERLAY_DIR/usr/local/sbin/ab-kernel-hook.sh" \
-    "$MNT/etc/kernel/postinst.d/zz-ab-kernel-notice"
+# -D, and a different directory per family. /etc/kernel/postinst.d is
+# initramfs-tools' convention and does not exist in an rpm root; `install` does
+# not create parent directories, so this ended the build. The rpm equivalent is
+# a kernel-install plugin, which takes (COMMAND KVER ENTRY_DIR) rather than
+# apt's (KVER PATH) -- the shared script ignores its arguments and only prints,
+# so the same file serves both.
+if [ "$FAMILY" = deb ]; then
+    install -D -m0755 "$OVERLAY_DIR/usr/local/sbin/ab-kernel-hook.sh" \
+        "$MNT/etc/kernel/postinst.d/zz-ab-kernel-notice"
+else
+    install -D -m0755 "$OVERLAY_DIR/usr/local/sbin/ab-kernel-hook.sh" \
+        "$MNT/etc/kernel/install.d/95-ab-kernel-notice.install"
+fi
 
 # ab-health-check is WantedBy=boot-complete.target, which ab-mark-good Requires
 # -- so enabling it is what makes the checks gate the blessing. With no checks
@@ -1973,7 +2171,15 @@ fi
 # Rebuild the initramfs so it includes cryptsetup, crypttab, and any keyfiles.
 # These config files belong to cryptsetup-initramfs / initramfs-tools, which only
 # exist now that the chroot package install has run.
-if [ "$ENCRYPT" = true ]; then
+#
+# deb only, and not merely because dracut ignores these files. The rpm branch
+# above deletes /etc/initramfs-tools outright once the dracut modules are in
+# place, so the UMASK append below does not write a useless line for that family
+# -- it redirects into a directory that is not there, and `set -e` ends the build
+# on the spot. Both settings have no dracut counterpart that needs writing:
+# dracut reads the whole crypttab rather than needing to be told to, and creates
+# the initramfs 0600 already.
+if [ "$ENCRYPT" = true ] && [ "$FAMILY" = deb ]; then
     log "Configuring and rebuilding initramfs with cryptsetup support"
     install -d "$MNT/etc/cryptsetup-initramfs"
     # Force ALL crypttab devices into the initramfs so it can unlock whichever
@@ -2012,16 +2218,72 @@ else
     # initramfs quietly lacks the overlay module boots read-only with nothing in
     # the log to say why, and that is the whole failure this module exists to
     # prevent -- so inclusion is stated, not inferred.
-    chroot "$MNT" dracut --force --kver "$KVER_FOR_DRACUT" \
+    # --no-hostonly is not optional for a mass-imaging tool. This family's dracut
+    # defaults to hostonly=yes, which trims the initramfs to the drivers the
+    # machine it is running on needs -- and the machine it is running on is the
+    # BUILDER, whose storage and network controllers are a virtio set that a
+    # physical target does not have. The image builds, and every machine that is
+    # not the build host drops to an emergency shell unable to find its own root.
+    # Exactly the same class of mistake as --kver above: something read from the
+    # build environment that belongs to the target.
+    #
+    # --no-hostonly-cmdline as well, or dracut bakes the builder's root= and
+    # rd.luks.* into the initramfs as a default cmdline.
+    # --install /etc/crypttab, because --no-hostonly means dracut will not copy
+    # it: that copy is gated on hostonly, and grub.cfg passes no rd.luks.* to
+    # replace it. Without the file the initramfs has no idea which containers to
+    # open, /dev/mapper/luks-rootfs-a never appears, and the machine sits in the
+    # dracut emergency shell -- after a completely clean build. Switching to
+    # hostonly to obtain the copy is not the fix: hostonly rewrites and filters
+    # crypttab against the BUILDER's devices, and would drop the PARTLABEL= specs
+    # this file deliberately uses so the image is true on any machine.
+    DRACUT_EXTRA=""
+    [ "$ENCRYPT" = true ] && DRACUT_EXTRA="--install /etc/crypttab"
+    chroot "$MNT" dracut --force --no-hostonly --no-hostonly-cmdline \
+        --kver "$KVER_FOR_DRACUT" \
         --add "ab-overlay ab-luks-key" \
+        $DRACUT_EXTRA \
         "/boot/initramfs-${KVER_FOR_DRACUT}.img"
     # dracut does not fail when a module it was told to add contributed nothing,
-    # so the initramfs is asked afterwards whether the hook is actually in it.
-    if ! chroot "$MNT" lsinitrd "/boot/initramfs-${KVER_FOR_DRACUT}.img" 2>/dev/null \
-            | grep -q "ab-overlay"; then
-        die "the generated initramfs does not contain the A/B overlay hook.
-    Without it the machine boots read-only with no slot selection, which looks
-    like a working image until you need to roll back."
+    # so the initramfs is asked afterwards what is actually in it.
+    #
+    # The hook FILE, matched on the .sh suffix -- not the module name. Grepping
+    # lsinitrd for "ab-overlay" passed on every image ever built, because the
+    # module name appears in the module list whether or not any hook was
+    # installed under a name dracut will source. That check could not fail, which
+    # is why nothing noticed that the hook never ran.
+    _initrd_files="$(chroot "$MNT" lsinitrd "/boot/initramfs-${KVER_FOR_DRACUT}.img" 2>/dev/null || true)"
+    if ! printf '%s' "$_initrd_files" | grep -qE "hooks/pre-pivot/.*ab-overlay\.sh"; then
+        die "the generated initramfs has no runnable A/B overlay hook
+    (looked for hooks/pre-pivot/*ab-overlay.sh). dracut sources only *.sh from a
+    hook directory, so a hook installed under any other name is inert. Without it
+    the machine boots read-only with no slot selection, which looks like a working
+    image until you need to roll back."
+    fi
+    # The same argument for the unlock path. ab-luks-key depends() on dracut's
+    # crypt module, so crypt arrives transitively -- which means it also leaves
+    # transitively, if that dependency is ever edited. An encrypted image whose
+    # initramfs cannot open a LUKS volume is not a degraded image, it is a brick,
+    # and it is a clean build right up until someone boots it.
+    if [ "$ENCRYPT" = true ]; then
+        if ! printf '%s' "$_initrd_files" | grep -qE "cryptsetup|/crypt"; then
+            die "this image is encrypted but the generated initramfs has no crypt
+    support in it, so nothing can unlock the root filesystem at boot. The machine
+    would reach an emergency shell every time."
+        fi
+        # And the rule it unlocks BY. crypt support with no crypttab is an
+        # initramfs that can open LUKS containers and does not know which ones.
+        if ! printf '%s' "$_initrd_files" | grep -qE "etc/crypttab"; then
+            die "the initramfs has crypt support but no /etc/crypttab, so nothing
+    tells it which volumes to unlock. --no-hostonly means dracut does not copy the
+    file; --install /etc/crypttab is what puts it there."
+        fi
+        if ! printf '%s' "$_initrd_files" | grep -qE "hooks/initqueue/settled/.*ab-luks-key\.sh"; then
+            die "the generated initramfs has no runnable LUKS bootstrap-key hook
+    (looked for hooks/initqueue/settled/*ab-luks-key.sh). Without it the machine
+    cannot fetch its own key from the BOOT partition and every boot stops at a
+    passphrase prompt nobody is there to answer."
+        fi
     fi
 fi
 
@@ -2060,13 +2322,37 @@ if [ "$SECURE_BOOT" != off ]; then
     # The signed shim is versioned in some releases (shimx64.efi.signed.latest)
     # and not in others. Take the first that exists rather than hard-coding one
     # spelling and discovering the other in a year.
+    #
+    # The two families ship the signed chain in entirely different places. Debian
+    # puts it under /usr/lib/shim and /usr/lib/grub/<target>-signed; the RHEL
+    # packages install straight onto the ESP at /boot/efi/EFI/<distro>/ (verified
+    # with `dnf repoquery -l shim-x64 grub2-efi-x64` on almalinux:9). Searching
+    # only Debian's locations meant `--secure-boot auto` found nothing on every
+    # RHEL image, left the unsigned grub2-install output in place, warned, and
+    # recorded "secure_boot": false -- a clean build that cannot boot on any
+    # machine with Secure Boot on.
     sb_shim=""
-    for candidate in "$MNT/usr/lib/shim/$SB_SHIM" \
-                     "$MNT/usr/lib/shim/${SB_SHIM}.latest" \
-                     "$MNT/usr/lib/shim/${SB_SHIM%.signed}"; do
-        [ -f "$candidate" ] && { sb_shim="$candidate"; break; }
-    done
-    sb_grub="$MNT/usr/lib/grub/$SB_GRUB_DIR/$SB_GRUB"
+    sb_grub=""
+    if [ "$FAMILY" = rpm ]; then
+        _esp="$MNT/boot/efi/EFI/$DISTRO"
+        for candidate in "$_esp/$SB_SHIM" "$_esp/shim.efi"; do
+            [ -f "$candidate" ] && { sb_shim="$candidate"; break; }
+        done
+        [ -f "$_esp/$SB_GRUB" ] && sb_grub="$_esp/$SB_GRUB"
+        SB_SEARCHED="$_esp/$SB_SHIM and $_esp/$SB_GRUB"
+    else
+        # The signed shim is versioned in some releases (shimx64.efi.signed.latest)
+        # and not in others. Take the first that exists rather than hard-coding one
+        # spelling and discovering the other in a year.
+        for candidate in "$MNT/usr/lib/shim/$SB_SHIM" \
+                         "$MNT/usr/lib/shim/${SB_SHIM}.latest" \
+                         "$MNT/usr/lib/shim/${SB_SHIM%.signed}"; do
+            [ -f "$candidate" ] && { sb_shim="$candidate"; break; }
+        done
+        [ -f "$MNT/usr/lib/grub/$SB_GRUB_DIR/$SB_GRUB" ] && \
+            sb_grub="$MNT/usr/lib/grub/$SB_GRUB_DIR/$SB_GRUB"
+        SB_SEARCHED="/usr/lib/shim/$SB_SHIM and /usr/lib/grub/$SB_GRUB_DIR/$SB_GRUB"
+    fi
 
     if [ -n "$sb_shim" ] && [ -f "$sb_grub" ]; then
         install -D -m0644 "$sb_shim" "$BOOTMNT/efi/EFI/BOOT/$SB_BOOT_NAME"
@@ -2076,7 +2362,8 @@ if [ "$SECURE_BOOT" != off ]; then
         # looks for it when verification fails, and without it the failure is a
         # bare "Security Policy Violation" and a dead machine rather than a
         # prompt that explains itself.
-        for mm in "$MNT/usr/lib/shim/$SB_MM" "$MNT/usr/lib/shim/${SB_MM%.signed}"; do
+        for mm in "$MNT/usr/lib/shim/$SB_MM" "$MNT/usr/lib/shim/${SB_MM%.signed}" \
+                  "$MNT/boot/efi/EFI/$DISTRO/$SB_MM"; do
             [ -f "$mm" ] && { install -D -m0644 "$mm" "$BOOTMNT/efi/EFI/BOOT/$SB_MM_NAME"; break; }
         done
 
@@ -2090,9 +2377,9 @@ if [ "$SECURE_BOOT" != off ]; then
         # distribution, it is baked into a binary this build does not produce,
         # and two 200-byte files cost nothing next to a machine that drops to a
         # GRUB rescue prompt because the one that was written was the other one.
-        for prefix_dir in debian ubuntu; do
+        for prefix_dir in debian ubuntu almalinux rocky redhat; do
             mkdir -p "$BOOTMNT/efi/EFI/$prefix_dir"
-            cat > "$BOOTMNT/efi/EFI/$prefix_dir/grub.cfg" <<'STUB'
+            cat > "$BOOTMNT/efi/EFI/$prefix_dir/grub.cfg" <<STUB
 # Written by the Flipside image builder. Not the real configuration.
 #
 # The distribution's signed GRUB looks here because its prefix is compiled in.
@@ -2100,11 +2387,11 @@ if [ "$SECURE_BOOT" != off ]; then
 # entries -- lives on the BOOT partition, which is also where an update writes.
 # Keeping the real file there means this one never has to change.
 search --no-floppy --label BOOT --set=root
-if [ -e ($root)/grub/grub.cfg ]; then
-    set prefix=($root)/grub
-    configfile ($root)/grub/grub.cfg
+if [ -e (\$root)/$GRUBDIR/grub.cfg ]; then
+    set prefix=(\$root)/$GRUBDIR
+    configfile (\$root)/$GRUBDIR/grub.cfg
 else
-    echo "Flipside: no /grub/grub.cfg on the partition labelled BOOT."
+    echo "Flipside: no /$GRUBDIR/grub.cfg on the partition labelled BOOT."
     echo "The ESP was found and this stub ran, so firmware and shim are fine;"
     echo "the BOOT partition is missing, unlabelled, or its config was removed."
     sleep 30
@@ -2115,16 +2402,33 @@ STUB
         log "Secure Boot: shim + signed GRUB installed at the removable path"
     elif [ "$SECURE_BOOT" = on ]; then
         die "--secure-boot on, but this suite provided no signed shim or GRUB.
-    Looked for /usr/lib/shim/$SB_SHIM and /usr/lib/grub/$SB_GRUB_DIR/$SB_GRUB.
+    Looked for $SB_SEARCHED.
     Build with --secure-boot auto to fall back, or off to stop asking."
     else
         warn "No signed shim or GRUB in this suite; this image needs Secure Boot"
         warn "disabled in firmware. Everything else about it is unchanged."
     fi
 fi
-KVER="$(ls "$BOOTMNT" | sed -n 's/^vmlinuz-//p' | head -n1)"
+# The rescue entry is excluded explicitly. RPM kernel installs leave a
+# `vmlinuz-0-rescue-<machineid>` on /boot, and it sorts ahead of the real kernel
+# -- so `head -n1` would stage the rescue image into both slots and the machine
+# would boot a kernel with no modules for the hardware it is on.
+KVER="$(ls "$BOOTMNT" | sed -n 's/^vmlinuz-//p' | grep -v '^0-rescue' | head -n1)"
 [ -n "$KVER" ] || die "no kernel found on BOOT partition"
 log "Kernel version: $KVER"
+
+# The initramfs is named differently by the two harnesses -- initramfs-tools
+# writes initrd.img-<ver>, dracut writes initramfs-<ver>.img -- so it is probed
+# rather than assumed. Getting this wrong is not a bad copy, it is a `du` that
+# fails under `set -e -o pipefail` and a slot with no initrd at all.
+if [ -f "$BOOTMNT/initrd.img-$KVER" ]; then
+    INITRD_SRC="$BOOTMNT/initrd.img-$KVER"
+elif [ -f "$BOOTMNT/initramfs-$KVER.img" ]; then
+    INITRD_SRC="$BOOTMNT/initramfs-$KVER.img"
+else
+    die "no initramfs for $KVER on the BOOT partition (looked for
+    initrd.img-$KVER and initramfs-$KVER.img). Without one no slot can boot."
+fi
 
 # Each slot gets its own copy of the kernel and initramfs, under a name that
 # never changes. /boot is a single shared partition, so without this both slots
@@ -2143,7 +2447,7 @@ log "Kernel version: $KVER"
 # first real desktop build died exactly there, one line after GRUB said
 # "No error reported". Say what is too big and which knob fixes it.
 KIMG_KB=$(du -k "$BOOTMNT/vmlinuz-$KVER" | cut -f1)
-IIMG_KB=$(du -k "$BOOTMNT/initrd.img-$KVER" | cut -f1)
+IIMG_KB=$(du -k "$INITRD_SRC" | cut -f1)
 NEED_KB=$(( 2 * (KIMG_KB + IIMG_KB) + 8192 ))   # two slot copies + slack
 FREE_KB=$(df -Pk "$BOOTMNT" | awk 'NR==2 {print $4}')
 if [ "$FREE_KB" -lt "$NEED_KB" ]; then
@@ -2155,19 +2459,24 @@ fi
 for sl in A B; do
     mkdir -p "$BOOTMNT/$sl"
     cp -a "$BOOTMNT/vmlinuz-$KVER"    "$BOOTMNT/$sl/vmlinuz"
-    cp -a "$BOOTMNT/initrd.img-$KVER" "$BOOTMNT/$sl/initrd.img"
+    cp -a "$INITRD_SRC" "$BOOTMNT/$sl/initrd.img"
 done
 log "Per-slot kernels staged: /A and /B"
 
+# grub2-install creates /boot/grub2 and never /boot/grub, so the directory has
+# to exist under the name THIS family's core image was built to look for. The
+# prefix is compiled into core.img: write the config to the other spelling and
+# the build is clean and the machine stops at a `grub rescue>` prompt.
+mkdir -p "$BOOTMNT/$GRUBDIR"
 sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" -e "s/__ROOTFLAG__/$ROOT_FLAG/g" \
-    "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/grub/grub.cfg"
+    "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/$GRUBDIR/grub.cfg"
 # An unsubstituted placeholder reaches the kernel as a bogus command-line word
 # and the root is silently mounted with the default flags, which under a
 # read-only model is a machine that boots and then cannot write anywhere.
-if grep -q '__ROOTFLAG__\|__OS__\|__KVER__' "$BOOTMNT/grub/grub.cfg"; then
+if grep -q '__ROOTFLAG__\|__OS__\|__KVER__' "$BOOTMNT/$GRUBDIR/grub.cfg"; then
     die "grub.cfg still contains an unsubstituted placeholder"
 fi
-chroot "$MNT" grub-editenv /boot/grub/grubenv create
+chroot "$MNT" "$GRUB_EDITENV" "/boot/$GRUBDIR/grubenv" create
 # A_OK/B_OK alongside the try counters: RAUC's grub backend reads ORDER,
 # <slot>_TRY and <slot>_OK, and without the _OK variables it reports every
 # slot as "boot status: bad" and refuses to mark one primary -- so an update
@@ -2178,7 +2487,7 @@ chroot "$MNT" grub-editenv /boot/grub/grubenv create
 # software that just failed. Probation is armed by ab-slot-pending.sh when an
 # update actually changes a slot, which is the only time a fallback means
 # anything.
-chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" \
+chroot "$MNT" "$GRUB_EDITENV" "/boot/$GRUBDIR/grubenv" set ORDER="A B" \
     A_TRY=0 B_TRY=0 A_OK=1 B_OK=1 A_PROVEN=1 B_PROVEN=1
 
 # Read while the slot is still mounted -- the only moment the package list can

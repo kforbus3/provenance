@@ -75,9 +75,33 @@ esac
 # and that is exactly what did not work -- clevis ships an initramfs-tools hook
 # (clevis-initramfs) and is the only one of the two that Debian's initramfs can
 # actually call at unlock time.
-for c in clevis cryptsetup lsinitramfs update-initramfs; do
+# Which initramfs harness this machine has. The RHEL family uses dracut, so the
+# tool names, the rebuild command and the generated filename are all different --
+# and the consequence of assuming Debian's was NOT a visible failure. The
+# `command -v` gate below exited 0 on a missing update-initramfs, so enrolment
+# on an RHEL machine reported success having bound nothing: the disk stayed
+# unlocked forever by the plaintext bootstrap key on the unencrypted BOOT
+# partition, the reaper never destroyed that keyslot, and `systemctl status
+# luks-enroll` read "success". The build, the sidecar and the UI all said tpm2.
+if command -v dracut >/dev/null 2>&1 && ! command -v update-initramfs >/dev/null 2>&1; then
+    INITRD_HARNESS=dracut
+    INITRD_LIST=lsinitrd
+    NEW_INITRD="/boot/initramfs-$(uname -r).img"
+    rebuild_initrd() {
+        dracut --force --no-hostonly --no-hostonly-cmdline \
+               --kver "$(uname -r)" "$NEW_INITRD"
+    }
+else
+    INITRD_HARNESS=initramfs-tools
+    INITRD_LIST=lsinitramfs
+    NEW_INITRD="/boot/initrd.img-$(uname -r)"
+    rebuild_initrd() { update-initramfs -u; }
+fi
+
+for c in clevis cryptsetup "$INITRD_LIST"; do
     command -v "$c" >/dev/null 2>&1 || { log "$c is missing; cannot enroll"; exit 0; }
 done
+log "initramfs harness: $INITRD_HARNESS"
 
 # `clevis luks pass` is how a binding is proved below. It has been in clevis
 # since 12 and Debian is well past that, but an image built against something
@@ -151,7 +175,7 @@ revert() {
     log "reverting to the bootstrap keyfile: $1"
     cp -a "$BACKUP/crypttab" "$CRYPTTAB"
     [ -f "$BACKUP/conf-hook" ] && cp -a "$BACKUP/conf-hook" "$HOOKCONF"
-    update-initramfs -u >/dev/null 2>&1 || log "  WARNING: could not rebuild the initramfs"
+    rebuild_initrd >/dev/null 2>&1 || log "  WARNING: could not rebuild the initramfs"
     /usr/local/sbin/ab-sync-boot.sh --slot both >/dev/null 2>&1 || true
     log "  the machine still unlocks with its keyfile; will retry next boot"
     exit 0
@@ -165,23 +189,30 @@ sed -i -E 's#(^\s*\S+\s+\S+\s+)/etc/cryptsetup-keys\.d/\S+#\1none#' "$CRYPTTAB"
 sed -i -E 's#,tpm2-device=auto##' "$CRYPTTAB"
 sed -i '/KEYFILE_PATTERN/d' "$HOOKCONF" 2>/dev/null || true
 
-update-initramfs -u || revert "update-initramfs failed"
+rebuild_initrd || revert "rebuilding the initramfs ($INITRD_HARNESS) failed"
 
-# update-initramfs writes the versioned file at the top of /boot; ab-sync-boot
-# below is what puts it where GRUB looks. Check it before it is copied anywhere.
-NEW_INITRD="/boot/initrd.img-$(uname -r)"
+# The rebuild writes the versioned file at the top of /boot; ab-sync-boot below
+# is what puts it where GRUB looks. Check it before it is copied anywhere.
+# ($NEW_INITRD was set with the harness above, since the two families name it
+# differently.)
 
 # The two things that were wrong last time, asked directly of the artefact that
 # will be booted: can it unlock without a keyfile, and is the keyfile really out
 # of it? An initramfs with no clevis in it is the exact failure this whole
 # rewrite exists to prevent, and it is one grep away.
-lsinitramfs "$NEW_INITRD" 2>/dev/null | grep -qE 'clevis-luks-askpass|scripts/local-top/clevis' \
-    || revert "the new initramfs contains no clevis unlock hook (is clevis-initramfs installed?)"
+# dracut's clevis module lands as hooks/initqueue/settled/*clevis* and
+# /usr/bin/clevis-luks-askpass; initramfs-tools' as scripts/local-top/clevis.
+# Both spellings, because a verification that only knows one reverts on a machine
+# that was in fact enrolled correctly.
+"$INITRD_LIST" "$NEW_INITRD" 2>/dev/null \
+    | grep -qE 'clevis-luks-askpass|scripts/local-top/clevis|clevis' \
+    || revert "the new initramfs contains no clevis unlock hook (is the clevis initramfs
+    integration installed? clevis-initramfs on Debian, clevis-dracut on RHEL)"
 if [ "$METHOD" = tpm2 ]; then
-    lsinitramfs "$NEW_INITRD" 2>/dev/null | grep -qi 'tss2\|tpm2' \
+    "$INITRD_LIST" "$NEW_INITRD" 2>/dev/null | grep -qi 'tss2\|tpm2' \
         || revert "the new initramfs contains no TPM2 libraries"
 fi
-lsinitramfs "$NEW_INITRD" 2>/dev/null | grep -q 'cryptsetup-keys\.d' \
+"$INITRD_LIST" "$NEW_INITRD" 2>/dev/null | grep -q 'cryptsetup-keys\.d' \
     && revert "the new initramfs still embeds the bootstrap keyfile"
 
 # Both slots, not just this one. The reaper removes the bootstrap keyslot from

@@ -24,6 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # config saying no key is baked in is not the same claim as the
         # initramfs not containing one, and only the second one boots.
         initramfs-tools-core \
+        # rpm, for reading an RHEL-family image's package database at bundle
+        # time. make-bundle.sh runs in THIS builder whatever family the source
+        # image is, and make-sbom.sh needs `rpm --root` to enumerate an rpm root
+        # -- without it every bundle built from an AlmaLinux or Rocky image
+        # carries no SBOM, and the failure is swallowed by a warning.
+        rpm \
         openssl \
         qemu-user-static \
         binfmt-support \
