@@ -738,6 +738,14 @@ esac
 # generation. Enforced below rather than left to fail deep in a dpkg run.
 case "$DISTRO" in
     ubuntu) MIN_ROOT=5120;;
+    # The RPM family needs the same headroom, for a different reason. There is no
+    # rauc package for it, so the toolchain to build one -- gcc, meson, ninja, git
+    # and eight -devel packages -- is installed INTO the slot, used, and removed.
+    # It is transient but it has to fit, on top of a base install that is already
+    # larger than Debian's minbase. A 3 GiB slot runs out partway through that and
+    # fails as "No space left on device" twenty minutes in, which is a true
+    # message about the wrong thing.
+    almalinux|rocky|rhel) MIN_ROOT=5120;;
     *)      MIN_ROOT=2560;;
 esac
 # A desktop environment is several GiB installed before the user's first login

@@ -21,6 +21,7 @@ import { listGroups } from "../api/admin";
 import { listHosts } from "../api/hosts";
 import { ProvisioningTab } from "./imaging/ProvisioningTab";
 import { OverlayTab } from "./imaging/OverlayTab";
+import { KeysTab } from "./imaging/KeysTab";
 import { distroFamily, DEFAULT_SUITE, RPM_SUITES } from "./imaging/distro";
 import { WritableState } from "./imaging/WritableState";
 import {
@@ -159,6 +160,7 @@ export function ImagingPage() {
         <Tab label={`Builds${builds.length ? ` (${builds.length})` : ""}`} />
         <Tab label="Provisioning" />
         <Tab label="Overlay" />
+        <Tab label="Keys" />
       </Tabs>
 
       {tab === 0 && <MachinesTab fleet={fleet} canManage={canManage}
@@ -180,6 +182,8 @@ export function ImagingPage() {
                                      setMsg={(text, kind) => setMsg({ kind: kind ?? "success", text })} />}
       {tab === 6 && <OverlayTab canBuild={canBuild}
                                 setMsg={(text, kind) => setMsg({ kind: kind ?? "success", text })} />}
+      {tab === 7 && <KeysTab canProvision={canProvision}
+                             setMsg={(text, kind) => setMsg({ kind: kind ?? "success", text })} />}
     </Box>
   );
 }

@@ -606,3 +606,61 @@ export function readFileAsBase64(file: File): Promise<string> {
 export async function deleteOverlayFile(path: string) {
   await api.delete("/api/v1/imaging/overlay/file", { params: { path } });
 }
+
+// --- imaging key backup -------------------------------------------------
+//
+// What the database backup cannot hold: the RAUC signing key, the MAC→hostname
+// assignments, and the provisioning stack's configuration.
+//
+// Metadata only. There is deliberately no download: a signing key fetchable over
+// HTTP is one whose custody is whoever holds a session cookie. Losing this key
+// means no already-deployed machine can ever be updated again — not "until we
+// re-key", ever, because they verify against a certificate baked into their own
+// image. The archive stays on the host; get it off with scp, deliberately.
+
+export interface KeyBackupItem {
+  path: string;
+  why: string;
+  present: boolean;
+  size: number;
+}
+
+export interface KeyBackupFile {
+  name: string;
+  size: number;
+  created: string;
+}
+
+export interface KeyBackupStatus {
+  items: KeyBackupItem[];
+  backups: KeyBackupFile[];
+  dir: string;
+  haveSigningKey: boolean;
+  scriptPresent: boolean;
+}
+
+export async function keyBackupStatus(): Promise<KeyBackupStatus> {
+  const { data } = await api.get("/api/v1/imaging/keys");
+  return {
+    items: data.items ?? [], backups: data.backups ?? [], dir: data.dir ?? "",
+    haveSigningKey: !!data.haveSigningKey, scriptPresent: !!data.scriptPresent,
+  };
+}
+
+export interface KeyBackupResult {
+  name: string;
+  size: number;
+  sha256: string;
+  path: string;
+  output?: string;
+}
+
+export async function createKeyBackup(): Promise<KeyBackupResult> {
+  const { data } = await api.post("/api/v1/imaging/keys/backup");
+  return data as KeyBackupResult;
+}
+
+export async function inspectKeyBackup(name: string) {
+  const { data } = await api.get("/api/v1/imaging/keys/inspect", { params: { name } });
+  return data as { name: string; entries: string[]; containsSigningKey: boolean };
+}
