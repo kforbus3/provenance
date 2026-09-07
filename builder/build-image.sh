@@ -956,12 +956,37 @@ step "Formatting filesystems"
 # target's own older e2fsprogs would fail to fsck them too. Debian trixie's GRUB
 # 2.12 copes, which is exactly why this only ever broke Ubuntu images. Turning
 # both off costs nothing measurable and keeps images readable by older tooling.
-EXT4_COMPAT="^orphan_file,^metadata_csum_seed"
+# ...but only the ones THIS mke2fs knows about. Rocky 9 ships e2fsprogs 1.46.5,
+# which predates orphan_file entirely, and mke2fs rejects a feature name it does
+# not recognise -- so hardcoding the list turned "make the image readable by older
+# tooling" into "cannot format a filesystem at all" on the older tooling.
+#
+# Each is probed against a throwaway sparse file with -n, which reports what would
+# be done and creates nothing. A feature this mke2fs has never heard of is one it
+# also does not enable, so dropping it from the list is not a compromise: the
+# reason for disabling it does not exist here.
+EXT4_PROBE="$WORK/.mke2fs-probe"
+: > "$EXT4_PROBE"
+truncate -s 16M "$EXT4_PROBE" 2>/dev/null || dd if=/dev/zero of="$EXT4_PROBE" bs=1M count=16 2>/dev/null
+EXT4_COMPAT=""
+for _feat in orphan_file metadata_csum_seed; do
+    if mke2fs -n -q -F -O "^$_feat" "$EXT4_PROBE" >/dev/null 2>&1; then
+        EXT4_COMPAT="${EXT4_COMPAT:+$EXT4_COMPAT,}^$_feat"
+    else
+        log "mke2fs does not know '$_feat'; it cannot enable it either, so nothing to disable"
+    fi
+done
+rm -f "$EXT4_PROBE"
+# -O with an empty argument is not the same as omitting it, so the flag is built
+# rather than the value.
+EXT4_OPTS=""
+[ -n "$EXT4_COMPAT" ] && EXT4_OPTS="-O $EXT4_COMPAT"
+
 mkfs.vfat -F32 -n EFI    "$P_ESP" >/dev/null
-mkfs.ext4 -q -O "$EXT4_COMPAT" -L BOOT     "$P_BOOT"
-mkfs.ext4 -q -O "$EXT4_COMPAT" -L rootfs-a "$DEV_A"
-mkfs.ext4 -q -O "$EXT4_COMPAT" -L rootfs-b "$DEV_B"
-mkfs.ext4 -q -O "$EXT4_COMPAT" -L overlay  "$DEV_OVL"
+mkfs.ext4 -q $EXT4_OPTS -L BOOT     "$P_BOOT"
+mkfs.ext4 -q $EXT4_OPTS -L rootfs-a "$DEV_A"
+mkfs.ext4 -q $EXT4_OPTS -L rootfs-b "$DEV_B"
+mkfs.ext4 -q $EXT4_OPTS -L overlay  "$DEV_OVL"
 
 step "Mounting root slot A"
 mkdir -p "$MNT"
