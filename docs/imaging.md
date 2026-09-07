@@ -235,6 +235,39 @@ declining. So these SBOMs answer "what CVEs affect this image" and cannot answer
 for. Worth knowing before feeding one to a compliance tool and getting 201
 unknowns back.
 
+## Disk encryption and how it unlocks
+
+Ticking **Encrypt the root filesystem (LUKS)** always enrols the passphrase you
+give as a recovery slot. The **unlock method** decides what *else* can open the
+disk, and the trade-off is always the same one: what has to be present at boot
+for the machine to come up on its own.
+
+| method | boots unattended | needs |
+| --- | --- | --- |
+| `keyfile` (default) | yes, anywhere | nothing — the key is in the initramfs |
+| `tpm2` | yes, on that machine only | a TPM; enrolled on first boot |
+| `tang` | yes, on that network | a reachable Tang server |
+| `passphrase` | **no** | somebody at the console, every boot |
+
+**`keyfile` protects the disk at rest, not the machine.** The initramfs is not
+encrypted, so the key can be read off a drive by anyone holding the machine. It
+defends against a disk pulled out of a rack, which is the common case; `tpm2`
+defends against the machine itself walking, because the key is sealed to that
+TPM and means nothing anywhere else.
+
+**`tang` mounts the root filesystem `_netdev`**, so networking comes up before
+the disk. Off that network the machine falls back to asking for the passphrase —
+which is exactly the intended behaviour for a laptop, and a surprise for a server
+in a rack whose Tang server is down.
+
+**`passphrase` cannot reboot unattended**, including after an A/B update. That
+makes it the wrong choice for anything the rollout engine manages.
+
+TPM2 and Tang enrol on the machine's *first boot* rather than at build time, since
+neither the TPM nor the network exists in the builder. Until that enrolment runs,
+the passphrase is the only thing that opens the disk — so a machine that fails
+first boot is recovered with it.
+
 ## The netboot imager
 
 Before any machine can be imaged there has to be something for it to boot. The

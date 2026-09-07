@@ -272,7 +272,15 @@ export interface ImageBuildRequest {
   sshKey?: string;
   sshKeyOnly?: boolean;
   encrypt?: boolean;
-  unlock?: string;
+  // How the root filesystem is unlocked at boot. The builder enrols the
+  // passphrase for recovery in every case; this decides what unlocks it
+  // unattended:
+  //   passphrase  typed at every boot — no unattended reboot
+  //   keyfile     a key in the initramfs (default; the initramfs is unencrypted,
+  //               so this protects the disk at rest, not against someone holding it)
+  //   tpm2        sealed to the machine's TPM — unattended, and bound to that machine
+  //   tang        released by a Tang server on the network — unattended while on it
+  unlock?: "passphrase" | "keyfile" | "tpm2" | "tang";
   luksPassphrase?: string;
   tangUrl?: string;
   stateModel?: string;
