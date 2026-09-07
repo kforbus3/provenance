@@ -413,10 +413,29 @@ no hostname yet — that is the point of the exercise.
 Everything on this tab needs `Imaging.Provision`, which is deliberately separate
 from `Imaging.Manage`: this is the part that puts a DHCP server on a network.
 
-The **Overlay** tab beside it edits the files layered into an image at build time
-— unit files, configs, scripts. The mode matters as much as the content (`cp -a`
-preserves it, so a script that lands without its executable bit is a boot that
-does nothing), which is why it is editable and shown next to the size.
+The **Overlay** tab beside it manages the files layered into an image at build
+time — unit files, configs, scripts, certificates, small binaries.
+
+- **Upload files**, or **upload a folder** and keep its tree beneath a path you
+  choose. Uploads are byte-exact: they travel base64-encoded rather than as text,
+  because a browser reading a file cannot know whether it holds UTF-8, and
+  guessing wrong corrupts it silently rather than failing.
+- **Create and edit** text files in place, **download** anything (including what
+  the editor will not open), **rename or move**, and **change the mode**.
+
+Two things about uploads are worth knowing before a folder of scripts does
+nothing on a machine:
+
+- **A browser cannot read a file's permissions.** Everything uploaded arrives with
+  a default mode, so anything that has to *run* needs its mode set afterwards —
+  `cp -a` preserves what is here, so an unexecutable script is an unexecutable
+  script on every machine built from that image.
+- **Empty directories are not uploaded**, because a browser does not report them.
+  A directory that must exist needs a file in it.
+
+Files are capped at 16 MiB (`MAX_OVERLAY_BYTES`) in each direction. Every path,
+typed or uploaded, is resolved against the overlay root and refused if it lands
+outside it — a folder upload names one path per file, and each is checked.
 
 ## The imaging run itself
 

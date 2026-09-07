@@ -535,6 +535,58 @@ export async function writeOverlayFile(path: string, content: string, mode?: num
   return data as OverlayFile;
 }
 
+// Uploads go base64 rather than as text, for every file and not just the ones
+// that look binary: a browser reading a file cannot know whether what it holds is
+// UTF-8, and guessing wrong corrupts it silently. A certificate or a compiled
+// tool is exactly what the overlay is for.
+export async function uploadOverlayFile(path: string, contentBase64: string, mode?: number) {
+  const body: Record<string, unknown> = { path, contentBase64 };
+  if (mode !== undefined) body.mode = mode;
+  const { data } = await api.put("/api/v1/imaging/overlay/file", body);
+  return data as OverlayFile;
+}
+
+export interface OverlayDownload {
+  path: string;
+  size: number;
+  mode: string;
+  contentBase64: string;
+}
+
+export async function downloadOverlayFile(path: string): Promise<OverlayDownload> {
+  const { data } = await api.get("/api/v1/imaging/overlay/download", { params: { path } });
+  return data as OverlayDownload;
+}
+
+export async function moveOverlayFile(from: string, to: string) {
+  const { data } = await api.post("/api/v1/imaging/overlay/move", { from, to });
+  return data as OverlayFile;
+}
+
+// Its own call because a browser cannot read a file's permissions when uploading
+// one — so a folder of scripts arrives without its executable bits, and setting
+// them is what makes the difference between a boot that runs them and one that
+// does not.
+export async function chmodOverlayFile(path: string, mode: number) {
+  const { data } = await api.post("/api/v1/imaging/overlay/chmod", { path, mode });
+  return data as OverlayFile;
+}
+
+// readFileAsBase64 strips the data: URL prefix FileReader adds. Kept here beside
+// the upload it feeds so the two cannot drift.
+export function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(fr.error ?? new Error("could not read the file"));
+    fr.onload = () => {
+      const result = String(fr.result ?? "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
 export async function deleteOverlayFile(path: string) {
   await api.delete("/api/v1/imaging/overlay/file", { params: { path } });
 }

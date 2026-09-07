@@ -32,9 +32,12 @@ weaker copy would be the one that mattered.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hmac
 import logging
 import os
+import stat
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -336,6 +339,15 @@ def set_assignments(req: Assignments):
 class OverlayWrite(Body):
     path: str
     content: str = ""
+    # Binary payloads arrive base64-encoded rather than as multipart.
+    #
+    # `content` is a str and always was, so anything that is not valid UTF-8 --
+    # a certificate, a compiled tool, a firmware blob -- could not be written at
+    # all, and the overlay is exactly where those belong. Base64 rather than
+    # multipart keeps this endpoint, the Go proxy in front of it and the browser
+    # all speaking JSON; the cost is 33% on the wire, which for overlay-sized
+    # files is not the constraint.
+    content_base64: str = ""
     mode: int | None = None
 
 
@@ -364,12 +376,61 @@ def overlay_read(path: str, max_bytes: int = 1 << 20):
         raise HTTPException(status_code=404, detail="no such file") from exc
 
 
+# An overlay file is copied into every image built afterwards, and the builder
+# holds the whole thing in memory to do it. Large enough for a binary that
+# belongs in an image, small enough that a mistaken upload is not a disk problem.
+MAX_OVERLAY_BYTES = int(os.environ.get("MAX_OVERLAY_BYTES", str(16 << 20)))
+
+
 @app.put("/overlay/file", dependencies=guarded)
 def overlay_write(req: OverlayWrite):
+    if req.content_base64:
+        try:
+            data = base64.b64decode(req.content_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise HTTPException(status_code=400,
+                                detail="contentBase64 is not valid base64") from exc
+    else:
+        data = req.content.encode()
+    if len(data) > MAX_OVERLAY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file is larger than the {MAX_OVERLAY_BYTES // (1024 * 1024)} MiB limit")
     try:
-        return orch.overlay_write(req.path, req.content.encode(), req.mode)
+        return orch.overlay_write(req.path, data, req.mode)
     except orch.OverlayPathError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/overlay/download", dependencies=guarded)
+def overlay_download(path: str):
+    """The raw bytes, base64-encoded, for files the browser cannot edit.
+
+    Same encoding as the write side so one JSON contract covers both directions,
+    and so a file that came in as binary reads back byte-identical rather than
+    through a decode that would have to guess at an encoding.
+    """
+    try:
+        full, image_path = orch.overlay_resolve(path)
+        if not os.path.isfile(full):
+            raise FileNotFoundError(image_path)
+        st = os.stat(full)
+        if st.st_size > MAX_OVERLAY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"file is larger than the {MAX_OVERLAY_BYTES // (1024 * 1024)} MiB limit")
+        with open(full, "rb") as f:
+            data = f.read()
+    except orch.OverlayPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="no such file") from exc
+    return {
+        "path": image_path,
+        "size": st.st_size,
+        "mode": format(stat.S_IMODE(st.st_mode), "04o"),
+        "contentBase64": base64.b64encode(data).decode(),
+    }
 
 
 @app.delete("/overlay/file", dependencies=guarded)
