@@ -299,6 +299,14 @@ type Config struct {
 	// live -- the directory the builder container writes into and the
 	// provisioning server serves from.
 	ArtifactDir string
+
+	// ImagingSecretPrefix is where a generated LUKS recovery passphrase is filed
+	// in the EXTERNAL secrets manager, when one is connected. The image name is
+	// appended, so a Vault KV ref reads "secret/blackfriars/images/<image>".
+	//
+	// Ignored without an external manager: the passphrase then goes into Fleet's
+	// own credential vault, which needs no path.
+	ImagingSecretPrefix string
 	// ControlURL is the address machines reach this server on *after* they have
 	// left the provisioning network. Every other address in a deployment is on
 	// the imaging segment, which a machine is on for the twenty minutes it takes
@@ -484,6 +492,7 @@ func Load() (*Config, error) {
 		AnsibleRunnerURL:            env("FLEET_ANSIBLE_RUNNER_URL", "http://ansible-runner:8000"),
 		AnsibleRunnerToken:          env("FLEET_ANSIBLE_RUNNER_TOKEN", ""),
 		ArtifactDir:                 env("FLEET_ARTIFACT_DIR", "/output"),
+		ImagingSecretPrefix:         strings.Trim(env("FLEET_IMAGING_SECRET_PREFIX", "secret/blackfriars/images"), "/"),
 		ControlURL:                  strings.TrimRight(env("FLEET_CONTROL_URL", ""), "/"),
 		AgentInterval:               envInt("FLEET_AGENT_INTERVAL", 300),
 		AgentToken:                  env("FLEET_AGENT_TOKEN", ""),

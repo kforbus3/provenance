@@ -114,6 +114,16 @@ class ImageBuild(Body):
     unlock: str = "keyfile"
     luks_passphrase: str = ""
     tang_url: str = ""
+    # The output name, when the caller has already settled it. resolve_output_name
+    # has always read this; the field was missing from the model, so extra="ignore"
+    # dropped it and the name was re-chosen here regardless of what was sent.
+    #
+    # It matters for an encrypted build whose recovery passphrase was filed in a
+    # secrets manager BEFORE the build started: the passphrase is filed under a
+    # name, and if this end picks a different one, the key is filed against an
+    # image that never existed.
+    name: str = ""
+    replace: bool = False
 
 
 class BundleBuild(Body):

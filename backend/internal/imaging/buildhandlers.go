@@ -3,6 +3,7 @@ package imaging
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/kforbus3/blackfriars/backend/internal/auth"
 	"github.com/kforbus3/blackfriars/backend/internal/httpx"
 )
 
@@ -89,8 +91,41 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A generated recovery passphrase is filed BEFORE the build is started, and
+	// the build is abandoned if it cannot be. See passphrase.go: an encrypted
+	// image whose key was never persisted looks exactly like a success.
+	var generated *GeneratedPassphrase
+	if kind == "image" && truthy(body["encrypt"]) && truthy(body["generatePassphrase"]) {
+		p := auth.MustPrincipal(r)
+		name := h.svc.FreeImageName(imageBaseName(body))
+		meta := map[string]string{
+			"distro": asString(body["distro"]), "suite": asString(body["suite"]),
+			"arch": asString(body["arch"]), "hostname": asString(body["hostname"]),
+			"unlock": asString(body["unlock"]), "requestedBy": p.Username,
+		}
+		var perr error
+		generated, perr = h.svc.StoreImagePassphrase(r.Context(), name, meta, p.UserID)
+		if perr != nil {
+			httpx.WriteError(w, http.StatusBadGateway, perr.Error())
+			return
+		}
+		// The builder takes it in the environment like any typed one, so it needs
+		// no access to the store this was just filed in. The name goes with it, so
+		// the image that gets built is the one the secret is filed under.
+		body["luksPassphrase"] = generated.Passphrase
+		body["name"] = name
+		delete(body, "generatePassphrase")
+	}
+
 	job, err := h.svc.StartBuild(r.Context(), kind, body)
 	if err != nil {
+		// The secret is already filed and the build never ran. Say so: it is not
+		// lost, and it is about to be the only thing in the vault with no image.
+		if generated != nil {
+			fail(w, fmt.Errorf("%w — the recovery passphrase filed at %s is now unused "+
+				"and can be deleted", err, generated.Location))
+			return
+		}
 		fail(w, err)
 		return
 	}
@@ -102,7 +137,62 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 		"distro": body["distro"], "suite": body["suite"], "arch": body["arch"],
 		"profile": body["profile"], "image": body["image"],
 	})
+	if generated != nil {
+		// The job as the sidecar described it, plus where the recovery key went.
+		// Marshalled and merged rather than re-listing Job's fields, which would
+		// be a second copy that silently drops whatever is added to the first.
+		out := map[string]any{}
+		if raw, mErr := json.Marshal(job); mErr == nil {
+			_ = json.Unmarshal(raw, &out)
+		}
+		out["passphraseStoredIn"] = generated.Backend
+		out["passphraseStoredAt"] = generated.Location
+		out["passphraseSecretId"] = generated.SecretID
+		out["imageName"] = body["name"]
+		httpx.WriteJSON(w, http.StatusOK, out)
+		return
+	}
 	httpx.WriteJSON(w, http.StatusOK, job)
+}
+
+// truthy reads a JSON boolean that may have arrived as a bool or as a string.
+func truthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t == "true" || t == "1"
+	}
+	return false
+}
+
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// imageBaseName is the name a build would produce by default, before the
+// free-name search. It mirrors the builder's own default so an unencrypted build
+// and a generated-passphrase one land on the same naming convention.
+func imageBaseName(body map[string]any) string {
+	if n := strings.TrimSpace(asString(body["name"])); n != "" {
+		return strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(n, ".zst"), ".gz"), ".img")
+	}
+	distro := asString(body["distro"])
+	if distro == "" {
+		distro = "debian"
+	}
+	suite := asString(body["suite"])
+	if suite == "" {
+		suite = "trixie"
+	}
+	arch := asString(body["arch"])
+	if arch == "" {
+		arch = "amd64"
+	}
+	return distro + "-" + suite + "-" + arch + "-ab"
 }
 
 func (h *handler) listJobs(w http.ResponseWriter, r *http.Request) {

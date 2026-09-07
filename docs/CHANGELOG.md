@@ -77,6 +77,33 @@ in `.env.example`.
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
 See [deployment.md](./deployment.md).
 
+### Encrypted builds generate and file their own recovery passphrase
+
+An encrypted build needed a passphrase typed into the dialog, which meant it then
+lived wherever the person who typed it put it. It is now generated — 256 bits — and
+**filed before the build starts**, with the build refused if it cannot be stored.
+Storing afterwards would mean a failed write had already produced an encrypted
+image nobody holds the key for, which looks exactly like a success.
+
+- **External secrets manager when one is connected** (Vault KV v2 or AWS Secrets
+  Manager), under `FLEET_IMAGING_SECRET_PREFIX`; **Fleet's own credential vault
+  otherwise**, sealed at rest. Either way a credential record is created, so it is
+  found the same way in Credentials — an external-backed record carries a
+  reference rather than a sealed blob.
+- `extsecret.Provider` gained an optional `Writer` half. Reading and writing are
+  different trust levels, so a deployment that only brokers existing secrets is
+  still asked for nothing more than a read-only token; callers fall back to the
+  local vault when the provider cannot write.
+- **Neither backend overwrites.** Vault writes with `cas: 0` and AWS uses
+  `CreateSecret`, so a name in use is refused. The value that would be destroyed
+  is the only copy of a recovery key for machines already in the field.
+- The **image name is settled by the backend** before the build, because the
+  secret is filed under it. It reads the same output directory the image library
+  comes from and passes the name explicitly, instead of letting the builder pick
+  one the backend cannot see until the build is already running. The sidecar's
+  build model now accepts `name`/`replace`, which `resolve_output_name` always
+  read but `extra="ignore"` silently dropped.
+
 ### Cross-architecture builds fail with the reason, and can be enabled
 
 An arm64 imager build died with `exec format error` inside a Dockerfile `RUN`.
