@@ -28,7 +28,8 @@ import {
 } from "./imaging/writable-state";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
-  forgetImaging, imagingNow, installOnMachine, listBuilds, listBundles, listImages,
+  forgetImaging, imageDownloadUrl, imageSbomUrl, imagingNow, installOnMachine,
+  listBuilds, listBundles, listImages,
   listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
   type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
 } from "../api/imaging";
@@ -932,7 +933,12 @@ function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
                   <TableCell>{i.version ?? "—"}</TableCell>
                   <TableCell>
                     {i.hasSbom
-                      ? `${i.packages ?? 0} packages`
+                      ? (
+                        <Button size="small" href={imageSbomUrl(i.name)}
+                                sx={{ textTransform: "none", p: 0, minWidth: 0 }}>
+                          {i.packages ?? 0} packages
+                        </Button>
+                      )
                       /* Worth naming rather than blanking: an image with no SBOM
                          is one nothing can answer a CVE question about later. */
                       : <Typography variant="caption" color="text.secondary">no SBOM</Typography>}
@@ -940,6 +946,11 @@ function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
                   <TableCell>{bytes(i.size)}</TableCell>
                   <TableCell>{formatDateTime(i.created)}</TableCell>
                   <TableCell align="right">
+                    {/* Imaging.View, not Build: taking a copy of an image is not
+                        producing one, and the person who has to hand it to
+                        somebody is not necessarily allowed to start a build. */}
+                    <Button size="small" href={imageDownloadUrl(i.name)}
+                            sx={{ textTransform: "none" }}>Download</Button>
                     {canBuild && (
                       <Button size="small" color="error" disabled={remove.isPending}
                               onClick={() => remove.mutate(i.name)}>Delete</Button>

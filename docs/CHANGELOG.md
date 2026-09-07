@@ -104,6 +104,27 @@ image nobody holds the key for, which looks exactly like a success.
   build model now accepts `name`/`replace`, which `resolve_output_name` always
   read but `extra="ignore"` silently dropped.
 
+### Images and their SBOMs can be downloaded
+
+The Images tab showed "N packages" for an image with a bill of materials and gave
+no way to get it, and no way to take a copy of the image either. Both were
+Flipside endpoints with no counterpart here.
+
+Served by the backend straight from the output directory — no sidecar
+round-trip, so they work when the builder is not deployed — and streamed rather
+than buffered, because an image is several gigabytes and reading one into memory
+to hand it to a browser is how a backend with plenty of memory runs out of it.
+
+Gated on `Imaging.View`, not `Imaging.Build`: reading an artefact is not producing
+one, and whoever has to hand an SBOM to an auditor is not necessarily allowed to
+start a build.
+
+The name comes from a URL and ends at `os.Open`, so it is refused unless it is a
+plain image filename that resolves inside the output directory. `filepath.Base`
+alone would not do: it turns `../../etc/shadow` into `shadow` and serves whatever
+happens to have that name. The directory also holds the RAUC signing key and the
+provisioning server's env file, so the route serves images and nothing else.
+
 ### The build dialog exposes every option the builder takes
 
 An audit rather than another single fix. `build-image.sh` accepts 40-odd flags;
