@@ -351,6 +351,17 @@ export async function cancelBuild(id: string): Promise<BuildJob> {
   return data;
 }
 
+// Downloads go through the browser as a normal navigation rather than through
+// axios: an image is several gigabytes, and buffering one in JS to hand it to a
+// save dialog defeats the point of streaming it. The cookie carries the auth.
+export function imageDownloadUrl(name: string): string {
+  return `/api/v1/imaging/images/${encodeURIComponent(name)}/download`;
+}
+
+export function imageSbomUrl(name: string): string {
+  return `/api/v1/imaging/images/${encodeURIComponent(name)}/sbom`;
+}
+
 export async function deleteImage(name: string) {
   await api.delete(`/api/v1/imaging/images/${encodeURIComponent(name)}`);
 }
