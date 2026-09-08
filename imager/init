@@ -222,7 +222,25 @@ done
 [ -n "$LINKED" ] && say "  link detected on:$LINKED"
 [ -n "$UNLINKED" ] && say "  no link on:$UNLINKED (tried last)"
 
+# The host we must be able to reach. Everything the imager does -- fetch the
+# image, report progress -- goes to whoever served the boot script, so an
+# interface that cannot reach it is not "network", however good its lease.
+SERVER_HOST="$(echo "$IMG_URL" | $BB sed -n 's|^[a-z]*://\([^/:]*\).*|\1|p')"
+
+# Configure EVERY interface that will answer, rather than stopping at the first.
+#
+# Stopping at the first lease is wrong on any machine with a second NIC on a
+# network that also runs DHCP -- an office LAN, most obviously. The machine came
+# up on the office segment with a perfectly good 10.x address, could not reach
+# the provisioning server at all, and reported under the WRONG MAC: the identity
+# it was assigned an image under belongs to the port facing the provisioning
+# network, not the one that answered first.
+#
+# Configuring both costs nothing: the provisioning subnet is directly connected
+# on its own port, so it is reachable regardless of which interface holds the
+# default route.
 GOT_IP=0
+LEASED=""
 for dev in $LINKED $UNLINKED; do
     # Named BEFORE the attempt, not after. Each try can take ~16s, and a silent
     # gap that long is indistinguishable from a hang -- which is exactly how
@@ -245,19 +263,57 @@ for dev in $LINKED $UNLINKED; do
     # the boot, it ends it. -t 8 -T 2 with -n already bounds this at ~16s.
     $BB udhcpc -i "$dev" -q -n -t 8 -T 2 \
         -s /usr/share/udhcpc/default.script >/dev/null 2>&1 || true
-    # Only accept the interface if it actually received an IPv4 address.
+    # Only count the interface if it actually received an IPv4 address.
     if $BB ip -4 addr show "$dev" 2>/dev/null | $BB grep -q "inet "; then
         GOT_IP=1
-        NET_DEV="$dev"
-        say "Network up on $dev: $($BB ip -o -4 addr show "$dev" | $BB awk '{print $4}')"
-        break
+        LEASED="$LEASED $dev"
+        say "  $dev: $($BB ip -o -4 addr show "$dev" | $BB awk '{print $4}')"
+    else
+        warn "  no lease on $dev"
     fi
-    warn "  no lease on $dev"
 done
 [ "$GOT_IP" = 1 ] || die "DHCP failed on all interfaces (no IPv4 lease applied).
     Tried:$IFACES
     Check the machine is patched into the provisioning segment, and that the
     provisioning stack is running with DHCP enabled on that interface."
+
+# Which interface actually faces the server. Picked by subnet rather than by
+# which answered first, because "answered first" is what put this machine on the
+# office LAN. The MAC reported to the control plane comes from this choice, and
+# it has to be the MAC the image was assigned to -- the one that PXE-booted.
+pick_server_dev() {
+    ip2int() { echo "$1" | $BB awk -F. '{print ($1*16777216)+($2*65536)+($3*256)+$4}'; }
+    case "$SERVER_HOST" in
+        *[!0-9.]*|"") return 1;;   # a name, not an address: cannot compare subnets
+    esac
+    _s="$(ip2int "$SERVER_HOST")"
+    for _d in $LEASED; do
+        _cidr="$($BB ip -o -4 addr show "$_d" 2>/dev/null | $BB awk '{print $4}' | $BB head -1)"
+        [ -n "$_cidr" ] || continue
+        _ip="${_cidr%/*}"; _len="${_cidr#*/}"
+        [ "$_len" -ge 0 ] 2>/dev/null || continue
+        _mask=$(( 0xFFFFFFFF ^ ((1 << (32 - _len)) - 1) ))
+        _a="$(ip2int "$_ip")"
+        if [ $(( _a & _mask )) -eq $(( _s & _mask )) ]; then
+            echo "$_d"; return 0
+        fi
+    done
+    return 1
+}
+
+NET_DEV="$(pick_server_dev || true)"
+if [ -n "$NET_DEV" ]; then
+    say "Using $NET_DEV to reach $SERVER_HOST: $($BB ip -o -4 addr show "$NET_DEV" | $BB awk '{print $4}')"
+else
+    # No interface shares a subnet with the server. It may still be routable --
+    # a routed provisioning network is a legitimate setup -- so this is a warning
+    # and a best guess, not a failure. If it is genuinely unreachable the image
+    # fetch below says so plainly.
+    NET_DEV="$(echo $LEASED | $BB awk '{print $1}')"
+    warn "No interface is on $SERVER_HOST's subnet; using $NET_DEV and relying on routing."
+    warn "If this machine was assigned an image by MAC, check it is the MAC of the"
+    warn "port facing the provisioning network -- that is the one that PXE-booted."
+fi
 
 # Now that an interface exists and has a lease, this machine has an identity.
 resolve_client_id
