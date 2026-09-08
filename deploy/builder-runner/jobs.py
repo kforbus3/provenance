@@ -141,6 +141,41 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
+    def forget(self, job_id: str) -> bool:
+        """Drop one finished job and its log.
+
+        The list is otherwise append-only, so a page that shows every build ever
+        run becomes a page nobody reads -- and the one failure worth noticing is
+        somewhere below thirty successes. A running job is refused: cancel it
+        first, or its container carries on writing to a log nothing is tracking.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return False
+        if job.status == "running":
+            raise ValueError(
+                f"{job_id} is still running. Cancel it first — forgetting it here "
+                "would leave its container building against a log nothing reads.")
+        self._jobs.pop(job_id, None)
+        if self._state_dir:
+            try:
+                os.remove(self._log_path(job_id))
+            except OSError:
+                pass
+        self._save_index()
+        return True
+
+    def forget_finished(self) -> int:
+        """Drop every job that is not running. Returns how many went."""
+        gone = 0
+        for jid in [j.id for j in self._jobs.values() if j.status != "running"]:
+            try:
+                if self.forget(jid):
+                    gone += 1
+            except ValueError:
+                pass
+        return gone
+
     def running(self, type: str | None = None) -> Job | None:
         """First running job (optionally of a given type)."""
         for j in self._jobs.values():

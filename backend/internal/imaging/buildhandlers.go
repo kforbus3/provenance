@@ -33,6 +33,10 @@ func mountBuilds(r chi.Router, h *handler) {
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/builds", h.listJobs)
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/builds/{id}", h.jobLog)
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Post("/imaging/builds/{id}/cancel", h.cancelJob)
+	// Clearing build history. Imaging.Build, not View: it removes a record, and
+	// the log it removes is the only account of what a build did.
+	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/builds/{id}", h.forgetJob)
+	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/builds", h.forgetFinishedJobs)
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/images/{name}", h.deleteImage)
 	r.With(h.d.Auth.RequirePermission("Imaging.Build")).Delete("/imaging/bundles/{name}", h.deleteBundle)
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/disk", h.disk)
@@ -259,6 +263,26 @@ func (h *handler) jobLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, job)
+}
+
+func (h *handler) forgetJob(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r, "id")
+	if err := h.svc.ForgetJob(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	h.audit(r, "imaging.build.forget", id, map[string]any{"job": id})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *handler) forgetFinishedJobs(w http.ResponseWriter, r *http.Request) {
+	n, err := h.svc.ForgetFinishedJobs(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	h.audit(r, "imaging.build.forget_finished", "builds", map[string]any{"removed": n})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"removed": n})
 }
 
 func (h *handler) cancelJob(w http.ResponseWriter, r *http.Request) {

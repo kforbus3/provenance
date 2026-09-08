@@ -20,6 +20,7 @@ weaker copy would be the one that mattered.
     GET  /healthz                     liveness
     POST /build/{image,bundle,imager} start a build, return the job
     GET  /jobs, /jobs/{id}            job list, status and log
+    DELETE /jobs, /jobs/{id}          forget finished builds
     POST /jobs/{id}/cancel            stop a build for real, container included
     GET  /images, /bundles, /disk     the artefact library
     DELETE /images/{name}, /bundles/{name}
@@ -219,6 +220,30 @@ def get_job(job_id: str, offset: int = 0):
     lines = jobs.log_text(job).split("\n") if jobs.log_text(job) else []
     return {**job.public(), "offset": offset,
             "log": lines[offset:], "total": len(lines)}
+
+
+@app.delete("/jobs/{job_id}", dependencies=guarded)
+def forget_job(job_id: str):
+    """Drop one finished job and its log."""
+    try:
+        if not jobs.forget(job_id):
+            raise HTTPException(status_code=404, detail="no such job")
+    except ValueError as exc:
+        # Still running: a 409, not a 500. The caller can act on it -- cancel
+        # first -- which is a different thing from the server having broken.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.delete("/jobs", dependencies=guarded)
+def forget_finished_jobs():
+    """Drop every job that is not running.
+
+    The list is append-only otherwise, and a page showing every build ever run
+    is a page nobody reads -- which matters because the one failure worth
+    noticing ends up below thirty successes.
+    """
+    return {"removed": jobs.forget_finished()}
 
 
 @app.post("/jobs/{job_id}/cancel", dependencies=guarded)

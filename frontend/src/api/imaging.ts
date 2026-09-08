@@ -353,6 +353,17 @@ export async function buildLog(id: string, offset = 0): Promise<BuildJob> {
   return data;
 }
 
+// Drop one finished build from the history, and its log with it.
+export async function forgetBuild(id: string): Promise<void> {
+  await api.delete(`/api/v1/imaging/builds/${encodeURIComponent(id)}`);
+}
+
+// Drop every build that is not running.
+export async function forgetFinishedBuilds(): Promise<number> {
+  const { data } = await api.delete("/api/v1/imaging/builds");
+  return (data?.removed ?? 0) as number;
+}
+
 export async function cancelBuild(id: string): Promise<BuildJob> {
   const { data } = await api.post(`/api/v1/imaging/builds/${encodeURIComponent(id)}/cancel`);
   return data;

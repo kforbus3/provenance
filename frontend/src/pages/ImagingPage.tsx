@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, LinearProgress, MenuItem,
@@ -6,6 +6,7 @@ import {
   TextField, Tooltip, Typography,
 } from "@mui/material";
 import BoltIcon from "@mui/icons-material/Bolt";
+import DeleteIcon from "@mui/icons-material/Delete";
 import DownloadingIcon from "@mui/icons-material/Downloading";
 import LinkIcon from "@mui/icons-material/Link";
 import PauseIcon from "@mui/icons-material/Pause";
@@ -18,7 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { listGroups } from "../api/admin";
-import { listHosts } from "../api/hosts";
+import { listHosts, createHost } from "../api/hosts";
 import { ProvisioningTab } from "./imaging/ProvisioningTab";
 import { OverlayTab } from "./imaging/OverlayTab";
 import { KeysTab } from "./imaging/KeysTab";
@@ -31,7 +32,7 @@ import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
   forgetImaging, imageDownloadUrl, imageSbomUrl, imagingNow, installOnMachine,
   listBuilds, listBundles, listImages,
-  deleteMachine, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
+  deleteMachine, forgetBuild, forgetFinishedBuilds, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
   type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
 } from "../api/imaging";
 
@@ -273,6 +274,7 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
   const [pairing, setPairing] = useState<Machine | null>(null);
   const [installing, setInstalling] = useState<Machine | null>(null);
   const [forgetting, setForgetting] = useState<Machine | null>(null);
+  const [adopting, setAdopting] = useState<Machine | null>(null);
   const { data: bundleData } = useQuery({ queryKey: ["imaging-bundles"], queryFn: listBundles });
 
   const forget = useMutation({
@@ -422,6 +424,18 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
                           here that removes a record rather than changing one --
                           and the confirmation says the thing that makes it safe:
                           a machine that still exists comes back by itself. */}
+                      {/* An imaged machine is not yet a managed host: it has to
+                          exist in Hosts and be paired before this server can
+                          reach it. Everything that takes is already known here —
+                          the hostname it was given at imaging and the address it
+                          reported — so offer it rather than making somebody
+                          retype it in another page and come back to pair. */}
+                      {canManage && !m.hostId && (
+                        <Tooltip title="Create a managed host from this machine and pair them, in one step">
+                          <span><Button size="small" variant="outlined" startIcon={<LinkIcon />}
+                                        onClick={() => setAdopting(m)}>Add as host</Button></span>
+                        </Tooltip>
+                      )}
                       {canManage && (
                         <Tooltip title="Remove this machine from the list. If it still exists it reappears on its next check-in.">
                           <span><Button size="small" color="error" disabled={forget.isPending}
@@ -456,6 +470,8 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
         </Table>
       </Paper>
 
+      <AddAsHostDialog machine={adopting} onClose={() => setAdopting(null)}
+                       setMsg={setMsg} onDone={onDone} />
       <PairDialog machine={pairing} onClose={() => setPairing(null)} setMsg={setMsg} onDone={onDone} />
       <InstallDialog machine={installing} controlUrl={bundleData?.controlUrl ?? ""}
                      onClose={() => setInstalling(null)} setMsg={setMsg} onDone={onDone} />
@@ -486,6 +502,124 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
         </DialogActions>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * AddAsHostDialog: turn an imaged machine into a managed host, and pair them.
+ *
+ * An imaged machine and a managed host are two different records, and until now
+ * getting from one to the other meant leaving this page, creating a host by
+ * hand, retyping the hostname and address that imaging already knew, and coming
+ * back to pair. Three of those four steps are the machine telling us what it
+ * already told us.
+ *
+ * What it cannot know is the login user — that was chosen when the image was
+ * built and is not carried on the machine record — and which environment and
+ * owner this machine belongs to, which are the operator's to decide. So those
+ * are asked for and everything else is filled in.
+ *
+ * Creating and pairing are one action here but two writes. If the pairing fails
+ * the host still exists, and the message says so: a half-done step that reports
+ * failure and leaves a stray host is worse than one that says what it managed.
+ */
+function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
+  machine: Machine | null; onClose: () => void; onDone: () => void; setMsg: (m: Note) => void;
+}) {
+  const [sshUser, setSshUser] = useState("");
+  const [environment, setEnvironment] = useState("");
+  const [owner, setOwner] = useState("");
+  const [address, setAddress] = useState("");
+  const [hostname, setHostname] = useState("");
+
+  // Re-seed each time a different machine is chosen, not on every render.
+  useEffect(() => {
+    if (!machine) return;
+    setHostname(machine.hostname || machine.id);
+    setAddress(machine.address || "");
+    setSshUser("");
+    setEnvironment("");
+    setOwner("");
+  }, [machine]);
+
+  const adopt = useMutation({
+    mutationFn: async () => {
+      const host = await createHost({
+        hostname: hostname.trim(),
+        description: `Imaged by Blackfriars${machine?.image ? ` from ${machine.image}` : ""}`,
+        environment: environment.trim(),
+        owner: owner.trim(),
+        address: address.trim(),
+        wgAddress: "",
+        sshPort: 22,
+        sshUser: sshUser.trim(),
+        tags: [],
+      });
+      try {
+        await updateMachine(machine!.id, { hostId: host.id });
+      } catch (e) {
+        // The host is real even though the pairing failed. Say which half
+        // happened rather than leaving a stray host nobody knows about.
+        throw new Error(
+          `Created the host ${host.hostname}, but could not pair it with this machine: ` +
+          `${apiError(e)}. Pair them from this page.`);
+      }
+      return host;
+    },
+    onSuccess: (host) => {
+      setMsg({
+        kind: "success",
+        text: `${host.hostname} added and paired. It is not enrolled yet — enrol it from Hosts to let this server reach it.`,
+      });
+      onDone();
+      onClose();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
+  const ready = hostname.trim() && sshUser.trim() && address.trim();
+
+  return (
+    <Dialog open={!!machine} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Add {machine?.hostname || machine?.id} as a managed host</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Creates the host record and pairs it with this machine. The hostname and
+          address come from imaging; the rest is yours to set.
+        </Typography>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField size="small" label="Hostname" value={hostname}
+                     onChange={(e) => setHostname(e.target.value)} fullWidth
+                     helperText="The name it was given when it was imaged." />
+          <TextField size="small" label="Address" value={address}
+                     onChange={(e) => setAddress(e.target.value)} fullWidth
+                     helperText={machine?.address
+                       ? "Last address this machine reported. Change it if the machine has moved to another network."
+                       : "This machine never reported an address — enter the one it has now."} />
+          <TextField size="small" label="SSH user" value={sshUser}
+                     onChange={(e) => setSshUser(e.target.value)} fullWidth
+                     helperText="The login user chosen when the image was built." />
+          <Stack direction="row" spacing={2}>
+            <TextField size="small" label="Environment" value={environment}
+                       onChange={(e) => setEnvironment(e.target.value)} fullWidth />
+            <TextField size="small" label="Owner" value={owner}
+                       onChange={(e) => setOwner(e.target.value)} fullWidth />
+          </Stack>
+          <Alert severity="info">
+            This does not enrol the machine. Enrolment is what establishes the SSH
+            trust and the overlay address, and it runs from the Hosts page — an
+            image carries only the authorized key it was built with.
+          </Alert>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={!ready || adopt.isPending}
+                onClick={() => adopt.mutate()}>
+          {adopt.isPending ? "Adding…" : "Add and pair"}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
@@ -1106,6 +1240,24 @@ function BuildsTab({ builds, canBuild, onChanged, setMsg }: {
   builds: BuildJob[]; canBuild: boolean; onChanged: () => void; setMsg: (m: Note) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+
+  // Clearing history. The list is append-only otherwise, and a page showing
+  // every build ever run is one nobody reads — which matters, because the
+  // failure worth noticing ends up below thirty successes.
+  const forget = useMutation({
+    mutationFn: (id: string) => forgetBuild(id),
+    onSuccess: () => { setMsg({ kind: "info", text: "Build removed from the list." }); onChanged(); },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+  const clearAll = useMutation({
+    mutationFn: () => forgetFinishedBuilds(),
+    onSuccess: (n) => {
+      setMsg({ kind: "info", text: `Cleared ${n} finished build${n === 1 ? "" : "s"}. Anything still running was left alone.` });
+      onChanged();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
+
   const cancel = useMutation({
     mutationFn: (id: string) => cancelBuild(id),
     onSuccess: () => {
@@ -1129,8 +1281,26 @@ function BuildsTab({ builds, canBuild, onChanged, setMsg }: {
     );
   }
 
+  const finished = builds.filter((b) => b.status !== "running").length;
+
   return (
     <>
+      <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+          {builds.length} build{builds.length === 1 ? "" : "s"}
+          {finished > 0 ? `, ${finished} finished` : ""}.
+        </Typography>
+        {canBuild && finished > 0 && (
+          <Tooltip title="Remove every build that is not running, and its log. Anything still running is left alone.">
+            <span>
+              <Button size="small" startIcon={<DeleteIcon />} disabled={clearAll.isPending}
+                      onClick={() => clearAll.mutate()}>
+                {clearAll.isPending ? "Clearing…" : `Clear ${finished} finished`}
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+      </Stack>
       <Paper variant="outlined">
         <Table size="small">
           <TableHead>
@@ -1165,6 +1335,14 @@ function BuildsTab({ builds, canBuild, onChanged, setMsg }: {
                     {canBuild && b.status === "running" && (
                       <Button size="small" color="error" disabled={cancel.isPending}
                               onClick={() => cancel.mutate(b.id)}>Cancel</Button>
+                    )}
+                    {canBuild && b.status !== "running" && (
+                      <Tooltip title="Remove this build and its log from the list">
+                        <span>
+                          <Button size="small" color="error" disabled={forget.isPending}
+                                  onClick={() => forget.mutate(b.id)}>Remove</Button>
+                        </span>
+                      </Tooltip>
                     )}
                   </Stack>
                 </TableCell>

@@ -186,6 +186,30 @@ func (s *Service) CancelJob(ctx context.Context, id string) (*Job, error) {
 	return &job, nil
 }
 
+// ForgetJob drops one finished build from the history.
+//
+// The list is append-only otherwise, and a Builds tab showing every build ever
+// run is one nobody reads -- which matters because the failure worth noticing
+// ends up below thirty successes. Routed through the runner for the same reason
+// DeleteArtifact is: the runner owns the job index and the log file beside it.
+func (s *Service) ForgetJob(ctx context.Context, id string) error {
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	return s.runner(ctx, http.MethodDelete, "/jobs/"+url.PathEscape(id), nil, &out)
+}
+
+// ForgetFinishedJobs drops every build that is not running.
+func (s *Service) ForgetFinishedJobs(ctx context.Context) (int, error) {
+	var out struct {
+		Removed int `json:"removed"`
+	}
+	if err := s.runner(ctx, http.MethodDelete, "/jobs", nil, &out); err != nil {
+		return 0, err
+	}
+	return out.Removed, nil
+}
+
 // DeleteArtifact removes a built image or bundle.
 //
 // Deliberately routed through the runner rather than done here with os.Remove,
