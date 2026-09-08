@@ -995,10 +995,42 @@ func (s *Server) buildRouter() chi.Router {
 	// monitoring is never throttled.
 	general := ratelimit.New(s.Cfg.RateLimitPerMin, s.Cfg.RateLimitBurst)
 	authLimit := ratelimit.New(s.Cfg.AuthRateLimitPerMin, s.Cfg.AuthRateLimitBurst)
+	// Which requests get the strict limiter: the ones that SUBMIT a credential.
+	//
+	// It used to be every path under /api/v1/auth, and that locked people out of
+	// their own accounts. /auth/me ("who am I"), /auth/oidc/status and
+	// /auth/saml/status are GETs the app makes on every page load -- the login
+	// page alone fires three -- so a handful of reloads exhausted a 15/min
+	// bucket. Then /auth/me answered 429, the app read that as "not signed in"
+	// and redirected to /login, which fired three more. The lockout fed itself,
+	// and the one thing it was not was a brute-force attempt.
+	//
+	// Nothing is loosened that guards a secret: login, MFA verification, password
+	// changes and bootstrap all still get the strict bucket. A GET that returns
+	// "is OIDC configured" has no credential to guess.
+	strictAuth := func(req *http.Request) bool {
+		p := req.URL.Path
+		if !strings.HasPrefix(p, "/api/v1/auth") && !strings.HasPrefix(p, "/api/v1/bootstrap") {
+			return false
+		}
+		// Reads cannot be credential attempts.
+		if req.Method == http.MethodGet || req.Method == http.MethodHead {
+			return false
+		}
+		// Session lifecycle rather than credential guessing. /auth/refresh needs
+		// a valid HttpOnly cookie to do anything and is called routinely by every
+		// signed-in tab; rate-limiting it as though it were a password guess is
+		// how a long session dies mid-action.
+		switch {
+		case strings.HasSuffix(p, "/auth/refresh"), strings.HasSuffix(p, "/auth/logout"):
+			return false
+		}
+		return true
+	}
 	rateLimitMW := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			lim := general
-			if strings.HasPrefix(req.URL.Path, "/api/v1/auth") || strings.HasPrefix(req.URL.Path, "/api/v1/bootstrap") {
+			if strictAuth(req) {
 				lim = authLimit
 			}
 			if !lim.Allow(ratelimit.KeyFromRequest(req)) {

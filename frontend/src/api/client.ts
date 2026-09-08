@@ -124,6 +124,26 @@ api.interceptors.response.use(
     const cfg = error.config;
     const url: string = cfg?.url ?? "";
     const isAuthCall = url.includes("/auth/refresh") || url.includes("/auth/login");
+
+    // 429 is "ask again shortly", not "you are not who you said you were".
+    //
+    // Conflating them locked an operator out of their own account: the strict
+    // per-IP limiter covered GET /auth/me, the bucket emptied during ordinary
+    // page loads, /auth/me answered 429, the app concluded the session was gone
+    // and redirected to /login — which called three more limited endpoints, so
+    // the lockout renewed itself. The server side of that is fixed; this is the
+    // half that keeps a transient limit from ever again reading as a sign-out.
+    //
+    // One retry, after the server's own Retry-After. Not a loop: if the limiter
+    // is still refusing after that, the caller should see the 429 and say so
+    // rather than hammering the endpoint that is asking for quiet.
+    if (error.response?.status === 429 && cfg && !cfg._rateRetry) {
+      cfg._rateRetry = true;
+      const after = Number(error.response.headers?.["retry-after"]) || 5;
+      await new Promise((r) => setTimeout(r, Math.min(after, 10) * 1000));
+      return api(cfg);
+    }
+
     if (error.response?.status === 401 && cfg && !cfg._retry && !isAuthCall) {
       cfg._retry = true;
       const token = await refreshAccessToken();
