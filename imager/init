@@ -261,15 +261,27 @@ for dev in $LINKED $UNLINKED; do
     # No `timeout` wrapper: busybox spells it `timeout SECS CMD` in 1.30+ and
     # `timeout -t SECS CMD` before that, and guessing wrong here does not degrade
     # the boot, it ends it. -t 8 -T 2 with -n already bounds this at ~16s.
+    # udhcpc's own words are kept, not discarded. "no lease on eth1" with the
+    # reason thrown away is a dead end: the server may have answered and the
+    # address failed to apply, or nothing answered at all, and those are
+    # different problems with different fixes. This cost a night of guessing
+    # from the outside while the DHCP server's log clearly showed it ACKing.
     $BB udhcpc -i "$dev" -q -n -t 8 -T 2 \
-        -s /usr/share/udhcpc/default.script >/dev/null 2>&1 || true
+        -s /usr/share/udhcpc/default.script > "/tmp/udhcpc.$dev" 2>&1
+    _dhcp_rc=$?
     # Only count the interface if it actually received an IPv4 address.
     if $BB ip -4 addr show "$dev" 2>/dev/null | $BB grep -q "inet "; then
         GOT_IP=1
         LEASED="$LEASED $dev"
         say "  $dev: $($BB ip -o -4 addr show "$dev" | $BB awk '{print $4}')"
     else
-        warn "  no lease on $dev"
+        warn "  no lease on $dev (udhcpc exit $_dhcp_rc)"
+        # The distinction that matters: udhcpc exiting 0 means it believes it
+        # got a lease, so the address failing to appear is the SCRIPT's failure,
+        # not the network's.
+        [ "$_dhcp_rc" = 0 ] && warn "      udhcpc reported success but no address was applied --"
+        [ "$_dhcp_rc" = 0 ] && warn "      that is the lease-apply script failing, not the server."
+        while IFS= read -r _l; do warn "      $_l"; done < "/tmp/udhcpc.$dev" 2>/dev/null
     fi
 done
 [ "$GOT_IP" = 1 ] || die "DHCP failed on all interfaces (no IPv4 lease applied).
@@ -313,6 +325,56 @@ else
     warn "No interface is on $SERVER_HOST's subnet; using $NET_DEV and relying on routing."
     warn "If this machine was assigned an image by MAC, check it is the MAC of the"
     warn "port facing the provisioning network -- that is the one that PXE-booted."
+fi
+
+# Prove the server is reachable before committing to a multi-gigabyte download.
+#
+# Falling back to "some interface got a lease" is a guess, and when the guess is
+# wrong the machine does not fail -- it sits in wget forever, on a console that
+# has already printed everything it is going to print. That is indistinguishable
+# from a slow download, and it is how a machine on the wrong network looked hung
+# for twenty minutes.
+#
+# A HEAD of the image is cheap and settles it. If it fails, the DHCP loop is
+# worth one more pass: the provisioning port may simply have been slower to come
+# up than the office one, and a second ask costs seconds against a boot that is
+# otherwise wasted.
+server_reachable() {
+    # --spider, not -s: busybox spells it that way and -s is silently something
+    # else. Checked against `busybox wget --help` rather than assumed, because a
+    # wrong flag here would make the gate below refuse every boot.
+    $BB wget -q --spider "$IMG_URL" 2>/dev/null && return 0
+    # Some servers refuse HEAD; the sidecar is small enough to fetch outright.
+    $BB wget -q -O /dev/null -T 5 "${IMG_URL}.sha256" 2>/dev/null && return 0
+    return 1
+}
+
+if ! server_reachable; then
+    warn "$SERVER_HOST is not reachable over $NET_DEV. Asking every interface again…"
+    for dev in $IFACES; do
+        say "  retrying $dev…"
+        $BB udhcpc -i "$dev" -q -n -t 6 -T 2 \
+            -s /usr/share/udhcpc/default.script >/dev/null 2>&1 || true
+    done
+    LEASED=""
+    for dev in $IFACES; do
+        $BB ip -4 addr show "$dev" 2>/dev/null | $BB grep -q "inet " && LEASED="$LEASED $dev"
+    done
+    _again="$(pick_server_dev || true)"
+    [ -n "$_again" ] && NET_DEV="$_again"
+    [ -n "$_again" ] && say "Now using $NET_DEV: $($BB ip -o -4 addr show "$NET_DEV" | $BB awk '{print $4}')"
+fi
+
+if ! server_reachable; then
+    die "cannot reach $SERVER_HOST, so the image cannot be downloaded.
+    Interfaces:$IFACES
+    With addresses:${LEASED:- none}
+    $( $BB ip -o -4 addr show 2>/dev/null | $BB grep -v ' lo ' )
+
+    This machine PXE-booted from $SERVER_HOST, so one of its ports faces that
+    network. Either that port did not get a lease from the provisioning server,
+    or the image was assigned to the MAC of a different port. Stopping here
+    rather than waiting in a download that cannot finish."
 fi
 
 # Now that an interface exists and has a lease, this machine has an identity.
