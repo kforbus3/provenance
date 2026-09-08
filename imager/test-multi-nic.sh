@@ -42,8 +42,12 @@ fail() { echo -e "\033[0;31m[test] FAIL:\033[0m $*" >&2; exit 1; }
 
 grep -q "no lease on eth0" <<<"$OUT" \
     || fail "the imager never gave up on the dead interface — is -n still on udhcpc?"
-grep -q "Network up on eth1" <<<"$OUT" \
-    || fail "the imager never reached the live interface"
+# The live interface must end up configured. Matched on the lease line rather
+# than a phrase like "Network up", which is wording and will change again.
+grep -qE "eth1: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/" <<<"$OUT" \
+    || fail "the imager never got a lease on the live interface"
+grep -q "Target disk:" <<<"$OUT" \
+    || fail "the imager never got past networking to disk selection"
 # The point is not just that it recovers, but that it says so: a silent 16s gap
 # per interface is what made this look like a hang rather than a wait.
 grep -q "asking eth0 for a lease" <<<"$OUT" \
