@@ -49,4 +49,30 @@ grep -q "Network up on eth1" <<<"$OUT" \
 grep -q "asking eth0 for a lease" <<<"$OUT" \
     || fail "the imager does not name the interface it is trying"
 
-echo -e "\033[0;32m[test] PASS:\033[0m gave up on the dead NIC and imaged from the live one"
+echo "[test] booting with TWO live DHCP networks — only one faces the server"
+OUT2="$(docker run --rm -v "$IM":/im:ro --entrypoint sh alpine:3.20 -c '
+    apk add -q qemu-system-x86_64 >/dev/null 2>&1
+    truncate -s 4G /tmp/d.img
+    # eth0 is an office LAN: it serves DHCP perfectly well and cannot reach the
+    # provisioning server. Taking its lease and stopping is what put a machine on
+    # the wrong network, reporting under the wrong MAC.
+    timeout 180 qemu-system-x86_64 -m 1024 -smp 2 -nographic -no-reboot \
+      -kernel /im/vmlinuz -initrd /im/initramfs.img \
+      -append "imager.url=http://192.168.50.1/none.img imager.action=shell console=ttyS0,115200" \
+      -netdev user,id=office,net=10.9.9.0/24,host=10.9.9.1 -device virtio-net-pci,netdev=office \
+      -netdev user,id=prov,net=192.168.50.0/24,host=192.168.50.1 -device virtio-net-pci,netdev=prov \
+      -drive file=/tmp/d.img,format=raw,if=virtio 2>&1
+  ' | grep -aE "imager\]" || true)"
+
+echo "$OUT2" | sed 's/^/    /'
+echo
+
+grep -q "eth0: 10.9.9" <<<"$OUT2" \
+    || fail "the office interface did not get its lease; the test is not exercising the case"
+grep -q "Using eth1 to reach 192.168.50.1" <<<"$OUT2" \
+    || fail "the imager did not choose the interface facing the provisioning server.
+    Taking the first lease puts the machine on the office LAN, unable to reach the
+    server, reporting under the MAC of the wrong port — so the image assigned to
+    the port that PXE-booted never matches."
+
+echo -e "\033[0;32m[test] PASS:\033[0m gave up on the dead NIC, and chose the server-facing NIC over a live decoy"
