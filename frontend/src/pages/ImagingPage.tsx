@@ -262,7 +262,7 @@ function ImagingNowPanel({ rows, canManage, onDone }: {
 
 // --- machines ----------------------------------------------------------------
 
-function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }: {
+export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }: {
   fleet?: Awaited<ReturnType<typeof listMachines>>;
   canManage: boolean;
   onNudge: (machineId: string) => void;
@@ -459,6 +459,32 @@ function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }: {
       <PairDialog machine={pairing} onClose={() => setPairing(null)} setMsg={setMsg} onDone={onDone} />
       <InstallDialog machine={installing} controlUrl={bundleData?.controlUrl ?? ""}
                      onClose={() => setInstalling(null)} setMsg={setMsg} onDone={onDone} />
+
+      {/* A confirmation, because this removes a record rather than changing one.
+          It leads with what makes the action safe rather than with a warning: if
+          the machine still exists it comes back by itself, so the mistake costs
+          a heartbeat interval and not a record. */}
+      <Dialog open={!!forgetting} onClose={() => setForgetting(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Forget {forgetting?.hostname || forgetting?.id}?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            This removes the machine and its imaging history from this list.
+          </Typography>
+          <Alert severity="info">
+            If the machine still exists it reappears on its next check-in. This is
+            for hardware that is gone, was reimaged under a different MAC, or only
+            ever appeared because of a test boot. Any host it is paired to is left
+            alone.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setForgetting(null)}>Cancel</Button>
+          <Button color="error" variant="contained" disabled={forget.isPending}
+                  onClick={() => forgetting && forget.mutate(forgetting.id)}>
+            {forget.isPending ? "Removing…" : "Forget it"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
