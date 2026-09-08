@@ -192,15 +192,59 @@ $BB sleep 2
 
 # --- Bring up networking via DHCP on every ethernet link ---
 say "Configuring network (DHCP)…"
+IFACES=""
 for dev in $($BB ls /sys/class/net); do
     [ "$dev" = "lo" ] && continue
     $BB ip link set "$dev" up 2>/dev/null || true
+    IFACES="$IFACES $dev"
 done
+# Carrier takes a moment to come up after the link does; without this wait every
+# interface still reads "no carrier" and the ordering below is meaningless.
 $BB sleep 3
+
+# Try interfaces WITH A CABLE first. A machine with four ports and one patched
+# is ordinary, and asking a dead port for a lease costs -t 8 -T 2 = ~16 seconds
+# EACH before the live one is reached. Machines here have two NICs and the
+# provisioning segment is on the second, so the imager spent that silence on a
+# port that was never going to answer.
+#
+# Carrier is a hint, not a rule: some drivers report it late or not at all in an
+# initramfs, so a no-carrier interface is still tried afterwards rather than
+# skipped. Ordering costs nothing and being wrong about carrier costs a boot.
+LINKED=""; UNLINKED=""
+for dev in $IFACES; do
+    if [ "$($BB cat /sys/class/net/$dev/carrier 2>/dev/null)" = "1" ]; then
+        LINKED="$LINKED $dev"
+    else
+        UNLINKED="$UNLINKED $dev"
+    fi
+done
+[ -n "$LINKED" ] && say "  link detected on:$LINKED"
+[ -n "$UNLINKED" ] && say "  no link on:$UNLINKED (tried last)"
+
 GOT_IP=0
-for dev in $($BB ls /sys/class/net); do
-    [ "$dev" = "lo" ] && continue
-    $BB udhcpc -i "$dev" -q -t 8 -T 2 -s /usr/share/udhcpc/default.script >/dev/null 2>&1 || true
+for dev in $LINKED $UNLINKED; do
+    # Named BEFORE the attempt, not after. Each try can take ~16s, and a silent
+    # gap that long is indistinguishable from a hang -- which is exactly how
+    # this looked from the console: "Configuring network (DHCP)…" and nothing.
+    say "  asking $dev for a lease…"
+    # -n is the load-bearing flag, and its absence is why this hung.
+    #
+    #   -q  quit AFTER a lease is obtained
+    #   -n  exit if no lease is obtained
+    #
+    # They sound like the same flag and are not. With -q alone, udhcpc exhausts
+    # its -t tries and then keeps retrying indefinitely rather than returning --
+    # so on a machine whose first interface faces a segment with no DHCP server,
+    # this loop never reached the second one. The imager sat on "Configuring
+    # network (DHCP)…" forever, on a machine that was cabled correctly, with the
+    # provisioning server answering fine one port over.
+    #
+    # No `timeout` wrapper: busybox spells it `timeout SECS CMD` in 1.30+ and
+    # `timeout -t SECS CMD` before that, and guessing wrong here does not degrade
+    # the boot, it ends it. -t 8 -T 2 with -n already bounds this at ~16s.
+    $BB udhcpc -i "$dev" -q -n -t 8 -T 2 \
+        -s /usr/share/udhcpc/default.script >/dev/null 2>&1 || true
     # Only accept the interface if it actually received an IPv4 address.
     if $BB ip -4 addr show "$dev" 2>/dev/null | $BB grep -q "inet "; then
         GOT_IP=1
@@ -208,8 +252,12 @@ for dev in $($BB ls /sys/class/net); do
         say "Network up on $dev: $($BB ip -o -4 addr show "$dev" | $BB awk '{print $4}')"
         break
     fi
+    warn "  no lease on $dev"
 done
-[ "$GOT_IP" = 1 ] || die "DHCP failed on all interfaces (no IPv4 lease applied)"
+[ "$GOT_IP" = 1 ] || die "DHCP failed on all interfaces (no IPv4 lease applied).
+    Tried:$IFACES
+    Check the machine is patched into the provisioning segment, and that the
+    provisioning stack is running with DHCP enabled on that interface."
 
 # Now that an interface exists and has a lease, this machine has an identity.
 resolve_client_id
