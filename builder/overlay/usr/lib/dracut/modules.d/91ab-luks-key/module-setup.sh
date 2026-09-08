@@ -51,6 +51,33 @@ install() {
     # the script as a child because it exits 0 on its ordinary paths, and
     # sourcing that would end dracut's init. See 90ab-overlay for the same note.
     inst_script /usr/lib/ab/initramfs/ab-luks-key /usr/lib/ab/initramfs/ab-luks-key
+
+    # A systemd unit ordered Before=cryptsetup-pre.target, because the hook alone
+    # runs too late.
+    #
+    # In a systemd initrd the cryptsetup units start as their devices appear, and
+    # a non-root volume is asked for exactly ONCE. rootfs-a and the overlay are
+    # retried by the root-device target and so survived the race; rootfs-b fired
+    # first, found no keyfile, and fell straight through to a passphrase prompt --
+    # on a machine that had the right key on its own BOOT partition the entire
+    # time. The keyslots were correct, the key was correct, the hook was correct:
+    # only the ordering was wrong, which is why every check of the image passed.
+    #
+    # cryptsetup-pre.target is systemd's ordering point for work that must finish
+    # before ANY cryptsetup unit runs. This removes the race rather than making it
+    # less likely.
+    if [ -n "${systemdsystemunitdir:-}" ]; then
+        inst_simple "$moddir/ab-luks-key.service" \
+            "$systemdsystemunitdir/ab-luks-key.service"
+        mkdir -p "${initdir}${systemdsystemunitdir}/sysinit.target.wants"
+        ln -sf ../ab-luks-key.service \
+            "${initdir}${systemdsystemunitdir}/sysinit.target.wants/ab-luks-key.service"
+    fi
+
+    # The initqueue hook stays as well. It costs nothing -- the script is
+    # idempotent and exits immediately once the key is staged -- and it is the
+    # only path on a dracut built without systemd, where the unit above is never
+    # installed at all.
     mkdir -p "${initdir}/lib/dracut/hooks/initqueue/settled"
     {
         echo '#!/bin/sh'

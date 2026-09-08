@@ -2322,6 +2322,18 @@ else
     cannot fetch its own key from the BOOT partition and every boot stops at a
     passphrase prompt nobody is there to answer."
         fi
+        # And the unit that makes it run IN TIME. The hook alone runs after the
+        # cryptsetup units have already asked, so a volume that is not the root
+        # gets one attempt, finds no keyfile and prompts -- which is exactly what
+        # happened, with the correct key sitting on the machine's own BOOT
+        # partition. Present-and-too-late looked identical to present-and-working
+        # in every check until somebody booted it.
+        if ! grep -qE "sysinit\.target\.wants/ab-luks-key\.service" <<<"$_initrd_files"; then
+            die "the generated initramfs has the LUKS key hook but nothing ordered
+    before cryptsetup-pre.target to run it in time. The volumes that are not the
+    root slot will each get one attempt, find no keyfile, and stop at a passphrase
+    prompt. Check that 91ab-luks-key/ab-luks-key.service was installed."
+        fi
     fi
 fi
 

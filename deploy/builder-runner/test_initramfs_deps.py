@@ -135,6 +135,51 @@ if os.path.exists(luks):
     check("ab-luks-key does not use dirname (its paths are constants)",
           "dirname" not in body)
 
+def check_ordering_unit():
+    """The key hook must be ordered before anything tries to unlock a volume.
+
+    The hook alone runs at initqueue/settled, which in a systemd initrd is AFTER
+    the cryptsetup units have started. A volume that is not the root slot is
+    asked for exactly once: it found no keyfile and fell through to a passphrase
+    prompt, on a machine that had the correct key on its own BOOT partition.
+
+    Everything else about that image was right -- two keyslots per volume, the
+    keyfile opening all three, the hook present and runnable. Only the ordering
+    was wrong, so every check passed and the machine still would not boot.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.normpath(os.path.join(here, "..", ".."))
+    mod = os.path.join(root, "builder/overlay/usr/lib/dracut/modules.d/91ab-luks-key")
+    unit = os.path.join(mod, "ab-luks-key.service")
+    setup = os.path.join(mod, "module-setup.sh")
+
+    ok = True
+    if not os.path.exists(unit):
+        check("the ordering unit ab-luks-key.service exists", False); ok = False
+    else:
+        body = open(unit, encoding="utf-8").read()
+        check("the unit is ordered Before=cryptsetup-pre.target",
+              "Before=cryptsetup-pre.target" in body)
+        check("the unit waits for devices to be enumerated",
+              "systemd-udev-trigger" in body)
+        # A failure to stage the key must not wedge the machine: the passphrase
+        # prompt is the fallback and has to stay reachable.
+        check("a failure does not block the boot",
+              "SuccessExitStatus" in body or "TimeoutStartSec" in body)
+
+    if os.path.exists(setup):
+        body = open(setup, encoding="utf-8").read()
+        check("module-setup.sh installs the unit",
+              "ab-luks-key.service" in body and "inst_simple" in body)
+        check("and enables it, or it is installed and never started",
+              "sysinit.target.wants" in body)
+    else:
+        check("module-setup.sh is present", False); ok = False
+    return 0 if ok else 1
+
+
+check_ordering_unit()
+
 print()
 if failures:
     print(f"FAILED ({len(failures)})")

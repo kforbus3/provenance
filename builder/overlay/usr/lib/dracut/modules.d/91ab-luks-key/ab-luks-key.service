@@ -1,0 +1,36 @@
+[Unit]
+# Stage this machine's LUKS bootstrap key before anything tries to unlock a volume.
+#
+# The initqueue/settled hook that used to do this alone runs too late. In a
+# systemd initrd the cryptsetup units start as their devices appear, and the
+# non-root volumes are asked for exactly once: rootfs-a and the overlay are
+# retried by the root-device target and so survived the race, while rootfs-b
+# fired early, found no keyfile, and fell straight through to a passphrase
+# prompt. The machine then waited for someone to type a key it had on its own
+# BOOT partition the whole time.
+#
+# cryptsetup-pre.target is the ordering point systemd provides for exactly this:
+# work that must complete before ANY cryptsetup unit runs. Being ordered before
+# it removes the race rather than making it less likely.
+Description=Stage the A/B bootstrap LUKS key from the BOOT partition
+DefaultDependencies=no
+# The key is found by partition label, so the block devices must be enumerated.
+After=systemd-udev-trigger.service
+Wants=systemd-udev-trigger.service
+Before=cryptsetup-pre.target
+Wants=cryptsetup-pre.target
+ConditionPathExists=/usr/lib/ab/initramfs/ab-luks-key
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/ab/initramfs/ab-luks-key
+# Never block the boot. The script exits 0 when there is nothing to do — an
+# unencrypted image, or one whose enrolment has already reaped the bootstrap key
+# — and a failure here must still leave the passphrase prompt reachable rather
+# than wedging a machine with no way in.
+SuccessExitStatus=0 1
+TimeoutStartSec=45
+
+[Install]
+WantedBy=sysinit.target
