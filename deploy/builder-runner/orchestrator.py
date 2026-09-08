@@ -1269,6 +1269,28 @@ def provisioning_preflight(cfg: dict | None = None) -> list[str]:
     if image and not os.path.isfile(os.path.join(settings.output_dir, image)):
         problems.append(f"The selected image '{image}' is not in the image library.")
 
+    # Where a machine reaches this server AFTER it leaves the imaging network.
+    #
+    # This is the setting that makes imaging useful rather than a one-off: a
+    # machine is on the provisioning segment for twenty minutes and then goes to
+    # wherever it actually lives. With no control URL the imager has only the
+    # address it was imaged from, which is on a private LAN it will never see
+    # again -- so the machine images perfectly, is moved, and is never heard from
+    # once. Nothing fails; it simply never appears, which is the hardest kind of
+    # missing to notice.
+    #
+    # A warning rather than a refusal: imaging machines that stay on this segment
+    # is a legitimate thing to do, and so is deciding to set this later. But it
+    # has to be said out loud, because the cost lands weeks after the choice.
+    if not control_url():
+        problems.append(
+            "No control URL is set, so machines will only know the address they "
+            "were imaged from. That address is on this provisioning network — "
+            "once a machine is moved to its real network it has no way to reach "
+            "this server, and it will never check in again. Set it to an address "
+            "reachable from wherever these machines will live."
+        )
+
     if not cfg.get("INTERFACE"):
         problems.append(
             "No provisioning interface selected. One is required: it confines "
@@ -1320,6 +1342,48 @@ def read_env() -> dict:
     return {k: cfg.get(k, "") for k in ENV_KEYS}
 
 
+def rerender_host_scripts() -> list[str]:
+    """Rewrite every per-machine boot script from the stored assignments.
+
+    Called after anything that changes what those scripts contain: the server
+    address, the default action, or the stack starting. They are otherwise
+    written once, at assignment time, and then never again.
+
+    Row by row rather than as a batch, and that is the point. write_assignments
+    validates the whole set and refuses it if ANY row names an image that is not
+    in the library -- so a single stale assignment, or one saved while its image
+    happened to be mid-rebuild, silently skipped the re-render for every OTHER
+    machine too. That is how a machine kept booting with `imager.action=reboot`
+    forty minutes after the operator had chosen poweroff: the setting was saved
+    correctly, the script was simply never rewritten, and nothing anywhere said
+    so.
+
+    Returns the problems, so the caller can surface them instead of a caller
+    somewhere deciding a failure here does not matter.
+    """
+    problems: list[str] = []
+    try:
+        cfg = read_env()
+        assignments = read_assignments()
+    except (OSError, ValueError) as exc:
+        return [f"could not read the provisioning config: {exc}"]
+
+    known = {i["name"] for i in list_images()[0]}
+    for a in assignments:
+        if a.get("image") and a["image"] not in known:
+            problems.append(
+                f"{a['mac']}: image {a['image']!r} is no longer in the library, so its "
+                "boot script was left as it was")
+            continue
+        try:
+            _write_host_script(a, cfg)
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{a['mac']}: could not rewrite its boot script: {exc}")
+    for p in problems:
+        print(f"[orchestrator] {p}")
+    return problems
+
+
 def write_env(cfg: dict) -> None:
     # Everything in the file that this page does not manage is carried across.
     # The file is rewritten from ENV_KEYS alone, so anything hand-added -- the
@@ -1356,15 +1420,9 @@ def write_env(cfg: dict) -> None:
             f.write("\n# Set by hand; left alone by the web UI.\n")
             for k, v in preserved.items():
                 f.write(f"{k}={v}\n")
-    # Per-machine scripts embed the server IP and the default action, so they
-    # go stale the moment either changes. Rewrite them from the stored
-    # assignments rather than leaving machines pointed at the old address.
-    try:
-        existing = read_assignments()
-        if existing:
-            write_assignments(existing)
-    except (OSError, ValueError):
-        pass
+    # Per-machine scripts embed the server IP and the default action, so they go
+    # stale the moment either changes.
+    rerender_host_scripts()
 
 
 # --------------------------- per-machine targeting ---------------------------
@@ -1603,12 +1661,7 @@ def server_up() -> str:
     # Best-effort: an assignment naming an image that has since been deleted
     # raises, and refusing to start the PXE server over one stale row would be a
     # worse outcome than leaving that row's script as it was.
-    try:
-        write_assignments(read_assignments())
-    except Exception as exc:  # noqa: BLE001
-        # print, not a logger: this module has none, and a NameError inside an
-        # except block would replace the real reason with a worse one.
-        print(f"[orchestrator] could not re-render per-machine boot scripts: {exc}")
+    rerender_host_scripts()
     return (_compose("up", "-d", "--build").stderr or "started").strip()
 
 

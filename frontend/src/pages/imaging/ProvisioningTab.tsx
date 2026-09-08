@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Box, Button, Chip, Divider, Grid, IconButton, MenuItem, Paper,
+  Alert, CircularProgress, Box, Button, Chip, Divider, Grid, IconButton, MenuItem, Paper,
   Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip,
   Typography,
 } from "@mui/material";
@@ -128,6 +128,24 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
   });
 
   const noBuilder = problems.some((p) => /builder|runner|501/i.test(p));
+
+  // Nothing is rendered until the saved settings are in hand.
+  //
+  // cfg starts empty and is filled by the effect above once the query resolves,
+  // so rendering before then showed the form's own defaults and then replaced
+  // them a moment later with what was actually saved. That reads as the page
+  // losing your settings, and it invites someone to "fix" a value that was
+  // never wrong -- and then save the defaults over the real configuration.
+  if (isLoading && !data) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, py: 4 }}>
+        <CircularProgress size={24} />
+        <Typography variant="body2" color="text.secondary">
+          Loading the provisioning settings…
+        </Typography>
+      </Box>
+    );
+  }
 
   return (
     <Box>
