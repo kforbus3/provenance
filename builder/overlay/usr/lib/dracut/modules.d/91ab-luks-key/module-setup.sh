@@ -23,7 +23,14 @@ depends() {
 install() {
     # blkid is what the script finds the BOOT partition with, by label, and it is
     # not otherwise guaranteed in a minimal initramfs.
-    inst_multiple blkid mount umount cp mkdir chmod
+    # Every binary the script calls, checked against the script rather than
+    # remembered. A dracut initramfs is not a distribution: a command not named
+    # here is simply absent, and the failure is a shell error in the middle of an
+    # unlock rather than anything that says "missing package". `dirname` was
+    # absent exactly this way and cost a machine its unattended boot -- the hook
+    # ran, printed "dirname: command not found", made no keyfile, and the disk
+    # fell through to a passphrase prompt.
+    inst_multiple blkid mount umount cp mkdir chmod grep head
 
     # initqueue/settled, not pre-mount or pre-trigger.
     #

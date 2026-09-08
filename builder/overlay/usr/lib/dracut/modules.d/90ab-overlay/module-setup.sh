@@ -44,7 +44,7 @@ install() {
     # shadowing the one just installed. dracut's busybox-less initramfs has the
     # same shape of problem, so they are installed explicitly rather than hoped
     # for.
-    inst_multiple rm cp mkdir mount umount blkid findmnt
+    inst_multiple rm cp mkdir mount umount blkid findmnt cat mv
     inst_multiple -o modprobe
 
     # pre-pivot: the root slot is mounted at $NEWROOT and we have not switched to

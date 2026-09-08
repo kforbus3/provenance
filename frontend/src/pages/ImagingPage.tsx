@@ -31,7 +31,7 @@ import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
   forgetImaging, imageDownloadUrl, imageSbomUrl, imagingNow, installOnMachine,
   listBuilds, listBundles, listImages,
-  listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
+  deleteMachine, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
   type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
 } from "../api/imaging";
 
@@ -272,7 +272,18 @@ function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }: {
 }) {
   const [pairing, setPairing] = useState<Machine | null>(null);
   const [installing, setInstalling] = useState<Machine | null>(null);
+  const [forgetting, setForgetting] = useState<Machine | null>(null);
   const { data: bundleData } = useQuery({ queryKey: ["imaging-bundles"], queryFn: listBundles });
+
+  const forget = useMutation({
+    mutationFn: (id: string) => deleteMachine(id),
+    onSuccess: () => {
+      setMsg({ kind: "info", text: `Removed ${forgetting?.hostname || forgetting?.id}. If that machine still exists it will reappear on its next check-in.` });
+      setForgetting(null);
+      onDone();
+    },
+    onError: (e) => { setMsg({ kind: "error", text: apiError(e) }); setForgetting(null); },
+  });
 
   const hold = useMutation({
     mutationFn: ({ id, held }: { id: string; held: boolean }) => updateMachine(id, { held }),
@@ -404,6 +415,17 @@ function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }: {
                                         onClick={() => hold.mutate({ id: m.id, held: !m.held })}>
                             {m.held ? "Release" : "Hold"}
                           </Button></span>
+                        </Tooltip>
+                      )}
+                      {/* Forgetting a machine. Last in the row and only for
+                          operators who can manage, because it is the one action
+                          here that removes a record rather than changing one --
+                          and the confirmation says the thing that makes it safe:
+                          a machine that still exists comes back by itself. */}
+                      {canManage && (
+                        <Tooltip title="Remove this machine from the list. If it still exists it reappears on its next check-in.">
+                          <span><Button size="small" color="error" disabled={forget.isPending}
+                                        onClick={() => setForgetting(m)}>Forget</Button></span>
                         </Tooltip>
                       )}
                       {canManage && m.hostId && m.reachable && (

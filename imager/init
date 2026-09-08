@@ -357,23 +357,86 @@ say "Writing image to ${TARGET}"
 report writing 5 ""
 say "Source: ${IMG_URL}"
 echo "${YEL}  This can take a few minutes; do not power off.${NC}"
+
+# How big the image is once decompressed, so progress can be a real fraction
+# rather than a guess. The build writes it into the sidecar next to the image;
+# best-effort, because an image published before the sidecar existed must still
+# be installable.
+IMG_MIB="$($BB wget -q -O - "${IMG_URL}.json" 2>/dev/null \
+    | $BB sed -n 's/.*"image_size_mib"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | $BB head -1)"
+case "$IMG_MIB" in ''|*[!0-9]*) IMG_MIB="";; esac
+
+# The write runs in the background so its progress can be watched. Everything it
+# does is unchanged -- same pipeline, same in-flight hashing.
+write_stream() {
+    if [ -n "$SHA_EXPECT" ]; then
+        # Hash the compressed stream in flight via a fifo; a truncated or corrupted
+        # download then fails loudly instead of leaving a silently broken disk.
+        $BB mkfifo /tmp/hashpipe
+        $BB sha256sum /tmp/hashpipe > /tmp/hash.out &
+        HASHPID=$!
+        $BB wget -O - "$IMG_URL" | $BB tee /tmp/hashpipe | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+        _rc=$?
+        wait $HASHPID
+        return $_rc
+    else
+        warn "No ${IMG_URL}.sha256 on the server; skipping download verification"
+        $BB wget -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+    fi
+}
+
+# Sectors the kernel has written to the target, from the block layer's own
+# counter. Field 7 of /sys/block/<dev>/stat, in 512-byte sectors. Read from the
+# device rather than from dd, because busybox dd has no progress output and the
+# write is three processes downstream of the download anyway.
+_written_sectors() {
+    $BB awk '{print $7}' "/sys/block/${DEV_BASE}/stat" 2>/dev/null || echo 0
+}
+
+DEV_BASE="$($BB basename "$TARGET")"
+SECT_START="$(_written_sectors)"; : "${SECT_START:=0}"
+
+write_stream &
+WPID=$!
+
+# Report while it runs. Previously the imager said "writing 5%" once and then
+# nothing until the write finished, so the UI showed 5% for the entire job --
+# on a 11 GiB image that is twenty minutes of a progress bar that never moves,
+# which is indistinguishable from a stuck machine. The percentage is mapped into
+# 5..85 so the phases after this one still have room above it.
+LAST_PCT=5
+while kill -0 "$WPID" 2>/dev/null; do
+    $BB sleep 5
+    _now="$(_written_sectors)"; : "${_now:=0}"
+    _mib=$(( (_now - SECT_START) / 2048 ))
+    [ "$_mib" -lt 0 ] && _mib=0
+    if [ -n "$IMG_MIB" ] && [ "$IMG_MIB" -gt 0 ]; then
+        _pct=$(( 5 + (_mib * 80 / IMG_MIB) ))
+        [ "$_pct" -gt 85 ] && _pct=85
+        # Only ever forwards: the counter is monotonic, but integer division on a
+        # briefly-stalled write can otherwise emit a lower number and make the
+        # bar jump backwards.
+        [ "$_pct" -lt "$LAST_PCT" ] && _pct="$LAST_PCT"
+        LAST_PCT="$_pct"
+        say "  ${_mib} / ${IMG_MIB} MiB written (${_pct}%)"
+        report writing "$_pct" "${_mib}/${IMG_MIB} MiB"
+    else
+        # No sidecar: report the honest thing -- how much has been written --
+        # rather than inventing a fraction of an unknown total.
+        say "  ${_mib} MiB written"
+        report writing "$LAST_PCT" "${_mib} MiB written"
+    fi
+done
+
+wait "$WPID" || die "the image download or write failed; NOT rebooting"
+
 if [ -n "$SHA_EXPECT" ]; then
-    # Hash the compressed stream in flight via a fifo; a truncated or corrupted
-    # download then fails loudly instead of leaving a silently broken disk.
-    $BB mkfifo /tmp/hashpipe
-    $BB sha256sum /tmp/hashpipe > /tmp/hash.out &
-    HASHPID=$!
-    $BB wget -O - "$IMG_URL" | $BB tee /tmp/hashpipe | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
-    wait $HASHPID
     SHA_ACTUAL="$($BB awk '{print $1}' /tmp/hash.out)"
     if [ "$SHA_ACTUAL" = "$SHA_EXPECT" ]; then
         say "${GRN}Download SHA256 verified.${NC}"
     else
         die "SHA256 mismatch (got ${SHA_ACTUAL:-nothing}, expected ${SHA_EXPECT}) — download truncated or corrupt; NOT rebooting"
     fi
-else
-    warn "No ${IMG_URL}.sha256 on the server; skipping download verification"
-    $BB wget -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
 fi
 $BB sync
 

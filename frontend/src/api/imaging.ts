@@ -218,6 +218,13 @@ export interface ActionResult {
 // Make a machine check in now rather than on its own timer. This is the whole of
 // the "push": the agent then does exactly what it would have done minutes later,
 // and the rollout's rules — canary, soak, batch, window, budget — are unchanged.
+// Forget a machine. Not a soft delete: one that still exists is recreated by its
+// next heartbeat, so a deletion made in error costs a heartbeat interval rather
+// than being permanent.
+export async function deleteMachine(id: string): Promise<void> {
+  await api.delete(`/api/v1/imaging/machines/${encodeURIComponent(id)}`);
+}
+
 export async function nudgeMachine(id: string): Promise<ActionResult> {
   const { data } = await api.post(`/api/v1/imaging/machines/${encodeURIComponent(id)}/nudge`);
   return data;

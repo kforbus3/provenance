@@ -42,6 +42,7 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Delete("/imaging/rollouts/{id}", h.deleteRollout)
 
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Put("/imaging/machines/{id}", h.updateMachine)
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Delete("/imaging/machines/{id}", h.deleteMachine)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/nudge", h.nudge)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/install", h.install)
 
@@ -398,6 +399,37 @@ type updateMachineReq struct {
 
 // updateMachine writes the operator-owned half of a machine record: which host
 // it is, what it is called, and whether it is held back from rollouts.
+// deleteMachine forgets a machine: one that is decommissioned, was reimaged
+// under a different MAC, or only ever existed because somebody test-booted a VM.
+//
+// Not a soft delete. A machine that still exists reports in on its next
+// heartbeat and is recreated, so a deletion made in error costs one heartbeat
+// interval — and a tombstone that suppressed the recreate would turn that into
+// a permanent mistake.
+//
+// A machine paired to a host is unpaired by this, not protected from it: the
+// host is the record that matters and it is untouched, while the imaging row is
+// a description of hardware that may be gone.
+func (h *handler) deleteMachine(w http.ResponseWriter, r *http.Request) {
+	id := clean(chi.URLParam(r, "id"), 128)
+	removed, err := h.d.Store.DeleteMachine(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not remove the machine")
+		return
+	}
+	if !removed {
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return
+	}
+	// Audited with the id, because this is the one imaging action that destroys
+	// a record rather than changing one.
+	h.audit(r, "imaging.machine.delete", id, map[string]any{"machine": id})
+	// Also drop any live progress row: the machine is gone, and leaving it in
+	// the "imaging now" list is a row nothing can ever clear.
+	h.svc.progress.Forget(id)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (h *handler) updateMachine(w http.ResponseWriter, r *http.Request) {
 	id := clean(chi.URLParam(r, "id"), 128)
 	m, err := h.d.Store.GetMachine(r.Context(), id)

@@ -53,6 +53,11 @@ CRYPTTAB=/cryptroot/crypttab
 [ -f "$CRYPTTAB" ] || CRYPTTAB=/etc/crypttab
 
 DEST=/cryptkey/luks.key
+# Spelled out rather than derived with `dirname`. The parent of a constant path
+# is a constant, and dracut's initramfs has no dirname -- so deriving it made
+# every unlock fail with "dirname: command not found", an empty mkdir, no
+# keyfile, and a passphrase prompt on a machine meant to boot unattended.
+DESTDIR=/cryptkey
 MNT=/ab-bootpart
 
 # Nothing to do on an unencrypted image, or once tpm2/tang enrolment has reaped
@@ -60,8 +65,8 @@ MNT=/ab-bootpart
 [ -f "$CRYPTTAB" ] || exit 0
 grep -q "$DEST" "$CRYPTTAB" 2>/dev/null || exit 0
 
-mkdir -p "$MNT" "$(dirname "$DEST")"
-chmod 0700 "$(dirname "$DEST")"
+mkdir -p "$MNT" "$DESTDIR"
+chmod 0700 "$DESTDIR"
 
 # By label, like everything else here: the partition number differs between the
 # BIOS and UEFI layouts, and a machine imaged from one must not depend on the

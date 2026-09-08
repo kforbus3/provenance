@@ -155,6 +155,30 @@ func (s *Store) SetMachineOperatorFields(ctx context.Context, id, label string, 
 	return err
 }
 
+// DeleteMachine forgets a machine entirely.
+//
+// For a machine that is gone -- decommissioned, reimaged under a different MAC,
+// or a row created by a test boot that will never come back. The imaging_events
+// rows cascade with it (0080: machine_id REFERENCES imaging_machines ON DELETE
+// CASCADE), which is the intent: the record exists to describe a machine, and
+// keeping the history of one nobody can point at is how the Machines tab fills
+// with rows an operator cannot act on.
+//
+// Deliberately NOT a soft delete. A machine that still exists reports in again
+// and is recreated by ReportMachine on its next heartbeat, so a wrong deletion
+// costs a heartbeat interval rather than being permanent -- and a tombstone that
+// suppressed that would turn a recoverable mistake into an unrecoverable one.
+//
+// Returns whether a row was actually removed, so the caller can 404 rather than
+// silently report success for an id that was never there.
+func (s *Store) DeleteMachine(ctx context.Context, id string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM imaging_machines WHERE id=$1`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // RecordImagingEvent appends to the provisioning record: what was handed to a
 // machine and whether it came back. Append-only, and never fails a caller --
 // losing a record must not fail the imaging run it describes.
