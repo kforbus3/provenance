@@ -437,13 +437,13 @@ write_stream() {
         $BB mkfifo /tmp/hashpipe
         $BB sha256sum /tmp/hashpipe > /tmp/hash.out &
         HASHPID=$!
-        $BB wget -O - "$IMG_URL" | $BB tee /tmp/hashpipe | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+        $BB wget -q -O - "$IMG_URL" | $BB tee /tmp/hashpipe | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
         _rc=$?
         wait $HASHPID
         return $_rc
     else
         warn "No ${IMG_URL}.sha256 on the server; skipping download verification"
-        $BB wget -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+        $BB wget -q -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
     fi
 }
 
