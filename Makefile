@@ -253,6 +253,14 @@ smoke: ## Build a real initramfs + bootloader and check what is actually in them
 	  --ulimit nofile=65536:65536 \
 	  -v $(PWD)/builder:/builder:ro almalinux:9 \
 	  bash /builder/smoke/bootloader-smoke.sh $(SMOKE_SUITE)
+	# The imager on a machine whose first NIC faces nothing. One missing udhcpc
+	# flag made that hang forever, and every test that had a single NIC — or the
+	# live one first — passed while it did.
+	@if [ -f output/imager/vmlinuz ]; then \
+	  imager/test-multi-nic.sh output/imager; \
+	else \
+	  echo "[smoke] no netboot imager built; skipping the multi-NIC test"; \
+	fi
 
 SMOKE_SUITE ?= 9
 
