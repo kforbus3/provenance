@@ -79,4 +79,49 @@ grep -q "Using eth1 to reach 192.168.50.1" <<<"$OUT2" \
     server, reporting under the MAC of the wrong port — so the image assigned to
     the port that PXE-booted never matches."
 
-echo -e "\033[0;32m[test] PASS:\033[0m gave up on the dead NIC, and chose the server-facing NIC over a live decoy"
+echo "[test] the provisioning NIC FIRST — order must not matter"
+# The previous two cases both had the provisioning network second, so both would
+# still pass if the rule were "take the last lease" rather than "take the one
+# facing the server". A machine can be patched on any port; the choice has to be
+# about the network, never about enumeration order.
+OUT3="$(docker run --rm -v "$IM":/im:ro --entrypoint sh alpine:3.20 -c '
+    apk add -q qemu-system-x86_64 >/dev/null 2>&1
+    truncate -s 4G /tmp/d.img
+    timeout 180 qemu-system-x86_64 -m 1024 -smp 2 -nographic -no-reboot \
+      -kernel /im/vmlinuz -initrd /im/initramfs.img \
+      -append "imager.url=http://192.168.50.1/none.img imager.action=shell console=ttyS0,115200" \
+      -netdev user,id=prov,net=192.168.50.0/24,host=192.168.50.1 -device virtio-net-pci,netdev=prov \
+      -netdev user,id=office,net=10.9.9.0/24,host=10.9.9.1 -device virtio-net-pci,netdev=office \
+      -drive file=/tmp/d.img,format=raw,if=virtio 2>&1
+  ' | grep -aE "imager\]" || true)"
+
+echo "$OUT3" | sed 's/^/    /'
+echo
+
+grep -q "eth1: 10.9.9" <<<"$OUT3" \
+    || fail "the office interface did not lease; the test is not exercising the case"
+grep -q "Using eth0 to reach 192.168.50.1" <<<"$OUT3" \
+    || fail "with the provisioning NIC first, the imager did not choose it.
+    The rule must be 'the interface facing the server', not 'the first' or 'the
+    last' — a machine can be patched on any port."
+
+echo "[test] a single NIC still works — the ordinary machine"
+OUT4="$(docker run --rm -v "$IM":/im:ro --entrypoint sh alpine:3.20 -c '
+    apk add -q qemu-system-x86_64 >/dev/null 2>&1
+    truncate -s 4G /tmp/d.img
+    timeout 180 qemu-system-x86_64 -m 1024 -smp 2 -nographic -no-reboot \
+      -kernel /im/vmlinuz -initrd /im/initramfs.img \
+      -append "imager.url=http://192.168.50.1/none.img imager.action=shell console=ttyS0,115200" \
+      -netdev user,id=prov,net=192.168.50.0/24,host=192.168.50.1 -device virtio-net-pci,netdev=prov \
+      -drive file=/tmp/d.img,format=raw,if=virtio 2>&1
+  ' | grep -aE "imager\]" || true)"
+
+echo "$OUT4" | sed 's/^/    /'
+echo
+
+grep -q "Using eth0 to reach 192.168.50.1" <<<"$OUT4" \
+    || fail "a single-NIC machine no longer selects its only interface"
+grep -q "Target disk:" <<<"$OUT4" \
+    || fail "a single-NIC machine no longer reaches disk selection"
+
+echo -e "\033[0;32m[test] PASS:\033[0m the server-facing NIC is chosen on any port, dead or decoy, one NIC or two"
