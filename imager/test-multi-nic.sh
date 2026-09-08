@@ -124,4 +124,39 @@ grep -q "Using eth0 to reach 192.168.50.1" <<<"$OUT4" \
 grep -q "Target disk:" <<<"$OUT4" \
     || fail "a single-NIC machine no longer reaches disk selection"
 
-echo -e "\033[0;32m[test] PASS:\033[0m the server-facing NIC is chosen on any port, dead or decoy, one NIC or two"
+echo "[test] a good lease on a network that cannot reach the server"
+# The failure this replaces: the machine took a perfectly good lease on a network
+# with no route to the provisioning server, then sat in wget forever on a console
+# that had already printed everything it was going to print. A slow download and
+# a doomed one looked identical, for twenty minutes at a time.
+#
+# restrict=on gives the guest DHCP and no route anywhere — a network that works
+# and cannot reach the server, which is exactly the second NIC of a real machine.
+OUT5="$(docker run --rm -v "$IM":/im:ro --entrypoint sh alpine:3.20 -c '
+    apk add -q qemu-system-x86_64 >/dev/null 2>&1
+    truncate -s 4G /tmp/d.img
+    timeout 200 qemu-system-x86_64 -cpu max -m 1536 -smp 2 -nographic -no-reboot \
+      -kernel /im/vmlinuz -initrd /im/initramfs.img \
+      -append "imager.url=http://192.168.50.1/images/none.img imager.action=shell console=ttyS0,115200" \
+      -netdev user,id=office,net=10.9.9.0/24,host=10.9.9.1,restrict=on \
+      -device virtio-net-pci,netdev=office \
+      -drive file=/tmp/d.img,format=raw,if=virtio 2>&1
+  ' | grep -aE "imager\]" || true)"
+
+echo "$OUT5" | sed 's/^/    /'
+echo
+
+grep -q "eth0: 10.9.9" <<<"$OUT5" \
+    || fail "the isolated interface did not lease; the test is not exercising the case"
+grep -q "is not reachable over eth0" <<<"$OUT5" \
+    || fail "the imager did not notice the server was unreachable and would have
+    hung in the download instead of saying so"
+grep -qi "FATAL" <<<"$OUT5" \
+    || fail "the imager did not stop. A machine that cannot reach the image server
+    must fail with a reason, not wait in a transfer that cannot finish."
+grep -q "retrying eth0" <<<"$OUT5" \
+    || fail "the imager gave up without a second DHCP pass — the provisioning port
+    is often just slower to come up than the office one"
+
+echo -e "\033[0;32m[test] PASS:\033[0m the server-facing NIC is chosen on any port, dead or decoy, one NIC or two,
+       and an unreachable server fails with a reason instead of hanging"
