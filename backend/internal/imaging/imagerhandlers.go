@@ -131,6 +131,6 @@ func (h *handler) imagingNow(w http.ResponseWriter, r *http.Request) {
 // that was unplugged mid-write, most often. It expires on its own; this is for
 // the operator who does not want to look at it for the next ten minutes.
 func (h *handler) forgetImaging(w http.ResponseWriter, r *http.Request) {
-	id := clean(chi.URLParam(r, "id"), 128)
+	id := pathID(r, "id")
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": h.svc.progress.Forget(id)})
 }

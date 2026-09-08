@@ -3,6 +3,7 @@ package imaging
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -76,6 +77,31 @@ func MountMachineCompat(r chi.Router, d *app.Deps, svc *Service) {
 type handler struct {
 	d   *app.Deps
 	svc *Service
+}
+
+// pathID reads an id from the URL path, percent-decoded.
+//
+// Machine ids are MAC addresses, and a MAC has colons in it. Go sets
+// URL.RawPath whenever the decoded path differs from the raw one, chi routes on
+// RawPath when it is set, and chi.URLParam then returns the still-encoded
+// segment. So a client that encodes the id -- which is correct HTTP, and which
+// every one of this product's own clients does -- sends
+// "bc%3A24%3A11%3Afd%3Ac8%3Ac0" and the handler looks up a machine by that
+// literal string. It matches nothing.
+//
+// The symptom was a 404 from every per-machine action: pair, hold, check in now,
+// install directly and forget. An id with nothing to encode, like a test row,
+// worked perfectly, which is why this survived being used.
+//
+// Decoding here rather than telling the clients to stop encoding: both spellings
+// are legal, the server should accept either, and a rule that lives in five
+// call sites is a rule that will be broken by the sixth.
+func pathID(r *http.Request, name string) string {
+	raw := chi.URLParam(r, name)
+	if dec, err := url.PathUnescape(raw); err == nil {
+		raw = dec
+	}
+	return clean(raw, 128)
 }
 
 func clean(v string, limit int) string {
@@ -411,7 +437,7 @@ type updateMachineReq struct {
 // host is the record that matters and it is untouched, while the imaging row is
 // a description of hardware that may be gone.
 func (h *handler) deleteMachine(w http.ResponseWriter, r *http.Request) {
-	id := clean(chi.URLParam(r, "id"), 128)
+	id := pathID(r, "id")
 	removed, err := h.d.Store.DeleteMachine(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not remove the machine")
@@ -431,7 +457,7 @@ func (h *handler) deleteMachine(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) updateMachine(w http.ResponseWriter, r *http.Request) {
-	id := clean(chi.URLParam(r, "id"), 128)
+	id := pathID(r, "id")
 	m, err := h.d.Store.GetMachine(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "no such machine")
@@ -537,7 +563,7 @@ func (h *handler) install(w http.ResponseWriter, r *http.Request) {
 // machineHost resolves the machine in the path to the host it is paired with,
 // checking the caller may touch that host.
 func (h *handler) machineHost(w http.ResponseWriter, r *http.Request) (*models.Host, string, bool) {
-	id := clean(chi.URLParam(r, "id"), 128)
+	id := pathID(r, "id")
 	m, err := h.d.Store.GetMachine(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "no such machine")
