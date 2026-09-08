@@ -72,18 +72,47 @@ chmod 0700 "$DESTDIR"
 # BIOS and UEFI layouts, and a machine imaged from one must not depend on the
 # other. blkid rather than a udev symlink, for the same reason crypttab uses
 # PARTLABEL= -- udev may not have settled this early.
-BOOTDEV="$(blkid -l -t LABEL=BOOT -o device 2>/dev/null)"
-[ -n "$BOOTDEV" ] || BOOTDEV="$(blkid -l -t PARTLABEL=BOOT -o device 2>/dev/null)"
-# Cache-free retry. blkid answers from /run/blkid/blkid.tab when it exists, and
-# an entry written before a label was applied hides that label afterwards --
-# which is a real failure mode wherever something scanned the disk earlier in
-# the same boot. -c /dev/null forces a probe of the devices themselves. Only
-# reached when the cached lookups found nothing, so it costs a scan exactly when
-# the alternative is prompting for a passphrase nobody knew about.
-if [ -z "$BOOTDEV" ]; then
-    BOOTDEV="$(blkid -c /dev/null -t LABEL=BOOT -o device 2>/dev/null | head -1)"
-    [ -n "$BOOTDEV" ] || BOOTDEV="$(blkid -c /dev/null -t PARTLABEL=BOOT -o device 2>/dev/null | head -1)"
-fi
+# Waited for, not merely looked for.
+#
+# This runs before any cryptsetup unit, which is the whole point -- a volume
+# that is not the root slot is asked for its key exactly once, and a key staged
+# after that is a key staged too late. But running that early means the disks may
+# not be enumerated yet: systemd-udev-trigger STARTS the coldplug and does not
+# wait for it to finish, so the first blkid can legitimately find nothing on a
+# machine that is perfectly healthy.
+#
+# That is exactly what happened. The unit ran at the right moment, found no BOOT
+# partition, and fell through to a passphrase prompt on a machine whose key was
+# sitting on a partition that appeared a second later.
+#
+# So: poll. Cheap, bounded, and it fails in the honest direction -- if the
+# partition never appears the prompt is still there, and the timeout is short
+# enough that a genuinely missing BOOT costs seconds rather than a hung boot.
+find_bootdev() {
+    blkid -l -t LABEL=BOOT -o device 2>/dev/null && return 0
+    blkid -l -t PARTLABEL=BOOT -o device 2>/dev/null && return 0
+    # Cache-free retry. blkid answers from /run/blkid/blkid.tab when it exists,
+    # and an entry written before a label was applied hides that label
+    # afterwards -- a real failure mode wherever something scanned the disk
+    # earlier in the same boot. -c /dev/null probes the devices themselves.
+    blkid -c /dev/null -t LABEL=BOOT -o device 2>/dev/null | head -1 | grep . && return 0
+    blkid -c /dev/null -t PARTLABEL=BOOT -o device 2>/dev/null | head -1 | grep . && return 0
+    return 1
+}
+
+BOOTDEV=""
+_waited=0
+while [ "$_waited" -lt 30 ]; do
+    BOOTDEV="$(find_bootdev)"
+    [ -n "$BOOTDEV" ] && break
+    # Nudge udev along rather than only waiting on it, where it is available.
+    [ "$_waited" = 0 ] && command -v udevadm >/dev/null 2>&1 && \
+        udevadm settle --timeout=10 >/dev/null 2>&1
+    sleep 1
+    _waited=$((_waited + 1))
+done
+[ -n "$BOOTDEV" ] && [ "$_waited" -gt 0 ] && \
+    echo "ab-luks-key: BOOT appeared after ${_waited}s" >&2
 
 if [ -z "$BOOTDEV" ]; then
     log_warning_msg "ab-luks-key: cannot find the BOOT partition;" \

@@ -30,7 +30,8 @@ install() {
     # absent exactly this way and cost a machine its unattended boot -- the hook
     # ran, printed "dirname: command not found", made no keyfile, and the disk
     # fell through to a passphrase prompt.
-    inst_multiple blkid mount umount cp mkdir chmod grep head
+    inst_multiple blkid mount umount cp mkdir chmod grep head sleep
+    inst_multiple -o udevadm
 
     # initqueue/settled, not pre-mount or pre-trigger.
     #
