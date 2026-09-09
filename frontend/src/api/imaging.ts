@@ -698,3 +698,20 @@ export async function inspectKeyBackup(name: string) {
   const { data } = await api.get("/api/v1/imaging/keys/inspect", { params: { name } });
   return data as { name: string; entries: string[]; containsSigningKey: boolean };
 }
+
+// Register an already-enrolled host as an updatable A/B machine — the inverse of
+// "Add as host" on the Imaging page.
+//
+// Rollouts select from the machine table, so a host with no machine record is
+// invisible to them, including to a rollout that targets the whole fleet. That
+// is right for an ordinary server and wrong for an A/B machine this deployment
+// did not image: one restored from a backup, imaged by an earlier server, or
+// whose record was removed. Registering reads the machine's real slot and
+// version over SSH rather than assuming them, and refuses a host that has no
+// ab-update rather than creating a record that can only ever fail a rollout.
+export async function registerHostForUpdates(hostId: string): Promise<Machine> {
+  const { data } = await api.post(
+    `/api/v1/imaging/hosts/${encodeURIComponent(hostId)}/register`,
+  );
+  return data;
+}

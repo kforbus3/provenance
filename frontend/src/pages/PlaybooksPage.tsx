@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, LinearProgress, Paper, Stack, Switch, Table, TableBody,
+  FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Stack, Switch, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, TextField, ToggleButton,
   ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
@@ -25,17 +25,9 @@ import { listGroups, type Group } from "../api/admin";
 import { useUIStore } from "../store/ui";
 import { useAuthStore } from "../store/auth";
 import { formatDateTime } from "../lib/datetime";
+import { PLAYBOOK_TEMPLATES } from "../lib/playbook-templates";
 
-const STARTER = `---
-- name: Example playbook
-  hosts: all
-  become: true
-  tasks:
-    - name: Ensure the system is up to date
-      ansible.builtin.package:
-        name: "*"
-        state: latest
-`;
+const STARTER = PLAYBOOK_TEMPLATES[0].content;
 
 // Authoring surface for Ansible playbooks. Playbooks are stored in Fleet,
 // edited here, and validated/linted by the ansible-runner sidecar. Running them
@@ -68,8 +60,8 @@ export function PlaybooksPage() {
         </Button>
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Author Ansible playbooks here, then validate and lint them. Running playbooks against hosts
-        is coming in a later phase.
+        Author Ansible playbooks here, then validate, lint and run them against hosts or a group.
+        A new playbook can start from a template — including one that installs an A/B (RAUC) update.
       </Typography>
 
       {runner && !runner.available && (
@@ -419,6 +411,25 @@ function PlaybookEditor({ id, onClose, onSaved }: { id: string | null; onClose: 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [content, setContent] = useState(STARTER);
+  const [template, setTemplate] = useState(PLAYBOOK_TEMPLATES[0].id);
+
+  // Switching template replaces the editor contents, and also the name and
+  // description when they are still empty or still the previous template's --
+  // so picking "A/B update" gives a playbook that is named, described and
+  // written, rather than a body with an empty name above it. Anything typed is
+  // left alone: an overwrite of someone's own words to save them a keystroke is
+  // not a trade worth making.
+  const pickTemplate = (id: string) => {
+    const t = PLAYBOOK_TEMPLATES.find((x) => x.id === id);
+    if (!t) return;
+    const prev = PLAYBOOK_TEMPLATES.find((x) => x.id === template);
+    setTemplate(id);
+    setContent(t.content);
+    if (!name.trim() || name === prev?.name) setName(t.name);
+    if (!description.trim() || description === prev?.playbookDescription) {
+      setDescription(t.playbookDescription);
+    }
+  };
   const [check, setCheck] = useState<{ kind: "validate" | "lint"; result: CheckResult } | null>(null);
   const [loaded, setLoaded] = useState(isNew);
 
@@ -460,6 +471,17 @@ function PlaybookEditor({ id, onClose, onSaved }: { id: string | null; onClose: 
       <DialogTitle>{isNew ? "New Playbook" : "Edit Playbook"}</DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2}>
+          {isNew && (
+            <TextField
+              select label="Start from" value={template} size="small" fullWidth
+              onChange={(e) => pickTemplate(e.target.value)}
+              helperText={PLAYBOOK_TEMPLATES.find((t) => t.id === template)?.description}
+            >
+              {PLAYBOOK_TEMPLATES.map((t) => (
+                <MenuItem key={t.id} value={t.id}>{t.label}</MenuItem>
+              ))}
+            </TextField>
+          )}
           <TextField
             label="Name" value={name} onChange={(e) => setName(e.target.value)}
             size="small" fullWidth autoFocus required

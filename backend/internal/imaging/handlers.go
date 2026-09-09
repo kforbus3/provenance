@@ -45,6 +45,9 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Put("/imaging/machines/{id}", h.updateMachine)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Delete("/imaging/machines/{id}", h.deleteMachine)
+		// Register an already-enrolled host as an updatable machine. Keyed on the
+		// HOST id, because the point is that no machine record exists yet.
+		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/hosts/{hostId}/register", h.registerHost)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/nudge", h.nudge)
 		pr.With(d.Auth.RequirePermission("Imaging.Manage")).Post("/imaging/machines/{id}/install", h.install)
 
@@ -463,6 +466,41 @@ type updateMachineReq struct {
 // A machine paired to a host is unpaired by this, not protected from it: the
 // host is the record that matters and it is untouched, while the imaging row is
 // a description of hardware that may be gone.
+// registerHost records an enrolled host as an A/B machine so rollouts can see it.
+//
+// Rollouts select FROM imaging_machines; a host with no row is invisible to
+// them, including to "the whole fleet". That is correct for an ordinary server
+// and wrong for an A/B machine this deployment did not image — restored from a
+// backup, imaged by a previous server, or whose row was deleted.
+func (h *handler) registerHost(w http.ResponseWriter, r *http.Request) {
+	raw := pathID(r, "hostId")
+	hostID, err := uuid.Parse(raw)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad host id")
+		return
+	}
+	// Not found rather than forbidden, as everywhere else here: whether a host
+	// exists is itself something a caller without access should not learn.
+	if !h.canSee(r, auth.MustPrincipal(r), hostID) {
+		httpx.WriteError(w, http.StatusNotFound, "no such host")
+		return
+	}
+	host, err := h.d.Store.GetHost(r.Context(), hostID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such host")
+		return
+	}
+	m, err := h.svc.RegisterHost(r.Context(), host)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	h.audit(r, "imaging.host.register", m.ID, map[string]any{
+		"host": host.Hostname, "slot": m.Slot, "version": m.Version,
+	})
+	httpx.WriteJSON(w, http.StatusOK, m)
+}
+
 func (h *handler) deleteMachine(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r, "id")
 	removed, err := h.d.Store.DeleteMachine(r.Context(), id)
