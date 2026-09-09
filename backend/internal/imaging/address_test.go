@@ -52,3 +52,32 @@ func TestARubbishAddressIsNotBelieved(t *testing.T) {
 		}
 	}
 }
+
+// Exercising the HANDLER, not the helper.
+//
+// The two tests above call reportedAddress() directly. They passed the whole
+// time the handler they name in their request path was still calling
+// clientIP() — so the fix they were written for was never actually applied to
+// the endpoint that receives the field, and nothing said so. A test that cannot
+// observe the code it is about is a test that cannot fail.
+//
+// This one drives imagerReport and reads what was recorded.
+func TestImagerReportRecordsTheMachinesOwnAddress(t *testing.T) {
+	svc := &Service{progress: newProgressRegistry()}
+	h := &handler{svc: svc}
+
+	r := post("id=bc:24:11:fd:c8:c0&phase=writing&percent=40&address=192.168.50.160",
+		"172.18.0.1:52000")
+	h.imagerReport(httptest.NewRecorder(), r)
+
+	rows := svc.progress.Active()
+	if len(rows) != 1 {
+		t.Fatalf("recorded %d rows, want 1", len(rows))
+	}
+	if rows[0].Address != "192.168.50.160" {
+		t.Errorf("recorded address = %q, want the machine's own 192.168.50.160. "+
+			"172.18.0.1 is the Docker bridge this report was relayed through, and "+
+			"it is what 'Add as host' would then offer to create the host at.",
+			rows[0].Address)
+	}
+}
