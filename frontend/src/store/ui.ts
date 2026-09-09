@@ -15,6 +15,11 @@ interface UIState {
   // null = the hub itself. Persisted so terminal/file tabs inherit it.
   siteScope: string | null;
   setSiteScope: (id: string | null) => void;
+  // Nav sections the user has collapsed. Collapsed rather than expanded is
+  // stored deliberately: a section added in a later release should appear open,
+  // not hidden because it was absent from a list written before it existed.
+  navCollapsed: string[];
+  toggleNavSection: (title: string) => void;
 }
 
 // currentSiteScope exposes the persisted scope to non-React code (the axios
@@ -36,6 +41,13 @@ export const useUIStore = create<UIState>()(
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
       siteScope: null,
       setSiteScope: (id) => set({ siteScope: id }),
+      navCollapsed: [],
+      toggleNavSection: (title) =>
+        set((s) => ({
+          navCollapsed: s.navCollapsed.includes(title)
+            ? s.navCollapsed.filter((t) => t !== title)
+            : [...s.navCollapsed, title],
+        })),
     }),
     { name: "fleet-ui" },
   ),

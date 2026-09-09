@@ -1,7 +1,9 @@
 import {
-  AppBar, Badge, Box, Button, Chip, CssBaseline, Drawer, IconButton, List, ListItemButton,
+  AppBar, Badge, Box, Button, Chip, Collapse, CssBaseline, Divider, Drawer, IconButton, List, ListItemButton,
   ListItemIcon, ListItemText, MenuItem, Select, Toolbar, Typography, Tooltip,
 } from "@mui/material";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import DnsIcon from "@mui/icons-material/Dns";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import DashboardIcon from "@mui/icons-material/Dashboard";
@@ -53,46 +55,130 @@ import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
 
-// Each item's `perm` mirrors the permission its route enforces in App.tsx, so the
-// menu shows a link only if the user can actually open the page. Items without a
-// `perm` (Dashboard, Approvals, Security) are available to every authenticated
-// user, matching their unguarded routes. The backend remains the sole
-// authorization authority — this filtering is cosmetic.
-const NAV: Array<{ to: string; label: string; icon: React.ReactNode; perm?: string; providerOnly?: boolean; hubOnly?: boolean }> = [
+// The navigation, grouped.
+//
+// This was thirty-five items in one flat list, in the order they happened to be
+// built. Finding anything meant reading all of it, and the list only grows --
+// every feature added another line, and the ones an operator uses hourly sat
+// between ones they touch twice a year.
+//
+// Grouped by what someone is trying to DO, not by which subsystem implements
+// it: "I need to reach a machine", "I need to prove who did what", "I need to
+// change who can do it". That is why Credentials sits with Certificates rather
+// than with Users, and why Imaging and Enrollment are together -- both are how
+// a machine comes to exist here.
+//
+// Each item's `perm` mirrors the permission its route enforces in App.tsx, so
+// the sidebar shows exactly what the user can actually open. Items with no
+// `perm` (Dashboard, Approvals, Security, Help) are available to every
+// authenticated user.
+interface NavItem {
+  to: string;
+  label: string;
+  icon: React.ReactNode;
+  perm?: string;
+  providerOnly?: boolean;
+  hubOnly?: boolean;
+}
+
+// Shown above the sections, always. These are the entry points rather than
+// destinations: where you land, what you ask, and the two scope switchers that
+// change what everything else means.
+export const NAV_TOP: NavItem[] = [
   { to: "/tenants", label: "Tenants", icon: <ApartmentIcon />, providerOnly: true },
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/sites", label: "Sites", icon: <HubIcon />, perm: "Federation.Manage", hubOnly: true },
   { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
-  { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
-  { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
-  { to: "/sessions", label: "Session Replay", icon: <HistoryIcon />, perm: "Session.Replay" },
-  { to: "/automation", label: "Automation", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
-  { to: "/schedules", label: "Schedules", icon: <ScheduleIcon />, perm: "Schedule.Manage" },
+];
+
+// Personal, not administrative: what is waiting for you, your own sign-in
+// security, and the manual. Rendered after the sections without a heading of
+// their own, because a heading over three unrelated personal items is more
+// clutter, not less.
+//
+// Two of these were previously mixed into the administrative list. "Security"
+// in particular sat between Vulnerabilities and Imaging and reads there as the
+// fleet's security posture -- it is this user's two-factor and passkeys, which
+// is why it is now named for what it is. Approvals had no permission attached,
+// so wherever it was grouped, that group appeared for every user in the
+// product.
+export const NAV_BOTTOM: NavItem[] = [
   { to: "/approvals", label: "Approvals", icon: <ApprovalIcon /> },
-  { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },
-  { to: "/reports", label: "Reports", icon: <AssessmentIcon />, perm: "Audit.View" },
-  { to: "/behavior", label: "Behavior", icon: <InsightsIcon />, perm: "Audit.View" },
-  { to: "/access-reviews", label: "Access Reviews", icon: <FactCheckIcon />, perm: "AccessReview.Manage" },
-  { to: "/users", label: "Users", icon: <PeopleIcon />, perm: "User.Edit" },
-  { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
-  { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },
-  { to: "/service-accounts", label: "Service Accounts", icon: <ApiIcon />, perm: "ServiceAccount.Manage" },
-  { to: "/vault", label: "Credentials", icon: <KeyIcon />, perm: "Credential.View" },
-  { to: "/databases", label: "Databases", icon: <StorageIcon />, perm: "Database.Connect" },
-  { to: "/kubernetes", label: "Kubernetes", icon: <HubIcon />, perm: "Kubernetes.Access" },
-  { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
-  { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
-  { to: "/lifecycle", label: "Expiry & Rotation", icon: <HourglassBottomIcon />, perm: "System.Configure" },
-  { to: "/security", label: "Security", icon: <ShieldIcon /> },
-  { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
-  { to: "/imaging", label: "Imaging", icon: <AlbumIcon />, perm: "Imaging.View" },
-  { to: "/command-policy", label: "Command Control", icon: <PolicyIcon />, perm: "CommandPolicy.Manage" },
-  { to: "/access-policies", label: "Access Policies", icon: <GavelIcon />, perm: "AccessPolicy.Manage" },
-  { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
-  { to: "/system-health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
-  { to: "/disaster-recovery", label: "Disaster Recovery", icon: <SyncAltIcon />, perm: "DR.Manage" },
-  { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
+  { to: "/security", label: "My Account", icon: <ShieldIcon /> },
   { to: "/help", label: "Help", icon: <HelpOutlineIcon /> },
+];
+
+export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
+  {
+    // Reaching machines, and what happened while you were there. Session Replay
+    // belongs here rather than under compliance: it is the recording of the
+    // thing directly above it, and it is looked for right after using it.
+    title: "Access",
+    items: [
+      { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
+      { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
+      { to: "/databases", label: "Databases", icon: <StorageIcon />, perm: "Database.Connect" },
+      { to: "/kubernetes", label: "Kubernetes", icon: <HubIcon />, perm: "Kubernetes.Access" },
+      { to: "/sessions", label: "Session Replay", icon: <HistoryIcon />, perm: "Session.Replay" },
+    ],
+  },
+  {
+    title: "Automation",
+    items: [
+      { to: "/automation", label: "Automation", icon: <PlaylistPlayIcon />, perm: "Playbook.Edit" },
+      { to: "/schedules", label: "Schedules", icon: <ScheduleIcon />, perm: "Schedule.Manage" },
+      { to: "/jobs", label: "Jobs", icon: <WorkHistoryIcon />, perm: "System.Configure" },
+    ],
+  },
+  {
+    // How a machine comes to exist here at all: imaged, or enrolled.
+    title: "Provisioning",
+    items: [
+      { to: "/imaging", label: "Imaging", icon: <AlbumIcon />, perm: "Imaging.View" },
+      { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
+    ],
+  },
+  {
+    title: "Security",
+    items: [
+      { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
+      { to: "/vault", label: "Credentials", icon: <KeyIcon />, perm: "Credential.View" },
+      { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
+      { to: "/lifecycle", label: "Expiry & Rotation", icon: <HourglassBottomIcon />, perm: "System.Configure" },
+    ],
+  },
+  {
+    // Who exists and what they may do. Approvals is here because it is the
+    // moment policy is applied to a person, not a report about it afterwards.
+    title: "Identity & Policy",
+    items: [
+      { to: "/users", label: "Users", icon: <PeopleIcon />, perm: "User.Edit" },
+      { to: "/roles", label: "Roles", icon: <SecurityIcon />, perm: "Role.Edit" },
+      { to: "/groups", label: "Groups", icon: <GroupWorkIcon />, perm: "Group.Edit" },
+      { to: "/service-accounts", label: "Service Accounts", icon: <ApiIcon />, perm: "ServiceAccount.Manage" },
+      { to: "/access-policies", label: "Access Policies", icon: <GavelIcon />, perm: "AccessPolicy.Manage" },
+      { to: "/command-policy", label: "Command Control", icon: <PolicyIcon />, perm: "CommandPolicy.Manage" },
+    ],
+  },
+  {
+    // Proving what happened, to someone who was not there.
+    title: "Compliance",
+    items: [
+      { to: "/audit", label: "Audit", icon: <GavelIcon />, perm: "Audit.View" },
+      { to: "/reports", label: "Reports", icon: <AssessmentIcon />, perm: "Audit.View" },
+      { to: "/behavior", label: "Behavior", icon: <InsightsIcon />, perm: "Audit.View" },
+      { to: "/access-reviews", label: "Access Reviews", icon: <FactCheckIcon />, perm: "AccessReview.Manage" },
+    ],
+  },
+  {
+    // The deployment itself, rather than what it manages.
+    title: "System",
+    items: [
+      { to: "/system-health", label: "Health", icon: <MonitorHeartIcon />, perm: "System.Configure" },
+      { to: "/disaster-recovery", label: "Disaster Recovery", icon: <SyncAltIcon />, perm: "DR.Manage" },
+      { to: "/settings", label: "Settings", icon: <SettingsIcon />, perm: "System.Configure" },
+    ],
+  },
 ];
 
 // Application chrome: top bar + persistent navigation drawer. The routed page
@@ -171,6 +257,38 @@ export function AppLayout() {
   const username = useAuthStore((s) => s.user?.username);
   const appName = useAppName();
   useDocumentTitle();
+
+  const collapsed = useUIStore((s) => s.navCollapsed);
+  const toggleNavSection = useUIStore((s) => s.toggleNavSection);
+
+  // Shown only if the user could actually open it. The sidebar has always
+  // mirrored the routes' own permission checks rather than keeping a second
+  // list, so a route that gains a permission cannot leave a dead link behind.
+  const visible = (item: NavItem) =>
+    (!item.perm || has(item.perm)) &&
+    (!item.providerOnly || showProvider) &&
+    (!item.hubOnly || isHub);
+
+  // "/" would prefix-match every path, so it alone is matched exactly.
+  const isSelected = (to: string) =>
+    to === "/" ? pathname === "/" : pathname.startsWith(to);
+
+  const renderItem = (item: NavItem) => (
+    <ListItemButton
+      key={item.to}
+      component={RouterLink}
+      to={item.to}
+      selected={isSelected(item.to)}
+      sx={{ py: 0.4 }}
+    >
+      <ListItemIcon sx={{ minWidth: 36 }}>
+        {item.to === "/ask" && pendingApprovals.length > 0
+          ? <Badge color="warning" badgeContent={pendingApprovals.length}>{item.icon}</Badge>
+          : item.icon}
+      </ListItemIcon>
+      <ListItemText primary={item.label} />
+    </ListItemButton>
+  );
 
   const handleLogout = async () => {
     await logout();
@@ -271,25 +389,46 @@ export function AppLayout() {
         <Toolbar variant="dense" />
         <Box sx={{ overflow: "auto" }}>
           <List dense>
-            {NAV.filter((item) => (!item.perm || has(item.perm)) && (!item.providerOnly || showProvider) && (!item.hubOnly || isHub)).map((item) => {
-              const selected =
-                item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
+            {NAV_TOP.filter(visible).map(renderItem)}
+            {NAV_SECTIONS.map((section) => {
+              const items = section.items.filter(visible);
+              // A section whose every item is hidden by permission must not
+              // leave its heading behind. An empty "Compliance" tells a user
+              // with no compliance access only that something exists which they
+              // cannot have.
+              if (items.length === 0) return null;
+              // The section holding the current page is always open, whatever
+              // was collapsed before: navigating into a page and finding the
+              // menu around it shut is disorienting, and it happens on every
+              // deep link and every reload.
+              const hasActive = items.some((i) => isSelected(i.to));
+              const open = hasActive || !collapsed.includes(section.title);
               return (
-                <ListItemButton
-                  key={item.to}
-                  component={RouterLink}
-                  to={item.to}
-                  selected={selected}
-                >
-                  <ListItemIcon sx={{ minWidth: 36 }}>
-                    {item.to === "/ask" && pendingApprovals.length > 0
-                      ? <Badge color="warning" badgeContent={pendingApprovals.length}>{item.icon}</Badge>
-                      : item.icon}
-                  </ListItemIcon>
-                  <ListItemText primary={item.label} />
-                </ListItemButton>
+                <Box key={section.title}>
+                  <ListItemButton
+                    onClick={() => toggleNavSection(section.title)}
+                    sx={{ py: 0.25 }}
+                  >
+                    <ListItemText
+                      primary={section.title}
+                      primaryTypographyProps={{
+                        variant: "overline",
+                        sx: { fontSize: 11, letterSpacing: 1, opacity: 0.65 },
+                      }}
+                    />
+                    {open ? <ExpandLessIcon fontSize="small" sx={{ opacity: 0.5 }} />
+                          : <ExpandMoreIcon fontSize="small" sx={{ opacity: 0.5 }} />}
+                  </ListItemButton>
+                  <Collapse in={open} timeout="auto" unmountOnExit>
+                    <List dense disablePadding>
+                      {items.map(renderItem)}
+                    </List>
+                  </Collapse>
+                </Box>
               );
             })}
+            <Divider sx={{ my: 0.5 }} />
+            {NAV_BOTTOM.filter(visible).map(renderItem)}
           </List>
         </Box>
       </Drawer>
