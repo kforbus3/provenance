@@ -275,6 +275,10 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
   const [installing, setInstalling] = useState<Machine | null>(null);
   const [forgetting, setForgetting] = useState<Machine | null>(null);
   const [adopting, setAdopting] = useState<Machine | null>(null);
+  // "Needs a host" rather than hiding managed machines by default. A row that
+  // vanishes when you act on it teaches you to distrust the list; a filter you
+  // chose is a different thing.
+  const [onlyUnpaired, setOnlyUnpaired] = useState(false);
   const { data: bundleData } = useQuery({ queryKey: ["imaging-bundles"], queryFn: listBundles });
 
   const forget = useMutation({
@@ -303,6 +307,8 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
 
   if (!fleet) return <CircularProgress />;
   const versions = Object.entries(fleet.versions).sort((a, b) => b[1] - a[1]);
+  const unpaired = fleet.machines.filter((m) => !m.hostId).length;
+  const shown = onlyUnpaired ? fleet.machines.filter((m) => !m.hostId) : fleet.machines;
 
   if (fleet.machines.length === 0) {
     return (
@@ -325,6 +331,31 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
         {versions.map(([v, n]) => <Chip key={v} size="small" variant="outlined" label={`${v} · ${n}`} />)}
       </Stack>
 
+      {/* A machine does not leave this list when it becomes a host, and should
+          not: this row is its A/B update record — slot, image, running version,
+          rollout progress — none of which the host record holds, and rollout
+          progress is keyed on it with ON DELETE CASCADE. Removing it on pairing
+          would silently drop the machine out of every future rollout, and its
+          agent would recreate the row on the next check-in anyway.
+          What the list needed was not fewer rows but a way to see which ones
+          still want something doing. */}
+      <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+          {unpaired === 0
+            ? `All ${fleet.machines.length} machines are paired with a host.`
+            : `${unpaired} of ${fleet.machines.length} not yet added as a host.`}
+        </Typography>
+        {unpaired > 0 && (
+          <Tooltip title="Machines stay listed after they become hosts — this row is their update record. Filter to the ones still waiting.">
+            <FormControlLabel
+              control={<Switch size="small" checked={onlyUnpaired}
+                               onChange={(e) => setOnlyUnpaired(e.target.checked)} />}
+              label={<Typography variant="body2">Only ones needing a host</Typography>}
+            />
+          </Tooltip>
+        )}
+      </Stack>
+
       <Paper variant="outlined">
         <Table size="small">
           <TableHead>
@@ -337,7 +368,7 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
             </TableRow>
           </TableHead>
           <TableBody>
-            {fleet.machines.map((m) => {
+            {shown.map((m) => {
               const p = PRESENCE[m.presence] ?? PRESENCE.unknown;
               return (
                 <TableRow key={m.id} hover sx={{ opacity: m.held ? 0.6 : 1 }}>
