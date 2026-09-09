@@ -408,10 +408,25 @@ func (s *Service) Run(parent context.Context, runID uuid.UUID, content string, h
 		for _, h := range hosts {
 			names = append(names, h.Hostname)
 		}
+		out := live.snapshot()
+
+		// Name the playbook in the subject. Every failure used to arrive as
+		// "Playbook run failed", so a mailbox of them said nothing about which
+		// of several scheduled playbooks was the one with a problem.
+		//
+		// Best-effort: the alert is worth sending without the name, and a
+		// failed lookup here must not cost the notification entirely.
+		pbName := ""
+		if run, err := s.store.GetPlaybookRun(pctx, runID); err == nil {
+			if pb, err := s.store.GetPlaybook(pctx, run.PlaybookID); err == nil {
+				pbName = pb.Name
+			}
+		}
+
 		s.nfy.Notify(context.WithoutCancel(parent), notify.Event{
 			Type: notify.EventPlaybookFailed, Severity: notify.SeverityError,
-			Title: "Playbook run failed",
-			Body:  fmt.Sprintf("A playbook run against %s failed: %s", strings.Join(names, ", "), errMsg),
+			Title: failureTitle(pbName, out),
+			Body:  failureSummary(out, names, errMsg),
 		})
 	}
 }
