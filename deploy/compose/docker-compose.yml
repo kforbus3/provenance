@@ -114,6 +114,11 @@ services:
       FLEET_JUMP_KNOWN_HOSTS: ${FLEET_JUMP_KNOWN_HOSTS:-}
       FLEET_SSH_INSECURE_HOST_KEYS: ${FLEET_SSH_INSECURE_HOST_KEYS:-}
       FLEET_TRUSTED_PROXIES: ${FLEET_TRUSTED_PROXIES:-}
+      # How many reverse proxies sit in front of this server. The client is the
+      # X-Forwarded-For entry that many places from the right, so a caller cannot
+      # reach it by prepending entries of its own. Deployments that terminate TLS
+      # on a separate box in front of the SPA nginx have two, not one.
+      FLEET_TRUSTED_PROXY_HOPS: ${FLEET_TRUSTED_PROXY_HOPS:-1}
       FLEET_CONTROL_PLANE_HOSTS: ${FLEET_CONTROL_PLANE_HOSTS:-}
       FLEET_REENCRYPT_SECRETS: ${FLEET_REENCRYPT_SECRETS:-}
       FLEET_HOST_SCOPED_ONLY: ${FLEET_HOST_SCOPED_ONLY:-}
