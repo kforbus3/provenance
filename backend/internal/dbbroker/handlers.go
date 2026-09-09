@@ -158,22 +158,7 @@ func (h *handler) audit(r *http.Request, action string, id uuid.UUID, detail map
 		ev.ActorName = p.Username
 	}
 	if r.RemoteAddr != "" {
-		ev.IP = clientIP(r)
+		ev.IP = httpx.ClientIP(r)
 	}
 	_, _ = h.d.Store.AppendAudit(r.Context(), ev)
-}
-
-// clientIP extracts the request IP (best-effort; the reverse proxy sets X-Forwarded-For).
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
-	return host
 }

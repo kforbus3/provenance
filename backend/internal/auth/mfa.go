@@ -207,16 +207,6 @@ func (s *Service) MFARequiredFor(ctx context.Context, u *models.User) bool {
 	return s.store.MFAGloballyRequired(ctx)
 }
 
-// VerifyUserTOTP checks a code against all of the user's confirmed TOTP secrets.
-func (s *Service) VerifyUserTOTP(secrets [][]byte, code string) bool {
-	for _, enc := range secrets {
-		if sec, err := s.DecryptSecret(enc); err == nil && ValidateTOTP(sec, code) {
-			return true
-		}
-	}
-	return false
-}
-
 // VerifyUserTOTPNoReplay validates a code and rejects one whose timestep was
 // already used (replay within the skew window). It is deliberately FAIL-OPEN: it
 // only ever returns false for an invalid code or a *provably* reused step; if the

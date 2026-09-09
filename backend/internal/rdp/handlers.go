@@ -11,13 +11,13 @@ package rdp
 import (
 	"context"
 	"fmt"
+	"github.com/kforbus3/blackfriars/backend/internal/httpx"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -121,7 +121,7 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	if dec := h.d.AccessPolicy.Authorize(ctx, accesspolicy.ConnCtx{
 		UserID: p.UserID, Username: p.Username, IsSuper: p.IsSuperAdmin,
 		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
-		Tags: host.Tags, Protocol: host.Protocol, Surface: "rdp", IP: clientIP(r),
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "rdp", IP: httpx.ClientIP(r),
 	}); dec.Denied {
 		return nil, fmt.Errorf("%s", dec.Reason)
 	}
@@ -308,7 +308,7 @@ func (h *handler) startRecording(ctx context.Context, r *http.Request, p *auth.P
 	hostID := host.ID
 	_, err := h.d.Store.CreateRDPRecording(ctx, store.RDPRecordingInput{
 		ID: id, HostID: &hostID, UserID: &p.UserID, Hostname: host.Hostname,
-		FleetUser: p.Username, RDPUser: rdpUser, Path: path, ClientIP: clientIP(r),
+		FleetUser: p.Username, RDPUser: rdpUser, Path: path, ClientIP: httpx.ClientIP(r),
 	})
 	if err != nil {
 		h.d.Log.Warn("rdp: could not create recording row", "err", err)
@@ -403,14 +403,6 @@ func dedupe(in []string) []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
-	}
-	return host
 }
 
 func queryInt(r *http.Request, key string, def int) int {

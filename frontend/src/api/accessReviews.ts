@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { saveResponse } from "../lib/download";
 
 // Access certification: snapshot the current access grants, keep or revoke each,
 // and produce evidence. Gated by AccessReview.Manage.
@@ -65,12 +66,5 @@ export async function completeAccessReview(id: string): Promise<void> {
 
 export async function downloadAccessReview(id: string): Promise<void> {
   const { data, headers } = await api.get(`/api/v1/access-reviews/${id}/export.csv`, { responseType: "blob" });
-  const blob = new Blob([data as BlobPart], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  const cd = (headers["content-disposition"] as string | undefined) ?? "";
-  a.download = cd.match(/filename="?([^"]+)"?/)?.[1] || `access-review-${id}.csv`;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  saveResponse(data as BlobPart, "text/csv", headers, `access-review-${id}.csv`);
 }

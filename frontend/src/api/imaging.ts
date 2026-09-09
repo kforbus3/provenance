@@ -162,11 +162,6 @@ export async function listRollouts(): Promise<Rollout[]> {
   return data.rollouts ?? [];
 }
 
-export async function getRollout(id: string): Promise<Rollout> {
-  const { data } = await api.get(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}`);
-  return data;
-}
-
 export interface NewRollout {
   bundle: string;
   bundleUrl?: string;
@@ -190,10 +185,6 @@ export async function createRollout(body: NewRollout): Promise<Rollout> {
 
 export async function steerRollout(id: string, verb: "pause" | "resume" | "cancel") {
   await api.post(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}/${verb}`);
-}
-
-export async function deleteRollout(id: string) {
-  await api.delete(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}`);
 }
 
 // Pair a machine with the host it is, name it, or hold it back from rollouts.

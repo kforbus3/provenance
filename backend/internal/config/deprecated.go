@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sort"
 	"strings"
 )
 
@@ -61,15 +60,4 @@ func (d deprecation) message() string {
 		b.WriteString("; it has no replacement and can be removed")
 	}
 	return b.String()
-}
-
-// DeprecatedSettings lists the deprecated settings, for the version endpoint and
-// for tests that check the list is well-formed. Sorted so the order is stable.
-func DeprecatedSettings() []string {
-	out := make([]string, 0, len(deprecations))
-	for _, d := range deprecations {
-		out = append(out, d.Env)
-	}
-	sort.Strings(out)
-	return out
 }

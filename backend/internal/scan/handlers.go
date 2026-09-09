@@ -49,14 +49,7 @@ type handler struct {
 // canAccess enforces host-level authorization (super admins bypass): the same
 // gate as terminals/SFTP, so scanning is limited to hosts the user can reach.
 func (h *handler) canAccess(r *http.Request, p *auth.Principal, hostID uuid.UUID) bool {
-	if p == nil {
-		return false
-	}
-	if p.IsSuperAdmin {
-		return true
-	}
-	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
-	return err == nil && ok
+	return auth.CanAccessHost(r.Context(), h.d.Store, p, hostID)
 }
 
 func (h *handler) hostFromURL(w http.ResponseWriter, r *http.Request) (*models.Host, bool) {

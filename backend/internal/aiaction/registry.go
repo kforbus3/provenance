@@ -101,12 +101,6 @@ func New(st *store.Store, log *slog.Logger,
 
 func (r *Registry) register(d ActionDef) { r.defs[d.Kind] = d }
 
-// Def returns a registered action definition.
-func (r *Registry) Def(kind string) (ActionDef, bool) {
-	d, ok := r.defs[kind]
-	return d, ok
-}
-
 const policySettingKey = "assistant_actions"
 
 // Policy is the admin-configurable action policy. RequireApprovalForAll forces

@@ -19,6 +19,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { downloadDir, downloadFile, listDir, uploadFile, readTextFile, writeTextFile } from "../api/sftp";
 import { getHost } from "../api/hosts";
 import { useDocumentTitle } from "../api/branding";
+import { formatBytes } from "../lib/format";
 
 interface Transfer {
   id: string;
@@ -360,11 +361,3 @@ function FileEditorDialog({
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(1)} ${units[i]}`;
-}

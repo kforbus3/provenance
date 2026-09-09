@@ -3,8 +3,6 @@ package accesspolicy
 import (
 	"context"
 	"log/slog"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,22 +10,6 @@ import (
 	"github.com/kforbus3/blackfriars/backend/internal/models"
 	"github.com/kforbus3/blackfriars/backend/internal/store"
 )
-
-// RequestIP is a best-effort client-IP extractor for audit records (the reverse proxy
-// sets X-Forwarded-For; realIP middleware has already validated it upstream).
-func RequestIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
-	return host
-}
 
 // policyStore is the slice of the store the Enforcer needs. Narrowing it to an
 // interface keeps the fail-closed store-error path testable with a fake. *store.Store

@@ -77,8 +77,3 @@ export async function drFailback(promoteLocalDb: boolean): Promise<DRActionResul
   const { data } = await api.post<DRActionResult>("/api/v1/dr/failback", { promoteLocalDb });
   return data;
 }
-
-export async function drPromote(): Promise<{ ok: boolean }> {
-  const { data } = await api.post<{ ok: boolean }>("/api/v1/dr/promote");
-  return data;
-}

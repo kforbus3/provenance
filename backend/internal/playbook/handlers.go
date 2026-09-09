@@ -378,14 +378,7 @@ func (h *handler) runStatus(w http.ResponseWriter, r *http.Request) {
 // canAccessHost mirrors the scan/terminal gate: super admins bypass; otherwise
 // the user must have access to the host (group/direct/temporary).
 func (h *handler) canAccessHost(r *http.Request, p *auth.Principal, hostID uuid.UUID) bool {
-	if p == nil {
-		return false
-	}
-	if p.IsSuperAdmin {
-		return true
-	}
-	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
-	return err == nil && ok
+	return auth.CanAccessHost(r.Context(), h.d.Store, p, hostID)
 }
 
 // --- helpers ---

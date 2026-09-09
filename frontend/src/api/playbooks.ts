@@ -54,11 +54,6 @@ export async function deletePlaybook(id: string): Promise<void> {
   await api.delete(`/api/v1/playbooks/${id}`);
 }
 
-export async function listPlaybookVersions(id: string): Promise<PlaybookVersion[]> {
-  const { data } = await api.get<{ versions: PlaybookVersion[] }>(`/api/v1/playbooks/${id}/versions`);
-  return data.versions ?? [];
-}
-
 export async function validatePlaybook(content: string): Promise<CheckResult> {
   const { data } = await api.post<CheckResult>("/api/v1/playbooks/validate", { content });
   return data;

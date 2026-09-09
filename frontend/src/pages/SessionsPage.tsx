@@ -22,6 +22,7 @@ import {
 } from "../api/sessions";
 import { useAuthStore } from "../store/auth";
 import { RdpRecordingsPanel } from "../components/RdpRecordingsPanel";
+import { formatBytes } from "../lib/format";
 
 // One parsed asciicast v2 output frame: absolute time offset (seconds) + bytes.
 interface CastFrame {
@@ -421,15 +422,6 @@ export function SessionsPage() {
       </Snackbar>
     </Box>
   );
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(1)} ${units[i]}`;
 }
 
 // highlightMatch wraps every case-insensitive occurrence of `term` in `text` with a

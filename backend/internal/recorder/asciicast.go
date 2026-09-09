@@ -149,6 +149,3 @@ func (r *Recorder) Close() Result {
 		SHA256:     hex.EncodeToString(sum),
 	}
 }
-
-// Path returns the recording file path.
-func (r *Recorder) Path() string { return r.path }

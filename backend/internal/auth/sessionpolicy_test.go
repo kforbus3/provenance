@@ -22,8 +22,8 @@ func TestIPAllowed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ipAllowed(c.ip, c.list); got != c.allow {
-				t.Errorf("ipAllowed(%q, %v) = %v, want %v", c.ip, c.list, got, c.allow)
+			if got := IPAllowed(c.ip, c.list); got != c.allow {
+				t.Errorf("IPAllowed(%q, %v) = %v, want %v", c.ip, c.list, got, c.allow)
 			}
 		})
 	}

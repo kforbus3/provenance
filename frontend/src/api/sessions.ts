@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { saveBlob as triggerDownload } from "../lib/download";
 
 // Read-only access to recorded SSH sessions and their asciicast recordings
 // (/sessions, /sessions/{id}/recording).
@@ -93,16 +94,7 @@ export async function searchSessionCommands(q: string, hostname?: string): Promi
   return data.results ?? [];
 }
 
-function triggerDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+
 
 // recordingFilename builds a descriptive name: who ran the session + when.
 function recordingFilename(s: SSHSession, ext: string): string {
@@ -112,12 +104,6 @@ function recordingFilename(s: SSHSession, ext: string): string {
   const user = (s.username || s.userId || "user").replace(/[^a-zA-Z0-9_.-]/g, "_");
   const host = (s.hostname || "host").replace(/[^a-zA-Z0-9_.-]/g, "_");
   return `session-${user}-${host}-${ts}.${ext}`;
-}
-
-// downloadRecordingCast exports the raw asciicast (.cast) file (for asciinema CLI).
-export async function downloadRecordingCast(s: SSHSession): Promise<void> {
-  const res = await api.get(`/api/v1/sessions/${s.id}/recording/download`, { responseType: "blob" });
-  triggerDownload(res.data as Blob, recordingFilename(s, "cast"));
 }
 
 // downloadRecording exports a FULLY SELF-CONTAINED HTML file that plays the

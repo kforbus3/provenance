@@ -148,7 +148,7 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) audit(r *http.Request, action string, id uuid.UUID, detail map[string]any) {
 	p := auth.MustPrincipal(r)
-	ev := models.AuditEvent{Action: action, TargetKind: "k8s_cluster", TargetID: id.String(), Detail: detail, IP: clientIP(r)}
+	ev := models.AuditEvent{Action: action, TargetKind: "k8s_cluster", TargetID: id.String(), Detail: detail, IP: httpx.ClientIP(r)}
 	if p != nil {
 		ev.ActorID = &p.UserID
 		ev.ActorName = p.Username
@@ -163,18 +163,4 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
-}
-
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
-	return host
 }

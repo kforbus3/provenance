@@ -20,15 +20,8 @@ import {
 } from "../api/rdpRecordings";
 import { getAccessToken } from "../api/client";
 import { useAuthStore } from "../store/auth";
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(1)} ${units[i]}`;
-}
+import { saveBlob } from "../lib/download";
+import { formatBytes } from "../lib/format";
 
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -203,14 +196,7 @@ export function RdpRecordingsPanel() {
     const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
     const safe = (s: string) => (s || "x").replace(/[^a-zA-Z0-9_.-]/g, "_");
     const name = `rdp-${safe(r.rdpUser)}-${safe(r.hostname)}-${ts}.guac`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, name);
   };
 
   const q = search.trim().toLowerCase();

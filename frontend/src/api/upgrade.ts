@@ -44,10 +44,6 @@ export async function getUpgradeStatus(): Promise<UpgradeStatus> {
   return data;
 }
 
-export async function setDrain(draining: boolean): Promise<void> {
-  await api.post("/api/v1/system/drain", { draining });
-}
-
 export interface ChannelRelease {
   version: string;
   minFromVersion?: string;
