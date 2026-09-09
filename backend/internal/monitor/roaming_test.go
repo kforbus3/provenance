@@ -21,8 +21,8 @@ import (
 func TestOverlayAddressIsTriedBeforeTheLANAddress(t *testing.T) {
 	h := &models.Host{
 		Hostname:  "laptop-1",
-		Address:   "10.10.0.51",    // where it lived when it was enrolled
-		WGAddress: "10.100.0.42",  // where it lives wherever it goes
+		Address:   "10.10.0.51",   // where it lived when it was enrolled
+		WGAddress: "10.100.0.42", // where it lives wherever it goes
 	}
 
 	got := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
@@ -40,7 +40,7 @@ func TestOverlayAddressIsTriedBeforeTheLANAddress(t *testing.T) {
 			"but which is sitting on the same network would read as offline", h.Address)
 	}
 	if !contains(got, h.Hostname) {
-		t.Errorf("the hostname is never tried; that is the last resort for a host "+
+		t.Errorf("the hostname is never tried; that is the last resort for a host " +
 			"with neither address recorded")
 	}
 }

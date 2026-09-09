@@ -1,0 +1,126 @@
+---
+# Install an A/B (RAUC) update on machines that Blackfriars manages as hosts.
+#
+# This is the same operation a rollout performs, driven from the Playbooks page
+# instead. Use it when you want to update hosts directly — a handful of machines,
+# an out-of-band fix, or a host that has no machine record — and use a rollout
+# when you want the safety rails that come with one: canary, soak, batching, a
+# failure budget and a maintenance window. Nothing here reproduces those.
+#
+# Variables (set them under "Extra variables" when you run this):
+#
+#   bundle_url    Bundle to install. Leave unset and each machine asks the server
+#                 it was imaged from for the newest one, which is what a bare
+#                 `ab-update` does. Set it to pin every host to one bundle.
+#   reboot_after  false by default. The update is written to the *inactive* slot
+#                 and nothing changes until a reboot, so installing is safe at
+#                 any hour and switching over is a separate decision.
+#   reboot_timeout  How long to wait for a machine to come back (seconds).
+#
+# What makes this safe: the running slot is never written. If the new slot fails
+# to boot, GRUB's try-counter falls back to the slot that is running now. The
+# worst case for a bad bundle is a reboot, not a lost machine.
+
+- name: Install an A/B update
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    bundle_url: ""
+    reboot_after: false
+    reboot_timeout: 600
+
+  tasks:
+    # Fail on the machines that cannot take an update before touching any of
+    # them, rather than discovering it host by host midway through a batch.
+    - name: Check that this is an A/B machine
+      ansible.builtin.stat:
+        path: /usr/local/sbin/ab-update
+      register: ab_update_bin
+
+    - name: Refuse hosts that have no A/B layout
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} has no /usr/local/sbin/ab-update, so it is not
+          an A/B machine and cannot take a RAUC bundle. Remove it from the target
+          list; nothing on it has been changed.
+      when: not ab_update_bin.stat.exists
+
+    - name: Record the slot that is running now
+      ansible.builtin.command: cat /proc/cmdline
+      register: cmdline_before
+      changed_when: false
+
+    # default([], true) before first(), not just default() after it. A cmdline
+    # with no rauc.slot makes regex_search return None, and default() replaces
+    # undefined values rather than None — so first() was handed None and the play
+    # died with "'NoneType' object is not iterable" instead of reporting the
+    # 'unknown' this was written to report.
+    - name: Extract the running slot
+      ansible.builtin.set_fact:
+        slot_before: "{{ cmdline_before.stdout | regex_search('rauc\\.slot=([AB])', '\\1') | default([], true) | first | default('unknown') }}"
+
+    - name: Show what will be updated
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} is running slot {{ slot_before }};
+          the update will be written to the other one
+          {{ '(bundle: ' ~ bundle_url ~ ')' if bundle_url else '(newest bundle from its imaging server)' }}.
+
+    # The long one. Streaming a bundle over HTTP and verifying it takes minutes
+    # on a slow link, and ab-update falls back to downloading it first if
+    # streaming fails, so the timeout has to allow for both.
+    #
+    # changed_when is deliberate: ab-update exits non-zero on every failure, so
+    # reaching here at all means the inactive slot was written.
+    - name: Install the bundle into the inactive slot
+      ansible.builtin.command: >-
+        /usr/local/sbin/ab-update {{ bundle_url | quote if bundle_url else '' }}
+      register: update_result
+      changed_when: update_result.rc == 0
+      timeout: 3600
+
+    - name: Show what the machine reported
+      ansible.builtin.debug:
+        var: update_result.stdout_lines
+
+    # Everything below only runs when you asked for it. An installed update that
+    # has not been rebooted into is a perfectly good end state.
+    - name: Reboot into the updated slot
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting into the updated A/B slot (Blackfriars)"
+      when: reboot_after | bool
+
+    - name: Read the slot that came up
+      ansible.builtin.command: cat /proc/cmdline
+      register: cmdline_after
+      changed_when: false
+      when: reboot_after | bool
+
+    - name: Extract the running slot
+      ansible.builtin.set_fact:
+        slot_after: "{{ cmdline_after.stdout | regex_search('rauc\\.slot=([AB])', '\\1') | default([], true) | first | default('unknown') }}"
+      when: reboot_after | bool
+
+    # A machine that came back on the slot it started on did not fail to reboot —
+    # it booted the new slot, that slot did not come up, and GRUB fell back. That
+    # is the safety net working, and it is the one outcome that must not be
+    # reported as success.
+    - name: Fail if the machine fell back to the old slot
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} rebooted but is running slot {{ slot_after }},
+          the same slot as before. The updated slot did not boot and GRUB fell
+          back. The machine is healthy and running its previous release; check
+          `journalctl -b -1` on it for why the new slot failed.
+      when:
+        - reboot_after | bool
+        - slot_after == slot_before
+        - slot_before != 'unknown'
+
+    - name: Report the running slot
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} is now running slot {{ slot_after }} (was {{ slot_before }})."
+      when: reboot_after | bool

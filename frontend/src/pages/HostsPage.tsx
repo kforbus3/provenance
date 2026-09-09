@@ -43,6 +43,8 @@ import {
 } from "../api/scans";
 import { downloadSupportBundle } from "../api/support";
 import { triggerVulnScan } from "../api/vulnscan";
+import { listMachines, registerHostForUpdates } from "../api/imaging";
+import UpdateIcon from "@mui/icons-material/SystemUpdateAlt";
 import { useAuthStore } from "../store/auth";
 import { useUIStore } from "../store/ui";
 import {
@@ -1454,6 +1456,86 @@ function ScanReportViewer({ scanId, token, onClose }: { scanId: string | null; t
   );
 }
 
+// AbUpdatesSection offers to register an enrolled host as an updatable A/B machine.
+//
+// Rollouts select from the machine table and join to hosts, so a host with no
+// machine record cannot be reached by one — not even by a rollout that targets
+// the whole fleet. For an ordinary server that is correct. For an A/B machine
+// this deployment did not image — restored from a backup, imaged by an earlier
+// server, or one whose record was removed — it is bookkeeping standing in for a
+// technical limit that isn't there: the machine has ab-update, an A/B layout and
+// a working certificate, and is simply not written down.
+//
+// So it is shown here rather than buried on the Imaging page, because "why can I
+// not roll out to this host" is a question asked while looking at the host. It
+// deliberately does not hide itself on hosts that turn out not to be A/B: it
+// cannot know that without asking the machine, and a control that appears only
+// once you no longer need it is not much of a control. Registering a non-A/B
+// host refuses, and says so.
+function AbUpdatesSection({ host }: { host: Host }) {
+  const qc = useQueryClient();
+  const canManage = useAuthStore((s) => s.has("Imaging.Manage"));
+  const [error, setError] = useState<string | null>(null);
+
+  // Read-only, and only for someone who could act on it. A viewer without
+  // imaging access should not be shown a section they cannot use, and the query
+  // would 403 anyway.
+  const { data } = useQuery({
+    queryKey: ["machines"],
+    queryFn: listMachines,
+    enabled: canManage,
+  });
+  const machine = data?.machines.find((m) => m.hostId === host.id);
+
+  const register = useMutation({
+    mutationFn: () => registerHostForUpdates(host.id),
+    onSuccess: () => {
+      setError(null);
+      qc.invalidateQueries({ queryKey: ["machines"] });
+    },
+    onError: (e: any) => setError(e?.response?.data?.error ?? "Registration failed."),
+  });
+
+  if (!canManage) return null;
+
+  return (
+    <>
+      <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+        A/B updates
+      </Typography>
+      {machine ? (
+        <DetailRows rows={[
+          ["Registered", "yes — this host can receive RAUC bundles from a rollout"],
+          ["Machine id", machine.id],
+          ["Running slot", machine.slot || "unknown"],
+          ["Version", machine.version || "unknown"],
+        ]} />
+      ) : (
+        <Stack spacing={1} sx={{ mt: 0.5 }}>
+          <Typography variant="body2" color="text.secondary">
+            This host has no machine record, so rollouts cannot reach it — including
+            one that targets every host. If it is an A/B machine that this server did
+            not image, register it: its slot and version are read from the machine
+            itself over SSH, not assumed.
+          </Typography>
+          {error && <Alert severity="warning" onClose={() => setError(null)}>{error}</Alert>}
+          <Box>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<UpdateIcon />}
+              disabled={register.isPending}
+              onClick={() => register.mutate()}
+            >
+              {register.isPending ? "Reading the machine…" : "Register for updates"}
+            </Button>
+          </Box>
+        </Stack>
+      )}
+    </>
+  );
+}
+
 // HostDetailsDialog shows collected facts about a host (distro, kernel, CPU,
 // memory) plus live status. It fetches the single host on demand — so the list
 // payload stays light at scale — and seeds from the row for an instant render,
@@ -1557,6 +1639,9 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
           ...(isRDP ? [] : [[overlayLabel(host?.overlay), st ? (st.wgOk ? "healthy" : "—") : ""] as [string, string | undefined]]),
           ["Last checked", st?.checkedAt ? fmtDate(st.checkedAt) : ""],
         ]} />
+        {/* A/B machines take updates as RAUC bundles through a rollout, which can
+            only see hosts that have a machine record. RDP hosts never do. */}
+        {!isRDP && h && <AbUpdatesSection host={h} />}
         {/* Why a host is offline was recorded all along but never shown, so the UI
             said "offline" and nothing else. A host-key mismatch — what a rebuilt
             host looks like — additionally gets its one-click remedy here. */}
