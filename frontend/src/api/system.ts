@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { saveBlob } from "../lib/download";
 
 export interface SchedulerStatus {
   name: string;
@@ -89,12 +90,5 @@ export async function getFipsReadiness(): Promise<FipsReadiness> {
 // downloadBackup streams a pg_dump of the database and saves it locally.
 export async function downloadBackup(): Promise<void> {
   const res = await api.get("/api/v1/system/backup", { responseType: "blob" });
-  const url = URL.createObjectURL(res.data as Blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `fleet-backup-${Date.now()}.sql`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  saveBlob(res.data as Blob, `fleet-backup-${Date.now()}.sql`);
 }

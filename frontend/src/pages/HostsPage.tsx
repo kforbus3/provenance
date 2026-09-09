@@ -51,6 +51,7 @@ import {
   Checkbox, FormControl, FormControlLabel, FormLabel, Radio, RadioGroup,
 } from "@mui/material";
 import { WgDownChip, WgOnChip, overlayLabel, wgDegraded, wgHealthy } from "../components/WgStatus";
+import { saveBlob } from "../lib/download";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -1999,14 +2000,8 @@ export function EnrollCredsDialog({
   const downloadScript = async (ext: string) => {
     const res = await fetch(scriptUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
     const text = await res.text();
-    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `fleet-enroll-${host?.hostname ?? "host"}.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob(new Blob([text], { type: "text/plain" }),
+      `fleet-enroll-${host?.hostname ?? "host"}.${ext}`);
   };
 
   // Windows/RDP hosts join the overlay via a PowerShell WireGuard script (dial-out),

@@ -151,7 +151,7 @@ func (h *handler) audit(r *http.Request, action string, id uuid.UUID, detail map
 	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: action,
 		TargetKind: "access_policy", TargetID: id.String(), Detail: detail,
-		IP: clientIP(r),
+		IP: httpx.ClientIP(r),
 	})
 }
 
@@ -162,19 +162,4 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
-}
-
-// clientIP extracts the request IP (best-effort; the reverse proxy sets X-Forwarded-For).
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
-	return host
 }

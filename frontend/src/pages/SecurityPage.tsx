@@ -10,6 +10,7 @@ import {
   mfaConfirm, mfaDelete, mfaEnroll, mfaList, recoveryStatus, generateRecoveryCodes,
 } from "../api/auth";
 import { registerPasskey, webauthnSupported } from "../api/webauthn";
+import { saveBlob } from "../lib/download";
 
 // Per-user security settings: enroll and manage TOTP two-factor authentication.
 export function SecurityPage() {
@@ -169,12 +170,8 @@ function RecoveryCodesCard({ hasMfa }: { hasMfa: boolean }) {
 
   const download = () => {
     if (!codes) return;
-    const blob = new Blob([codes.join("\n") + "\n"], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "fleet-recovery-codes.txt";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob(new Blob([codes.join("\n") + "\n"], { type: "text/plain" }),
+      "fleet-recovery-codes.txt");
   };
 
   return (

@@ -18,10 +18,6 @@ var engines = map[string]engineInfo{
 	"mongodb":   {defaultPort: 27017, defaultDB: "admin"},
 }
 
-// IsDocument reports whether an engine is document-oriented (a JSON command console)
-// rather than SQL.
-func IsDocument(engine string) bool { return normalizeEngine(engine) == "mongodb" }
-
 // normalizeEngine lower-cases/trims an engine string, defaulting to postgres for the
 // empty value (backward compatible with pre-v0.41 targets).
 func normalizeEngine(e string) string {

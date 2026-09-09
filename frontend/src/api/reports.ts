@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { saveBlob as saveDownload, filenameFrom } from "../lib/download";
 
 // Compliance evidence exports (CSV). Downloads flow through axios so the bearer
 // token is sent; the response blob is saved via a temporary object URL.
@@ -26,14 +27,5 @@ export async function downloadEvidencePack(from: string, to: string): Promise<vo
 }
 
 function saveBlob(data: BlobPart, type: string, contentDisposition: string | undefined, fallback: string) {
-  const blob = new Blob([data], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  const match = (contentDisposition ?? "").match(/filename="?([^"]+)"?/);
-  a.download = match?.[1] || fallback;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  saveDownload(new Blob([data], { type }), filenameFrom(contentDisposition, fallback));
 }

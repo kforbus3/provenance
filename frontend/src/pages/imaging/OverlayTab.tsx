@@ -13,6 +13,7 @@ import DriveFileRenameOutlineIcon from "@mui/icons-material/DriveFileRenameOutli
 import LockOpenIcon from "@mui/icons-material/LockOpen";
 import LinearProgress from "@mui/material/LinearProgress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { saveBlob } from "../../lib/download";
 import {
   listOverlay, readOverlayFile, writeOverlayFile, deleteOverlayFile,
   uploadOverlayFile, downloadOverlayFile, moveOverlayFile, chmodOverlayFile,
@@ -70,14 +71,8 @@ export function OverlayTab({ canBuild, setMsg }: {
       const bin = atob(f.contentBase64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = f.path.split("/").pop() || "overlay-file";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([bytes], { type: "application/octet-stream" }),
+        f.path.split("/").pop() || "overlay-file");
     },
     onError: (e) => setMsg(errText(e, "Could not download that file."), "error"),
   });

@@ -11,6 +11,7 @@ import UploadIcon from "@mui/icons-material/Upload";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import Guacamole from "guacamole-common-js";
+import { saveBlob as triggerDownload } from "../lib/download";
 
 interface Entry {
   streamName: string;
@@ -29,16 +30,7 @@ function parentOf(p: string): string {
   return "/" + parts.join("/");
 }
 
-function triggerDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+
 
 // RdpFilesDrawer browses, downloads from, and uploads to the redirected RDP drive
 // exposed by guacd as a Guacamole.Object. Upload/download availability is enforced

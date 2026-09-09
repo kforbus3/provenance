@@ -1835,5 +1835,3 @@ function BuildBundleDialog({ open, images, onClose, onStarted, setMsg }: {
     </Dialog>
   );
 }
-
-export default ImagingPage;

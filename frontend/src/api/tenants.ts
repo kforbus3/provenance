@@ -22,10 +22,6 @@ export async function createTenant(name: string): Promise<Tenant> {
   return data;
 }
 
-export async function renameTenant(id: string, name: string): Promise<void> {
-  await api.patch(`/api/v1/tenants/${id}`, { name });
-}
-
 export async function setTenantStatus(id: string, status: "active" | "suspended"): Promise<void> {
   await api.post(`/api/v1/tenants/${id}/status`, { status });
 }

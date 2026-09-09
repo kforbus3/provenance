@@ -290,17 +290,7 @@ func reportedAddress(r *http.Request) string {
 			return v
 		}
 	}
-	return clientIP(r)
-}
-
-func clientIP(r *http.Request) string {
-	if r.RemoteAddr == "" {
-		return ""
-	}
-	if i := strings.LastIndex(r.RemoteAddr, ":"); i > 0 {
-		return r.RemoteAddr[:i]
-	}
-	return r.RemoteAddr
+	return httpx.ClientIP(r)
 }
 
 // --- the operator-facing endpoints -------------------------------------------
@@ -695,14 +685,7 @@ func (h *handler) machineHost(w http.ResponseWriter, r *http.Request) (*models.H
 }
 
 func (h *handler) canSee(r *http.Request, p *auth.Principal, hostID uuid.UUID) bool {
-	if p == nil {
-		return false
-	}
-	if p.IsSuperAdmin {
-		return true
-	}
-	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
-	return err == nil && ok
+	return auth.CanAccessHost(r.Context(), h.d.Store, p, hostID)
 }
 
 func parseUUID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {

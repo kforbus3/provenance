@@ -72,11 +72,6 @@ export async function listHostScans(hostId: string): Promise<HostScan[]> {
   return data.scans ?? [];
 }
 
-export async function getScan(id: string): Promise<HostScan> {
-  const { data } = await api.get<HostScan>(`/api/v1/scans/${id}`);
-  return data;
-}
-
 // URL for the stored HTML report (token-authenticated). Used for direct download
 // (download=1 forces an attachment). For in-app viewing we fetch the HTML and
 // render it via iframe srcdoc instead of framing this URL, so reverse-proxy

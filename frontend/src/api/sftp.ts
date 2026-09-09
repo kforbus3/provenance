@@ -1,4 +1,5 @@
 import { api, getAccessToken, scopedURL } from "./client";
+import { saveBlob } from "../lib/download";
 
 export interface SftpEntry {
   name: string;
@@ -116,14 +117,7 @@ async function streamToDisk(
     received += value.byteLength;
     onProgress?.(received, total);
   }
-  const blobUrl = URL.createObjectURL(new Blob(chunks));
-  const a = document.createElement("a");
-  a.href = blobUrl;
-  a.download = suggestedName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(blobUrl);
+  saveBlob(new Blob(chunks), suggestedName);
 }
 
 export function downloadFile(

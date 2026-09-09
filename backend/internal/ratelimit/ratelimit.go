@@ -93,16 +93,3 @@ func KeyFromRequest(r *http.Request) string {
 	}
 	return host
 }
-
-// Middleware returns HTTP middleware that rejects requests over the limit with
-// 429 Too Many Requests and a Retry-After hint.
-func (l *Limiter) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !l.Allow(KeyFromRequest(r)) {
-			w.Header().Set("Retry-After", "5")
-			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}

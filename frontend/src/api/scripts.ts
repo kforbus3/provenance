@@ -50,11 +50,6 @@ export async function deleteScript(id: string): Promise<void> {
   await api.delete(`/api/v1/scripts/${id}`);
 }
 
-export async function listScriptVersions(id: string): Promise<ScriptVersion[]> {
-  const { data } = await api.get<{ versions: ScriptVersion[] }>(`/api/v1/scripts/${id}/versions`);
-  return data.versions ?? [];
-}
-
 // --- execution ---
 
 export interface ScriptRun {

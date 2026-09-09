@@ -18,20 +18,6 @@ import (
 // (self-lockout guard) in the generic settings PUT.
 const sessionPolicyKey = "session_policy"
 
-// clientIP returns the request's client IP (host portion of RemoteAddr, already
-// rewritten to the real client by the realIP middleware when a trusted proxy is
-// configured). Empty if it can't be parsed.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if net.ParseIP(host) == nil {
-		return ""
-	}
-	return host
-}
-
 // validateSessionPolicy checks a proposed global policy value: every allowlist
 // entry must be a valid CIDR or IP, the limit must be non-negative, and — the
 // key guardrail — a non-empty allowlist must include the saver's current IP, so
@@ -51,7 +37,7 @@ func validateSessionPolicy(raw json.RawMessage, saverIP string) string {
 	if msg := validateAllowlist(p.IPAllowlist); msg != "" {
 		return msg
 	}
-	if len(p.IPAllowlist) > 0 && !ipInAllowlist(saverIP, p.IPAllowlist) {
+	if len(p.IPAllowlist) > 0 && !auth.IPAllowed(saverIP, p.IPAllowlist) {
 		return "this allowlist does not include your current IP address — you would be locked out. Add your current network before saving."
 	}
 	return ""
@@ -76,29 +62,6 @@ func validateAllowlist(entries []string) string {
 		}
 	}
 	return ""
-}
-
-func ipInAllowlist(ip string, cidrs []string) bool {
-	addr := net.ParseIP(ip)
-	if addr == nil {
-		return false
-	}
-	for _, c := range cidrs {
-		c = strings.TrimSpace(c)
-		if c == "" {
-			continue
-		}
-		if strings.Contains(c, "/") {
-			if _, n, err := net.ParseCIDR(c); err == nil && n.Contains(addr) {
-				return true
-			}
-			continue
-		}
-		if p := net.ParseIP(c); p != nil && p.Equal(addr) {
-			return true
-		}
-	}
-	return false
 }
 
 // getUserSessionPolicy returns a user's per-user override (or null) alongside the
@@ -150,7 +113,7 @@ func (h *handler) setUserSessionPolicy(w http.ResponseWriter, r *http.Request) {
 		// Self-lockout guard: an admin editing their own override with a non-empty
 		// allowlist that excludes their current IP would lock themselves out.
 		if p := auth.MustPrincipal(r); p != nil && p.UserID == id &&
-			len(*rq.IPAllowlist) > 0 && !ipInAllowlist(clientIP(r), *rq.IPAllowlist) {
+			len(*rq.IPAllowlist) > 0 && !auth.IPAllowed(httpx.ClientIP(r), *rq.IPAllowlist) {
 			httpx.WriteError(w, http.StatusBadRequest,
 				"this allowlist does not include your current IP address — you would be locked out")
 			return

@@ -45,7 +45,7 @@ func (h *handler) setSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if key == sessionPolicyKey {
-		if msg := validateSessionPolicy(value, clientIP(r)); msg != "" {
+		if msg := validateSessionPolicy(value, httpx.ClientIP(r)); msg != "" {
 			httpx.WriteError(w, http.StatusBadRequest, msg)
 			return
 		}

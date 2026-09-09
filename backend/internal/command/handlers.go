@@ -194,14 +194,7 @@ func (h *handler) runStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) canAccessHost(r *http.Request, p *auth.Principal, hostID uuid.UUID) bool {
-	if p == nil {
-		return false
-	}
-	if p.IsSuperAdmin {
-		return true
-	}
-	ok, err := h.d.Store.UserCanAccessHost(r.Context(), p.UserID, hostID)
-	return err == nil && ok
+	return auth.CanAccessHost(r.Context(), h.d.Store, p, hostID)
 }
 
 // connCtx builds the ABAC evaluation context for a command target.
@@ -209,7 +202,7 @@ func connCtx(r *http.Request, p *auth.Principal, host *models.Host) accesspolicy
 	return accesspolicy.ConnCtx{
 		UserID: p.UserID, Username: p.Username, IsSuper: p.IsSuperAdmin,
 		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
-		Tags: host.Tags, Protocol: host.Protocol, Surface: "command", IP: accesspolicy.RequestIP(r),
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "command", IP: httpx.ClientIP(r),
 	}
 }
 

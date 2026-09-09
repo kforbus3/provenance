@@ -111,10 +111,6 @@ export async function listMyCheckouts(): Promise<VaultCheckout[]> {
   return data.checkouts ?? [];
 }
 
-export async function checkinCheckout(coid: string): Promise<void> {
-  await api.post(`/api/v1/vault/checkouts/${coid}/checkin`);
-}
-
 export async function listCheckoutApprovals(): Promise<VaultCheckout[]> {
   const { data } = await api.get<{ checkouts: VaultCheckout[] }>("/api/v1/vault/checkouts/approvals");
   return data.checkouts ?? [];

@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { saveResponse } from "../lib/download";
 
 // Vulnerability scanning: match a host's installed packages against a CVE database
 // (Anchore Grype) and report findings with CVSS scores.
@@ -185,20 +186,6 @@ export async function msrcImport(file: File): Promise<number> {
 
 // --- SBOM ---------------------------------------------------------------
 
-// downloadHostSbom fetches a host's most recent software bill of materials as a
-// CycloneDX 1.5 document.
-//
-// The filename comes from the server's Content-Disposition so it carries the
-// hostname and the collection timestamp — an SBOM is evidence, and one that
-// cannot be tied back to a machine and a moment is not much use in a review.
-export async function downloadHostSbom(hostId: string, hostname?: string): Promise<void> {
-  const { data, headers } = await api.get(
-    `/api/v1/vuln-scans/latest/sbom?hostId=${encodeURIComponent(hostId)}`,
-    { responseType: "blob" },
-  );
-  saveSbom(data as BlobPart, headers, `${hostname || hostId}-sbom.cdx.json`);
-}
-
 // downloadScanSbom fetches the bill of materials a specific scan collected,
 // which is what you want when comparing a host against its own past state.
 export async function downloadScanSbom(scanId: string): Promise<void> {
@@ -209,12 +196,5 @@ export async function downloadScanSbom(scanId: string): Promise<void> {
 }
 
 function saveSbom(data: BlobPart, headers: Record<string, unknown>, fallback: string) {
-  const blob = new Blob([data], { type: "application/vnd.cyclonedx+json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  const cd = (headers["content-disposition"] as string | undefined) ?? "";
-  a.download = cd.match(/filename="?([^"]+)"?/)?.[1] || fallback;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  saveResponse(data, "application/vnd.cyclonedx+json", headers, fallback);
 }

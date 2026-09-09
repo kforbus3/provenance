@@ -265,11 +265,6 @@ export interface HostKeyPin {
   fingerprint: string;
 }
 
-export async function getHostKeyPins(id: string): Promise<HostKeyPin[]> {
-  const { data } = await api.get<{ pins: HostKeyPin[] }>(`/api/v1/hosts/${id}/host-key`);
-  return data.pins ?? [];
-}
-
 // clearHostKeyPins drops every pin for a host so the next connection re-pins the
 // key it now presents — the remedy after a legitimate rebuild.
 export async function clearHostKeyPins(id: string): Promise<number> {
@@ -304,11 +299,6 @@ export async function bulkHostTags(
 ): Promise<number> {
   const { data } = await api.post<{ applied: number }>("/api/v1/hosts/bulk/tags", { hostIds, ...tags });
   return data.applied;
-}
-
-export async function getHostStatusStats(): Promise<HostStatusStats> {
-  const { data } = await api.get<HostStatusStats>("/api/v1/hosts/stats/status");
-  return data;
 }
 
 // --- Host access management (groups + direct users) ---

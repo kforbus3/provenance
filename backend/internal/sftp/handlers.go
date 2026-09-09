@@ -82,7 +82,7 @@ func (h *handler) connect(w http.ResponseWriter, r *http.Request) (client *pkgsf
 	if dec := h.d.AccessPolicy.Authorize(r.Context(), accesspolicy.ConnCtx{
 		UserID: p.UserID, Username: p.Username, IsSuper: p.IsSuperAdmin,
 		HostID: host.ID, HostName: host.Hostname, Environment: host.Environment,
-		Tags: host.Tags, Protocol: host.Protocol, Surface: "sftp", IP: accesspolicy.RequestIP(r),
+		Tags: host.Tags, Protocol: host.Protocol, Surface: "sftp", IP: httpx.ClientIP(r),
 	}); dec.Denied {
 		httpx.WriteError(w, http.StatusForbidden, dec.Reason)
 		return nil, nil, nil, noop, false

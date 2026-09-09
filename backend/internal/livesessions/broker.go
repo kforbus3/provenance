@@ -174,13 +174,6 @@ func (b *Broker) Publish(sessionID uuid.UUID, f Frame) {
 	}
 }
 
-// Watchers returns how many watchers a session currently has.
-func (b *Broker) Watchers(sessionID uuid.UUID) int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.subs[sessionID])
-}
-
 // Subscribe registers a watcher of sessionID, returning a frame channel, the last
 // known terminal size (zero if unknown), and an unsubscribe func the caller must
 // invoke when done.

@@ -246,7 +246,7 @@ func (s *Service) enforceSessionPolicy(ctx context.Context, userID uuid.UUID, ip
 	if override != nil && override.IPAllowlist != nil {
 		allow = *override.IPAllowlist
 	}
-	if len(allow) > 0 && !ipAllowed(ip, allow) {
+	if len(allow) > 0 && !IPAllowed(ip, allow) {
 		return ErrIPNotAllowed
 	}
 
@@ -262,10 +262,16 @@ func (s *Service) enforceSessionPolicy(ctx context.Context, userID uuid.UUID, ip
 	return nil
 }
 
-// ipAllowed reports whether client IP `ip` is covered by any entry in the
+// IPAllowed reports whether client IP `ip` is covered by any entry in the
 // allowlist. Entries may be CIDRs (10.0.0.0/8) or bare IPs (matched exactly). An
 // unparseable client IP is never allowed when a non-empty list is configured.
-func ipAllowed(ip string, cidrs []string) bool {
+//
+// Exported because admin/sessionpolicy.go carried a byte-identical copy under
+// the name ipInAllowlist. Two implementations of one security check is one
+// implementation more than can be kept correct: only this one had a test, so a
+// fix to the tested copy would have left the untested one deciding whether a
+// session is allowed from an address.
+func IPAllowed(ip string, cidrs []string) bool {
 	addr := net.ParseIP(ip)
 	if addr == nil {
 		return false
@@ -481,9 +487,3 @@ func (s *Service) loadPrincipal(ctx context.Context, claims *Claims) (*Principal
 		MustChangePw: u.MustChangePw, TenantID: u.TenantID,
 	}, nil
 }
-
-// Store exposes the underlying store for handlers that need it.
-func (s *Service) Store() *store.Store { return s.store }
-
-// Config exposes config for handlers/middleware.
-func (s *Service) Config() *config.Config { return s.cfg }
