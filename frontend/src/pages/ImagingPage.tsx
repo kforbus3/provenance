@@ -526,7 +526,7 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
 function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
   machine: Machine | null; onClose: () => void; onDone: () => void; setMsg: (m: Note) => void;
 }) {
-  const [sshUser, setSshUser] = useState("");
+  const [sshUser, setSshUser] = useState("fleet");
   const [environment, setEnvironment] = useState("");
   const [owner, setOwner] = useState("");
   const [address, setAddress] = useState("");
@@ -537,7 +537,7 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
     if (!machine) return;
     setHostname(machine.hostname || machine.id);
     setAddress(machine.address || "");
-    setSshUser("");
+    setSshUser("fleet");
     setEnvironment("");
     setOwner("");
   }, [machine]);
@@ -594,11 +594,11 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
           <TextField size="small" label="Address" value={address}
                      onChange={(e) => setAddress(e.target.value)} fullWidth
                      helperText={machine?.address
-                       ? "Last address this machine reported. Change it if the machine has moved to another network."
+                       ? "The address this machine reported while it was being imaged — on the provisioning network. If it has been moved, this is not where it is now."
                        : "This machine never reported an address — enter the one it has now."} />
           <TextField size="small" label="SSH user" value={sshUser}
                      onChange={(e) => setSshUser(e.target.value)} fullWidth
-                     helperText="The login user chosen when the image was built." />
+                     helperText="The account this server connects as. Enrolment creates it — it is not the login user the image was built with." />
           <Stack direction="row" spacing={2}>
             <TextField size="small" label="Environment" value={environment}
                        onChange={(e) => setEnvironment(e.target.value)} fullWidth />

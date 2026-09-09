@@ -560,3 +560,20 @@ func (s *Store) SetHostEnrolled(ctx context.Context, hostID uuid.UUID, enrolled 
 	_, err := s.pool.Exec(ctx, `UPDATE hosts SET enrolled=$2, updated_at=now() WHERE id=$1`, hostID, enrolled)
 	return err
 }
+
+// SetHostSSHUser records the login account enrolment actually used.
+//
+// The host form lets sshUser be empty because enrolment defaults it to "fleet"
+// -- and it defaulted only the script's variable, never the record. So the
+// machine got a fleet account and the host row still said nothing, the monitor
+// then connected as no user at all, and the host reported offline forever with
+// a working SSH server and a valid certificate. Nothing was broken except a
+// field that was never written back.
+//
+// Only fills a blank. An operator who typed a user meant it.
+func (s *Store) SetHostSSHUser(ctx context.Context, hostID uuid.UUID, user string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET ssh_user=$2, updated_at=now()
+		 WHERE id=$1 AND (ssh_user IS NULL OR ssh_user='')`, hostID, user)
+	return err
+}

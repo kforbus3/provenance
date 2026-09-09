@@ -517,6 +517,11 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	_ = s.store.SetHostWGAddress(ctx, host.ID, wgIP)
 	_ = s.store.SetHostOverlay(ctx, host.ID, effOverlay)
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
+	// Record the account that was actually created and will be connected as.
+	// Without this a host enrolled with a blank sshUser stays blank, and every
+	// probe afterwards logs in as nobody -- which reads as "offline" on a host
+	// that is running perfectly.
+	_ = s.store.SetHostSSHUser(ctx, host.ID, loginUser)
 
 	// 11) Validate end to end: connect through the jump host using a per-user
 	//     certificate and run a command, proving cert auth + the tunnel path.

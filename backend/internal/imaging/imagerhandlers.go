@@ -101,7 +101,7 @@ func (h *handler) imagerCheckin(w http.ResponseWriter, r *http.Request) {
 		Hostname:     clean(r.PostForm.Get("hostname"), 200),
 		Slot:         clean(r.PostForm.Get("slot"), 8),
 		Version:      clean(r.PostForm.Get("version"), 200),
-		Address:      clientIP(r),
+		Address:      reportedAddress(r),
 		BootedAt:     &now,
 		ReportedBy:   id,
 		ReportSource: "agent",

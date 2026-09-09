@@ -2,6 +2,7 @@ package imaging
 
 import (
 	"crypto/subtle"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -152,7 +153,7 @@ func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 	m := &models.ImagingMachine{
 		ID:            id,
 		Hostname:      clean(r.PostForm.Get("hostname"), 200),
-		Address:       clientIP(r),
+		Address:       reportedAddress(r),
 		Slot:          clean(r.PostForm.Get("slot"), 8),
 		Version:       clean(r.PostForm.Get("version"), 200),
 		Arch:          clean(r.PostForm.Get("arch"), 32),
@@ -261,6 +262,32 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return digits
+}
+
+// reportedAddress prefers the address the machine says it has.
+//
+// The connection's own address is useless here: the report arrives through the
+// provisioning nginx and then the compose network, so what it carries is the
+// Docker bridge gateway -- 172.18.0.1 for every machine ever imaged. That value
+// then pre-filled the host form, and a host pointed at the bridge of the server
+// watching it is a host nothing can reach.
+//
+// A machine knows its own address. Taking its word for it is also the only thing
+// that works once it has moved to the network it will actually live on, where
+// the connection address is a proxy's either way.
+//
+// Validated as an IP before it is believed. This endpoint is unauthenticated by
+// design, so the field is attacker-controlled -- but it is only ever displayed
+// and used to pre-fill a form a person then confirms, never to authorize
+// anything. An unparseable value falls back to the connection address rather
+// than being stored.
+func reportedAddress(r *http.Request) string {
+	if v := strings.TrimSpace(r.FormValue("address")); v != "" {
+		if net.ParseIP(v) != nil {
+			return v
+		}
+	}
+	return clientIP(r)
 }
 
 func clientIP(r *http.Request) string {

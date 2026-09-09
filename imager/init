@@ -139,7 +139,7 @@ report() {   # report <phase> <percent> [detail]
     _p="$1"; _pct="${2:-}"; _d="${3:-}"
     (
         if ! $BB wget -q -T 3 -O /dev/null --post-data \
-            "id=${CLIENT_ID}&phase=${_p}&percent=${_pct}&detail=${_d}&disk=${TARGET:-}&url=${IMG_URL}" \
+            "id=${CLIENT_ID}&phase=${_p}&percent=${_pct}&detail=${_d}&disk=${TARGET:-}&url=${IMG_URL}&address=${MY_ADDR:-}" \
             "$REPORT_URL" 2>/dev/null
         then
             # Once per run, not per phase. Reporting stays best-effort and the
@@ -376,6 +376,16 @@ if ! server_reachable; then
     or the image was assigned to the MAC of a different port. Stopping here
     rather than waiting in a download that cannot finish."
 fi
+
+# The machine's own address, sent with every report.
+#
+# The server used to infer it from the connection, which arrives through two
+# proxies -- so what it recorded was the Docker bridge gateway, 172.18.0.1, for
+# every machine ever imaged. That address then pre-filled the host form, and a
+# host pointed at the bridge of the server watching it is a host nothing can
+# reach. A machine knows its own address; it should say it rather than leave it
+# to be guessed from the far end of a proxy chain.
+MY_ADDR="$($BB ip -o -4 addr show "$NET_DEV" 2>/dev/null | $BB awk '{print $4}' | $BB cut -d/ -f1)"
 
 # Now that an interface exists and has a lease, this machine has an identity.
 resolve_client_id
