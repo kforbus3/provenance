@@ -57,9 +57,25 @@ func (s *Store) PruneRecordingsBefore(ctx context.Context, before time.Time) (pa
 	return paths, bytes, rows.Err()
 }
 
-// RecordingSessionIDs returns the set of SSH session ids that have a recording.
-func (s *Store) RecordingSessionIDs(ctx context.Context) (map[uuid.UUID]bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ssh_session_id FROM session_recordings`)
+// RecordingSessionIDs reports which of the given sessions have a recording.
+//
+// Scoped to the ids the caller is about to display. It used to take no argument
+// and run `SELECT DISTINCT ssh_session_id FROM session_recordings` -- the whole
+// table, with no bound -- collecting every id ever recorded into a map, on
+// every single page load of the session list, in order to set a boolean on the
+// hundred rows already fetched.
+//
+// That is invisible on a development database and is the first thing to fall
+// over on a real one: the work grows with the total history of the deployment
+// rather than with the page being drawn, and recording retention is off by
+// default, so nothing ever removes rows from underneath it.
+func (s *Store) RecordingSessionIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]bool{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT ssh_session_id FROM session_recordings WHERE ssh_session_id = ANY($1)`,
+		ids)
 	if err != nil {
 		return nil, err
 	}

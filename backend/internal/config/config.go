@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -147,6 +148,19 @@ type Config struct {
 	// is ignored (so it can't be spoofed to bypass the auth rate limiter). Default:
 	// private + loopback ranges (covers a reverse proxy on the same host/network).
 	TrustedProxies []string
+
+	// TrustedProxyHops is how many reverse proxies sit in front of this server.
+	// The client is the X-Forwarded-For entry that many places from the right —
+	// the address the outermost proxy actually saw — so a caller cannot reach it
+	// by prepending entries of its own.
+	//
+	// It is stated rather than inferred. Deciding which entries are proxies by
+	// whether they are private addresses looks reasonable and is wrong: the
+	// default trusted list has to include RFC1918 because the proxy is on a
+	// Docker bridge or the LAN, which made every private CLIENT look like a
+	// proxy too. Default 1 matches the shipped compose, which has one nginx in
+	// front of the backend.
+	TrustedProxyHops int
 
 	// SSHInsecureHostKeys disables SSH host-key verification on the gateway. It
 	// exists only for the local test fabric (ephemeral containers with changing
@@ -463,6 +477,7 @@ func Load() (*Config, error) {
 		SSHInsecureHostKeys:         envBool("FLEET_SSH_INSECURE_HOST_KEYS", false),
 		HostScopedOnly:              envBool("FLEET_HOST_SCOPED_ONLY", false),
 		TrustedProxies:              trustedProxiesFromEnv(),
+		TrustedProxyHops:            envInt("FLEET_TRUSTED_PROXY_HOPS", 1),
 		WGInterface:                 env("FLEET_WG_INTERFACE", "wg0"),
 		WGSubnet:                    env("FLEET_WG_SUBNET", "10.100.0.0/24"),
 		WGJumpIP:                    env("FLEET_WG_JUMP_IP", "10.100.0.1"),
@@ -684,6 +699,54 @@ func (c *Config) validate() error {
 		if c.KMSVaultTLSSkipVerify {
 			return fmt.Errorf("FLEET_KMS_VAULT_SKIP_VERIFY must not be enabled outside development")
 		}
+		// A production instance still pointing at localhost.
+		//
+		// PublicURL defaults to https://localhost:8443 and the compose file
+		// supplies http://localhost:8080, and nothing checked it. Left unset it
+		// silently drives the CORS allowed origins, the WebAuthn relying-party
+		// id, the OIDC redirect URI, the SAML ACS/metadata/SLO URLs, the SCIM
+		// base URL and the WebSocket origin check. The server boots perfectly
+		// and then single sign-on, passkeys and every terminal fail separately,
+		// none of them saying why.
+		//
+		// Refusing at boot turns six confusing runtime failures into one
+		// sentence at startup.
+		if u, uerr := url.Parse(c.PublicURL); uerr != nil || u.Host == "" {
+			return fmt.Errorf("FLEET_PUBLIC_URL is not a valid absolute URL (%q)", c.PublicURL)
+		} else if h := strings.ToLower(u.Hostname()); h == "localhost" || h == "127.0.0.1" || h == "::1" {
+			return fmt.Errorf("FLEET_PUBLIC_URL is still %q in the %q environment. It is the "+
+				"address browsers and identity providers are told to use, so single sign-on, "+
+				"passkeys and terminal WebSockets will each fail on their own. Set it to the "+
+				"URL this deployment is actually reached at", c.PublicURL, c.Environment)
+		}
+
+		// Session cookies without Secure, on a deployment that serves HTTPS.
+		//
+		// The Go default is true, but the compose file that `make up-single`
+		// uses -- the documented single-server production path -- passes
+		// ${FLEET_COOKIE_SECURE:-false}, and `make env` seeds .env from an
+		// example that sets it to false. So an operator who follows the boot
+		// errors, sets FLEET_ENV=production and gets a clean start still ends up
+		// with session cookies that any network path can read, and no HSTS
+		// either, since securityHeaders() keys off the same flag.
+		//
+		// Refused rather than warned when the public URL is https, because there
+		// is no case where serving HTTPS and marking cookies insecure is what
+		// somebody meant. Plain http is a different matter: a deployment behind
+		// a private LAN address, which is a real way to run this, cannot set
+		// Secure at all or nobody can log in. That gets a warning.
+		if !c.CookieSecure {
+			if strings.HasPrefix(strings.ToLower(c.PublicURL), "https://") {
+				return fmt.Errorf("FLEET_COOKIE_SECURE is false but FLEET_PUBLIC_URL is https "+
+					"(%s): session cookies would be sent without the Secure flag and no HSTS "+
+					"header would be set. Set FLEET_COOKIE_SECURE=true", c.PublicURL)
+			}
+			slog.Warn("FLEET_COOKIE_SECURE is false: session cookies are sent without the " +
+				"Secure flag and no HSTS header is set. That is only safe on a trusted " +
+				"private network reached over plain http; anything internet-facing must " +
+				"serve https and set FLEET_COOKIE_SECURE=true.")
+		}
+
 		// Warn (don't fail) on an unencrypted Postgres connection. Acceptable when the
 		// DB is co-located on the same Docker host (loopback/bridge), but on any
 		// networked or managed Postgres this sends the DB password and every

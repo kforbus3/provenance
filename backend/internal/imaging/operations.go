@@ -114,7 +114,14 @@ func (s *Service) EvaluateFor(ctx context.Context, machineID string, rep Report)
 			if err := s.store.SaveRolloutProgress(ctx, rec, progressFrom(eng)); err != nil {
 				s.log.Warn("imaging: saving rollout progress", "rollout", rec.ID, "err", err)
 			}
-			s.announceHalt(ctx, rec, len(members))
+			// Counts computed here, from the engine that has just run. This
+			// path never calls fill(), which is the only thing that populates
+			// rec.Done -- so the alert used to read "0 of 37 machines were
+			// done" on every halt, throwing away the one number that says how
+			// far the rollout got before it stopped.
+			counts := eng.Counts(members)
+			done := counts[StateVerified] + counts[StateFailed] + counts[StateSkipped]
+			s.announceHalt(ctx, rec, done, len(members))
 		}
 		return action
 	}
@@ -358,13 +365,13 @@ func maxInt(a, b int) int {
 
 // notifyHalted is the alert. Kept separate from the bookkeeping in announceHalt
 // so that "have we already said this" and "what do we say" are not tangled.
-func (s *Service) notifyHalted(ctx context.Context, rec *models.ImagingRollout, total int) {
+func (s *Service) notifyHalted(ctx context.Context, rec *models.ImagingRollout, done, total int) {
 	s.nfy.Notify(ctx, notify.Event{
 		Type:     notify.EventRolloutHalted,
 		Severity: notify.SeverityError,
 		Title:    "Rollout halted: " + rec.Version,
 		Body: fmt.Sprintf("Rolling out %s stopped on its failure budget. %s "+
-			"%d of %d machines were done.", rec.Bundle, rec.HaltReason, rec.Done, total),
+			"%d of %d machines were done.", rec.Bundle, rec.HaltReason, done, total),
 		DedupeKey: "imaging-rollout-" + rec.ID.String(),
 	})
 }
@@ -407,7 +414,7 @@ func (s *Service) SteerRollout(ctx context.Context, id uuid.UUID, verb string) e
 // The event an operator most needs pushed at them rather than found: a halted
 // rollout means machines failed an update and the rest of the fleet is
 // deliberately not getting it, and nothing else will say so.
-func (s *Service) announceHalt(ctx context.Context, rec *models.ImagingRollout, total int) {
+func (s *Service) announceHalt(ctx context.Context, rec *models.ImagingRollout, done, total int) {
 	if s.nfy == nil {
 		return
 	}
@@ -423,5 +430,5 @@ func (s *Service) announceHalt(ctx context.Context, rec *models.ImagingRollout, 
 	if rec.State != RolloutHalted || already {
 		return
 	}
-	s.notifyHalted(ctx, rec, total)
+	s.notifyHalted(ctx, rec, done, total)
 }

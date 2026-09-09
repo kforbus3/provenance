@@ -54,12 +54,24 @@ func (h *handler) imagerReport(w http.ResponseWriter, r *http.Request) {
 			pct = &n
 		}
 	}
+	// The machine's own word for its address, not the address this request
+	// arrived from.
+	//
+	// This is the ONLY endpoint anything sends `address=` to: imager/init posts
+	// it here, and the agent's heartbeat does not send it at all. The two
+	// handlers that were switched to reportedAddress() are the two that never
+	// receive the field, so the change had no effect anywhere and this -- the
+	// one place it mattered -- was left reading the peer address.
+	//
+	// It matters because a machine with several NICs knows which of them is on
+	// the imaging network and this server does not, and because the address
+	// recorded here is what "Add as host" later offers to create the host at.
 	row := h.svc.progress.Report(id, phase,
 		pct,
 		clean(r.PostForm.Get("detail"), 300),
 		clean(r.PostForm.Get("disk"), 64),
 		clean(r.PostForm.Get("url"), 500),
-		clientIP(r))
+		reportedAddress(r))
 
 	// A finished imaging run is worth keeping; the live view is not. This is the
 	// moment a machine first exists as far as the fleet is concerned -- before

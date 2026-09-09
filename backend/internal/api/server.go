@@ -958,7 +958,7 @@ func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(realIP(s.Cfg.TrustedProxies)) // trusted-proxy-aware; not chi's spoofable RealIP
+	r.Use(realIP(s.Cfg.TrustedProxies, s.Cfg.TrustedProxyHops)) // trusted-proxy-aware; not chi's spoofable RealIP
 	// HSTS only where the deployment actually serves over TLS (secure cookies are the
 	// same signal), so a plaintext dev server isn't pinned to HTTPS.
 	r.Use(securityHeaders(s.Cfg.CookieSecure))

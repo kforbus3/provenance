@@ -81,7 +81,11 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	// Flag which sessions actually have a recording so the UI only offers
 	// export/replay/delete for those.
-	if withRec, rerr := h.d.Store.RecordingSessionIDs(r.Context()); rerr == nil {
+	ids := make([]uuid.UUID, 0, len(sessions))
+	for i := range sessions {
+		ids = append(ids, sessions[i].ID)
+	}
+	if withRec, rerr := h.d.Store.RecordingSessionIDs(r.Context(), ids); rerr == nil {
 		for i := range sessions {
 			sessions[i].HasRecording = withRec[sessions[i].ID]
 		}

@@ -503,6 +503,18 @@ func (h *handler) registerHost(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) deleteMachine(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r, "id")
+	// Read before destroying, so the machine's pairing can be checked. Deleting
+	// cascades to its events and to its rows in any running rollout.
+	m, err := h.d.Store.GetMachine(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return
+	}
+	if !h.mayManage(r, m) {
+		// Not found rather than forbidden, as everywhere else here.
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return
+	}
 	removed, err := h.d.Store.DeleteMachine(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not remove the machine")
@@ -525,6 +537,14 @@ func (h *handler) updateMachine(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r, "id")
 	m, err := h.d.Store.GetMachine(r.Context(), id)
 	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such machine")
+		return
+	}
+	// Checked against the machine's CURRENT pairing, before anything is
+	// changed. The host-id branch below separately checks the incoming host, so
+	// a machine cannot be moved to a host the caller cannot see either -- but
+	// that check alone left label and held reachable on any machine at all.
+	if !h.mayManage(r, m) {
 		httpx.WriteError(w, http.StatusNotFound, "no such machine")
 		return
 	}
@@ -627,6 +647,27 @@ func (h *handler) install(w http.ResponseWriter, r *http.Request) {
 
 // machineHost resolves the machine in the path to the host it is paired with,
 // checking the caller may touch that host.
+// mayManage reports whether this caller may act on this machine.
+//
+// A machine paired with a host inherits that host's access: acting on the
+// machine is acting on the host, and Imaging.Manage is granted to Operator,
+// which is host-group scoped. Without this, a scoped operator who knew a MAC
+// could hold a machine they cannot see out of every rollout, or delete its
+// record along with its events and its place in a running rollout -- both
+// silently, both returning 200, while a plain GET of the same machine filters
+// it out of their list. That inconsistency is the bug.
+//
+// An UNPAIRED machine is deliberately allowed. It belongs to no host yet, which
+// is the state every machine is in while it is being imaged, and Imaging.Manage
+// is the permission that governs imaging. Requiring a pairing first would mean
+// nobody could tidy up a failed or duplicate record.
+func (h *handler) mayManage(r *http.Request, m *models.ImagingMachine) bool {
+	if m.HostID == nil {
+		return true
+	}
+	return h.canSee(r, auth.MustPrincipal(r), *m.HostID)
+}
+
 func (h *handler) machineHost(w http.ResponseWriter, r *http.Request) (*models.Host, string, bool) {
 	id := pathID(r, "id")
 	m, err := h.d.Store.GetMachine(r.Context(), id)
