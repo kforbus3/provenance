@@ -219,7 +219,7 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	@echo "  Windows x86_64:      fleet-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
-test: backend-test frontend-test scanner-test imaging-test ## Run all tests
+test: backend-test frontend-typecheck frontend-test scanner-test imaging-test ## Run all tests
 
 .PHONY: smoke
 smoke: ## Build a real initramfs + bootloader and check what is actually in them (rpm, ~8 min)
@@ -275,6 +275,20 @@ backend-test: ## Run Go unit + integration tests
 	docker run --rm -v $(PWD):/src -w /src/backend golang:1.26-alpine \
 	  sh -c "apk add --no-cache git gcc musl-dev openssh-client >/dev/null && GOFLAGS=-mod=mod go test ./..."
 
+.PHONY: frontend-typecheck
+frontend-typecheck: ## Typecheck the frontend exactly as the production image build does
+	# The gate that was missing. `npm run build` in frontend/Dockerfile runs
+	# `tsc -b` before vite, and nothing here ran it -- so a test file importing
+	# node:fs passed both vitest and a hand-run `tsc --noEmit`, and then failed
+	# the IMAGE BUILD during a deploy. A type error that only the deploy can
+	# find is a type error found at the worst possible moment.
+	#
+	# This is `tsc -b`, the same invocation the image uses, rather than
+	# `--noEmit`: they read the same config but not necessarily the same way,
+	# and the point of this target is to be identical to the thing that broke.
+	docker run --rm -v $(PWD)/frontend:/app -w /app node:22-alpine \
+	  sh -c "npm ci --silent && npx tsc -b"
+
 .PHONY: frontend-test
 frontend-test: ## Run frontend unit tests
 	docker run --rm -v $(PWD)/frontend:/app -w /app node:22-alpine \
@@ -301,7 +315,7 @@ imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runne
 	# see the other side is a test that cannot fail.
 	docker run --rm -v $(PWD):/src -w /src/deploy/builder-runner python:3.13-alpine \
 	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
-	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py && python test_keybackup.py && python test_nofile.py && python test_family_guards.py && python test_reachable.py && python test_initramfs_deps.py && python test_playbook_template.py"
+	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py && python test_keybackup.py && python test_nofile.py && python test_family_guards.py && python test_reachable.py && python test_initramfs_deps.py && python test_playbook_template.py && python test_nav_routes.py"
 
 .PHONY: lint
 lint: fmt-check ## Run gofmt check + Go vet

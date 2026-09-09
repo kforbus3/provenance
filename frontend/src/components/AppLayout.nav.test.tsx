@@ -3,9 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { AppLayout, NAV_TOP, NAV_SECTIONS, NAV_BOTTOM } from "./AppLayout";
+import { AppLayout } from "./AppLayout";
 import { useAuthStore } from "../store/auth";
 import { useUIStore } from "../store/ui";
 
@@ -87,41 +85,11 @@ describe("sidebar sections", () => {
   });
 });
 
-// Every sidebar entry must lead somewhere, and lead somewhere with the same
-// permission it claims. Both halves drift silently: a route renamed in App.tsx
-// leaves a menu item that navigates to the catch-all redirect and dumps the
-// user on the dashboard with no error, and a permission changed on the route
-// but not the item leaves an entry that is visible and then refuses to open.
-describe("the sidebar agrees with the route table", () => {
-  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
-  const all = [...NAV_TOP, ...NAV_SECTIONS.flatMap((s) => s.items), ...NAV_BOTTOM];
-
-  it("covers every item with a real route", () => {
-    const missing = all
-      .map((i) => i.to.replace(/^\//, ""))
-      .filter((path) => path !== "")
-      .filter((path) => !new RegExp(`path="${path}"`).test(app));
-    expect(missing, `sidebar entries with no route in App.tsx: ${missing.join(", ")}`)
-      .toEqual([]);
-  });
-
-  it("claims the same permission the route enforces", () => {
-    const wrong: string[] = [];
-    for (const item of all) {
-      const path = item.to.replace(/^\//, "");
-      if (!path) continue;
-      const m = app.match(new RegExp(`path="${path}"[^\\n]*`));
-      if (!m) continue;
-      const routePerm = m[0].match(/permission="([^"]+)"/)?.[1];
-      if ((routePerm ?? undefined) !== item.perm) {
-        wrong.push(`${item.to}: sidebar=${item.perm ?? "none"} route=${routePerm ?? "none"}`);
-      }
-    }
-    expect(wrong, `sidebar/route permission mismatch: ${wrong.join("; ")}`).toEqual([]);
-  });
-
-  it("has no duplicate destinations", () => {
-    const seen = all.map((i) => i.to);
-    expect(seen.length).toBe(new Set(seen).size);
-  });
-});
+// The sidebar/route cross-checks -- every entry resolves to a route in App.tsx,
+// and claims the permission that route enforces -- live in
+// deploy/builder-runner/test_nav_routes.py instead of here.
+//
+// They have to read App.tsx, and this project's tsconfig has no node types: a
+// `node:fs` import passes vitest and then fails `tsc -b` in the production
+// image build, which is how it got caught. Reading files is what the Python
+// checks already do, so that is where a check that reads a file belongs.
