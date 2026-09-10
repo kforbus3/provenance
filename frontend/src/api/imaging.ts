@@ -706,3 +706,13 @@ export async function registerHostForUpdates(hostId: string): Promise<Machine> {
   );
   return data;
 }
+
+// Remove a finished rollout from the list.
+//
+// The record is history, not state: the machines it updated keep their versions
+// and a new rollout for the same bundle is unaffected. The server refuses while
+// one is still running -- cancel it first -- so this cannot be used to abandon a
+// rollout mid-flight and leave machines half-updated with nothing tracking them.
+export async function deleteRollout(id: string): Promise<void> {
+  await api.delete(`/api/v1/imaging/rollouts/${encodeURIComponent(id)}`);
+}
