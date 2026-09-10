@@ -147,6 +147,22 @@ func checkHostBringup(out, overlayIP string) (string, error) {
 			got, overlayIP)
 	}
 	detail := fmt.Sprintf("OpenVPN tunnel up (addr %s, observed on the host)", got)
+	// Up now and up after a reboot are different claims, and only the second is
+	// what an operator means by "enrolled". The bring-up script falls back to a
+	// bare daemon when neither systemd unit template could be enabled — that
+	// tunnel is real, works, and is enabled by nothing, so the host stays
+	// reachable until it is rebooted and then comes back with no overlay at all.
+	//
+	// It happened, on a RHEL host: the config was written to the path only the
+	// legacy openvpn@.service reads, RHEL 9 ships only openvpn-client@.service,
+	// both enables failed, the fallback daemon carried the tunnel, and the
+	// enrollment reported success. Nothing said the tunnel was temporary.
+	if strings.Contains(out, "OVPN_HOST_NOT_PERSISTENT") {
+		detail += " — WARNING: the tunnel is running but is NOT enabled at boot " +
+			"(neither openvpn-client@fleet-overlay nor openvpn@fleet-overlay could be " +
+			"enabled, so it is a bare daemon); this host will lose its overlay on the " +
+			"next reboot"
+	}
 	// Peer isolation fails open by design, which is precisely why its absence has to
 	// be said out loud: the enrollment otherwise succeeds identically whether or not
 	// this host can be reached by every other host on the overlay.

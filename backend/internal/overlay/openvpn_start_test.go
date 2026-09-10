@@ -268,3 +268,58 @@ func TestCheckHostBringup(t *testing.T) {
 		})
 	}
 }
+
+// A tunnel that is up now and enabled by nothing is not an enrolled host.
+//
+// alma1 was enrolled, reachable for days, rebooted, and came back with no
+// overlay. The config had been written to /etc/openvpn/fleet-overlay.conf --
+// the path only the legacy openvpn@.service reads -- because the script tried
+// that location first and /etc/openvpn exists on RHEL as the parent of client/
+// and server/. RHEL 9 ships only openvpn-client@.service, which reads
+// /etc/openvpn/client/%i.conf. Both enables failed, the bare-daemon fallback
+// brought the tunnel up, and enrollment reported success.
+func TestHostScriptWritesTheConfigWhereBothUnitTemplatesLook(t *testing.T) {
+	o := startTestOverlay()
+	got := o.HostInstallScript([]byte("ca"), []byte("crt"), []byte("key"),
+		o.ClientConfig("vpn.example.com:1194"), "10.101.0.2")
+
+	for _, path := range []string{
+		"/etc/openvpn/client/fleet-overlay.conf", // openvpn-client@ (current)
+		"/etc/openvpn/fleet-overlay.conf",        // openvpn@ (legacy)
+	} {
+		if !strings.Contains(got, "cp "+fleetDir+"/client.ovpn "+path) {
+			t.Errorf("config is never written to %s, so the unit that reads it cannot start", path)
+		}
+	}
+	// Unconditionally, not "A else B": the else branch never ran on the
+	// distribution that needed it.
+	if strings.Contains(got, "/etc/openvpn/fleet-overlay.conf 2>/dev/null || cp") {
+		t.Error("still writes one location only if the other failed")
+	}
+	// The template that current distributions actually ship must be tried first.
+	if strings.Index(got, "enable --now openvpn-client@") > strings.Index(got, "enable --now openvpn@fleet") {
+		t.Error("tries the legacy openvpn@ template before openvpn-client@")
+	}
+}
+
+func TestNonPersistentTunnelIsReportedRatherThanPassedOff(t *testing.T) {
+	detail, err := checkHostBringup(
+		"OVPN_HOST_IP=10.101.0.2\nOVPN_HOST_NOT_PERSISTENT\nOVPN_HOST_CONFIGURED\n", "10.101.0.2")
+	if err != nil {
+		t.Fatalf("a working tunnel must still enroll: %v", err)
+	}
+	if !strings.Contains(detail, "next reboot") {
+		t.Errorf("detail %q does not warn that the tunnel will not survive a reboot", detail)
+	}
+}
+
+func TestPersistentTunnelCarriesNoWarning(t *testing.T) {
+	detail, err := checkHostBringup(
+		"OVPN_HOST_IP=10.101.0.2\nOVPN_HOST_PERSISTENT\nOVPN_HOST_CONFIGURED\n", "10.101.0.2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(detail, "next reboot") {
+		t.Errorf("warned about a tunnel that is enabled at boot: %q", detail)
+	}
+}
