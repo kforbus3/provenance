@@ -321,5 +321,79 @@ def check_chroot_resolver():
     return bad
 
 
+def check_update_tools():
+    """The rpm image must carry the programs RAUC needs to apply an update.
+
+    A bundle's payload is rootfs.tar.gz. RAUC's ext4 handler makes a fresh
+    filesystem in the target slot and shells out to `tar` to extract into it. An
+    image without tar builds, boots and images onto machines perfectly, and can
+    never be updated:
+
+        Failed updating slot rootfs.1: failed to start tar extract:
+        Failed to execute child process "tar" (No such file or directory)
+
+    after a full download and a verified signature, at 99%.
+
+    This is the same family difference the resolver check above is about, and it
+    is worth naming as a class: tar is Essential on Debian, so debootstrap always
+    provides it and the deb path never had to ask for it. `dnf --installroot`
+    installs exactly what it is told. Anything the deb family gets for free is a
+    thing the rpm family has to be given explicitly, and nothing in the build
+    fails when it is not -- only a machine, later, doing the one thing the whole
+    A/B mechanism exists for.
+
+    gzip is checked too. It arrived as somebody else's dependency, which is not
+    the same as being required, and a dependency can go away.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    sh = os.path.join(here, "..", "..", "builder", "build-image.sh")
+    if not os.path.exists(sh):
+        print("  FAIL  build-image.sh not found")
+        return 1
+    body = open(sh, encoding="utf-8").read()
+
+    print("== the rpm image can apply an update ==")
+    bad = 0
+
+    # The install COMMAND, not the region around it, and with comments stripped.
+    #
+    # The first version of this check took everything between the dnf line and
+    # the RAUC section -- 757 lines -- and matched the word "tar" in the comment
+    # that explains why tar is installed. So it passed with tar removed from the
+    # package list, which is the only thing it exists to detect. A check that
+    # matches its own documentation is worse than none.
+    code = [ln for ln in body.splitlines() if not ln.lstrip().startswith("#")]
+    install = ""
+    for i, ln in enumerate(code):
+        if "dnf -y install" in ln and "install_weak_deps=False" in ln:
+            cmd = [ln]
+            while cmd[-1].rstrip().endswith("\\") and i + len(cmd) < len(code):
+                cmd.append(code[i + len(cmd)])
+            joined = " ".join(cmd)
+            # The base transaction is the one that installs the kernel.
+            if "KERNEL_PKG" in joined:
+                install = joined
+                break
+    if not install:
+        print("  FAIL  could not find the rpm base install command; this check "
+              "needs rewriting rather than deleting")
+        return 1
+
+    for tool, why in (
+        ("tar", "rauc extracts a bundle's rootfs.tar.gz with it; without it every "
+                "update fails at 99% with 'Failed to execute child process tar'"),
+        ("gzip", "the payload is gzipped, and arriving as another package's "
+                 "dependency is not the same as being required"),
+        ("e2fsprogs", "rauc makes a fresh ext4 in the target slot"),
+    ):
+        if re.search(rf"(?<![\w-]){re.escape(tool)}(?![\w-])", install):
+            print(f"  PASS  {tool} is installed into the image")
+        else:
+            print(f"  FAIL  the rpm image does not install {tool} — {why}")
+            bad = 1
+
+    return bad
+
+
 if __name__ == "__main__":
-    sys.exit(main() | check_state_models() | check_chroot_resolver())
+    sys.exit(main() | check_state_models() | check_chroot_resolver() | check_update_tools())
