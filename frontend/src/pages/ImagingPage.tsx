@@ -1821,9 +1821,11 @@ function BuildBundleDialog({ open, images, onClose, onStarted, setMsg }: {
                      onChange={(e) => setDescription(e.target.value)}
                      placeholder="What changed" />
           {chosen?.encrypted && (
-            <TextField fullWidth type="password" label="LUKS passphrase" value={luks}
+            <TextField fullWidth type="password" label="LUKS passphrase (optional)" value={luks}
                        onChange={(e) => setLuks(e.target.value)}
-                       helperText="Needed to open the encrypted image and read the root slot out of it." />
+                       helperText={"Leave blank if this image's passphrase was generated and stored here — "
+                         + "the server uses the one it filed under Credentials. Only needed for an image "
+                         + "built with storing turned off, where your copy is the only one."} />
           )}
         </Stack>
       </DialogContent>
