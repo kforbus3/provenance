@@ -25,7 +25,7 @@ func TestOverlayClientIsNamedForEachOverlay(t *testing.T) {
 	for _, tc := range []struct{ overlay, want string }{
 		{"openvpn", "openvpn"},
 		{"wireguard", "wireguard-tools"},
-		{"OpenVPN", "openvpn"},   // the setting is not case-normalised anywhere else
+		{"OpenVPN", "openvpn"}, // the setting is not case-normalised anywhere else
 		{" wireguard ", "wireguard-tools"},
 	} {
 		if got := overlayClientPackage(tc.overlay); got != tc.want {
