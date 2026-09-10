@@ -118,6 +118,31 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The overlay client belongs IN the image, not installed onto the machine
+	// afterwards.
+	//
+	// Enrollment installs openvpn (or wireguard-tools) onto a running host with
+	// the package manager, which puts it in /usr -- and /usr is exactly what an
+	// A/B update replaces. The overlay's config, certificates and keys live in
+	// /etc and survive, because the overlay carries /etc across; the binary and
+	// its systemd unit do not. So a machine enrolled on the VPN, updated once,
+	// comes up on the new slot with a complete configuration and nothing to run
+	// it, and drops off the overlay silently. That is not a rare case -- it is
+	// every A/B machine, on its first update.
+	//
+	// Added to `packages` rather than as a new flag, because that list already
+	// flows through the sidecar to build-image.sh AND is installed in the
+	// transaction that runs after EPEL is enabled -- which openvpn needs on the
+	// rpm family, where it is not in any base repository.
+	if kind == "image" {
+		if pkg := overlayClientPackage(h.svc.cfg.Overlay); pkg != "" {
+			existing := asString(body["packages"])
+			if !strings.Contains(existing, pkg) {
+				body["packages"] = strings.TrimSpace(existing + " " + pkg)
+			}
+		}
+	}
+
 	// A generated recovery passphrase is filed BEFORE the build is started, and
 	// the build is abandoned if it cannot be. See passphrase.go: an encrypted
 	// image whose key was never persisted looks exactly like a success.
@@ -706,4 +731,22 @@ func (h *handler) setAssignments(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "imaging.assignments.set", "assignments", map[string]any{
 		"count": len(out), "macs": strings.Join(macs, " ")})
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"assignments": out})
+}
+
+// overlayClientPackage names the package a machine needs to join this
+// deployment's overlay, or "" when the deployment has none configured.
+//
+// Same package name on both families; what differs is where it comes from, and
+// that is already handled by installing it in the post-EPEL transaction.
+func overlayClientPackage(overlay string) string {
+	switch strings.ToLower(strings.TrimSpace(overlay)) {
+	case "openvpn":
+		return "openvpn"
+	case "wireguard":
+		return "wireguard-tools"
+	default:
+		// Unset means the deployment has not chosen, and guessing would put a
+		// VPN client on every machine for an overlay that may never be used.
+		return ""
+	}
 }
