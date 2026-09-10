@@ -1579,6 +1579,22 @@ set -euo pipefail
 # dracut, not initramfs-tools: it is what an RPM distribution generates an initrd
 # with, and the kernel package expects it to be there.
 #
+# tar and gzip are here because RAUC needs them to apply an update, and nothing
+# else in this image does. A bundle's payload is rootfs.tar.gz -- rauc's ext4
+# handler makes a fresh filesystem and shells out to `tar` to extract into it --
+# so an image without tar can be built, booted and imaged onto machines, and can
+# never be updated:
+#
+#   Failed updating slot rootfs.1: failed to start tar extract:
+#   Failed to execute child process "tar" (No such file or directory)
+#
+# after a full download and a verified signature, at 99%.
+#
+# This is a family difference, not an oversight in the abstract: tar is Essential
+# on Debian, so debootstrap always provides it and the deb path never had to ask.
+# `dnf --installroot` installs what it is told and nothing else. gzip happened to
+# arrive as somebody else's dependency, which is not the same as being required.
+#
 # The profile and caller-supplied packages are NOT in this transaction. The
 # server profile asks for htop, which is in EPEL only (confirmed: it is in no
 # base el9 repository), and EPEL is not enabled until the RAUC section below --
@@ -1589,6 +1605,7 @@ dnf -y install --setopt=install_weak_deps=False \
     ${KERNEL_PKG} dracut ${GRUB_PKGS} \
     openssh-server sudo ca-certificates curl \
     ${RESOLVED_PKG} ${NETWORK_PKG} cloud-utils-growpart gdisk parted e2fsprogs \
+    tar gzip \
     ${CRYPT_PACKAGES}
 
 # --- RAUC, built from source -------------------------------------------------

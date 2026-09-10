@@ -201,17 +201,50 @@ if [ "$rc" -ne 0 ]; then
         echo "What RAUC reported:"
         grep -iE "LastError|failed|error" "$LOG" 2>/dev/null | tail -3 | sed 's/^/  /'
         echo ""
-        if grep -qiE "signature|keyring|certificate|verif" "$LOG" 2>/dev/null; then
+
+        # Hints are chosen from the ERROR, not from the whole log.
+        #
+        # Matching the whole log meant matching rauc's ordinary progress output.
+        # "Verifying signature" is printed by every successful install, so the
+        # word "verif" was present in every failure too -- and a missing `tar`
+        # was reported as
+        #
+        #   This looks like a trust problem: the bundle is signed by a key this
+        #   image does not carry ... rebuild the image against the signing cert
+        #
+        # which is a confident, detailed answer to a question nobody asked, and
+        # it sends whoever reads it to rebuild an image over a certificate that
+        # was never wrong. A wrong diagnosis costs more than none: this file
+        # already says so, about the version of this code that printed every
+        # hint on every failure.
+        #
+        # LastError is rauc's own statement of what went wrong. Falling back to
+        # the whole log when there is none keeps a hint available for the
+        # failures that never reach rauc.
+        _err="$(grep -i "LastError" "$LOG" 2>/dev/null | tail -1)"
+        [ -n "$_err" ] || _err="$(cat "$LOG" 2>/dev/null)"
+
+        # Something rauc needed and could not run. Named first because it is
+        # indistinguishable from a bundle problem in every other respect: the
+        # download completes, the signature verifies, and it fails at 99%.
+        if printf '%s' "$_err" | grep -qiE "Failed to execute child process|No such file or directory.*(tar|gzip|xz|mkfs)"; then
+            _missing="$(printf '%s' "$_err" | sed -n 's/.*child process [\u201c"]\([^\u201d"]*\)[\u201d"].*/\1/p')"
+            echo "  This machine is missing a program RAUC needs to apply the update"
+            echo "  ${_missing:+(}${_missing}${_missing:+), }not a problem with the bundle."
+            echo "  A bundle's payload is a tar archive, so the image needs tar and gzip."
+            echo "  Install it and retry:  sudo dnf install -y tar gzip"
+            echo "  Images built after this was fixed carry them already."
+        elif printf '%s' "$_err" | grep -qiE "signature|keyring|certificate|not signed"; then
             echo "  This looks like a trust problem: the bundle is signed by a key this"
             echo "  image does not carry. The certificate has to be inside the image when"
             echo "  it is built -- rebuild the image against the signing cert, not the"
             echo "  bundle."
         fi
-        if grep -qi "compatible" "$LOG" 2>/dev/null; then
+        if printf '%s' "$_err" | grep -qi "compatible"; then
             echo "  This machine's compatible is '$(sed -n 's/^compatible=//p' /etc/rauc/system.conf 2>/dev/null)';"
             echo "  the bundle must declare the same one."
         fi
-        if grep -qiE "dm table|verity|nbd|mounting bundle|streaming" "$LOG" 2>/dev/null; then
+        if printf '%s' "$_err" | grep -qiE "dm table|verity|nbd|mounting bundle|streaming"; then
             echo "  This is a streaming problem, not a problem with the bundle. The"
             echo "  download-and-install retry above should have avoided it; if that"
             echo "  also failed, check free space in /var/tmp and that the server"
