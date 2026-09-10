@@ -149,3 +149,22 @@ export async function setVaultRotationPolicy(id: string, intervalDays: number): 
   const { data } = await api.put<VaultSecret>(`/api/v1/vault/secrets/${id}/rotation-policy`, { intervalDays });
   return data;
 }
+
+// Machines a LUKS recovery credential actually unlocks.
+//
+// Not obvious from anything else on screen: a machine's LUKS header is written
+// once, at imaging time, and updates never touch it — so a machine keeps the
+// passphrase of the image it was IMAGED from however many bundles it has
+// installed since. The credential named after an old image is often the only
+// recovery key for machines running something much newer.
+export interface DependentMachine {
+  id: string;
+  hostname: string;
+  version: string;
+  imagedAt?: string;
+}
+
+export async function secretMachines(id: string): Promise<DependentMachine[]> {
+  const { data } = await api.get(`/api/v1/vault/secrets/${encodeURIComponent(id)}/machines`);
+  return data.machines ?? [];
+}

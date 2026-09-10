@@ -98,6 +98,48 @@ func (s *Store) ReportMachine(ctx context.Context, m *models.ImagingMachine) (*m
 	return scanMachine(row)
 }
 
+// MachinesImagedFrom returns the machines imaged from a given image, by the
+// image's bare name.
+//
+// This is what connects a LUKS recovery credential to the machines it actually
+// opens, and the connection is not obvious: a machine's LUKS header is written
+// once, at imaging time, and an update never touches it. RAUC writes THROUGH
+// /dev/mapper/luks-rootfs-*, so a bundle built from a newer image replaces the
+// operating system and leaves the keyslots exactly as the original image made
+// them. A machine therefore keeps the passphrase of the image it was IMAGED
+// from, for as long as it lives, regardless of what it is running now.
+//
+// So deleting the credential for an old image because the fleet has "moved on"
+// throws away the only recovery key for every machine imaged from it — and
+// nothing about that machine's current version hints at which credential it
+// needs.
+//
+// The normalisation mirrors secretNameForImage in the imaging package, which is
+// what filed the credential: take the basename, drop one compression suffix.
+// Machines record the URL they were imaged from
+// (http://host/images/x.img.zst); credentials are filed under the bare name
+// (x.img). If these two ever disagree the join silently returns nothing, which
+// is why a test pins them together.
+func (s *Store) MachinesImagedFrom(ctx context.Context, image string) ([]models.ImagingMachine, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+machineCols+`
+		  FROM imaging_machines
+		 WHERE regexp_replace(regexp_replace(image, '^.*/', ''), '[.](zst|gz)$', '') = $1
+		 ORDER BY imaged_at NULLS LAST, id`, image)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ImagingMachine
+	for rows.Next() {
+		m, serr := scanMachine(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ListMachines(ctx context.Context) ([]models.ImagingMachine, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+machineCols+
 		` FROM imaging_machines ORDER BY last_seen DESC NULLS LAST, id`)

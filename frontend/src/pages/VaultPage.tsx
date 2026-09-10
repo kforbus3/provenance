@@ -22,6 +22,7 @@ import {
   listVaultGrants, createVaultGrant, deleteVaultGrant,
   requestCheckout, listMyCheckouts, listCheckoutApprovals, approveCheckout, denyCheckout,
   rotateVaultSecret, setVaultRotationPolicy,
+  secretMachines,
   type VaultSecret, type VaultSecretInput,
 } from "../api/vault";
 
@@ -113,7 +114,10 @@ export function VaultPage() {
                 </TableCell>
                 <TableCell><Chip size="small" variant="outlined" label={TYPES.find((t) => t.value === s.type)?.label ?? s.type} /></TableCell>
                 <TableCell>{s.username || "—"}</TableCell>
-                <TableCell>{s.target || "—"}</TableCell>
+                <TableCell>
+                  {s.target || "—"}
+                  {s.name.startsWith("luks/") && <DependentMachines secret={s} />}
+                </TableCell>
                 <TableCell>{s.version}</TableCell>
                 <TableCell align="right">
                   {canReveal(s)
@@ -133,7 +137,16 @@ export function VaultPage() {
                     <Tooltip title="Edit"><IconButton size="small" onClick={() => setEditing(s)}><EditIcon fontSize="small" /></IconButton></Tooltip>
                     <Tooltip title="Grants"><IconButton size="small" onClick={() => setGranting(s)}><GroupIcon fontSize="small" /></IconButton></Tooltip>
                     <Tooltip title="Delete"><IconButton size="small" color="error"
-                      onClick={() => { if (window.confirm(`Delete credential "${s.name}"? This cannot be undone.`)) del.mutate(s.id); }}>
+                      onClick={() => {
+                        const luks = s.name.startsWith("luks/");
+                        const warn = luks
+                          ? `Delete credential "${s.name}"?\n\nThis is a LUKS recovery passphrase. Every machine `
+                            + `imaged from ${s.target} still unlocks with it — updates replace the operating `
+                            + `system and never change the disk's keys — so deleting it destroys their only `
+                            + `recovery key. The server refuses if any machine still depends on it.`
+                          : `Delete credential "${s.name}"? This cannot be undone.`;
+                        if (window.confirm(warn)) del.mutate(s.id);
+                      }}>
                       <DeleteIcon fontSize="small" /></IconButton></Tooltip>
                   </>}
                 </TableCell>
@@ -437,5 +450,42 @@ function GrantsDialog({ secret, onClose }: { secret: VaultSecret; onClose: () =>
       </DialogContent>
       <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
     </Dialog>
+  );
+}
+
+// DependentMachines shows how many machines a LUKS recovery credential unlocks.
+//
+// It is the missing half of a relationship nothing else on screen shows. A
+// machine's LUKS header is written once, at imaging time; RAUC writes through
+// /dev/mapper/luks-rootfs-*, so a bundle built from a newer image replaces the
+// operating system and leaves the keyslots as the original image made them. A
+// machine therefore keeps the passphrase of the image it was IMAGED from, no
+// matter what it is running now — and the credential named after a months-old
+// image can be the only recovery key for machines on the current release.
+//
+// Rendered inline rather than behind a click because the moment it matters is
+// the moment someone is looking at a list of credentials deciding which are
+// stale.
+function DependentMachines({ secret }: { secret: VaultSecret }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["secret-machines", secret.id],
+    queryFn: () => secretMachines(secret.id),
+  });
+  if (isLoading || !data) return null;
+  if (data.length === 0) {
+    // Said explicitly. "No badge" is ambiguous between "nothing depends on this"
+    // and "we did not look", and only one of those makes it safe to delete.
+    return (
+      <Tooltip title="No machine was imaged from this image, so nothing depends on this passphrase.">
+        <Chip size="small" variant="outlined" sx={{ ml: 0.5 }} label="0 machines" />
+      </Tooltip>
+    );
+  }
+  const names = data.map((m) => m.hostname || m.id).join(", ");
+  return (
+    <Tooltip title={`Still unlocks: ${names}. Deleting this destroys their only recovery key.`}>
+      <Chip size="small" color="warning" sx={{ ml: 0.5 }}
+            label={`${data.length} machine${data.length === 1 ? "" : "s"}`} />
+    </Tooltip>
   );
 }
