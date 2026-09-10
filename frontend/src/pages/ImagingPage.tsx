@@ -3,7 +3,7 @@ import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, LinearProgress, MenuItem,
   Paper, Stack, Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs,
-  TextField, Tooltip, Typography,
+  TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
 import BoltIcon from "@mui/icons-material/Bolt";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -19,7 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { listGroups } from "../api/admin";
-import { listHosts, createHost } from "../api/hosts";
+import { listHosts, createHost, type Host } from "../api/hosts";
 import { ProvisioningTab } from "./imaging/ProvisioningTab";
 import { OverlayTab } from "./imaging/OverlayTab";
 import { KeysTab } from "./imaging/KeysTab";
@@ -872,7 +872,7 @@ function RolloutsTab({ rollouts, canManage, onSteer, onCreated, setMsg }: {
   );
 }
 
-function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
+export function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
   open: boolean; onClose: () => void; onCreated: () => void; setMsg: (m: Note) => void;
 }) {
   const { data: bundleData } = useQuery({
@@ -882,8 +882,26 @@ function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
   // Keeping two in step is work nobody would have done.
   const { data: groups = [] } = useQuery({ queryKey: ["groups"], queryFn: listGroups, enabled: open });
 
+  // Only machines can be rolled out to, and a machine reaches a rollout through
+  // the host it is paired with -- so the pickable hosts are exactly the paired
+  // ones. Offering every host would offer targets that resolve to nothing and
+  // are refused on submit, which is a worse way to learn the same fact.
+  const { data: machineData } = useQuery({
+    queryKey: ["machines"], queryFn: listMachines, enabled: open,
+  });
+  const { data: hostData } = useQuery({
+    queryKey: ["hosts"], queryFn: listHosts, enabled: open,
+  });
+  const targetableHosts = useMemo(() => {
+    const paired = new Set((machineData?.machines ?? [])
+      .map((m) => m.hostId).filter(Boolean) as string[]);
+    return (hostData?.hosts ?? []).filter((h) => paired.has(h.id));
+  }, [machineData, hostData]);
+
   const [bundle, setBundle] = useState("");
+  const [mode, setMode] = useState<"fleet" | "group" | "hosts">("fleet");
   const [group, setGroup] = useState("");
+  const [hosts, setHosts] = useState<Host[]>([]);
   const [canary, setCanary] = useState(1);
   const [batch, setBatch] = useState(10);
   const [soak, setSoak] = useState(15);
@@ -895,8 +913,9 @@ function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
   const create = useMutation({
     mutationFn: () => createRollout({
       bundle,
-      groups: group ? [group] : [],
-      all: !group,
+      groups: mode === "group" && group ? [group] : [],
+      hosts: mode === "hosts" ? hosts.map((h) => h.id) : [],
+      all: mode === "fleet",
       canary, batchSize: batch, soakSeconds: soak * 60, maxFailures: maxFail,
       ...(windowed ? { windowStart: start, windowEnd: end } : {}),
     }),
@@ -921,16 +940,48 @@ function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
               </MenuItem>
             ))}
           </TextField>
-          <TextField select fullWidth label="Target" value={group}
-                     onChange={(e) => setGroup(e.target.value)}
-                     helperText="Host groups, the same ones access and policy use.">
-            <MenuItem value="">The whole fleet</MenuItem>
-            {groups.map((g) => (
-              <MenuItem key={g.id} value={g.id}>
-                {g.name}{g.hostCount != null ? ` (${g.hostCount} hosts)` : ""}
-              </MenuItem>
-            ))}
-          </TextField>
+          <ToggleButtonGroup size="small" exclusive value={mode}
+                             onChange={(_, v) => { if (v) setMode(v); }}>
+            <ToggleButton value="fleet">Whole fleet</ToggleButton>
+            <ToggleButton value="group">Group</ToggleButton>
+            <ToggleButton value="hosts">Hosts</ToggleButton>
+          </ToggleButtonGroup>
+          {mode === "fleet" && (
+            <Alert severity="info">
+              Every A/B machine. A rollout resolves to machines, not to hosts, so
+              an ordinary server that was never imaged is not a target and cannot
+              be reached by this — it is simply not in the set.
+            </Alert>
+          )}
+          {mode === "group" && (
+            <TextField select fullWidth label="Group" value={group}
+                       onChange={(e) => setGroup(e.target.value)}
+                       helperText="Host groups, the same ones access and policy use. Members
+                                   that are not A/B machines are not targeted.">
+              {groups.map((g) => (
+                <MenuItem key={g.id} value={g.id}>
+                  {g.name}{g.hostCount != null ? ` (${g.hostCount} hosts)` : ""}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          {mode === "hosts" && (
+            <Autocomplete
+              multiple
+              options={targetableHosts}
+              value={hosts}
+              onChange={(_, v) => setHosts(v)}
+              getOptionLabel={(h) => h.hostname}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              renderInput={(params) => (
+                <TextField {...params} label="Hosts" placeholder="Pick one or more"
+                  helperText={targetableHosts.length === 0
+                    ? "No host is paired with an A/B machine yet. Pair one on the Machines tab, "
+                      + "or register an enrolled host from its Hosts page."
+                    : "Only hosts paired with an A/B machine are listed — the rest cannot receive a bundle."} />
+              )}
+            />
+          )}
           <Stack direction="row" spacing={2}>
             <TextField type="number" label="Canary" value={canary}
                        onChange={(e) => setCanary(+e.target.value)} />
@@ -971,7 +1022,10 @@ function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={!bundle || create.isPending}
+        <Button variant="contained"
+                disabled={!bundle || create.isPending
+                          || (mode === "group" && !group)
+                          || (mode === "hosts" && hosts.length === 0)}
                 onClick={() => create.mutate()}>Create</Button>
       </DialogActions>
     </Dialog>
