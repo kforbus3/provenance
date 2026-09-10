@@ -7,6 +7,7 @@ package vault
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -44,6 +45,11 @@ func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Post("/vault/secrets", h.create)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Put("/vault/secrets/{id}", h.update)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Delete("/vault/secrets/{id}", h.del)
+		// Which machines a LUKS recovery credential actually opens. Read-only and
+		// no secret material, so Credential.View is enough -- the point is to make
+		// the dependency visible BEFORE somebody tries to delete it, not only in
+		// the refusal afterwards.
+		pr.With(d.Auth.RequirePermission("Credential.View")).Get("/vault/secrets/{id}/machines", h.dependentMachines)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Get("/vault/secrets/{id}/grants", h.listGrants)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Post("/vault/secrets/{id}/grants", h.createGrant)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Delete("/vault/secrets/{id}/grants/{grantId}", h.deleteGrant)
@@ -307,12 +313,86 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, secret)
 }
 
+// dependentMachines lists the machines a LUKS recovery credential unlocks.
+//
+// Empty for every other kind of credential, and for a LUKS one no machine was
+// imaged from -- both are ordinary answers, not errors.
+func (h *handler) dependentMachines(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	secret, err := h.d.Store.GetVaultSecret(r.Context(), id)
+	if err != nil || secret == nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such credential")
+		return
+	}
+	out := []models.ImagingMachine{}
+	if strings.HasPrefix(secret.Name, "luks/") && secret.Target != "" {
+		ms, merr := h.d.Store.MachinesImagedFrom(r.Context(), secret.Target)
+		if merr != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not read the machines")
+			return
+		}
+		out = ms
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"machines": out, "count": len(out)})
+}
+
 func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r, "id")
 	if !ok {
 		return
 	}
 	secret, _ := h.d.Store.GetVaultSecret(r.Context(), id)
+
+	// A LUKS recovery credential that machines still depend on.
+	//
+	// A machine's LUKS header is written once, at imaging time, and an update
+	// never touches it -- RAUC writes through /dev/mapper/luks-rootfs-*, so a
+	// bundle built from a newer image replaces the operating system and leaves
+	// the keyslots as the original image made them. A machine therefore keeps
+	// the passphrase of the image it was IMAGED from, however new the release it
+	// is running.
+	//
+	// That makes this deletion the quiet, irreversible one: the fleet "moved to"
+	// a new image months ago, the old image's credential looks like leftovers,
+	// and deleting it destroys the only recovery key for every machine imaged
+	// from it. Nothing about those machines' current version points back to it,
+	// and nothing goes wrong until somebody is standing at a console that will
+	// not boot.
+	//
+	// Refused rather than warned, because a warning in an API response is read
+	// by nobody. ?force=true is the deliberate override, and it is audited as
+	// such -- retiring the machines first is the ordinary path.
+	if secret != nil && strings.HasPrefix(secret.Name, "luks/") && secret.Target != "" {
+		machines, merr := h.d.Store.MachinesImagedFrom(r.Context(), secret.Target)
+		if merr != nil {
+			// Cannot answer the question, so do not act on the answer. Deleting
+			// here on the assumption that nothing depends on it is the one
+			// outcome that cannot be undone.
+			httpx.WriteError(w, http.StatusInternalServerError,
+				"could not check which machines depend on this recovery passphrase; "+
+					"nothing was deleted")
+			return
+		}
+		if len(machines) > 0 && !httpx.QueryBool(r, "force") {
+			httpx.WriteError(w, http.StatusConflict, fmt.Sprintf(
+				"%d machine%s still unlock%s with this passphrase, because a machine keeps the "+
+					"LUKS keys of the image it was imaged from however many updates it has had "+
+					"since: %s. Deleting it destroys their only recovery key. Retire them first, "+
+					"or repeat with ?force=true.",
+				len(machines), plural(len(machines)), verbS(len(machines)),
+				machineNames(machines)))
+			return
+		}
+		if len(machines) > 0 {
+			h.audit(r, "credential.delete.forced", id, map[string]any{
+				"name": secret.Name, "dependentMachines": len(machines),
+			})
+		}
+	}
+
 	if err := h.d.Store.DeleteVaultSecret(r.Context(), id); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not delete credential")
 		return
@@ -419,4 +499,39 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 		return err
 	}
 	return nil
+}
+
+// machineNames renders a bounded list of machines for an error message. Bounded
+// because an image used fleet-wide has hundreds, and an error nobody can read is
+// the same as no error.
+func machineNames(ms []models.ImagingMachine) string {
+	const max = 6
+	names := make([]string, 0, len(ms))
+	for _, m := range ms {
+		n := strings.TrimSpace(m.Hostname)
+		if n == "" {
+			n = m.ID
+		}
+		names = append(names, n)
+		if len(names) == max && len(ms) > max {
+			return strings.Join(names, ", ") + fmt.Sprintf(" and %d more", len(ms)-max)
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// verbS keeps the message grammatical for one machine as well as many, because a
+// message that reads as broken is trusted less than one that does not.
+func verbS(n int) string {
+	if n == 1 {
+		return "s"
+	}
+	return ""
 }
