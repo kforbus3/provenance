@@ -2162,11 +2162,51 @@ if [ -n "$RUN_SCRIPT" ]; then
     [ -f "$RUN_SCRIPT" ] || die "--run-script: no such file: $RUN_SCRIPT"
     step "Running your customization script in the chroot"
     install -m0755 "$RUN_SCRIPT" "$MNT/tmp/ab-custom.sh"
+
+    # Give it a resolver, the same way the package install got one.
+    #
+    # The build bind-mounts the host's /etc/resolv.conf for its own dnf/apt work
+    # and then, hundreds of lines earlier than this, replaces it with the symlink
+    # a booted machine wants -- ../run/systemd/resolve/stub-resolv.conf, which
+    # resolves to nothing inside a chroot. So by the time a customization script
+    # runs, the image has no working DNS, and the most ordinary script anybody
+    # would write dies on:
+    #
+    #   Curl error (6): Couldn't resolve host name for
+    #   https://mirrors.almalinux.org/mirrorlist/9/crb
+    #
+    # which reads as a network problem with the build host rather than as
+    # something the build did to the chroot on purpose.
+    #
+    # Restored afterwards, so the image still ships the symlink systemd-resolved
+    # expects rather than a copy of the builder's resolver -- that was its own
+    # bug once: a machine that resolved names only as long as the build host's
+    # DNS server was reachable from wherever it ended up.
+    _rs_bound=0
+    if [ -e /etc/resolv.conf ]; then
+        rm -f "$MNT/etc/resolv.conf"
+        : > "$MNT/etc/resolv.conf"
+        if mount --bind /etc/resolv.conf "$MNT/etc/resolv.conf"; then
+            _rs_bound=1
+        else
+            log "  WARNING: could not give the chroot a resolver; a script that"
+            log "           needs the network will fail to resolve names"
+        fi
+    fi
+    _rs_restore() {
+        [ "$_rs_bound" = 1 ] || return 0
+        umount "$MNT/etc/resolv.conf" 2>/dev/null || true
+        rm -f "$MNT/etc/resolv.conf"
+        ln -sf ../run/systemd/resolve/stub-resolv.conf "$MNT/etc/resolv.conf"
+    }
+
     if ! chroot "$MNT" /tmp/ab-custom.sh; then
         rm -f "$MNT/tmp/ab-custom.sh"
+        _rs_restore
         die "your --run-script failed (see its output above); the image was not finished"
     fi
     rm -f "$MNT/tmp/ab-custom.sh"
+    _rs_restore
 fi
 
 # --- the certificate that decides whether this machine can ever be updated ----
