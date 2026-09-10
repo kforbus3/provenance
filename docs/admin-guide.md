@@ -825,7 +825,7 @@ bundled compose file guacd also mounts the shared `recordings` volume and runs a
 backend's `fleet` user so recordings it writes are readable by the backend (see below).
 
 **Configure an RDP host.** On the host form set **Protocol** to **RDP (Windows
-desktop)** and the **RDP Port** (default `3389`). RDP has no Fleet-certificate mode:
+desktop)** and the **RDP Port** (default `3389`). RDP has no Provenance-certificate mode:
 **Authentication** must be a **Vault credential — password**, so the Windows account
 password is stored in the vault and **injected into guacd in memory** — the operator
 never sees it and it never reaches the browser. Attaching the credential enforces the

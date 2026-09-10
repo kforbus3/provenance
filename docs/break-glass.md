@@ -40,7 +40,7 @@ host protects nothing. Map `FLEET_BACKUP_DIR` to off-host storage (an NFS mount,
 an external disk, or rsync the directory to another machine on a cron).
 
 The encrypted file format is standard openssl, so it restores **anywhere** with
-no Fleet-specific tooling — see below.
+no Provenance-specific tooling — see below.
 
 ### Also back up the state volumes (not in the DB dump)
 

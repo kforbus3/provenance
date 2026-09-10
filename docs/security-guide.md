@@ -18,7 +18,7 @@ and operational recommendations.
 
 - On login, the **Issuer** generates a fresh `ssh-ed25519` keypair in an
   in-process **Identity Vault** and signs a short-lived user certificate
-  (default TTL 7 days, `FLEET_USER_CERT_TTL`), bound to the browser session with
+  (default TTL 12 hours, `FLEET_USER_CERT_TTL`), bound to the browser session with
   principals `fleet` + username.
 - **Private keys never touch disk or the database.** Only certificate *metadata*
   is persisted in `ssh_certificates` (serial, principals, public key, validity,
@@ -172,7 +172,7 @@ and operational recommendations.
     asks for teardown (`?teardown=true`, or the checkbox in the delete dialog). For a
     host that is genuinely leaving, tear it down — otherwise a machine Provenance no longer
     manages or audits keeps a standing root account. See
-    [host-enrollment-guide.md](./host-enrollment-guide.md#removing-fleet-from-the-machine-opt-in),
+    [host-enrollment-guide.md](./host-enrollment-guide.md#removing-provenance-from-the-machine-opt-in),
     and `scripts/fleet-unenroll.sh` for hosts Provenance can no longer reach.
 
   > **Defaults are permissive.** `Host.Sudo` is seeded to **Administrator and

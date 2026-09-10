@@ -20,6 +20,13 @@ import (
 
 // The curated, user-facing set — must match frontend/scripts/build-help.mjs so the
 // assistant and the in-app help cover the same documentation.
+//
+// It said that before and was not true: this list had 12 entries and build-help
+// had 20, and imaging.md was in NEITHER. So the in-app Help had no imaging page
+// and the assistant could not answer a single question about images, rollouts,
+// LUKS or A/B updates — half the product, invisible to both places a user asks.
+// A test now compares the two lists, because a comment saying they must match is
+// not a mechanism for making them match.
 var curated = []struct{ File, Title string }{
 	{"installation.md", "Installation"},
 	{"user-guide.md", "User Guide"},
@@ -27,12 +34,22 @@ var curated = []struct{ File, Title string }{
 	{"operations.md", "Operations"},
 	{"host-enrollment-guide.md", "Host Enrollment"},
 	{"certificate-lifecycle.md", "Certificate Lifecycle"},
+	{"imaging.md", "Imaging & A/B Updates"},
+	{"access-policies.md", "Access Policies (ABAC)"},
+	{"database-broker.md", "Database Access"},
+	{"kubernetes.md", "Kubernetes Access"},
+	{"external-secrets.md", "External Secrets Manager"},
+	{"kms.md", "Encryption at Rest (KMS)"},
+	{"behavior-analytics.md", "Behavior Analytics (UEBA)"},
+	{"federation.md", "Multi-Site Federation"},
 	{"api.md", "API Reference"},
+	{"itsm.md", "ITSM (ServiceNow / Jira)"},
 	{"automation.md", "Automation (SDK & CLI)"},
 	{"security-guide.md", "Security"},
 	{"deployment.md", "Deployment"},
 	{"internet-exposure.md", "Internet Exposure"},
 	{"high-availability.md", "High Availability"},
+	{"CHANGELOG.md", "Changelog"},
 }
 
 func main() {

@@ -166,11 +166,30 @@ func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		ids = append(ids, scanID.String())
-		go h.svc.Run(context.WithoutCancel(r.Context()), scanID, host)
+		// Bounded, like every other fan-out in this codebase and unlike this one
+		// until now. A scan SSHes to the host and then calls the grype sidecar,
+		// so "scan this group" on 500 hosts meant 500 simultaneous dials through
+		// a jump host whose sshd starts refusing connections at MaxStartups 10 --
+		// the same failure the monitor's own fan-out limit exists to avoid, and
+		// which its comment records having caused once already.
+		//
+		// The scheduled path was already bounded at scanFanoutLimit. Only the
+		// path a person triggers from the UI was not, which is the one most
+		// likely to be pointed at the whole fleet at once.
+		go func(hst *models.Host, id uuid.UUID) {
+			scanSem <- struct{}{}
+			defer func() { <-scanSem }()
+			h.svc.Run(context.WithoutCancel(context.Background()), id, hst)
+		}(host, scanID)
 	}
 	h.audit(r, "vuln_scan.start", map[string]any{"hosts": len(ids)})
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"scanIds": ids})
 }
+
+// scanSem bounds how many manual scans run at once, across all requests. Package
+// level on purpose: a per-request semaphore would let ten operators each start
+// their own burst and reproduce exactly what this prevents.
+var scanSem = make(chan struct{}, 8)
 
 // clearFailed removes failed scan records (error-only rows with no findings),
 // clearing the "recent failures" surface.

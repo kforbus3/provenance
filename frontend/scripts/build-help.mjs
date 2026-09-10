@@ -22,6 +22,7 @@ const DOCS = [
   { file: "operations.md", title: "Operations", category: "Administration", order: 4 },
   { file: "host-enrollment-guide.md", title: "Host Enrollment", category: "Administration", order: 5 },
   { file: "certificate-lifecycle.md", title: "Certificate Lifecycle", category: "Administration", order: 6 },
+  { file: "imaging.md", title: "Imaging & A/B Updates", category: "Imaging & updates", order: 6.5 },
   { file: "access-policies.md", title: "Access Policies (ABAC)", category: "Administration", order: 7 },
   { file: "database-broker.md", title: "Database Access", category: "Brokered access", order: 8 },
   { file: "kubernetes.md", title: "Kubernetes Access", category: "Brokered access", order: 9 },
@@ -35,6 +36,7 @@ const DOCS = [
   { file: "security-guide.md", title: "Security", category: "Reference", order: 14 },
   { file: "deployment.md", title: "Deployment", category: "Reference", order: 15 },
   { file: "internet-exposure.md", title: "Internet Exposure", category: "Reference", order: 16 },
+  { file: "high-availability.md", title: "High Availability", category: "Reference", order: 16.5 },
   { file: "CHANGELOG.md", title: "Changelog", category: "Reference", order: 17 },
 ];
 

@@ -136,13 +136,28 @@ reading a version off it when it goes quiet.
 
 ## Rollout targets
 
-Rollouts target **host groups** — the same groups access control and policy use.
-Not a second set of groups naming the same machines. Keeping two in step is work
-nobody would have done, and a stale copy of "which machines are production" is
-how the wrong fleet gets an update.
+A rollout targets one of three things, and it resolves to **machines**, never to
+hosts:
 
-The consequence worth knowing: a machine reaches a rollout through its pairing.
-An unpaired machine is in no group and so is targeted only by *the whole fleet*.
+- **The whole fleet** — every A/B machine. Not every host: an ordinary server
+  that was never imaged has no machine record, so it is not in the set and
+  cannot be reached by a rollout at all.
+- **A host group** — the same groups access control and policy use, not a second
+  set naming the same machines. A stale copy of "which machines are production"
+  is how the wrong fleet gets an update. Members of the group that are not A/B
+  machines are simply not targeted; they are not attempted and cannot fail it.
+- **Individual hosts** — for updating one machine without inventing a group for
+  it. The picker offers only hosts already paired with a machine, because an
+  unpaired host resolves to nothing.
+
+A machine reaches a rollout through the host it is paired with. **A host with no
+machine record is invisible to every rollout, including a fleet-wide one** — which
+is correct for a server that was never imaged, and wrong for an A/B machine this
+server did not image (restored from backup, imaged by an earlier server, or whose
+record was deleted). Register it from the host's own page: **Hosts → the host →
+details → A/B updates → Register for updates**. That reads its real slot and
+version over SSH rather than assuming them, and refuses a host that has no
+`ab-update` rather than creating a record that could only ever fail.
 
 ## Maintenance windows
 
@@ -255,7 +270,7 @@ Where it goes:
   has a secrets manager should not need a second copy of record. The path is
   `FLEET_IMAGING_SECRET_PREFIX` (default `secret/blackfriars/images`) plus the
   image name.
-- **Fleet's own credential vault otherwise**, sealed at rest, under
+- **Provenance's own credential vault otherwise**, sealed at rest, under
   `imaging/luks/<image>`.
 
 Either way a credential record is created, so the passphrase is found the same way
@@ -278,6 +293,40 @@ Credentials, or read the reference straight from your secrets manager. Every
 machine imaged from that image accepts the same passphrase on any encrypted
 partition — rotating it means re-imaging, or `cryptsetup luksChangeKey` per
 machine.
+
+### An update never changes disk encryption
+
+A machine's LUKS header is written **once, at imaging time**, and no update ever
+touches it. For an encrypted image the RAUC slot devices are `/dev/mapper/
+luks-rootfs-a|b`, so installing a bundle makes a fresh filesystem *inside* the
+existing container and extracts into it. Every keyslot survives.
+
+Three consequences, and the third is the one that costs people a machine:
+
+1. **A machine keeps the passphrase of the image it was IMAGED from, for life** —
+   however many bundles it installs afterwards. Its current OS version tells you
+   nothing about which credential opens its disk.
+2. **The credential for a newer image does not open an older machine.** A fleet
+   can therefore hold several LUKS passphrases at once, partitioned by *when each
+   machine was imaged*, not by what it is running.
+3. **Deleting the credential for a retired image destroys the only recovery key
+   for every machine imaged from it.** Nothing about those machines points back
+   at it. The credential list shows a machine count on each `luks/` entry for
+   this reason, and the server refuses the deletion while any machine still
+   depends on it — `?force=true` overrides, and is audited separately.
+
+Rotating a deployed machine's passphrase means `cryptsetup luksChangeKey` on that
+machine, or re-imaging it. See
+[per-machine LUKS keys](./luks-per-machine-keys-plan.md) for the plan to narrow
+one-passphrase-per-image down to one per machine; it is **not implemented**.
+
+### Bundle builds take the passphrase from the vault
+
+Building a bundle from an encrypted image has to open its root slot, which needs
+that image's passphrase. If the image was built with **generate and store** on,
+the server files the passphrase as `luks/<image>` and supplies it automatically —
+leave the field in the build dialog blank. Supply one explicitly only for an image
+built with storing turned off, where your copy is the only one.
 
 ## Building for another distribution family
 
@@ -483,6 +532,30 @@ Paths must be **absolute**. The builder silently skips anything else, so the
 dialog refuses to submit instead: a skipped directive is a setting that looks
 accepted and is not in the image, and it is found on a machine.
 
+### What does not survive an update
+
+The root slot is replaced wholesale, so **anything installed onto a running
+machine with `dnf` or `apt` is gone at the next update**. That is what A/B means,
+not a defect in it — but it makes package installs on a live machine the wrong
+place for anything the machine needs permanently.
+
+| Path | Survives an update? |
+|---|---|
+| `/etc`, `/home`, `/var` and the rest of the overlay | yes — carried across |
+| `/usr`, `/bin`, `/sbin`, `/lib`, `/boot` | **no** — replaced by the bundle |
+| `/usr/local` | yes — the one carve-out |
+
+The failure this produces is quiet and specific: the machine comes up on the new
+slot with a *complete and correct* configuration in `/etc` and nothing to run it
+with. Enrollment installs the overlay client (`openvpn` or `wireguard-tools`)
+with the package manager, so every enrolled A/B machine dropped off the VPN on its
+first update — config, certificate and key all present, binary and unit gone.
+
+Images now carry the overlay client for whichever overlay the deployment uses, so
+this is fixed going forward. Anything else you need permanently belongs **in the
+image**: add it with `--packages`, or in `overlay.d` if it is a file rather than a
+package.
+
 ## The netboot imager
 
 Before any machine can be imaged there has to be something for it to boot. The
@@ -589,6 +662,23 @@ can be changed by editing this repository: the change would have to reach
 machines that only take an update by asking these endpoints for one. They are
 the wire contract; the `/api/v1/imaging/...` routes are the convenience.
 
+## Machines imaged before a fix
+
+A build fix only reaches machines imaged after it. These four all produce the same
+shape — the machine works, and cannot be *updated* — so they are collected here
+rather than left in the changelog.
+
+| Symptom on the machine | Cause | What to do |
+|---|---|---|
+| `rauc: error while loading shared libraries: libjson-glib-1.0.so.0` | rpm images built before the runtime libraries were kept: `dnf remove` of the build toolchain took `json-glib` with it | `dnf install -y json-glib`, then rebuild the image and the bundle |
+| Update fails at 99% with `failed to start tar extract: Failed to execute child process "tar"` | rpm images built before `tar`/`gzip` were installed — a bundle's payload is a tar archive, and `dnf --installroot` never provided one | `dnf install -y tar gzip`, then rebuild the image and the bundle |
+| Machine comes up after an update with no VPN, but its config and certificate are intact | the overlay client was installed by enrollment into `/usr`, which the update replaced | reinstall it (`dnf install -y openvpn`; `systemctl enable --now openvpn-client@fleet-overlay`) — permanent once re-imaged from a current image |
+| OpenVPN tunnel works until the machine reboots, then never comes back | RHEL-family hosts enrolled before the client config was written where `openvpn-client@.service` reads it — the tunnel was a bare daemon enabled by nothing | re-enroll the host |
+
+The first two are the ones to watch for, because the machine images and boots
+perfectly and only fails the first time you try to update it — rauc is used for
+nothing else.
+
 ## Configuration
 
 | variable | meaning |
@@ -614,6 +704,45 @@ control URL, so the fleet can be re-pointed centrally.
 
 `FLEET_AGENT_INTERVAL` is likewise sent in every reply, so re-pacing the whole
 fleet does not mean touching a machine.
+
+### Serving updates to machines that have left the imaging network
+
+`FLEET_CONTROL_URL` tells machines where to find this server after they leave the
+provisioning segment — it is returned in every heartbeat reply, so the fleet
+re-points itself, and it is what a rollout builds its bundle URL from.
+
+Setting it is not enough on its own. **Something has to serve `/bundles/` at that
+address.** The provisioning listener is deliberately bound to `SERVER_IP` — the
+imaging segment — so a machine that has been moved to the main network cannot
+reach it, and a `CONTROL_URL` pointing anywhere else answers 404. The web UI's
+port does not serve bundles either.
+
+The provisioning container has a second listener for exactly this, off unless you
+switch it on. In `server/.env`:
+
+```sh
+UPDATE_IP=10.10.0.208     # an address machines can reach after they are moved
+UPDATE_PORT=80           # optional, defaults to 80
+```
+
+It serves `/bundles/`, `/health` and the heartbeat endpoint, and nothing else —
+not the image library. It is skipped as a no-op if it would duplicate the imaging
+listener. Then set the backend's `FLEET_CONTROL_URL` to that same address:
+
+```sh
+FLEET_CONTROL_URL=http://provisioning.example.com
+```
+
+Check it end to end before relying on it — a wrong value fails on the machine and
+nowhere else:
+
+```sh
+curl -o /dev/null -w '%{http_code}\n' http://provisioning.example.com/bundles/<bundle>.raucb
+```
+
+> The two names are easy to confuse: the backend reads **`FLEET_CONTROL_URL`**,
+> and the PXE server's own compose file uses **`CONTROL_URL`** for the value it
+> writes into each machine's deploy marker at imaging time.
 
 ## The heartbeat endpoint
 
