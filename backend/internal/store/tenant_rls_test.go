@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kforbus3/blackfriars/backend/internal/db"
+	"github.com/kforbus3/provenance/backend/internal/db"
 )
 
 // providerTenant is the seeded default tenant every pre-existing row backfills into

@@ -16,10 +16,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/ssrf"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/ssrf"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 const oidcSettingKey = "oidc"

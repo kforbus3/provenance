@@ -1,5 +1,5 @@
 // Package hosts provides host inventory CRUD and serves as the canonical example
-// of a Blackfriars HTTP module: construct from *app.Deps, gate every route
+// of a Provenance HTTP module: construct from *app.Deps, gate every route
 // with auth + RBAC middleware, and audit state changes.
 package hosts
 
@@ -14,12 +14,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Mount attaches host routes to r, gated by authentication and permissions.

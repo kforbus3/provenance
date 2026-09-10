@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/release"
+	"github.com/kforbus3/provenance/backend/internal/release"
 )
 
 // runRelease implements `fleetctl release <keygen|build>` — the offline publisher

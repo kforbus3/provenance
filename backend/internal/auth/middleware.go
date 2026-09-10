@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/tenant"
+	"github.com/kforbus3/provenance/backend/internal/tenant"
 )
 
 // RequireAuth validates the bearer access token and attaches the Principal.

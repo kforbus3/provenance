@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/config"
 )
 
 func testScript(t *testing.T) string {

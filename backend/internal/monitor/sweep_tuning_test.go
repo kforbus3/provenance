@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/config"
 )
 
 // TestNextSweepGap verifies the adaptive cadence: a quick sweep idles the remainder

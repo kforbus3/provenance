@@ -1,4 +1,4 @@
-module github.com/kforbus3/blackfriars/sdk
+module github.com/kforbus3/provenance/sdk
 
 go 1.23.0
 

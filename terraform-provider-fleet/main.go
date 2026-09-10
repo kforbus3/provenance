@@ -10,7 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/kforbus3/blackfriars/terraform-provider-fleet/internal/provider"
+	"github.com/kforbus3/provenance/terraform-provider-fleet/internal/provider"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".

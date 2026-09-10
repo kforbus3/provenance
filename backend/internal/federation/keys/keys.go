@@ -11,7 +11,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
 )
 
 // Identity is an Ed25519 keypair with its derived fingerprint.

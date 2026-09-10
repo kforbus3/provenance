@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 const scheduleCols = `id, name, kind, enabled, target_kind, target_id, target_name,

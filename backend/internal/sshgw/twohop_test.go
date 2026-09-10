@@ -15,8 +15,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
 )
 
 // These tests stand up the real two-hop arrangement in process: a jump host that

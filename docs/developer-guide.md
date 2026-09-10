@@ -1,6 +1,6 @@
-# Blackfriars — Developer Guide
+# Provenance — Developer Guide
 
-This guide covers building, running, and extending Blackfriars. Everything
+This guide covers building, running, and extending Provenance. Everything
 runs through Docker, so **no local Go, Node, or PostgreSQL toolchain is required.**
 
 ## Layout

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
 )
 
 // Save persists an incoming config. The SMTP password is encrypted at rest; if
@@ -114,7 +114,7 @@ func (s *Service) SendTest(ctx context.Context, channel string) error {
 		Type:     "test",
 		Severity: SeverityInfo,
 		Title:    "Fleet test notification",
-		Body:     "This is a test notification from Blackfriars. If you received it, the channel is configured correctly.",
+		Body:     "This is a test notification from Provenance. If you received it, the channel is configured correctly.",
 	}
 	switch channel {
 	case "email":

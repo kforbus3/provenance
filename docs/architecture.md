@@ -1,6 +1,6 @@
-# Blackfriars — Architecture
+# Provenance — Architecture
 
-Blackfriars is a Privileged Access Management (PAM) platform for browser-based
+Provenance is a Privileged Access Management (PAM) platform for browser-based
 SSH. It brokers every SSH session through a hardened gateway, issues short-lived
 ephemeral SSH certificates instead of distributing long-lived keys, and records
 an immutable, tamper-evident audit trail of every privileged action.
@@ -94,7 +94,7 @@ no local Go/Node/Postgres toolchain is required (see the [Developer Guide](./dev
 
 The full chain is: **Browser → HTTPS/WSS → React → REST → Backend → SSH Gateway
 → Jump Host → WireGuard → Managed Hosts.** Managed hosts are configured to trust
-the Blackfriars user CA (`TrustedUserCAKeys`); the backend never needs to push or
+the Provenance user CA (`TrustedUserCAKeys`); the backend never needs to push or
 manage `authorized_keys` per user.
 
 ---
@@ -130,14 +130,14 @@ ephemeral-identity issuance once identity is established:
   PKCE. When OIDC is enabled the login page shows a **Sign in with SSO** button;
   the backend redirects the browser to the configured IdP, then verifies the
   returned ID token against the provider's JWKS, maps the username/email/groups
-  claims to a Blackfriars user (provisioning or role-mapping as configured), and issues
-  a normal Blackfriars session — from there the Issuer mints the ephemeral identity
+  claims to a Provenance user (provisioning or role-mapping as configured), and issues
+  a normal Provenance session — from there the Issuer mints the ephemeral identity
   exactly as for password login. Uses `github.com/coreos/go-oidc/v3` and
   `golang.org/x/oauth2`.
 - **LDAP / Active Directory (`internal/auth/ldap.go`)** — directory users sign in
   through the normal username/password form. The backend performs a
   service-account (bind-DN) lookup to resolve the user's DN, then re-binds as that
-  user to verify the password, mapping directory attributes/groups to a Blackfriars
+  user to verify the password, mapping directory attributes/groups to a Provenance
   user. Uses `github.com/go-ldap/ldap/v3`.
 
 A third, **non-interactive** auth path serves automation. A **service account**
@@ -179,7 +179,7 @@ runner to `--syntax-check` / lint YAML, and orchestrates runs:
 2. It resolves each target's jump-reachable address (WireGuard tunnel IP, or the
    direct address for skip-WireGuard hosts) and POSTs the playbook, inventory,
    ephemeral certificate, and jump-host coordinates to the runner.
-3. The **sidecar** performs the actual SSH — connecting **through the Blackfriars jump
+3. The **sidecar** performs the actual SSH — connecting **through the Provenance jump
    host** using the supplied certificate — and streams run output back; the
    backend records the run and an audit event. The runner never holds long-lived
    keys and is reachable only on the internal compose network.
@@ -223,7 +223,7 @@ scheduler renders the same reports weekly/monthly and delivers them as **CSV ema
 attachments** through the `notify` layer (a `report.scheduled` event); the notify
 layer gained multipart/mixed attachment support, which the webhook channel ignores.
 
-### 9. Blackfriars insights and health digests
+### 9. Provenance insights and health digests
 The **`insights`** engine derives explainable, no-ML issues from host status +
 metric history — offline hosts, low/critical disk, high memory/load, pending
 security updates, and a disk-runway (days-to-full) projection with a confidence

@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	fleet "github.com/kforbus3/blackfriars/sdk"
+	fleet "github.com/kforbus3/provenance/sdk"
 )
 
 var (

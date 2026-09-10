@@ -15,7 +15,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 	mssql "github.com/microsoft/go-mssqldb"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // tunnelDialer hands a single pre-established SSH-tunnel connection to a database/sql

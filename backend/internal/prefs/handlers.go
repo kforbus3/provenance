@@ -12,9 +12,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
 )
 
 // allowedKeys whitelists the preference keys the API will store, so this can't be used

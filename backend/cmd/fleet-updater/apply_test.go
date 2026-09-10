@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/release"
+	"github.com/kforbus3/provenance/backend/internal/release"
 )
 
 // fakeDocker records calls and can be told to fail a given operation.

@@ -16,11 +16,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/federation/fedauth"
-	"github.com/kforbus3/blackfriars/backend/internal/federation/keys"
-	fedlink "github.com/kforbus3/blackfriars/backend/internal/federation/link"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/federation/fedauth"
+	"github.com/kforbus3/provenance/backend/internal/federation/keys"
+	fedlink "github.com/kforbus3/provenance/backend/internal/federation/link"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // siteState is the resolved site identity + hub trust, loaded from federation_hub.

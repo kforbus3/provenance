@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // hostKeyPinStore is the persistence the verifier needs. *store.Store satisfies it.

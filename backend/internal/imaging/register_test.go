@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // Registering an enrolled host as an updatable machine is the inverse of "add as

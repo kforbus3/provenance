@@ -9,12 +9,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/notify"
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Notifier is the subset of the notification service the rotator needs.

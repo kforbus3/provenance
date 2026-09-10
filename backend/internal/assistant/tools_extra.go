@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/insights"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/ueba"
+	"github.com/kforbus3/provenance/backend/internal/insights"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/ueba"
 )
 
 // This file holds the second wave of read-only assistant tools that closed the

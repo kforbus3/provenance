@@ -1,6 +1,6 @@
-# Blackfriars — Security Guide
+# Provenance — Security Guide
 
-Blackfriars is a Privileged Access Management platform; its security posture is
+Provenance is a Privileged Access Management platform; its security posture is
 central to its purpose. This guide documents the controls, their configuration,
 and operational recommendations.
 
@@ -106,7 +106,7 @@ and operational recommendations.
   no factor is enrolled, login issues **no session** until the user completes
   forced TOTP enrollment. Prefer passkeys (phishing-resistant) for internet
   exposure.
-- **External identity providers (SSO).** In addition to local accounts, Blackfriars can
+- **External identity providers (SSO).** In addition to local accounts, Provenance can
   delegate sign-on to an external IdP; each user carries an `auth_source`
   (`local` | `oidc` | `ldap`), and **external accounts cannot use a local
   password**. Both providers are configured in **Settings** (`System.Configure`)
@@ -120,9 +120,9 @@ and operational recommendations.
     user-bind password verification, with group→role mapping by **CN**. Supports
     `ldap://` / `ldaps://` and **StartTLS**; the **bind password is sealed at
     rest** (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`).
-  - **Trade-off:** SSO **bypasses Blackfriars's local password and MFA** — the IdP is
+  - **Trade-off:** SSO **bypasses Provenance's local password and MFA** — the IdP is
     the authenticator, so enforce strong authentication (MFA, conditional access)
-    at the IdP. Local-account controls (lockout, password policy, Blackfriars MFA) apply
+    at the IdP. Local-account controls (lockout, password policy, Provenance MFA) apply
     only to `auth_source=local` users.
 - **Session reaping:** a background loop enforces idle (`FLEET_SESSION_IDLE_TTL`)
   and absolute (`FLEET_SESSION_ABSOLUTE_TTL`) limits even for connections that
@@ -168,12 +168,12 @@ and operational recommendations.
     tier's certificate for the managed host.
 
   - **Deleting a host does not remove the grant by default.** The accounts and the
-    `NOPASSWD` sudoers file survive removal from Blackfriars's inventory unless the delete
+    `NOPASSWD` sudoers file survive removal from Provenance's inventory unless the delete
     asks for teardown (`?teardown=true`, or the checkbox in the delete dialog). For a
-    host that is genuinely leaving, tear it down — otherwise a machine Blackfriars no longer
+    host that is genuinely leaving, tear it down — otherwise a machine Provenance no longer
     manages or audits keeps a standing root account. See
     [host-enrollment-guide.md](./host-enrollment-guide.md#removing-fleet-from-the-machine-opt-in),
-    and `scripts/fleet-unenroll.sh` for hosts Blackfriars can no longer reach.
+    and `scripts/fleet-unenroll.sh` for hosts Provenance can no longer reach.
 
   > **Defaults are permissive.** `Host.Sudo` is seeded to **Administrator and
   > Operator**, so every builtin role that can open a terminal has root on hosts it
@@ -185,7 +185,7 @@ and operational recommendations.
   Ansible/scheduling features and are granted to the Administrator role only:
   - **`Playbook.Run`** is effectively **arbitrary root-level command execution
     across hosts** — running a playbook applies changes on the targets through
-    Blackfriars's SSH path. It is therefore admin-only by default and granted
+    Provenance's SSH path. It is therefore admin-only by default and granted
     *separately* from `Playbook.Edit`. It is still **access-scoped** (the runner
     can only target hosts the user can reach, via `UserCanAccessHost`) and every
     run is **audited**. Treat granting it like granting root on the fleet.
@@ -240,7 +240,7 @@ and operational recommendations.
   movement. It also keeps one tenant's or environment's hosts off another's at the
   network layer, behind the row-level separation multi-tenancy enforces in the
   database.
-  - Nothing in Blackfriars needs host-to-host reachability: terminal sessions, SFTP, the
+  - Nothing in Provenance needs host-to-host reachability: terminal sessions, SFTP, the
     health monitor, Ansible playbook runs (via `ProxyJump`), and the database and
     Kubernetes brokers all dial **from** the jump host, so none of them is a
     forwarded flow. Turn it off only for a deployment that genuinely needs managed
@@ -252,7 +252,7 @@ and operational recommendations.
       `overlay peer isolation ON` in its log, or `iptables -L FORWARD -v -n` for
       the rule and its drop counters.
     - **On each managed host**, so a host stays isolated even if the jump-host
-      rule is removed, fails to apply, or a jump host outside Blackfriars's control
+      rule is removed, fails to apply, or a jump host outside Provenance's control
       never had it:
       - **WireGuard** — `AllowedIPs = <jump host>/32`. That one value does two
         jobs: the host cannot *address* a sibling, and it **drops a decrypted
@@ -315,10 +315,10 @@ and operational recommendations.
   the API — like the CA private key, it is stored only as ciphertext.
 - **External KMS / HSM (optional).** The CA and credential-vault master passphrases can be
   wrapped by an external KMS (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, or GCP Cloud KMS)
-  instead of living in the environment as plaintext — Blackfriars unwraps them once at boot, so a stolen
+  instead of living in the environment as plaintext — Provenance unwraps them once at boot, so a stolen
   disk or backup can't be decrypted without live KMS access. See [kms.md](./kms.md).
 - **External secrets manager (optional).** A vault credential can be *external-backed*: instead of
-  Blackfriars storing the material, it references a secret in an external manager (HashiCorp Vault KV) and
+  Provenance storing the material, it references a secret in an external manager (HashiCorp Vault KV) and
   fetches it on demand at point of use — no local copy is kept. See
   [external-secrets.md](./external-secrets.md).
 
@@ -439,7 +439,7 @@ factors themselves:
 
 ## 16. Live session shadowing
 
-Blackfriars supports **read-only, real-time viewing of an active terminal session** for
+Provenance supports **read-only, real-time viewing of an active terminal session** for
 four-eyes oversight of privileged access. It is an observation control, not a
 control channel:
 

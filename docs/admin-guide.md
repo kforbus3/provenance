@@ -1,11 +1,11 @@
-# Blackfriars — Administrator Guide
+# Provenance — Administrator Guide
 
-This guide is for operators who deploy and administer Blackfriars: bootstrap,
+This guide is for operators who deploy and administer Provenance: bootstrap,
 users, roles, groups, hosts, settings, and day-to-day operations.
 
 ## 1. Deploy the stack
 
-Blackfriars runs entirely in Docker. From the repository root:
+Provenance runs entirely in Docker. From the repository root:
 
 ```sh
 make env      # create .env from .env.example
@@ -93,7 +93,7 @@ can create custom roles and assign any subset of permissions.
 > accounts. The built-in **Super Administrator** role mirrors that flag:
 > assigning or removing the role promotes or demotes the account (super admins
 > only), as does the **Super admin** switch when creating or editing a user.
-> Blackfriars refuses to delete, disable, or demote the **last active super
+> Provenance refuses to delete, disable, or demote the **last active super
 > administrator** so the platform can never be left without one.
 
 > `Host.Connect`, `Host.Scan`, `Host.Remediate`, and `File.Transfer` are **also**
@@ -105,13 +105,13 @@ can create custom roles and assign any subset of permissions.
 > configuration* and are not automatically reversible. It is granted to
 > **Administrator only** by default. Fixes for SSH/firewall/lockout rules,
 > networking sysctls such as `ip_forward`/`rp_filter`/`route_localnet`, and
-> Blackfriars's privilege path (`sudo_*` such as `noexec`/`requiretty`, and root-login
+> Provenance's privilege path (`sudo_*` such as `noexec`/`requiretty`, and root-login
 > lockout) are flagged "access-impacting" in the UI and require an extra
-> confirmation, since they can sever Blackfriars's own access to — or automation of —
+> confirmation, since they can sever Provenance's own access to — or automation of —
 > the host. Remediating a **control-plane
 > host** (the jump host, a host tagged `control-plane`/`protected`, or one listed
 > in `FLEET_CONTROL_PLANE_HOSTS`) requires a second, distinct confirmation because
-> hardening the box that runs Blackfriars can lock Blackfriars out of the entire fleet.
+> hardening the box that runs Provenance can lock Provenance out of the entire fleet.
 
 Three permissions gate the automation features, all granted to **Administrator**
 (and Super Administrator) by default:
@@ -145,7 +145,7 @@ unique per-user certificate and is fully recorded and audited.
 > `Host.Sudo` is granted to **Administrator** and **Operator** by default, so
 > upgrades preserve the previous "connect = root" behavior. The login-only
 > account is created **at enrollment** — hosts enrolled before this feature must
-> be **re-enrolled** (Hosts → Enroll → *Already trusts the Blackfriars CA*) before
+> be **re-enrolled** (Hosts → Enroll → *Already trusts the Provenance CA*) before
 > login-only users can connect to them.
 
 ## 4. Manage users
@@ -176,7 +176,7 @@ Users generate **one-time backup codes** that stand in for their authenticator
 (TOTP or passkey) when it is lost. This is **self-service** under **Security**
 settings, so admins never hold the codes:
 
-- **10 codes** are issued at once and shown **once**; Blackfriars stores only their
+- **10 codes** are issued at once and shown **once**; Provenance stores only their
   SHA-256 hashes and can never redisplay them.
 - Format `xxxx-xxxx-xxxx`; a user types one at the **normal MFA prompt** — the same
   field as a TOTP code (dashes, spacing, and case are normalized).
@@ -257,7 +257,7 @@ its members immediately gain access to those hosts. Rule fields:
 ## 6. Manage hosts & access
 
 Add hosts to the inventory (`POST /hosts`, requires `Host.Enroll`), then enroll
-them so they trust the Blackfriars user CA — see the
+them so they trust the Provenance user CA — see the
 [Host Enrollment Guide](./host-enrollment-guide.md).
 
 **Authorize users** (no host is reachable by default). A user can reach a host via:
@@ -276,7 +276,7 @@ dashboards.
 
 When enrolling a host you can tick **"Directly reachable from the jump host —
 skip WireGuard"**. Use it for hosts that already sit on the jump host's LAN (or
-for the host that runs Blackfriars itself). The host is then reached at its
+for the host that runs Provenance itself). The host is then reached at its
 **management address** through the jump host instead of over the WireGuard
 overlay; everything else (CA trust, login accounts, scans, sessions) is
 unchanged. See the [Host Enrollment Guide](./host-enrollment-guide.md) for the
@@ -304,12 +304,12 @@ a version history.
 
 **Running** a playbook requires the separate **`Playbook.Run`** permission
 (admin-only by default) **plus** access to the target host(s). Runs go against one
-or more hosts or a whole **group**, through the Blackfriars jump host as the privileged
+or more hosts or a whole **group**, through the Provenance jump host as the privileged
 `fleet` account via certificate auth — the same path scans use. **Dry-run
 (Ansible check mode) is on by default**; clear it to make real changes. Output
 streams live and is retained in a per-playbook **run history**.
 
-Write plays that target `hosts: all` — Blackfriars supplies the inventory for the hosts
+Write plays that target `hosts: all` — Provenance supplies the inventory for the hosts
 you select.
 
 > **Security:** `Playbook.Run` is effectively **arbitrary root-level change across
@@ -356,7 +356,7 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `lockout_policy` | max 5 failed, 15 min lockout | account lockout |
 | `session_policy` | idle 30 min, absolute 12 h | session lifetime |
 | `require_mfa` | `{"enabled": false}` | when on, **all** users must enroll a second factor (Users → *Require MFA for all*) |
-| `branding` | `{"app_name": "Blackfriars"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
+| `branding` | `{"app_name": "Provenance"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
 | `assistant` | `{"enabled": false, "ollamaUrl": "", "model": "", "numCtx": 0}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `ollamaUrl`, so run Ollama on your own network; a public URL raises a warning on the settings page. `numCtx` is the Ollama context window (0 = 32768, floored at 16384) — see below |
 | `assistant_actions` | `{"requireApprovalForAll": false, "disabledKinds": []}` | assistant-action policy: force approval for every action, or disable specific action kinds; edit via **Settings → Assistant actions** |
 | `scan_policy` | `{"timeoutMinutes": …}` | scan / remediation timeout budget (overrides `FLEET_SCAN_TIMEOUT`, clamped to a sane range) |
@@ -375,13 +375,13 @@ it does **not** return an error when a prompt exceeds it — it silently discard
 *oldest* tokens, which are the system prompt. An assistant running that way has no
 tool-selection guidance and no answer rules at all, which shows up as wrong tool
 choices ("security scan" answered with CVEs), chatty preambles, and confident
-"I do not have a tool for that" replies about data Blackfriars actually holds.
+"I do not have a tool for that" replies about data Provenance actually holds.
 
-Blackfriars therefore always sends an explicit `num_ctx`. Leave **Context window** blank to
+Provenance therefore always sends an explicit `num_ctx`. Leave **Context window** blank to
 use the default (32768); any value you set is floored at 16384. Check
 `GET /api/v1/assistant/status` for the effective `contextWindow`, the
 `promptFloorTokens` the instructions cost, and a `contextWarning` when the chosen
-model was trained for a shorter context than Blackfriars requests. Prefer a model with a
+model was trained for a shorter context than Provenance requests. Prefer a model with a
 32k context; a bigger window also needs more VRAM for the KV cache.
 
 The **Settings → Branding** card edits the application name in the UI; the change
@@ -507,7 +507,7 @@ For backups see §11; for restore, recovery, and break-glass procedures see
 
 ## 15. Single sign-on (SSO)
 
-Blackfriars can authenticate users against an external identity provider via
+Provenance can authenticate users against an external identity provider via
 **OIDC**, **SAML 2.0**, or **LDAP / Active Directory**, in addition to local
 accounts, and can accept **SCIM 2.0** provisioning. Every user carries an
 **`auth_source`** (`local` | `oidc` | `saml` | `ldap`); accounts backed by an
@@ -528,11 +528,11 @@ configured by `System.Configure` holders.
   **button text**.
 
 Set your IdP's redirect / callback URL to **`<PublicURL>/api/v1/auth/oidc/callback`**.
-Blackfriars uses the **authorization-code flow with PKCE** and verifies the ID token
+Provenance uses the **authorization-code flow with PKCE** and verifies the ID token
 against the provider's **JWKS**. On first login it finds the user by **username,
 then email**; if not found and auto-provision is on, it creates the account
 (`auth_source = oidc`) with the default role. **Group → role mappings are applied
-additively** on top of the default role, then a normal Blackfriars session is issued.
+additively** on top of the default role, then a normal Provenance session is issued.
 When OIDC is enabled the login page shows a **"Sign in with SSO"** button.
 
 | Action | Endpoint |
@@ -544,13 +544,13 @@ When OIDC is enabled the login page shows a **"Sign in with SSO"** button.
 ### SAML 2.0 (Okta, Azure AD / Entra ID, OneLogin, ADFS, …)
 
 **Settings → Single sign-on (SAML)**. The card shows the three values your IdP
-needs to register Blackfriars as a Service Provider:
+needs to register Provenance as a Service Provider:
 
 - **ACS (Reply) URL** — `<PublicURL>/api/v1/auth/saml/acs`
 - **SP Entity ID / Audience** — defaults to `<PublicURL>/api/v1/auth/saml/metadata`
 - **SP metadata** — `<PublicURL>/api/v1/auth/saml/metadata` (importable by most IdPs)
 
-Then configure the IdP side in Blackfriars:
+Then configure the IdP side in Provenance:
 
 - **IdP Entity ID (issuer)**, **IdP SSO URL** (HTTP-Redirect binding), and the
   **IdP signing certificate** (PEM or base64 — public, used to verify assertion
@@ -558,7 +558,7 @@ Then configure the IdP side in Blackfriars:
 - **IdP SLO URL** (optional) — the IdP's Single Logout endpoint, needed for SLO
   (below).
 - **SP signing key** (optional) — an **SP certificate** + **private key** (PEM).
-  When set, Blackfriars signs its SLO `LogoutRequest`/`LogoutResponse` messages (and
+  When set, Provenance signs its SLO `LogoutRequest`/`LogoutResponse` messages (and
   can sign AuthnRequests) with it, and publishes the certificate in its SP
   metadata so the IdP can verify them. Leave blank to run without an SP key
   (unsigned AuthnRequests / local-only logout).
@@ -567,7 +567,7 @@ Then configure the IdP side in Blackfriars:
 - **Default role**, the **auto-provision** toggle, **group → role mappings**, and
   the login **button text**.
 
-Blackfriars validates the IdP-signed assertion's **signature, audience, and time
+Provenance validates the IdP-signed assertion's **signature, audience, and time
 bounds** before trusting it, then finds the user by **username, then email**;
 if not found and auto-provision is on, it creates the account
 (`auth_source = saml`) with the default role — **group → role mappings apply
@@ -583,25 +583,25 @@ sent **unsigned** (baseline); the IdP must sign its assertions.
 
 #### Single Logout (SLO)
 
-SAML Single Logout ends the session at the IdP as well as in Blackfriars, so a logout
+SAML Single Logout ends the session at the IdP as well as in Provenance, so a logout
 propagates across all apps federated to that IdP. Both directions are supported:
 
-- **SP-initiated** — the user logs out of Blackfriars; Blackfriars sends a signed
+- **SP-initiated** — the user logs out of Provenance; Provenance sends a signed
   `LogoutRequest` to the IdP's **SLO URL** and processes the returned
   `LogoutResponse`.
-- **IdP-initiated** — the IdP (or another SP) POSTs a `LogoutRequest` to Blackfriars's
-  SLO endpoint; Blackfriars ends the local session and replies with a signed
+- **IdP-initiated** — the IdP (or another SP) POSTs a `LogoutRequest` to Provenance's
+  SLO endpoint; Provenance ends the local session and replies with a signed
   `LogoutResponse`.
 
 SLO requires an **SP signing key** (the SP certificate + private key above) so
-Blackfriars can sign its logout messages, and the **IdP SLO URL** so it knows where
-to send them. Configure both on the IdP side too (register Blackfriars's SP metadata,
+Provenance can sign its logout messages, and the **IdP SLO URL** so it knows where
+to send them. Configure both on the IdP side too (register Provenance's SP metadata,
 which now advertises the SLO endpoint and the SP certificate).
 
-**Local logout is always guaranteed.** Clearing the Blackfriars session never depends
+**Local logout is always guaranteed.** Clearing the Provenance session never depends
 on the IdP: if **no SP signing key** is configured, or the IdP exposes **no SLO
-endpoint**, or the SLO exchange fails, Blackfriars **falls back to a local-only
-logout** — the user is signed out of Blackfriars immediately, and only the IdP-side
+endpoint**, or the SLO exchange fails, Provenance **falls back to a local-only
+logout** — the user is signed out of Provenance immediately, and only the IdP-side
 global logout is skipped.
 
 | Action | Endpoint |
@@ -614,7 +614,7 @@ global logout is skipped.
 ### SCIM 2.0 provisioning (lifecycle automation)
 
 **Settings → Provisioning (SCIM 2.0)**. SCIM lets your IdP **create, update, and
-deprovision** Blackfriars accounts automatically — most importantly, it **disables an
+deprovision** Provenance accounts automatically — most importantly, it **disables an
 account the moment a user is removed in the IdP**, before they would ever attempt
 to sign in. It pairs with SAML: SCIM manages the account lifecycle, SAML
 authenticates the login.
@@ -754,7 +754,7 @@ A token authenticates a service account to the **REST API**:
 
 The **Credentials** page (a `Credential.View` or `Credential.Manage` holder sees it)
 stores static credentials — **passwords, SSH keys, API keys** — for systems that
-can't use Blackfriars's ephemeral certificates (network gear, appliances, databases,
+can't use Provenance's ephemeral certificates (network gear, appliances, databases,
 legacy hosts). Secret material is **encrypted at rest** with secretbox under a
 dedicated **`FLEET_VAULT_PASSPHRASE`** (required in production, must differ from the
 CA passphrase — see the Deployment guide).
@@ -773,7 +773,7 @@ CA passphrase — see the Deployment guide).
 
 **Rotation.** Editing a credential's value always stores a new **version** (history).
 For a **password** credential attached to a host, the **Rotate** action (needs
-`Credential.Rotate`) rotates it automatically: Blackfriars connects to the host with the
+`Credential.Rotate`) rotates it automatically: Provenance connects to the host with the
 current password, sets a new random one via `chpasswd`, verifies the new login, and
 stores it — the operator never sees either value. The vault is kept consistent with
 the host: if the host change fails, the stored value is reverted. This requires the
@@ -799,18 +799,18 @@ denial, and check-in is audited.
 
 **Credential injection (connect without seeing the secret).** On a host's edit form,
 set **Authentication** to **Vault credential — password** or **— SSH key** and pick a
-credential. When anyone connects (terminal or SFTP) to that host, Blackfriars resolves the
+credential. When anyone connects (terminal or SFTP) to that host, Provenance resolves the
 credential, decrypts it **in memory**, and authenticates the SSH connection with it —
 the operator **never sees the secret**, and it never reaches the browser. Sessions
 opened this way are audited (`session.credential_injected`). Attaching a credential to
 a host requires `Host.Edit` plus access to that credential (`Credential.Manage`, or a
 `use`/`manage` grant), so a host editor can't bind a secret they couldn't use. Hosts
-default to Blackfriars certificate authentication; use vaulted auth for appliances, network
-gear, and legacy systems that can't accept Blackfriars's ephemeral certificates.
+default to Provenance certificate authentication; use vaulted auth for appliances, network
+gear, and legacy systems that can't accept Provenance's ephemeral certificates.
 
 ## 18c. Windows desktops (RDP)
 
-Blackfriars brokers **RDP (Windows desktop)** sessions to the browser through the bundled
+Provenance brokers **RDP (Windows desktop)** sessions to the browser through the bundled
 **guacd** sidecar (Apache Guacamole daemon), so operators reach a full remote desktop
 from the same UI as SSH — no local RDP client, no direct network route to the host.
 
@@ -846,7 +846,7 @@ guacd enforces each gate; the enabled directions are recorded in the session-sta
 audit event. (Browser clipboard access requires an HTTPS origin.)
 
 **Drive redirection / file transfer (opt-in).** Enabling **Enable drive** on the host
-mounts a **Blackfriars** drive inside the RDP session and adds a **Files** button to the
+mounts a **Provenance** drive inside the RDP session and adds a **Files** button to the
 desktop viewer for browsing, downloading, and uploading files — each direction gated
 by **Allow upload** (browser → desktop) and **Allow download** (desktop → browser),
 both off by default. Each session gets its **own isolated exchange directory** on the
@@ -889,7 +889,7 @@ click **Enroll**, set the jump host's WireGuard endpoint, and **download the Pow
 script**. Run it once in an **elevated PowerShell** on the Windows host; it installs
 WireGuard, brings up a dial-out tunnel to the jump host (auto-reconnecting service, no
 inbound firewall rules), and prints a public key. Paste that key back and **Finish** —
-Blackfriars adds it as an overlay peer. From then on the host's RDP session and WinRM fact
+Provenance adds it as an overlay peer. From then on the host's RDP session and WinRM fact
 collection ride the tunnel, reachable from anywhere with internet. (WireGuard on Windows
 is for non-FIPS deployments; FIPS environments use OpenVPN — see the FIPS plan.)
 
@@ -929,7 +929,7 @@ days, and `to` is an **exclusive** end-of-day. All are gated `Audit.View`.
 
 ### Scheduled report delivery
 
-Blackfriars can deliver reports automatically — **weekly or monthly**, at a chosen day and
+Provenance can deliver reports automatically — **weekly or monthly**, at a chosen day and
 hour, covering a lookback window — as **CSV email attachments** through the
 notification channels. Configure it on the **Scheduled compliance reports** settings
 card; delivery emits a `report.scheduled` event, so **route that event to Email**
@@ -1029,7 +1029,7 @@ booted still reports the old kernel's CVEs.
 |--------|----------|
 | Start a scan | `POST /vuln-scans` `{hostId}` or `{groupId}` → `{scanIds:[…]}` (`Host.Scan`) |
 | Recent scans for a host | `GET /vuln-scans?hostId=` |
-| Blackfriars roll-up | `GET /vuln-scans/latest` (latest completed per host) |
+| Provenance roll-up | `GET /vuln-scans/latest` (latest completed per host) |
 | Scan + findings | `GET /vuln-scans/{id}` |
 
 ### CVE database management
@@ -1051,12 +1051,12 @@ self-managed DB of any age is usable.
 | Online update | `POST /vuln-scans/db/update` (`System.Configure`) |
 | Offline import | `POST /vuln-scans/db/import` (`System.Configure`) — archive upload |
 
-## 22. Blackfriars insights & health digests
+## 22. Provenance insights & health digests
 
 The local-LLM **Ask AI** assistant (§9, `assistant` setting) is backed by two
 admin-facing features:
 
-- **Blackfriars insights** — an explainable engine (no ML) derives issues from host status
+- **Provenance insights** — an explainable engine (no ML) derives issues from host status
   and metric history: offline hosts, low / critically-low disk, high memory/load,
   pending security updates, and a **disk-runway projection** (days-to-full with a
   confidence level from the trend fit). It surfaces as the Dashboard **"Needs
@@ -1075,7 +1075,7 @@ admin-facing features:
 
 ## 23. High Availability (multi-instance)
 
-Blackfriars can run as multiple backend instances behind a load balancer for
+Provenance can run as multiple backend instances behind a load balancer for
 redundancy and rolling upgrades. It is **safe by default** — a single-instance
 deployment needs no configuration and is simply always the leader. The control plane
 (auth, inventory, management APIs, and starting new sessions) survives instance loss;
@@ -1089,13 +1089,13 @@ requirements, Postgres-HA and load-balancer notes, jump-host/WireGuard failover
 
 ## 24. Brokered access, access policies & encryption
 
-Beyond SSH/RDP, Blackfriars brokers other privileged access the same way — through the jump host with a
+Beyond SSH/RDP, Provenance brokers other privileged access the same way — through the jump host with a
 **vaulted credential injected** and every action audited, so operators never hold the credential:
 
 - **Databases** — register PostgreSQL, MySQL, MariaDB, or SQL Server targets and run audited SQL
   from the Databases page (`Database.Manage` / `Database.Connect`). See
   **[Database access](./database-broker.md)**.
-- **Kubernetes** — register clusters and reach them via Blackfriars's authenticating proxy (browse
+- **Kubernetes** — register clusters and reach them via Provenance's authenticating proxy (browse
   resources, or point `kubectl` at the proxy); `Kubernetes.Manage` / `Kubernetes.Access`. See
   **[Kubernetes access](./kubernetes.md)**.
 
@@ -1111,7 +1111,7 @@ Two more controls tighten the platform:
 - **Behavior analytics (UEBA)** — advisory anomaly detection over session records on the Behavior
   page (`Audit.View`). See **[Behavior analytics](./behavior-analytics.md)**.
 - **External secrets manager** — back a vault credential with an external manager (HashiCorp Vault
-  KV) that Blackfriars reads on demand instead of storing the material. See
+  KV) that Provenance reads on demand instead of storing the material. See
   **[External secrets](./external-secrets.md)**.
 - **ITSM (ServiceNow / Jira)** — open a change/incident ticket for each just-in-time access request
   and attach its reference to the approval (Settings → Integrations, `System.Configure`). See

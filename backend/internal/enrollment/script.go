@@ -12,9 +12,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/krl"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/overlay"
+	"github.com/kforbus3/provenance/backend/internal/krl"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/overlay"
 )
 
 // EnrollScript generates a self-contained bootstrap script for the no-install
@@ -216,7 +216,7 @@ func windowsWGScript(wgIP, jumpPub, jumpEndpoint, allowed string, listenPort int
 }
 
 const windowsWGTemplate = `#Requires -RunAsAdministrator
-# Blackfriars — Windows WireGuard enrollment. Run in an elevated PowerShell.
+# Provenance — Windows WireGuard enrollment. Run in an elevated PowerShell.
 $ErrorActionPreference = "Stop"
 $wgDir = "$env:ProgramFiles\WireGuard"
 
@@ -500,7 +500,7 @@ F=$(mktemp)
 func (s *Service) bootstrapScript(loginUser, caKeys, wgIP, jumpPub, jumpEndpoint, krlB64 string, hostID uuid.UUID) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
-	b.WriteString("# Blackfriars — host bootstrap (no-install enrollment).\n")
+	b.WriteString("# Provenance — host bootstrap (no-install enrollment).\n")
 	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/fleet-enroll.sh'\n")
 	b.WriteString("set -e\n")
 	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (run: ssh -t USER@HOST "sudo sh ~/fleet-enroll.sh")'; exit 1; fi` + "\n\n")
@@ -565,7 +565,7 @@ func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 strin
 
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
-	b.WriteString("# Blackfriars — host bootstrap (no-install enrollment, " + overlayName + " overlay).\n")
+	b.WriteString("# Provenance — host bootstrap (no-install enrollment, " + overlayName + " overlay).\n")
 	b.WriteString("# Holds this host's overlay client key: run it, then delete it.\n")
 	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/fleet-enroll.sh'\n")
 	b.WriteString("set -e\n")

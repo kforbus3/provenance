@@ -1,5 +1,5 @@
 ---
-# Install an A/B (RAUC) update on machines that Blackfriars manages as hosts.
+# Install an A/B (RAUC) update on machines that Provenance manages as hosts.
 #
 # This is the same operation a rollout performs, driven from the Playbooks page
 # instead. Use it when you want to update hosts directly — a handful of machines,
@@ -90,7 +90,7 @@
     - name: Reboot into the updated slot
       ansible.builtin.reboot:
         reboot_timeout: "{{ reboot_timeout }}"
-        msg: "Rebooting into the updated A/B slot (Blackfriars)"
+        msg: "Rebooting into the updated A/B slot (Provenance)"
       when: reboot_after | bool
 
     - name: Read the slot that came up

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/cpe"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/winrm"
+	"github.com/kforbus3/provenance/backend/internal/cpe"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/winrm"
 )
 
 // --- CycloneDX SBOM ---
@@ -81,7 +81,7 @@ func newBOM(hostname, osID, osVersion string) cdxBOM {
 		Version:     1,
 		Metadata: &cdxMetadata{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Tools:     []cdxTool{{Vendor: "Blackfriars", Name: "fleet-vulnscan"}},
+			Tools:     []cdxTool{{Vendor: "Provenance", Name: "fleet-vulnscan"}},
 			Component: subject,
 		},
 	}

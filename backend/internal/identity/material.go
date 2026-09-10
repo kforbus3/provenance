@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
+	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
 )
 
 // KeyMaterial is an ephemeral key + signed certificate exported as files for an

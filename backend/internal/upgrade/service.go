@@ -21,12 +21,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/backup"
-	"github.com/kforbus3/blackfriars/backend/internal/cluster"
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/release"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
-	"github.com/kforbus3/blackfriars/backend/internal/ws"
+	"github.com/kforbus3/provenance/backend/internal/backup"
+	"github.com/kforbus3/provenance/backend/internal/cluster"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/release"
+	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/ws"
 )
 
 // Service coordinates upgrades and drain state for one backend instance.

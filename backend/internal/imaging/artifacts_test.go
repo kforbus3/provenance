@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/config"
 )
 
 // svcWithOutput builds a Service whose artifact directory is a temp dir, which is

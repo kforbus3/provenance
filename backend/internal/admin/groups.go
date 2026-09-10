@@ -7,8 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 func (h *handler) listGroups(w http.ResponseWriter, r *http.Request) {

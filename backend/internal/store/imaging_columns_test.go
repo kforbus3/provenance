@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // ReportMachine is the only writer for most of a machine's record, and its

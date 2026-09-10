@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // Search bounds — keep a single query's I/O predictable regardless of how many

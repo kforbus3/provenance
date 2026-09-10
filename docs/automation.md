@@ -1,6 +1,6 @@
 # Automation: SDK & CLI
 
-Blackfriars can be driven as code. Alongside the [REST API](./api.md), an
+Provenance can be driven as code. Alongside the [REST API](./api.md), an
 official **Go SDK** and a **`fleet` command-line tool** let you manage inventory
 and access from CI/CD pipelines, scheduled jobs, and your own tooling — without a
 browser and without database access.
@@ -42,7 +42,7 @@ expiry (`--expires-days`) on tokens used by short-lived jobs.
 Install:
 
 ```bash
-go install github.com/kforbus3/blackfriars/sdk/cmd/fleet@latest
+go install github.com/kforbus3/provenance/sdk/cmd/fleet@latest
 ```
 
 Verify the token and see its effective permissions:
@@ -90,7 +90,7 @@ so redirecting stdout captures exactly the secret.
 Add it to a module:
 
 ```bash
-go get github.com/kforbus3/blackfriars/sdk@latest
+go get github.com/kforbus3/provenance/sdk@latest
 ```
 
 ```go
@@ -104,7 +104,7 @@ hosts, err := c.ListHosts(ctx, fleet.ListOptions{Limit: 100})
 Non-2xx responses return an `*fleet.APIError` with the status and server message;
 `fleet.IsNotFound` and `fleet.IsUnauthorized` classify the common cases. The SDK
 depends only on the Go standard library. Full reference and examples are in the
-[SDK README](https://github.com/kforbus3/blackfriars/tree/main/sdk).
+[SDK README](https://github.com/kforbus3/provenance/tree/main/sdk).
 
 ---
 
@@ -126,7 +126,7 @@ For any endpoint not wrapped by the SDK, call it directly per the
 ## 5. Terraform
 
 A **Terraform provider** (`terraform-provider-fleet`, in the repository) manages
-Blackfriars as declarative infrastructure over the same API and token model. It exposes:
+Provenance as declarative infrastructure over the same API and token model. It exposes:
 
 - `fleet_host` — managed hosts (full CRUD + import)
 - `fleet_group` — groups, including dynamic membership rules

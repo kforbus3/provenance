@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/config"
 )
 
 func svcWithDir(t *testing.T) (*Service, string) {

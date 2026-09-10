@@ -1,8 +1,8 @@
-# Blackfriars
+# Provenance
 
 **Privileged access management and OS lifecycle for Linux fleets, in one place.**
 
-Blackfriars covers a machine's whole life: it **builds** the operating system a
+Provenance covers a machine's whole life: it **builds** the operating system a
 machine runs, **puts it on the disk** over PXE, **updates it** in staged
 rollouts, and gives operators secure, audited **browser SSH access** to it for
 everything in between. Two halves that are usually two products, deliberately
@@ -130,7 +130,7 @@ Working and verified end-to-end (see `git log` for the milestone history):
 - Host inventory + **quick-connect Terminals launcher** with **group filter** and **per-host
   pending package updates**; **enroll hosts five ways** — SSH password, SSH private key,
   **forwarded SSH agent** (key stays local), a **no-install ssh-pipe** script, or a **direct
-  "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Blackfriars itself).
+  "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Provenance itself).
   WireGuard-routed methods install CA trust + WireGuard and verify per-user cert login
 - Internal SSH **CA + ephemeral certificates, unique per (user, host)** (in-RAM keys, 7-day,
   auto-renew, revoke via distributed KRL)

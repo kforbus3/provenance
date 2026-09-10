@@ -1,13 +1,13 @@
-# Blackfriars — Host Enrollment Guide
+# Provenance — Host Enrollment Guide
 
-Enrollment makes a managed host reachable through Blackfriars. The goal is for
-the host to **trust the Blackfriars user CA** so that any short-lived user certificate
+Enrollment makes a managed host reachable through Provenance. The goal is for
+the host to **trust the Provenance user CA** so that any short-lived user certificate
 the platform issues is accepted — without distributing per-user keys or managing
 `authorized_keys`.
 
 ## Concepts
 
-- **User CA.** Blackfriars runs an SSH certificate authority (`ssh-ed25519`). Its public
+- **User CA.** Provenance runs an SSH certificate authority (`ssh-ed25519`). Its public
   key is configured as a `TrustedUserCAKeys` on every managed host. Its private
   key is encrypted at rest (`FLEET_CA_PASSPHRASE`) and never leaves the backend.
 - **Reachability.** Managed hosts are not exposed directly. The backend reaches
@@ -23,7 +23,7 @@ the platform issues is accepted — without distributing per-user keys or managi
 - The host runs OpenSSH and is reachable from the jump host over the WireGuard
   network.
 - You hold the **Host.Enroll** permission.
-- The Blackfriars user CA exists (created automatically on first backend start;
+- The Provenance user CA exists (created automatically on first backend start;
   retrievable via `GET /api/v1/certificates/ca` → `activeUserCA`).
 
 ## Step 1 — Add the host to inventory
@@ -48,7 +48,7 @@ The response includes the new host `id`. This writes a `host.create` audit event
 
 ## Step 2 — Bootstrap the host (install CA trust + WireGuard)
 
-Click the **Enroll** (cable) icon on the host row and pick how Blackfriars should reach
+Click the **Enroll** (cable) icon on the host row and pick how Provenance should reach
 the host for the one-time bootstrap. All methods install the CA trust + login
 user + sshd config and bring up WireGuard; they differ only in how the bootstrap
 SSH connection authenticates:
@@ -59,18 +59,18 @@ SSH connection authenticates:
 | **SSH private key** | password auth is disabled; you have an authorized key | none | key pasted once over HTTPS |
 | **SSH agent** | you want the key to never leave your machine | a small bridge binary | stays in your local agent (only signatures forwarded) |
 | **No install (ssh-pipe)** | you want neither an install nor to upload a key | none | stays on your machine (your own `ssh`) |
-| **Trusted (re-provision)** | host already trusts the Blackfriars CA | none | session certificate |
+| **Trusted (re-provision)** | host already trusts the Provenance CA | none | session certificate |
 
 Any method can additionally set **Directly reachable / skip WireGuard** for a host
 that needs no overlay:
 
 | Option | Use when | Effect |
 |---|---|---|
-| **Directly reachable / skip WireGuard** | the host is on the **jump host's LAN**, or is **the host that runs Blackfriars itself** | the enroll request carries a `skipWireGuard` flag; enrollment installs CA trust + login accounts but **skips the WireGuard overlay** — no overlay address, no host WireGuard interface, no jump peer, and no tunnel verification. The gateway reaches the host at its **management `address`** through the jump host. |
+| **Directly reachable / skip WireGuard** | the host is on the **jump host's LAN**, or is **the host that runs Provenance itself** | the enroll request carries a `skipWireGuard` flag; enrollment installs CA trust + login accounts but **skips the WireGuard overlay** — no overlay address, no host WireGuard interface, no jump peer, and no tunnel verification. The gateway reaches the host at its **management `address`** through the jump host. |
 
 **Why this exists.** A host co-located with the jump host (the single-server
 deployment, where the jump host runs as a container on the same Docker server as
-Blackfriars) can't stand up a second WireGuard endpoint on the jump's UDP port. Skipping
+Provenance) can't stand up a second WireGuard endpoint on the jump's UDP port. Skipping
 the overlay lets such a host enroll and be reached directly. When you select it,
 the management **Address must be reachable from the jump host** (the WireGuard
 endpoint field is disabled).
@@ -103,7 +103,7 @@ a password fails with `sudo: a terminal is required to read the password`.
 enroll dialog's **VPN overlay** field, and changing it is just a re-enrollment — any
 method. The two overlays are separate subnets (`FLEET_WG_SUBNET` and
 `FLEET_OVPN_SUBNET`), so the host is **renumbered** into the pool it joins; the
-dialog shows the new pool and the address it will leave. Blackfriars proves the new tunnel
+dialog shows the new pool and the address it will leave. Provenance proves the new tunnel
 by dialing the host at its new overlay address from the jump host, then retires the
 old transport on both ends — client stopped and disabled on the host (config renamed
 `*.fleet-disabled`, issued key material kept), peer or pinned address removed on the
@@ -172,7 +172,7 @@ A successful connection means:
 ## Windows (RDP) hosts
 
 Windows hosts are enrolled onto the same WireGuard overlay as Linux hosts, but
-they run no SSH — Blackfriars brokers **RDP** for sessions and uses **WinRM** to collect
+they run no SSH — Provenance brokers **RDP** for sessions and uses **WinRM** to collect
 facts. Enrollment is driven from the host's **Enroll** action, which produces a
 **PowerShell** script you run **once, in an elevated (Administrator) PowerShell**
 on the Windows host. That script is the only thing you run by hand; it configures
@@ -189,7 +189,7 @@ everything below automatically.
 4. **Enables WinRM over HTTPS**: runs `Enable-PSRemoting`, creates a self-signed
    certificate, binds an HTTPS listener on TCP **5986**, and opens a firewall rule
    for it. Fact collection uses this (TLS), so no `AllowUnencrypted` is required.
-5. Prints the host's WireGuard **public key** — paste it back into Blackfriars's
+5. Prints the host's WireGuard **public key** — paste it back into Provenance's
    **Finish enrollment** step to add the host as a peer on the jump host.
 
 If step 1, 3, or 4 fails (e.g. `winget` unavailable on a stripped Server Core
@@ -216,7 +216,7 @@ without dropping its tunnel.
 |---|---|---|---|
 | 51820 (`FLEET_WG_PORT`) | UDP | WireGuard overlay | WireGuard for Windows |
 | 3389 | TCP | RDP session | script (`Remote Desktop` firewall group) |
-| 5986 | TCP | WinRM HTTPS (host facts) | script (`Blackfriars WinRM HTTPS` rule) |
+| 5986 | TCP | WinRM HTTPS (host facts) | script (`Provenance WinRM HTTPS` rule) |
 
 If the Windows Firewall is on and you enroll manually, allow inbound **3389** and
 **5986** (and, on a strict host, inbound UDP **51820**). Note that a freshly added
@@ -241,7 +241,7 @@ Run in an elevated PowerShell on the host:
 Enable-PSRemoting -Force -SkipNetworkProfileCheck
 $c = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
 New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbPrint $c.Thumbprint -Force
-New-NetFirewallRule -DisplayName "Blackfriars WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -Profile Any
+New-NetFirewallRule -DisplayName "Provenance WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -Profile Any
 ```
 
 Fact collection authenticates over WinRM with the host's **vaulted credential**,
@@ -307,23 +307,23 @@ the key you are about to trust is really the host's. The clear is audited
 
 `DELETE /api/v1/hosts/{id}` (requires `Host.Delete`) removes the host and, via
 `ON DELETE CASCADE`, its group links, inventory, fingerprints, and status. The
-deletion is audited. For an overlay-enrolled host, Blackfriars also retires its
+deletion is audited. For an overlay-enrolled host, Provenance also retires its
 WireGuard peer on the jump host (the live kernel entry and the persisted
 `/etc/wireguard/peers/<host>.conf` fragment) — best-effort: if the jump host is
 unreachable at that moment, the stale entry is cleaned up automatically the next
 time its overlay address is reused by an enrollment.
 
-### Removing Blackfriars from the machine (opt-in)
+### Removing Provenance from the machine (opt-in)
 
-Deleting a host removes it from Blackfriars's *inventory*. It does not, by default,
+Deleting a host removes it from Provenance's *inventory*. It does not, by default,
 change the machine: the `fleet` account with its `NOPASSWD` sudo grant, the
 login-only account, the trusted CA, the principal files and the sshd drop-in all
 stay exactly as enrollment left them. That is the right behaviour for taking a host
-out of Blackfriars temporarily — re-enrolling reuses them — and the wrong one for
+out of Provenance temporarily — re-enrolling reuses them — and the wrong one for
 decommissioning, so the delete dialog offers the choice.
 
-Tick **"Also remove Blackfriars's accounts and SSH trust from the host"** (or send
-`DELETE /api/v1/hosts/{id}?teardown=true`) and Blackfriars connects to the host once more
+Tick **"Also remove Provenance's accounts and SSH trust from the host"** (or send
+`DELETE /api/v1/hosts/{id}?teardown=true`) and Provenance connects to the host once more
 before retiring its overlay, and removes:
 
 | Removed | Left alone |
@@ -332,13 +332,13 @@ before retiring its overlay, and removes:
 | The `<ssh-user>` and `<ssh-user>-login` accounts, with their home directories | Every other account |
 | `/etc/ssh/fleet_ca.pub`, `/etc/ssh/fleet_krl` | Any other CA or key material |
 | `/etc/ssh/auth_principals/*` (and the directory, if empty) | — |
-| `/etc/ssh/sshd_config.d/00-fleet.conf`, and the `# Blackfriars` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
+| `/etc/ssh/sshd_config.d/00-fleet.conf`, and the `# Provenance` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
 | The overlay client **and its key material** — the WireGuard interface, its boot units, config and keys, or everything under `/etc/openvpn/fleet` | Any other VPN this host runs |
 | The host's peer / pinned address on the jump host, so the tunnel stops from the other end too | Every other peer |
 | On a certificate overlay, the host's **client certificate is revoked** and the server's CRL republished | Every other certificate |
 
 > **This can lock you out.** On a host whose only administrative access was through
-> Blackfriars, removing those accounts removes your way in. Make sure you have another
+> Provenance, removing those accounts removes your way in. Make sure you have another
 > route — console access, or your own key in a real user's `authorized_keys` —
 > before ticking the box. The checkbox is unchecked every time the dialog opens; it
 > is never remembered.
@@ -347,7 +347,7 @@ Two details worth knowing:
 
 - **The work runs detached on the host.** The teardown deletes the account its own
   SSH session is using, and `userdel` refuses while a process of that account is
-  alive. Blackfriars therefore writes `/usr/local/sbin/fleet-unenroll.sh`, launches it with
+  alive. Provenance therefore writes `/usr/local/sbin/fleet-unenroll.sh`, launches it with
   `setsid`, and returns. The API reports that teardown *started*, not that it
   finished. The host's own record is `/var/log/fleet-unenroll.log`.
 - **On a certificate overlay, deleting the host's copy is not enough — it is
@@ -364,7 +364,7 @@ Two details worth knowing:
   the server; an already-established tunnel drops at its next renegotiation.
 
 - **The overlay comes down last, on both ends.** On the host it is the final step of
-  the detached script — it is the transport Blackfriars arrived over, so it cannot be
+  the detached script — it is the transport Provenance arrived over, so it cannot be
   brought down while the session is still using it, and doing it last means the
   privileged account is already gone even if the transport teardown stalls. On the
   jump host the peer is retired straight afterwards, and unlike a delete without
@@ -375,10 +375,10 @@ Two details worth knowing:
   does not parse, the original `sshd_config` is restored and the running sshd is left
   alone — a cleanup that strands the host is worse than the leftovers it removes.
 
-### Cleaning up a host Blackfriars cannot reach
+### Cleaning up a host Provenance cannot reach
 
 If the host was already offline when it was deleted, was removed from the database
-directly, or was enrolled by a Blackfriars deployment that no longer exists, run
+directly, or was enrolled by a Provenance deployment that no longer exists, run
 [`scripts/fleet-unenroll.sh`](../scripts/fleet-unenroll.sh) **on the machine**:
 
 ```sh
@@ -387,11 +387,11 @@ sudo sh fleet-unenroll.sh               # remove it
 sudo sh fleet-unenroll.sh -u ops        # host was enrolled with a non-default SSH user
 ```
 
-It removes the same set as the table above and is safe to re-run. When Blackfriars fails
+It removes the same set as the table above and is safe to re-run. When Provenance fails
 to reach a host during a teardown, it names that host in the UI and points here.
 
 One thing it cannot do: **removing a host's copy of an OpenVPN certificate does not
 revoke it.** The script runs on the host and has no access to the CA. If the key may
-have been copied off the machine, delete the host in Blackfriars with teardown ticked as
+have been copied off the machine, delete the host in Provenance with teardown ticked as
 well — that revokes the certificate and republishes the CRL even if the host itself
 was never reachable.

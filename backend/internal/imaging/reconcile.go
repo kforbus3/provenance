@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // Run drives rollouts forward by reaching the machines they are waiting on.

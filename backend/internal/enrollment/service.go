@@ -15,14 +15,14 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/krl"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/overlay"
-	"github.com/kforbus3/blackfriars/backend/internal/overlaypki"
-	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/krl"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/overlay"
+	"github.com/kforbus3/provenance/backend/internal/overlaypki"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/store"
 
 	"log/slog"
 
@@ -1151,7 +1151,7 @@ LOGIN='%s'
 NOSUDO="${LOGIN}-login"
 cat > /usr/local/sbin/fleet-unenroll.sh <<'FLEETEOF'
 #!/bin/sh
-# Written by Blackfriars when the host was removed from its inventory.
+# Written by Provenance when the host was removed from its inventory.
 # Removes Fleet's accounts and SSH trust, then deletes itself.
 set +e
 LOGIN="$1"
