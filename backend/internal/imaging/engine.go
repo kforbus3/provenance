@@ -127,6 +127,20 @@ type Report struct {
 	Health      string
 	UpdateState string // downloading | installing | installed | failed | idle
 	UpdateError string
+	// Rollout is the rollout the update state belongs to, as the machine
+	// remembers it. The agent has always sent this and nothing read it.
+	//
+	// Its absence was a real bug: a machine remembers what it is in the middle
+	// of across reboots, so it keeps reporting update_state=failed long after
+	// the rollout that offered the bundle has gone. Without the id, that report
+	// was folded into whatever rollout happened to be evaluating the machine
+	// next -- so a machine that failed once failed every rollout afterwards,
+	// instantly, with attempts=0 because it was never actually offered
+	// anything. Fixing the cause and starting a new rollout could not clear it.
+	//
+	// Empty for an agent old enough not to send it, which is accepted rather
+	// than ignored: those machines have the old behaviour and nothing worse.
+	Rollout string
 }
 
 // Action is what to tell a machine. Nil means nothing to do.
@@ -191,6 +205,13 @@ func (r *Rollout) applyReport(id string, rep Report, now time.Time) bool {
 			m.Error = ""
 			return true
 		}
+	}
+
+	// Only what this machine says about THIS rollout. A report naming a
+	// different one is the machine's memory of an earlier update, and applying
+	// it here would let an old failure decide a new rollout's outcome.
+	if rep.Rollout != "" && rep.Rollout != r.ID {
+		return *m != before
 	}
 
 	switch rep.UpdateState {

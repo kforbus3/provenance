@@ -193,6 +193,7 @@ func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if act := h.svc.EvaluateFor(r.Context(), id, Report{
 		Version: m.Version, Health: m.Health,
 		UpdateState: m.UpdateState, UpdateError: m.UpdateError,
+		Rollout: m.UpdateRollout,
 	}); act != nil {
 		out["action"] = act.Type
 		out["bundle_url"] = act.BundleURL

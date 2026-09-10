@@ -294,3 +294,77 @@ func TestAnAmbiguousHostnameMatchesNothing(t *testing.T) {
 		t.Fatalf("unambiguous names were not matched: %+v", unique)
 	}
 }
+
+// A machine's memory of an OLD rollout must not decide a new one.
+//
+// The agent remembers what it is in the middle of across reboots, so it keeps
+// reporting update_state=failed long after the rollout that offered the bundle
+// has finished. It sends the rollout id alongside — and nothing read it, so the
+// stale failure was folded into whatever rollout was evaluating the machine
+// next.
+//
+// The symptom is unmistakable once you know it: a brand-new rollout, with a
+// brand-new bundle, reporting "completed · failed: 1" within seconds, carrying
+// the previous attempt's error message, and attempts=0 — because the machine
+// was never actually offered anything. Fixing the underlying problem and
+// starting a fresh rollout could not clear it; every new rollout inherited the
+// same corpse.
+func TestAnOldFailureDoesNotFailANewRollout(t *testing.T) {
+	r := newRollout(Strategy{Canary: 1, BatchSize: 10, MaxFailures: 2})
+	members := []string{"a"}
+
+	stale := Report{
+		Version: "1.0", Health: "ok", UpdateState: "failed",
+		UpdateError: "rauc: error while loading shared libraries: libjson-glib-1.0.so.0",
+		Rollout:     "r-0", // the rollout before this one
+	}
+
+	act, _ := r.Evaluate("a", stale, members, false, time.Now())
+	m := r.progress("a")
+
+	if m.State == StateFailed {
+		t.Fatalf("a new rollout inherited a failure from rollout %q: state=%s error=%q",
+			stale.Rollout, m.State, m.Error)
+	}
+	if act == nil {
+		t.Fatal("the machine was not offered the bundle; a stale report should not " +
+			"stop a rollout from trying")
+	}
+	if m.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 — the machine was offered the bundle", m.Attempts)
+	}
+}
+
+// The same report, naming THIS rollout, is exactly what it looks like.
+func TestAFailureForThisRolloutStillCounts(t *testing.T) {
+	r := newRollout(Strategy{Canary: 1, BatchSize: 10, MaxFailures: 2})
+	members := []string{"a"}
+	now := time.Now()
+
+	r.Evaluate("a", report("1.0", "idle"), members, false, now) // offered
+	r.Evaluate("a", Report{
+		Version: "1.0", Health: "ok", UpdateState: "failed",
+		UpdateError: "install failed", Rollout: r.ID,
+	}, members, false, now)
+
+	if got := r.progress("a").State; got != StateFailed {
+		t.Errorf("state = %s, want failed — this rollout's own failure must count", got)
+	}
+}
+
+// An agent old enough not to send the id keeps working, with the behaviour it
+// has always had. Accepting these is a deliberate trade: those machines are no
+// worse off than before, and refusing them would break every fleet mid-upgrade.
+func TestAReportWithNoRolloutIdIsStillAccepted(t *testing.T) {
+	r := newRollout(Strategy{Canary: 1, BatchSize: 10, MaxFailures: 2})
+	members := []string{"a"}
+	now := time.Now()
+
+	r.Evaluate("a", report("1.0", "idle"), members, false, now)
+	r.Evaluate("a", Report{Version: "1.0", Health: "ok", UpdateState: "failed"}, members, false, now)
+
+	if got := r.progress("a").State; got != StateFailed {
+		t.Errorf("state = %s, want failed — an agent that sends no rollout id must "+
+			"still be able to report one", got)
+	}
+}
