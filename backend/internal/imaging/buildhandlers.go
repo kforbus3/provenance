@@ -122,6 +122,10 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 	// the build is abandoned if it cannot be. See passphrase.go: an encrypted
 	// image whose key was never persisted looks exactly like a success.
 	var generated *GeneratedPassphrase
+	// Recorded so the audit entry says the server unsealed a stored credential
+	// to do this. Reading a filed passphrase on the operator's behalf is
+	// reasonable -- it exists for this -- but it is not something to do silently.
+	usedFiledPassphrase := false
 	if shouldFilePassphrase(kind, body) {
 		p := auth.MustPrincipal(r)
 		name := h.svc.FreeImageName(imageBaseName(body))
@@ -144,6 +148,43 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 		delete(body, "generatePassphrase")
 	}
 
+	// A bundle is built by reading the image's root slot, so an encrypted image
+	// needs its passphrase. This server generated that passphrase, filed it, and
+	// knows which image it belongs to -- and used to make the operator go and
+	// find it and paste it back, or watch the build stop at
+	//
+	//   [bundle] ERROR: this image is encrypted; pass --luks-passphrase
+	//
+	// Supplied only when the caller sent none, so anyone passing one explicitly
+	// still wins -- including for an image built with "generate and store" off,
+	// where nothing is filed and theirs is the only copy.
+	//
+	// It never leaves the server in a response, and goes to the builder in the
+	// environment exactly as it does for an image build.
+	if kind == "bundle" && strings.TrimSpace(asString(body["luksPassphrase"])) == "" {
+		if img := asString(body["image"]); img != "" {
+			pass, perr := h.svc.ImagePassphrase(r.Context(), img)
+			switch {
+			case perr != nil:
+				// Do not fail the build on this: the operator may be about to
+				// supply their own, and an image with nothing filed is a normal
+				// state. Say it happened, and let the builder's own error stand
+				// if the passphrase really was needed.
+				h.svc.log.Warn("imaging: reading the filed passphrase for a bundle build",
+					"image", img, "err", perr)
+			case pass != "":
+				body["luksPassphrase"] = pass
+				// Set alongside it, because the sidecar only forwards LUKS_PASS
+				// into the build container when this is true -- so supplying the
+				// passphrase without it would be the same silent no-op as not
+				// supplying it at all. A passphrase is only filed for an image
+				// that is encrypted, so finding one settles the question.
+				body["encrypted"] = true
+				usedFiledPassphrase = true
+			}
+		}
+	}
+
 	job, err := h.svc.StartBuild(r.Context(), kind, body)
 	if err != nil {
 		// The secret is already filed and the build never ran. Say so: it is not
@@ -163,6 +204,7 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 		// built is auditable from the artefact and its sidecar.
 		"distro": body["distro"], "suite": body["suite"], "arch": body["arch"],
 		"profile": body["profile"], "image": body["image"],
+		"usedFiledPassphrase": usedFiledPassphrase,
 	})
 	if generated != nil {
 		// The job as the sidecar described it, plus where the recovery key went.

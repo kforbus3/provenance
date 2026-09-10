@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/kforbus3/blackfriars/backend/internal/models"
 )
@@ -212,6 +214,20 @@ func (s *Store) GetVaultSecret(ctx context.Context, id uuid.UUID) (*models.Vault
 	row := s.pool.QueryRow(ctx, `SELECT `+vaultSecretCols+`
 		FROM vault_secrets s LEFT JOIN users u ON u.id = s.created_by WHERE s.id=$1`, id)
 	return scanVaultSecret(row)
+}
+
+// VaultSecretByName finds a credential by its exact name, or nil when there is
+// none. Nil rather than an error: "no such credential" is an ordinary answer for
+// a caller asking whether one exists, and making it an error means every such
+// caller has to unpick sql.ErrNoRows to tell "absent" from "broken".
+func (s *Store) VaultSecretByName(ctx context.Context, name string) (*models.VaultSecret, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+vaultSecretCols+`
+		FROM vault_secrets s LEFT JOIN users u ON u.id = s.created_by WHERE s.name=$1`, name)
+	v, err := scanVaultSecret(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return v, err
 }
 
 // GetVaultSecretSealed returns the sealed payload of a secret's current version.

@@ -1,10 +1,13 @@
 package imaging
 
 import (
+	"encoding/json"
+
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"github.com/kforbus3/blackfriars/backend/internal/credresolve"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -232,4 +235,42 @@ func (s *Service) storeExternally(ctx context.Context, name string, fields map[s
 			"secrets, only read them", providerName)
 	}
 	return providerName, ref, nil
+}
+
+// ImagePassphrase returns the recovery passphrase this server filed for an
+// image, or "" when it filed none.
+//
+// Building an update bundle from an encrypted image means reading its root
+// slot, which needs the passphrase. The server generated it, filed it, and knew
+// exactly which image it belongs to — and then made the operator find it and
+// paste it back in, or watch the build fail:
+//
+//	[bundle] ERROR: this image is encrypted; pass --luks-passphrase
+//
+// Empty string and nil error when nothing is filed. That is the ordinary case
+// for an unencrypted image, and for an encrypted one built with "generate and
+// store" turned off — where the operator holds the only copy on purpose, and
+// must supply it themselves. Neither is an error here; the builder already says
+// the right thing when it is handed nothing.
+func (s *Service) ImagePassphrase(ctx context.Context, image string) (string, error) {
+	secret, err := s.store.VaultSecretByName(ctx, "luks/"+secretNameForImage(image))
+	if err != nil || secret == nil {
+		return "", err
+	}
+	key, err := s.cfg.VaultKey()
+	if err != nil {
+		return "", err
+	}
+	pt, err := credresolve.Open(ctx, s.store, secret, key, s.cfg.ExtSecret())
+	if err != nil {
+		return "", fmt.Errorf("reading the recovery passphrase filed for %s: %w", image, err)
+	}
+	// Two shapes, because the two backends store different things. The local
+	// vault seals the passphrase on its own; the external manager holds the
+	// whole field set, so the passphrase has to be picked out of it.
+	var fields map[string]string
+	if json.Unmarshal(pt, &fields) == nil && fields["passphrase"] != "" {
+		return fields["passphrase"], nil
+	}
+	return string(pt), nil
 }
