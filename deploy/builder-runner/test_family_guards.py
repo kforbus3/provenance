@@ -291,6 +291,33 @@ def check_chroot_resolver():
               "builder's nameserver into every machine")
         bad = 1
 
+    # And --run-script needs one too.
+    #
+    # The resolver is restored to systemd-resolved's symlink hundreds of lines
+    # before a customization script runs, and that symlink points at
+    # /run/systemd/resolve/stub-resolv.conf, which does not exist in a chroot. So
+    # the most ordinary script anybody would write -- `dnf upgrade -y` -- failed
+    # on "Could not resolve host: mirrors.almalinux.org", which reads as a
+    # problem with the build host rather than as something the build did to the
+    # chroot deliberately.
+    #
+    # Checked by position, because the fix is entirely about ordering: the script
+    # has to get a resolver back AFTER the restore that took it away.
+    restore_at = code.find('ln -sf ../run/systemd/resolve/stub-resolv.conf')
+    script_at = code.find('chroot "$MNT" /tmp/ab-custom.sh')
+    if script_at == -1:
+        print("  FAIL  the --run-script hook is gone; this check needs rewriting")
+        bad = 1
+    elif restore_at != -1 and restore_at < script_at:
+        rebind = code.find('mount --bind /etc/resolv.conf', restore_at)
+        if rebind == -1 or rebind > script_at:
+            print("  FAIL  --run-script runs after resolv.conf was restored to the "
+                  "resolved symlink, so it has no DNS: a script that installs or "
+                  "upgrades anything dies on 'Could not resolve host'")
+            bad = 1
+        else:
+            print("  PASS  --run-script gets a resolver back before it runs")
+
     return bad
 
 
