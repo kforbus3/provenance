@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, FormControlLabel, LinearProgress, MenuItem,
+  DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, LinearProgress, MenuItem,
   Paper, Stack, Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs,
   TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
@@ -32,7 +32,7 @@ import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
   forgetImaging, imageDownloadUrl, imageSbomUrl, imagingNow, installOnMachine,
   listBuilds, listBundles, listImages,
-  deleteMachine, forgetBuild, forgetFinishedBuilds, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
+  deleteMachine, deleteRollout, forgetBuild, forgetFinishedBuilds, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
   type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
 } from "../api/imaging";
 
@@ -789,7 +789,7 @@ function InstallDialog({ machine, controlUrl, onClose, onDone, setMsg }: {
 
 // --- rollouts ----------------------------------------------------------------
 
-function RolloutsTab({ rollouts, canManage, onSteer, onCreated, setMsg }: {
+export function RolloutsTab({ rollouts, canManage, onSteer, onCreated, setMsg }: {
   rollouts: Rollout[];
   canManage: boolean;
   onSteer: (id: string, verb: "pause" | "resume" | "cancel") => void;
@@ -797,7 +797,22 @@ function RolloutsTab({ rollouts, canManage, onSteer, onCreated, setMsg }: {
   setMsg: (m: Note) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const qc = useQueryClient();
   const { data: groups = [] } = useQuery({ queryKey: ["groups"], queryFn: listGroups });
+
+  // A rollout that is over is history, not state. Leaving every one of them on
+  // the page for ever buries the one that is actually running -- the same reason
+  // the Builds tab grew a way to clear finished work.
+  const FINISHED = ["completed", "cancelled", "failed"];
+  const finished = rollouts.filter((r) => FINISHED.includes(r.state));
+  const remove = useMutation({
+    mutationFn: (ids: string[]) => Promise.all(ids.map(deleteRollout)).then(() => {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["imaging-rollouts"] });
+      onCreated();
+    },
+    onError: (e) => setMsg({ kind: "error", text: apiError(e) }),
+  });
   const groupName = useMemo(() => {
     const by = new Map(groups.map((g) => [g.id, g.name]));
     return (id: string) => by.get(id) ?? id;
@@ -806,8 +821,22 @@ function RolloutsTab({ rollouts, canManage, onSteer, onCreated, setMsg }: {
   return (
     <>
       {canManage && (
-        <Button variant="contained" startIcon={<RocketLaunchIcon />} sx={{ mb: 2 }}
-                onClick={() => setOpen(true)}>New rollout</Button>
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+          <Button variant="contained" startIcon={<RocketLaunchIcon />}
+                  onClick={() => setOpen(true)}>New rollout</Button>
+          {finished.length > 0 && (
+            <Button startIcon={<DeleteIcon />} disabled={remove.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Remove ${finished.length} finished rollout`
+                        + `${finished.length === 1 ? "" : "s"} from the list? The machines they `
+                        + `updated are unaffected — this only clears the history.`)) {
+                        remove.mutate(finished.map((r) => r.id));
+                      }
+                    }}>
+              Clear finished ({finished.length})
+            </Button>
+          )}
+        </Stack>
       )}
       {rollouts.length === 0 && (
         <Alert severity="info">
@@ -841,6 +870,19 @@ function RolloutsTab({ rollouts, canManage, onSteer, onCreated, setMsg }: {
                 {canManage && ["running", "paused", "halted"].includes(r.state) && (
                   <Button size="small" color="error" startIcon={<StopIcon />}
                           onClick={() => onSteer(r.id, "cancel")}>Cancel</Button>
+                )}
+                {/* Only once it is over. The server refuses to delete a running
+                    rollout, and offering a button that is going to be refused
+                    teaches people to distrust the buttons. */}
+                {canManage && FINISHED.includes(r.state) && (
+                  <Tooltip title="Remove from the list. The machines it updated are unaffected.">
+                    <span>
+                      <IconButton size="small" disabled={remove.isPending}
+                                  onClick={() => remove.mutate([r.id])}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 )}
               </Stack>
               {r.state === "halted" && (
