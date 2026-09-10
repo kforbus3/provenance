@@ -1641,11 +1641,53 @@ if [ ! -e /usr/share/dbus-1/system-services/de.pengutronix.rauc.service ]; then
 fi
 rauc --version
 
+# Keep the libraries rauc actually links against.
+#
+# rauc is built from source here, so rpm has no record that anything needs its
+# runtime libraries. dnf's clean_requirements_on_remove is on by default, so
+# \`dnf remove \$RAUC_BUILD_PKGS\` takes the base libraries out along with the
+# -devel packages that pulled them in -- json-glib in particular. Confirmed on a
+# stock AlmaLinux 9: installing json-glib-devel then removing it leaves no
+# json-glib behind, before autoremove is even reached. The image
+# builds, verifies, boots and images machines perfectly; the breakage appears
+# later, on a machine, in the middle of an update:
+#
+#   rauc: error while loading shared libraries: libjson-glib-1.0.so.0:
+#   cannot open shared object file: No such file or directory
+#
+# and the machine cannot be updated by the mechanism that exists to update it.
+#
+# Derived from the binary rather than listed by hand: rauc gains and drops
+# dependencies between releases, and a hand-kept list is one somebody has to
+# remember to change. Marking them explicitly installed is what makes autoremove
+# leave them alone.
+RAUC_RUNTIME_PKGS="\$(ldd /usr/bin/rauc 2>/dev/null | awk '/=> \\//{print \$3}' \
+    | xargs -r rpm -qf --queryformat '%{NAME}\\n' 2>/dev/null | sort -u | tr '\\n' ' ')"
+if [ -n "\$RAUC_RUNTIME_PKGS" ]; then
+    echo "rauc runtime packages kept: \$RAUC_RUNTIME_PKGS"
+    dnf -y mark install \$RAUC_RUNTIME_PKGS 2>/dev/null || true
+fi
+
 # The toolchain is build-time only. Left in, it is several hundred megabytes of
 # compiler in every image and a larger attack surface on every machine.
 dnf -y remove \$RAUC_BUILD_PKGS || true
 dnf -y autoremove || true
 dnf clean all
+
+# Verified AFTER the cleanup, not before.
+#
+# The check above ran before the removal, so it proved the build worked and
+# nothing proved the image did. This is the one that matters: it asks whether
+# the rauc that ships can still start, on the image as it will actually be
+# written to a disk. Loading the shared libraries is the whole point -- \`rauc
+# --version\` fails exactly the way a machine mid-update fails.
+if ! rauc --version >/dev/null 2>&1; then
+    echo "ERROR: rauc no longer runs after the build toolchain was removed:" >&2
+    rauc --version >&2 || true
+    echo "  Its runtime libraries were taken out by dnf autoremove. rauc is built" >&2
+    echo "  from source, so rpm does not know anything needs them." >&2
+    exit 1
+fi
 
 ${SB_SETUP}
 
