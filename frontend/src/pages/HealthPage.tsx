@@ -86,7 +86,11 @@ export function HealthPage() {
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["system-health"],
     queryFn: getSystemHealth,
-    refetchInterval: 15000,
+    // 60s, not 15s: each poll opens a live TCP connection to the jump host,
+    // calls the ansible sidecar and stats the backup directory. One open tab
+    // at 15s is 5,760 fresh bastion connections a day, and a slow jump host
+    // makes every one of them hang for the 3s dial timeout.
+    refetchInterval: 60_000,
   });
 
   const overall = data?.overall ?? "ok";

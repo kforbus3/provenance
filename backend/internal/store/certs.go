@@ -296,7 +296,8 @@ func (s *Store) ExpiringCertificates(ctx context.Context, before time.Time) ([]m
 		SELECT serial, id, kind, ca_key_id, user_id, session_id, host_id, key_id, principals,
 			public_key, audit_id, issued_at, expires_at
 		FROM ssh_certificates
-		WHERE kind='user' AND revoked_at IS NULL AND expires_at < $1
+		WHERE kind='user' AND revoked_at IS NULL
+		   AND expires_at > now() AND expires_at < $1
 		ORDER BY expires_at ASC`, before)
 	if err != nil {
 		return nil, err

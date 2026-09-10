@@ -147,7 +147,7 @@ request, `RequireAuth` routes a `flt_`-prefixed bearer to token auth instead of 
 verification, resolves the owning service account, and applies its roles/groups
 through the normal RBAC + host-access gates. A token grants **REST access only** —
 it never mints an ephemeral SSH identity, so it cannot open the terminal/SFTP
-WebSocket. See the [Security Guide](./security-guide.md#14-service-accounts--api-tokens).
+WebSocket. See the [Security Guide](./security-guide.md#14-service-accounts-api-tokens).
 
 ### 3. Opening a terminal
 1. The SPA opens `WSS /api/v1/terminal/{hostId}?token=<access JWT>` (browsers

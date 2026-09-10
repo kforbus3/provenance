@@ -137,8 +137,8 @@ full list):
 | `FLEET_CA_PASSPHRASE` | — | encrypts the CA private key (≥16 bytes in prod) |
 | `FLEET_COOKIE_SECURE` | `true` | set `false` only for non-HTTPS local dev |
 | `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` | `jumphost:22` / `fleet` | SSH egress |
-| `FLEET_USER_CERT_TTL` | `168h` (7d) | ephemeral user cert lifetime |
-| `FLEET_CERT_RENEW_BEFORE` | `24h` | renew certs this far ahead of expiry |
+| `FLEET_USER_CERT_TTL` | `12h` | ephemeral user cert lifetime |
+| `FLEET_CERT_RENEW_BEFORE` | `3h` | renew certs this far ahead of expiry |
 | `FLEET_RECORDING_DIR` | `/var/lib/fleet/recordings` | session recordings |
 
 In `development`, missing secrets fall back to **insecure deterministic

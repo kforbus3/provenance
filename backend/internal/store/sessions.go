@@ -57,8 +57,22 @@ func (s *Store) RotateRefresh(ctx context.Context, id uuid.UUID, newHash string,
 }
 
 // TouchSession updates last_seen_at for idle tracking.
+// TouchSession records that a session is still in use.
+//
+// Only once a minute per session. It ran on EVERY authenticated request, which
+// makes an idle dashboard a write workload: five polling queries every thirty
+// seconds per open tab, each one a row update, so thirty operators with the
+// dashboard open wrote to this table five times a second purely for bookkeeping
+// -- and every one of those updates is a dead tuple for autovacuum to collect on
+// a table that is read on every request.
+//
+// A minute of resolution is more than the value is ever read at: last_seen_at
+// drives the session list and stale-session reaping, neither of which can tell
+// the difference.
 func (s *Store) TouchSession(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `UPDATE sessions SET last_seen_at=now() WHERE id=$1`, id)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE sessions SET last_seen_at=now()
+		 WHERE id=$1 AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 minute')`, id)
 	return err
 }
 

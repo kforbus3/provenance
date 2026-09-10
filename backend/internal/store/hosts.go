@@ -285,8 +285,19 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 // ListHosts returns all hosts with details. Filtering/sorting is applied in the
 // handler layer for flexibility; pagination is by limit/offset.
 func (s *Store) ListHosts(ctx context.Context, limit, offset int) ([]models.Host, error) {
-	if limit <= 0 || limit > 1000 {
+	// Over the maximum yields the MAXIMUM, not the default.
+	//
+	// It used to collapse both cases to 100, so a caller asking for 10000 --
+	// meaning "everything" -- silently got the first hundred hosts by hostname.
+	// FleetView did exactly that (imaging/operations.go), so on a fleet over a
+	// hundred hosts, every machine paired with a host later in the alphabet
+	// rendered as unpaired: not slow, wrong, and wrong in a way that looks like
+	// a pairing bug rather than a pagination one.
+	if limit <= 0 {
 		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
 	}
 	if offset < 0 {
 		offset = 0

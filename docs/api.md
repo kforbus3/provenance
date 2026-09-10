@@ -669,49 +669,81 @@ viewing scans require `Host.Scan`; CVE-database management requires
 
 ---
 
-## Imaging and OS updates (Flipside)
+## Imaging and OS updates
 
 OS images, signed update bundles and staged rollouts, driven from a
-[Flipside](./imaging.md) deployment. Everything proxies through the backend, so
-Provenance's roles, host-access rules and audit log apply — and so the Flipside
-operator token never reaches a browser. Inert unless `FLEET_FLIPSIDE_URL` is set;
-`/imaging/status` answers `{"configured": false}` rather than erroring.
+imaging is **in this process**, not a separate deployment proxied to. There is no
+external service to configure and no external imaging URL to configure; one codebase, one
+database, one permission model and one audit log cover both halves.
 
-The two actions worth understanding are the two ways Provenance gives Flipside the
-reach it structurally cannot have:
+Two actions are worth understanding, because they are how the server reaches a
+machine that structurally cannot be reached:
 
-- **`/nudge`** makes a machine check in with Flipside *now* rather than on its
-  own timer. The agent then does exactly what it would have done minutes later,
-  and Flipside applies the rollout's canary, soak, batching and failure budget
-  unchanged. Provenance removes the waiting and decides nothing. A failed nudge
-  costs latency, not the update — the agent still polls.
-- **`/install`** writes a bundle over SSH, for machines that cannot reach
-  Flipside at all, and then reports to Flipside what it observed on the host.
-  It bypasses the rollout's pacing entirely, which is why it is a separate
-  action rather than a faster path to the same thing.
+- **`/nudge`** makes a machine check in *now* rather than on its own timer. The
+  agent then does exactly what it would have done minutes later, and the rollout
+  applies its canary, soak, batching and failure budget unchanged. The nudge
+  removes waiting and decides nothing. A failed nudge costs latency, not the
+  update — the agent still polls.
+- **`/install`** writes a bundle over SSH, for a machine that cannot reach this
+  server at all, and reports what it observed on the host. It bypasses the
+  rollout's pacing entirely, which is why it is a separate action rather than a
+  faster path to the same one.
+
+Note the key each route takes. A **machine** is keyed by what the imager saw —
+normally a MAC address — and exists before it is a host. `register` is the
+exception: it takes a **host** id, because the whole point is that no machine
+record exists yet.
 
 | Method | Path | Required permission |
 |--------|------|---------------------|
-| GET | `/api/v1/imaging/status` | any authenticated user |
 | GET | `/api/v1/imaging/images` | `Imaging.View` |
 | GET | `/api/v1/imaging/bundles` | `Imaging.View` |
-| GET | `/api/v1/imaging/groups` | `Imaging.View` |
-| GET | `/api/v1/imaging/fleet` | `Imaging.View` |
+| GET | `/api/v1/imaging/machines` | `Imaging.View` |
+| GET | `/api/v1/imaging/now` | `Imaging.View` |
+| DELETE | `/api/v1/imaging/now/{id}` | `Imaging.Manage` |
 | GET | `/api/v1/imaging/rollouts` | `Imaging.View` |
 | GET | `/api/v1/imaging/rollouts/{id}` | `Imaging.View` |
 | POST | `/api/v1/imaging/rollouts` | `Imaging.Manage` |
 | POST | `/api/v1/imaging/rollouts/{id}/{pause\|resume\|cancel}` | `Imaging.Manage` |
-| PUT | `/api/v1/imaging/hosts/{hostId}/link` | `Imaging.Manage` |
-| POST | `/api/v1/imaging/hosts/{hostId}/nudge` | `Imaging.Manage` |
-| POST | `/api/v1/imaging/hosts/{hostId}/install` | `Imaging.Manage` |
+| DELETE | `/api/v1/imaging/rollouts/{id}` | `Imaging.Manage` |
+| PUT | `/api/v1/imaging/machines/{id}` | `Imaging.Manage` |
+| DELETE | `/api/v1/imaging/machines/{id}` | `Imaging.Manage` |
+| POST | `/api/v1/imaging/machines/{id}/nudge` | `Imaging.Manage` |
+| POST | `/api/v1/imaging/machines/{id}/install` | `Imaging.Manage` |
+| POST | `/api/v1/imaging/hosts/{hostId}/register` | `Imaging.Manage` |
 
-`/imaging/fleet` returns one row per machine, pairing Provenance hosts with
-Flipside machines and saying **how** they were paired: `linked` (recorded, and
-the only form that survives a rename or re-image), `hostname` (a guess), or
-`none`. Machines Flipside knows about and Provenance does not appear too, without
-a host id — usually a machine that was imaged and never enrolled, which is worth
-seeing rather than hiding. Host-access rules apply: a host the caller may not
-see does not appear here either.
+Building images, bundles and the netboot imager, and the provisioning server
+itself, are separate surfaces gated by **`Imaging.Build`** and
+**`Imaging.Provision`** — see the [Imaging guide](./imaging.md).
+
+`POST /imaging/rollouts` takes a bundle and a target. The target is one of three
+shapes, and exactly one must be given:
+
+```json
+{ "bundle": "almalinux-ab-1.0.2.raucb", "all": true }
+{ "bundle": "almalinux-ab-1.0.2.raucb", "groups": ["<group-uuid>"] }
+{ "bundle": "almalinux-ab-1.0.2.raucb", "hosts": ["<host-uuid>"] }
+```
+
+plus the optional pacing controls `canary`, `batchSize`, `soakSeconds`,
+`maxFailures`, `windowStart`, `windowEnd` and `windowDays`.
+
+A rollout resolves to **machines**, not hosts. `all` means every A/B machine, not
+every host — an ordinary server that was never imaged is not in the set and
+cannot be reached by one. A host with no machine record is invisible to every
+rollout including a fleet-wide one, which is what
+`/imaging/hosts/{hostId}/register` exists to fix.
+
+`/imaging/machines` returns one row per machine with the host it is paired with,
+if any. A machine the imager saw but nobody enrolled appears too, without a host
+id — usually one that was imaged and never came back, which is worth seeing
+rather than hiding. Host-access rules apply: a machine paired to a host the
+caller may not see does not appear.
+
+`POST /imaging/hosts/{hostId}/register` reads an enrolled host's A/B state over
+SSH — its machine id, running slot and version — and records it as a machine so
+rollouts can reach it. It refuses a host with no `/usr/local/sbin/ab-update`
+rather than creating a record that could only ever fail.
 
 ## AI assistant (Ollama)
 

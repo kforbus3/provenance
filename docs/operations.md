@@ -356,7 +356,7 @@ lists the failed rules so you can **select which to fix**:
   one listed in `FLEET_CONTROL_PLANE_HOSTS` — requires a second, distinct confirmation. Hardening the
   box that runs Provenance (e.g. an `ip_forward=0` sysctl that breaks Docker's bridge networking) can lock
   Provenance out of the entire fleet; only proceed with out-of-band console access to recover. If it does
-  get locked out, see the recovery runbook: [break-glass §5](break-glass.md#5-recovering-after-hardening-locked-fleet-out-of-its-own-host).
+  get locked out, see the recovery runbook: [break-glass §5](break-glass.md#5-recovering-after-hardening-locked-provenance-out-of-its-own-host).
 - The scan needs SCAP content matching the host's **OS version** (e.g. `ssg-debian13-ds.xml`
   for Debian 13). If a host's distro is newer than its packaged `scap-security-guide`, Provenance
   **auto-provisions** the right datastream: the backend downloads the ComplianceAsCode release

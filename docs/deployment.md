@@ -92,19 +92,17 @@ Key variables (full list in `.env.example`):
 |---|---|
 | `FLEET_ENV` | `development` or `production` |
 | `FLEET_PUBLIC_URL` | Public HTTPS URL; drives CORS, cookies, WebAuthn |
-| `FLEET_JWT_SECRET` / `FLEET_CSRF_SECRET` | Token + CSRF signing (≥16 bytes) |
+| `FLEET_JWT_SECRET` | Access-token signing (**≥32 bytes** — production refuses to start below this) |
+| `FLEET_CSRF_SECRET` | CSRF signing (≥16 bytes) |
 | `FLEET_CA_PASSPHRASE` | Encrypts the internal SSH CA private key at rest |
 | `FLEET_AUDIT_HMAC_KEY` | **Required in production** (≥32 bytes). Keys the HMAC that chains the tamper-evident audit log, binding each event's sequence, timestamp, and tenant. Without it the chain is unauthenticated (anyone who can write the table can forge a consistent chain). Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production. See [security-guide.md](./security-guide.md) |
-| `FLEET_FLIPSIDE_URL` | Flipside's API base, e.g. `https://flipside.example.com`. Unset leaves the imaging subsystem entirely inert. See [imaging.md](./imaging.md) |
-| `FLEET_FLIPSIDE_TOKEN` | A Flipside API token (`flt_…`) with the **operator** role — enough to build images and bundles and run rollouts, without Flipside's own user and secret management |
-| `FLEET_FLIPSIDE_NUDGE` | `true` (default) to make machines a live rollout is waiting on check in immediately; `false` leaves them to their own timer |
 | `FLEET_ANSIBLE_RUNNER_TOKEN` | **Required in production** (≥16 bytes). Shared secret the backend presents to the `ansible-runner` sidecar; the sidecar rejects unauthenticated calls. **Must match on both** the backend and the `ansible-runner` container. Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production |
 | `FLEET_RECORDING_KEY` | *(optional, ≥32 bytes)* AES-256-GCM at-rest encryption of session recordings — **both** SSH (asciicast) **and** RDP/Guacamole streams. The backend **warns if unset** and stores recordings in plaintext. Generate with `openssl rand -hex 32`. Enabling it later encrypts only new recordings; existing plaintext recordings still play. Losing the key makes encrypted recordings unrecoverable — keep it off-host with the other secrets |
 | `POSTGRES_PASSWORD` | Database password |
 | `FLEET_COOKIE_SECURE` | `true` whenever served over HTTPS |
 | `FLEET_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Session inactivity / hard-cap lifetimes |
 | `FLEET_REFRESH_TOKEN_TTL` | Refresh-cookie lifetime (shorten for internet exposure) |
-| `FLEET_USER_CERT_TTL` | Ephemeral user-cert lifetime (default 7d, auto-renewed) |
+| `FLEET_USER_CERT_TTL` | Ephemeral user-cert lifetime (default 12h, auto-renewed) |
 | `FLEET_CA_ROTATE_AFTER` | Age at which the active SSH CA key triggers a rotation reminder (default `8760h` = 365d) |
 | `FLEET_RATE_LIMIT_*` / `FLEET_AUTH_RATE_LIMIT_*` | Per-IP rate limits (0 disables) |
 | `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` | Jump host `host:port` + login user |

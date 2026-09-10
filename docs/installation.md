@@ -74,7 +74,28 @@ Key settings in `.env`:
 | `FLEET_COOKIE_SECURE` | `true` in production (cookies only over HTTPS) |
 | `FLEET_WG_JUMP_ENDPOINT` | The address:port managed hosts will dial to reach the jump host (public/LAN IP or DNS + UDP port), if you use the WireGuard overlay |
 
-> In production, the backend refuses to start with weak or missing secrets. Do not
+> **In production the backend refuses to start on several checks.** Failing fast
+> here is deliberate: each of these is a setting that would otherwise let the
+> server run and break something later, somewhere else.
+>
+> - **Weak or missing secrets** — `FLEET_JWT_SECRET` (≥32 bytes),
+>   `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE`, `FLEET_AUDIT_HMAC_KEY`,
+>   `FLEET_ANSIBLE_RUNNER_TOKEN`.
+> - **`FLEET_PUBLIC_URL` still pointing at localhost.** This is the address
+>   browsers and identity providers are told to use, so a wrong one boots cleanly
+>   and then breaks single sign-on, passkeys and every terminal WebSocket
+>   separately, none of them saying why.
+> - **`FLEET_COOKIE_SECURE=false` while `FLEET_PUBLIC_URL` is `https://`.**
+>   Session cookies would be sent without the `Secure` flag and no HSTS header
+>   set. Plain `http://` is warned about rather than refused — a deployment on a
+>   trusted private network genuinely cannot set `Secure`, or nobody can log in.
+>
+> **`.env.example` trips two of these on purpose**: it ships
+> `FLEET_PUBLIC_URL=http://localhost:8080` and `FLEET_COOKIE_SECURE=false`, which
+> are right for a laptop and wrong for a server. For a production install start
+> from **`.env.production.example`** instead, which has the correct values.
+>
+> In production, the backend also refuses to start with weak or missing secrets. Do not
 > reuse the CA passphrase as the backup passphrase — one leak would then decrypt both.
 
 The full list of environment variables (retention windows, monitor concurrency,
@@ -106,6 +127,13 @@ version stamped into the build is derived from the nearest git tag.
 > after install (§6, and for air-gapped hosts §7).
 
 ---
+
+> **The UI is on port 5173.** `make up-single` publishes the frontend there; the
+> backend listens on 8080 bound to loopback and is reached *through* it. So with
+> the example `.env` the browser wants `http://<host>:5173`, not
+> `FLEET_PUBLIC_URL`. For production, put your TLS reverse proxy in front of 5173
+> and set `FLEET_PUBLIC_URL` to the address that proxy serves — they must match,
+> or sign-on and WebSockets break.
 
 ## 5. Create the first administrator (bootstrap)
 

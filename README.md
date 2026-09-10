@@ -30,7 +30,7 @@ Browser ──HTTPS/WS──> React SPA ──REST/WS──> Go Backend ──SS
 ## Why it's different
 
 - **Ephemeral identities.** Every login mints a brand-new Ed25519 keypair **in backend RAM**
-  and signs a short-lived (7-day) OpenSSH user certificate. Private keys never touch disk,
+  and signs a short-lived (12-hour) OpenSSH user certificate. Private keys never touch disk,
   the database, cookies, or the browser, and are zeroized on logout/idle. Certificates
   auto-renew ~24h before expiry and are revoked on session end.
 - **Internal SSH Certificate Authority.** The CA private key is generated in-process,
@@ -132,7 +132,7 @@ Working and verified end-to-end (see `git log` for the milestone history):
   **forwarded SSH agent** (key stays local), a **no-install ssh-pipe** script, or a **direct
   "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Provenance itself).
   WireGuard-routed methods install CA trust + WireGuard and verify per-user cert login
-- Internal SSH **CA + ephemeral certificates, unique per (user, host)** (in-RAM keys, 7-day,
+- Internal SSH **CA + ephemeral certificates, unique per (user, host)** (in-RAM keys, 12-hour,
   auto-renew, revoke via distributed KRL)
 - Backend-only **browser SSH terminal** (xterm.js) through jump host + WireGuard
 - **Session recording** (asciicast v2) + replay + offline export, plus **live session

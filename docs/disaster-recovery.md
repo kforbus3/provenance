@@ -170,7 +170,7 @@ as a security incident, and preserve evidence (DB snapshot + exports).
 [break-glass.md](./break-glass.md) for the full procedure.
 
 **Restore** — performed offline; the encrypted file is standard openssl, so it
-restores anywhere with no Fleet-specific tooling:
+restores anywhere with no Provenance-specific tooling:
 
 ```bash
 openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \

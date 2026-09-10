@@ -167,7 +167,7 @@ A successful connection means:
 
 - WireGuard tunnel up (`host_status.wg_ok`),
 - SSH reachable through the jump host (`host_status.ssh_ok`),
-- the host accepted a Fleet-issued user certificate.
+- the host accepted a Provenance-issued user certificate.
 
 ## Windows (RDP) hosts
 

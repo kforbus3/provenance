@@ -22,8 +22,8 @@ Relevant configuration (`internal/config`):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `FLEET_CA_PASSPHRASE` | — (required in prod, ≥16B) | encrypts the CA private key |
-| `FLEET_USER_CERT_TTL` | `168h` (7 days) | ephemeral user certificate lifetime |
-| `FLEET_CERT_RENEW_BEFORE` | `24h` | renew certs this far ahead of expiry |
+| `FLEET_USER_CERT_TTL` | `12h` | ephemeral user certificate lifetime |
+| `FLEET_CERT_RENEW_BEFORE` | `3h` | renew certs this far ahead of expiry |
 | `FLEET_HOST_CERT_TTL` | `8760h` (365 days) | host certificate lifetime |
 
 ## 1. CA creation (bootstrap of trust)
