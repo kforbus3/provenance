@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/notify"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 const settingKey = "report_schedule"

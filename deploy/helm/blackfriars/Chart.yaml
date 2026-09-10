@@ -1,6 +1,6 @@
 apiVersion: v2
 name: blackfriars
-description: Blackfriars — privileged access management and OS lifecycle for Linux fleets
+description: Provenance — privileged access management and OS lifecycle for Linux fleets
   (Go backend + React frontend, A/B image builder, PXE imaging, staged rollouts).
 type: application
 # Chart version — bump on chart changes.
@@ -19,4 +19,4 @@ home: https://github.com/kforbus3/blackfriars
 sources:
   - https://github.com/kforbus3/blackfriars
 maintainers:
-  - name: Blackfriars
+  - name: Provenance

@@ -9,12 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/accesspolicy"
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/accesspolicy"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Mount attaches ad-hoc command routes, gated by Command.Run (admin-only by

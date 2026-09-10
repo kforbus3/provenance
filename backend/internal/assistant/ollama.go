@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/ssrf"
+	"github.com/kforbus3/provenance/backend/internal/ssrf"
 )
 
 // ollamaClient is a minimal client for a local Ollama instance (/api/tags and

@@ -1,5 +1,5 @@
 // Package admin provides user, role, group, and system-settings management. It
-// follows the canonical Blackfriars HTTP module shape: construct from
+// follows the canonical Provenance HTTP module shape: construct from
 // *app.Deps, gate every route with auth + RBAC middleware, and audit state
 // changes through the tamper-evident audit chain.
 package admin
@@ -11,10 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // Mount attaches admin routes to r, gated by authentication and permissions.

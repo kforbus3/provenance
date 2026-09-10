@@ -30,8 +30,8 @@ import (
 
 	"log/slog"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 const (

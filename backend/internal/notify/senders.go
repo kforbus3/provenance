@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/ssrf"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/ssrf"
 )
 
 // emailPassword decrypts the stored SMTP password (empty if none/unset).

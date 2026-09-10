@@ -13,10 +13,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
-	"github.com/kforbus3/blackfriars/backend/internal/identity"
-	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
+	"github.com/kforbus3/provenance/backend/internal/identity"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
 )
 
 // Gateway establishes SSH connections through the jump host.

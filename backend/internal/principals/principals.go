@@ -1,4 +1,4 @@
-// Package principals defines the SSH certificate principal names Blackfriars
+// Package principals defines the SSH certificate principal names Provenance
 // uses to authorize a certificate to a managed-host account, and the helpers
 // that make those principals host-scoped.
 //

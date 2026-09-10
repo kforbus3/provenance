@@ -5,9 +5,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
 )
 
 // Mount attaches the insights endpoint. Results are scoped to the caller's

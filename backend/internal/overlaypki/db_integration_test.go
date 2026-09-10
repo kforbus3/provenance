@@ -10,9 +10,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/overlaypki"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/overlaypki"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // TestEnsureCAPersistsAndReloads proves the FIPS-boot contract against a real

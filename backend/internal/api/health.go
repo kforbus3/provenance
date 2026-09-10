@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
 )
 
 // healthComponent is one checked subsystem.

@@ -12,13 +12,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/msrc"
-	"github.com/kforbus3/blackfriars/backend/internal/playbook"
-	"github.com/kforbus3/blackfriars/backend/internal/scan"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
-	"github.com/kforbus3/blackfriars/backend/internal/vulnscan"
-	"github.com/kforbus3/blackfriars/backend/internal/winscript"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/msrc"
+	"github.com/kforbus3/provenance/backend/internal/playbook"
+	"github.com/kforbus3/provenance/backend/internal/scan"
+	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/vulnscan"
+	"github.com/kforbus3/provenance/backend/internal/winscript"
 )
 
 // scanFanoutLimit bounds how many host scans a scheduled fire runs at once. A

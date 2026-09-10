@@ -1,6 +1,6 @@
 # Imaging and OS updates
 
-Blackfriars manages a machine's whole life. Most of this product manages
+Provenance manages a machine's whole life. Most of this product manages
 machines that already exist — access, sessions, policy, audit. This part builds
 the operating system they run and puts it on their disks: an A/B image builder,
 a PXE imaging server, signed RAUC update bundles, and a control plane that rolls

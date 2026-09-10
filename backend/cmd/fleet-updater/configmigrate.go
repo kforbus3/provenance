@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kforbus3/blackfriars/backend/internal/release"
+	"github.com/kforbus3/provenance/backend/internal/release"
 )
 
 // applyConfigAdditions merges a manifest's additive config into the deployment's .env

@@ -1,4 +1,4 @@
-module github.com/kforbus3/blackfriars/terraform-provider-fleet
+module github.com/kforbus3/provenance/terraform-provider-fleet
 
 go 1.25.0
 
@@ -9,7 +9,7 @@ toolchain go1.26.6
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.13.0
 	github.com/hashicorp/terraform-plugin-go v0.25.0
-	github.com/kforbus3/blackfriars/sdk v0.0.0
+	github.com/kforbus3/provenance/sdk v0.0.0
 )
 
 require (
@@ -37,4 +37,4 @@ require (
 )
 
 // The SDK is developed in the same repository; build against the local copy.
-replace github.com/kforbus3/blackfriars/sdk => ../sdk
+replace github.com/kforbus3/provenance/sdk => ../sdk

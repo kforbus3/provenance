@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/credinject"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/notify"
-	"github.com/kforbus3/blackfriars/backend/internal/winrm"
+	"github.com/kforbus3/provenance/backend/internal/credinject"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/winrm"
 )
 
 const (

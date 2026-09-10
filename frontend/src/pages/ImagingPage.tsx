@@ -577,7 +577,7 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
     mutationFn: async () => {
       const host = await createHost({
         hostname: hostname.trim(),
-        description: `Imaged by Blackfriars${machine?.image ? ` from ${machine.image}` : ""}`,
+        description: `Imaged by Provenance${machine?.image ? ` from ${machine.image}` : ""}`,
         environment: environment.trim(),
         owner: owner.trim(),
         address: address.trim(),

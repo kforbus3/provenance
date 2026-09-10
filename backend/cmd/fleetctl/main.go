@@ -1,4 +1,4 @@
-// Command fleetctl is the offline administrative CLI for Blackfriars. It
+// Command fleetctl is the offline administrative CLI for Provenance. It
 // connects directly to the database (using the same FLEET_DATABASE_URL) and is
 // the documented out-of-band recovery path — e.g. restoring access when every
 // administrator is locked out, resetting MFA, or rotating the CA.
@@ -16,18 +16,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/ca"
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
-	"github.com/kforbus3/blackfriars/backend/internal/db"
-	"github.com/kforbus3/blackfriars/backend/internal/kms"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/notify"
-	"github.com/kforbus3/blackfriars/backend/internal/overlaypki"
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
-	"github.com/kforbus3/blackfriars/backend/internal/vault"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/ca"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
+	"github.com/kforbus3/provenance/backend/internal/db"
+	"github.com/kforbus3/provenance/backend/internal/kms"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/overlaypki"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/vault"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `fleetctl — Blackfriars offline admin CLI
+	fmt.Fprint(os.Stderr, `fleetctl — Provenance offline admin CLI
 
 Usage:
   fleetctl create-admin <username> <password> [email]   Create a Super Administrator (recovery)
@@ -262,7 +262,7 @@ func runKMS(ctx context.Context, cfg *config.Config, args []string) error {
 
 	switch sub {
 	case "status":
-		fmt.Println("Blackfriars — external KMS status")
+		fmt.Println("Provenance — external KMS status")
 		fmt.Println("====================================")
 		fmt.Printf("  Provider              : %s\n", cfg.KMSProvider)
 		fmt.Printf("  Key ID                : %s\n", orNone(cfg.KMSKeyID))
@@ -329,7 +329,7 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 		return "NOT-FIPS"
 	}
 
-	fmt.Println("Blackfriars — FIPS readiness report")
+	fmt.Println("Provenance — FIPS readiness report")
 	fmt.Println("======================================")
 	fmt.Printf("  Config FLEET_FIPS_MODE : %v\n", cfg.FIPSMode)
 	fmt.Printf("  Config FLEET_OVERLAY   : %s   [%s]\n", cfg.Overlay, ok(cfg.Overlay != "wireguard"))

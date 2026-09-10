@@ -18,9 +18,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/federation/link"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/federation/link"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
 )
 
 // Service holds federation state for whichever role this instance runs.

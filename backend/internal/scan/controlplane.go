@@ -3,8 +3,8 @@ package scan
 import (
 	"strings"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // controlPlaneTags mark a host as part of Fleet's own control plane. Remediating

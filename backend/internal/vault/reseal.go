@@ -3,8 +3,8 @@ package vault
 import (
 	"context"
 
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // ResealSecrets re-seals every stored vault-secret version to the active KDF profile

@@ -1,12 +1,12 @@
 # Break-Glass & Recovery Runbook
 
-Blackfriars is the **single path** to your hosts. If the backend, database, or
+Provenance is the **single path** to your hosts. If the backend, database, or
 CA is lost, you can lose access to the entire fleet at once. This runbook covers
-(1) the secrets and backups that make recovery possible, (2) how to rebuild Blackfriars
-from a backup, and (3) how to reach a host when Blackfriars itself is down.
+(1) the secrets and backups that make recovery possible, (2) how to rebuild Provenance
+from a backup, and (3) how to reach a host when Provenance itself is down.
 
 > **Test this before you need it.** A backup you have never restored is a guess.
-> Walk through "Rebuild Blackfriars from a backup" on a throwaway host at least once.
+> Walk through "Rebuild Provenance from a backup" on a throwaway host at least once.
 
 ---
 
@@ -63,7 +63,7 @@ snapshot (optional for the mostly-static jump host files).
 
 ---
 
-## 3. Rebuild Blackfriars from a backup
+## 3. Rebuild Provenance from a backup
 
 On a fresh host (or after wiping a broken one):
 
@@ -105,31 +105,31 @@ backup.
 
 ---
 
-## 4. Reaching a host while Blackfriars is down
+## 4. Reaching a host while Provenance is down
 
-Your managed hosts keep running a normal `sshd` even when Blackfriars is unavailable —
-what's down is the **jump host + certificate** path Blackfriars brokers. To get in
-out-of-band you need a credential that does **not** depend on Blackfriars's CA.
+Your managed hosts keep running a normal `sshd` even when Provenance is unavailable —
+what's down is the **jump host + certificate** path Provenance brokers. To get in
+out-of-band you need a credential that does **not** depend on Provenance's CA.
 
 ### Recommended: pre-provision a break-glass key (do this now, not in a crisis)
 
 1. On your workstation, generate an **offline** keypair and store the private key
    somewhere safe (password manager / hardware token) — it must **never** live on
-   the Blackfriars server:
+   the Provenance server:
    ```sh
    ssh-keygen -t ed25519 -f fleet-breakglass -C "fleet-breakglass"
    ```
 2. Install the **public** key on each host, in the `fleet` account's
    `authorized_keys` (or a dedicated `breakglass` sudoer). During enrollment the
    host is reachable on the jump host's LAN; you can append it then, or push it
-   later over an existing Blackfriars session:
+   later over an existing Provenance session:
    ```sh
    echo "ssh-ed25519 AAAA… fleet-breakglass" >> ~fleet/.ssh/authorized_keys
    ```
 3. **Test it** from your workstation against one host (directly, or via the jump
    host's LAN address), then file the private key away.
 
-When Blackfriars is down, SSH in with that key directly to the host's management
+When Provenance is down, SSH in with that key directly to the host's management
 address (or through the jump host if only the backend is down):
 ```sh
 ssh -i fleet-breakglass fleet@<host-management-ip>
@@ -138,7 +138,7 @@ ssh -i fleet-breakglass fleet@<host-management-ip>
 > **Trade-off.** A standing emergency key is a standing credential — keep it
 > offline, scope it to what you need, and rotate it periodically. If you prefer no
 > standing key, the alternative is console/hypervisor access (hypervisor console,
-> IPMI/BMC, cloud serial console) to the host, which needs no Blackfriars component at all.
+> IPMI/BMC, cloud serial console) to the host, which needs no Provenance component at all.
 
 ### If the backend is down but hosts + jump host are healthy
 
@@ -148,10 +148,10 @@ and WireGuard are intact, so a restored backend reconnects immediately.
 
 ---
 
-## 5. Recovering after hardening locked Blackfriars out of its own host
+## 5. Recovering after hardening locked Provenance out of its own host
 
 **Symptom:** after a scan remediation (or manual hardening) is applied to the host
-that runs Blackfriars, the web UI stops loading or SSH brokering stalls. Blackfriars flags such
+that runs Provenance, the web UI stops loading or SSH brokering stalls. Provenance flags such
 rules **⚠ access-impacting** and requires an extra confirmation for control-plane
 hosts, but if a fix still slipped through, recover from the console (or a
 [break-glass key](#recommended-pre-provision-a-break-glass-key-do-this-now-not-in-a-crisis)).
@@ -184,11 +184,11 @@ If the host uses **kernel** WireGuard, ensure the module is loaded
 (`sudo modprobe wireguard`); otherwise the jump host / enrollment fall back to
 userspace `wireguard-go`.
 
-### Sudo `noexec` / `requiretty` (breaks Blackfriars automation)
+### Sudo `noexec` / `requiretty` (breaks Provenance automation)
 
-`Defaults noexec` or `requiretty` in sudoers stops Blackfriars's non-interactive
+`Defaults noexec` or `requiretty` in sudoers stops Provenance's non-interactive
 `sudo bash` (enrollment, remediation) from executing. Keep the hardening for
-everyone else but exempt the account Blackfriars connects as — edit the offending file
+everyone else but exempt the account Provenance connects as — edit the offending file
 with `visudo` and add, after the `Defaults` line it wrote:
 
 ```
@@ -201,10 +201,10 @@ Defaults:<fleet-ssh-user> !noexec
 place — recover with a normal sudo account, not root. Only revert them if a
 workflow genuinely needs direct root login.
 
-> **Prevention.** Add Blackfriars's own host to `FLEET_CONTROL_PLANE_HOSTS` (or tag it
+> **Prevention.** Add Provenance's own host to `FLEET_CONTROL_PLANE_HOSTS` (or tag it
 > `control-plane`) so remediating it always demands the extra confirmation, and
 > prefer running host-hardening scans against managed hosts rather than the box
-> that runs Blackfriars.
+> that runs Provenance.
 
 ---
 

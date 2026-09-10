@@ -1,4 +1,4 @@
-// Command fleet-updater is the privileged sidecar that applies signed Blackfriars
+// Command fleet-updater is the privileged sidecar that applies signed Provenance
 // upgrade bundles by swapping container images over the Docker socket. It is the ONLY
 // component with Docker access; the backend hands it a staged, already-verified bundle
 // and this process independently re-verifies the signature before touching anything.
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/release"
+	"github.com/kforbus3/provenance/backend/internal/release"
 )
 
 // Config is resolved from the environment (set in the compose service definition).

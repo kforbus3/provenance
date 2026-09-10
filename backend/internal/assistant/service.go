@@ -19,11 +19,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/aiaction"
-	"github.com/kforbus3/blackfriars/backend/internal/insights"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
-	"github.com/kforbus3/blackfriars/backend/internal/tenant"
+	"github.com/kforbus3/provenance/backend/internal/aiaction"
+	"github.com/kforbus3/provenance/backend/internal/insights"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/tenant"
 )
 
 const (

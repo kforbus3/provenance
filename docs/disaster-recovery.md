@@ -1,13 +1,13 @@
-# Blackfriars — Disaster Recovery
+# Provenance — Disaster Recovery
 
-This guide covers the **DR planning** side of Blackfriars: recovery objectives
+This guide covers the **DR planning** side of Provenance: recovery objectives
 (RPO/RTO), what state must be protected, and the failure scenarios you should
 rehearse for. The platform's durable state lives in **PostgreSQL** and the
 **session recordings directory**; the CA private key (encrypted) lives in the
 database, protected by `FLEET_CA_PASSPHRASE`.
 
 > **The encrypted-backup and rebuild procedure lives in
-> [break-glass.md](./break-glass.md) — that runbook is authoritative.** Blackfriars's
+> [break-glass.md](./break-glass.md) — that runbook is authoritative.** Provenance's
 > shipped backups are produced under **Settings → Backup & Restore**: `pg_dump`
 > piped through `openssl` (AES-256-CBC, PBKDF2) into `FLEET_BACKUP_DIR`
 > (default `/var/lib/fleet/backups`), with optional scheduling + retention.
@@ -37,7 +37,7 @@ database, protected by `FLEET_CA_PASSPHRASE`.
 
 ## Backups (where DR fits)
 
-Blackfriars's **database backup is the encrypted `pg_dump | openssl` artifact** managed
+Provenance's **database backup is the encrypted `pg_dump | openssl` artifact** managed
 under **Settings → Backup & Restore** and documented step-by-step in
 [break-glass.md](./break-glass.md): enable scheduling + retention, get the files
 **off the host** (map `FLEET_BACKUP_DIR` to off-host storage or rsync the
@@ -221,7 +221,7 @@ single-pane model, not a DR model). The in-app **Disaster Recovery** page (nav;
 > replication**, with one writable at a time. On failure you promote the standby and
 > use its domain.
 >
-> **What this is not:** it is **not** zero-touch or shared-nothing magic. Blackfriars
+> **What this is not:** it is **not** zero-touch or shared-nothing magic. Provenance
 > reflects replication state and *triggers* your orchestration; the actual database
 > promotion, DNS changes, and jump-host WireGuard bring-up are steps you wire up. And
 > it does **not** bring back hosts that die with a site — that is workload DR.
@@ -237,8 +237,8 @@ write to it until you fail over.
 ## Requirement 1 — data parity ("up to date at failure")
 
 - **Streaming replication** primary → standby: **async** (RPO = lag, seconds) or
-  **synchronous** (zero loss, WAN latency cost). Blackfriars does not manage this — use
-  native replication, Patroni, or a managed cross-region replica; Blackfriars only needs
+  **synchronous** (zero loss, WAN latency cost). Provenance does not manage this — use
+  native replication, Patroni, or a managed cross-region replica; Provenance only needs
   `FLEET_DATABASE_URL` pointed at whatever is currently primary. The DR page shows
   this instance's live posture (in-recovery + replay lag).
 - **Identical secrets on both stacks** — mandatory: `FLEET_CA_PASSPHRASE` (**the
@@ -301,12 +301,12 @@ standby, **Force failover** with "Also promote this database" → point the stan
 domain.
 
 **Unplanned (primary down):** the standby runs a **read-only standby console**
-automatically — when Blackfriars detects its database is a replica (`pg_is_in_recovery()`)
+automatically — when Provenance detects its database is a replica (`pg_is_in_recovery()`)
 it boots in **standby mode**: migrations are skipped, no background writers start,
 and the entire UI is replaced by a break-glass console (login isn't possible against
 a replica). Go to the standby's address, and the console shows replication lag and a
 **Promote this instance to primary** action gated by `FLEET_DR_STANDBY_TOKEN`. Enter
-the token and promote: Blackfriars runs `pg_promote()` and **restarts into normal mode**
+the token and promote: Provenance runs `pg_promote()` and **restarts into normal mode**
 against the now-primary database (ensure the container has a restart policy). Then
 fire the DNS/WG webhook (from the now-normal **Force failover**, or your automation).
 `fleetctl` on the standby remains the fallback if the console can't run.
@@ -330,9 +330,9 @@ Not symmetric — it needs replication re-established the *other* way first:
    fire its webhook to move DNS/WG back, return operators to its domain.
 4. Re-seed the other side as its standby to restore the original posture.
 
-## What Blackfriars does vs. what you do
+## What Provenance does vs. what you do
 
-| Blackfriars does | You do |
+| Provenance does | You do |
 |------------|--------|
 | Show recovery/replication state + peer health | Set up and monitor PostgreSQL replication |
 | Optionally run `pg_promote()` from the console | Grant `pg_promote` execution / run it via DB tooling |

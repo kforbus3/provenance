@@ -3,8 +3,8 @@ package scan
 import (
 	"testing"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 func TestIsControlPlaneHost(t *testing.T) {

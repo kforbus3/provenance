@@ -14,12 +14,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/app"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/httpx"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/recorder"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/recorder"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Mount attaches session routes to r, gated by authentication and permissions.
@@ -174,7 +174,7 @@ func (h *handler) playerRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, _ := h.d.Store.GetSSHSession(r.Context(), id)
-	title := "Blackfriars session"
+	title := "Provenance session"
 	if sess != nil {
 		title = sess.Username + "@" + sess.Hostname + " · " + sess.StartedAt.Format("2006-01-02 15:04:05")
 	}

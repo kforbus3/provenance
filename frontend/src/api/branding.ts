@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getVersion } from "./client";
 
 // Default brand name; matches the backend fallback when no branding is set.
-const DEFAULT_APP_NAME = "Blackfriars";
+const DEFAULT_APP_NAME = "Provenance";
 
 // useAppName returns the configured application/brand name. It reads the public
 // /version endpoint (also used by the dashboard), so it works pre-auth on the

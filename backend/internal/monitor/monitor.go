@@ -15,18 +15,18 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/credinject"
-	"github.com/kforbus3/blackfriars/backend/internal/identity"
-	"github.com/kforbus3/blackfriars/backend/internal/jobs"
-	"github.com/kforbus3/blackfriars/backend/internal/metrics"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/notify"
-	"github.com/kforbus3/blackfriars/backend/internal/overlay"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
-	"github.com/kforbus3/blackfriars/backend/internal/winrm"
-	"github.com/kforbus3/blackfriars/backend/internal/ws"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/credinject"
+	"github.com/kforbus3/provenance/backend/internal/identity"
+	"github.com/kforbus3/provenance/backend/internal/jobs"
+	"github.com/kforbus3/provenance/backend/internal/metrics"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/overlay"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/winrm"
+	"github.com/kforbus3/provenance/backend/internal/ws"
 )
 
 // Monitor periodically probes hosts and reports their health.

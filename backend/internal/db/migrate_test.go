@@ -16,7 +16,7 @@ var migNameRe = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(_[a-z0-9]+)*\.sql$`)
 // existing database would re-run it (and orphan the old record). A new migration
 // must instead take a fresh, unused ordinal.
 //
-// "0079" is the one entry here that is not merely historical. Blackfriars and
+// "0079" is the one entry here that is not merely historical. Provenance and
 // Moorgate forked from a common ancestor at 0078 and each took 0079 for unrelated
 // work — imaging permissions here, the vulnerability roll-up there — and both are
 // already applied on real databases. Renumbering either one now is precisely the

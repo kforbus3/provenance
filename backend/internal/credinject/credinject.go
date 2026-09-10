@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/credresolve"
-	"github.com/kforbus3/blackfriars/backend/internal/extsecret"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/credresolve"
+	"github.com/kforbus3/provenance/backend/internal/extsecret"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Injection is the resolved SSH auth for a vaulted host.

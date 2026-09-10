@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/release"
+	"github.com/kforbus3/provenance/backend/internal/release"
 )
 
 // Status mirrors the backend's upgrade.Status JSON shape so the backend can proxy it

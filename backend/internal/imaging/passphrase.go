@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"github.com/kforbus3/blackfriars/backend/internal/credresolve"
+	"github.com/kforbus3/provenance/backend/internal/credresolve"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,9 +16,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/extsecret"
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/extsecret"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Generating and filing the LUKS recovery passphrase for an image about to be

@@ -1,4 +1,4 @@
-# Blackfriars — REST API Reference
+# Provenance — REST API Reference
 
 All application endpoints are served under the versioned prefix **`/api/v1`**.
 Operational endpoints (`/health`, `/ready`, `/version`, `/metrics`) are served at
@@ -48,7 +48,7 @@ the root.
 |--------|------|-------------|
 | GET | `/health` | Liveness. `{"status":"ok"}` |
 | GET | `/ready` | Readiness; pings the DB. `200 {"status":"ready"}` or `503 {"status":"db_unavailable"}` |
-| GET | `/version` | `{"version":"<build>","environment":"production","appName":"Blackfriars"}` |
+| GET | `/version` | `{"version":"<build>","environment":"production","appName":"Provenance"}` |
 | GET | `/metrics` | Prometheus metrics (text exposition format) |
 | GET | `/api/v1/ping` | `{"pong":"ok"}` |
 
@@ -123,7 +123,7 @@ which completes login. No session is issued until a factor is confirmed.
 
 When local authentication fails and an LDAP/Active Directory directory is
 configured and enabled, login falls back to verifying the credentials against
-the directory (finding or provisioning the matching Blackfriars account) before
+the directory (finding or provisioning the matching Provenance account) before
 returning `401`.
 
 **`POST /auth/refresh`** → rotates tokens using the `fleet_refresh` + `fleet_sid`
@@ -169,7 +169,7 @@ the SSO button → `{ "enabled": true, "buttonText": "Sign in with SSO" }`
 
 **`GET /auth/oidc/callback`** → the IdP redirects here with `code`/`state`. The
 backend validates state, exchanges the code, verifies the ID token
-(signature/issuer/audience/nonce), finds-or-provisions the user, issues a Blackfriars
+(signature/issuer/audience/nonce), finds-or-provisions the user, issues a Provenance
 session (sets the auth cookies), and `302`-redirects into the app (`/`). On
 failure it redirects to `/login?sso=…`.
 
@@ -610,7 +610,7 @@ embedded/downloaded by the browser.
 | GET | `/api/v1/hosts/{id}/scans` | List recent scans for the host |
 | GET | `/api/v1/scans/{id}` | One scan's status + summary (poll while running) |
 | GET | `/api/v1/scans/{id}/report?token=<jwt>[&download=1]` | Stored HTML report (sandboxed view / download) |
-| GET | `/api/v1/scans/{id}/findings` | `Host.Scan` — `{findings: [id, title, severity, accessImpacting], controlPlane}` (controlPlane=host is part of Blackfriars's control plane) |
+| GET | `/api/v1/scans/{id}/findings` | `Host.Scan` — `{findings: [id, title, severity, accessImpacting], controlPlane}` (controlPlane=host is part of Provenance's control plane) |
 | POST | `/api/v1/scans/{id}/remediation/preview` | `Host.Remediate` — `{ruleIds}` → `{script}` (no changes) |
 | POST | `/api/v1/scans/{id}/remediate` | `Host.Remediate` — `{ruleIds, confirmAccessImpacting, confirmControlPlane}` → run id (async); 409 if access-impacting rules or a control-plane host are targeted without the matching confirmation |
 | GET | `/api/v1/remediations/{id}` | `Host.Remediate` — run status/output/exit + verification re-scan id |
@@ -673,17 +673,17 @@ viewing scans require `Host.Scan`; CVE-database management requires
 
 OS images, signed update bundles and staged rollouts, driven from a
 [Flipside](./imaging.md) deployment. Everything proxies through the backend, so
-Blackfriars's roles, host-access rules and audit log apply — and so the Flipside
+Provenance's roles, host-access rules and audit log apply — and so the Flipside
 operator token never reaches a browser. Inert unless `FLEET_FLIPSIDE_URL` is set;
 `/imaging/status` answers `{"configured": false}` rather than erroring.
 
-The two actions worth understanding are the two ways Blackfriars gives Flipside the
+The two actions worth understanding are the two ways Provenance gives Flipside the
 reach it structurally cannot have:
 
 - **`/nudge`** makes a machine check in with Flipside *now* rather than on its
   own timer. The agent then does exactly what it would have done minutes later,
   and Flipside applies the rollout's canary, soak, batching and failure budget
-  unchanged. Blackfriars removes the waiting and decides nothing. A failed nudge
+  unchanged. Provenance removes the waiting and decides nothing. A failed nudge
   costs latency, not the update — the agent still polls.
 - **`/install`** writes a bundle over SSH, for machines that cannot reach
   Flipside at all, and then reports to Flipside what it observed on the host.
@@ -705,10 +705,10 @@ reach it structurally cannot have:
 | POST | `/api/v1/imaging/hosts/{hostId}/nudge` | `Imaging.Manage` |
 | POST | `/api/v1/imaging/hosts/{hostId}/install` | `Imaging.Manage` |
 
-`/imaging/fleet` returns one row per machine, pairing Blackfriars hosts with
+`/imaging/fleet` returns one row per machine, pairing Provenance hosts with
 Flipside machines and saying **how** they were paired: `linked` (recorded, and
 the only form that survives a rename or re-image), `hostname` (a guess), or
-`none`. Machines Flipside knows about and Blackfriars does not appear too, without
+`none`. Machines Flipside knows about and Provenance does not appear too, without
 a host id — usually a machine that was imaged and never enrolled, which is worth
 seeing rather than hiding. Host-access rules apply: a host the caller may not
 see does not appear here either.
@@ -779,7 +779,7 @@ run in the background (local inference can exceed the request timeout); poll the
 
 **Context window** — the system prompt plus the tool schemas cost ~10k tokens before
 any fleet data. Ollama's 4096-token default silently discards the oldest tokens (the
-system prompt) rather than erroring, so Blackfriars always sends an explicit `num_ctx`
+system prompt) rather than erroring, so Provenance always sends an explicit `num_ctx`
 (`numCtx`, default 32768, floored at 16384) and reports the effective window plus a
 warning in `GET /assistant/status`. Individual tool results are capped before they
 enter the transcript, with the true row total preserved.
@@ -788,7 +788,7 @@ enter the transcript, with the true row total preserved.
 `conversationId`; history is bounded, owner-scoped, and TTL-pruned, so follow-up
 questions ("and db-02?") resolve against earlier context.
 
-**Blackfriars insights** — **`GET /insights`** returns explainable issues derived (no
+**Provenance insights** — **`GET /insights`** returns explainable issues derived (no
 ML) from host status + metric history: offline hosts, low/critically-low disk,
 high memory/load, pending security updates, and a disk-runway projection
 (days-to-full with a confidence level from the trend fit). Results are scoped to
@@ -943,7 +943,7 @@ streams a logical `pg_dump` of the database as a download
 (`application/sql`; `501` if `pg_dump` is unavailable). Restore is an out-of-band
 operation and is intentionally not exposed over the web UI.
 
-**`GET /system/health`** → a live status report of Blackfriars's subsystems for the
+**`GET /system/health`** → a live status report of Provenance's subsystems for the
 admin System Health page. Each component (database, certificate authority, jump
 host, Ansible runner, backups, and each background job) is checked with a bounded
 timeout so one slow dependency can't stall the report.

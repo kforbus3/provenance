@@ -5,8 +5,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
 )
 
 func has(list []string, want string) bool {

@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 const vaultCheckoutCols = `c.id, c.secret_id, c.user_id, c.reason, c.status, c.requested_at, c.expires_at,

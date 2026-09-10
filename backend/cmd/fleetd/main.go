@@ -1,4 +1,4 @@
-// Command fleetd is the Blackfriars API server and SSH gateway.
+// Command fleetd is the Provenance API server and SSH gateway.
 package main
 
 import (
@@ -19,14 +19,14 @@ import (
 	// resolves zones for schedule computation, even without an OS tzdata package.
 	_ "time/tzdata"
 
-	"github.com/kforbus3/blackfriars/backend/internal/api"
-	"github.com/kforbus3/blackfriars/backend/internal/auth"
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
-	"github.com/kforbus3/blackfriars/backend/internal/db"
-	"github.com/kforbus3/blackfriars/backend/internal/secretbox"
-	"github.com/kforbus3/blackfriars/backend/internal/telemetry"
-	"github.com/kforbus3/blackfriars/backend/internal/tenant"
+	"github.com/kforbus3/provenance/backend/internal/api"
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
+	"github.com/kforbus3/provenance/backend/internal/db"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/telemetry"
+	"github.com/kforbus3/provenance/backend/internal/tenant"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".

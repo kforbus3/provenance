@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/awssig"
+	"github.com/kforbus3/provenance/backend/internal/awssig"
 )
 
 // awsKMSPrefix tags a wrapped blob produced by the AWS KMS backend so it is

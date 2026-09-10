@@ -3,7 +3,7 @@ package assistant
 import (
 	"testing"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // TestDiskFreeSummary reproduces the nas case the user flagged: the host card

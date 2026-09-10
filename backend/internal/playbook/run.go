@@ -15,11 +15,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kforbus3/blackfriars/backend/internal/credinject"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/notify"
-	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/credinject"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
 )
 
 const (

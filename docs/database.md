@@ -1,4 +1,4 @@
-# Blackfriars — Database Schema Reference
+# Provenance — Database Schema Reference
 
 The schema is normalized PostgreSQL covering identity, RBAC, hosts, certificates,
 sessions, recordings, approvals, enrollment, and a tamper-evident audit log. It is
@@ -498,7 +498,7 @@ recoverable. UNIQUE `(playbook_id, version)`. Index: `idx_playbook_versions_pb`
 | `created_at` | TIMESTAMPTZ | |
 
 ### `playbook_runs`
-One execution of a playbook against a target (a single host or a Blackfriars group).
+One execution of a playbook against a target (a single host or a Provenance group).
 `output` holds the captured log. Indexes: `idx_playbook_runs_pb`
 (`playbook_id, created_at DESC`), `idx_playbook_runs_status`.
 

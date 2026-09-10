@@ -9,13 +9,13 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/kforbus3/blackfriars/backend/internal/ca"
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/cryptoprofile"
-	"github.com/kforbus3/blackfriars/backend/internal/metrics"
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	princ "github.com/kforbus3/blackfriars/backend/internal/principals"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/ca"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
+	"github.com/kforbus3/provenance/backend/internal/metrics"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Issuer mints ephemeral identities, persists certificate metadata, and keeps

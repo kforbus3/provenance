@@ -1,4 +1,4 @@
-module github.com/kforbus3/blackfriars/backend
+module github.com/kforbus3/provenance/backend
 
 go 1.26.0
 

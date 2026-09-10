@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kforbus3/blackfriars/backend/internal/config"
-	"github.com/kforbus3/blackfriars/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // Event types. Stable string keys — they also index Config.Events and appear in

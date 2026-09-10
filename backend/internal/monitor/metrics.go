@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kforbus3/blackfriars/backend/internal/models"
-	"github.com/kforbus3/blackfriars/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/sshgw"
 )
 
 // metricsScript gathers disk, memory, load, and network facts in one shot. Each
