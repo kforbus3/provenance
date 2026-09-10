@@ -559,12 +559,52 @@ cat > %[1]s/client.ovpn <<'FLEOF'
 %[5]sFLEOF
 %[6]s%[7]sif ! ovpn_client_running; then
   if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
-    cp %[1]s/client.ovpn /etc/openvpn/fleet-overlay.conf 2>/dev/null || cp %[1]s/client.ovpn /etc/openvpn/client/fleet-overlay.conf 2>/dev/null || true
-    systemctl enable --now openvpn@fleet-overlay >/dev/null 2>&1 || systemctl enable --now openvpn-client@fleet-overlay >/dev/null 2>&1 || \
+    # BOTH locations, because the two unit templates read different ones and
+    # which template exists depends on the distribution.
+    #
+    # This used to be "cp to /etc/openvpn/ else cp to /etc/openvpn/client/", and
+    # on RHEL 9 the first branch always won -- /etc/openvpn exists there as the
+    # parent of client/ and server/ -- so the config landed at the path only the
+    # LEGACY openvpn@.service reads. RHEL 9 does not ship openvpn@.service at
+    # all: EPEL's package provides openvpn-client@.service, whose unit says
+    # WorkingDirectory=/etc/openvpn/client and --config %%i.conf.
+    #
+    # So the config went to a path nothing read, both unit attempts failed, and
+    # the bare-daemon fallback below brought the tunnel up for that boot only.
+    # Enrollment then saw a working tunnel and reported success. The host stayed
+    # connected until it was rebooted, and came back with no overlay.
+    mkdir -p /etc/openvpn/client 2>/dev/null || true
+    cp %[1]s/client.ovpn /etc/openvpn/client/fleet-overlay.conf 2>/dev/null || true
+    cp %[1]s/client.ovpn /etc/openvpn/fleet-overlay.conf 2>/dev/null || true
+    # openvpn-client@ first: it is what current distributions ship. openvpn@ is
+    # the legacy template, still present on older Debian/Ubuntu.
+    if systemctl enable --now openvpn-client@fleet-overlay >/dev/null 2>&1; then
+      OVPN_PERSISTENT=1
+    elif systemctl enable --now openvpn@fleet-overlay >/dev/null 2>&1; then
+      OVPN_PERSISTENT=1
+    else
+      # Last resort: a daemon that is running now and is enabled by nothing. It
+      # is better than no tunnel, and it must not be mistaken for a configured
+      # one -- so say so rather than letting the address check below report a
+      # success that will not survive a reboot.
+      systemctl disable openvpn-client@fleet-overlay >/dev/null 2>&1 || true
       openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid --log-append %[1]s/client.log || true
+      OVPN_PERSISTENT=0
+    fi
   else
     : > %[1]s/client.log
     openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid --log-append %[1]s/client.log || true
+    OVPN_PERSISTENT=0
+  fi
+else
+  # Already running when this ran. Whether it is enabled is a separate question
+  # from whether it is up, and it is the one that decides what happens at the
+  # next reboot, so answer it rather than assuming.
+  if systemctl is-enabled openvpn-client@fleet-overlay >/dev/null 2>&1 ||
+     systemctl is-enabled openvpn@fleet-overlay >/dev/null 2>&1; then
+    OVPN_PERSISTENT=1
+  else
+    OVPN_PERSISTENT=0
   fi
 fi
 # The tunnel is not up because a process started — it is up when the server has
@@ -597,6 +637,15 @@ done
 echo "OVPN_WAITED=${_i}s"
 if [ -n "$OVPN_IP" ]; then
   echo "OVPN_HOST_IP=$OVPN_IP"
+  # Up now is not the same as up after a reboot, and only one of those is what
+  # "enrolled" is supposed to mean. A tunnel started by the bare-daemon fallback
+  # is enabled by nothing and disappears at the next boot, which is exactly how a
+  # host that had been reachable for days came back with no overlay.
+  if [ "${OVPN_PERSISTENT:-0}" = "1" ]; then
+    echo OVPN_HOST_PERSISTENT
+  else
+    echo OVPN_HOST_NOT_PERSISTENT
+  fi
 %[9]s  echo OVPN_HOST_CONFIGURED
 else
   # Diagnostics only — nothing here may abort the script. "set -e" is still on, and
