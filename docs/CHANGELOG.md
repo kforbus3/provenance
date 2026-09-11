@@ -7,10 +7,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## v1.0.0 — Provenance — 2026-09-10
 
-**First release of the combined product.** The version starts at 1.0.0 because
-this is the first release of Provenance: the earlier v1.x and v2.x tags belong to
-the SSH control plane this grew out of, on a lineage that is not an ancestor of
-this one.
+**First release of the combined product.** The version starts again at 1.0.0
+because this is the first release of Provenance — one codebase that builds a
+signed image, images a bare machine, enrols it and then operates and updates it
+for life. Nothing before this was ever published: no tag of this repository has
+ever been pushed and no release has ever existed outside it.
+
+The number was used once before, by [the August 2026
+release](#v100-2026-08-05--a-compatibility-promise-and-the-dependency-audit-that-had-never-run)
+of the SSH control plane this grew out of. That entry is still below, and the
+tag now points here.
 
 **The product is now Provenance.** Brand and Go module path only — every
 `FLEET_*` setting, binary name, `.fleetup` bundle, compose project, container
@@ -1279,7 +1285,14 @@ preserves the old behaviour. Two further notes for existing deployments:
 
 ---
 
-## v1.0.0 — A compatibility promise, and the dependency audit that had never run
+## v1.0.0 (2026-08-05) — A compatibility promise, and the dependency audit that had never run
+
+> **Note.** The `v1.0.0` git tag was later reused for the first release of
+> Provenance, the combined product (top of this file). That release was never
+> published — no tag of this repository has ever been pushed — so the reuse
+> breaks nothing external, but this entry is the release that originally carried
+> the number, and it stays here as the record of it. The commit is `bda473b`.
+
 
 The feature set has been past 1.0 for a long time; what was missing was a
 commitment. From this release the version number is a statement about
