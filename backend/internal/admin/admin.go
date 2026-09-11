@@ -37,6 +37,14 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("User.ResetPassword")).Post("/users/{id}/reset-mfa", h.resetMFA)
 		pr.With(d.Auth.RequirePermission("Session.Terminate")).Post("/users/{id}/terminate-sessions", h.terminateSessions)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Get("/users/{id}/login-history", h.loginHistory)
+
+		// Sessions. Gated on Session.Terminate for the list as well as the
+		// revoke: "who is signed in right now" is an oversight capability, it is
+		// the same audience, and the alternative was inventing a Session.View
+		// permission that no role is seeded with -- which ships a screen nobody
+		// can open until somebody edits a role.
+		pr.With(d.Auth.RequirePermission("Session.Terminate")).Get("/sessions", h.listActiveSessions)
+		pr.With(d.Auth.RequirePermission("Session.Terminate")).Delete("/sessions/{id}", h.terminateSession)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Get("/users/{id}/session-policy", h.getUserSessionPolicy)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Put("/users/{id}/session-policy", h.setUserSessionPolicy)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Delete("/users/{id}/session-policy", h.clearUserSessionPolicy)

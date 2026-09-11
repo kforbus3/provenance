@@ -5,6 +5,55 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**Image options that cannot produce a working machine are now refused at build
+time.** A *keep* is a carve-out from a *reset*, and two ways of writing one
+produced a machine that looked healthy and was not: keeping a path that is
+itself reset cancels the reset, so an update installs a new slot whose binaries
+are never seen and reports success; keeping the package database leaves it
+describing the other slot's image, so every later `dnf`/`apt` transaction
+reasons from a package list that is not what is installed. Both fail the build
+instead. A keep containing a file the image ships is refused as well, checked
+against the built tree rather than a list of known-safe paths.
+
+Encryption options that would have been silently ignored are refused too.
+`--unlock`, `--luks-passphrase`, `--tang-url` and `--tpm2-pcrs` only ever applied
+on an encrypted image; asking for TPM unlock and forgetting `--encrypt` produced
+an unencrypted disk with no indication the flag had been dropped. Options
+belonging to one unlock method given with another are refused for the same
+reason.
+
+`build-image.sh --check-only` validates the options and builds nothing, and the
+build dialog applies the same rules as you type.
+
+Three related bugs are fixed: `--keep-path`/`--reset-on-update` were silently
+discarded by the `stateful` and `appliance` models; the package-database paths
+were added twice on `stateful` and redundantly on `appliance`; and the keep that
+protects LUKS enrollment sat on the one model that never reset `/etc`, so it did
+nothing there and was missing everywhere it mattered. Documentation described a
+state model named `paths` that does not exist.
+
+**Writable state is now reset when a slot's image changes, not when the slot
+changes.** With a per-slot upper layer, booting the other slot and back cleared
+state that nothing had invalidated — so the one thing `--slot-private-upper` is
+for, each slot keeping its own state, was the thing it did not do. The machine
+now keys on the slot's filesystem UUID, which changes when an update rewrites
+that slot and at no other time. Slot-private path stores were being re-seeded on
+every slot change too, and follow the same rule now; that applies to shared-upper
+images as well.
+
+**Active sign-ins are visible and can be ended individually.** Administrators
+could see a user's login *history* and terminate *all* of their sessions, but had
+no way to see who was signed in right now or to cut off one session — a laptop
+left logged in somewhere meant signing that person out everywhere. Users →
+Active sign-ins lists every current session with device, address and last
+activity; terminating one closes any terminal open on it and revokes its
+certificates rather than only marking the row revoked. Requires
+`Session.Terminate`, the same permission the existing bulk action carries.
+
+---
+
 ## v1.1.0 — 2026-09-11
 
 Two gaps in what the scanners can see. Neither needed a new scanner: both are

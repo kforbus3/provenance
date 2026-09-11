@@ -185,3 +185,54 @@ func (s *Store) ListAuthEvents(ctx context.Context, userID *uuid.UUID, limit int
 	}
 	return out, rows.Err()
 }
+
+// ActiveSession is a live session with the username attached, for the admin
+// "who is signed in right now" view. models.Session carries only a user id, and
+// a list of UUIDs is not something an operator can act on.
+type ActiveSession struct {
+	models.Session
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+// ListActiveSessions returns every session that is currently usable, newest
+// activity first, across all users.
+//
+// "Currently usable" is not the same test ListUserSessions applies. That one
+// filters on revoked_at alone, which is right for its callers -- they are about
+// to end every one of them, and ending an already-expired session is harmless.
+// It is wrong for a display: an expired row is not somebody signed in, and
+// showing it invites an operator to terminate a session that ended by itself
+// days ago, then wonder why nothing changed.
+//
+// The bound matters because this is the query behind a screen an operator reads
+// to decide whether to cut somebody off.
+func (s *Store) ListActiveSessions(ctx context.Context, limit int) ([]ActiveSession, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.id, s.user_id, COALESCE(host(s.ip),''), s.user_agent, s.mfa_passed,
+		       s.created_at, s.last_seen_at, s.expires_at, s.revoked_at,
+		       u.username, u.display_name
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.revoked_at IS NULL AND s.expires_at > now()
+		ORDER BY s.last_seen_at DESC NULLS LAST
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ActiveSession{}
+	for rows.Next() {
+		var a ActiveSession
+		if err := rows.Scan(&a.ID, &a.UserID, &a.IP, &a.UserAgent, &a.MFAPassed,
+			&a.CreatedAt, &a.LastSeenAt, &a.ExpiresAt, &a.RevokedAt,
+			&a.Username, &a.DisplayName); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

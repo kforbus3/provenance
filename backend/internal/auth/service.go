@@ -348,6 +348,23 @@ func (s *Service) endSession(ctx context.Context, sessionID uuid.UUID) error {
 	return s.store.RevokeSession(ctx, sessionID)
 }
 
+// DestroySession ends ONE session: zeroizes its private key, revokes its
+// certificates, closes any live terminal or SFTP channel on it, and marks the
+// row revoked.
+//
+// Exported so an operator can cut off a single sign-in rather than all of a
+// user's. The distinction matters for the case this exists for -- a laptop left
+// logged in somewhere, or one suspicious session among several -- where ending
+// every session is a blunter answer than the situation calls for.
+//
+// It has to be this and not store.RevokeSession. That marks the row and nothing
+// else: the terminal stays open, the certificate stays valid until it expires,
+// and the key stays in memory. An operator who clicked "terminate" would be told
+// it worked while the session they were worried about carried on.
+func (s *Service) DestroySession(ctx context.Context, sessionID uuid.UUID) error {
+	return s.endSession(ctx, sessionID)
+}
+
 // DestroyUserSessions ends every active session for a user — zeroizing each
 // session's private key and revoking its certificates. Call before disabling or
 // deleting an account so the user's credentials are immediately useless.

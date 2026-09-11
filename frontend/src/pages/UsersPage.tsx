@@ -23,6 +23,7 @@ import {
   type AuthEvent, type CreateUserInput, type User,
 } from "../api/admin";
 import { useAuthStore } from "../store/auth";
+import { ActiveSessionsPanel } from "../components/ActiveSessionsPanel";
 
 // The server's error body, when present, explains guard refusals ("cannot
 // demote the last active super administrator") — show it over a generic snack.
@@ -397,6 +398,12 @@ export function UsersPage() {
         </DialogContent>
         <DialogActions><Button onClick={() => setRolesUser(null)}>Close</Button></DialogActions>
       </Dialog>
+
+      {/* Who is signed in right now. Beside the user list because that is where
+          an operator already is when they are deciding whether somebody should
+          still have access — and because the per-user "terminate all sessions"
+          action lives there too, which is the blunter version of the same job. */}
+      <ActiveSessionsPanel />
 
       <Snackbar
         open={Boolean(snack)} autoHideDuration={3000} onClose={() => setSnack(null)}

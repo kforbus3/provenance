@@ -299,3 +299,29 @@ export async function listSettings(): Promise<Settings> {
 export async function setSetting(key: string, value: unknown): Promise<void> {
   await api.put(`/api/v1/settings/${encodeURIComponent(key)}`, value);
 }
+
+// A browser sign-in that is still usable — not an SSH session recording, which
+// is what SessionsPage shows. The two are different things with the same word.
+export interface ActiveSession {
+  id: string;
+  userId: string;
+  username: string;
+  displayName?: string;
+  ip?: string;
+  userAgent?: string;
+  mfaPassed: boolean;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+}
+
+export async function listActiveSessions(): Promise<ActiveSession[]> {
+  const { data } = await api.get<{ sessions: ActiveSession[] }>(`/api/v1/sessions`);
+  return data.sessions ?? [];
+}
+
+// Ends one sign-in rather than all of a user's: the server closes any live
+// terminal on it and revokes its certificates, not only marks it revoked.
+export async function terminateSession(id: string): Promise<void> {
+  await api.delete(`/api/v1/sessions/${id}`);
+}

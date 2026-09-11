@@ -566,3 +566,50 @@ func (h *handler) cutHostAccessNow(ctx context.Context, userID, hostID uuid.UUID
 		_, _, _ = h.d.DistributeKRL(ctx)
 	}
 }
+
+// listActiveSessions returns everyone signed in right now, across all users.
+//
+// This is an oversight view, not a self-service one. "My sessions" would be a
+// different endpoint with a different answer, and returning the caller's own
+// sessions here would look like the feature while being useless for the job it
+// exists for: seeing who is on the system and cutting off the one that should
+// not be.
+func (h *handler) listActiveSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := h.d.Store.ListActiveSessions(r.Context(), 200)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load sessions")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+// terminateSession ends one session rather than all of a user's.
+func (h *handler) terminateSession(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+	sess, err := h.d.Store.GetSession(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "no such session")
+		return
+	}
+	// The same guard the bulk terminate applies, for the same reason. Without it
+	// the per-session route is a way around it: an admin who may not terminate a
+	// super-administrator's sessions could end them one at a time and reach the
+	// identical result, which is the shape a permission check takes when a new
+	// endpoint is added beside an old one and only the old one was guarded.
+	if h.guardSuperTarget(w, r, sess.UserID) {
+		return
+	}
+	// Not store.RevokeSession: that marks the row and leaves the live terminal
+	// open and the certificate valid. See auth.DestroySession.
+	if err := h.d.Auth.DestroySession(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not terminate session")
+		return
+	}
+	h.audit(r, "session.terminate", "session", id.String(),
+		map[string]any{"userId": sess.UserID.String()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "session_terminated"})
+}
