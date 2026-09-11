@@ -2,44 +2,49 @@ package imaging
 
 import "testing"
 
-// The overlay client has to be IN the image.
+// The overlay client has to be the one the MACHINE needs, not the one the
+// deployment's default names.
 //
-// Enrollment installs openvpn (or wireguard-tools) onto a running host with the
-// package manager, which puts it in /usr — and /usr is exactly what an A/B
-// update replaces. The config, certificates and keys live in /etc and survive,
-// because the overlay carries /etc across. The binary and its systemd unit do
-// not.
+// hosts.overlay is a per-host column; cfg.Overlay is only the fallback for a host
+// that has not chosen. Keying on the config alone built an image carrying
+// wireguard-tools -- correct for a deployment whose default resolves to WireGuard
+// -- for a rebuild of a machine enrolled with openvpn. That image would have
+// reproduced the exact failure it was built to fix: the machine comes up with a
+// complete OpenVPN configuration, its certificates intact in /etc, and no
+// openvpn binary to run any of it, then drops off the overlay silently.
 //
-// So a machine enrolled on the VPN, updated once, comes up on the new slot with
-// a complete OpenVPN configuration, its certificate, its key, and nothing to run
-// them with:
-//
-//	command -v openvpn      → (nothing)
-//	systemctl is-enabled …  → No such file or directory
-//	ls /etc/openvpn/fleet/  → ca.crt  client.crt  client.ovpn
-//
-// and silently leaves the overlay. Observed on a real machine. It is not a rare
-// case; it is every A/B machine, on its first update.
-
-func TestOverlayClientIsNamedForEachOverlay(t *testing.T) {
-	for _, tc := range []struct{ overlay, want string }{
+// Caught by reading the built image's package manifest rather than by trusting
+// the build's success, on a real rebuild of a real host.
+func TestOverlayClientPackage(t *testing.T) {
+	for _, c := range []struct{ mode, want string }{
 		{"openvpn", "openvpn"},
-		{"wireguard", "wireguard-tools"},
-		{"OpenVPN", "openvpn"}, // the setting is not case-normalised anywhere else
+		{"OpenVPN", "openvpn"}, // the column is not normalised on write
 		{" wireguard ", "wireguard-tools"},
+		{"wireguard", "wireguard-tools"},
+		{"", ""},          // unset: guessing would put a VPN on every machine
+		{"tailscale", ""}, // unknown: silence beats a wrong package
 	} {
-		if got := overlayClientPackage(tc.overlay); got != tc.want {
-			t.Errorf("overlayClientPackage(%q) = %q, want %q", tc.overlay, got, tc.want)
+		if got := overlayClientPackage(c.mode); got != c.want {
+			t.Errorf("overlayClientPackage(%q) = %q, want %q", c.mode, got, c.want)
 		}
 	}
 }
 
-// Unset means the deployment has not chosen one. Guessing would put a VPN client
-// on every machine for an overlay that may never be used.
-func TestNoOverlayMeansNoPackage(t *testing.T) {
-	for _, overlay := range []string{"", "   ", "none", "something-else"} {
-		if got := overlayClientPackage(overlay); got != "" {
-			t.Errorf("overlayClientPackage(%q) = %q, want empty", overlay, got)
-		}
+// A fleet running both transports must get both clients, and in a stable order:
+// an image is not built for one host, so it cannot pick.
+func TestOverlayClientsForMixedFleet(t *testing.T) {
+	pkgs := overlayClientsFor("wireguard", []string{"openvpn", "wireguard", "openvpn", ""})
+	if len(pkgs) != 2 || pkgs[0] != "openvpn" || pkgs[1] != "wireguard-tools" {
+		t.Fatalf("got %v, want [openvpn wireguard-tools] — sorted and deduplicated", pkgs)
+	}
+
+	// The configured default alone, when no host has overridden it.
+	if pkgs := overlayClientsFor("openvpn", nil); len(pkgs) != 1 || pkgs[0] != "openvpn" {
+		t.Errorf("got %v, want [openvpn]", pkgs)
+	}
+
+	// Nothing configured and no host enrolled: add nothing rather than guess.
+	if pkgs := overlayClientsFor("", nil); len(pkgs) != 0 {
+		t.Errorf("got %v, want none", pkgs)
 	}
 }

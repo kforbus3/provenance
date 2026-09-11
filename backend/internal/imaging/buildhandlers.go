@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -134,12 +135,31 @@ func (h *handler) startBuild(w http.ResponseWriter, r *http.Request) {
 	// flows through the sidecar to build-image.sh AND is installed in the
 	// transaction that runs after EPEL is enabled -- which openvpn needs on the
 	// rpm family, where it is not in any base repository.
+	//
+	// Every transport the FLEET uses, not just the configured default. The
+	// transport is a per-host column (hosts.overlay) and the config value is only
+	// the fallback for a host that has not chosen. Keying on the config alone
+	// built an image carrying wireguard-tools for a deployment whose default
+	// resolved to WireGuard, while the machine it was being rebuilt for was
+	// enrolled with openvpn -- so the rebuilt image would have reproduced the
+	// exact failure it was meant to fix, and the machine would have come up with
+	// a complete OpenVPN configuration and no openvpn to run it.
+	//
+	// An image is not built for one host, so it cannot pick; it carries the
+	// clients the fleet actually needs. Two small packages is the right price for
+	// not having to know in advance which machine an image will be written to.
 	if kind == "image" {
-		if pkg := overlayClientPackage(h.svc.cfg.Overlay); pkg != "" {
-			existing := asString(body["packages"])
+		// Best-effort: a database that cannot answer must not stop a build. The
+		// configured default is covered either way.
+		inUse, _ := h.svc.store.OverlayModesInUse(r.Context())
+		existing := asString(body["packages"])
+		for _, pkg := range overlayClientsFor(h.svc.cfg.Overlay, inUse) {
 			if !strings.Contains(existing, pkg) {
-				body["packages"] = strings.TrimSpace(existing + " " + pkg)
+				existing = strings.TrimSpace(existing + " " + pkg)
 			}
+		}
+		if existing != "" {
+			body["packages"] = existing
 		}
 	}
 
@@ -738,6 +758,26 @@ func (h *handler) setAssignments(w http.ResponseWriter, r *http.Request) {
 //
 // Same package name on both families; what differs is where it comes from, and
 // that is already handled by installing it in the post-EPEL transaction.
+
+// overlayClientsFor is the set of overlay client packages an image must carry:
+// the configured default, plus every transport an enrolled host is actually
+// using. Sorted and deduplicated, so the same inputs always produce the same
+// package list.
+func overlayClientsFor(configured string, inUse []string) []string {
+	want := map[string]bool{}
+	for _, m := range append([]string{configured}, inUse...) {
+		if pkg := overlayClientPackage(m); pkg != "" {
+			want[pkg] = true
+		}
+	}
+	pkgs := make([]string, 0, len(want))
+	for pkg := range want {
+		pkgs = append(pkgs, pkg)
+	}
+	sort.Strings(pkgs)
+	return pkgs
+}
+
 func overlayClientPackage(overlay string) string {
 	switch strings.ToLower(strings.TrimSpace(overlay)) {
 	case "openvpn":

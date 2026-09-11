@@ -652,3 +652,29 @@ func (s *Store) SetHostSSHUser(ctx context.Context, hostID uuid.UUID, user strin
 		 WHERE id=$1 AND (ssh_user IS NULL OR ssh_user='')`, hostID, user)
 	return err
 }
+
+// OverlayModesInUse returns the distinct overlay transports enrolled hosts are
+// actually using, ignoring hosts that have not chosen one.
+//
+// The transport is a PER-HOST column, and the global config value is only the
+// default applied when a host has not overridden it. Anything that reasons about
+// "which overlay does this deployment use" from the config alone is wrong the
+// moment one host differs -- which is the normal case for a deployment that has
+// migrated, or one running a FIPS host beside non-FIPS ones.
+func (s *Store) OverlayModesInUse(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT overlay FROM hosts WHERE COALESCE(overlay,'') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
