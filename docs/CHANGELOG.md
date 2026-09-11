@@ -5,7 +5,125 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.0.0 — Provenance — 2026-09-10
+
+**First release of the combined product.** The version starts at 1.0.0 because
+this is the first release of Provenance: the earlier v1.x and v2.x tags belong to
+the SSH control plane this grew out of, on a lineage that is not an ancestor of
+this one.
+
+**The product is now Provenance.** Brand and Go module path only — every
+`FLEET_*` setting, binary name, `.fleetup` bundle, compose project, container
+name and database object is unchanged, so nothing on a deployed machine has to
+change because the product got a name. The container names in particular stay
+`blackfriars-`: the Docker socket proxy's allowlist keys off that prefix to
+decide what may be created, and renaming it would turn a security control into a
+refusal to build anything.
+
+
+### Updates that could never have worked
+
+Four defects each made an A/B machine unupdatable, and every one of them let the
+machine image, boot and run perfectly first — rauc is used for nothing else, so
+nothing failed until the first update was attempted.
+
+- **rpm images shipped without the libraries rauc links against.** `dnf remove` of
+  the build toolchain took `json-glib` with it, because rauc is built from source
+  and rpm has no record that anything needs it. The build even verified rauc —
+  *before* the cleanup that broke it. Verified after it now, fatally.
+- **rpm images shipped without `tar`.** A bundle's payload is a tar archive, and
+  `dnf --installroot` installs exactly what it is told. Updates failed at 99%,
+  after a full download and a verified signature. The same family difference as
+  the resolver: tar is Essential on Debian, so the deb path never had to ask.
+- **A machine's old failure decided every subsequent rollout.** The agent
+  remembers what it is mid-way through and keeps reporting it; it sends the
+  rollout id alongside and nothing read it. So a machine that failed once failed
+  every rollout afterwards, instantly, with `attempts=0` — and fixing the cause
+  could not clear it.
+- **Every enrolled machine dropped off the VPN on its first update.** Enrollment
+  installs the overlay client with the package manager, into `/usr`, which is
+  exactly what an update replaces. The config, certificate and key survive in
+  `/etc`; the binary does not. Images now carry the client.
+
+### Reaching machines that have moved
+
+A machine is imaged on a provisioning segment and then moved. `FLEET_CONTROL_URL`
+tells it where the server lives afterwards — but setting it does nothing unless
+something serves `/bundles/` at that address, and the provisioning listener is
+bound to the imaging segment on purpose. `UPDATE_IP` switches on a second
+listener for exactly this. Both are now documented; neither was.
+
+- **Rollouts can target individual hosts**, not only a group or the whole fleet.
+  The backend always accepted it; only the dialog was missing.
+- **An enrolled host can be registered as an updatable machine** from its own
+  page, reading its real slot and version over SSH rather than assuming them. A
+  host with no machine record is invisible to every rollout including a
+  fleet-wide one, and that is the way out.
+- **Bundle builds take the LUKS passphrase from the vault** rather than asking
+  for one the server filed itself fifteen minutes earlier.
+- **Finished rollouts can be cleared.**
+
+### Recovery keys you can still find
+
+A machine's LUKS header is written once, at imaging time, and no update touches
+it — so a machine keeps the passphrase of the image it was *imaged* from for
+life, and its current version tells you nothing about which credential opens it.
+Deleting a retired image's credential therefore destroys the only recovery key
+for every machine imaged from it, silently.
+
+Credentials now show how many machines depend on them, and the server refuses the
+deletion while any do (`?force=true` overrides, audited separately). The
+relationship needed no new data — machines already record the image they came
+from — only for something to look.
+
+### Security
+
+- **Every client IP behind the proxy was being discarded.** The trusted-proxy
+  list was used to decide both "may this peer set XFF" and "is this entry a
+  proxy" — and it defaults to all of RFC1918, so every private client was
+  classified as a proxy and thrown away. One shared auth rate-limit bucket for an
+  entire organisation, and an audit log recording where requests were relayed.
+  It was also spoofable in the case it existed to prevent. Replaced with a hop
+  count, `FLEET_TRUSTED_PROXY_HOPS`.
+- **Audit IPs could be forged.** Four handlers read the left-most
+  `X-Forwarded-For` entry — the one the caller writes — so any authenticated user
+  could choose the address recorded against their Kubernetes exec, database query,
+  SFTP transfer or ad-hoc command.
+- **Two imaging routes skipped the access check their siblings enforce**, letting
+  a host-group-scoped operator hold or delete a machine they cannot see.
+- **Production refuses to boot misconfigured**: a localhost `FLEET_PUBLIC_URL`,
+  or `FLEET_COOKIE_SECURE=false` while serving https. Both booted cleanly before
+  and failed later, somewhere else.
+
+### Performance and correctness
+
+- `ListHosts` returned 100 rows when asked for 10000 — over-limit collapsed to the
+  default rather than the maximum, so machines paired to hosts later in the
+  alphabet rendered as unpaired.
+- Manual vulnerability scans fanned out one unbounded goroutine per host.
+- The session list scanned the whole recordings table on every page load.
+- Indexes for the growth tables that were being sequentially scanned;
+  `sftp_transfers` had none at all beyond its primary key.
+
+### Fit and finish
+
+- **The sidebar is grouped.** Thirty-five items in one flat list became seven
+  sections. Two pages were also in the wrong place: `/security` is your own
+  two-factor and passkeys, not fleet posture, and Approvals is a personal inbox.
+- **A failed playbook alert names the hosts that failed**, rather than every host
+  it ran against with ansible's exit code as the reason.
+- **An `ab-update` playbook template**, with the parts that are easy to get wrong
+  already decided — the reboot is opt-in, and a machine that returns on the slot
+  it started on has *failed*, because that is GRUB falling back.
+
+### Known and deliberate
+
+- **Data retention ships off.** Turning it on would silently delete audit history,
+  which is not a default anybody should inherit. Set `FLEET_AUDIT_RETENTION` and
+  `FLEET_ACTIVITY_RETENTION` deliberately.
+- Evidence-pack PDFs materialise their whole date range in memory; command search
+  cannot use its index; the monitor sweep is bounded at 16 workers regardless of
+  fleet size. All three are real and none is a small change.
 
 **Provenance is Moorgate and Flipside as one program.** Not one product driving
 the other over an API — one codebase, one database, one set of host groups, one
