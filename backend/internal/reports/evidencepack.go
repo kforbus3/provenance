@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-pdf/fpdf"
@@ -30,26 +29,15 @@ type packMeta struct {
 // carry the full line-item detail). Data is gathered by reusing the CSV export
 // queries and summarized in memory, so the pack can never disagree with the CSVs.
 func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte, error) {
-	sessions, err := st.ExportSSHSessions(ctx, m.From, m.To)
+	// Counts, not rows. See store.EvidenceSummaryFor: the pack prints fourteen
+	// scalars, and it used to obtain them by materialising every session,
+	// certificate, scan, finding and audit event in the window -- with the audit
+	// detail JSON untruncated -- and measuring the slices in Go.
+	sum, err := st.EvidenceSummaryFor(ctx, m.From, m.To)
 	if err != nil {
 		return nil, err
 	}
-	certs, err := st.ExportCertificates(ctx, m.From, m.To)
-	if err != nil {
-		return nil, err
-	}
-	scans, err := st.ExportScans(ctx, m.From, m.To)
-	if err != nil {
-		return nil, err
-	}
-	vulns, err := st.ExportVulnScanFindings(ctx, m.From, m.To)
-	if err != nil {
-		return nil, err
-	}
-	audit, err := st.ExportAuditEvents(ctx, m.From, m.To)
-	if err != nil {
-		return nil, err
-	}
+
 	// The integrity attestation covers the ENTIRE chain (integrity is a global
 	// property — a broken link anywhere is a problem), not just the window. Verify
 	// under bypass so it sees every event: the hash chain is a single global
@@ -136,32 +124,32 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 
 	// --- privileged access ---
 	h2("Privileged Access (SSH sessions)")
-	kv("Sessions in period", strconv.Itoa(len(sessions.Rows)))
-	kv("Distinct users", strconv.Itoa(distinct(sessions.Rows, 0)))
-	kv("Distinct hosts reached", strconv.Itoa(distinct(sessions.Rows, 1)))
+	kv("Sessions in period", strconv.Itoa(sum.Sessions))
+	kv("Distinct users", strconv.Itoa(sum.SessionUsers))
+	kv("Distinct hosts reached", strconv.Itoa(sum.SessionHosts))
 
 	// --- certificate issuance ---
 	h2("Certificate Issuance (ephemeral SSH credentials)")
-	kv("Certificates issued", strconv.Itoa(len(certs.Rows)))
-	kv("Of which revoked", strconv.Itoa(countNonEmpty(certs.Rows, 8))) // revoked_at column
+	kv("Certificates issued", strconv.Itoa(sum.CertsIssued))
+	kv("Of which revoked", strconv.Itoa(sum.CertsRevoked))
 
 	// --- scan posture ---
 	h2("Security Scan Posture")
-	kv("Scans run", strconv.Itoa(len(scans.Rows)))
-	kv("Completed", strconv.Itoa(countEqual(scans.Rows, 2, "completed")))
-	kv("Rules passed / failed", fmt.Sprintf("%d / %d", sumInt(scans.Rows, 4), sumInt(scans.Rows, 5)))
+	kv("Scans run", strconv.Itoa(sum.Scans))
+	kv("Completed", strconv.Itoa(sum.ScansCompleted))
+	kv("Rules passed / failed", fmt.Sprintf("%d / %d", sum.RulesPassed, sum.RulesFailed))
 
 	// --- vulnerabilities ---
 	h2("Vulnerabilities (CVE findings)")
-	kv("Total findings", strconv.Itoa(len(vulns.Rows)))
-	kv("Critical", strconv.Itoa(countSeverity(vulns.Rows, 6, "critical")))
-	kv("High", strconv.Itoa(countSeverity(vulns.Rows, 6, "high")))
+	kv("Total findings", strconv.Itoa(sum.VulnFindings))
+	kv("Critical", strconv.Itoa(sum.VulnCritical))
+	kv("High", strconv.Itoa(sum.VulnHigh))
 
 	// --- privileged command activity ---
 	h2("Privileged-Command Activity")
-	kv("Audited events in period", strconv.Itoa(len(audit.Rows)))
-	kv("Commands flagged by policy", strconv.Itoa(countPrefix(audit.Rows, 2, "command.flagged")))
-	kv("Commands blocked by policy", strconv.Itoa(countPrefix(audit.Rows, 2, "command.blocked")))
+	kv("Audited events in period", strconv.Itoa(sum.AuditEvents))
+	kv("Commands flagged by policy", strconv.Itoa(sum.CommandsFlagged))
+	kv("Commands blocked by policy", strconv.Itoa(sum.CommandsBlocked))
 
 	pdf.Ln(6)
 	note("This pack is a summary. Full line-item detail for each section is available as a CSV export " +
@@ -176,65 +164,3 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 }
 
 // --- summary helpers over ReportTable rows (string cells) ---
-
-func distinct(rows [][]string, col int) int {
-	seen := map[string]struct{}{}
-	for _, r := range rows {
-		if col < len(r) && r[col] != "" {
-			seen[r[col]] = struct{}{}
-		}
-	}
-	return len(seen)
-}
-
-func countNonEmpty(rows [][]string, col int) int {
-	n := 0
-	for _, r := range rows {
-		if col < len(r) && strings.TrimSpace(r[col]) != "" {
-			n++
-		}
-	}
-	return n
-}
-
-func countEqual(rows [][]string, col int, want string) int {
-	n := 0
-	for _, r := range rows {
-		if col < len(r) && r[col] == want {
-			n++
-		}
-	}
-	return n
-}
-
-func countSeverity(rows [][]string, col int, want string) int {
-	n := 0
-	for _, r := range rows {
-		if col < len(r) && strings.EqualFold(r[col], want) {
-			n++
-		}
-	}
-	return n
-}
-
-func countPrefix(rows [][]string, col int, prefix string) int {
-	n := 0
-	for _, r := range rows {
-		if col < len(r) && strings.HasPrefix(r[col], prefix) {
-			n++
-		}
-	}
-	return n
-}
-
-func sumInt(rows [][]string, col int) int {
-	sum := 0
-	for _, r := range rows {
-		if col < len(r) {
-			if v, err := strconv.Atoi(strings.TrimSpace(r[col])); err == nil {
-				sum += v
-			}
-		}
-	}
-	return sum
-}

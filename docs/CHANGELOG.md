@@ -5,6 +5,37 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.0.1 — 2026-09-11
+
+The three performance limits v1.0.0 documented rather than fixed.
+
+- **The evidence pack loaded five whole tables to print fourteen numbers.** Every
+  session, certificate, scan, finding and audit event in the window — with the
+  audit detail JSON untruncated — materialised at once so the pack could call
+  `len()` on them. The date range came from the caller and had no maximum, so
+  `?from=1970-01-01` was a supported request. Counted in SQL now, from the same
+  tables with the same filters, so the pack still cannot disagree with the CSVs
+  it attaches. The window is capped at two years, clamped rather than rejected.
+- **Command search could never use its index.** The query matches a term as
+  full-text OR as a substring, on purpose, so both `systemctl restart` and
+  `rm -rf` work — but Postgres cannot build a bitmap over an OR unless both
+  branches are indexable, and `ILIKE '%…%'` is not without trigrams. So every
+  search sequentially scanned `session_commands`, the table that grows by one row
+  per command typed in every recorded session and has no retention path of its
+  own. With pg_trgm the plan is a `BitmapOr` over two index scans; verified on a
+  real database.
+- **The monitor probed a host's three addresses one at a time**, each waiting a
+  full SSH timeout before the next, inside a sweep capped at 16 workers — a cap
+  that exists to protect the jump host and so cannot be raised. An unreachable
+  host cost three timeouts of a slot instead of one. The dials now race and the
+  first answer wins, turning the sum into the max; the overlay address still wins
+  a tie, because reaching a host over the overlay is what proves the overlay
+  works. Each probe also has a deadline now: the sweep's own context is the
+  server's and had none, so a host that completed its handshake and then went
+  silent held a worker slot indefinitely.
+
+Also: an upgrade bundle is published with this release.
+
 ## v1.0.0 — Provenance — 2026-09-10
 
 **First release of the combined product.** The version starts again at 1.0.0
@@ -127,9 +158,8 @@ from — only for something to look.
 - **Data retention ships off.** Turning it on would silently delete audit history,
   which is not a default anybody should inherit. Set `FLEET_AUDIT_RETENTION` and
   `FLEET_ACTIVITY_RETENTION` deliberately.
-- Evidence-pack PDFs materialise their whole date range in memory; command search
-  cannot use its index; the monitor sweep is bounded at 16 workers regardless of
-  fleet size. All three are real and none is a small change.
+(The three performance limits listed here before release are now fixed in
+v1.0.1.)
 
 **Provenance is Moorgate and Flipside as one program.** Not one product driving
 the other over an API — one codebase, one database, one set of host groups, one

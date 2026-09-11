@@ -590,7 +590,20 @@ func windowsPrimaryIP(ifaces []winrm.Iface, wgAddr string) string {
 // records latency, uptime, and SSH/WireGuard health. When the host is online and
 // its inventory is missing or stale, it also re-collects host facts (distro,
 // kernel, etc.) over the same connection and returns them for persistence.
+// probeTimeout bounds a single host's probe: three concurrent dials plus the
+// commands that follow. Generous enough for a slow link, short enough that one
+// wedged host costs a slot for seconds rather than for ever.
+const probeTimeout = 45 * time.Second
+
 func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.Injection, h *models.Host) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
+	// A ceiling on one host, because the sweep's own context is the server's and
+	// has no deadline at all. A host that completes its TCP handshake and then
+	// stops responding -- a wedged sshd, a silently-dropping firewall -- otherwise
+	// holds one of sixteen worker slots indefinitely, and the sweep degrades a
+	// slot at a time with nothing logged to say so.
+	ctx, cancelProbe := context.WithTimeout(ctx, probeTimeout)
+	defer cancelProbe()
+
 	now := time.Now()
 	st := models.HostStatus{Status: "unknown", CheckedAt: &now}
 
@@ -601,23 +614,74 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 		loginUser = inj.LoginUser
 	}
 
+	// All three addresses at once, first success wins.
+	//
+	// This used to try them in turn, and each dial waits the full SSH timeout
+	// before the next is attempted -- so an unreachable host held a worker slot
+	// for three timeouts rather than one. The sweep runs at most 16 workers
+	// (deliberately: a larger fan-out trips the jump host's MaxStartups), so on a
+	// fleet of a thousand with a handful unreachable, a "30-second" sweep took
+	// minutes and nothing in the configuration could help.
+	//
+	// Racing them costs at most two extra dials for a host that is up, which is
+	// the cheap case, and turns the expensive case from the SUM of the timeouts
+	// into the MAX of them.
 	candidates := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
 	var conn *sshgw.Conn
 	var dialErr error
-	for _, addr := range candidates {
-		start := time.Now()
-		if inj != nil {
-			conn, dialErr = m.gw.DialSystemAuthViaJump(ctx, h.ID, addr, h.SSHPort, loginUser, inj.Auth)
-		} else {
-			conn, dialErr = m.gw.DialWithSigner(ctx, signer, addr, h.SSHPort, loginUser)
+	var usedAddr string
+	{
+		type result struct {
+			conn *sshgw.Conn
+			addr string
+			lat  int
+			err  error
 		}
-		if dialErr == nil {
-			lat := int(time.Since(start).Milliseconds())
-			st.LatencyMS = &lat
-			// If we reached it via the WireGuard address, the overlay is healthy.
-			st.WGOK = addr == h.WGAddress && h.WGAddress != ""
-			break
+		// Cancelled as soon as one succeeds, so the losing dials stop rather than
+		// running on in the background holding jump-host slots.
+		dctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		results := make(chan result, len(candidates))
+		for _, addr := range candidates {
+			go func(addr string) {
+				start := time.Now()
+				var c *sshgw.Conn
+				var err error
+				if inj != nil {
+					c, err = m.gw.DialSystemAuthViaJump(dctx, h.ID, addr, h.SSHPort, loginUser, inj.Auth)
+				} else {
+					c, err = m.gw.DialWithSigner(dctx, signer, addr, h.SSHPort, loginUser)
+				}
+				results <- result{c, addr, int(time.Since(start).Milliseconds()), err}
+			}(addr)
 		}
+		// The overlay address is preferred when more than one answers, because
+		// reaching a host over the overlay is also what proves the overlay works
+		// -- so a race won by the LAN address must not report wgOk=false for a
+		// host whose tunnel is fine. Wait for every dial to settle before
+		// deciding; they are concurrent, so that costs the slowest, not the sum.
+		for range candidates {
+			r := <-results
+			if r.err != nil {
+				if dialErr == nil {
+					dialErr = r.err
+				}
+				continue
+			}
+			if conn == nil || (r.addr == h.WGAddress && h.WGAddress != "") {
+				if conn != nil {
+					conn.Close()
+				}
+				conn, usedAddr = r.conn, r.addr
+				lat := r.lat
+				st.LatencyMS = &lat
+				dialErr = nil
+			} else {
+				r.conn.Close()
+			}
+		}
+		// If we reached it via the WireGuard address, the overlay is healthy.
+		st.WGOK = usedAddr == h.WGAddress && h.WGAddress != ""
 	}
 	if dialErr != nil || conn == nil {
 		st.Status = "offline"

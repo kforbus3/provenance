@@ -112,8 +112,23 @@ func dateRange(r *http.Request) (from, to time.Time) {
 			to = t
 		}
 	}
+	// A ceiling on the window, because the caller picks it and the server does the
+	// work. Every export streams now and the pack counts in SQL, so a long range
+	// is no longer ruinous -- but "no maximum at all" means ?from=1970-01-01 is a
+	// supported request, and there is no version of that which anybody wants.
+	//
+	// Clamped rather than rejected: an auditor asking for everything should get
+	// the most recent maxReportWindow of it, not an error telling them to ask
+	// again with arithmetic.
+	if to.Sub(from) > maxReportWindow {
+		from = to.Add(-maxReportWindow)
+	}
 	return from, to
 }
+
+// maxReportWindow bounds an export or evidence pack. Two years covers the
+// retention periods anybody sets and the audits anybody runs.
+const maxReportWindow = 2 * 366 * 24 * time.Hour
 
 func parseDate(v string, endOfDay bool) (time.Time, bool) {
 	if t, err := time.Parse(time.RFC3339, v); err == nil {
