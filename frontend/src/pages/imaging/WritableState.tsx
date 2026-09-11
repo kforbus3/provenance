@@ -1,5 +1,5 @@
 import { Alert, Grid, MenuItem, Stack, Switch, FormControlLabel, TextField, Typography } from "@mui/material";
-import { invalidPaths, type WritableStateValue } from "./writable-state";
+import { combinationProblems, invalidPaths, type WritableStateValue } from "./writable-state";
 
 // The writable-state section of the build dialog.
 //
@@ -18,6 +18,8 @@ export function WritableState({ value, onChange }: {
 }) {
   const set = <K extends keyof WritableStateValue>(k: K, v: WritableStateValue[K]) =>
     onChange({ ...value, [k]: v });
+
+  const problems = combinationProblems(value);
 
   const pathField = (
     k: keyof WritableStateValue,
@@ -46,9 +48,11 @@ export function WritableState({ value, onChange }: {
     <Stack spacing={2}>
       <Typography variant="subtitle2">Writable state</Typography>
       <Typography variant="body2" color="text.secondary">
-        Where a machine's writes go. The root slot is read-only and is replaced
-        wholesale by an A/B update, so anything written there would be destroyed by
-        the next one — this is what survives instead. Space-separated absolute paths.
+        Where a machine's writes go. An A/B update replaces the whole root slot, so
+        this is what decides which writes survive it. Space-separated absolute paths.
+        Under <code>overlay</code> the root is writable and the directories the
+        distribution owns are reset on a slot change; under the other two models the
+        root is genuinely read-only and only the paths listed here can be written.
       </Typography>
 
       <Grid container spacing={2}>
@@ -57,7 +61,7 @@ export function WritableState({ value, onChange }: {
             select fullWidth size="small" label="Model" value={value.stateModel}
             onChange={(e) => set("stateModel", e.target.value)}
             helperText={value.stateModel === "overlay"
-              ? "One overlay over the whole root. Every write lands on the overlay partition."
+              ? "One overlay over the whole root. Every write lands on the overlay partition, but /usr, /boot and the package database are reset on a slot change — so packages installed after imaging do not survive an update."
               : value.stateModel === "appliance"
                 ? "Read-only root with the smallest writable set the system needs to run."
                 : "The root stays read-only and only the paths below are writable."}
@@ -116,6 +120,24 @@ export function WritableState({ value, onChange }: {
         {pathField("ownPaths", "Also owned by the image",
           "Replaced by the image on update rather than preserved.",
           "/opt/app")}
+
+        {/* build-image.sh refuses these outright, so showing them here is the
+            difference between finding out now and finding out when a build that
+            has been running for half an hour stops. */}
+        {problems.length > 0 && (
+          <Grid item xs={12}>
+            <Alert severity="error">
+              <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                {problems.length === 1
+                  ? "This combination will not build"
+                  : `${problems.length} combinations will not build`}
+              </Typography>
+              {problems.map((p) => (
+                <Typography key={p} variant="body2" sx={{ mb: 0.5 }}>{p}</Typography>
+              ))}
+            </Alert>
+          </Grid>
+        )}
       </Grid>
     </Stack>
   );

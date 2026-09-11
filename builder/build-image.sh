@@ -83,11 +83,27 @@ RESET_PATHS="/usr /bin /sbin /lib /lib32 /lib64 /libx32 /boot"
 # image's -- clearing /usr wholesale used to take it, and a script left in
 # /usr/local/bin vanished on the first update with nothing said.
 KEEP_PATHS="/usr/local"
+# What --reset-on-update and --keep-path added, held apart from the two lists
+# above until the state model has set its own. See the parser.
+USER_RESET_PATHS=""
+USER_KEEP_PATHS=""
 SSH_KEY_ONLY="${SSH_KEY_ONLY:-false}"
 COMPRESS="${COMPRESS:-zstd}"
+CHECK_ONLY=false
 # Encryption
 ENCRYPT="${ENCRYPT:-false}"
 UNLOCK="${UNLOCK:-keyfile}"             # passphrase | keyfile | tpm2 | tang
+# Whether --unlock was actually given. The default above is a real value, so
+# without this an unencrypted image cannot tell "operator asked for tpm2" from
+# "nobody said anything", and refusing the second would refuse every build.
+UNLOCK_SET=false
+# Likewise for the passphrase and the tang server. Both also have an environment
+# form (LUKS_PASS, TANG_URL) that the imaging sidecar's container inherits from
+# its own environment, so "is it non-empty" cannot stand in for "did somebody ask
+# for this" -- an ambient value would refuse every unencrypted build the UI runs.
+LUKS_PASS_SET=false
+TANG_URL_SET=false
+TPM2_PCRS_SET=false
 # RAUC is built from source on the RPM family -- there is no package for it in
 # base or EPEL. Pinned rather than tracking a branch: this is the component that
 # decides whether a machine can be updated at all, and it should change when
@@ -180,6 +196,7 @@ Usage: $0 [options]
                           them; on fails the build if it cannot; off keeps the
                           old unsigned layout. A Secure Boot image also boots
                           with Secure Boot disabled.
+  --check-only            Validate the options and exit; build nothing.
   --compress MODE         zstd|gzip|none (default: $COMPRESS)
   --encrypt               LUKS2-encrypt the root slots and overlay
   --unlock METHOD         passphrase|keyfile|tpm2|tang (default: $UNLOCK)
@@ -224,15 +241,23 @@ slot-private $2"; shift 2;;
         --volatile)        # PATH or PATH:SIZE -- the manifest wants them apart
             EXTRA_MOUNTS="$EXTRA_MOUNTS
 volatile ${2%%:*} $(case "$2" in *:*) echo "${2##*:}";; esac)"; shift 2;;
-        --reset-on-update) RESET_PATHS="$RESET_PATHS $2"; shift 2;;
-        --keep-path)       KEEP_PATHS="$KEEP_PATHS $2"; shift 2;;
+        # Collected separately from the model's own lists and merged after it
+        # has chosen them. Appending to RESET_PATHS/KEEP_PATHS directly meant
+        # `--state-model stateful --keep-path /srv` was parsed, stored, and then
+        # thrown away by the model's `KEEP_PATHS=""` a hundred lines later --
+        # accepted without complaint and absent from the image.
+        --reset-on-update) USER_RESET_PATHS="$USER_RESET_PATHS $2"; shift 2;;
+        --keep-path)       USER_KEEP_PATHS="$USER_KEEP_PATHS $2"; shift 2;;
         --ssh-pubkey) SSH_PUBKEY="$(cat "$2")"; shift 2;;
         --ssh-authorized-key) SSH_PUBKEY="$2"; shift 2;;
         --ssh-key-only) SSH_KEY_ONLY=true; shift;;
+        # Validate the options and exit without building. See the block that
+        # acts on it, after the last argument-only check.
+        --check-only) CHECK_ONLY=true; shift;;
         --compress) COMPRESS="$2"; shift 2;;
         --encrypt) ENCRYPT=true; shift;;
-        --unlock) UNLOCK="$2"; shift 2;;
-        --luks-passphrase) LUKS_PASS="$2"; shift 2;;
+        --unlock) UNLOCK="$2"; UNLOCK_SET=true; shift 2;;
+        --luks-passphrase) LUKS_PASS="$2"; LUKS_PASS_SET=true; shift 2;;
         --luks-passphrase-file)
             # Only the first line, and without its newline: a passphrase pasted
             # into a file almost always ends with one, and including it produces
@@ -244,9 +269,10 @@ volatile ${2%%:*} $(case "$2" in *:*) echo "${2##*:}";; esac)"; shift 2;;
                 IFS= read -r LUKS_PASS < "$2" || true
             fi
             [ -n "$LUKS_PASS" ] || die "--luks-passphrase-file: '$2' is empty"
+            LUKS_PASS_SET=true
             shift 2;;
-        --tang-url) TANG_URL="$2"; shift 2;;
-        --tpm2-pcrs) TPM2_PCRS="$2"; shift 2;;
+        --tang-url) TANG_URL="$2"; TANG_URL_SET=true; shift 2;;
+        --tpm2-pcrs) TPM2_PCRS="$2"; TPM2_PCRS_SET=true; shift 2;;
         -h|--help) usage; exit 0;;
         *) echo "Unknown option: $1" >&2; usage; exit 1;;
     esac
@@ -355,10 +381,28 @@ ROOT_FLAG=rw                   # what GRUB passes for the root slot
 case "$STATE_MODEL" in
     overlay)
         # The whole root is one overlay shared by both slots, and the paths the
-        # distribution owns are clawed back on a slot change. Everything a
-        # person does to the machine survives an update, including `apt install`
-        # -- which is the point on a general-purpose Debian fleet, and the
-        # reason this is the default.
+        # distribution owns -- /usr, /bin, /sbin, /lib*, /boot and the package
+        # database -- are clawed back on a slot change. Everything else a person
+        # does to the machine survives an update: /etc, /home, /opt, /srv, /var
+        # and /usr/local are all still there afterwards, which is what makes this
+        # the right default for a general-purpose fleet.
+        #
+        # `apt install` is NOT in that set, and this comment claimed for a long
+        # time that it was. It is not a carve-out that was forgotten; it cannot
+        # work here. A package writes into /usr and records itself in the package
+        # database, and with one upper shared by both slots that database would
+        # survive a slot change describing the other slot's image -- so it is
+        # reset, and the files it no longer accounts for are reset with it.
+        # Keeping either half is worse than losing both: keep the files and
+        # nothing patches them again, keep the database and every later
+        # transaction reasons from a package list that is not what is installed.
+        # Both are refused at the top of this script for exactly that reason.
+        #
+        # Packages a machine needs permanently belong in the image. The other two
+        # models make that unmissable by mounting the root read-only, so the
+        # install fails in front of whoever typed it; this one accepts the write
+        # and discards it at the next slot change, which is the same answer
+        # delivered weeks late.
         :;;
     stateful)
         # /usr is the image's and cannot be written at all, so nothing a machine
@@ -394,13 +438,43 @@ persist /var"
 overlay /var
 persist /data"
         RESET_PATHS="/var"
-        # LUKS enrollment writes the unlock key here after the image was built.
-        # Reverting /etc would undo it and the machine would come up asking for
-        # a passphrase with nobody there to type it.
-        KEEP_PATHS="/etc/cryptsetup-keys.d"
+        # No keeps. This model does not reset /etc -- an operator has to be able
+        # to configure the thing -- so the LUKS-enrollment keep that used to sit
+        # here carved nothing out of anything. It is applied from the reset list
+        # now, above, where it fires for whichever model actually resets /etc.
+        KEEP_PATHS=""
         ;;
     *) die "--state-model: unknown model '$STATE_MODEL' (expected: overlay, stateful, appliance)";;
 esac
+
+# The package database is the one family-specific part of the distribution-owned
+# paths cleared on a slot change, and only the overlay model needs it added: the
+# other two set a complete list of their own just above. It used to be appended
+# 550 lines further down, unconditionally, which was wrong twice over -- stateful
+# names these exact three paths itself, so state.conf shipped each of them twice,
+# and appliance already resets the whole of /var, so it got three redundant
+# children of a path it was clearing anyway.
+#
+# The comment there justified the distance by saying the list is built before the
+# arguments naming the distribution are parsed. That was true of the defaults at
+# the top of the file, but not here: --distro has been parsed and FAMILY resolved
+# for ninety lines by this point. Being here is what lets the validation below
+# see the finished list -- checking a keep path against a reset list that is
+# still missing three entries is how `--keep-path /var/lib/rpm` got refused with
+# a message saying it was not inside anything that gets reset.
+if [ "$STATE_MODEL" = overlay ]; then
+    if [ "$FAMILY" = rpm ]; then
+        RESET_PATHS="$RESET_PATHS /var/lib/rpm /var/lib/dnf /var/cache/dnf"
+    else
+        RESET_PATHS="$RESET_PATHS /var/lib/dpkg /var/lib/apt /var/cache/apt"
+    fi
+fi
+
+# Now the operator's own additions, on top of whichever list the model settled
+# on. Last, so that every model honours the flags rather than only the one whose
+# defaults happen not to be reassigned.
+RESET_PATHS="$RESET_PATHS$USER_RESET_PATHS"
+KEEP_PATHS="$KEEP_PATHS$USER_KEEP_PATHS"
 
 MOUNT_DIRECTIVES="$MOUNT_DIRECTIVES$EXTRA_MOUNTS"
 
@@ -446,6 +520,59 @@ for _p in $RESET_PATHS $KEEP_PATHS; do
     esac
 done
 
+# Resetting /etc on an encrypted image would take the LUKS enrollment with it.
+# The unlock key is written to /etc/cryptsetup-keys.d *after* the build, by
+# enrollment on the machine, so it lives in the writable layer and nowhere in
+# the image -- a reset clears it and the machine comes up asking for a
+# passphrase nobody is there to type. The appliance model used to carry this
+# keep unconditionally, which was a no-op there because appliance does not reset
+# /etc; attached to the condition instead, so it appears exactly when it does
+# something and every model gets it.
+if [ "$ENCRYPT" = true ]; then
+    for _r in $RESET_PATHS; do
+        case /etc/cryptsetup-keys.d in
+            "$_r"|"$_r"/*)
+                case " $KEEP_PATHS " in
+                    *" /etc/cryptsetup-keys.d "*) ;;
+                    *) KEEP_PATHS="$KEEP_PATHS /etc/cryptsetup-keys.d"
+                       log "  keeping /etc/cryptsetup-keys.d: $_r is reset and this image is encrypted";;
+                esac;;
+        esac
+    done
+fi
+
+# A keep is a carve-out from a reset, and only from a reset. ab-overlay moves
+# each keep path aside into /ab-rw/.keep, clears the reset paths, and moves it
+# back; a keep that is not inside any reset path carves nothing out. It is a mv
+# of live data out of the store and back on every single slot change, for no
+# effect -- and on the failing branch of that mv the script drops the path
+# (ab-overlay's `mv ... || remove_path`). So it is not merely useless, it is a
+# way to lose data that was never at risk. It also reads in state.conf as
+# protection the machine is not giving.
+#
+# Equality is the case that matters most. `--keep-path /usr` cancels the reset
+# of /usr outright: the upper's /usr goes on shadowing the lower, and an update
+# installs a new slot whose binaries are never seen. That is exactly the shape
+# of the klibc `rm` bug recorded in ab-overlay -- an update that reports success
+# and changes nothing -- reached this time through the build arguments rather
+# than a missing binary. Refused rather than warned about, because the machine
+# that results looks healthy from every angle except the version it is running.
+for _k in $KEEP_PATHS; do
+    _inside=""
+    for _r in $RESET_PATHS; do
+        [ "$_k" = "$_r" ] && die "--keep-path $_k is also reset on update, so the keep
+    cancels the reset entirely. An update would leave the running slot's $_k
+    shadowing the one it just installed, and the machine would report success
+    while continuing to run the old release.
+    Keep something *inside* it instead (e.g. $_k/local), or drop the reset."
+        case "$_k" in "$_r"/*) _inside=1;; esac
+    done
+    [ -n "$_inside" ] || die "--keep-path $_k is not inside any path that is reset on
+    update, so it keeps nothing -- $_k already survives a slot change under
+    --state-model $STATE_MODEL.
+    Paths reset on update are:$(for _r in $RESET_PATHS; do printf ' %s' "$_r"; done)"
+done
+
 # --slot-private-upper only means anything if something is overlaid. Every model
 # here overlays at least one path, so this is a guard against a future one that
 # does not -- where the flag would otherwise be accepted, do nothing, and leave
@@ -453,6 +580,79 @@ done
 if [ "$UPPER_MODE" = per-slot ] && [ -z "$_ovl" ]; then
     die "--slot-private-upper: state model '$STATE_MODEL' overlays nothing, so there
     is no upper layer to give each slot. Use --slot-private for individual paths."
+fi
+
+# --- Validate options ---
+#
+# Moved up from where it used to sit, 550 lines below, so that it runs before
+# --check-only returns: these rules depend on the arguments and nothing else, so
+# there is no reason to reach them only on a build that has already started
+# fetching packages.
+if [ "$SSH_KEY_ONLY" = true ] && [ -z "$SSH_PUBKEY" ]; then
+    die "--ssh-key-only requires an SSH key (--ssh-pubkey or --ssh-authorized-key)"
+fi
+USE_KEYFILE=false
+if [ "$ENCRYPT" = true ]; then
+    [ -n "$LUKS_PASS" ] || die "--encrypt requires --luks-passphrase"
+    case "$UNLOCK" in
+        passphrase) ;;
+        keyfile|tpm2|tang) USE_KEYFILE=true;;
+        *) die "--unlock must be passphrase|keyfile|tpm2|tang";;
+    esac
+    [ "$UNLOCK" = tang ] && [ -z "$TANG_URL" ] && die "--unlock tang requires --tang-url"
+    # PCRs are what a TPM seals the key against; no other unlock method has
+    # anything to seal. Given alongside one of the others the value was simply
+    # never read, which on a flag whose whole job is to narrow what can open the
+    # disk is a silent loosening of the thing the operator was tightening.
+    [ "$TPM2_PCRS_SET" = true ] && [ "$UNLOCK" != tpm2 ] && \
+        die "--tpm2-pcrs only applies to --unlock tpm2 (this image uses '$UNLOCK').
+    PCRs are what the TPM seals the key against, and nothing else seals anything."
+    [ "$TANG_URL_SET" = true ] && [ "$UNLOCK" != tang ] && \
+        die "--tang-url only applies to --unlock tang (this image uses '$UNLOCK').
+    Nothing else contacts a tang server, so the URL would never be read."
+else
+    # Everything above is reached only when the image is encrypted, so without
+    # --encrypt these options were parsed, stored, and never looked at again --
+    # including --unlock, which was not even checked for being one of the four
+    # words. An operator who asks for TPM unlock and does not ask for encryption
+    # got an unencrypted disk and no indication that the flag had been dropped,
+    # which is the worst possible direction for this particular mistake to fail
+    # in: the image is *less* protected than the command line describes.
+    #
+    # --luks-passphrase is worth refusing for a second reason. A passphrase on a
+    # command line is in the shell history and the process table of whatever ran
+    # it; spending that to configure nothing is a secret disclosed for no benefit.
+    [ "$UNLOCK_SET" = true ] && die "--unlock $UNLOCK has no effect without --encrypt.
+    The disk would not be encrypted, so there would be nothing to unlock. Add
+    --encrypt, or drop --unlock."
+    [ "$LUKS_PASS_SET" = true ] && die "--luks-passphrase has no effect without --encrypt.
+    Add --encrypt, or drop the passphrase -- and treat it as disclosed either way,
+    because it reached the shell history and the process table to do nothing."
+    [ "$TANG_URL_SET" = true ] && die "--tang-url has no effect without --encrypt --unlock tang."
+    [ "$TPM2_PCRS_SET" = true ] && die "--tpm2-pcrs has no effect without --encrypt --unlock tpm2."
+fi
+
+# --check-only stops here, having done every check that depends on the arguments
+# alone and none that depend on the build host. Two jobs.
+#
+# It lets the writable-state options be validated without a 30-minute build and
+# without root, which is what makes the combination rules testable at all -- the
+# alternative is asserting that a message appears in the first few lines of a
+# real build and killing it, on a host where a half-built image means leftover
+# loop devices and mounts.
+#
+# And it gives the API one way to tell an operator their combination is refused
+# *before* it queues the build, without a second copy of these rules in Go or
+# TypeScript that drifts from this one. The rule that runs is the rule that
+# decides.
+if [ "$CHECK_ONLY" = true ]; then
+    echo "state-model $STATE_MODEL"
+    echo "upper $([ "$UPPER_MODE" = per-slot ] && echo per-slot || echo shared)"
+    printf '%s\n' "$MOUNT_DIRECTIVES" | grep -v '^[[:space:]]*$' | sed 's/^/mount /'
+    for _r in $RESET_PATHS; do echo "reset-on-update $_r"; done
+    for _k in $KEEP_PATHS;  do echo "keep $_k"; done
+    log "options check passed (no image was built)"
+    exit 0
 fi
 
 # How big the overlay partition has to be *as built*, before the machine ever
@@ -917,17 +1117,6 @@ case "$SUITE" in bionic|focal|jammy) RESOLVED_PKG="";; esac
 # vocabulary it had. Rename them here, where the family is known. Kept in one
 # place rather than spread through the arch cases so that adding an architecture
 # and adding a distribution stay separate jobs.
-# The package database, whose location is the one family-specific part of the
-# distribution-owned paths cleared on a slot change. Appended rather than
-# branched into the list above because that list is built before the arguments
-# naming the distribution have been parsed. The `stateful` and `appliance`
-# models replace RESET_PATHS wholesale below and set their own.
-if [ "$FAMILY" = rpm ]; then
-    RESET_PATHS="$RESET_PATHS /var/lib/rpm /var/lib/dnf /var/cache/dnf"
-else
-    RESET_PATHS="$RESET_PATHS /var/lib/dpkg /var/lib/apt /var/cache/apt"
-fi
-
 # How this image's initramfs reaches the shared A/B scripts, for the state
 # manifest that ships inside the image. Naming the other family's harness in a
 # file left in /etc is how somebody later concludes the wrong one is in use --
@@ -998,21 +1187,6 @@ else
     GRUB_EDITENV="grub-editenv"
     NETWORK_PKG=""
     NETWORK_UNIT="systemd-networkd"
-fi
-
-# --- Validate options ---
-if [ "$SSH_KEY_ONLY" = true ] && [ -z "$SSH_PUBKEY" ]; then
-    die "--ssh-key-only requires an SSH key (--ssh-pubkey or --ssh-authorized-key)"
-fi
-USE_KEYFILE=false
-if [ "$ENCRYPT" = true ]; then
-    [ -n "$LUKS_PASS" ] || die "--encrypt requires --luks-passphrase"
-    case "$UNLOCK" in
-        passphrase) ;;
-        keyfile|tpm2|tang) USE_KEYFILE=true;;
-        *) die "--unlock must be passphrase|keyfile|tpm2|tang";;
-    esac
-    [ "$UNLOCK" = tang ] && [ -z "$TANG_URL" ] && die "--unlock tang requires --tang-url"
 fi
 
 # The default slot is the historical 3072 MiB, lifted straight to the floor
@@ -1984,6 +2158,49 @@ EOF
     for p in $KEEP_PATHS;   do echo "keep $p"; done
 } > "$STATE_CONF"
 log "  $(grep -cvE '^\s*(#|$)' "$STATE_CONF") directive(s)"
+
+# Does any keep path shadow a file this image ships? The structural check above
+# ran on the arguments; this one runs on the real tree, and it is the check that
+# generalises -- it needs no list of paths that are safe to keep, because it
+# asks the image instead.
+#
+# The reason a keep is safe at all is that the image ships nothing there, so
+# holding the machine's copy across a slot change cannot hide anything the
+# update delivered. /usr/local is the default keep precisely because both
+# families reserve it for local administration and neither ships a regular file
+# into it -- verified, not assumed: `dpkg -S /usr/local` matches no package, and
+# AlmaLinux owns 34 paths under it, every one a directory.
+#
+# Turn that around and it is the whole rule. A keep path containing a file from
+# the image is a promise to go on serving this machine's copy of that file
+# forever, including after an update replaces it -- which is the silent-stale
+# failure again, scoped to a subtree. `--keep-path /var/lib/rpm` is the one that
+# looks most reasonable and is worst: the database would survive describing the
+# other slot's package set, so every subsequent dnf transaction reasons from a
+# manifest of software that is not installed.
+#
+# Directories are fine and are why this counts regular files only: a keep path
+# has to exist in the image for the machine to have written under it.
+#
+# A function so it can be lifted out and run against a fixture tree by
+# test_state_model_guards.py: the test extracts this definition from this file
+# and calls it, so what the test exercises is this code rather than a second
+# copy of it that can agree with itself while both are wrong.
+keep_shadowing_report() {
+    _root="$1"; shift
+    for _k in "$@"; do
+        [ -d "$_root$_k" ] || continue
+        _hit=$(find "$_root$_k" -type f -print -quit 2>/dev/null)
+        [ -n "$_hit" ] && printf ' %s(%s)' "$_k" "${_hit#$_root}"
+    done
+}
+
+_shadowed=$(keep_shadowing_report "$MNT" $KEEP_PATHS)
+[ -z "$_shadowed" ] || die "keep path(s) contain files this image ships:$_shadowed
+    A keep holds the machine's copy of a path across a slot change, so the image's
+    copy is never seen again -- an update would replace those files and the machine
+    would go on running the old ones, reporting success.
+    Keep a subdirectory the image does not populate, or drop the keep."
 
 # Will the seeding actually fit? Everything above is a guess made before
 # debootstrap ran; this is the measurement, made against the real tree, and it

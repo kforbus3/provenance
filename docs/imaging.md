@@ -511,15 +511,22 @@ the API. **If you add a builder flag, add the control in the same change.**
 
 ### Writable state
 
-The root slot is read-only and an A/B update replaces it wholesale, so anything
-written there is destroyed by the next update. This section is what survives
-instead, and it is **fixed at build time**: a machine records the layout it was
-imaged with and refuses a change at boot, because a layout that moved under a
+An A/B update replaces the whole root slot, so this section is what decides which
+writes survive it. It is **fixed at build time**: a machine records the layout it
+was imaged with and refuses a change at boot, because a layout that moved under a
 running system is a system whose data is somewhere it is not looking.
 
-- **model** — `overlay` puts one overlay over the whole root, which is what every
-  image built before this existed gets. `paths` keeps the root read-only and makes
-  only the enumerated paths writable.
+- **model** — one of three:
+
+  | Model | Root | What survives a slot change |
+  |---|---|---|
+  | `overlay` (default) | writable, one overlay over the whole root | everything except `/usr`, `/bin`, `/sbin`, `/lib*`, `/boot` and the package database, which are reset |
+  | `stateful` | **read-only** | `/home`, `/root`, `/srv`, `/opt`, `/usr/local`, `/var`; `/etc` is a small overlay so the image can still ship config that wins |
+  | `appliance` | **read-only** | `/data` only; `/etc` stays editable, `/var` reverts to the image's copy |
+
+  `overlay` is what every image built before this existed gets. The other two
+  mount the root read-only, so a package install fails immediately rather than
+  appearing to work and vanishing at the next slot change.
 - **per-slot upper layer** — each slot gets `upper-A`/`upper-B` rather than
   sharing one, so a configuration change made under A cannot follow you into B.
   Booting the other slot then recovers from a bad *edit*, not only a bad image —
@@ -531,6 +538,59 @@ running system is a system whose data is somewhere it is not looking.
 Paths must be **absolute**. The builder silently skips anything else, so the
 dialog refuses to submit instead: a skipped directive is a setting that looks
 accepted and is not in the image, and it is found on a machine.
+
+#### Combinations the builder refuses
+
+A *keep* is a carve-out from a *reset*, and only from a reset. Two ways of
+writing one produce a machine that looks healthy and is not, so the build fails
+rather than producing it:
+
+- **Keeping a path that is itself reset** cancels the reset. `--keep-path /usr`
+  leaves the running machine's `/usr` shadowing the one the update just
+  installed: the update reports success and the machine goes on running the old
+  release. Keeping the package database (`/var/lib/rpm`, `/var/lib/dpkg`) is the
+  same failure — the database survives describing the *other* slot's image, so
+  every later `dnf`/`apt` transaction reasons from a package list that is not
+  what is installed.
+- **Keeping a path nothing resets** carves nothing out. It already survives a
+  slot change, and the boot script implements a keep by moving the path out of
+  the writable store and back again on every slot change — so it can only lose
+  data that was never at risk, while reading in the manifest as protection.
+
+The builder also *adds* one keep on your behalf: if the image is encrypted and
+anything resets `/etc`, `/etc/cryptsetup-keys.d` is kept automatically. The LUKS
+unlock key is written there by enrollment after the build, so a reset of `/etc`
+would take it and the machine would come up asking for a passphrase with nobody
+there to type it.
+
+#### Encryption options that would do nothing
+
+`--unlock`, `--luks-passphrase` and `--tang-url` only mean anything on an
+encrypted image, and are refused without `--encrypt` rather than ignored. This
+matters most for `--unlock`: asking for TPM unlock and forgetting `--encrypt`
+used to produce an unencrypted disk with no indication the flag had been
+dropped — an image *less* protected than the command line describes.
+
+A passphrase passed this way is also disclosed to the shell history and the
+process table, so spending one to configure nothing is worth refusing on its own.
+
+The same applies to options that belong to one unlock method and are given with
+another: `--tpm2-pcrs` requires `--unlock tpm2`, and `--tang-url` requires
+`--unlock tang`. Both were previously read only on the branch matching their own
+method, so the value was dropped without a word — and on a flag whose purpose is
+to narrow what can open the disk, a silent drop loosens exactly what the operator
+was tightening.
+
+To check a combination without building anything:
+
+```bash
+builder/build-image.sh --check-only --distro debian --state-model stateful \
+  --reset-on-update /srv --keep-path /srv/keepme
+```
+
+It applies every rule that depends on the arguments alone, prints the resolved
+mount, reset and keep lists, and exits without touching a disk. The build dialog
+applies the same rules as you type.
 
 ### What does not survive an update
 
