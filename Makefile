@@ -261,6 +261,23 @@ smoke: ## Build a real initramfs + bootloader and check what is actually in them
 	else \
 	  echo "[smoke] no netboot imager built; skipping the multi-NIC test"; \
 	fi
+	# The state-manifest engine, run for real against a loopback ext4 and a fake
+	# root slot -- 108 assertions over every directive combination, about a
+	# second each. This is the detailed test of ab-overlay, which is the riskiest
+	# script here: it runs before there is a system to log into and its failures
+	# reach only the kernel log.
+	#
+	# It was dead for months and nothing said so. Its default pointed at
+	# etc/initramfs-tools/scripts/local-bottom/ab-overlay -- where build-image.sh
+	# INSTALLS the script inside an image, not where it lives in the repo -- so
+	# from the moment the source moved to usr/lib/ab/initramfs/ it could only
+	# print HARNESS-FAIL. Nothing ran it, so nothing reported that.
+	#
+	# Named here rather than left to be run by hand, because "a harness exists"
+	# and "a harness runs" turned out to be very different claims.
+	docker run --rm --privileged --platform=linux/amd64 \
+	  -v $(PWD):/repo:ro ubuntu:24.04 \
+	  bash /repo/scripts/imaging/test-state-directives.sh
 
 SMOKE_SUITE ?= 9
 

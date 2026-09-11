@@ -23,7 +23,14 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq e2fsprogs util-linux kmod >/dev/null 2>&1
 
-SCRIPT="${SCRIPT:-/repo/builder/overlay/etc/initramfs-tools/scripts/local-bottom/ab-overlay}"
+# The shared script, at the path it lives at IN THIS REPO. It is installed to
+# etc/initramfs-tools/scripts/local-bottom/ab-overlay inside a built image
+# (build-image.sh), and that installed path is what this default used to name --
+# so from the moment the source moved to usr/lib/ab/initramfs/ the harness could
+# only ever print HARNESS-FAIL. Which is how the most detailed test of the
+# riskiest script in the project came to be one nobody ran: it did not fail
+# loudly in anyone's build, it simply was not wired to anything.
+SCRIPT="${SCRIPT:-/repo/builder/overlay/usr/lib/ab/initramfs/ab-overlay}"
 [ -r "$SCRIPT" ] || { echo "HARNESS-FAIL: no $SCRIPT"; exit 1; }
 modprobe overlay 2>/dev/null || true
 
