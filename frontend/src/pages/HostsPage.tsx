@@ -1640,6 +1640,45 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
           ...(isRDP ? [] : [[overlayLabel(host?.overlay), st ? (st.wgOk ? "healthy" : "—") : ""] as [string, string | undefined]]),
           ["Last checked", st?.checkedAt ? fmtDate(st.checkedAt) : ""],
         ]} />
+        {/* Listening ports, next to the pending updates rather than on a page of
+            their own: the question "is this CVE reachable" is asked while
+            looking at the CVEs. */}
+        {inv?.listeningPorts && inv.listeningPorts.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>
+              Listening ports ({inv.listeningPorts.length}
+              {inv.listeningPorts.filter((p) => p.exposed).length > 0
+                && `, ${inv.listeningPorts.filter((p) => p.exposed).length} exposed`})
+            </Typography>
+            <Box sx={{ maxHeight: 220, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 1, p: 1 }}>
+              <Stack spacing={0.25}>
+                {[...inv.listeningPorts]
+                  // Exposed first: a socket on loopback is a fact, a socket on a
+                  // wildcard is a decision somebody should be able to see at a glance.
+                  .sort((a, b) => Number(b.exposed) - Number(a.exposed) || a.port - b.port)
+                  .map((p) => (
+                    <Stack key={`${p.proto}-${p.address}-${p.port}`} direction="row" spacing={1} alignItems="center">
+                      {p.exposed
+                        ? <Chip size="small" color="warning" label="exposed"
+                                sx={{ height: 18, "& .MuiChip-label": { px: 0.75, fontSize: 11 } }} />
+                        : <Chip size="small" variant="outlined" label="local"
+                                sx={{ height: 18, "& .MuiChip-label": { px: 0.75, fontSize: 11 } }} />}
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                        {p.proto}/{p.port}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap>
+                        {p.address}{p.process ? ` · ${p.process}` : ""}
+                      </Typography>
+                    </Stack>
+                  ))}
+              </Stack>
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              “Exposed” means bound to something other than loopback — reachable by
+              whatever can route to that address.
+            </Typography>
+          </Box>
+        )}
         {/* A/B machines take updates as RAUC bundles through a rollout, which can
             only see hosts that have a machine record. RDP hosts never do. */}
         {!isRDP && h && <AbUpdatesSection host={h} />}

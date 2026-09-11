@@ -362,6 +362,18 @@ type HostMetrics struct {
 }
 
 // HostInventory holds collected facts about a host.
+// ListeningPort is one bound socket on a host.
+type ListeningPort struct {
+	Proto   string `json:"proto"`   // tcp | udp
+	Address string `json:"address"` // the bound address, as the host reports it
+	Port    int    `json:"port"`
+	Process string `json:"process,omitempty"` // owning process, when the host will say
+	// Exposed is true when the socket is bound to a wildcard address rather than
+	// loopback. It is the difference between "postgres is running" and "postgres
+	// is reachable", which is the whole reason to collect this.
+	Exposed bool `json:"exposed"`
+}
+
 type HostInventory struct {
 	OSName        string     `json:"osName"`
 	OSVersion     string     `json:"osVersion"`
@@ -381,6 +393,17 @@ type HostInventory struct {
 	// the assistant can answer "which packages need updating on host X", not just how
 	// many. Nil = not yet collected; empty = collected and up to date.
 	UpdatePackages []PendingUpdate `json:"updatePackages,omitempty"`
+	// ListeningPorts is what the host actually has bound, with the process that
+	// owns each socket. Nil = not yet collected; empty = collected and nothing is
+	// listening.
+	//
+	// This is the half vulnerability scanning cannot see. Grype reads the package
+	// database and reports that a vulnerable openssl is installed; it has no way
+	// to say whether anything is serving on it, or on which interface. A CVE in a
+	// library nothing has loaded and a CVE in something bound to 0.0.0.0 are very
+	// different findings and looked identical.
+	ListeningPorts []ListeningPort `json:"listeningPorts,omitempty"`
+	PortsCheckedAt *time.Time      `json:"portsCheckedAt,omitempty"`
 	// ObsoletePackages are installed packages offered by no configured repository
 	// (apt's [installed,local] / dnf "extras") — orphaned leftovers from in-place
 	// distribution upgrades. Used to classify a vulnerability whose package can't be

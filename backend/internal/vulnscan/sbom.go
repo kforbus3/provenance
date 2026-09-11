@@ -116,6 +116,27 @@ func buildLinuxSBOM(hostname string, inv inventory) ([]byte, int) {
 			PURL:    pu,
 		})
 	}
+	// Ecosystem packages -- pip and npm installs the distribution's package
+	// manager cannot see. Added to the same SBOM rather than a second one so a
+	// host has one component list and grype makes one pass over it.
+	for _, e := range inv.Ecosystem {
+		pu := ecoPurl(e)
+		if pu == "" {
+			continue
+		}
+		if seen[pu] {
+			continue
+		}
+		seen[pu] = true
+		bom.Components = append(bom.Components, cdxComponent{
+			Type:    "library",
+			BOMRef:  pu,
+			Name:    e.Name,
+			Version: e.Version,
+			PURL:    pu,
+		})
+	}
+
 	b, err := json.Marshal(bom)
 	if err != nil {
 		return nil, 0

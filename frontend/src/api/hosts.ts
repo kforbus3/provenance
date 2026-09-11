@@ -1,6 +1,17 @@
 import { api } from "./client";
 
 // Host inventory types mirror backend/internal/models/models.go (camelCase JSON).
+// What a host actually has bound. The half vulnerability scanning cannot see:
+// grype reads the package database and reports that a vulnerable openssl is
+// installed, with no way to say whether anything is serving on it.
+export interface ListeningPort {
+  proto: string;
+  address: string;
+  port: number;
+  process?: string;
+  exposed: boolean;
+}
+
 export interface HostInventory {
   osName: string;
   osVersion: string;
@@ -13,6 +24,8 @@ export interface HostInventory {
   updatesAvailable?: number;
   securityUpdates?: number;
   updatesCheckedAt?: string;
+  listeningPorts?: ListeningPort[];
+  portsCheckedAt?: string;
   updatePackages?: PendingUpdate[];
 }
 

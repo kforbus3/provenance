@@ -45,6 +45,51 @@ Set these in `.env` (generate with `openssl rand -hex 32`). In `production`
 recordings at rest — see [§18c](#18c-windows-desktops-rdp) and the
 [Security Guide](./security-guide.md).
 
+### What a host is listening on
+
+Vulnerability scanning reads the package database and reports which installed
+packages have CVEs. It has no way to say whether any of it is *reachable* — a
+vulnerable library nothing has bound and one serving on `0.0.0.0` produce the
+same finding.
+
+Host details now shows the bound sockets, collected over the connection the
+monitor already holds and refreshed hourly rather than on every sweep. Each is
+marked **exposed** or **local**:
+
+- **local** — bound to loopback. Running, but nothing off the host can reach it.
+- **exposed** — bound to a wildcard or to a specific interface address. Something
+  can reach it; which something depends on your network.
+
+Binding to one interface rather than all of them is still *exposed*. Treating it
+as safe is how a database ends up served to a network somebody forgot was
+attached.
+
+The owning process is shown where the host will say. It is hidden for sockets the
+monitor's login user does not own, because this is collected without `sudo` —
+a partly-attributed list is worth having, and a sudo prompt inside a monitor
+sweep is not.
+
+### Software the package manager cannot see
+
+The SBOM sent to the vulnerability scanner is built from `dpkg` or `rpm`, so it
+describes what the *distribution* installed. Anything else — a `pip install`, an
+`npm install`, a vendored application dependency — was invisible, and that is
+where a large share of real vulnerabilities live. A host could be reported clean
+while serving a Django with a published RCE, because Django came from pip.
+
+Scans now also enumerate Python (`dist-info`/`egg-info`) and Node
+(`node_modules/package.json`) packages in the locations those ecosystems install
+into, and add them to the same SBOM. The search is deliberately bounded — fixed
+directories, shallow depth, a result cap — because it runs on every scanned host
+and must not become a filesystem walk. On a real host it completes in well under
+a second.
+
+Two things it does not do: it will not find an application's dependencies inside
+a project directory under `/home` or `/srv` that is not on the list, and it does
+not inspect container images. If you need either, that is the point at which a
+full filesystem SBOM tool belongs on the host itself.
+
+
 ## 2. Bootstrap the first administrator
 
 On first run, no users exist and the **bootstrap wizard** is open. This is a

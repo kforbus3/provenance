@@ -5,6 +5,50 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.1.0 — 2026-09-11
+
+Two gaps in what the scanners can see. Neither needed a new scanner: both are
+answered over the SSH connection this already has.
+
+**Nothing knew what a host was listening on.** Vulnerability scanning reads the
+package database and reports which installed packages have CVEs; it has no way to
+say whether any of it is reachable. A vulnerable library nothing has bound and
+one serving on `0.0.0.0` produced identical findings. Bound sockets are now
+collected with the host's other facts — hourly, over the connection the monitor
+already holds, without `sudo` — and shown in host details as **exposed** or
+**local**. Binding to one interface rather than all of them still counts as
+exposed: treating it as safe is how a database ends up served to a network
+somebody forgot was attached.
+
+**Software outside the package manager was invisible to scanning.** The SBOM was
+built purely from `dpkg`/`rpm`, so a `pip install`, an `npm install` or a vendored
+dependency never reached grype — and that is where a large share of real
+vulnerabilities live. A host could be reported clean while serving a Django with
+a published RCE, because Django came from pip. Scans now enumerate Python and
+Node packages in the directories those ecosystems install into and add them to
+the same SBOM. Bounded on purpose — fixed locations, shallow depth, a result cap
+— because it runs on every scanned host; measured at a quarter of a second on a
+real one.
+
+Two details that would each have made this silently useless:
+
+- **PyPI names are normalised (PEP 503) before they become purls.** A dist-info
+  directory is named `python_dateutil-2.9.0.dist-info`, while advisories use
+  `python-dateutil`. Found on a real host. An unnormalised purl matches nothing,
+  and a package that matches nothing looks exactly like a package with no
+  vulnerabilities. npm names are deliberately left alone — that ecosystem is
+  case-sensitive and does not normalise.
+- **Ecosystem purls carry no distro namespace or architecture.** Those belong to
+  the deb/rpm form; grype's pypi and npm matchers key on the bare shape.
+
+Considered and rejected: adding OpenVAS or another network scanner. It duplicates
+grype for the authenticated case with a worse false-positive rate, needs a
+multi-gigabyte feed and its own stack, and fights the topology — every host here
+is reached *through* the jump host, whose connection limits the monitor's own
+fan-out cap exists to respect. If an unauthenticated outside-in view is ever
+needed for evidence, that is the case for it, scoped to on-demand scans of
+selected hosts rather than the fleet.
+
 ## v1.0.2 — 2026-09-11
 
 **Deleting a host left its SSH host-key pins behind.** `ssh_host_keys` is keyed

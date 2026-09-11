@@ -213,15 +213,17 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 	// 2. Inventory.
 	if rows, err := s.pool.Query(ctx, `
 		SELECT host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
-			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages
+			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
+			listening_ports, ports_checked_at
 		FROM host_inventory WHERE host_id = ANY($1)`, ids); err == nil {
 		for rows.Next() {
 			var hid uuid.UUID
 			var inv models.HostInventory
-			var updatePkgs, obsoletePkgs []byte
+			var updatePkgs, obsoletePkgs, ports []byte
 			if rows.Scan(&hid, &inv.OSName, &inv.OSVersion, &inv.KernelVersion, &inv.Architecture,
 				&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
-				&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs) != nil {
+				&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs,
+				&ports, &inv.PortsCheckedAt) != nil {
 				continue
 			}
 			if len(updatePkgs) > 0 {
@@ -229,6 +231,9 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 			}
 			if len(obsoletePkgs) > 0 {
 				_ = json.Unmarshal(obsoletePkgs, &inv.ObsoletePackages)
+			}
+			if len(ports) > 0 {
+				_ = json.Unmarshal(ports, &inv.ListeningPorts)
 			}
 			if h := byID[hid]; h != nil {
 				h.Inventory = &inv
@@ -579,10 +584,17 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 	if inv.ObsoletePackages != nil {
 		obsoletePkgs, _ = json.Marshal(inv.ObsoletePackages)
 	}
+	// nil stays NULL so the COALESCE below keeps the last known list. An empty
+	// slice is a real answer -- "asked, nothing listening" -- and must overwrite.
+	var ports []byte
+	if inv.ListeningPorts != nil {
+		ports, _ = json.Marshal(inv.ListeningPorts)
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,
-			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages, collected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
+			listening_ports, ports_checked_at, collected_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
 		ON CONFLICT (host_id) DO UPDATE SET
 			os_name=EXCLUDED.os_name, os_version=EXCLUDED.os_version, kernel_version=EXCLUDED.kernel_version,
 			architecture=EXCLUDED.architecture, ssh_version=EXCLUDED.ssh_version, cpu_count=EXCLUDED.cpu_count,
@@ -593,9 +605,12 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 			updates_checked_at=COALESCE(EXCLUDED.updates_checked_at, host_inventory.updates_checked_at),
 			update_packages=COALESCE(EXCLUDED.update_packages, host_inventory.update_packages),
 			obsolete_packages=COALESCE(EXCLUDED.obsolete_packages, host_inventory.obsolete_packages),
+			listening_ports=COALESCE(EXCLUDED.listening_ports, host_inventory.listening_ports),
+			ports_checked_at=COALESCE(EXCLUDED.ports_checked_at, host_inventory.ports_checked_at),
 			collected_at=now()`,
 		hostID, inv.OSName, inv.OSVersion, inv.KernelVersion, inv.Architecture, inv.SSHVersion, inv.CPUCount, inv.MemoryMB,
-		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs, obsoletePkgs)
+		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs, obsoletePkgs,
+		ports, inv.PortsCheckedAt)
 	return err
 }
 
