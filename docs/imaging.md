@@ -455,7 +455,7 @@ correct configuration as the broken one.
 
 ## Disk encryption and how it unlocks
 
-Ticking **Encrypt the root filesystem (LUKS)** always enrols the passphrase you
+Ticking **Encrypt the root filesystem (LUKS)** always enrolls the passphrase you
 give as a recovery slot. The **unlock method** decides what *else* can open the
 disk, and the trade-off is always the same one: what has to be present at boot
 for the machine to come up on its own.
@@ -481,8 +481,8 @@ in a rack whose Tang server is down.
 **`passphrase` cannot reboot unattended**, including after an A/B update. That
 makes it the wrong choice for anything the rollout engine manages.
 
-TPM2 and Tang enrol on the machine's *first boot* rather than at build time, since
-neither the TPM nor the network exists in the builder. Until that enrolment runs,
+TPM2 and Tang enroll on the machine's *first boot* rather than at build time, since
+neither the TPM nor the network exists in the builder. Until that enrollment runs,
 the passphrase is the only thing that opens the disk — so a machine that fails
 first boot is recovered with it.
 

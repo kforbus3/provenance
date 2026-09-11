@@ -86,7 +86,7 @@ install() {
     } > "${initdir}/lib/dracut/hooks/initqueue/settled/10-ab-luks-key.sh"
     chmod 0755 "${initdir}/lib/dracut/hooks/initqueue/settled/10-ab-luks-key.sh"
 
-    # The marker the enrolment reaper reads, written only when crypttab still
+    # The marker the enrollment reaper reads, written only when crypttab still
     # points at the bootstrap key -- exactly when the hook above does anything.
     # luks-enroll.sh rewrites crypttab to clevis and rebuilds, which drops the
     # marker, and that next boot is the proof the reaper waits for before

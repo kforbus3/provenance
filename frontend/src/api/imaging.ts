@@ -275,7 +275,7 @@ export interface ImageBuildRequest {
   sshKey?: string;
   sshKeyOnly?: boolean;
   encrypt?: boolean;
-  // How the root filesystem is unlocked at boot. The builder enrols the
+  // How the root filesystem is unlocked at boot. The builder enrolls the
   // passphrase for recovery in every case; this decides what unlocks it
   // unattended:
   //   passphrase  typed at every boot — no unattended reboot

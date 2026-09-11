@@ -78,7 +78,7 @@ esac
 # Which initramfs harness this machine has. The RHEL family uses dracut, so the
 # tool names, the rebuild command and the generated filename are all different --
 # and the consequence of assuming Debian's was NOT a visible failure. The
-# `command -v` gate below exited 0 on a missing update-initramfs, so enrolment
+# `command -v` gate below exited 0 on a missing update-initramfs, so enrollment
 # on an RHEL machine reported success having bound nothing: the disk stayed
 # unlocked forever by the plaintext bootstrap key on the unencrypted BOOT
 # partition, the reaper never destroyed that keyslot, and `systemctl status

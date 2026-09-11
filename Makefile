@@ -315,7 +315,7 @@ imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runne
 	# see the other side is a test that cannot fail.
 	docker run --rm -v $(PWD):/src -w /src/deploy/builder-runner python:3.13-alpine \
 	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
-	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py && python test_keybackup.py && python test_nofile.py && python test_family_guards.py && python test_reachable.py && python test_initramfs_deps.py && python test_playbook_template.py && python test_nav_routes.py && python test_compose_env.py && python test_rauc_runtime.py && python test_docs_lists.py && python test_documented_settings.py"
+	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py && python test_keybackup.py && python test_nofile.py && python test_family_guards.py && python test_reachable.py && python test_initramfs_deps.py && python test_playbook_template.py && python test_nav_routes.py && python test_compose_env.py && python test_rauc_runtime.py && python test_docs_lists.py && python test_documented_settings.py && python test_spelling.py"
 
 .PHONY: lint
 lint: fmt-check ## Run gofmt check + Go vet

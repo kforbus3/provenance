@@ -600,7 +600,7 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
     onSuccess: (host) => {
       setMsg({
         kind: "success",
-        text: `${host.hostname} added and paired. It is not enrolled yet — enrol it from Hosts to let this server reach it.`,
+        text: `${host.hostname} added and paired. It is not enrolled yet — enroll it from Hosts to let this server reach it.`,
       });
       onDone();
       onClose();
@@ -629,7 +629,7 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
                        : "This machine never reported an address — enter the one it has now."} />
           <TextField size="small" label="SSH user" value={sshUser}
                      onChange={(e) => setSshUser(e.target.value)} fullWidth
-                     helperText="The account this server connects as. Enrolment creates it — it is not the login user the image was built with." />
+                     helperText="The account this server connects as. Enrollment creates it — it is not the login user the image was built with." />
           <Stack direction="row" spacing={2}>
             <TextField size="small" label="Environment" value={environment}
                        onChange={(e) => setEnvironment(e.target.value)} fullWidth />
@@ -637,7 +637,7 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
                        onChange={(e) => setOwner(e.target.value)} fullWidth />
           </Stack>
           <Alert severity="info">
-            This does not enrol the machine. Enrolment is what establishes the SSH
+            This does not enroll the machine. Enrollment is what establishes the SSH
             trust and the overlay address, and it runs from the Hosts page — an
             image carries only the authorized key it was built with.
           </Alert>

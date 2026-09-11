@@ -9,7 +9,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 **First release of the combined product.** The version starts again at 1.0.0
 because this is the first release of Provenance — one codebase that builds a
-signed image, images a bare machine, enrols it and then operates and updates it
+signed image, images a bare machine, enrolls it and then operates and updates it
 for life. Nothing before this was ever published: no tag of this repository has
 ever been pushed and no release has ever existed outside it.
 

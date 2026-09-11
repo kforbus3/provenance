@@ -572,9 +572,9 @@ func (s *Store) SetHostEnrolled(ctx context.Context, hostID uuid.UUID, enrolled 
 	return err
 }
 
-// SetHostSSHUser records the login account enrolment actually used.
+// SetHostSSHUser records the login account enrollment actually used.
 //
-// The host form lets sshUser be empty because enrolment defaults it to "fleet"
+// The host form lets sshUser be empty because enrollment defaults it to "fleet"
 // -- and it defaulted only the script's variable, never the record. So the
 // machine got a fleet account and the host row still said nothing, the monitor
 // then connected as no user at all, and the host reported offline forever with

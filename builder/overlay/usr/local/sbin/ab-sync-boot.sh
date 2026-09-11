@@ -9,7 +9,7 @@
 # update-initramfs expect them, and GRUB never looks. Without this, a
 # regenerated initramfs is simply ignored at the next boot.
 #
-# That matters most for LUKS enrolment: it re-runs update-initramfs so the
+# That matters most for LUKS enrollment: it re-runs update-initramfs so the
 # initramfs can unlock via TPM or Tang, and if the slot's copy is stale the
 # machine comes up asking for a passphrase nobody is there to type.
 #

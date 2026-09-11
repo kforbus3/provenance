@@ -37,7 +37,7 @@ var capabilityCatalog = map[string]string{
 	"list_schedules":        "what runs automatically and when it fires next",
 	"audit_log":             "the audit trail of changes",
 	"security_events":       "failed logins, lockouts, MFA failures, and behavioural anomalies",
-	"list_users":            "user accounts, roles, and MFA enrolment",
+	"list_users":            "user accounts, roles, and MFA enrollment",
 	"list_approvals":        "pending access approvals and active temporary grants",
 	"access_control":        "groups, roles and their permissions, service accounts and API tokens, and access reviews",
 	"expiring_credentials":  "credentials, certificates and keys that are expiring or overdue for rotation",

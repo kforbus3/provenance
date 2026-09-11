@@ -432,7 +432,7 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 		}
 	}
 	_ = s.store.SetHostEnrolled(ctx, host.ID, true)
-	// Same as the other enrolment path: record the account actually created, or
+	// Same as the other enrollment path: record the account actually created, or
 	// the monitor logs in as nobody and the host reads offline forever.
 	_ = s.store.SetHostSSHUser(ctx, host.ID, loginUser)
 

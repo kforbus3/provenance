@@ -394,7 +394,7 @@ persist /var"
 overlay /var
 persist /data"
         RESET_PATHS="/var"
-        # LUKS enrolment writes the unlock key here after the image was built.
+        # LUKS enrollment writes the unlock key here after the image was built.
         # Reverting /etc would undo it and the machine would come up asking for
         # a passphrase with nobody there to type it.
         KEEP_PATHS="/etc/cryptsetup-keys.d"
@@ -694,7 +694,7 @@ case "$ARCH" in
         # verifies GRUB with it; GRUB verifies the kernel through shim's
         # protocol. Debian and Ubuntu both ship signed kernels by default, so
         # the chain is complete without anything of ours being signed -- which
-        # is the whole reason to use theirs rather than enrol our own key on
+        # is the whole reason to use theirs rather than enroll our own key on
         # every machine.
         SB_SHIM="shimx64.efi.signed"
         SB_GRUB="grubx64.efi.signed"
@@ -2532,7 +2532,7 @@ fi
 # no, not an inconvenience: the machines this project images for desktops and
 # laptops are exactly the ones where it is mandated.
 #
-# The fix is to use the distribution's chain rather than enrol a key of our own
+# The fix is to use the distribution's chain rather than enroll a key of our own
 # on every machine:
 #
 #   firmware --(Microsoft key)--> shim --(distro key, built into shim)--> GRUB

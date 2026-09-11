@@ -60,7 +60,7 @@ DEST=/cryptkey/luks.key
 DESTDIR=/cryptkey
 MNT=/ab-bootpart
 
-# Nothing to do on an unencrypted image, or once tpm2/tang enrolment has reaped
+# Nothing to do on an unencrypted image, or once tpm2/tang enrollment has reaped
 # the bootstrap key and rewritten crypttab to use clevis.
 [ -f "$CRYPTTAB" ] || exit 0
 grep -q "$DEST" "$CRYPTTAB" 2>/dev/null || exit 0

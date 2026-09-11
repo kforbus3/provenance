@@ -80,14 +80,14 @@ deployment I have seen (`checkin_url` is read out of `/boot/ab-deploy.json`, and
 the imaging network is not a place to assume TLS). Pushing a recovery passphrase
 over it would be worse than the problem being solved.
 
-**Preferred: pull it over SSH, after enrolment.** The server already opens
+**Preferred: pull it over SSH, after enrollment.** The server already opens
 authenticated, encrypted SSH sessions to managed hosts — that is how nudge,
 install and host registration work, and the machinery is the same `s.dial` in
 every case. Inverting the direction removes the new push path entirely:
 
 - the machine adds its keyslot at first boot and leaves the passphrase in a
   root-only file
-- after enrolment the server reads it over SSH, files it, and tells the machine
+- after enrollment the server reads it over SSH, files it, and tells the machine
   to remove the image-wide slot and the temporary file
 - a machine that is never enrolled keeps both keys, which is the safe state
 
@@ -104,7 +104,7 @@ authenticate the machine as more than a MAC address.
 - **The delete guard** (shipped) keys on the image credential. It needs a second
   rule for `luks/machine/*` — those are one-to-one and deleting one is always
   destroying a recovery key.
-- **`luks-enroll.sh` reaps the bootstrap key** after TPM2/Tang enrolment. The
+- **`luks-enroll.sh` reaps the bootstrap key** after TPM2/Tang enrollment. The
   rekey needs that key, so it must run before the reaper, or the reaper must
   wait. Both units are already condition-guarded; the ordering is a
   `Before=`/`After=` pair, not new machinery.
