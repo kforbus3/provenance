@@ -10,11 +10,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -484,7 +486,32 @@ func (s *Service) DBImport(ctx context.Context, archive io.Reader) (string, erro
 }
 
 func (s *Service) dbPost(ctx context.Context, path string, body io.Reader, contentType string) (string, error) {
-	// DB operations can take minutes; use a dedicated longer-timeout client.
+	// DB operations take minutes -- the grype vulnerability database is hundreds
+	// of megabytes and is unpacked after it lands -- so this uses a client with a
+	// long timeout.
+	//
+	// That client was not enough, and for a while this looked like a network
+	// fault that was not one. Every route is behind middleware.Timeout(60s)
+	// (api/server.go), so the INBOUND request's context is cancelled after a
+	// minute and takes the outbound call down with it, whatever the client's own
+	// timeout says. An operator got
+	//
+	//   Online update failed: scanner unreachable: Post ".../db/update":
+	//   context deadline exceeded
+	//
+	// at exactly sixty seconds, every time, with a hint suggesting the scanner
+	// could not reach the internet. It could: the download had already started,
+	// and it FINISHED -- `/db/status` showed a valid database built that morning.
+	// The only thing that failed was telling the operator so.
+	//
+	// WithoutCancel keeps the values on the context (auth, tracing, tenancy) and
+	// drops the inbound deadline, then a deadline of our own bounds it. chi's
+	// Timeout middleware writes its 504 in a defer after the handler returns, so
+	// a handler that outlives the minute and writes first still wins.
+	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+
 	client := &http.Client{Timeout: 20 * time.Minute}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url(path), body)
 	if err != nil {
@@ -493,6 +520,13 @@ func (s *Service) dbPost(ctx context.Context, path string, body io.Reader, conte
 	req.Header.Set("Content-Type", contentType)
 	resp, err := client.Do(req)
 	if err != nil {
+		// "unreachable" is the wrong word for a timeout, and the difference
+		// decides what an operator does next: retry versus go and find a DB
+		// archive to import by hand.
+		if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
+			return "", fmt.Errorf("the scanner did not finish within 20 minutes; "+
+				"it may still be working -- check the database status before retrying: %w", err)
+		}
 		return "", fmt.Errorf("scanner unreachable: %w", err)
 	}
 	defer resp.Body.Close()
