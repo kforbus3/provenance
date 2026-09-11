@@ -1755,7 +1755,7 @@ set -euo pipefail
 #
 # tar and gzip are here because RAUC needs them to apply an update, and nothing
 # else in this image does. A bundle's payload is rootfs.tar.gz -- rauc's ext4
-# handler makes a fresh filesystem and shells out to `tar` to extract into it --
+# handler makes a fresh filesystem and shells out to \`tar\` to extract into it --
 # so an image without tar can be built, booted and imaged onto machines, and can
 # never be updated:
 #
@@ -1766,7 +1766,7 @@ set -euo pipefail
 #
 # This is a family difference, not an oversight in the abstract: tar is Essential
 # on Debian, so debootstrap always provides it and the deb path never had to ask.
-# `dnf --installroot` installs what it is told and nothing else. gzip happened to
+# \`dnf --installroot\` installs what it is told and nothing else. gzip happened to
 # arrive as somebody else's dependency, which is not the same as being required.
 #
 # The profile and caller-supplied packages are NOT in this transaction. The

@@ -395,5 +395,64 @@ def check_update_tools():
     return bad
 
 
+def check_heredoc_substitution():
+    """Nothing inside the chroot heredocs may run a command on the BUILDER.
+
+    build-image.sh writes the in-chroot script with `cat > setup.sh <<CHROOT` --
+    unquoted, deliberately, because the body interpolates $MNT, $SUITE and the
+    package lists. Unquoted also means backticks and $(...) are command
+    substitution, run on the builder at the moment the file is written.
+
+    That cost a full image build. A comment added with the tar/gzip fix read
+
+        # `dnf --installroot` installs what it is told and nothing else.
+
+    so bash ran `dnf --installroot` on the builder, spliced its usage text into
+    the generated script, and everything past the first newline of that text was
+    no longer behind the `#`. setup.sh ended up with a line reading `[--nodocs]`
+    and the build died with three errors that name nothing relevant:
+
+        tar: You must specify one of the '-Acdtrux' ... options
+        Command line error: argument --installroot: expected one argument
+        /tmp/setup.sh: line 20: [--nodocs]: command not found
+
+    900 lines in, after minutes of package installs.
+
+    The file already knew: an older comment nearby escapes its backticks. Knowing
+    is not checking. Escape them, or reword. $VAR stays -- that is what the
+    unquoted heredoc is for.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.normpath(os.path.join(here, "..", ".."))
+    src = open(os.path.join(root, "builder", "build-image.sh"),
+               encoding="utf-8").read().splitlines()
+
+    bad = []
+    inside = False
+    for i, line in enumerate(src, 1):
+        if re.search(r"<<CHROOT\s*$", line):
+            inside = True
+            continue
+        if inside:
+            if line.strip() == "CHROOT":
+                inside = False
+                continue
+            if "`" in re.sub(r"\\`", "", line):
+                bad.append((i, "backtick", line.strip()[:88]))
+            if re.search(r"(?<!\\)\$\(", line):
+                bad.append((i, "$(", line.strip()[:88]))
+
+    print("== the chroot heredocs run nothing on the builder ==")
+    if not bad:
+        print("  PASS  no unescaped command substitution in the CHROOT heredocs")
+        return 0
+    for ln, kind, text in bad:
+        print(f"  FAIL  build-image.sh:{ln} unescaped {kind}: {text}")
+        print("        This RUNS on the builder when setup.sh is written.")
+    return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main() | check_state_models() | check_chroot_resolver() | check_update_tools())
+    sys.exit(main() | check_state_models() | check_chroot_resolver()
+             | check_update_tools() | check_heredoc_substitution())
+
