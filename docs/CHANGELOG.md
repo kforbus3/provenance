@@ -1358,7 +1358,14 @@ preserves the old behaviour. Two further notes for existing deployments:
 
 ---
 
-## v1.1.0 — Bills of materials, from data the scanner was already throwing away
+## v1.1.0 (2026-08-05) — Bills of materials, from data the scanner was already throwing away
+
+> **Note.** The `v1.1.0` git tag was later reused for the Provenance release of
+> the same number (top of this file), under the same policy as `v1.0.0`: no tag
+> of this repository had ever been pushed, so moving it broke nothing outside a
+> working copy. This entry is the release that originally carried the number and
+> stays here as the record of it; its commit is `547c48f`.
+
 
 - **Software bills of materials for every scanned host.** The vulnerability
   scanner already pulled each host's package database over SSH, handed it to
