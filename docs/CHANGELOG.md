@@ -14,7 +14,7 @@ for life. Nothing before this was ever published: no tag of this repository has
 ever been pushed and no release has ever existed outside it.
 
 The number was used once before, by [the August 2026
-release](#v100-2026-08-05--a-compatibility-promise-and-the-dependency-audit-that-had-never-run)
+release](#v100-2026-08-05-a-compatibility-promise-and-the-dependency-audit-that-had-never-run)
 of the SSH control plane this grew out of. That entry is still below, and the
 tag now points here.
 
@@ -29,7 +29,7 @@ refusal to build anything.
 
 ### Updates that could never have worked
 
-Four defects each made an A/B machine unupdatable, and every one of them let the
+Four defects each left an A/B machine unable to update, and every one of them let the
 machine image, boot and run perfectly first — rauc is used for nothing else, so
 nothing failed until the first update was attempted.
 
@@ -1288,10 +1288,11 @@ preserves the old behaviour. Two further notes for existing deployments:
 ## v1.0.0 (2026-08-05) — A compatibility promise, and the dependency audit that had never run
 
 > **Note.** The `v1.0.0` git tag was later reused for the first release of
-> Provenance, the combined product (top of this file). That release was never
-> published — no tag of this repository has ever been pushed — so the reuse
-> breaks nothing external, but this entry is the release that originally carried
-> the number, and it stays here as the record of it. The commit is `bda473b`.
+> Provenance, the combined product (top of this file). *This* release was never
+> published — no tag of this repository had ever been pushed — so moving the tag
+> broke nothing outside a working copy. This entry is the release that originally
+> carried the number and stays here as the record of it; its commit is
+> `bda473b`.
 
 
 The feature set has been past 1.0 for a long time; what was missing was a
