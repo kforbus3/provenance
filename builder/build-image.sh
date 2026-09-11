@@ -2195,12 +2195,36 @@ keep_shadowing_report() {
     done
 }
 
+#
+# Reported, not refused. This started as a hard failure and that was wrong: it
+# failed the DEFAULT image on its own `keep /usr/local`, because this builder
+# ships the A/B helper scripts (ab-update, ab-agent, ab-sync-boot and the rest)
+# into /usr/local/sbin. No image could be built at all.
+#
+# The reasoning behind the failure did not survive contact with what a keep
+# actually does. A keep moves the path aside out of the STORE -- the upper layer
+# -- clears the reset paths, and puts it back. The image's copy is in the LOWER.
+# So a file the image ships at a kept path is shadowed only if the MACHINE has
+# also written that file; until it does, the keep moves nothing and the image's
+# new copy is what the machine reads.
+#
+# Whether the machine has written there is not knowable when the image is built,
+# so a hard failure was condemning a configuration on a precondition rather than
+# a defect.
+#
+# It is still worth saying, because the case it warns about is real and silent:
+# edit /usr/local/sbin/ab-update.sh on a machine and that edit lives in the upper,
+# is held across every slot change by this keep, and shadows every future image's
+# copy of it -- so the script that applies updates stops being updatable, with
+# nothing said.
 _shadowed=$(keep_shadowing_report "$MNT" $KEEP_PATHS)
-[ -z "$_shadowed" ] || die "keep path(s) contain files this image ships:$_shadowed
-    A keep holds the machine's copy of a path across a slot change, so the image's
-    copy is never seen again -- an update would replace those files and the machine
-    would go on running the old ones, reporting success.
-    Keep a subdirectory the image does not populate, or drop the keep."
+if [ -n "$_shadowed" ]; then
+    warn "the image ships files inside a kept path:$_shadowed"
+    warn "  A keep holds the MACHINE's copy across a slot change. These files are"
+    warn "  the image's, so they update normally -- unless someone edits one on a"
+    warn "  machine, after which that machine keeps its own copy forever and never"
+    warn "  sees another image's. Worth knowing for /usr/local/sbin/ab-*."
+fi
 
 # Will the seeding actually fit? Everything above is a guess made before
 # debootstrap ran; this is the measurement, made against the real tree, and it

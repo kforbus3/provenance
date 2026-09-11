@@ -576,6 +576,18 @@ rather than producing it:
   the writable store and back again on every slot change — so it can only lose
   data that was never at risk, while reading in the manifest as protection.
 
+The builder also **reports** — without refusing — when the image itself ships
+files inside a path you keep. The default image does: the A/B helper scripts
+(`ab-update`, `ab-agent`, `ab-sync-boot` and the rest) are installed into
+`/usr/local/sbin`, and `/usr/local` is the default keep.
+
+That is not a fault on its own. A keep moves the path aside out of the *writable
+store* and puts it back; the image's copy lives underneath, in the slot, and an
+update replaces it normally. It only bites once a **machine** writes one of those
+files — edit `/usr/local/sbin/ab-update.sh` on a machine and that edit is held
+across every slot change from then on, shadowing every future image's copy, so
+the script that applies updates quietly stops being updatable.
+
 The builder also *adds* one keep on your behalf: if the image is encrypted and
 anything resets `/etc`, `/etc/cryptsetup-keys.d` is kept automatically. The LUKS
 unlock key is written there by enrollment after the build, so a reset of `/etc`

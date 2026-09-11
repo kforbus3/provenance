@@ -196,7 +196,7 @@ check("but not on an unencrypted image, where it would keep nothing",
       "keep /etc/cryptsetup-keys.d" not in out, out)
 
 print()
-print("== a keep that shadows a file the image ships is refused ==")
+print("== a keep that holds files the image ships is REPORTED, not refused ==")
 
 
 def shadowing_report(root, keeps):
@@ -232,6 +232,26 @@ with tempfile.TemporaryDirectory() as td:
         rep = shadowing_report(td, ["/var/lib/dpkg"])
         check("a keep holding a shipped file is reported",
               "/var/lib/dpkg" in rep, f"got: {rep!r}")
+
+        # It must NOT fail the build. This was a die() and it refused the
+        # default image: the builder ships the A/B helper scripts into
+        # /usr/local/sbin, and /usr/local is the default keep, so every build
+        # stopped with
+        #
+        #   ERROR: keep path(s) contain files this image ships:
+        #          /usr/local(/usr/local/sbin/ab-slot-pending.sh)
+        #
+        # The reasoning was wrong, not just the threshold. A keep moves the path
+        # aside out of the STORE -- the upper -- and puts it back; the image's
+        # copy is in the LOWER. A file the image ships at a kept path is shadowed
+        # only once the MACHINE writes it, which is not knowable at build time.
+        src = open(SCRIPT, encoding="utf-8").read()
+        i = src.find("_shadowed=$(keep_shadowing_report")
+        check("keep_shadowing_report found in build-image.sh", i != -1)
+        if i != -1:
+            after = src[i:i + 700]
+            check("a shipped file inside a kept path warns rather than dying",
+                  "die " not in after and 'warn "' in after, after[:300])
 
         rep = shadowing_report(td, ["/does/not/exist"])
         check("a keep the image does not create at all is not reported",
