@@ -96,3 +96,19 @@ func (s *Store) ListHostKeys(ctx context.Context, hosts []string) ([]HostKeyPin,
 	}
 	return out, rows.Err()
 }
+
+// hostIdentities is what a host can be dialled as, and therefore what it can be
+// pinned under. Kept beside the pin table rather than in the host store so the
+// two cannot drift: a new way to address a host that is not listed here becomes
+// a pin nothing will ever clean up.
+//
+// It mirrors sshgw.HostKeyIDs, which is what the gateway verifies against.
+func hostIdentities(wgAddress, address, hostname string) []string {
+	var out []string
+	for _, v := range []string{wgAddress, address, hostname} {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}

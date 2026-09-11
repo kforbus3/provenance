@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -461,9 +462,57 @@ func (s *Store) UpdateHost(ctx context.Context, id uuid.UUID, in HostInput) (*mo
 }
 
 // DeleteHost removes a host.
+// DeleteHost removes a host and the SSH host-key pins recorded for it.
+//
+// The pins are not reachable by a foreign key: ssh_host_keys is keyed by the
+// TEXT a host is dialled as — its overlay address, its management address, its
+// hostname — because that is what the gateway has in hand when it verifies a
+// key. So nothing cascaded, and every deleted host left its pins behind. Nine
+// were found on a deployment of forty-three.
+//
+// That is not merely untidy. An overlay address is allocated by scanning
+// hosts.wg_address for what is in use (NextFreeWGAddress), so deleting a host
+// RETURNS its address to the pool. The next host enrolled can be handed
+// 10.100.0.25, present its own key, be compared against the deleted host's pin,
+// and be refused with
+//
+//	host key for <host> does not match the pinned key
+//	(possible MITM, or the host was rebuilt — remove its pin to re-trust)
+//
+// on a host that was never rebuilt and is not being attacked. The message sends
+// whoever reads it looking for an intrusion.
+//
+// Deleted in the same transaction as the host: a pin outliving its host is the
+// bug, and doing it afterwards on a best-effort basis just makes the bug rarer.
 func (s *Store) DeleteHost(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM hosts WHERE id=$1`, id)
-	return err
+	return s.tx(ctx, func(tx pgx.Tx) error {
+		// Read the identities before the row goes; afterwards there is nothing
+		// left to say what this host was called.
+		var wg, addr, name *string
+		if err := tx.QueryRow(ctx, `
+			SELECT host(wg_address)::text, NULLIF(address,''), NULLIF(hostname,'')
+			  FROM hosts WHERE id=$1`, id).Scan(&wg, &addr, &name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil // already gone
+			}
+			return err
+		}
+		var ids []string
+		for _, v := range []*string{wg, addr, name} {
+			if v != nil && *v != "" {
+				ids = append(ids, *v)
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM hosts WHERE id=$1`, id); err != nil {
+			return err
+		}
+		if len(ids) > 0 {
+			if _, err := tx.Exec(ctx, `DELETE FROM ssh_host_keys WHERE host = ANY($1)`, ids); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // CountHostsByStatus returns counts grouped by status for dashboards/metrics.

@@ -19,6 +19,41 @@ Day-to-day operator flows for Provenance. Assumes the stack is up via `make up`.
 > silently does not work rather than an error. Use **`make up-single`** for those.
 > `redeploy-single` warns when the running jump host predates its compose file.
 
+## Orphaned SSH host-key pins
+
+`ssh_host_keys` records the key first seen for each address a host is dialled as.
+It is keyed by that text rather than by host id, so before v1.0.2 deleting a host
+left its pins behind.
+
+A stale pin is not harmless. Overlay addresses are allocated by scanning which
+are in use, so a deleted host's address returns to the pool — and the next host
+handed it is compared against the dead host's key and refused with "possible
+MITM, or the host was rebuilt".
+
+Find them:
+
+```sql
+SELECT k.host, k.first_seen::date
+  FROM ssh_host_keys k
+ WHERE k.host <> 'jumphost'
+   AND NOT EXISTS (
+     SELECT 1 FROM hosts h
+      WHERE host(h.wg_address)::text = k.host
+         OR h.address = k.host
+         OR h.hostname = k.host)
+ ORDER BY k.host;
+```
+
+`jumphost` is excluded deliberately: it is dialled by `FLEET_JUMP_HOST` on every
+connection and is not a managed host, so it has no row in `hosts` and its pin is
+live.
+
+Review the list before deleting. A pin with no host is usually a deleted host —
+but it is indistinguishable from one for a host that is about to be added back
+under the same name, and removing it means the next connection trusts whatever
+answers. Delete with the same `WHERE` clause once you are satisfied.
+
+
 ## Upgrading Provenance (in-UI)
 
 Provenance upgrades itself from a single signed **`.fleetup`** bundle — no SSH, no

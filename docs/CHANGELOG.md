@@ -5,6 +5,31 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.0.2 — 2026-09-11
+
+**Deleting a host left its SSH host-key pins behind.** `ssh_host_keys` is keyed
+by the text a host is dialled as — overlay address, management address, hostname
+— because that is what the gateway holds when it verifies a key. No foreign key
+reaches it, so nothing cascaded. Nine orphans were found on a deployment of
+forty-three pins.
+
+That matters because an overlay address is allocated by scanning
+`hosts.wg_address` for what is in use, so deleting a host **returns its address
+to the pool**. The next host enrolled can be handed it, present its own key, be
+compared against the deleted host's pin, and be refused with
+
+    host key for <host> does not match the pinned key
+    (possible MITM, or the host was rebuilt — remove its pin to re-trust)
+
+on a host that was never rebuilt and is not under attack — a message that sends
+whoever reads it hunting an intrusion.
+
+Deletion now removes the pins in the same transaction as the host. Existing
+orphans are not cleaned up automatically: they are indistinguishable from a pin
+for a host added back under the same name, and deleting trust records on a guess
+is not something this should do by itself. Find them with the query in
+[operations.md](operations.md).
+
 ## v1.0.1 — 2026-09-11
 
 The three performance limits v1.0.0 documented rather than fixed.
