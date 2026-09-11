@@ -95,7 +95,8 @@ export function WritableState({ value, onChange }: {
               Each slot gets its own <code>upper-A</code> / <code>upper-B</code> instead of
               sharing one. A configuration change made while running A cannot follow you
               into B — so booting the other slot recovers from a bad <em>edit</em>, not only
-              a bad image. The cost is that the two slots stop sharing anything the overlay
+              a bad image. Each slot keeps its own state until that slot is itself
+              updated. The cost is that the two slots stop sharing anything the overlay
               covers. This is recorded in the image and <strong>cannot be changed by an
               update</strong>: a machine refuses a layout change at boot.
             </Alert>
@@ -111,8 +112,8 @@ export function WritableState({ value, onChange }: {
         {pathField("volatilePaths", "Discarded on reboot",
           "tmpfs — nothing written here outlives the boot.",
           "/tmp /var/tmp")}
-        {pathField("resetPaths", "Reset when the slot changes",
-          "Cleared on an A/B update, so stale state cannot cross a release.",
+        {pathField("resetPaths", "Reset when the slot's image is replaced",
+          "Cleared when an update rewrites this slot, so stale state cannot cross a release.",
           "/var/cache")}
         {pathField("keepPaths", "Held back from that reset",
           "Exceptions to the line above, kept across the update.",

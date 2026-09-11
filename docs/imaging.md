@@ -532,8 +532,27 @@ running system is a system whose data is somewhere it is not looking.
   Booting the other slot then recovers from a bad *edit*, not only a bad image —
   at the cost of the slots no longer sharing anything the overlay covers.
 - **the path directives** — shared across slots, private to each slot, discarded
-  on reboot, reset when the slot changes, held back from that reset, and owned by
-  the image.
+  on reboot, reset when the slot's image is replaced, held back from that reset,
+  and owned by the image.
+
+#### What triggers the reset
+
+The distribution-owned paths are cleared out of the writable state when **the
+image under them is replaced**, which the machine detects from the slot's
+filesystem UUID: RAUC installs an ext4 slot from a tar payload, so it makes a
+fresh filesystem each time and the UUID changes on exactly that event.
+
+This matters if you use a per-slot upper. The test used to be "did the slot
+letter change", which is right for one upper shared by both slots but wrong for
+two: `upper-B` is written against B's lower, so booting A and back into B
+invalidates nothing — and the old rule cleared it anyway, on every switch. A
+per-slot upper now keeps each slot's state until that slot is actually updated,
+which is what the option is for.
+
+A machine with no recorded identity yet — the first boot after updating to an
+image that has this — falls back to the slot-letter rule for that one boot. It
+errs towards clearing too much, which costs someone a package install rather
+than leaving a binary from the old release shadowing the new one.
 
 Paths must be **absolute**. The builder silently skips anything else, so the
 dialog refuses to submit instead: a skipped directive is a setting that looks

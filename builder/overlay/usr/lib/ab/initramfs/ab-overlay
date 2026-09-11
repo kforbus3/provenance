@@ -28,7 +28,7 @@
 # both share. A configuration change made while running A then cannot follow you
 # into B, so "boot the other slot" recovers from a bad edit and not only from a
 # bad image -- at the cost of the two slots no longer sharing anything the
-# overlay covers. See BUILDER.md#a-separate-upper-layer-per-slot.
+# overlay covers. See docs/imaging.md, "Writable state".
 #
 # Runs after the root slot is mounted and before the switch to it --
 # local-bottom under initramfs-tools, pre-pivot under dracut. Add ab.state=off (ab.overlay=off) to the kernel command line
@@ -448,8 +448,93 @@ fi
 LAST=""
 [ -r /ab-rw/.slot ] && LAST="$(cat /ab-rw/.slot 2>/dev/null)"
 
-if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
-    msg "slot changed ${LAST} -> ${SLOT}; clearing OS paths from writable state"
+# What identifies the content this upper is sitting on. RAUC installs an ext4
+# slot from a .tar payload, and for that combination its handler is "make a
+# fresh filesystem and extract into it" (see make-bundle.sh) -- so the slot's
+# filesystem UUID changes on exactly the event that makes an upper stale, an
+# install into that slot, and on nothing else. Rebooting the same slot keeps it;
+# booting the other slot reads a different one.
+#
+# That matters because the test this replaced was "did the slot letter change",
+# which is the right question only when one upper is shared by both slots. With
+# `upper per-slot` each upper is written against its own slot's lower, so an
+# A -> B switch invalidates nothing: upper-B is exactly where it was when B last
+# ran, and B's lower has not moved. The old test cleared it anyway, on every
+# switch, which is the reset firing on the wrong event -- and the one thing
+# --slot-private-upper is sold on is that each slot keeps its own state.
+#
+# Keyed per upper, so the two uppers are tracked independently. Under a shared
+# upper there is one stamp and the answer comes out the same as before, plus it
+# no longer resets when both slots happen to hold identical content.
+# /proc/mounts rather than findmnt, and a shell loop rather than head: the two
+# harnesses ship different sets of binaries, and the dracut module listing
+# findmnt is not the same thing as the initramfs-tools hook copying it -- which
+# it does not. A helper that works on one family and silently returns nothing on
+# the other would leave every Debian machine on the fallback path below, looking
+# exactly like a machine whose slot had genuinely changed.
+#
+# The bind of the slot appears here with its real backing device, so no special
+# handling is needed for it. Last match wins, which is the most recent mount.
+lower_fs_uuid() {
+    _dev=""
+    while read -r _d _m _rest; do
+        [ "$_m" = "/ab-lower" ] && _dev="$_d"
+    done < /proc/mounts
+    [ -n "$_dev" ] || return 1
+    # -c /dev/null: probe the device rather than answering from
+    # /run/blkid/blkid.tab. The cache is keyed by device path, and an entry
+    # written before this slot was rewritten reports the filesystem that used to
+    # be there -- which is the one value that must never be stale here, because
+    # "the UUID has not changed" is precisely how this decides the writable state
+    # is still valid. A cached answer would say the slot was untouched after an
+    # install replaced it, and the update's /usr would stay shadowed.
+    #
+    # Found by building a real filesystem, reading it through the bind, running
+    # mkfs over it and reading it again: without this the second read returned
+    # the first filesystem's UUID. ab-luks-key carries the same guard for the
+    # same reason.
+    blkid -c /dev/null -o value -s UUID "$_dev" 2>/dev/null
+}
+
+# The decision itself, as a function of four values and nothing else, so it can
+# be lifted out and exercised against every arrangement that matters --
+# test_slot_reset.py does exactly that. Booting a machine twice is not a test
+# anyone runs per change, and this is the logic that decides whether a fleet's
+# writable state survives an update.
+#
+# Prints the reason to reset, or nothing at all to leave the state alone.
+reset_reason() {               # reset_reason <slot> <last-slot> <lower-id> <last-id>
+    _slot="$1"; _last="$2"; _now_id="$3"; _was_id="$4"
+
+    # Both identities known: this is the real question -- has the content under
+    # this upper been replaced since the upper was last reconciled against it.
+    if [ -n "$_now_id" ] && [ -n "$_was_id" ]; then
+        [ "$_now_id" != "$_was_id" ] && \
+            printf 'slot %s was rewritten since this writable state last ran' "${_slot:-?}"
+        return 0
+    fi
+
+    # No usable stamp: the first boot after upgrading from an image whose
+    # ab-overlay predates this, or a machine whose slot UUID could not be read.
+    # Fall back to the slot-letter test, which errs towards clearing too much --
+    # the direction that costs someone their `dnf install` rather than leaving a
+    # binary from the old release shadowing the one the update just delivered.
+    [ -n "$_slot" ] && [ -n "$_last" ] && [ "$_slot" != "$_last" ] && \
+        printf 'slot changed %s -> %s' "$_last" "$_slot"
+    return 0
+}
+
+STAMP="/ab-rw/.lower-${UPPER_ROOT##*/}"
+LOWER_ID="$(lower_fs_uuid || true)"
+LAST_ID=""
+[ -r "$STAMP" ] && LAST_ID="$(cat "$STAMP" 2>/dev/null)"
+
+NEEDS_RESET=""
+RESET_WHY="$(reset_reason "$SLOT" "$LAST" "$LOWER_ID" "$LAST_ID")"
+[ -n "$RESET_WHY" ] && NEEDS_RESET=1
+
+if [ -n "$NEEDS_RESET" ]; then
+    msg "${RESET_WHY}; clearing OS paths from writable state"
 
     # A kept path is one that lives inside something being cleared but is not
     # the image's to clear. /usr/local is the reason this exists: the FHS
@@ -516,6 +601,12 @@ if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
     fi
 fi
 [ -n "$SLOT" ] && { printf '%s\n' "$SLOT" > /ab-rw/.slot 2>/dev/null || true; }
+# Written on every boot, not only after a reset: the stamp records what this
+# upper has now been reconciled against, and a boot that needed no reset is
+# still a boot that reconciled it. Leaving it unwritten would mean the first
+# boot after an upgrade never acquires a stamp and the fallback above stays in
+# force forever.
+[ -n "$LOWER_ID" ] && { printf '%s\n' "$LOWER_ID" > "$STAMP" 2>/dev/null || true; }
 
 # --- apply the manifest ------------------------------------------------------
 
