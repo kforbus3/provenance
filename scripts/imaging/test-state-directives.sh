@@ -52,14 +52,75 @@ check(){ ensure_ovl; if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 # distribution owns (/usr/bin/distro-tool), something the machine owns
 # (/usr/local/bin/mine), something the image declares it owns (/etc/motd), and
 # directories the non-root directives target.
+populate_slot() {               # populate_slot <dir>
+    mkdir -p "$1"/{usr/bin,usr/local/bin,usr/lib/ab,etc,var/log,var/lib/dpkg,home,opt}
+    echo "release-1" > "$1/usr/bin/distro-tool"
+    echo "release-1" > "$1/etc/motd"
+    echo "release-1" > "$1/var/lib/dpkg/status"
+    echo "from-the-image" > "$1/var/log/.shipped"
+    printf '/etc/motd\n' > "$1/usr/lib/ab/image-owned.list"
+}
+
 make_slot() {
     rm -rf "$WORK/slot"
-    mkdir -p "$WORK/slot"/{usr/bin,usr/local/bin,usr/lib/ab,etc,var/log,var/lib/dpkg,home,opt}
-    echo "release-1" > "$WORK/slot/usr/bin/distro-tool"
-    echo "release-1" > "$WORK/slot/etc/motd"
-    echo "release-1" > "$WORK/slot/var/lib/dpkg/status"
-    echo "from-the-image" > "$WORK/slot/var/log/.shipped"
-    printf '/etc/motd\n' > "$WORK/slot/usr/lib/ab/image-owned.list"
+    mkdir -p "$WORK/slot"
+    populate_slot "$WORK/slot"
+}
+
+# --- a slot that is a real filesystem -----------------------------------------
+#
+# Most cases below stand a plain directory in for the root slot, which is enough
+# for every directive: the engine binds $rootmnt either way.
+#
+# It is NOT enough for the reset. The engine decides whether the writable state
+# is stale by reading the slot's filesystem UUID -- RAUC makes a fresh filesystem
+# for every install, so the UUID changes on exactly the event that invalidates an
+# upper. A bound directory has no filesystem of its own: /ab-lower's device in
+# /proc/mounts is whatever the container's root is, blkid says nothing about it,
+# and the engine falls back to comparing slot letters.
+#
+# So the directory cases exercise the FALLBACK, which is worth having and is not
+# what a real machine does. These helpers give a case two real ext4 filesystems
+# to switch between, which is what makes the difference between "boot the other
+# slot" and "that slot was reinstalled" visible at all.
+SLOT_LOOP=""
+CUR_SLOT=""
+
+slot_fs_detach() {
+    umount "$WORK/slot" 2>/dev/null || umount -l "$WORK/slot" 2>/dev/null
+    [ -n "$SLOT_LOOP" ] && losetup -d "$SLOT_LOOP" 2>/dev/null
+    SLOT_LOOP=""; CUR_SLOT=""
+}
+
+# A fresh filesystem in that slot: a new UUID, which is what an install looks
+# like from here. Must not be the slot currently mounted.
+slot_fs_new() {                 # slot_fs_new <A|B>
+    [ "$CUR_SLOT" = "$1" ] && slot_fs_detach
+    rm -f "$WORK/slot-$1.img"
+    truncate -s 96M "$WORK/slot-$1.img"
+    mkfs.ext4 -q "$WORK/slot-$1.img" 2>/dev/null
+}
+
+slot_fs_use() {                 # slot_fs_use <A|B>  -- mount it as the root slot
+    slot_fs_detach
+    mkdir -p "$WORK/slot"
+    SLOT_LOOP=$(losetup -f --show "$WORK/slot-$1.img")
+    mount "$SLOT_LOOP" "$WORK/slot" || echo "    HARNESS-FAIL: could not mount slot $1"
+    CUR_SLOT="$1"
+}
+
+# The manifest has to be in both slots: the engine reads it from whichever one is
+# being booted, and a case that switches slots would otherwise find no manifest
+# on the second and silently get the no-manifest defaults.
+manifest_both() {               # manifest_both < heredoc
+    cat > "$WORK/manifest.tmp"
+    local keep="$CUR_SLOT" s
+    for s in A B; do
+        slot_fs_use "$s"
+        mkdir -p "$WORK/slot/usr/lib/ab"
+        cp "$WORK/manifest.tmp" "$WORK/slot/usr/lib/ab/state.conf"
+    done
+    slot_fs_use "$keep"
 }
 
 # The overlay partition, for real: the script mounts it by label and the whole
@@ -121,13 +182,18 @@ teardown() { unmount_all; }
 # End of a case: also release the loop device.
 finish() {
     unmount_all
+    slot_fs_detach
     [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null
     LOOP=""
 }
 
 # Run the real script the way local-bottom does: $rootmnt set, root slot already
-# mounted there. A bind of a directory stands in for the slot's filesystem --
-# the script binds $rootmnt anyway, so it never sees the difference.
+# mounted there. A bind of a directory stands in for the slot's filesystem in
+# most cases -- the script binds $rootmnt anyway.
+#
+# It does see the difference in one place, which this comment used to deny: the
+# reset reads the slot's filesystem UUID, and a bound directory has none. Cases
+# that care use slot_fs_use to mount a real ext4 instead.
 run_engine() {                  # run_engine "<cmdline>"
     mkdir -p "$WORK/root"
     mount -o bind "$WORK/slot" "$WORK/root"
@@ -171,6 +237,20 @@ ensure_ovl() {
 is_ab_overlay() { [ "$(findmnt -no SOURCE "$1" 2>/dev/null | tail -1)" = ab-root ]; }
 
 begin() { CASE="$1"; echo ""; echo "== $CASE"; unmount_all; make_slot; make_ovl; }
+
+# Same, but the root slot is a real filesystem in each of two slots. make_ovl
+# runs `losetup -D`, so it has to happen while no slot loop is attached --
+# otherwise it either detaches the slot out from under the case or trips over a
+# busy device, both of which look like engine bugs and are not.
+begin_fs() {
+    CASE="$1"; echo ""; echo "== $CASE"
+    unmount_all
+    slot_fs_detach
+    make_ovl
+    slot_fs_new A; slot_fs_new B
+    slot_fs_use B; populate_slot "$WORK/slot"
+    slot_fs_use A; populate_slot "$WORK/slot"
+}
 
 R="$WORK/root"
 
@@ -707,6 +787,183 @@ check "it was reported"                 'grep -q "unknown .upper sometimes" "$WO
 check "root became an overlay"          'is_ab_overlay "$R"'
 check "the shared upper was used"       'echo x > "$R/etc/f" && [ -f /ab-rw/upper/etc/f ]'
 check "the recorded layout is the plain one" '[ "$(cat /ab-rw/.model)" = overlay ]'
+finish
+
+# =============================================================================
+# Everything above stands a directory in for the root slot, so the engine cannot
+# read a filesystem UUID and falls back to comparing slot letters. These cases
+# give it two real filesystems, which is the only way to tell "you booted the
+# other slot" apart from "that slot was reinstalled" -- and the difference
+# between them is the whole reason the reset was rewritten.
+#
+# First, the guard. If the identity were unreadable here too, every case below
+# would quietly re-test the fallback and pass while proving nothing. The engine
+# records what it reconciled against, so the presence of that stamp is proof the
+# real path was taken.
+begin_fs "the slot identity is readable at all (or the cases below prove nothing)"
+manifest_both <<'EOF'
+model overlay
+overlay /
+upper per-slot
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+slot_fs_use A
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "the engine recorded an identity for A's upper" \
+      '[ -s /ab-rw/.lower-upper-A ]'
+check "and it is the slot filesystem's own UUID" \
+      '[ "$(cat /ab-rw/.lower-upper-A)" = "$(blkid -c /dev/null -o value -s UUID "$SLOT_LOOP")" ]'
+check "so the reset did not decide by slot letter" \
+      '! grep -q "slot changed" "$WORK/out.log"'
+finish
+
+# =============================================================================
+# The bug. upper-B is written against B's lower; booting A and back into B
+# changes the slot letter twice and changes B's image not at all. The old rule
+# cleared upper-B on that second switch, every time -- so the one thing a
+# per-slot upper is for, each slot keeping its own state, was the thing it did
+# not do.
+begin_fs "per-slot upper: returning to a slot whose image is unchanged keeps its state"
+manifest_both <<'EOF'
+model overlay
+overlay /
+upper per-slot
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+slot_fs_use B
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+echo "installed-by-hand" > "$R/usr/bin/extra-tool"
+check "B's own upper holds it"          '[ -f /ab-rw/upper-B/usr/bin/extra-tool ]'
+teardown
+slot_fs_use A
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+teardown
+slot_fs_use B
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "nothing was cleared on the way back" \
+      '! grep -q "clearing OS paths" "$WORK/out.log"'
+check "what was installed under B is still there" \
+      '[ "$(cat "$R/usr/bin/extra-tool")" = installed-by-hand ]'
+check "the distribution's own file is still the image's" \
+      '[ "$(cat "$R/usr/bin/distro-tool")" = release-1 ]'
+finish
+
+# =============================================================================
+# ...and the half that must still happen. A bundle installed into B gives that
+# slot a new filesystem, so anything in upper-B was written against an image
+# that is no longer there.
+begin_fs "per-slot upper: a bundle installed into that slot does clear it"
+manifest_both <<'EOF'
+model overlay
+overlay /
+upper per-slot
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+slot_fs_use B
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+echo "installed-by-hand" > "$R/usr/bin/extra-tool"
+echo "mine" > "$R/usr/local/bin/keepme"
+teardown
+slot_fs_use A
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+teardown
+# The install: a fresh filesystem in B, carrying release-2.
+slot_fs_new B
+slot_fs_use B
+populate_slot "$WORK/slot"
+echo "release-2" > "$WORK/slot/usr/bin/distro-tool"
+cp "$WORK/manifest.tmp" "$WORK/slot/usr/lib/ab/state.conf"
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "the reset was announced, and for the right reason" \
+      'grep -q "was rewritten" "$WORK/out.log"'
+check "the stale hand-installed binary is gone" \
+      '[ ! -f "$R/usr/bin/extra-tool" ]'
+check "the new release is what the machine now runs" \
+      '[ "$(cat "$R/usr/bin/distro-tool")" = release-2 ]'
+check "/usr/local was held back from the clearing" \
+      '[ "$(cat "$R/usr/local/bin/keepme")" = mine ]'
+check "A's upper was not touched" \
+      '[ -d /ab-rw/upper-A ]'
+finish
+
+# =============================================================================
+# A shared upper carries whatever the last-running slot wrote, so switching
+# slots always invalidates it. This is the default and was already right; it is
+# here because the rewrite had to leave it right.
+begin_fs "shared upper: a slot change still clears it"
+manifest_both <<'EOF'
+model overlay
+overlay /
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+slot_fs_use A
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "installed-by-hand" > "$R/usr/bin/extra-tool"
+teardown
+slot_fs_use B
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "the reset was announced"         'grep -q "clearing OS paths" "$WORK/out.log"'
+check "what A wrote into /usr is gone"  '[ ! -f "$R/usr/bin/extra-tool" ]'
+finish
+
+# =============================================================================
+# The other half of not over-clearing: rebooting the same slot, with nothing
+# installed, must leave everything alone. Under the old rule this was already
+# true, and it is the case that would break first if the identity were computed
+# from something that varies per boot rather than per install.
+begin_fs "rebooting the same slot changes nothing"
+manifest_both <<'EOF'
+model overlay
+overlay /
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+slot_fs_use A
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "installed-by-hand" > "$R/usr/bin/extra-tool"
+teardown
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "nothing was cleared"             '! grep -q "clearing OS paths" "$WORK/out.log"'
+check "the file is still there"         '[ "$(cat "$R/usr/bin/extra-tool")" = installed-by-hand ]'
+teardown
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "and still there after a third boot" \
+      '[ "$(cat "$R/usr/bin/extra-tool")" = installed-by-hand ]'
+finish
+
+# =============================================================================
+# An update to the running slot cannot happen -- RAUC writes the inactive one --
+# but the identity check does not know that, and answering it correctly is what
+# makes the rule "this slot's image changed" rather than "the slot letter
+# changed". A shared upper whose slot was reinstalled underneath it is stale.
+begin_fs "shared upper: the same slot, reinstalled, is still cleared"
+manifest_both <<'EOF'
+model overlay
+overlay /
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+slot_fs_use A
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "installed-by-hand" > "$R/usr/bin/extra-tool"
+teardown
+slot_fs_new A
+slot_fs_use A
+populate_slot "$WORK/slot"
+cp "$WORK/manifest.tmp" "$WORK/slot/usr/lib/ab/state.conf"
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "the reset was announced"         'grep -q "was rewritten" "$WORK/out.log"'
+check "the stale file is gone"          '[ ! -f "$R/usr/bin/extra-tool" ]'
 finish
 
 # =============================================================================
