@@ -214,16 +214,18 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 	if rows, err := s.pool.Query(ctx, `
 		SELECT host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
-			listening_ports, ports_checked_at
+			listening_ports, ports_checked_at,
+			containers, containers_checked_at, COALESCE(containers_status,'')
 		FROM host_inventory WHERE host_id = ANY($1)`, ids); err == nil {
 		for rows.Next() {
 			var hid uuid.UUID
 			var inv models.HostInventory
-			var updatePkgs, obsoletePkgs, ports []byte
+			var updatePkgs, obsoletePkgs, ports, containers []byte
 			if rows.Scan(&hid, &inv.OSName, &inv.OSVersion, &inv.KernelVersion, &inv.Architecture,
 				&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
 				&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs,
-				&ports, &inv.PortsCheckedAt) != nil {
+				&ports, &inv.PortsCheckedAt,
+				&containers, &inv.ContainersCheckedAt, &inv.ContainersStatus) != nil {
 				continue
 			}
 			if len(updatePkgs) > 0 {
@@ -234,6 +236,9 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 			}
 			if len(ports) > 0 {
 				_ = json.Unmarshal(ports, &inv.ListeningPorts)
+			}
+			if len(containers) > 0 {
+				_ = json.Unmarshal(containers, &inv.Containers)
 			}
 			if h := byID[hid]; h != nil {
 				h.Inventory = &inv
@@ -590,11 +595,16 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 	if inv.ListeningPorts != nil {
 		ports, _ = json.Marshal(inv.ListeningPorts)
 	}
+	var containers []byte
+	if inv.Containers != nil {
+		containers, _ = json.Marshal(inv.Containers)
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
-			listening_ports, ports_checked_at, collected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+			listening_ports, ports_checked_at,
+			containers, containers_checked_at, containers_status, collected_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
 		ON CONFLICT (host_id) DO UPDATE SET
 			os_name=EXCLUDED.os_name, os_version=EXCLUDED.os_version, kernel_version=EXCLUDED.kernel_version,
 			architecture=EXCLUDED.architecture, ssh_version=EXCLUDED.ssh_version, cpu_count=EXCLUDED.cpu_count,
@@ -607,10 +617,18 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 			obsolete_packages=COALESCE(EXCLUDED.obsolete_packages, host_inventory.obsolete_packages),
 			listening_ports=COALESCE(EXCLUDED.listening_ports, host_inventory.listening_ports),
 			ports_checked_at=COALESCE(EXCLUDED.ports_checked_at, host_inventory.ports_checked_at),
+			-- Same rule, and it matters more here: a sweep that could not reach the
+			-- docker socket must not blank a list collected when it could. The
+			-- STATUS is overwritten unconditionally, because why we cannot see the
+			-- containers is current news even when the list itself is stale.
+			containers=COALESCE(EXCLUDED.containers, host_inventory.containers),
+			containers_checked_at=COALESCE(EXCLUDED.containers_checked_at, host_inventory.containers_checked_at),
+			containers_status=EXCLUDED.containers_status,
 			collected_at=now()`,
 		hostID, inv.OSName, inv.OSVersion, inv.KernelVersion, inv.Architecture, inv.SSHVersion, inv.CPUCount, inv.MemoryMB,
 		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs, obsoletePkgs,
-		ports, inv.PortsCheckedAt)
+		ports, inv.PortsCheckedAt,
+		containers, inv.ContainersCheckedAt, inv.ContainersStatus)
 	return err
 }
 

@@ -27,6 +27,26 @@ export interface HostInventory {
   listeningPorts?: ListeningPort[];
   portsCheckedAt?: string;
   updatePackages?: PendingUpdate[];
+  containers?: Container[];
+  // Why the container list is what it is. An empty list means "nothing running"
+  // ONLY when this says ok — the monitor runs without sudo and Docker's socket is
+  // root-owned, so a host whose monitor account lacks access answers nothing.
+  containersStatus?: "" | "ok" | "no_docker" | "no_access" | "unreachable";
+  containersCheckedAt?: string;
+}
+
+// One running container on a host.
+export interface Container {
+  id: string;
+  name: string;
+  image: string;
+  repository?: string;
+  tag?: string;
+  // What is ACTUALLY running: a tag moves, a digest does not.
+  digest?: string;
+  state?: string;
+  status?: string;
+  ports?: string;
 }
 
 // One upgradable package on a host (collected alongside the update counts).

@@ -404,6 +404,20 @@ type HostInventory struct {
 	// different findings and looked identical.
 	ListeningPorts []ListeningPort `json:"listeningPorts,omitempty"`
 	PortsCheckedAt *time.Time      `json:"portsCheckedAt,omitempty"`
+
+	// Containers is what the host is actually running. Nothing else in this
+	// product knew a container existed: vulnerability scanning reads the host's
+	// package database, so a machine running twenty containers looked like a
+	// machine with almost nothing on it.
+	//
+	// ContainersStatus says WHY the list is what it is. An empty list is a real
+	// answer only when the host could be asked -- Docker's socket is root-owned
+	// and the monitor runs without sudo, so a host whose monitor account is not
+	// in the docker group answers nothing, and rendering that as "no containers"
+	// would turn an unanswered question into a clean bill of health.
+	Containers          []Container `json:"containers,omitempty"`
+	ContainersStatus    string      `json:"containersStatus,omitempty"`
+	ContainersCheckedAt *time.Time  `json:"containersCheckedAt,omitempty"`
 	// ObsoletePackages are installed packages offered by no configured repository
 	// (apt's [installed,local] / dnf "extras") — orphaned leftovers from in-place
 	// distribution upgrades. Used to classify a vulnerability whose package can't be
@@ -445,6 +459,26 @@ type HostStatusEvent struct {
 }
 
 // Session is a browser login session that owns an ephemeral SSH identity.
+// Container is one running container on a host.
+type Container struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	// Repository and Tag are Image split for display and for matching an update
+	// against what is running. Parsed on the server, because a registry may carry
+	// a port (registry.example.com:5000/app) and splitting on the first colon
+	// gets that wrong in a way nobody notices until it is their registry.
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
+	// Digest pins what is ACTUALLY running. A tag moves: "nginx:1.25" says
+	// nothing about which nginx:1.25, and both vulnerability scanning and update
+	// detection need the answer rather than the label.
+	Digest string `json:"digest,omitempty"`
+	State  string `json:"state,omitempty"`
+	Status string `json:"status,omitempty"`
+	Ports  string `json:"ports,omitempty"`
+}
+
 type Session struct {
 	ID         uuid.UUID  `json:"id"`
 	UserID     uuid.UUID  `json:"userId"`

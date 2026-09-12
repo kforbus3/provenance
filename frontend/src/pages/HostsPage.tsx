@@ -1643,6 +1643,69 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
         {/* Listening ports, next to the pending updates rather than on a page of
             their own: the question "is this CVE reachable" is asked while
             looking at the CVEs. */}
+        {/* Containers. Shown even when the list is empty, because WHY it is empty
+            is the interesting part: a host whose monitor account cannot reach the
+            Docker socket answers nothing, and rendering that as "no containers"
+            would report a clean host for the machines carrying the most
+            software. */}
+        {inv?.containersStatus && inv.containersStatus !== "no_docker" && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>
+              Containers{inv.containers?.length ? ` (${inv.containers.length})` : ""}
+            </Typography>
+            {inv.containersStatus === "no_access" && (
+              <Alert severity="warning" sx={{ mb: 1 }}>
+                A container runtime is installed, but this host's monitor account cannot
+                reach its socket — so what is running here is unknown, and none of it is
+                being scanned for vulnerabilities. Add the account to the <code>docker</code>
+                {" "}group on this host to collect it.
+              </Alert>
+            )}
+            {inv.containersStatus === "unreachable" && (
+              <Alert severity="info" sx={{ mb: 1 }}>
+                The last sweep could not ask this host what it is running.
+              </Alert>
+            )}
+            {inv.containersStatus === "ok" && !inv.containers?.length && (
+              <Typography variant="body2" color="text.secondary">
+                A container runtime is installed and nothing is running.
+              </Typography>
+            )}
+            {!!inv.containers?.length && (
+              <Box sx={{ maxHeight: 220, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 1, p: 1 }}>
+                <Stack spacing={0.25}>
+                  {[...inv.containers]
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((c) => (
+                      <Stack key={c.id} direction="row" spacing={1} alignItems="center">
+                        <Typography variant="body2" sx={{ fontFamily: "monospace", fontSize: 12, minWidth: 150 }}>
+                          {c.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                          {c.repository}{c.tag ? `:${c.tag}` : ""}
+                        </Typography>
+                        {/* The digest, abbreviated. A tag moves; this is what is
+                            actually running, and it is what an update check and a
+                            vulnerability scan both key on. */}
+                        {c.digest && (
+                          <Tooltip title={c.digest}>
+                            <Typography variant="caption" color="text.secondary"
+                                        sx={{ fontFamily: "monospace", fontSize: 11 }}>
+                              {c.digest.replace("sha256:", "").slice(0, 12)}
+                            </Typography>
+                          </Tooltip>
+                        )}
+                        {c.state && c.state !== "running" && (
+                          <Chip label={c.state} size="small" color="warning" variant="outlined" />
+                        )}
+                      </Stack>
+                    ))}
+                </Stack>
+              </Box>
+            )}
+          </Box>
+        )}
+
         {inv?.listeningPorts && inv.listeningPorts.length > 0 && (
           <Box sx={{ mt: 2 }}>
             <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>

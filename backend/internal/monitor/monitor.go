@@ -790,6 +790,7 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 	collectUpdates(conn, &inv)
 	collectObsolete(conn, &inv)
 	collectListeningPorts(conn, &inv)
+	collectContainers(conn, &inv)
 	return inv, true
 }
 

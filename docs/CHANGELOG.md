@@ -5,6 +5,34 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**Provenance can see containers.** Nothing in it knew a container existed:
+vulnerability scanning reads the host's package database, so a machine running
+twenty containers looked like a machine with almost nothing on it, and everything
+inside those images was invisible. On a fleet whose `docker`, `ai`, `containers`,
+`gitlab`, `grafana` and `prometheus` hosts are mostly containers, that is most of
+the attack surface.
+
+Running containers are now collected over the connection the monitor already
+holds — hourly, without `sudo`, alongside bound sockets — and shown in host
+details: name, image, resolved **digest**, state and ports. The digest rather than
+only the tag, because a tag moves: "nginx:1.25" does not say which nginx:1.25, and
+both vulnerability scanning and update detection need the answer rather than the
+label.
+
+Crucially, **"nothing is running" and "we could not look" are recorded
+separately**. Docker's socket is root-owned and every monitor probe runs without
+`sudo`, so a host whose monitor account is not in the `docker` group answers
+nothing — and an empty list there would report a clean host for exactly the
+machines carrying the most software. Host details says which it was, and what to
+do about it.
+
+This is the first half of managing containers rather than only observing them:
+you cannot roll out an update to something you cannot see.
+
+---
+
 ## v1.2.2 — 2026-09-11
 
 **Installing a bundle now cleans up after itself.** This product is installed once
