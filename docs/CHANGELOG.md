@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.19 — 2026-09-12
+
+**A deploy no longer strands containers that share another's network.** A service
+declared with `network_mode: "service:something"` has no network stack of its own
+— it lives inside that other container's. Recreating the owner destroyed the
+namespace and left every container attached to it running, reporting healthy, and
+with no network at all. On one fleet a rollout that recreated a VPN gateway
+stranded three containers behind it, including a torrent client that carried on
+reporting "Up 35 hours" with no route out. A narrowed deploy now brings those
+along. `depends_on` is not followed: that is start order, and a container whose
+dependency restarts is not broken by it.
+
+**A rollout detects an expired premise from what is actually running.** The
+previous release compared against a host's adopted stack, which works only where
+one exists — and the host this kept failing on had none. The arbiter is now what
+the host is running, which the verification step already reads. A container still
+on the tag the rollout was moving away from remains a failure: that is a deploy
+which reported success and changed nothing.
+
+---
+
 ## v1.2.18 — 2026-09-12
 
 **A rollout no longer fails on an image the host has been re-pinned past.** An
