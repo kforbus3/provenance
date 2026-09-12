@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.4 — 2026-09-12
+
+**Containers are collected on their own cadence.** v1.2.3 shipped container
+detection inside the hourly host-facts refresh, which is gated on a timestamp
+every host already had — so on upgrading, every host whose facts were still fresh
+skipped container collection entirely. A 19-host fleet showed containers for
+three of them: the three whose hourly refresh happened to fall after the upgrade.
+Nothing failed and nothing logged it. Containers now refresh every ten minutes,
+independently: a kernel version changes at a reboot, what a host runs changes
+whenever somebody deploys, and a rollout picks its targets from that list.
+
+**"Check now" said it would do something it cannot.** It re-asks registries about
+images already discovered; it never reaches out to hosts. The empty state offered
+it as the way to collect container lists, which is the one thing it does not do.
+It is "Check registries now", and the page says so.
+
+**Images built on the host are no longer reported as authentication failures.**
+Docker records a repository digest only for images it pulled, so a locally built
+one has none — including this product's own containers. A bare name resolves to
+Docker Hub, the repository is not there, and Hub answers 401, which surfaced as
+"this registry needs credentials" and would send you to configure credentials
+that cannot help. On the host running Provenance that was ten rows out of
+thirteen. They read "built locally" now.
+
+---
+
 ## v1.2.3 — 2026-09-12
 
 **Provenance can see containers.** Nothing in it knew a container existed:
