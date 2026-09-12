@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.15 — 2026-09-12
+
+**A deploy will no longer write a compose file that does not parse.** The
+previous release stopped an adoption saving the command runner's trailing
+"[exit code 0]" line into a stack's compose — but a stack already holding it
+stayed broken, because the deploy writes the stored copy without looking at it.
+Every retry rewrote the same unparseable file onto the host. The deploy now
+validates with compose's own parser first and restores the previous file if the
+new one fails, so a bad record fails the deploy rather than breaking the host,
+and a migration cleans the records already stored.
+
+---
+
 ## v1.2.14 — 2026-09-12
 
 **A rollout no longer writes an invalid compose file to a host.** Every command
