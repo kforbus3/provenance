@@ -5,6 +5,37 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.23 — 2026-09-12
+
+**Updates are now found for the version you pinned, not just the tag that
+happens to be running.** Pinning a compose file to the version a container is
+already on recreates nothing — the digest does not change, so there is no work
+for Docker to do. Between that pin and the next deploy the file says
+`bazarr:v1.6.0-ls356` while the container is still on `:latest`, and thirteen
+services across two hosts were sitting in exactly that state. The check followed
+the container, so those were only ever asked about under `:latest`, where the one
+available answer is "latest moved again". The version actually chosen was never
+compared against anything, and the upgrade waiting in the registry could not be
+seen. Tags a managed stack names are now checked in their own right, and a
+rollout built from one applies to the hosts whose compose files name it.
+
+**Every linuxserver.io image was permanently unupdatable, and now is not.** They
+are tagged `v1.6.0-ls356`, and the next build of the same image is
+`v1.6.0-ls372`. The rule that keeps `15-alpine` from being offered as an upgrade
+to `16-bookworm` read that build number as a variant, so seven images here were
+each reported as having no comparable tag in their own repository while being a
+plain version behind. A suffix now matches on its stem and orders the number
+after it as the count of builds it is. The stem may not itself contain digits, so
+`-alpine3.21` against `-alpine3.22` is still refused: that number is the base
+image's own version, and changing the operating system inside a container is not
+a patch bump.
+
+One consequence worth knowing: a service pinned but not yet recreated will now
+show its real update, and applying it is what finally brings the container onto
+the version its file has named all along.
+
+---
+
 ## v1.2.22 — 2026-09-12
 
 **Saving a compose file no longer moves the stack somewhere else.** The compose
