@@ -43,6 +43,28 @@ that slot and at no other time. Slot-private path stores were being re-seeded on
 every slot change too, and follow the same rule now; that applies to shared-upper
 images as well.
 
+**The audit chain can no longer be downgraded to a keyless one.** Each row records
+which algorithm hashed it, so that rows written before the HMAC key existed still
+verify. Verification trusted that column — and a party with database write access
+writes it. Reading the tail hash, appending a row tagged as keyless and hashing it
+with plain SHA-256 produced an event the chain reported as intact; the same move
+rebuilds an entire tail, erasing what it replaces. That is the threat the keyed
+chain exists to stop.
+
+Keyless rows appearing after the chain was keyed are now reported, and reported
+**separately from breakage**: such a row cannot be repaired — rewriting it means
+rewriting every hash after it, the operation the chain exists to make impossible —
+so folding it into "broken" would park an unfixable failure at the head of the
+report and hide every genuine break behind it. `/audit/verify` returns
+`weakFromSeq`, `weakCount` and a reason alongside `intact`.
+
+**`fleetctl` now keys the chain it writes to.** It loaded the key and never
+installed it, so every row it wrote used the legacy keyless hash — and its
+commands are the most sensitive in the product: `create-admin`, `rotate-ca`,
+`reset-mfa`, `enable-user`. It surfaced only as a warning that read like a missing
+setting ("audit chain is UNKEYED") on deployments whose server had the key
+configured all along.
+
 **Root can now be granted for a bounded time instead of permanently.** `Host.Sudo`
 decides which account a connection lands in — the privileged one or the host's
 login-only account — and it was a standing permission with nothing else feeding

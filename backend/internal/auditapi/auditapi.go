@@ -218,12 +218,24 @@ func (h *handler) actions(w http.ResponseWriter, r *http.Request) {
 func (h *handler) verify(w http.ResponseWriter, r *http.Request) {
 	// Verify under bypass: the hash chain is a single global sequence across all
 	// tenants, so a tenant-scoped read would hide rows and falsely report a break.
-	intact, brokenAt, err := h.d.Store.VerifyAuditChain(tenant.WithBypass(r.Context()))
+	res, err := h.d.Store.VerifyAuditChainDetail(tenant.WithBypass(r.Context()))
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not verify audit chain")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"intact": intact, "brokenAtSeq": brokenAt})
+	// "intact" answers only "was anything altered". Weak links are reported beside
+	// it rather than folded into it: a weak link cannot be repaired -- rewriting
+	// that row means rewriting every hash after it, the exact operation this chain
+	// exists to make impossible -- so folding it in would leave the report saying
+	// "broken" forever and hide every genuine break behind it.
+	body := map[string]any{"intact": res.BrokenAtSeq == 0, "brokenAtSeq": res.BrokenAtSeq}
+	if res.WeakFromSeq != 0 {
+		body["weakFromSeq"] = res.WeakFromSeq
+		body["weakCount"] = res.WeakCount
+		body["weakReason"] = "keyless rows written after the chain was keyed; from this " +
+			"sequence the tail is not tamper-evident against a party with database write access"
+	}
+	httpx.WriteJSON(w, http.StatusOK, body)
 }
 
 // export streams the entire audit log as a JSON array, paging through the store

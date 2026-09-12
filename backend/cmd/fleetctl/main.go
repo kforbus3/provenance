@@ -89,6 +89,18 @@ func run(cmd string, args []string) error {
 		return runKMS(ctx, cfg, args)
 	}
 
+	// Key the audit chain, exactly as the server does. Without this fleetctl loads
+	// the key into cfg and never installs it, so every row it writes falls back to
+	// the legacy keyless SHA-256 (hash_alg=1) -- and fleetctl's commands are the
+	// most sensitive in the product: create-admin, rotate-ca, reset-mfa,
+	// enable-user. The one thing an attacker would most want to forge was the one
+	// thing written without a MAC.
+	//
+	// It showed up as a warning nobody could act on: "audit chain is UNKEYED: no
+	// AuditHMACKey configured", printed by fleetctl on a deployment whose server
+	// had the key set all along.
+	store.SetAuditHMACKey(cfg.AuditHMACKey)
+
 	// The recovery CLI operates across all tenants; pass multiTenancy=false so its
 	// connections always bypass row-level security regardless of the deployment flag.
 	pool, err := db.Connect(ctx, cfg.DatabaseURL, 4, 1, false)

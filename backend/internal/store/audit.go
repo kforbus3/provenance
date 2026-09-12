@@ -288,16 +288,51 @@ func (s *Store) DistinctAuditActions(ctx context.Context) ([]string, error) {
 // configured AuditHMACKey. NOTE: verifying keyed (hash_alg=2) rows requires the same
 // AuditHMACKey to be configured; with no key those rows report as broken.
 func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq int64, err error) {
+	r, verr := s.VerifyAuditChainDetail(ctx)
+	if verr != nil {
+		return false, 0, verr
+	}
+	// Kept for callers that only ask "was anything altered". A weak link is not an
+	// alteration; it is a row that could be altered undetectably, which
+	// VerifyAuditChainDetail reports separately so a permanent weak link cannot
+	// mask a later real break.
+	return r.BrokenAtSeq == 0, r.BrokenAtSeq, nil
+}
+
+// AuditChainResult separates "something was altered" from "something could be
+// altered without this noticing".
+//
+// They need separating because only the FIRST problem is reported. A weak link
+// that cannot be repaired -- rewriting it would mean rewriting every hash after
+// it, which is the operation the chain exists to make impossible -- would sit at
+// the head of the report forever and hide every genuine break behind it.
+type AuditChainResult struct {
+	// BrokenAtSeq is the first row whose hash or prev_hash does not match: a real
+	// alteration. 0 when the chain is sound.
+	BrokenAtSeq int64
+	// WeakFromSeq is the first keyless row written AFTER the chain was keyed. From
+	// there the tail is not tamper-evident: a party with database write access can
+	// append or rebuild keyless rows and they verify, because each row names its
+	// own algorithm. 0 when there is none.
+	WeakFromSeq int64
+	// WeakCount is how many such rows there are.
+	WeakCount int
+}
+
+// VerifyAuditChainDetail recomputes the chain and reports both conditions.
+func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, error) {
+	var out AuditChainResult
 	key := currentAuditHMACKey()
 	rows, qerr := s.pool.Query(ctx, `
 		SELECT seq, tenant_id::text, actor_id, COALESCE(actor_name,''), action, target_kind, target_id,
 		       COALESCE(host(ip),''), detail, prev_hash, hash, created_at, hash_alg
 		FROM audit_events ORDER BY seq ASC`)
 	if qerr != nil {
-		return false, 0, qerr
+		return out, qerr
 	}
 	defer rows.Close()
 	prev := ""
+	seenKeyed := false
 	for rows.Next() {
 		var (
 			seq             int64
@@ -312,7 +347,7 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq 
 		)
 		if err := rows.Scan(&seq, &tenantID, &actorID, &actorName, &action, &tk, &tid, &ip,
 			&detail, &prevH, &h, &createdAt, &alg); err != nil {
-			return false, 0, err
+			return out, err
 		}
 		detailJSON, _ := json.Marshal(detail)
 		var canonical string
@@ -325,11 +360,36 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq 
 		want := auditMAC(alg, key, prev, canonical)
 		// Constant-time compare on the hash; prev_hash linkage must also match.
 		if prevH != prev || !hmac.Equal([]byte(h), []byte(want)) {
-			return false, seq, nil
+			out.BrokenAtSeq = seq
+			return out, nil
+		}
+		// No downgrade once the chain is keyed.
+		//
+		// Each row names its own algorithm, and anything that is not hash_alg=2 is
+		// re-derived with keyless SHA-256 -- which is what lets rows written before
+		// the key existed still verify. The attacker also writes that column. So a
+		// party with only database write access could read the tail hash, append
+		// events of their choosing tagged hash_alg=1, hash them with plain SHA-256,
+		// and this function would report the chain intact. The same move rebuilds a
+		// whole tail, erasing what it replaces.
+		//
+		// Demonstrated, not theorised: TestAuditChainRejectsKeylessRowAfterKeying
+		// forges exactly that row and this used to return intact=true.
+		//
+		// Once a keyed row exists, every later row must be keyed. The attacker
+		// cannot produce hash_alg=2 without the key, so they cannot move the
+		// boundary forward, and anything keyless after it is refused.
+		if alg == auditAlgHMAC {
+			seenKeyed = true
+		} else if seenKeyed {
+			if out.WeakFromSeq == 0 {
+				out.WeakFromSeq = seq
+			}
+			out.WeakCount++
 		}
 		prev = h
 	}
-	return true, 0, rows.Err()
+	return out, rows.Err()
 }
 
 func nilUUID(u *uuid.UUID) string {
