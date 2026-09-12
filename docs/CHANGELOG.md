@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.11 — 2026-09-12
+
+**Every image the fleet runs now has a row on the Updates tab.** It listed only
+images a registry had already been asked about, and the check ran twice a day — so
+a host whose containers had just become visible contributed nothing to the screen
+for most of a day, with no row saying so. Twenty-four containers appeared on a
+host and the page showed none of them. An image nobody has asked about now reads
+"not checked yet" rather than being absent, and never "up to date", which is a
+claim nobody has verified. The check also ticks hourly rather than twice a day; a
+result still lasts twelve hours, so a tick where everything is current costs one
+database query and no registry requests.
+
+**An hourly inventory refresh no longer blanks the reason a host is not
+reporting containers.** Writing the status unconditionally was right while that
+statement was the only writer. Once containers moved to their own cadence it ran
+without collecting them, so a refresh whose container check was not due wrote an
+empty status over a real one — and an empty status renders as no container
+section at all, so seven hosts looked like they had nothing to say.
+
+---
+
 ## v1.2.10 — 2026-09-12
 
 **Resume now actually retries.** It marked failed hosts as forgiven — which stops
