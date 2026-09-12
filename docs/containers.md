@@ -87,6 +87,15 @@ credentials must not stop the fleet learning about everything else. The row says
 which it was, because "needs credentials", "no such tag" and "rate limited" have
 different answers.
 
+Every image the fleet runs has a row here, whether or not a registry has been
+asked about it yet. One that has not been asked reads **not checked yet** rather
+than being absent — a host whose containers have only just become visible would
+otherwise contribute nothing to this screen until the next check, which is not
+the same as having nothing on it.
+
+The check ticks hourly and a result lasts twelve hours, so a tick where
+everything is current costs one database query and no registry requests at all.
+
 The Updates tab has a **Host** picker and an image filter, deliberately separate.
 One box matching both meant typing a host's name found images whose *name*
 contained it somewhere else entirely — searching for `docker` turned up a

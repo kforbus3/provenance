@@ -204,10 +204,28 @@ type ImageUpdateRow struct {
 // its own -- an operator needs to know which machines that is true of before they
 // can decide anything, and looking it up per image is the work this avoids.
 func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) ([]ImageUpdateRow, error) {
-	updates, err := s.ImageUpdates(ctx)
+	// Driven by what the fleet RUNS, not by what has been checked.
+	//
+	// Starting from the checked rows meant an image only appeared here once a
+	// registry had been asked about it — and the check runs every twelve hours. A
+	// host whose containers had just become visible contributed nothing to this
+	// screen for most of a day, with no row saying so: twenty-four containers on
+	// a host, and a page that showed none of them. "We have not asked yet" and
+	// "there is nothing there" are different, and this page is the one place that
+	// distinction is the whole point.
+	tracked, err := s.TrackedImages(ctx)
 	if err != nil {
 		return nil, err
 	}
+	checked, err := s.ImageUpdates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[string]ImageUpdate, len(checked))
+	for _, u := range checked {
+		byKey[u.Repository+":"+u.Tag] = u
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		SELECT c->>'repository', COALESCE(c->>'tag',''), h.id::text, h.hostname,
 		       COALESCE(c->>'digest',''), COALESCE(c->>'name',''),
@@ -237,14 +255,17 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) (
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]ImageUpdateRow, 0, len(updates))
-	for _, u := range updates {
-		// Never nil. A missing key yields a nil slice, which marshals to JSON
-		// `null` rather than `[]` — and an image whose hosts have all moved on is
-		// the normal case, not an edge one: upgrading this product itself leaves
-		// rows for the tags it just replaced, until the next check pass prunes
-		// them. A client doing hosts.filter(...) on that gets a white screen.
-		hosts := byImage[u.Repository+":"+u.Tag]
+
+	out := make([]ImageUpdateRow, 0, len(tracked))
+	for _, t := range tracked {
+		key := t.Repository + ":" + t.Tag
+		u, ok := byKey[key]
+		if !ok {
+			// Never asked about. CheckedAt stays zero, which is how the client
+			// tells this apart from a check that came back with nothing to report.
+			u = ImageUpdate{Repository: t.Repository, Tag: t.Tag}
+		}
+		hosts := byImage[key]
 		if hosts == nil {
 			hosts = []ImageUpdateHost{}
 		}

@@ -37,6 +37,8 @@ export interface ImageUpdate {
   latestTag?: string;
   note?: string;
   error?: string;
+  // Empty when no registry has been asked about this image yet — it is running,
+  // but the check has not reached it. Not the same as a check that found nothing.
   checkedAt: string;
   // Nullable, not just empty: Go marshals a nil slice as `null`. An image no host
   // runs any more is ordinary — the tags an upgrade just replaced keep their rows

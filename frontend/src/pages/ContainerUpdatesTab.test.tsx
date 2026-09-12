@@ -148,3 +148,28 @@ describe("ContainerUpdatesTab filtering", () => {
       expect(screen.getByText(/2 images in total/)).toBeInTheDocument());
   });
 });
+
+describe("ContainerUpdatesTab unchecked images", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("shows an image that is running but has never been checked", async () => {
+    // Twenty-four containers appeared on a host and the page showed none of
+    // them, because rows came from the CHECKED table and the check runs every
+    // twelve hours. "We have not asked yet" is not "there is nothing there".
+    vi.mocked(listContainerUpdates).mockResolvedValue([
+      {
+        repository: "jellyfin/jellyfin", tag: "10.11.11",
+        checkedAt: "", // never asked
+        hosts: [{ hostId: "h1", hostname: "docker", stale: false }],
+      },
+    ] as never);
+
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText(/jellyfin\/jellyfin:10\.11\.11/)).toBeInTheDocument());
+    expect(screen.getByText("not checked yet")).toBeInTheDocument();
+    // And must not read as up to date, which is a claim nobody has verified.
+    expect(screen.queryByText("up to date")).not.toBeInTheDocument();
+  });
+});

@@ -29,7 +29,7 @@ const errMsg = (e: unknown, fallback: string) =>
 // What this row is telling the operator, as one of four states. Kept in one
 // place because the states overlap: an image can have a newer tag AND a moved
 // digest, and showing both as separate badges reads as two problems.
-type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local" | "gone" | "self";
+type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local" | "gone" | "self" | "unchecked";
 
 // hostsOf normalises the hosts list.
 //
@@ -48,6 +48,10 @@ function verdictOf(u: ImageUpdate): Verdict {
   // claim about something you are running — and this is the row an operator
   // sees immediately after an upgrade, for the tags the upgrade just replaced.
   if (hostsOf(u).length === 0) return "gone";
+  // Running, but no registry has been asked about it yet — a host whose
+  // containers have only just become visible. Saying so beats leaving the row
+  // out, which is indistinguishable from the host having nothing on it.
+  if (!u.checkedAt) return "unchecked";
   // Part of Provenance itself. Shown, never offered — this application is
   // upgraded by signed bundle, and a rollout of its own containers could not even
   // report what it did: the backend running the rollout is what gets restarted.
@@ -86,6 +90,12 @@ function VerdictChip({ u }: { u: ImageUpdate }) {
       return (
         <Tooltip title={u.note ?? ""}>
           <Chip label="cannot compare" size="small" variant="outlined" />
+        </Tooltip>
+      );
+    case "unchecked":
+      return (
+        <Tooltip title="Running here, but no registry has been asked about it yet. The next check picks it up — or press “Check registries now”.">
+          <Chip label="not checked yet" size="small" variant="outlined" />
         </Tooltip>
       );
     case "self":
@@ -143,7 +153,7 @@ function UpdateRow({ u, canRun, onRollOut }: {
             </Typography>
           )}
         </TableCell>
-        <TableCell>{formatDateTime(u.checkedAt)}</TableCell>
+        <TableCell>{u.checkedAt ? formatDateTime(u.checkedAt) : "—"}</TableCell>
         <TableCell align="right">
           {canRollOut && (
             <Tooltip title={verdict === "moved"
@@ -250,7 +260,7 @@ export function ContainerUpdatesTab() {
     }
     // Actionable first. An operator opening this screen wants the images that
     // need a decision, not an alphabetical list with three of them buried in it.
-    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5, self: 6, gone: 7 };
+    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, unchecked: 4, current: 5, local: 6, self: 7, gone: 8 };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a)] - rank[verdictOf(b)] ||
       a.repository.localeCompare(b.repository));

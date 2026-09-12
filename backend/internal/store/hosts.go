@@ -620,13 +620,22 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 			listening_ports=COALESCE(EXCLUDED.listening_ports, host_inventory.listening_ports),
 			ports_checked_at=COALESCE(EXCLUDED.ports_checked_at, host_inventory.ports_checked_at),
 			-- Same rule, and it matters more here: a sweep that could not reach the
-			-- docker socket must not blank a list collected when it could. The
-			-- STATUS is overwritten unconditionally, because why we cannot see the
-			-- containers is current news even when the list itself is stale.
+			-- docker socket must not blank a list collected when it could.
+			--
+			-- The status is COALESCED on EMPTY rather than written straight through.
+			-- It used to be unconditional, which was right while this statement was
+			-- the only writer -- "why we cannot see the containers" is current news
+			-- even when the list itself is stale. It stopped being right when
+			-- containers moved to their own cadence: this path now runs WITHOUT
+			-- collecting them, so an hourly inventory refresh whose container check
+			-- was not due wrote an empty status over a real one. Seven hosts lost
+			-- the reason they were not reporting, and an empty status renders as no
+			-- container section at all -- the host simply looked like it had nothing
+			-- to say.
 			containers=COALESCE(EXCLUDED.containers, host_inventory.containers),
 			containers_checked_at=COALESCE(EXCLUDED.containers_checked_at, host_inventory.containers_checked_at),
-			containers_status=EXCLUDED.containers_status,
-			containers_detail=EXCLUDED.containers_detail,
+			containers_status=COALESCE(NULLIF(EXCLUDED.containers_status, ''), host_inventory.containers_status),
+			containers_detail=COALESCE(NULLIF(EXCLUDED.containers_detail, ''), host_inventory.containers_detail),
 			collected_at=now()`,
 		hostID, inv.OSName, inv.OSVersion, inv.KernelVersion, inv.Architecture, inv.SSHVersion, inv.CPUCount, inv.MemoryMB,
 		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs, obsoletePkgs,

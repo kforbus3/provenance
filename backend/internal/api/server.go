@@ -685,7 +685,15 @@ func (s *Server) containerScanLoop(ctx context.Context) {
 // instance would otherwise ask about every image and multiply the rate-limit
 // pressure by the number of instances, for one identical answer.
 func (s *Server) imageUpdateLoop(ctx context.Context) {
-	t := time.NewTicker(12 * time.Hour)
+	// Ticks hourly; a result still lasts twelve hours.
+	//
+	// The freshness rule lives in the check itself, so a tick where everything is
+	// current costs one database query and no registry requests at all. Ticking at
+	// the freshness interval instead meant an image the fleet had only just STARTED
+	// running waited up to twelve hours to be asked about — a host whose containers
+	// had just become visible showed nothing on the updates screen for most of a
+	// day.
+	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	run := func() {
 		if !s.isLeader() || s.imageCheck == nil {
