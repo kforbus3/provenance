@@ -85,3 +85,29 @@ export async function rollbackStack(id: string): Promise<{ output: string }> {
   const { data } = await api.post<{ output: string }>(`/api/v1/stacks/${id}/rollback`);
   return data;
 }
+
+// What compose projects exist on the fleet, whether or not Provenance manages
+// them.
+//
+// This needs no setup: every compose-managed container records its own project
+// and directory, so the monitor sweep already knows — wherever they live. The
+// Stacks page used to list only what had been ADOPTED, which made a working
+// deployment look like an empty product with a setup task attached.
+export interface DiscoveredProject {
+  hostId: string;
+  hostname: string;
+  project: string;
+  dir: string;
+  services: string[];
+  images: number;
+  // Adopted means Provenance holds the compose file, which is needed only to
+  // change a version. Rebuilds work without it.
+  adopted: boolean;
+  stackId?: string;
+}
+
+export async function listDiscoveredProjects(): Promise<DiscoveredProject[]> {
+  const { data } = await api.get<{ projects: DiscoveredProject[] }>(
+    "/api/v1/stacks/discovered");
+  return data.projects ?? [];
+}

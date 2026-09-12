@@ -11,11 +11,32 @@ the split version has a specific failure — the bot opens a merge request, nobo
 reads it, and six months later nothing has been updated and everybody believes
 it has.
 
+## Nothing to set up
+
+Provenance finds your compose projects by itself, wherever they are. Every
+compose-managed container records its own project name and directory, so the
+ordinary monitor sweep already knows — on one fleet that was sixteen projects
+across seven hosts, living in `/home`, `/opt/stacks`, `/root`, `/data/compose` and
+`/project`. There is no convention to follow, no path to configure, and nothing to
+tell Provenance.
+
+**Updates work without adopting anything.** A rebuild — the same tag republished,
+which is most of the ongoing security work — is pulled and recreated in place,
+using the host's own compose project. Provenance only needs a *copy* of a compose
+file to change a **version**, and it takes one automatically at that point.
+
+So the Managed stacks list being short, or empty, is not a backlog. It is the
+normal state of a working deployment.
+
 ## What you see
 
-The **Containers** screen has three tabs.
+The **Containers** screen has four tabs.
 
-**Stacks** is what each host *should* be running. Provenance holds the compose
+**Discovered** is every compose project on the fleet, whether or not Provenance
+manages it. This is the answer to "what can I keep up to date here", and it is
+true the moment Provenance is deployed.
+
+**Managed stacks** is the compose files Provenance holds a copy of. Provenance holds the compose
 file and writes a rendered copy to the host, so a stack keeps running when
 Provenance does not — you lose the ability to change it, not to run it. Every
 row shows two numbers: `revision` is what should be deployed, `deployedRevision`

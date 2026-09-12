@@ -34,11 +34,24 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/stacks/{id}", h.get)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/stacks/{id}/history", h.history)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/stacks/drift", h.drift)
+		// What exists on the fleet, whether or not Provenance manages it. No setup:
+		// every compose-managed container records its own project and directory.
+		pr.With(d.Auth.RequirePermission("Host.View")).Get("/stacks/discovered", h.discovered)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/stacks", h.save)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Delete("/stacks/{id}", h.del)
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/stacks/{id}/deploy", h.deploy)
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/stacks/{id}/rollback", h.rollback)
 	})
+}
+
+func (h *handler) discovered(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.store.DiscoveredProjects(r.Context())
+	if err != nil {
+		h.d.Log.Warn("listing discovered compose projects", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list compose projects")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,7 @@ import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { ContainerUpdatesTab } from "./ContainerUpdatesTab";
 import { RolloutsTab } from "./RolloutsTab";
+import { DiscoveredProjectsPanel } from "./DiscoveredProjectsPanel";
 import { TabErrorBoundary } from "../components/TabErrorBoundary";
 
 // Container stacks: what each host should be running.
@@ -65,7 +66,7 @@ export function StacksPage() {
   const [historyOf, setHistoryOf] = useState<ContainerStack | null>(null);
   const [output, setOutput] = useState<{ title: string; body: string } | null>(null);
   const [snack, setSnack] = useState("");
-  const [tab, setTab] = useState<"stacks" | "updates" | "rollouts">("stacks");
+  const [tab, setTab] = useState<"discovered" | "stacks" | "updates" | "rollouts">("discovered");
 
   const { data: stacks = [], isLoading } = useQuery({
     queryKey: ["stacks"],
@@ -112,12 +113,20 @@ export function StacksPage() {
       {/* Two halves of one job: what a host SHOULD run, and what is available to
           run. Separate tabs rather than separate pages because deciding to take
           an update and applying it are the same visit. */}
+      {/* Discovered first, and the default. It is the answer to "what can I keep
+          up to date here", it needs no setup, and it is true the moment
+          Provenance is deployed — where an empty Stacks list read as a product
+          with a configuration task attached. */}
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="Stacks" value="stacks" />
+        <Tab label="Discovered" value="discovered" />
+        <Tab label="Managed stacks" value="stacks" />
         <Tab label="Updates" value="updates" />
         <Tab label="Rollouts" value="rollouts" />
       </Tabs>
 
+      {tab === "discovered" && (
+        <TabErrorBoundary name="Discovered"><DiscoveredProjectsPanel /></TabErrorBoundary>
+      )}
       {tab === "updates" && (
         <TabErrorBoundary name="Updates"><ContainerUpdatesTab /></TabErrorBoundary>
       )}
@@ -127,9 +136,11 @@ export function StacksPage() {
 
       {tab === "stacks" && <>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        What each host should be running. Provenance holds the definition and writes a
-        rendered copy to the host, so a stack keeps running even when Provenance does
-        not — you lose the ability to change it, not to run it.
+        Compose files Provenance holds a copy of. A project appears here once
+        something needed the file changed — a version update, or an edit you made —
+        and from then on every change is a revision with an author, a note and a
+        rollback. <b>An empty list is not a setup step.</b> Everything discovered is
+        already updatable; see the Discovered tab.
       </Typography>
 
       {drifted.length > 0 && (
