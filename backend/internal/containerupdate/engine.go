@@ -2,6 +2,7 @@ package containerupdate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,11 +29,13 @@ type Store interface {
 	GetHost(ctx context.Context, id uuid.UUID) (*models.Host, error)
 	HostContainers(ctx context.Context, hostID uuid.UUID) ([]models.Container, error)
 	RolloutImages(ctx context.Context, id uuid.UUID) ([]store.RolloutImage, error)
+	GetSetting(ctx context.Context, key string) (json.RawMessage, error)
 }
 
 // Deployer applies a stack to its host, pulling images first.
 type Deployer interface {
 	DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error)
+	DeployPullingService(ctx context.Context, stackID uuid.UUID, service string) (*store.ContainerStack, string, error)
 }
 
 // Runner executes a script on a host, for the verification read-back.
@@ -248,9 +251,18 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		e.fail(ctx, r.ID, hostID, "could not read what this host is running: "+err.Error())
 		return
 	}
+	// Never this application's own containers. Checked here as well as when a
+	// rollout is created, because a rollout created before this rule existed --
+	// or one whose targets changed -- must not be applied by a later tick.
+	self := selfProject(ctx, e.store)
 	runs := map[string]bool{}
+	protected := map[string]string{}
 	for _, c := range containers {
-		runs[c.Repository+":"+c.Tag] = true
+		key := c.Repository + ":" + c.Tag
+		runs[key] = true
+		if isSelfContainer(self, c.ComposeProject, c.Image) {
+			protected[key] = c.Name
+		}
 	}
 
 	applied := 0
@@ -258,8 +270,17 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		if ctx.Err() != nil {
 			return
 		}
-		if !runs[im.Repository+":"+im.FromTag] {
+		key := im.Repository + ":" + im.FromTag
+		if !runs[key] {
 			continue
+		}
+		if name, ok := protected[key]; ok {
+			e.fail(ctx, r.ID, hostID, fmt.Sprintf(
+				"%s runs %s as part of Provenance itself. This application is upgraded "+
+					"by signed bundle — which verifies the signature, backs up the database, "+
+					"applies migrations and keeps a rollback — not by replacing its "+
+					"containers underneath it.", name, key))
+			return
 		}
 		// Each image is applied as its own single-image operation, so one code
 		// path serves both a one-image rollout and a fleet-wide one.
@@ -343,7 +364,11 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 		}
 	}
 
-	if _, out, err := e.dep.DeployPulling(ctx, stack.ID); err != nil {
+	// Narrowed to the service that runs this image. Bringing up the whole project
+	// would restart everything beside it — on a host running a model server and a
+	// vector database, updating curl would have restarted both.
+	service := e.composeServiceFor(ctx, r, hostID)
+	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, service); err != nil {
 		return fmt.Errorf("%s", trimOutput(err.Error()+"\n"+out))
 	}
 
@@ -353,6 +378,26 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// rollout that counted the exit code would march a no-op across the fleet
 	// while reporting every host as updated.
 	return e.verify(ctx, r, hostID)
+}
+
+// composeServiceFor returns the compose service running this image on a host, or
+// "" when it cannot be established.
+//
+// Empty means "the whole project", which is the old behaviour and the safe
+// fallback: a deploy that touches more than it needed is recoverable, and one
+// that touches nothing because a name was guessed wrong is an update reported as
+// applied that never happened.
+func (e *Engine) composeServiceFor(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) string {
+	containers, err := e.store.HostContainers(ctx, hostID)
+	if err != nil {
+		return ""
+	}
+	for _, c := range containers {
+		if c.Repository == r.Repository && c.Tag == r.FromTag && c.ComposeService != "" {
+			return c.ComposeService
+		}
+	}
+	return ""
 }
 
 // adopt reads the host's compose file for this image and records it as a stack.

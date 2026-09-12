@@ -23,7 +23,7 @@ func TestRenderScriptDoesNotExpandTheComposeFile(t *testing.T) {
 		"      test: [\"CMD-SHELL\", \"curl -f http://localhost || exit 1\"]",
 	}, "\n")
 
-	got := renderScript("/opt/stacks/web", compose, 7, false)
+	got := renderScript("/opt/stacks/web", compose, 7, false, "")
 
 	// Quoted delimiter: the shell must not touch anything inside.
 	if !strings.Contains(got, "<<'PROVENANCE_COMPOSE_EOF'") {
@@ -73,7 +73,7 @@ func TestShellQuote(t *testing.T) {
 	}
 
 	// And end to end: a hostile path must appear only inside quotes.
-	got := renderScript(`/opt/stacks/x'; rm -rf /; '`, "services: {}", 1, false)
+	got := renderScript(`/opt/stacks/x'; rm -rf /; '`, "services: {}", 1, false, "")
 	if strings.Contains(got, "; rm -rf /; \n") {
 		t.Error("a quoted path escaped its quoting and became a command")
 	}
@@ -96,7 +96,7 @@ func TestAnOrdinaryDeployDoesNotPull(t *testing.T) {
 	// `up -d` already fetches anything the host does not have. Pulling every
 	// image on every deploy would make a one-line compose edit as slow as a full
 	// update, for no change in what ends up running.
-	got := renderScript("/opt/stacks/web", "services: {}", 1, false)
+	got := renderScript("/opt/stacks/web", "services: {}", 1, false, "")
 	if strings.Contains(got, "compose pull") {
 		t.Errorf("an ordinary deploy pulled:\n%s", got)
 	}
@@ -108,7 +108,7 @@ func TestAnUpdateDeployPullsFirst(t *testing.T) {
 	// and starts the old bytes again: the deploy reports success, the digest
 	// never changes, and a rollout marches a no-op across the fleet while every
 	// host stays on the vulnerable image.
-	got := renderScript("/opt/stacks/web", "services: {}", 1, true)
+	got := renderScript("/opt/stacks/web", "services: {}", 1, true, "")
 	pull := strings.Index(got, "docker compose pull")
 	up := strings.Index(got, "docker compose up -d")
 	if pull < 0 {
@@ -120,5 +120,48 @@ func TestAnUpdateDeployPullsFirst(t *testing.T) {
 	// Both compose flavours, or a host on the older binary silently never pulls.
 	if !strings.Contains(got, "docker-compose pull") {
 		t.Errorf("the docker-compose fallback does not pull:\n%s", got)
+	}
+}
+
+func TestAnUpdateRolloutTouchesOnlyItsOwnService(t *testing.T) {
+	// The blast radius, which is the part an operator cannot undo.
+	//
+	// A stack deploy is about the whole file, so pressing Deploy brings up the
+	// whole project — that is what was asked for. An update rollout is about ONE
+	// image. On a host running a model server, a vector database, a speech
+	// recogniser and five other things, updating curl would have restarted all of
+	// them.
+	got := renderScript("/opt/stacks/site", "services: {}", 3, true, "web")
+
+	if !strings.Contains(got, "docker compose pull 'web'") {
+		t.Errorf("did not pull just the service:\n%s", got)
+	}
+	if !strings.Contains(got, "docker compose up -d 'web'") {
+		t.Errorf("did not bring up just the service:\n%s", got)
+	}
+	// --remove-orphans deletes containers the file no longer defines. That is a
+	// whole-project decision, and making it as a side effect of updating one image
+	// would remove things nobody mentioned.
+	if strings.Contains(got, "--remove-orphans") {
+		t.Errorf("a single-service deploy removed orphans:\n%s", got)
+	}
+	// The docker-compose fallback too, or an older host silently does the whole
+	// project while a newer one does not.
+	if !strings.Contains(got, "docker-compose up -d 'web'") {
+		t.Errorf("the docker-compose fallback was not narrowed:\n%s", got)
+	}
+}
+
+func TestAnOrdinaryDeployStillBringsUpTheWholeProject(t *testing.T) {
+	got := renderScript("/opt/stacks/site", "services: {}", 3, false, "")
+	if !strings.Contains(got, "up -d --remove-orphans") {
+		t.Errorf("a stack deploy should still be the whole file:\n%s", got)
+	}
+}
+
+func TestAServiceNameCannotEscapeIntoTheScript(t *testing.T) {
+	got := renderScript("/opt/x", "services: {}", 1, true, "web'; rm -rf /; '")
+	if strings.Contains(got, "rm -rf /;") && !strings.Contains(got, `'\''`) {
+		t.Errorf("a service name reached the shell unquoted:\n%s", got)
 	}
 }

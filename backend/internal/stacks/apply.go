@@ -40,7 +40,19 @@ import (
 // already present locally and starts the old bytes again. The deploy reports
 // success, the digest never changes, and the rollout marches a no-op across the
 // fleet while every host stays on the vulnerable image.
-func renderScript(dir, compose string, revision int, pull bool) string {
+// service, when set, narrows the bring-up to one compose service.
+//
+// A stack deploy is about the whole file, so an operator pressing Deploy gets
+// the whole project — that is what they asked for. An update ROLLOUT is about one
+// image, and bringing up the whole project to change one of them restarts
+// everything beside it: on a host running a model server, a vector database and
+// five other things, updating curl would have restarted all of them. Nobody asked
+// for that, and the blast radius is the part an operator cannot undo.
+//
+// --remove-orphans is dropped with it: removing containers the file no longer
+// defines is a whole-project decision, and making it as a side effect of updating
+// one image would delete things nobody mentioned.
+func renderScript(dir, compose string, revision int, pull bool, service string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	// The heredoc delimiter is quoted, so nothing inside the compose file is
@@ -64,16 +76,21 @@ func renderScript(dir, compose string, revision int, pull bool) string {
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s\n",
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
+	// What to act on: one service, or the whole project.
+	target := " --remove-orphans"
+	if service != "" {
+		target = " " + shellQuote(service)
+	}
 	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
 	if pull {
-		b.WriteString("  docker compose pull\n")
+		b.WriteString("  docker compose pull" + target + "\n")
 	}
-	b.WriteString("  docker compose up -d --remove-orphans\n")
+	b.WriteString("  docker compose up -d" + target + "\n")
 	b.WriteString("elif command -v docker-compose >/dev/null 2>&1; then\n")
 	if pull {
-		b.WriteString("  docker-compose pull\n")
+		b.WriteString("  docker-compose pull" + target + "\n")
 	}
-	b.WriteString("  docker-compose up -d --remove-orphans\n")
+	b.WriteString("  docker-compose up -d" + target + "\n")
 	b.WriteString("else\n")
 	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
 	b.WriteString("fi\n")

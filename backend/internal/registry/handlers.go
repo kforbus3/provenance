@@ -2,7 +2,9 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -15,6 +17,19 @@ type handler struct {
 	d   *app.Deps
 	svc *Checker
 	st  *store.Store
+}
+
+// selfProject is the compose project that is this application. Its containers are
+// shown but never offered for a rollout — this application is upgraded by signed
+// bundle. See internal/containerupdate/selfprotect.go.
+func (h *handler) selfProject(ctx context.Context) string {
+	if raw, err := h.st.GetSetting(ctx, "containers.selfProject"); err == nil && len(raw) > 0 {
+		var v string
+		if json.Unmarshal(raw, &v) == nil && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return "fleet-terminal"
 }
 
 // Mount attaches container-image update routes.
@@ -33,7 +48,7 @@ func Mount(r chi.Router, d *app.Deps, svc *Checker, st *store.Store) {
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.st.ImageUpdatesWithHosts(r.Context())
+	rows, err := h.st.ImageUpdatesWithHosts(r.Context(), h.selfProject(r.Context()))
 	if err != nil {
 		h.d.Log.Warn("listing container updates", "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not list container updates")

@@ -208,6 +208,23 @@ Two cases still report rather than guess:
 Where a stack **is** adopted, it wins: that is the definition of record, and the
 one with a history and a rollback.
 
+### A rollout touches only the service it is updating
+
+A stack **deploy** — the button on the Stacks tab — brings up the whole compose
+project, because that is what deploying a file means.
+
+A **rollout** is about one image, so it pulls and recreates only the service that
+runs it. On a host where one compose project holds a model server, a vector
+database and six other things, updating `curl` restarts `curl`. It also does not
+pass `--remove-orphans`: removing containers the file no longer defines is a
+whole-project decision, and making it as a side effect of updating one image
+would delete things nobody mentioned.
+
+If the compose service cannot be established, the whole project is brought up
+instead — a deploy that touches more than it needed is recoverable, and one that
+touches nothing because a name was guessed wrong is an update reported as applied
+that never happened.
+
 ### How the compose file is edited
 
 Line by line, not parsed and re-emitted. A YAML round-trip drops your comments,
@@ -228,6 +245,35 @@ name the old bytes.
 
 Every rewrite is a normal stack revision, visible in the stack's history and
 rollback-able like any other.
+
+## Provenance's own containers
+
+The containers that make up Provenance are **shown but never offered for update**.
+They carry a **upgraded by bundle** badge, and "Update all" skips them.
+
+This is not only its own images — those are built locally and are excluded
+anyway, having no registry digest. It is the third-party containers the
+application is *made of*: the PostgreSQL holding its data, the Redis holding its
+sessions, the guacd carrying its remote-desktop connections. Those are ordinary
+registry images and would otherwise be offered like any other.
+
+They are excluded because upgrading this application is not the same operation as
+pulling a newer image. A bundle verifies a signature, takes a pre-upgrade database
+backup, applies migrations in order, keeps a `:rollback` anchor, and restarts the
+stack in a sequence that survives the backend replacing itself. A container
+rollout does none of that — and could not even report what it did, because the
+backend running the rollout is what gets restarted.
+
+Upgrade them from **Settings → Updates** instead.
+
+They stay visible on purpose. What the instance is running, and what is wrong
+with those images, is exactly what an operator should be able to see — the
+vulnerability scanning of postgres or guacd is some of the most useful this does.
+Only *updating* them this way is refused.
+
+Recognised by compose project, defaulting to `fleet-terminal`. A deployment that
+renamed its compose project should set `containers.selfProject` to match, or its
+own database would be offered for update.
 
 ## Vulnerability scanning
 

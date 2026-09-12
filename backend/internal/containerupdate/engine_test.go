@@ -2,6 +2,7 @@ package containerupdate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -120,6 +121,10 @@ func (f *fakeStore) UpsertStack(_ context.Context, in store.StackInput) (*store.
 	return &st, nil
 }
 
+func (f *fakeStore) GetSetting(_ context.Context, _ string) (json.RawMessage, error) {
+	return nil, nil // no override: the default self project applies
+}
+
 func (f *fakeStore) RolloutImages(_ context.Context, id uuid.UUID) ([]store.RolloutImage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -149,15 +154,24 @@ func (f *fakeStore) GetHost(_ context.Context, id uuid.UUID) (*models.Host, erro
 }
 
 type fakeDeployer struct {
-	mu    sync.Mutex
-	calls int
-	err   error
+	mu       sync.Mutex
+	calls    int
+	err      error
+	services []string // what each deploy was narrowed to
 }
 
 func (d *fakeDeployer) DeployPulling(context.Context, uuid.UUID) (*store.ContainerStack, string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++
+	return nil, "compose output", d.err
+}
+
+func (d *fakeDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, service string) (*store.ContainerStack, string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	d.services = append(d.services, service)
 	return nil, "compose output", d.err
 }
 
@@ -878,5 +892,46 @@ func TestPacingAppliesAcrossTheWholeRolloutNotPerImage(t *testing.T) {
 	}
 	if started != 1 {
 		t.Errorf("%d hosts started on a canary-of-1 tick, want 1", started)
+	}
+}
+
+func TestTheRolloutDeploysOnlyTheServiceRunningTheImage(t *testing.T) {
+	// On a host running eight containers from one compose project, updating one
+	// image must not restart the other seven.
+	f, _, ids := inPlaceFixture("1.24", "1.27")
+	f.containers[ids] = []models.Container{
+		{Name: "web", Repository: "nginx", Tag: "1.24",
+			ComposeProject: "site", ComposeService: "web", ComposeDir: "/opt/site"},
+		{Name: "db", Repository: "postgres", Tag: "16",
+			ComposeProject: "site", ComposeService: "db", ComposeDir: "/opt/site"},
+	}
+	d := &fakeDeployer{}
+	r := scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)
+	newEngine(f, d, r).Tick(context.Background())
+
+	if len(d.services) != 1 {
+		t.Fatalf("deployed %d times, want 1 (services: %v)", len(d.services), d.services)
+	}
+	if d.services[0] != "web" {
+		t.Errorf("deployed service %q, want \"web\" — the other services must be left alone",
+			d.services[0])
+	}
+}
+
+func TestAnUnknownServiceFallsBackToTheWholeProject(t *testing.T) {
+	// Empty means the whole project, which is the old behaviour and the safe
+	// fallback: a deploy that touches more than it needed is recoverable, and one
+	// that touches nothing because a name was guessed wrong is an update reported
+	// as applied that never happened.
+	f, _, ids := inPlaceFixture("1.24", "1.27")
+	f.containers[ids] = []models.Container{
+		{Name: "web", Repository: "nginx", Tag: "1.24", ComposeDir: "/opt/site"}, // no service
+	}
+	d := &fakeDeployer{}
+	newEngine(f, d, scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)).
+		Tick(context.Background())
+
+	if len(d.services) != 1 || d.services[0] != "" {
+		t.Errorf("services = %v, want one empty (the whole project)", d.services)
 	}
 }

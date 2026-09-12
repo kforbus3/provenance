@@ -57,7 +57,7 @@ func TestDriftComparesIntendedAgainstConfirmed(t *testing.T) {
 // byte. Anything else means what runs is not what was reviewed.
 func TestDeploySendsTheStoredComposeVerbatim(t *testing.T) {
 	compose := "services:\n  a:\n    image: nginx@sha256:abc\n    command: [\"sh\",\"-c\",\"echo $$HOME\"]\n"
-	script := renderScript("/opt/stacks/web", compose, 4, false)
+	script := renderScript("/opt/stacks/web", compose, 4, false, "")
 	if !strings.Contains(script, compose) {
 		t.Error("the compose file was altered between the database and the host")
 	}

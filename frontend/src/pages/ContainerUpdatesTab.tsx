@@ -29,7 +29,7 @@ const errMsg = (e: unknown, fallback: string) =>
 // What this row is telling the operator, as one of four states. Kept in one
 // place because the states overlap: an image can have a newer tag AND a moved
 // digest, and showing both as separate badges reads as two problems.
-type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local" | "gone";
+type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local" | "gone" | "self";
 
 // hostsOf normalises the hosts list.
 //
@@ -48,6 +48,10 @@ function verdictOf(u: ImageUpdate): Verdict {
   // claim about something you are running — and this is the row an operator
   // sees immediately after an upgrade, for the tags the upgrade just replaced.
   if (hostsOf(u).length === 0) return "gone";
+  // Part of Provenance itself. Shown, never offered — this application is
+  // upgraded by signed bundle, and a rollout of its own containers could not even
+  // report what it did: the backend running the rollout is what gets restarted.
+  if (hostsOf(u).every((h) => h.protected)) return "self";
   if (u.error) return "error";
   // Built on the host and never in a registry. Not a problem and not a failure —
   // there is simply nothing to compare against, and showing it as either would
@@ -84,6 +88,12 @@ function VerdictChip({ u }: { u: ImageUpdate }) {
           <Chip label="cannot compare" size="small" variant="outlined" />
         </Tooltip>
       );
+    case "self":
+      return (
+        <Tooltip title="Part of Provenance itself. Upgraded by signed bundle from Settings → Updates, which verifies the signature, backs up the database, applies migrations and keeps a rollback.">
+          <Chip label="upgraded by bundle" size="small" variant="outlined" />
+        </Tooltip>
+      );
     case "gone":
       return (
         <Tooltip title="No host reports running this image any more — it is left over from a previous version and will be dropped at the next check.">
@@ -111,7 +121,8 @@ function UpdateRow({ u, canRun, onRollOut }: {
   // Only something actionable can be rolled out. Offering the button on a row
   // that says "up to date" would invite a rollout that deploys the same bytes
   // to every host and reports success for a change nobody made.
-  const canRollOut = canRun && (verdict === "newer" || verdict === "moved") && hosts.length > 0;
+  const canRollOut = canRun && (verdict === "newer" || verdict === "moved") &&
+    hosts.length > 0 && !hosts.some((h) => h.protected);
   return (
     <>
       <TableRow hover>
@@ -172,7 +183,9 @@ function UpdateRow({ u, canRun, onRollOut }: {
                     <Typography variant="caption" color="text.secondary"
                                 sx={{ fontFamily: "monospace" }}>{h.container}</Typography>
                   )}
-                  {h.stale
+                  {h.protected
+                    ? <Chip label="part of Provenance — upgraded by bundle" size="small" variant="outlined" />
+                    : h.stale
                     ? <Chip label="running older bytes" size="small" color="warning" variant="outlined" />
                     : h.digest
                       ? <Chip label="matches registry" size="small" variant="outlined" />
@@ -220,7 +233,7 @@ export function ContainerUpdatesTab() {
       : updates;
     // Actionable first. An operator opening this screen wants the images that
     // need a decision, not an alphabetical list with three of them buried in it.
-    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5, gone: 6 };
+    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5, self: 6, gone: 7 };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a)] - rank[verdictOf(b)] ||
       a.repository.localeCompare(b.repository));
@@ -228,7 +241,8 @@ export function ContainerUpdatesTab() {
 
   const actionableUpdates = updates.filter((u) => {
     const v = verdictOf(u);
-    return (v === "newer" || v === "moved") && hostsOf(u).length > 0;
+    return (v === "newer" || v === "moved") && hostsOf(u).length > 0 &&
+      !hostsOf(u).some((h) => h.protected);
   });
   const actionable = actionableUpdates.length;
 

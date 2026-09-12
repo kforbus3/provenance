@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -183,6 +184,11 @@ type ImageUpdateHost struct {
 	// now. Per host, not per image: mid-rollout some hosts have the new bytes and
 	// some do not, and an image-level flag would hide exactly that.
 	Stale bool `json:"stale"`
+	// Protected means this container is part of Provenance itself, on this host.
+	// It is shown — what the instance runs, and what is wrong with those images,
+	// is exactly what an operator should see — but it is never offered for a
+	// rollout: this application is upgraded by signed bundle.
+	Protected bool `json:"protected,omitempty"`
 }
 
 // ImageUpdateRow is one repository:tag with what the registry said and who runs it.
@@ -197,14 +203,15 @@ type ImageUpdateRow struct {
 // The hosts are the point. "nginx:1.24 has 1.27 available" is not actionable on
 // its own -- an operator needs to know which machines that is true of before they
 // can decide anything, and looking it up per image is the work this avoids.
-func (s *Store) ImageUpdatesWithHosts(ctx context.Context) ([]ImageUpdateRow, error) {
+func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) ([]ImageUpdateRow, error) {
 	updates, err := s.ImageUpdates(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT c->>'repository', COALESCE(c->>'tag',''), h.id::text, h.hostname,
-		       COALESCE(c->>'digest',''), COALESCE(c->>'name','')
+		       COALESCE(c->>'digest',''), COALESCE(c->>'name',''),
+		       COALESCE(c->>'composeProject',''), COALESCE(c->>'image','')
 		FROM host_inventory hi
 		JOIN hosts h ON h.id = hi.host_id,
 		     LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
@@ -217,11 +224,14 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context) ([]ImageUpdateRow, er
 	defer rows.Close()
 	byImage := map[string][]ImageUpdateHost{}
 	for rows.Next() {
-		var repo, tag string
+		var repo, tag, project, image string
 		var hh ImageUpdateHost
-		if err := rows.Scan(&repo, &tag, &hh.HostID, &hh.Hostname, &hh.Digest, &hh.Container); err != nil {
+		if err := rows.Scan(&repo, &tag, &hh.HostID, &hh.Hostname, &hh.Digest, &hh.Container,
+			&project, &image); err != nil {
 			return nil, err
 		}
+		hh.Protected = selfProject != "" &&
+			(project == selfProject || strings.HasPrefix(image, selfProject+"-"))
 		byImage[repo+":"+tag] = append(byImage[repo+":"+tag], hh)
 	}
 	if err := rows.Err(); err != nil {

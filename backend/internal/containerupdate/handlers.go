@@ -176,6 +176,31 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		roll.WindowStart, roll.WindowEnd = &req.WindowStart, &req.WindowEnd
 	}
 
+	// Refuse before anything is recorded. The engine checks again per host, but an
+	// operator who asked to update this application's own database should be told
+	// no at the moment they ask — not have a rollout created that fails later.
+	self := selfProject(r.Context(), h.st)
+	for _, hostID := range hosts {
+		containers, cerr := h.st.HostContainers(r.Context(), hostID)
+		if cerr != nil {
+			continue
+		}
+		for _, c := range containers {
+			if !isSelfContainer(self, c.ComposeProject, c.Image) {
+				continue
+			}
+			for _, im := range images {
+				if c.Repository == im.Repository && c.Tag == im.FromTag {
+					httpx.WriteError(w, http.StatusBadRequest, c.Name+" is part of Provenance "+
+						"itself. This application is upgraded by signed bundle — which verifies "+
+						"the signature, backs up the database, applies migrations and keeps a "+
+						"rollback — not by replacing its containers underneath it.")
+					return
+				}
+			}
+		}
+	}
+
 	var by *uuid.UUID
 	if p := auth.MustPrincipal(r); p != nil {
 		id := p.UserID

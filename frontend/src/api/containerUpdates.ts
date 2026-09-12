@@ -18,6 +18,12 @@ export interface ImageUpdateHost {
   // Per host, not per image: mid-rollout some hosts have the new bytes and some
   // do not, and an image-level flag would hide exactly that.
   stale: boolean;
+  // Part of Provenance itself on this host. Shown — what the instance runs, and
+  // what is wrong with those images, is exactly what an operator should see —
+  // but never offered for a rollout: this application is upgraded by signed
+  // bundle, which verifies the signature, backs up the database, applies
+  // migrations and keeps a rollback.
+  protected?: boolean;
 }
 
 export interface ImageUpdate {
