@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v1.3.0 — 2026-09-12
+## v1.2.6 — 2026-09-12
 
 **Containers can be updated without adopting them first.** Every compose-managed
 container records which project and service it is and where that project lives,
