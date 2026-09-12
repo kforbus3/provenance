@@ -386,6 +386,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.dynamicGroupLoop(ctx)
 	go s.krlLoop(ctx)
 	go s.vaultRotationLoop(ctx)
+	go s.containerScanLoop(ctx)
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx, s.isLeader)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx, s.isLeader)
@@ -609,6 +610,50 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 		s.Log.Info("distributed KRL", "hosts", pushed, "revokedSerials", len(serials))
 	}
 	return int(pushed), int(failed), nil
+}
+
+// containerScanLoop scans the container images the fleet is running.
+//
+// Daily, not hourly. A digest's contents never change, so the only thing that can
+// turn a clean image into a vulnerable one is the vulnerability database moving --
+// and that happens about once a day. Scanning more often would re-pull images from
+// their registries for an answer that cannot have changed, which costs bandwidth,
+// disk and Docker Hub's rate limit for nothing.
+//
+// Leader-only for the same reason the other sweeps are: in a multi-instance
+// deployment every instance would otherwise pull every image.
+func (s *Server) containerScanLoop(ctx context.Context) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	run := func() {
+		if !s.isLeader() || s.vulnScan == nil {
+			return
+		}
+		scanned, failed := s.vulnScan.ScanContainerImages(ctx)
+		var err error
+		if failed > 0 {
+			err = fmt.Errorf("%d image(s) could not be scanned", failed)
+		}
+		_ = scanned
+		s.Jobs.Record("container-image-scan", err)
+	}
+	// A first pass shortly after start, so a new deployment does not wait a day to
+	// learn what it is running -- but not immediately, because the first monitor
+	// sweep has to collect the container lists before there is anything to scan.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(15 * time.Minute):
+		run()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
 }
 
 // retentionLoop prunes session recordings older than the configured retention

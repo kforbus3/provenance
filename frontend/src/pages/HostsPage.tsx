@@ -29,11 +29,12 @@ import {
   getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
   removeHostGroup, removeHostUser, updateHost, setHostMaintenance, clearHostMaintenance, maintenanceActive,
   clearHostKeyPins, hostKeyMismatch,
-  bulkRefreshHosts, bulkHostMaintenance, bulkHostTags,
+  bulkRefreshHosts, bulkHostMaintenance, bulkHostTags, listContainerImages,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
 import {
   type EnrollmentResult, type EnrollParams, type Host, type HostInput,
+  type ContainerImageScan,
 } from "../api/hosts";
 import { listGroups, listUsers } from "../api/admin";
 import {
@@ -1555,6 +1556,23 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
   // RDP (Windows) hosts have no SSH/kernel/apt-updates and aren't on the WireGuard
   // overlay; their facts come from WinRM. Hide the fields that don't apply.
   const isRDP = h?.protocol === "rdp";
+
+  // Container image findings, fetched once for the fleet and joined by digest.
+  // The same image runs in many places and its findings are identical wherever
+  // it runs, so this is one small table rather than a payload repeated per host.
+  // Only fetched when this host actually has containers.
+  const { data: imageScanList = [] } = useQuery({
+    queryKey: ["container-images"],
+    queryFn: listContainerImages,
+    enabled: Boolean(host) && Boolean(inv?.containers?.length),
+    staleTime: 5 * 60_000,
+  });
+  const imageScans = useMemo(() => {
+    const m: Record<string, ContainerImageScan> = {};
+    for (const sc of imageScanList) m[sc.digest] = sc;
+    return m;
+  }, [imageScanList]);
+
   const { data: software = [] } = useQuery({
     queryKey: ["host-software", host?.id],
     queryFn: () => listHostSoftware(host!.id),
@@ -1695,6 +1713,36 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
                             </Typography>
                           </Tooltip>
                         )}
+                        {/* What is wrong with this image, joined by digest.
+                            "Not scanned yet" is shown as such rather than as a
+                            zero: a blank where a count belongs reads as clean,
+                            and on a container host that is the reassuring answer
+                            to a question nobody has asked yet. */}
+                        {(() => {
+                          const sc = c.digest ? imageScans[c.digest] : undefined;
+                          if (!sc) return null;
+                          if (sc.pending) {
+                            return <Chip label="not scanned" size="small" variant="outlined" />;
+                          }
+                          if (sc.error) {
+                            return (
+                              <Tooltip title={sc.error}>
+                                <Chip label="scan failed" size="small" color="warning" variant="outlined" />
+                              </Tooltip>
+                            );
+                          }
+                          const crit = sc.critical ?? 0;
+                          const high = sc.high ?? 0;
+                          if (crit + high === 0) {
+                            return <Chip label="no critical/high" size="small" color="success" variant="outlined" />;
+                          }
+                          return (
+                            <Chip
+                              label={`${crit ? `${crit} critical` : ""}${crit && high ? ", " : ""}${high ? `${high} high` : ""}`}
+                              size="small" color={crit > 0 ? "error" : "warning"}
+                            />
+                          );
+                        })()}
                         {c.state && c.state !== "running" && (
                           <Chip label={c.state} size="small" color="warning" variant="outlined" />
                         )}

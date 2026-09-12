@@ -33,6 +33,8 @@ import (
 // table here is a deliberate security decision — it asserts the table holds no
 // per-tenant data (or is isolated some other way). Keep the reason accurate.
 var rlsGlobalAllowlist = map[string]string{
+	// --- container image scanning (0087) ---
+	"container_image_scans": "a cache of public CVE data keyed by image DIGEST, holding no tenant data: the same digest is the same bytes for everyone, and the host->image linkage that would identify a tenant lives in host_inventory, which is scoped. Shared on purpose — grype fetches each image from its registry to scan it, so per-tenant copies would multiply bandwidth, disk and registry rate-limit pressure for an identical answer (0087).",
 	// --- imaging control plane (0080) ---
 	"imaging_rollout_machines": "one machine's progress through one rollout; reachable only via imaging_rollouts, which is RLS-scoped. A tenant_id here would be a second copy of the parent's and a second place for the two to disagree (0080).",
 	// --- tenancy + RBAC catalog (global by design; the per-user *assignment* is scoped) ---

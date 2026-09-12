@@ -20,6 +20,7 @@ import io
 import asyncio
 import json
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -207,6 +208,59 @@ async def scan_sbom(request: Request):
         os.remove(path)
     if proc.returncode != 0:
         return JSONResponse({"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=500)
+    try:
+        return JSONResponse(_normalize(json.loads(proc.stdout)))
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "could not parse grype output"}, status_code=500)
+
+
+# A container image reference, pinned by digest.
+#
+# Digest-only, deliberately. A tag moves: scanning "nginx:1.25" tells you about
+# whatever that tag points at NOW, which is not necessarily what the host is
+# running -- and a report about an image nobody is running is worse than no
+# report, because it is indistinguishable from one that matters. The inventory
+# collects the resolved digest for exactly this reason, so the scan can be about
+# the bytes actually in use.
+#
+# Bounded to what a registry reference can contain. grype is handed this as an
+# argument, not through a shell, but an unbounded string reaching a subprocess
+# argument list is not something to leave to the absence of a shell.
+IMAGE_REF = re.compile(r"^[a-zA-Z0-9._:/-]{1,255}@sha256:[a-f0-9]{64}$")
+
+
+@app.post("/scan-image")
+async def scan_image(request: Request):
+    """Scan a container image by digest-pinned reference.
+
+    grype pulls the image from its registry itself -- there is no Docker daemon in
+    this container and it needs none. That also means this reaches the network:
+    a private registry needs credentials in the scanner's environment, and a rate
+    limited one will say so in the error rather than silently returning nothing.
+    """
+    body = await request.body()
+    try:
+        ref = (json.loads(body or b"{}").get("image") or "").strip()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    if not ref:
+        return JSONResponse({"error": "image is required"}, status_code=400)
+    if not IMAGE_REF.match(ref):
+        return JSONResponse(
+            {"error": "image must be a digest-pinned reference (repo@sha256:...)"},
+            status_code=400,
+        )
+    try:
+        proc = await _run_grype(["grype", f"registry:{ref}", "-o", "json"], SCAN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"error": "scan timed out"}, status_code=504)
+    if proc.returncode != 0:
+        # Surfaced rather than flattened to "scan failed": the three things that
+        # go wrong here -- no such image, no credentials, rate limited -- have
+        # three different answers, and an operator cannot pick one from a generic
+        # failure.
+        return JSONResponse(
+            {"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=502)
     try:
         return JSONResponse(_normalize(json.loads(proc.stdout)))
     except json.JSONDecodeError:

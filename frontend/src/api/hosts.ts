@@ -423,3 +423,36 @@ export async function finishEnroll(id: string, hostPublicKey: string): Promise<E
   const { data } = await api.post<EnrollmentResult>(`/api/v1/hosts/${id}/enroll/finish`, { hostPublicKey });
   return data;
 }
+
+// Vulnerability findings for one container image, keyed by digest.
+//
+// Fleet-global by nature: the same digest is the same bytes everywhere, so this
+// is fetched once and joined against whatever each host is running.
+export interface ContainerImageScan {
+  digest: string;
+  image?: string;
+  critical?: number;
+  high?: number;
+  medium?: number;
+  low?: number;
+  dbBuilt?: string;
+  // Why a scan produced nothing. An image that could not be pulled — no
+  // credentials, rate limited, gone from the registry — must not read as an
+  // image with no vulnerabilities.
+  error?: string;
+  scannedAt?: string;
+  // Running, but not scanned yet. Distinct from "scanned and clean", because a
+  // UI that cannot tell them apart will show the reassuring one.
+  pending?: boolean;
+}
+
+export async function listContainerImages(): Promise<ContainerImageScan[]> {
+  const { data } = await api.get<{ images: ContainerImageScan[] }>(`/api/v1/container-images`);
+  return data.images ?? [];
+}
+
+export async function scanContainerImages(): Promise<{ scanned: number; failed: number }> {
+  const { data } = await api.post<{ scanned: number; failed: number }>(
+    `/api/v1/container-images/scan`);
+  return data;
+}

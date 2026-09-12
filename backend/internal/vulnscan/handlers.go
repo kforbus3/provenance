@@ -32,6 +32,12 @@ func Mount(r chi.Router, d *app.Deps, svc *Service, msrcSvc *msrc.Service) {
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Delete("/vuln-scans/failed", h.clearFailed)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/latest", h.latest)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/db", h.dbStatus)
+		// Container image findings, keyed by digest. Fleet-global by nature: the
+		// same digest is the same bytes everywhere, so this is one table the UI
+		// joins against rather than a per-host payload repeated for every host
+		// running a popular base image.
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/container-images", h.containerImages)
+		pr.With(d.Auth.RequirePermission("Host.Scan")).Post("/container-images/scan", h.scanContainerImages)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/msrc", h.msrcStatus)
 		// Literal segments are registered before the {id} pattern so
 		// /vuln-scans/latest/sbom resolves to the host lookup rather than being
@@ -400,4 +406,48 @@ func (h *handler) latestSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSBOM(w, b)
+}
+
+// containerImages returns what is known about every scanned container image.
+//
+// Whole-table rather than per-host: the set is bounded by the number of distinct
+// images the fleet runs, which is small, and a host page needs the results for
+// whatever it happens to be running without a round trip per container.
+func (h *handler) containerImages(w http.ResponseWriter, r *http.Request) {
+	refs, err := h.d.Store.DistinctContainerImages(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list container images")
+		return
+	}
+	digests := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		digests = append(digests, ref.Digest)
+	}
+	scans, err := h.d.Store.ContainerImageScans(r.Context(), digests)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read image scans")
+		return
+	}
+	out := make([]any, 0, len(refs))
+	for _, ref := range refs {
+		if sc, ok := scans[ref.Digest]; ok {
+			out = append(out, sc)
+			continue
+		}
+		// Known to be running, not yet scanned. Reported as such rather than
+		// omitted: "we have not looked at this yet" is a different statement from
+		// "this image is clean", and a UI that cannot tell them apart will show
+		// the reassuring one.
+		out = append(out, map[string]any{
+			"digest": ref.Digest, "image": ref.Image, "pending": true,
+		})
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"images": out})
+}
+
+// scanContainerImages runs a scan pass now rather than waiting for the daily one.
+func (h *handler) scanContainerImages(w http.ResponseWriter, r *http.Request) {
+	scanned, failed := h.svc.ScanContainerImages(r.Context())
+	h.audit(r, "vuln_scan.container_images", map[string]any{"scanned": scanned, "failed": failed})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"scanned": scanned, "failed": failed})
 }

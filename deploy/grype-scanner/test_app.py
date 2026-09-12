@@ -94,3 +94,40 @@ def test_normalize_empty_state_reads_as_unknown():
         {"vulnerability": {"id": "CVE-1", "severity": "Low", "fix": {}}, "artifact": {"name": "a"}},
     ]})
     assert out["findings"][0]["fixState"] == "unknown"
+
+
+# --- /scan-image reference validation ----------------------------------------
+#
+# The reference reaches grype as a subprocess argument. There is no shell, so
+# this is not about injection so much as about scanning the right thing: a
+# reference that is not digest-pinned scans whatever a tag points at NOW, which
+# is not necessarily what any host is running. A report about an image nobody
+# runs is worse than no report, because it looks exactly like one that matters.
+
+def test_image_ref_requires_a_digest():
+    from app import IMAGE_REF
+    sha = "a" * 64
+
+    good = [
+        f"nginx@sha256:{sha}",
+        f"qmcgaw/gluetun@sha256:{sha}",
+        f"ghcr.io/owner/app@sha256:{sha}",
+        # A registry with a port is a normal reference and must be accepted.
+        f"registry.example.com:5000/app@sha256:{sha}",
+    ]
+    for ref in good:
+        assert IMAGE_REF.match(ref), f"should accept {ref}"
+
+    bad = [
+        "nginx",                       # no digest at all
+        "nginx:1.25",                  # a tag moves; this is the whole point
+        f"nginx@sha512:{sha}",         # only sha256 is what a registry gives us
+        f"nginx@sha256:{'a' * 63}",    # truncated digest
+        f"nginx@sha256:{'A' * 64}",    # digests are lowercase hex
+        f"nginx@sha256:{sha} extra",   # trailing junk
+        f"nginx;id@sha256:{sha}",      # shell metacharacters have no business here
+        f"$(id)@sha256:{sha}",
+        "",
+    ]
+    for ref in bad:
+        assert not IMAGE_REF.match(ref), f"should reject {ref!r}"
