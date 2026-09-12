@@ -5,6 +5,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.24 — 2026-09-12
+
+**A forced recheck now reaches the images it was pressed for.** A pass checks a
+bounded number of images, because a registry's rate limit does not care why the
+request was made. Which images waited for the next pass was decided by where they
+happened to sit in a list — ordered by name, with the tags a compose file names
+appended after them. On a fleet of sixty-four images against a cap of forty, that
+put every one of those rows past the cut, every time; and on a forced pass, which
+deliberately ignores freshness and so re-offers the same first forty, it would
+have put them there permanently. The pass reported "checked 40, failed 0" each
+time, which is why nothing looked wrong.
+
+A pass is now ordered by what has waited longest, with images never checked at
+all going first. That is the right rule irrespective of the bug: an image that
+has just appeared is the one somebody is most likely waiting on.
+
+---
+
 ## v1.2.23 — 2026-09-12
 
 **Updates are now found for the version you pinned, not just the tag that
