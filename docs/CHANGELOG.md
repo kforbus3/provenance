@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.13 — 2026-09-12
+
+**A rollout can now finish a change it had half-applied.** When a compose file
+has already been edited to the new tag while the container still runs the old one
+— by hand, or by an earlier attempt that wrote the file and failed before
+deploying — adoption asked only whether the file named the OLD tag, concluded it
+was not the right project, and refused. It was the right project; the file was
+simply already where the rollout wanted to get to, and the work left was to
+deploy it. Every partially-applied change is in that state, including one a
+rollout produced itself, so a rollout could not finish its own work.
+
+**The rollout is now tested against a real Docker.** Four separate failures
+reached an operator before a test, and all four were the same shape: a script, a
+shell and a parser that are only correct together, checked by unit tests that fed
+the parser hand-written strings. The container-update suite now runs the real
+scripts and the real engine against a real daemon and a real compose project —
+adopt, rewrite, deploy, verify, and the sequencing through all of it — as part of
+the normal test run, skipping loudly where Docker is unavailable rather than
+appearing to pass.
+
+---
+
 ## v1.2.12 — 2026-09-12
 
 **Container digests were being dropped on every bash host, and are not any
