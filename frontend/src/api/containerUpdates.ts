@@ -84,17 +84,31 @@ export interface UpdateRollout {
   windowEnd?: string;
   windowDays?: number[];
   canaryDoneAt?: string;
+  images?: RolloutImage[];
+  // The list carries only the count; the detail view carries the images.
+  imageCount?: number;
   createdAt: string;
   createdBy?: string;
   hosts?: UpdateRolloutHost[];
   counts?: Record<string, number>;
 }
 
-export interface CreateRolloutRequest {
+export interface RolloutImage {
   repository: string;
   fromTag: string;
   toTag: string;
   targetDigest?: string;
+}
+
+export interface CreateRolloutRequest {
+  repository?: string;
+  fromTag?: string;
+  toTag?: string;
+  targetDigest?: string;
+  // Several images in one rollout, paced as one operation. Ten separate rollouts
+  // would each pace themselves, so a canary of one would mean ten hosts taking
+  // an unproven update at the same time — which is not a canary.
+  images?: RolloutImage[];
   // Empty means every host currently running the image. Resolved once, when the
   // rollout is created — a rollout whose membership changed underneath it could
   // never be complete.

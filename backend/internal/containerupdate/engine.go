@@ -26,6 +26,8 @@ type Store interface {
 	ListStacks(ctx context.Context, hostID *uuid.UUID) ([]store.ContainerStack, error)
 	UpsertStack(ctx context.Context, in store.StackInput) (*store.ContainerStack, error)
 	GetHost(ctx context.Context, id uuid.UUID) (*models.Host, error)
+	HostContainers(ctx context.Context, hostID uuid.UUID) ([]models.Container, error)
+	RolloutImages(ctx context.Context, id uuid.UUID) ([]store.RolloutImage, error)
 }
 
 // Deployer applies a stack to its host, pulling images first.
@@ -178,6 +180,23 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 	// Claiming is still serial and still conditional, so two overlapping ticks
 	// cannot both take the same host: for a compose file that means two writers
 	// racing on one path.
+	// The images this rollout covers, read once for the whole batch rather than
+	// per host: they do not change while it runs, and a rollout over a hundred
+	// hosts would otherwise ask a hundred times for the same answer.
+	images, err := e.store.RolloutImages(ctx, r.ID)
+	if err != nil {
+		e.log.Warn("update rollout: listing images", "rollout", r.ID, "err", err)
+		return
+	}
+	if len(images) == 0 {
+		// A rollout created before images were recorded. Its own columns are the
+		// single image it covers.
+		images = []store.RolloutImage{{
+			Repository: r.Repository, FromTag: r.FromTag,
+			ToTag: r.ToTag, TargetDigest: r.TargetDigest,
+		}}
+	}
+
 	claimed := make([]uuid.UUID, 0, capacity)
 	for _, h := range hosts {
 		if capacity <= 0 || ctx.Err() != nil {
@@ -207,18 +226,88 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		wg.Add(1)
 		go func(hostID uuid.UUID) {
 			defer wg.Done()
-			e.apply(ctx, r, hostID)
+			e.applyAll(ctx, r, images, hostID)
 		}(hostID)
 	}
 	wg.Wait()
 }
 
-// apply moves one host onto the target image.
-func (e *Engine) apply(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) {
+// applyAll moves one host onto every image in the rollout that it runs.
+//
+// A host is the unit, not an image: it is either current or it is not, and a
+// fleet half-updated per image is harder to reason about than one updated host
+// at a time. An image the host does not run is not a failure — a rollout covering
+// ten images rarely has all ten on every host.
+//
+// The first failure stops this host. Continuing would apply later updates on top
+// of a host already known to be in a state nobody intended, and the failure
+// budget is about hosts.
+func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []store.RolloutImage, hostID uuid.UUID) {
+	containers, err := e.store.HostContainers(ctx, hostID)
+	if err != nil {
+		e.fail(ctx, r.ID, hostID, "could not read what this host is running: "+err.Error())
+		return
+	}
+	runs := map[string]bool{}
+	for _, c := range containers {
+		runs[c.Repository+":"+c.Tag] = true
+	}
+
+	applied := 0
+	for _, im := range images {
+		if ctx.Err() != nil {
+			return
+		}
+		if !runs[im.Repository+":"+im.FromTag] {
+			continue
+		}
+		// Each image is applied as its own single-image operation, so one code
+		// path serves both a one-image rollout and a fleet-wide one.
+		one := r
+		one.Repository, one.FromTag, one.ToTag, one.TargetDigest =
+			im.Repository, im.FromTag, im.ToTag, im.TargetDigest
+		if err := e.applyOne(ctx, one, hostID); err != nil {
+			e.fail(ctx, r.ID, hostID,
+				fmt.Sprintf("%s:%s → %s: %s", im.Repository, im.FromTag, im.ToTag, err.Error()))
+			return
+		}
+		applied++
+	}
+
+	if applied == 0 {
+		// Enrolled but running none of the images by the time its turn came --
+		// somebody updated it by hand, or the container was removed. Not a
+		// failure, and not a silent success either: skipped says which.
+		if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostSkipped,
+			"this host was not running any of the images by the time its turn came"); err != nil {
+			e.log.Warn("update rollout: recording skip", "host", hostID, "err", err)
+		}
+		return
+	}
+	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, ""); err != nil {
+		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
+	}
+}
+
+// applyOne moves one host onto one target image, and reports what went wrong.
+//
+// Recording the host's state is the CALLER's job: a host in a multi-image
+// rollout is not verified until every image that applies to it is.
+func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) error {
 	stack, compose, err := e.targetStack(ctx, r, hostID)
 	if err != nil {
-		e.fail(ctx, r.ID, hostID, err.Error())
-		return
+		// No stack holds this image. For an update that does not need the compose
+		// file CHANGED -- a moved tag, the same version rebuilt -- the container's
+		// own compose project is enough, and asking an operator to adopt a file
+		// just to pull a rebuilt image is work for nothing.
+		applied, ierr := e.applyInPlace(ctx, r, hostID)
+		if !applied {
+			return err
+		}
+		if ierr != nil {
+			return ierr
+		}
+		return e.verify(ctx, r, hostID)
 	}
 
 	// Only save a new revision when the text actually changed. A digest-only
@@ -235,14 +324,12 @@ func (e *Engine) apply(ctx context.Context, r store.UpdateRollout, hostID uuid.U
 			AuthorName: "container update rollout",
 		})
 		if err != nil {
-			e.fail(ctx, r.ID, hostID, "could not record the new compose: "+err.Error())
-			return
+			return fmt.Errorf("could not record the new compose: %w", err)
 		}
 	}
 
 	if _, out, err := e.dep.DeployPulling(ctx, stack.ID); err != nil {
-		e.fail(ctx, r.ID, hostID, trimOutput(err.Error()+"\n"+out))
-		return
+		return fmt.Errorf("%s", trimOutput(err.Error()+"\n"+out))
 	}
 
 	// Verified means the host is RUNNING the target, not that the deploy command
@@ -250,13 +337,49 @@ func (e *Engine) apply(ctx context.Context, r store.UpdateRollout, hostID uuid.U
 	// on the old image is the exact failure this rollout exists to catch, and a
 	// rollout that counted the exit code would march a no-op across the fleet
 	// while reporting every host as updated.
-	if err := e.verify(ctx, r, hostID); err != nil {
-		e.fail(ctx, r.ID, hostID, err.Error())
-		return
+	return e.verify(ctx, r, hostID)
+}
+
+// applyInPlace updates a container through its own compose project.
+//
+// Returns whether this path applies at all, and if so whether it worked. It
+// applies only when the compose file does not need to change: a version bump is
+// written INTO that file, and editing a file Provenance does not own is a
+// different decision -- on a host whose compose files are deployed from a git
+// repo or an rsync target, the edit is reverted on the next deploy, silently.
+func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) (bool, error) {
+	if r.FromTag != r.ToTag {
+		return false, nil // a version bump needs the file changed; not this path
 	}
-	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, ""); err != nil {
-		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
+	containers, err := e.store.HostContainers(ctx, hostID)
+	if err != nil {
+		return false, nil // fall back to the stack message rather than invent one
 	}
+	var match *models.Container
+	for i := range containers {
+		c := &containers[i]
+		if c.Repository == r.Repository && c.Tag == r.FromTag &&
+			c.ComposeDir != "" && c.ComposeService != "" {
+			match = c
+			break
+		}
+	}
+	if match == nil {
+		return false, nil
+	}
+
+	h, err := e.store.GetHost(ctx, hostID)
+	if err != nil {
+		return true, fmt.Errorf("could not read the host: %w", err)
+	}
+	out, code, failed := e.run.RunScript(ctx, inPlaceScript(match.ComposeDir, match.ComposeService), h)
+	if failed || code != 0 {
+		return true, fmt.Errorf("%s", inPlaceFailure(match.ComposeDir, match.ComposeService, out))
+	}
+	e.log.Info("container updated in place",
+		"host", h.Hostname, "project", match.ComposeProject,
+		"service", match.ComposeService, "dir", match.ComposeDir)
+	return true, nil
 }
 
 // targetStack finds the managed stack on a host that names the image, and
@@ -286,7 +409,10 @@ func (e *Engine) targetStack(ctx context.Context, r store.UpdateRollout, hostID 
 	// operator reading "no managed stack" knows the fix is to adopt the compose
 	// file, whereas "deploy failed" sends them to look at docker.
 	return nil, "", fmt.Errorf(
-		"no Provenance-managed stack on this host names %s:%s — adopt its compose file to make it updatable",
+		"no Provenance-managed stack on this host names %s:%s, and this is a version "+
+			"change rather than a rebuild — the new version has to be written into a "+
+			"compose file, so adopt this host's compose file as a stack to make it "+
+			"updatable. Rebuilds of the same tag do not need that.",
 		r.Repository, r.FromTag)
 }
 

@@ -1,6 +1,9 @@
 package monitor
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // "Nothing is running" and "we were not allowed to look" must never render the
 // same.
@@ -25,7 +28,7 @@ func TestParseContainersDistinguishesEmptyFromUnasked(t *testing.T) {
 		{"garbage with no marker", "bash: docker: command not found\n", ContainersUnreachable, 0},
 	}
 	for _, c := range cases {
-		got, status := parseContainers(c.out)
+		got, status, _ := parseContainers(c.out)
 		if status != c.wantStatus {
 			t.Errorf("%s: status = %q, want %q", c.name, status, c.wantStatus)
 		}
@@ -43,7 +46,7 @@ func TestParseContainers(t *testing.T) {
 		"nextcloud:29-apache\tnextcloud@sha256:aaaa\n" +
 		"qmcgaw/gluetun:latest\tqmcgaw/gluetun@sha256:bbbb\n"
 
-	got, status := parseContainers(out)
+	got, status, _ := parseContainers(out)
 	if status != ContainersOK {
 		t.Fatalf("status = %q", status)
 	}
@@ -86,5 +89,79 @@ func TestSplitImageRef(t *testing.T) {
 		if repo != c.repo || tag != c.tag {
 			t.Errorf("splitImageRef(%q) = (%q, %q), want (%q, %q)", c.ref, repo, tag, c.repo, c.tag)
 		}
+	}
+}
+
+// Six hosts on a nineteen-host fleet reported no_access, and the status said
+// nothing about which of its two causes applied. They need opposite actions —
+// an account missing from the socket's group is a one-line fix; a daemon that is
+// not running is a different problem — so working it out meant an SSH session per
+// host, which is the work this product exists to remove.
+func TestTheReasonACollectionFailedIsCarriedNotDiscarded(t *testing.T) {
+	cases := []struct {
+		name, out, wantStatus, wantDetail string
+	}{
+		{
+			"not in the socket's group",
+			"::NOACCESS::fleet cannot use /var/run/docker.sock — it belongs to group docker; " +
+				"add this account to that group (usermod -aG docker fleet) and reconnect\n",
+			ContainersNoAccess,
+			"usermod -aG docker fleet",
+		},
+		{
+			"daemon not running",
+			"::NOACCESS::no socket at /var/run/docker.sock — the daemon may not be running, " +
+				"or may be rootless or remote (DOCKER_HOST=unset): Cannot connect\n",
+			ContainersNoAccess,
+			"the daemon may not be running",
+		},
+		{
+			"daemon present but no client",
+			"::NORUNTIME::a container socket exists at /var/run/docker.sock but no docker or " +
+				"podman command is installed for this account\n",
+			ContainersNoDocker,
+			"no docker or podman command is installed",
+		},
+		{
+			"genuinely no runtime",
+			"::NORUNTIME::no container runtime is installed\n",
+			ContainersNoDocker,
+			"no container runtime is installed",
+		},
+	}
+	for _, c := range cases {
+		_, status, detail := parseContainers(c.out)
+		if status != c.wantStatus {
+			t.Errorf("%s: status = %q, want %q", c.name, status, c.wantStatus)
+		}
+		if !strings.Contains(detail, c.wantDetail) {
+			t.Errorf("%s: detail = %q, want it to contain %q — without this an "+
+				"operator has the same question they started with",
+				c.name, detail, c.wantDetail)
+		}
+	}
+}
+
+func TestASuccessfulCollectionCarriesNoExcuse(t *testing.T) {
+	// A detail on a working host would be noise shown next to a correct answer.
+	_, status, detail := parseContainers("::OK::\n::IMAGES::\n")
+	if status != ContainersOK || detail != "" {
+		t.Errorf("status=%q detail=%q, want ok and empty", status, detail)
+	}
+}
+
+// The script must actually emit what the parser reads. They are edited in
+// different places and nothing else connects them: a marker that stops carrying
+// its detail leaves every reason empty, and every test above still passes
+// because they test the parser against hand-written strings.
+func TestTheScriptEmitsDetailAlongsideEveryFailureMarker(t *testing.T) {
+	for _, marker := range []string{"::NORUNTIME::", "::NOACCESS::"} {
+		if !strings.Contains(containersScript, `echo "`+marker+`$_detail"`) {
+			t.Errorf("the script emits %s without $_detail, so the reason never "+
+				"reaches the operator", marker)
+		}
+	}
+	if !strings.Contains(containersScript, "usermod -aG") {
+		t.Error("the permission case should name the command that fixes it")
 	}
 }

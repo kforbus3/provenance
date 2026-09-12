@@ -194,6 +194,10 @@ export function ContainerUpdatesTab() {
   const [filter, setFilter] = useState("");
   const [snack, setSnack] = useState("");
   const [rollingOut, setRollingOut] = useState<ImageUpdate | null>(null);
+  // "Everything with something available", as one rollout rather than one per
+  // image: ten separate rollouts each pace themselves, so a canary of one would
+  // mean ten hosts taking an unproven update simultaneously.
+  const [rollingOutAll, setRollingOutAll] = useState<ImageUpdate[] | null>(null);
 
   const { data: updates = [], isLoading } = useQuery({
     queryKey: ["container-updates"],
@@ -222,10 +226,11 @@ export function ContainerUpdatesTab() {
       a.repository.localeCompare(b.repository));
   }, [updates, filter]);
 
-  const actionable = updates.filter((u) => {
+  const actionableUpdates = updates.filter((u) => {
     const v = verdictOf(u);
-    return v === "newer" || v === "moved";
-  }).length;
+    return (v === "newer" || v === "moved") && hostsOf(u).length > 0;
+  });
+  const actionable = actionableUpdates.length;
 
   return (
     <Box>
@@ -255,7 +260,16 @@ export function ContainerUpdatesTab() {
       </Stack>
 
       {actionable > 0 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={canRun ? (
+            <Button color="inherit" size="small"
+                    onClick={() => setRollingOutAll(actionableUpdates)}>
+              Update all
+            </Button>
+          ) : undefined}
+        >
           {actionable} image{actionable > 1 ? "s have" : " has"} something newer available.
         </Alert>
       )}
@@ -294,7 +308,8 @@ export function ContainerUpdatesTab() {
         </TableContainer>
       )}
 
-      <StartRolloutDialog update={rollingOut} onClose={() => setRollingOut(null)}
+      <StartRolloutDialog update={rollingOut} updates={rollingOutAll}
+                          onClose={() => { setRollingOut(null); setRollingOutAll(null); }}
                           onStarted={(m) => {
                             setSnack(m);
                             qc.invalidateQueries({ queryKey: ["rollouts"] });

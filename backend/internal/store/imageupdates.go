@@ -2,7 +2,12 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // ImageUpdate is what a registry last said about one repository:tag pair.
@@ -241,6 +246,29 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context) ([]ImageUpdateRow, er
 				hosts[i].Digest != u.Digest
 		}
 		out = append(out, ImageUpdateRow{ImageUpdate: u, Hosts: hosts})
+	}
+	return out, nil
+}
+
+// HostContainers returns what one host reported running.
+//
+// For the rollout engine: a container's own compose labels say which project and
+// service it belongs to and where that project lives, which is what lets an image
+// be updated in place without Provenance holding a copy of its compose file.
+func (s *Store) HostContainers(ctx context.Context, hostID uuid.UUID) ([]models.Container, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(containers, jsonb_build_array())
+		FROM host_inventory WHERE host_id = $1`, hostID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	out := []models.Container{}
+	if len(raw) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

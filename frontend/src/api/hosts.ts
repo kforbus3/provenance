@@ -32,6 +32,10 @@ export interface HostInventory {
   // ONLY when this says ok — the monitor runs without sudo and Docker's socket is
   // root-owned, so a host whose monitor account lacks access answers nothing.
   containersStatus?: "" | "ok" | "no_docker" | "no_access" | "unreachable";
+  // WHY, in the probe's own words. "no_access" has two causes needing opposite
+  // actions — an account missing from the socket's group, or a daemon that is not
+  // running — and the group is not called "docker" on every distribution.
+  containersDetail?: string;
   containersCheckedAt?: string;
 }
 

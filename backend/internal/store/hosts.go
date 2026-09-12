@@ -215,7 +215,8 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 		SELECT host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
 			listening_ports, ports_checked_at,
-			containers, containers_checked_at, COALESCE(containers_status,'')
+			containers, containers_checked_at, COALESCE(containers_status,''),
+			COALESCE(containers_detail,'')
 		FROM host_inventory WHERE host_id = ANY($1)`, ids); err == nil {
 		for rows.Next() {
 			var hid uuid.UUID
@@ -225,7 +226,8 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 				&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
 				&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs,
 				&ports, &inv.PortsCheckedAt,
-				&containers, &inv.ContainersCheckedAt, &inv.ContainersStatus) != nil {
+				&containers, &inv.ContainersCheckedAt, &inv.ContainersStatus,
+				&inv.ContainersDetail) != nil {
 				continue
 			}
 			if len(updatePkgs) > 0 {
@@ -603,8 +605,8 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
 			listening_ports, ports_checked_at,
-			containers, containers_checked_at, containers_status, collected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
+			containers, containers_checked_at, containers_status, containers_detail, collected_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
 		ON CONFLICT (host_id) DO UPDATE SET
 			os_name=EXCLUDED.os_name, os_version=EXCLUDED.os_version, kernel_version=EXCLUDED.kernel_version,
 			architecture=EXCLUDED.architecture, ssh_version=EXCLUDED.ssh_version, cpu_count=EXCLUDED.cpu_count,
@@ -624,11 +626,12 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 			containers=COALESCE(EXCLUDED.containers, host_inventory.containers),
 			containers_checked_at=COALESCE(EXCLUDED.containers_checked_at, host_inventory.containers_checked_at),
 			containers_status=EXCLUDED.containers_status,
+			containers_detail=EXCLUDED.containers_detail,
 			collected_at=now()`,
 		hostID, inv.OSName, inv.OSVersion, inv.KernelVersion, inv.Architecture, inv.SSHVersion, inv.CPUCount, inv.MemoryMB,
 		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs, obsoletePkgs,
 		ports, inv.PortsCheckedAt,
-		containers, inv.ContainersCheckedAt, inv.ContainersStatus)
+		containers, inv.ContainersCheckedAt, inv.ContainersStatus, inv.ContainersDetail)
 	return err
 }
 
@@ -719,8 +722,9 @@ func (s *Store) UpdateHostContainers(ctx context.Context, hostID uuid.UUID, inv 
 		UPDATE host_inventory SET
 			containers = COALESCE($2, containers),
 			containers_checked_at = COALESCE($3, containers_checked_at),
-			containers_status = $4
+			containers_status = $4,
+			containers_detail = $5
 		WHERE host_id = $1`,
-		hostID, containers, inv.ContainersCheckedAt, inv.ContainersStatus)
+		hostID, containers, inv.ContainersCheckedAt, inv.ContainersStatus, inv.ContainersDetail)
 	return err
 }

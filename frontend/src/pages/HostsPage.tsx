@@ -1666,7 +1666,7 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
             Docker socket answers nothing, and rendering that as "no containers"
             would report a clean host for the machines carrying the most
             software. */}
-        {inv?.containersStatus && inv.containersStatus !== "no_docker" && (
+        {inv?.containersStatus && !(inv.containersStatus === "no_docker" && !inv.containersDetail) && (
           <Box sx={{ mt: 2 }}>
             <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>
               Containers{inv.containers?.length ? ` (${inv.containers.length})` : ""}
@@ -1674,9 +1674,24 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
             {inv.containersStatus === "no_access" && (
               <Alert severity="warning" sx={{ mb: 1 }}>
                 A container runtime is installed, but this host's monitor account cannot
-                reach its socket — so what is running here is unknown, and none of it is
-                being scanned for vulnerabilities. Add the account to the <code>docker</code>
-                {" "}group on this host to collect it.
+                reach it — so what is running here is unknown, and none of it is being
+                scanned for vulnerabilities.
+                {/* The probe's own words, because the two causes need opposite
+                    actions and the group is not called "docker" everywhere. This
+                    used to name that group from a guess. */}
+                {inv.containersDetail && (
+                  <Box component="div" sx={{ mt: 1, fontFamily: "monospace", fontSize: 12, wordBreak: "break-word" }}>
+                    {inv.containersDetail}
+                  </Box>
+                )}
+              </Alert>
+            )}
+            {inv.containersStatus === "no_docker" && inv.containersDetail && (
+              <Alert severity="info" sx={{ mb: 1 }}>
+                No container runtime is usable from this host's monitor account.
+                <Box component="div" sx={{ mt: 1, fontFamily: "monospace", fontSize: 12, wordBreak: "break-word" }}>
+                  {inv.containersDetail}
+                </Box>
               </Alert>
             )}
             {inv.containersStatus === "unreachable" && (

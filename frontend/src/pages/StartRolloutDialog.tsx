@@ -4,7 +4,7 @@ import {
   Divider, MenuItem, Stack, TextField, Typography,
 } from "@mui/material";
 import { useMutation } from "@tanstack/react-query";
-import { createRollout, type ImageUpdate } from "../api/containerUpdates";
+import { createRollout, type ImageUpdate, type RolloutImage } from "../api/containerUpdates";
 
 // Starting a staged rollout of one image update.
 //
@@ -23,10 +23,14 @@ const SOAKS = [
   { label: "4 hours", value: 14400 },
 ];
 
+// `update` is a single image; `updates` is "everything with something
+// available". One dialog for both, because the pacing choices are identical and
+// the only difference is how many images the rollout covers.
 export function StartRolloutDialog({
-  update, onClose, onStarted,
+  update, updates, onClose, onStarted,
 }: {
   update: ImageUpdate | null;
+  updates?: ImageUpdate[] | null;
   onClose: () => void;
   onStarted: (msg: string) => void;
 }) {
@@ -41,20 +45,35 @@ export function StartRolloutDialog({
   // The target: a newer tag when one was found, otherwise the same tag whose
   // digest moved. Both are real updates — the second is a rebuild of the same
   // version, where pulling IS the whole update.
+  const many = updates ?? null;
   const toTag = update?.latestTag || update?.tag || "";
   const isRebuild = !!update && toTag === update.tag;
 
+  const imageOf = (u: ImageUpdate): RolloutImage => ({
+    repository: u.repository,
+    fromTag: u.tag,
+    toTag: u.latestTag || u.tag,
+    targetDigest: u.digest,
+  });
+  const images = many ? many.map(imageOf) : [];
+
   const start = useMutation({
     mutationFn: () => createRollout({
-      repository: update!.repository,
-      fromTag: update!.tag,
-      toTag,
-      targetDigest: update!.digest,
+      ...(many
+        ? { images }
+        : {
+            repository: update!.repository,
+            fromTag: update!.tag,
+            toTag,
+            targetDigest: update!.digest,
+          }),
       canary, batchSize, soakSeconds, maxFailures,
       ...(windowStart && windowEnd ? { windowStart, windowEnd } : {}),
     }),
     onSuccess: () => {
-      onStarted(`Rolling out ${update!.repository}:${toTag}`);
+      onStarted(many
+        ? `Rolling out ${images.length} image${images.length === 1 ? "" : "s"}`
+        : `Rolling out ${update!.repository}:${toTag}`);
       onClose();
     },
     onError: (e) => setErr(errMsg(e, "Could not start the rollout.")),
@@ -62,16 +81,28 @@ export function StartRolloutDialog({
 
   // ?? not ?. — the server sends null, not [], for an image no host runs, and
   // update?.hosts.length throws on it just as surely as update.hosts.length does.
-  const hostCount = update?.hosts?.length ?? 0;
+  const hostCount = many
+    ? new Set(many.flatMap((u) => (u.hosts ?? []).map((h) => h.hostId))).size
+    : update?.hosts?.length ?? 0;
 
   return (
-    <Dialog open={update !== null} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Roll out {update?.repository}</DialogTitle>
+    <Dialog open={update !== null || (many?.length ?? 0) > 0} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>
+        {many ? `Roll out ${images.length} update${images.length === 1 ? "" : "s"}` : `Roll out ${update?.repository}`}
+      </DialogTitle>
       <DialogContent>
         {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
 
         <Typography variant="body2" sx={{ mb: 1 }}>
-          {isRebuild ? (
+          {many ? (
+            <>
+              Applying <strong>{images.length}</strong> update
+              {images.length === 1 ? "" : "s"} across {hostCount} host
+              {hostCount === 1 ? "" : "s"}. Each host takes every update that applies
+              to it before the next host starts — so a host is either current or it
+              is not, rather than half-updated across the fleet.
+            </>
+          ) : isRebuild ? (
             <>
               <strong>{update?.repository}:{update?.tag}</strong> has been rebuilt — the
               tag points at different bytes than these hosts are running. The version
@@ -84,6 +115,19 @@ export function StartRolloutDialog({
             </>
           )}
         </Typography>
+
+        {many && images.length > 0 && (
+          <Box sx={{ maxHeight: 140, overflow: "auto", border: 1, borderColor: "divider",
+                     borderRadius: 1, p: 1, mb: 2 }}>
+            {images.map((im) => (
+              <Typography key={`${im.repository}:${im.fromTag}`} variant="caption"
+                          sx={{ display: "block", fontFamily: "monospace" }}>
+                {im.repository}:{im.fromTag}
+                {im.toTag !== im.fromTag ? ` → ${im.toTag}` : " (rebuild)"}
+              </Typography>
+            ))}
+          </Box>
+        )}
 
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
           Only hosts whose compose file Provenance manages can be updated this way.
@@ -131,7 +175,7 @@ export function StartRolloutDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={start.isPending || !update}
+        <Button variant="contained" disabled={start.isPending || (!update && !many?.length)}
                 onClick={() => { setErr(""); start.mutate(); }}>
           Start rollout
         </Button>

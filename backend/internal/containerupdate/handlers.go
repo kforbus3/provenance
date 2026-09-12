@@ -67,18 +67,22 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRequest struct {
-	Repository   string      `json:"repository"`
-	FromTag      string      `json:"fromTag"`
-	ToTag        string      `json:"toTag"`
-	TargetDigest string      `json:"targetDigest"`
-	Hosts        []uuid.UUID `json:"hosts"`
-	Canary       int         `json:"canary"`
-	BatchSize    int         `json:"batchSize"`
-	SoakSeconds  int         `json:"soakSeconds"`
-	MaxFailures  int         `json:"maxFailures"`
-	WindowStart  string      `json:"windowStart"`
-	WindowEnd    string      `json:"windowEnd"`
-	WindowDays   []int32     `json:"windowDays"`
+	Repository   string `json:"repository"`
+	FromTag      string `json:"fromTag"`
+	ToTag        string `json:"toTag"`
+	TargetDigest string `json:"targetDigest"`
+	// Images covers several at once. When set, the single repository/fromTag/
+	// toTag fields are ignored: one rollout over many images is paced as one
+	// operation, which is the whole reason it is one rollout and not ten.
+	Images      []store.RolloutImage `json:"images"`
+	Hosts       []uuid.UUID          `json:"hosts"`
+	Canary      int                  `json:"canary"`
+	BatchSize   int                  `json:"batchSize"`
+	SoakSeconds int                  `json:"soakSeconds"`
+	MaxFailures int                  `json:"maxFailures"`
+	WindowStart string               `json:"windowStart"`
+	WindowEnd   string               `json:"windowEnd"`
+	WindowDays  []int32              `json:"windowDays"`
 }
 
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
@@ -90,28 +94,53 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	req.Repository = strings.TrimSpace(req.Repository)
 	req.FromTag = strings.TrimSpace(req.FromTag)
 	req.ToTag = strings.TrimSpace(req.ToTag)
-	if req.Repository == "" || req.FromTag == "" || req.ToTag == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "repository, fromTag and toTag are required")
-		return
+
+	images := req.Images
+	for i := range images {
+		images[i].Repository = strings.TrimSpace(images[i].Repository)
+		images[i].FromTag = strings.TrimSpace(images[i].FromTag)
+		images[i].ToTag = strings.TrimSpace(images[i].ToTag)
+	}
+	if len(images) == 0 {
+		if req.Repository == "" || req.FromTag == "" || req.ToTag == "" {
+			httpx.WriteError(w, http.StatusBadRequest,
+				"repository, fromTag and toTag are required (or a list of images)")
+			return
+		}
+		images = []store.RolloutImage{{
+			Repository: req.Repository, FromTag: req.FromTag,
+			ToTag: req.ToTag, TargetDigest: req.TargetDigest,
+		}}
+	}
+	for _, im := range images {
+		if im.Repository == "" || im.FromTag == "" || im.ToTag == "" {
+			httpx.WriteError(w, http.StatusBadRequest,
+				"every image needs a repository, a fromTag and a toTag")
+			return
+		}
 	}
 
 	hosts := req.Hosts
 	if len(hosts) == 0 {
-		// No explicit list means "every host running this image". Resolved ONCE,
-		// here, rather than re-read as the rollout runs: a rollout whose
-		// membership changed underneath it could never be complete, and a host
-		// that started running the image after the operator approved the change
-		// was never part of what they approved.
+		// No explicit list means "every host running any of these images".
+		// Resolved ONCE, here, rather than re-read as the rollout runs: a rollout
+		// whose membership changed underneath it could never be complete, and a
+		// host that started running the image after the operator approved the
+		// change was never part of what they approved.
 		var err error
-		hosts, err = h.st.HostsRunningImage(r.Context(), req.Repository, req.FromTag)
+		hosts, err = h.st.HostsRunningAnyImage(r.Context(), images)
 		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, "could not find the hosts running this image")
+			httpx.WriteError(w, http.StatusInternalServerError, "could not find the hosts running these images")
 			return
 		}
 	}
 	if len(hosts) == 0 {
-		httpx.WriteError(w, http.StatusBadRequest,
-			"no host is running "+req.Repository+":"+req.FromTag)
+		if len(images) == 1 {
+			httpx.WriteError(w, http.StatusBadRequest,
+				"no host is running "+images[0].Repository+":"+images[0].FromTag)
+			return
+		}
+		httpx.WriteError(w, http.StatusBadRequest, "no host is running any of these images")
 		return
 	}
 
@@ -133,9 +162,13 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	roll := store.UpdateRollout{
-		Repository: req.Repository, FromTag: req.FromTag, ToTag: req.ToTag,
-		TargetDigest: req.TargetDigest,
-		Canary:       req.Canary, BatchSize: req.BatchSize,
+		// The first image also fills the summary columns, so a single-image
+		// rollout reads exactly as it did and a multi-image one has something to
+		// show in a list before its images are loaded.
+		Repository: images[0].Repository, FromTag: images[0].FromTag,
+		ToTag: images[0].ToTag, TargetDigest: images[0].TargetDigest,
+		Images: images,
+		Canary: req.Canary, BatchSize: req.BatchSize,
 		SoakSeconds: req.SoakSeconds, MaxFailures: req.MaxFailures,
 		WindowDays: req.WindowDays,
 	}
@@ -155,7 +188,8 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.d.Log.Info("container update rollout created",
-		"repository", roll.Repository, "from", roll.FromTag, "to", roll.ToTag,
+		"images", len(images), "repository", roll.Repository,
+		"from", roll.FromTag, "to", roll.ToTag,
 		"hosts", len(hosts), "canary", roll.Canary, "batch", roll.BatchSize)
 	httpx.WriteJSON(w, http.StatusCreated, out)
 }

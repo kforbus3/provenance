@@ -120,6 +120,11 @@ function RolloutRow({ r, canRun, onMessage }: {
           {r.toTag !== r.fromTag
             ? <> → {r.toTag}</>
             : <Typography component="span" variant="caption" color="text.secondary"> (rebuild)</Typography>}
+          {(r.imageCount ?? 0) > 1 && (
+            <Typography component="span" variant="caption" color="text.secondary">
+              {" "}and {r.imageCount! - 1} more image{r.imageCount! > 2 ? "s" : ""}
+            </Typography>
+          )}
         </TableCell>
         <TableCell><StateChip r={r} /></TableCell>
         <TableCell>

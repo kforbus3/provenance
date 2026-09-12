@@ -27,6 +27,8 @@ type fakeStore struct {
 	rollouts   []store.UpdateRollout
 	hosts      map[uuid.UUID][]store.UpdateRolloutHost
 	stacks     map[uuid.UUID][]store.ContainerStack
+	containers map[uuid.UUID][]models.Container
+	images     map[uuid.UUID][]store.RolloutImage
 	saved      []string // compose bodies written
 	stateCalls []string // "host:state"
 	rolloutSet []string // "rollout:state:reason"
@@ -105,6 +107,30 @@ func (f *fakeStore) UpsertStack(_ context.Context, in store.StackInput) (*store.
 	return &store.ContainerStack{HostID: in.HostID, Compose: in.Compose}, nil
 }
 
+func (f *fakeStore) RolloutImages(_ context.Context, id uuid.UUID) ([]store.RolloutImage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if im, ok := f.images[id]; ok {
+		return im, nil
+	}
+	// Default: the rollout's own columns, the single-image case.
+	for _, r := range f.rollouts {
+		if r.ID == id {
+			return []store.RolloutImage{{
+				Repository: r.Repository, FromTag: r.FromTag,
+				ToTag: r.ToTag, TargetDigest: r.TargetDigest,
+			}}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) HostContainers(_ context.Context, hostID uuid.UUID) ([]models.Container, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.containers[hostID], nil
+}
+
 func (f *fakeStore) GetHost(_ context.Context, id uuid.UUID) (*models.Host, error) {
 	return &models.Host{ID: id, Hostname: "h-" + id.String()[:4]}, nil
 }
@@ -158,9 +184,11 @@ func fixture(n int, strategy store.UpdateRollout) (*fakeStore, uuid.UUID, []uuid
 	r.State = store.UpdateRolloutRunning
 
 	f := &fakeStore{
-		hosts:     map[uuid.UUID][]store.UpdateRolloutHost{},
-		stacks:    map[uuid.UUID][]store.ContainerStack{},
-		claimFail: map[uuid.UUID]bool{},
+		hosts:      map[uuid.UUID][]store.UpdateRolloutHost{},
+		stacks:     map[uuid.UUID][]store.ContainerStack{},
+		containers: map[uuid.UUID][]models.Container{},
+		images:     map[uuid.UUID][]store.RolloutImage{},
+		claimFail:  map[uuid.UUID]bool{},
 	}
 	ids := make([]uuid.UUID, n)
 	for i := range ids {
@@ -169,6 +197,11 @@ func fixture(n int, strategy store.UpdateRollout) (*fakeStore, uuid.UUID, []uuid
 			HostID: ids[i], State: store.UpdateHostPending})
 		f.stacks[ids[i]] = []store.ContainerStack{{
 			ID: uuid.New(), HostID: ids[i], Enabled: true, Compose: composeNginx}}
+		// The host has to be running the image for the rollout to apply it —
+		// a rollout covering several images only applies the ones a given host
+		// actually runs.
+		f.containers[ids[i]] = []models.Container{{
+			Name: "web", Image: "nginx:1.24", Repository: "nginx", Tag: "1.24"}}
 	}
 	f.rollouts = []store.UpdateRollout{r}
 	return f, rid, ids
@@ -345,7 +378,7 @@ func TestAHostWithNoManagedStackFailsWithAnActionableReason(t *testing.T) {
 	}
 	// "deploy failed" would send an operator to look at docker. The fix is to
 	// adopt the compose file, and the message has to say so.
-	if !strings.Contains(h.Error, "adopt its compose file") {
+	if !strings.Contains(h.Error, "adopt this host's compose file") {
 		t.Errorf("the error should say what to do about it, got %q", h.Error)
 	}
 }
@@ -492,5 +525,263 @@ func TestTheVerifyScriptOnlyMatchesTheTargetRepository(t *testing.T) {
 		if !strings.HasPrefix(got, "'") || !strings.HasSuffix(got, ":'*") {
 			t.Errorf("shellCase(%q) = %q — not a quoted tag-wildcard pattern", repo, got)
 		}
+	}
+}
+
+// --- updating in place, without an adopted stack ---------------------------
+//
+// Asking an operator to adopt a compose file just to pull a rebuilt image is
+// work for nothing: the container's own labels already say which compose project
+// and service it is and where that project lives. But only for updates that do
+// not need the FILE changed — a version bump is written into the file, and
+// editing one Provenance does not own is reverted on the next deploy for any
+// host whose compose files come from a git repo or an rsync target.
+
+func inPlaceFixture(from, to string) (*fakeStore, uuid.UUID, uuid.UUID) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.rollouts[0].FromTag, f.rollouts[0].ToTag = from, to
+	f.stacks[ids[0]] = nil // nothing adopted
+	f.containers[ids[0]] = []models.Container{{
+		Name: "web", Image: "nginx:" + from, Repository: "nginx", Tag: from,
+		ComposeProject: "site", ComposeService: "web", ComposeDir: "/opt/stacks/site",
+	}}
+	return f, rid, ids[0]
+}
+
+func TestARebuildIsAppliedThroughTheHostsOwnComposeProject(t *testing.T) {
+	f, rid, _ := inPlaceFixture("1.24", "1.24") // same tag: a rebuild
+	f.rollouts[0].TargetDigest = "sha256:new"
+	r := &fakeRunner{out: "::OK::\nnginx:1.24\tnginx@sha256:new\n"}
+	d := &fakeDeployer{}
+	newEngine(f, d, r).Tick(context.Background())
+
+	if d.calls != 0 {
+		t.Error("deployed a stack for a host that has none")
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
+		t.Fatalf("state = %q (%q) — a rebuild should not need an adopted stack",
+			got, f.hosts[rid][0].Error)
+	}
+}
+
+func TestTheInPlaceScriptPullsBeforeRecreating(t *testing.T) {
+	// `up -d` alone finds the tag already present locally and starts the old bytes
+	// again. That is the entire failure this feature exists to catch, and it is
+	// just as available here as it was in the stack deploy.
+	s := inPlaceScript("/opt/stacks/site", "web")
+	pull := strings.Index(s, "pull 'web'")
+	up := strings.Index(s, "up -d 'web'")
+	if pull < 0 || up < 0 {
+		t.Fatalf("script does not pull and recreate the service:\n%s", s)
+	}
+	if pull > up {
+		t.Errorf("recreated before pulling, which starts the old image:\n%s", s)
+	}
+}
+
+func TestTheInPlaceScriptRefusesAProjectItCannotSee(t *testing.T) {
+	// working_dir is recorded by whatever ran compose. For a project deployed FROM
+	// a container it is that container's path, and the file is not on the host at
+	// all. Running blind would either fail confusingly or act on a DIFFERENT
+	// project that happens to live at the same path.
+	s := inPlaceScript("/opt/stacks/site", "web")
+	if !strings.Contains(s, "config --services") {
+		t.Error("the script does not check that a compose project is readable there")
+	}
+	if !strings.Contains(s, "::NOPROJECT::") || !strings.Contains(s, "::NOSERVICE::") {
+		t.Error("the script cannot report WHICH check failed, so neither can the row")
+	}
+}
+
+func TestAVersionBumpIsNotAppliedInPlace(t *testing.T) {
+	// The new version has to be written into the compose file. Doing that to a
+	// file Provenance does not own is reverted on the next deploy for any host
+	// whose compose files come from somewhere else — silently, leaving the fleet
+	// on an image nobody can explain.
+	f, rid, _ := inPlaceFixture("1.24", "1.27")
+	r := &fakeRunner{out: "::OK::\nnginx:1.27\tnginx@sha256:new\n"}
+	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State != store.UpdateHostFailed {
+		t.Fatalf("state = %q, want failed", h.State)
+	}
+	if !strings.Contains(h.Error, "adopt this host's compose file") {
+		t.Errorf("the error should say a stack is needed for a version change, got %q", h.Error)
+	}
+}
+
+func TestAContainerWithNoComposeLabelsFallsBackToTheStackMessage(t *testing.T) {
+	// A plain `docker run` container. Recreating it means reproducing run
+	// arguments nobody recorded, so it is reported rather than guessed at.
+	f, rid, ids := inPlaceFixture("1.24", "1.24")
+	f.containers[ids] = []models.Container{{
+		Name: "web", Image: "nginx:1.24", Repository: "nginx", Tag: "1.24",
+	}} // no compose labels
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State != store.UpdateHostFailed {
+		t.Fatalf("state = %q, want failed", h.State)
+	}
+	if !strings.Contains(h.Error, "no Provenance-managed stack") {
+		t.Errorf("got %q", h.Error)
+	}
+}
+
+func TestAnAdoptedStackStillWinsOverInPlace(t *testing.T) {
+	// If Provenance holds the file, that is the definition of record and the one
+	// with a history. In-place is the fallback, not the preference.
+	f, rid, ids := inPlaceFixture("1.24", "1.24")
+	f.stacks[ids] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: ids, Enabled: true, Compose: composeNginx}}
+	d := &fakeDeployer{}
+	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx@sha256:new\n"}).
+		Tick(context.Background())
+
+	if d.calls != 1 {
+		t.Errorf("the adopted stack was not used (%d deploys)", d.calls)
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
+		t.Errorf("state = %q (%q)", got, f.hosts[rid][0].Error)
+	}
+}
+
+// --- one rollout, many images ---------------------------------------------
+//
+// "Update everything that has something available" was otherwise one rollout per
+// image, started by hand, each pacing itself independently — so ten images meant
+// ten canaries on ten different hosts at once, which is not a canary at all.
+// Pacing applies to the whole operation or it does not apply.
+
+// multiFixture: two hosts, three images between them.
+func multiFixture() (*fakeStore, uuid.UUID, []uuid.UUID) {
+	f, rid, ids := fixture(2, store.UpdateRollout{Canary: 1, BatchSize: 2})
+	f.images[rid] = []store.RolloutImage{
+		{Repository: "nginx", FromTag: "1.24", ToTag: "1.24", TargetDigest: "sha256:n"},
+		{Repository: "redis", FromTag: "7", ToTag: "7", TargetDigest: "sha256:r"},
+		{Repository: "caddy", FromTag: "2", ToTag: "2", TargetDigest: "sha256:c"},
+	}
+	// host 0 runs nginx and redis; host 1 runs nginx only. Nobody runs caddy.
+	f.containers[ids[0]] = []models.Container{
+		{Name: "web", Repository: "nginx", Tag: "1.24", ComposeDir: "/opt/a", ComposeService: "web"},
+		{Name: "cache", Repository: "redis", Tag: "7", ComposeDir: "/opt/a", ComposeService: "cache"},
+	}
+	f.containers[ids[1]] = []models.Container{
+		{Name: "web", Repository: "nginx", Tag: "1.24", ComposeDir: "/opt/b", ComposeService: "web"},
+	}
+	f.stacks[ids[0]] = nil
+	f.stacks[ids[1]] = nil
+	return f, rid, ids
+}
+
+// verifyAll answers the read-back for every image in multiFixture.
+const verifyAll = "::OK::\nnginx:1.24\tnginx@sha256:n\nredis:7\tredis@sha256:r\n"
+
+func TestAHostTakesEveryImageInTheRolloutThatItRuns(t *testing.T) {
+	f, rid, _ := multiFixture()
+	r := &fakeRunner{out: verifyAll}
+	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
+
+	// Canary is 1, so exactly one host this tick. It runs two of the three
+	// images, so two in-place updates plus their verifications.
+	verified := 0
+	for _, h := range f.hosts[rid] {
+		if h.State == store.UpdateHostVerified {
+			verified++
+		}
+	}
+	if verified != 1 {
+		t.Fatalf("%d hosts verified on the canary tick, want 1 (states: %+v)", verified, f.hosts[rid])
+	}
+	// Two updates + two read-backs on the one host that runs two images.
+	if r.calls < 4 {
+		t.Errorf("%d script runs — the host running two of the images should have "+
+			"had both applied, not one", r.calls)
+	}
+}
+
+func TestAnImageAHostDoesNotRunIsNotAFailure(t *testing.T) {
+	// A rollout over ten images rarely has all ten on every host. Treating the
+	// absent ones as failures would halt it on its budget immediately.
+	f, rid, _ := multiFixture()
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: verifyAll}).Tick(context.Background())
+	for _, h := range f.hosts[rid] {
+		if h.State == store.UpdateHostFailed {
+			t.Errorf("host failed over an image it does not run: %q", h.Error)
+		}
+	}
+	for _, s := range f.rolloutSet {
+		if strings.HasPrefix(s, store.UpdateRolloutHalted) {
+			t.Fatalf("halted: %v", f.rolloutSet)
+		}
+	}
+}
+
+func TestAHostRunningNoneOfTheImagesIsSkippedNotVerified(t *testing.T) {
+	// Enrolled, but by the time its turn came it was running none of them —
+	// somebody updated it by hand, or the container was removed. Recording that
+	// as verified would claim an update that never happened.
+	f, rid, ids := multiFixture()
+	f.containers[ids[0]] = nil
+	f.containers[ids[1]] = nil
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: verifyAll}).Tick(context.Background())
+
+	var skipped, verified int
+	for _, h := range f.hosts[rid] {
+		switch h.State {
+		case store.UpdateHostSkipped:
+			skipped++
+		case store.UpdateHostVerified:
+			verified++
+		}
+	}
+	if verified > 0 {
+		t.Errorf("%d hosts reported verified having had nothing applied", verified)
+	}
+	if skipped == 0 {
+		t.Error("a host that took no updates should be skipped, so the row says so")
+	}
+}
+
+func TestTheFirstFailingImageStopsThatHost(t *testing.T) {
+	// Continuing would apply later updates on top of a host already known to be
+	// in a state nobody intended.
+	f, rid, ids := multiFixture()
+	f.containers[ids[0]] = []models.Container{
+		{Name: "web", Repository: "nginx", Tag: "1.24"}, // no compose labels: cannot update
+		{Name: "cache", Repository: "redis", Tag: "7", ComposeDir: "/opt/a", ComposeService: "cache"},
+	}
+	f.containers[ids[1]] = nil
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: verifyAll}).Tick(context.Background())
+
+	var failed int
+	for _, h := range f.hosts[rid] {
+		if h.State == store.UpdateHostFailed {
+			failed++
+			if !strings.Contains(h.Error, "nginx:1.24") {
+				t.Errorf("the error should name the image that failed, got %q", h.Error)
+			}
+		}
+	}
+	if failed != 1 {
+		t.Errorf("%d hosts failed, want 1", failed)
+	}
+}
+
+func TestPacingAppliesAcrossTheWholeRolloutNotPerImage(t *testing.T) {
+	// The reason this is one rollout rather than ten: a canary of 1 must mean one
+	// HOST, whatever number of images it takes.
+	f, rid, _ := multiFixture()
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: verifyAll}).Tick(context.Background())
+
+	var started int
+	for _, h := range f.hosts[rid] {
+		if h.State != store.UpdateHostPending {
+			started++
+		}
+	}
+	if started != 1 {
+		t.Errorf("%d hosts started on a canary-of-1 tick, want 1", started)
 	}
 }

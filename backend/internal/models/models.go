@@ -415,9 +415,14 @@ type HostInventory struct {
 	// and the monitor runs without sudo, so a host whose monitor account is not
 	// in the docker group answers nothing, and rendering that as "no containers"
 	// would turn an unanswered question into a clean bill of health.
-	Containers          []Container `json:"containers,omitempty"`
-	ContainersStatus    string      `json:"containersStatus,omitempty"`
-	ContainersCheckedAt *time.Time  `json:"containersCheckedAt,omitempty"`
+	Containers       []Container `json:"containers,omitempty"`
+	ContainersStatus string      `json:"containersStatus,omitempty"`
+	// ContainersDetail is WHY, when the status is not ok. "no_access" alone tells
+	// an operator that something is wrong and nothing about what to do — and its
+	// two causes (a socket they lack the group for; a daemon that is not running)
+	// need opposite actions.
+	ContainersDetail    string     `json:"containersDetail,omitempty"`
+	ContainersCheckedAt *time.Time `json:"containersCheckedAt,omitempty"`
 	// ObsoletePackages are installed packages offered by no configured repository
 	// (apt's [installed,local] / dnf "extras") — orphaned leftovers from in-place
 	// distribution upgrades. Used to classify a vulnerability whose package can't be
@@ -475,8 +480,18 @@ type Container struct {
 	// detection need the answer rather than the label.
 	Digest string `json:"digest,omitempty"`
 	State  string `json:"state,omitempty"`
-	Status string `json:"status,omitempty"`
-	Ports  string `json:"ports,omitempty"`
+	// Where this container's compose project lives, from its own labels. This is
+	// what lets an image be updated in place without Provenance holding a copy of
+	// the compose file.
+	//
+	// Only the working directory, not the config file paths: those are recorded
+	// as whatever ran compose saw them, so a project deployed FROM a container
+	// carries that container's paths, which do not exist on the host.
+	ComposeProject string `json:"composeProject,omitempty"`
+	ComposeService string `json:"composeService,omitempty"`
+	ComposeDir     string `json:"composeDir,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Ports          string `json:"ports,omitempty"`
 }
 
 type Session struct {

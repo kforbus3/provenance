@@ -32,9 +32,23 @@ type UpdateRollout struct {
 	CreatedAt     time.Time `json:"createdAt"`
 	CreatedByName string    `json:"createdBy,omitempty"`
 
+	// Images is every image this rollout covers. A single-image rollout has one.
+	// Loaded on the detail view; the list carries only the count, because a list
+	// of fifty rollouts does not need every image of every one of them.
+	Images     []RolloutImage `json:"images,omitempty"`
+	ImageCount int            `json:"imageCount,omitempty"`
+
 	// Filled in by the service layer.
 	Hosts  []UpdateRolloutHost `json:"hosts,omitempty"`
 	Counts map[string]int      `json:"counts,omitempty"`
+}
+
+// RolloutImage is one image a rollout covers.
+type RolloutImage struct {
+	Repository   string `json:"repository"`
+	FromTag      string `json:"fromTag"`
+	ToTag        string `json:"toTag"`
+	TargetDigest string `json:"targetDigest,omitempty"`
 }
 
 // UpdateRolloutHost is one host's place in one rollout.
@@ -88,6 +102,24 @@ func (s *Store) CreateUpdateRollout(ctx context.Context, r UpdateRollout, hosts 
 		Scan(&id, &createdAt)
 	if err != nil {
 		return nil, err
+	}
+	// Always at least one row, even for a single-image rollout, so the engine has
+	// one path to read rather than two that drift.
+	images := r.Images
+	if len(images) == 0 {
+		images = []RolloutImage{{
+			Repository: r.Repository, FromTag: r.FromTag,
+			ToTag: r.ToTag, TargetDigest: r.TargetDigest,
+		}}
+	}
+	for _, im := range images {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO container_update_rollout_images
+			    (rollout_id, repository, from_tag, to_tag, target_digest)
+			VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+			id, im.Repository, im.FromTag, im.ToTag, im.TargetDigest); err != nil {
+			return nil, err
+		}
 	}
 	for _, h := range hosts {
 		if _, err := tx.Exec(ctx, `
@@ -176,8 +208,28 @@ func (s *Store) ListUpdateRollouts(ctx context.Context) ([]UpdateRollout, error)
 	if err := crows.Err(); err != nil {
 		return nil, err
 	}
+	irows, err := s.pool.Query(ctx, `
+		SELECT rollout_id, count(*) FROM container_update_rollout_images GROUP BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer irows.Close()
+	imageCounts := map[uuid.UUID]int{}
+	for irows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := irows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		imageCounts[id] = n
+	}
+	if err := irows.Err(); err != nil {
+		return nil, err
+	}
+
 	for i := range out {
 		out[i].Counts = counts[out[i].ID]
+		out[i].ImageCount = imageCounts[out[i].ID]
 	}
 	return out, nil
 }
@@ -194,6 +246,9 @@ func (s *Store) GetUpdateRollout(ctx context.Context, id uuid.UUID) (*UpdateRoll
 	}
 	r.Hosts, err = s.UpdateRolloutHosts(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if r.Images, err = s.RolloutImages(ctx, id); err != nil {
 		return nil, err
 	}
 	r.Counts = map[string]int{}
@@ -366,4 +421,65 @@ func (s *Store) HostsRunningImage(ctx context.Context, repo, tag string) ([]uuid
 // match "nginx" inside "nginx-extras" and rewrite the wrong service.
 func (s *Store) StacksReferencingImage(ctx context.Context, hostID uuid.UUID) ([]ContainerStack, error) {
 	return s.ListStacks(ctx, &hostID)
+}
+
+// RolloutImages returns every image a rollout covers.
+func (s *Store) RolloutImages(ctx context.Context, id uuid.UUID) ([]RolloutImage, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT repository, from_tag, to_tag, target_digest
+		FROM container_update_rollout_images
+		WHERE rollout_id = $1
+		ORDER BY repository, from_tag`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RolloutImage{}
+	for rows.Next() {
+		var im RolloutImage
+		if err := rows.Scan(&im.Repository, &im.FromTag, &im.ToTag, &im.TargetDigest); err != nil {
+			return nil, err
+		}
+		out = append(out, im)
+	}
+	return out, rows.Err()
+}
+
+// HostsRunningAnyImage returns the hosts running any of the given repository:tag
+// pairs, once each.
+//
+// For "update everything that has something available": the rollout covers many
+// images, and a host belongs to it if it runs any of them. Resolved once, at
+// creation, for the same reason the single-image case is — a rollout whose
+// membership changed underneath it could never be complete.
+func (s *Store) HostsRunningAnyImage(ctx context.Context, images []RolloutImage) ([]uuid.UUID, error) {
+	if len(images) == 0 {
+		return nil, nil
+	}
+	repos := make([]string, 0, len(images))
+	tags := make([]string, 0, len(images))
+	for _, im := range images {
+		repos = append(repos, im.Repository)
+		tags = append(tags, im.FromTag)
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT hi.host_id
+		FROM host_inventory hi,
+		     LATERAL jsonb_array_elements(COALESCE(hi.containers, jsonb_build_array())) AS c
+		JOIN unnest($1::text[], $2::text[]) AS k(repository, tag)
+		  ON k.repository = c->>'repository' AND k.tag = c->>'tag'`,
+		repos, tags)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }

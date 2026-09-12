@@ -146,21 +146,49 @@ A rollout with an unlimited failure budget reaches **completed** even if every
 host failed — that is genuinely the state it is in, so the row shows
 `completed · 3 failed` rather than a green tick.
 
+## Updating everything at once
+
+The warning above the list has an **Update all** button: one rollout covering
+every image with something available, rather than one rollout per image.
+
+That distinction matters. Ten separate rollouts each pace themselves, so a canary
+of one would mean ten hosts taking an unproven update at the same moment — which
+is not a canary. One rollout paces the whole operation, and it paces by **host**:
+a host takes every update that applies to it, then the next host follows. So a
+host is either current or it is not, rather than half-updated across the fleet.
+
+An image a given host does not run is not a failure — a rollout over ten images
+rarely has all ten everywhere. A host that turns out to be running none of them by
+the time its turn comes is marked **skipped**, not verified: it took no updates,
+and recording it as verified would claim one that never happened.
+
 ## What can and cannot be updated
 
-Only hosts whose compose file Provenance manages. Updating means rewriting the
-image reference and bringing the stack back up, and Provenance can only do that
-for a file it holds.
+It depends on the kind of update, and most of the time you need nothing at all.
 
-A host running the image outside a managed stack is **reported**, not guessed
-at — the rollout marks it failed with *"no Provenance-managed stack on this host
-names nginx:1.24 — adopt its compose file to make it updatable"*. Recreating a
-container whose run configuration was never recorded would mean inventing the
-parts nobody told us, and a container that comes back missing a volume or a
-network is worse than one that was never touched.
+**A rebuild — the same tag republished** — needs no compose file changed, so
+Provenance does not need to hold one. Every compose-managed container records
+which project and service it is and where that project lives, so the update is:
+go to that directory, pull that service, bring that service back up. Nothing to
+adopt.
 
-To make such a host updatable, add its compose file as a stack on the **Stacks**
-tab.
+**A version bump** — `1.24` to `1.27` — is written *into* the compose file, so
+something has to edit it. That needs a stack Provenance owns, added on the
+**Stacks** tab. Editing a file Provenance does not own would be reverted on the
+next deploy for any host whose compose files come from a git repository or an
+rsync target — silently, leaving the fleet on an image nobody can explain.
+
+Two cases still report rather than guess:
+
+- a container started with plain `docker run`, whose run arguments were never
+  recorded. Recreating it would mean inventing the parts nobody told us, and one
+  that comes back missing a volume is worse than one never touched.
+- a compose project whose recorded directory holds no readable project — usually
+  one deployed from inside a container, where the path is that container's. Acting
+  blind could apply to a *different* project that happens to live at the same path.
+
+Where a stack **is** adopted, it wins: that is the definition of record, and the
+one with a history and a rollback.
 
 ### How the compose file is edited
 
