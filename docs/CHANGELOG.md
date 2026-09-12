@@ -5,6 +5,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.21 — 2026-09-12
+
+**A compose project the host cannot reach is explained, and no longer halts a
+fleet-wide rollout.** A container created from inside another container — a
+Portainer stack, for instance — records a directory that exists only in whatever
+deployed it. Trying to update one produced the shell's own error and stopped every
+remaining host. The directory is checked before it is entered now, the message
+says what kind of thing it is and where to go instead, and the image is treated as
+inapplicable rather than failed: nothing will make it work from here, so halting
+everything else achieves nothing.
+
+---
+
 ## v1.2.20 — 2026-09-12
 
 **Every compose project on the fleet is now visible, and none of it needs setting
