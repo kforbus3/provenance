@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.2.3 — 2026-09-12
 
 **Provenance can see containers.** Nothing in it knew a container existed:
 vulnerability scanning reads the host's package database, so a machine running
