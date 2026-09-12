@@ -25,7 +25,19 @@ import (
 func inPlaceScript(dir, service string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
-	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
+	// Asked about BEFORE cd, and reported as a marker.
+	//
+	// `set -eu` means a failed cd kills the script where it stands, so the checks
+	// below never run and the operator gets the shell's words instead of ours:
+	//
+	//	/bin/sh: 2: cd: can't cd to /data/compose/40/stacks/nginx
+	//	[exit code 2]
+	//
+	// That path is real, and it is inside a container that no longer exists — a
+	// Portainer stack whose manager has been removed. Nothing about the raw error
+	// says so.
+	fmt.Fprintf(&b, "[ -d %s ] || { echo '::NODIR::' >&2; exit 6; }\n", shellQuote(dir))
+	fmt.Fprintf(&b, "cd %s 2>/dev/null || { echo '::NOACCESS::' >&2; exit 7; }\n", shellQuote(dir))
 
 	// Which compose binary. The same two-flavour check the stack deploy uses: a
 	// host on the older standalone binary must not silently do nothing.
@@ -71,6 +83,15 @@ func shellQuote(s string) string {
 // inPlaceFailure turns the script's exit into something an operator can act on.
 func inPlaceFailure(dir, service string, out string) string {
 	switch {
+	case strings.Contains(out, "::NODIR::"):
+		return fmt.Sprintf(
+			"this container's compose project is recorded at %s, which does not exist "+
+				"on this host — that is a path inside whatever deployed it, so it was "+
+				"created from another container (a Portainer stack, for instance). "+
+				"Update it from wherever it is managed.", dir)
+	case strings.Contains(out, "::NOACCESS::"):
+		return fmt.Sprintf(
+			"%s exists but could not be entered, even with sudo.", dir)
 	case strings.Contains(out, "::NOPROJECT::"):
 		return fmt.Sprintf(
 			"this container's compose project is recorded at %s, but no compose project "+
@@ -82,4 +103,18 @@ func inPlaceFailure(dir, service string, out string) string {
 				"not the project this container came from.", dir, service)
 	}
 	return trimOutput(out)
+}
+
+// unreachableProject reports a compose project this host cannot act on at all.
+//
+// Distinguished from a failure because nothing will make it work: the directory
+// is a path inside whatever created the container, not a path on the host. On a
+// live fleet that was a Portainer stack whose Portainer had since been removed,
+// leaving a container nobody can redeploy from here.
+//
+// Treated as inapplicable rather than failed, for the same reason a superseded
+// image is: halting a fleet-wide rollout on something permanently impossible
+// stops every other host for no gain, every time it runs.
+func unreachableProject(out string) bool {
+	return strings.Contains(out, "::NODIR::") || strings.Contains(out, "::NOACCESS::")
 }

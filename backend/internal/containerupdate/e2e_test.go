@@ -590,3 +590,44 @@ func TestE2EANetworkNamespaceDependentIsBroughtAlong(t *testing.T) {
 		t.Errorf("dependent namespace = %s, want %s", after, want)
 	}
 }
+
+// TestE2EAnUnreachableComposeProjectIsExplainedNotDumped is the failure that
+// halted a fleet-wide rollout with the shell's words instead of ours:
+//
+//	jc21/nginx-proxy-manager:latest → latest: /bin/sh: 2: cd: can't cd to
+//	/data/compose/40/stacks/nginx
+//	[exit code 2]
+//
+// That path is real. It is inside the container that deployed the stack — a
+// Portainer whose container has since been removed — so it does not exist on the
+// host and never will. `set -eu` killed the script at the cd, so none of the
+// checks below it ran and none of their explanations reached the operator.
+func TestE2EAnUnreachableComposeProjectIsExplainedNotDumped(t *testing.T) {
+	e2eEnabled(t)
+	const missing = "/data/compose/40/stacks/nginx"
+
+	out, code := sh(t, inPlaceScript(missing, "nginx-proxy-manager"))
+	if code == 0 {
+		t.Fatal("acted on a directory that does not exist")
+	}
+	msg := inPlaceFailure(missing, "nginx-proxy-manager", out)
+
+	if strings.Contains(msg, "/bin/sh") || strings.Contains(msg, "can't cd") {
+		t.Errorf("the operator gets the shell's words, not an explanation:\n%s", msg)
+	}
+	if !strings.Contains(msg, missing) {
+		t.Errorf("the message does not name the path:\n%s", msg)
+	}
+	// Actionable: it says what kind of thing this is and where to go instead.
+	for _, want := range []string{"does not exist on this host", "another container", "wherever it is managed"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the message should say %q:\n%s", want, msg)
+		}
+	}
+	// And it is recognised as permanently inapplicable, so a fleet-wide rollout is
+	// not halted by it every single time it runs.
+	if !unreachableProject(out) {
+		t.Error("an unreachable project is treated as an ordinary failure, which " +
+			"halts every other host for something nothing can fix")
+	}
+}

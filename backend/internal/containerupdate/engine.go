@@ -540,7 +540,13 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	}
 	out, code, failed := e.run.RunScript(ctx, hostexec.Privileged(inPlaceScript(match.ComposeDir, match.ComposeService)), h)
 	if failed || code != 0 {
-		return true, fmt.Errorf("%s", inPlaceFailure(match.ComposeDir, match.ComposeService, out))
+		msg := inPlaceFailure(match.ComposeDir, match.ComposeService, out)
+		if unreachableProject(out) {
+			// Nothing will make this work from here, so halting a fleet-wide
+			// rollout on it stops every other host for no gain, every time.
+			return true, fmt.Errorf("%w: %s", errSuperseded, msg)
+		}
+		return true, fmt.Errorf("%s", msg)
 	}
 	e.log.Info("container updated in place",
 		"host", h.Hostname, "project", match.ComposeProject,
