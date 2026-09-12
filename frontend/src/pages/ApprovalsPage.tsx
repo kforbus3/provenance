@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import {
-  Autocomplete, Box, Button, Chip, CircularProgress, MenuItem, Paper, Stack, Tab,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, TextField,
-  Typography,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, CircularProgress,
+  FormControlLabel, MenuItem, Paper, Stack, Tab, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, Tabs, TextField, Typography,
 } from "@mui/material";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -53,7 +53,15 @@ function ApprovalTable({
           {rows.map((r) => (
             <TableRow key={r.id} hover>
               <TableCell>{r.requester || r.requesterId}</TableCell>
-              <TableCell>{r.targetKind}: {r.targetName || r.hostId || r.groupId}</TableCell>
+              <TableCell>
+                {r.targetKind}: {r.targetName || r.hostId || r.groupId}
+                {/* Root is the part an approver must not miss while skimming a
+                    table, so it is a chip rather than a column nobody reads. */}
+                {r.sudo && (
+                  <Chip label="root" size="small" color="warning" variant="outlined"
+                        sx={{ ml: 1 }} />
+                )}
+              </TableCell>
               <TableCell>{r.reason}</TableCell>
               <TableCell>{Math.round(r.requestedSecs / 60)}m</TableCell>
               <TableCell>
@@ -132,6 +140,8 @@ export function ApprovalsPage() {
   const [ticketRef, setTicketRef] = useState("");
   const [reqDuration, setReqDuration] = useState("1h");
   const [reqCustom, setReqCustom] = useState("60");
+  // Defaults to off. Root is the thing you should have to ask for on purpose.
+  const [reqSudo, setReqSudo] = useState(false);
 
   // Targets are searched server-side as the user types (debounced), so this
   // scales to large fleets. Already-reachable targets are excluded by the API.
@@ -162,16 +172,27 @@ export function ApprovalsPage() {
       await Promise.all(selected.map((t) =>
         createApproval({
           targetKind, reason, ticketRef: ticketRef || undefined, requestedSecs,
+          sudo: reqSudo,
           ...(targetKind === "host" ? { hostId: t.id } : { groupId: t.id }),
         }),
       ));
     },
-    onSuccess: () => { setReason(""); setSelected([]); setTicketRef(""); refresh(); },
+    onSuccess: () => {
+      setReason(""); setSelected([]); setTicketRef("");
+      // Root is not sticky: the next request starts from no-root, so nobody asks
+      // for it by accident because the last one needed it.
+      setReqSudo(false);
+      refresh();
+    },
   });
 
   const decideMut = useMutation({
-    mutationFn: (args: { id: string; decision: "approve" | "deny"; grantedSecs?: number }) =>
-      decideApproval(args.id, { decision: args.decision, grantedSecs: args.grantedSecs }),
+    mutationFn: (args: {
+      id: string; decision: "approve" | "deny"; grantedSecs?: number; grantSudo?: boolean;
+    }) =>
+      decideApproval(args.id, {
+        decision: args.decision, grantedSecs: args.grantedSecs, grantSudo: args.grantSudo,
+      }),
     onSuccess: refresh,
   });
 
@@ -188,6 +209,17 @@ export function ApprovalsPage() {
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Typography variant="subtitle1" sx={{ mb: 2 }}>New access request</Typography>
             <Stack spacing={2}>
+              <FormControlLabel
+                control={<Checkbox checked={reqSudo} onChange={(e) => setReqSudo(e.target.checked)} />}
+                label="Also request root (sudo) on the target"
+              />
+              {reqSudo && (
+                <Alert severity="info">
+                  Without this you land in the host's login-only account, which has no
+                  sudo. With it — and only if the approver grants the root half — you
+                  land in the privileged account until the grant expires, then stop.
+                </Alert>
+              )}
               <Stack direction="row" spacing={2}>
                 <TextField select size="small" label="Target kind" value={targetKind}
                   onChange={(e) => { setTargetKind(e.target.value as "host" | "group"); setSelected([]); }}
@@ -256,10 +288,36 @@ export function ApprovalsPage() {
               <DurationSelect value={dur} custom={cust}
                 onValue={(v) => setDecideDuration({ ...decideDuration, [r.id]: v })}
                 onCustom={(v) => setDecideCustom({ ...decideCustom, [r.id]: v })} />
-              <Button size="small" variant="contained" color="success" disabled={decideMut.isPending}
-                onClick={() => decideMut.mutate({ id: r.id, decision: "approve", grantedSecs: durationToSecs(dur, cust) })}>
-                Approve
-              </Button>
+              {/* A request that asked for root gets two approve buttons rather
+                  than one plus a checkbox. The approver has to pick, so granting
+                  root is never what happens because a box was left as it was --
+                  and withholding it while still granting the access stays a
+                  one-click answer. */}
+              {r.sudo ? (
+                <>
+                  <Button size="small" variant="contained" color="warning" disabled={decideMut.isPending}
+                    onClick={() => decideMut.mutate({
+                      id: r.id, decision: "approve",
+                      grantedSecs: durationToSecs(dur, cust), grantSudo: true,
+                    })}>
+                    Approve + root
+                  </Button>
+                  <Button size="small" variant="contained" color="success" disabled={decideMut.isPending}
+                    onClick={() => decideMut.mutate({
+                      id: r.id, decision: "approve",
+                      grantedSecs: durationToSecs(dur, cust), grantSudo: false,
+                    })}>
+                    Approve access only
+                  </Button>
+                </>
+              ) : (
+                <Button size="small" variant="contained" color="success" disabled={decideMut.isPending}
+                  onClick={() => decideMut.mutate({
+                    id: r.id, decision: "approve", grantedSecs: durationToSecs(dur, cust),
+                  })}>
+                  Approve
+                </Button>
+              )}
               <Button size="small" variant="outlined" color="error" disabled={decideMut.isPending}
                 onClick={() => decideMut.mutate({ id: r.id, decision: "deny" })}>
                 Deny

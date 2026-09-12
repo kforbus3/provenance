@@ -113,9 +113,11 @@ func (h *handler) connect(w http.ResponseWriter, r *http.Request) (client *pkgsf
 }
 
 func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*sshgw.Conn, error) {
-	// Same privilege tier as terminals: Host.Sudo (or super admin) lands in the
-	// sudo account, everyone else in the host's login-only account.
-	loginUser, principals := sshgw.LoginTier(p.IsSuperAdmin || p.Has("Host.Sudo"), host.SSHUser, p.Username)
+	// Same privilege tier as terminals, including time-boxed grants: a transfer
+	// must not be a way around a restriction the terminal enforces, and it must
+	// not be a way around an expiry either.
+	loginUser, principals := sshgw.LoginTier(
+		auth.MaySudo(r.Context(), h.d.Store, h.d.Log, p, host.ID), host.SSHUser, p.Username)
 	// Strict overlay mode: when enabled and this host is on a VPN overlay,
 	// dial ONLY the overlay address so a transfer never silently bypasses the
 	// tunnel via the host's direct address.

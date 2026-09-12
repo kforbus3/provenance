@@ -200,9 +200,14 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 		_ = safeWrite(websocket.TextMessage, mustJSON(controlMsg{Type: "error", Data: msg}))
 	}
 
-	// Privilege tier: Host.Sudo (or super admin) lands in the privileged sudo
+	// Privilege tier: the standing Host.Sudo permission (or super admin), OR an
+	// approved time-boxed grant for this host, lands in the privileged sudo
 	// account; everyone else in the host's login-only account.
-	loginUser, principals := sshgw.LoginTier(p.IsSuperAdmin || p.Has("Host.Sudo"), host.SSHUser, p.Username)
+	//
+	// Evaluated here, per connection, so a grant's expiry actually ends root
+	// rather than only applying to terminals opened after it.
+	loginUser, principals := sshgw.LoginTier(
+		auth.MaySudo(ctx, h.d.Store, h.d.Log, p, host.ID), host.SSHUser, p.Username)
 
 	// If the host authenticates with a vaulted credential (not Fleet certs), resolve
 	// it — the plaintext is used only inside the gateway dial, never exposed here or

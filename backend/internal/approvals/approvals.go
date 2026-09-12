@@ -46,6 +46,9 @@ type approvalReq struct {
 	GroupID       string `json:"groupId"`
 	RequestedSecs int64  `json:"requestedSecs"`
 	TicketRef     string `json:"ticketRef"`
+	// Sudo asks to land in the privileged account for the duration of the grant,
+	// rather than the login-only one. Asking is not being given it.
+	Sudo bool `json:"sudo"`
 }
 
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +68,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		Reason:        rq.Reason,
 		TicketRef:     rq.TicketRef,
 		RequestedSecs: rq.RequestedSecs,
+		Sudo:          rq.Sudo,
 	}
 	switch rq.TargetKind {
 	case "host":
@@ -253,6 +257,12 @@ type decideReq struct {
 	Decision    string `json:"decision"` // approve|deny
 	Note        string `json:"note"`
 	GrantedSecs int64  `json:"grantedSecs"`
+	// GrantSudo decides the root half separately from the access half. A request
+	// that asked for sudo can be approved without it: the approver grants the
+	// access and withholds the privilege, which is a decision worth being able to
+	// make. Defaults to false, so an approver who says nothing grants no root --
+	// an omitted field must not be the permissive answer.
+	GrantSudo bool `json:"grantSudo"`
 }
 
 func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
@@ -295,7 +305,8 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusForbidden, "you cannot decide your own access request")
 		return
 	}
-	ar, err := h.d.Store.DecideApprovalRequest(r.Context(), id, p.UserID, status, rq.Note, grantedSecs)
+	ar, err := h.d.Store.DecideApprovalRequest(r.Context(), id, p.UserID, status, rq.Note,
+		grantedSecs, rq.GrantSudo)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not record decision")
 		return

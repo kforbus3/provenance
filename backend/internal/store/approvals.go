@@ -15,7 +15,8 @@ import (
 const approvalCols = `ar.id, ar.requester_id, COALESCE(u.username,''), ar.target_kind,
 	ar.host_id, ar.group_id, COALESCE(h.hostname, g.name, ''),
 	ar.reason, ar.ticket_ref, ar.requested_secs, ar.status,
-	ar.decided_by, COALESCE(d.username,''), ar.decided_at, ar.decision_note, ar.granted_secs, ar.created_at`
+	ar.decided_by, COALESCE(d.username,''), ar.decided_at, ar.decision_note, ar.granted_secs,
+	ar.created_at, ar.sudo`
 
 const approvalFrom = `approval_requests ar
 	JOIN users u ON u.id = ar.requester_id
@@ -27,7 +28,8 @@ func scanApprovalRequest(row pgx.Row) (*models.ApprovalRequest, error) {
 	var a models.ApprovalRequest
 	err := row.Scan(&a.ID, &a.RequesterID, &a.Requester, &a.TargetKind, &a.HostID, &a.GroupID,
 		&a.TargetName, &a.Reason, &a.TicketRef, &a.RequestedSecs, &a.Status,
-		&a.DecidedBy, &a.DecidedByName, &a.DecidedAt, &a.DecisionNote, &a.GrantedSecs, &a.CreatedAt)
+		&a.DecidedBy, &a.DecidedByName, &a.DecidedAt, &a.DecisionNote, &a.GrantedSecs,
+		&a.CreatedAt, &a.Sudo)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -43,15 +45,19 @@ type ApprovalRequestInput struct {
 	Reason        string
 	TicketRef     string
 	RequestedSecs int64
+	// Sudo asks for root on the target for the duration of the grant. Asking is
+	// not being given it -- the approver decides separately.
+	Sudo bool
 }
 
 // CreateApprovalRequest inserts a pending approval request.
 func (s *Store) CreateApprovalRequest(ctx context.Context, in ApprovalRequestInput) (*models.ApprovalRequest, error) {
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO approval_requests (requester_id, target_kind, host_id, group_id, reason, ticket_ref, requested_secs)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-		in.RequesterID, in.TargetKind, in.HostID, in.GroupID, in.Reason, in.TicketRef, in.RequestedSecs).Scan(&id)
+		INSERT INTO approval_requests (requester_id, target_kind, host_id, group_id, reason, ticket_ref, requested_secs, sudo)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+		in.RequesterID, in.TargetKind, in.HostID, in.GroupID, in.Reason, in.TicketRef,
+		in.RequestedSecs, in.Sudo).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +101,7 @@ func (s *Store) ListApprovalRequests(ctx context.Context, status string, request
 // DecideApprovalRequest records an approve/deny decision on a pending request. On
 // approval it atomically inserts a temporary_permissions grant whose lifetime is
 // grantedSecs seconds from now.
-func (s *Store) DecideApprovalRequest(ctx context.Context, id, decidedBy uuid.UUID, status, note string, grantedSecs int64) (*models.ApprovalRequest, error) {
+func (s *Store) DecideApprovalRequest(ctx context.Context, id, decidedBy uuid.UUID, status, note string, grantedSecs int64, grantSudo bool) (*models.ApprovalRequest, error) {
 	var a *models.ApprovalRequest
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		var gs *int64
@@ -106,21 +112,24 @@ func (s *Store) DecideApprovalRequest(ctx context.Context, id, decidedBy uuid.UU
 			requesterID     uuid.UUID
 			targetKind      string
 			hostID, groupID *uuid.UUID
+			askedSudo       bool
 		)
 		err := tx.QueryRow(ctx, `
 			UPDATE approval_requests
 			SET status=$2, decided_by=$3, decided_at=now(), decision_note=$4, granted_secs=$5
 			WHERE id=$1 AND status='pending'
-			RETURNING requester_id, target_kind, host_id, group_id`,
-			id, status, decidedBy, note, gs).Scan(&requesterID, &targetKind, &hostID, &groupID)
+			RETURNING requester_id, target_kind, host_id, group_id, sudo`,
+			id, status, decidedBy, note, gs).Scan(&requesterID, &targetKind, &hostID, &groupID, &askedSudo)
 		if err != nil {
 			return mapNotFound(err)
 		}
 		if status == "approved" {
+			// grantSudo, not askedSudo: an approver may grant the access and
+			// withhold the root. Requesting it is not being given it.
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO temporary_permissions (request_id, user_id, host_id, group_id, expires_at)
-				VALUES ($1,$2,$3,$4, now() + make_interval(secs => $5))`,
-				id, requesterID, hostID, groupID, grantedSecs); err != nil {
+				INSERT INTO temporary_permissions (request_id, user_id, host_id, group_id, expires_at, sudo)
+				VALUES ($1,$2,$3,$4, now() + make_interval(secs => $5), $6)`,
+				id, requesterID, hostID, groupID, grantedSecs, askedSudo && grantSudo); err != nil {
 				return err
 			}
 		}
@@ -133,12 +142,12 @@ func (s *Store) DecideApprovalRequest(ctx context.Context, id, decidedBy uuid.UU
 	return a, nil
 }
 
-const tempPermCols = `id, request_id, user_id, host_id, group_id, granted_at, expires_at, revoked_at`
+const tempPermCols = `id, request_id, user_id, host_id, group_id, granted_at, expires_at, revoked_at, sudo`
 
 func scanTempPerm(row pgx.Row) (*models.TemporaryPermission, error) {
 	var t models.TemporaryPermission
 	err := row.Scan(&t.ID, &t.RequestID, &t.UserID, &t.HostID, &t.GroupID,
-		&t.GrantedAt, &t.ExpiresAt, &t.RevokedAt)
+		&t.GrantedAt, &t.ExpiresAt, &t.RevokedAt, &t.Sudo)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -269,4 +278,35 @@ func (s *Store) ApprovalSummaries(ctx context.Context, ids []uuid.UUID) (map[uui
 		out[a.ID] = *a
 	}
 	return out, rows.Err()
+}
+
+// HasSudoGrant reports whether a user currently holds a time-boxed root grant
+// for a host, directly or through one of the host's groups.
+//
+// This is the lookup on the connection path, and it is the whole point of the
+// feature: Host.Sudo is a live permission check with nothing else feeding it, so
+// without this the only route to root for a login-only user is an administrator
+// granting their role Host.Sudo -- fleet-wide, indefinitely, with nothing to take
+// it back.
+//
+// Checked per connection rather than cached on the session. An expiry that only
+// applies to connections opened after it would not be an expiry; a terminal
+// opened five minutes before the grant lapsed would hold root indefinitely.
+func (s *Store) HasSudoGrant(ctx context.Context, userID, hostID uuid.UUID) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM temporary_permissions tp
+			WHERE tp.user_id = $1
+			  AND tp.sudo
+			  AND tp.revoked_at IS NULL
+			  AND tp.expires_at > now()
+			  AND (
+			        tp.host_id = $2
+			     OR (tp.group_id IS NOT NULL AND EXISTS (
+			            SELECT 1 FROM host_groups hg
+			            WHERE hg.group_id = tp.group_id AND hg.host_id = $2))
+			  )
+		)`, userID, hostID).Scan(&ok)
+	return ok, err
 }

@@ -559,7 +559,9 @@ type ApprovalRequest struct {
 	DecidedAt     *time.Time `json:"decidedAt,omitempty"`
 	DecisionNote  string     `json:"decisionNote,omitempty"`
 	GrantedSecs   *int64     `json:"grantedSecs,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
+	// Sudo: the request asked for root, not only access.
+	Sudo      bool      `json:"sudo"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // ExpiredGrant describes a temporary permission that the reaper just expired,
@@ -583,6 +585,8 @@ type TemporaryPermission struct {
 	GrantedAt time.Time  `json:"grantedAt"`
 	ExpiresAt time.Time  `json:"expiresAt"`
 	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+	// Sudo: this grant lands the user in the privileged account until it expires.
+	Sudo bool `json:"sudo"`
 }
 
 // EnrollmentJob tracks an automated host onboarding run.

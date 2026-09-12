@@ -43,6 +43,22 @@ that slot and at no other time. Slot-private path stores were being re-seeded on
 every slot change too, and follow the same rule now; that applies to shared-upper
 images as well.
 
+**Root can now be granted for a bounded time instead of permanently.** `Host.Sudo`
+decides which account a connection lands in — the privileged one or the host's
+login-only account — and it was a standing permission with nothing else feeding
+it. So the only route to root for a login-only user was an administrator adding
+`Host.Sudo` to their role: fleet-wide, indefinite, and with nothing to take it
+back. In practice that left two outcomes, both of which defeat the tier — either
+operators hold sudo permanently, or they are granted it once and never lose it.
+
+An access request can now ask for root as well, and an approver decides the two
+halves separately: **Approve + root** or **Approve access only**. A granted
+request is scoped to one host or group, expires on its own, and carries the
+reason, ticket reference and decider the approval workflow already recorded.
+Checked per connection, so an expiry actually ends root rather than only applying
+to sessions opened afterwards; SFTP applies the same check, so a transfer is not a
+way around either the restriction or the expiry. A grant lookup that fails denies.
+
 **Active sign-ins are visible and can be ended individually.** Administrators
 could see a user's login *history* and terminate *all* of their sessions, but had
 no way to see who was signed in right now or to cut off one session — a laptop

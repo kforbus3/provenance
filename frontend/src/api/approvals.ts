@@ -21,6 +21,8 @@ export interface ApprovalRequest {
   decisionNote?: string;
   grantedSecs?: number;
   createdAt: string;
+  // The request asked for root on the target, not only access.
+  sudo?: boolean;
 }
 
 export interface CreateApprovalInput {
@@ -30,12 +32,19 @@ export interface CreateApprovalInput {
   groupId?: string;
   requestedSecs: number;
   ticketRef?: string;
+  // Ask to land in the privileged account for the duration of the grant rather
+  // than the login-only one. Asking is not being given it — the approver decides
+  // the root half separately.
+  sudo?: boolean;
 }
 
 export interface DecideInput {
   decision: "approve" | "deny";
   note?: string;
   grantedSecs?: number;
+  // Grant the root half. Separate from the decision, so an approver can allow
+  // the access and withhold the privilege. Omitted means no root.
+  grantSudo?: boolean;
 }
 
 export interface RequestTarget {
