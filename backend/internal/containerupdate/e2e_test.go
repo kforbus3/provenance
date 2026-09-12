@@ -66,7 +66,9 @@ func sh(t *testing.T, script string) (string, int) {
 	} else if err != nil {
 		t.Fatalf("running script: %v", err)
 	}
-	return string(out), code
+	// Same as shRun: the product appends this to every result, so a test that
+	// omits it is testing something the product never produces.
+	return string(out) + fmt.Sprintf("\n[exit code %d]", code), code
 }
 
 // e2eProject writes a compose project and brings it up. Returns its directory.
@@ -321,6 +323,16 @@ func (r *realRunner) RunScript(_ context.Context, script string, _ *models.Host)
 	return out, code, code != 0
 }
 
+// shRun runs a script the way the PRODUCT does, not merely the way a shell does.
+//
+// internal/command appends "\n[exit code N]" to every result it returns. The
+// harness previously returned the raw shell output, so it modelled the host
+// faithfully and stubbed the runner — and the runner is what broke: adoption took
+// "everything after the marker" as the compose file, swallowed that trailing
+// line, and wrote it to a real host where it is not YAML.
+//
+// A harness that does not reproduce every party in the chain cannot catch a
+// disagreement between them. This reproduces the runner.
 func shRun(script string) (string, int) {
 	cmd := exec.Command("/bin/sh", "-c", script)
 	out, err := cmd.CombinedOutput()
@@ -328,7 +340,7 @@ func shRun(script string) (string, int) {
 	if ee, ok := err.(*exec.ExitError); ok {
 		code = ee.ExitCode()
 	}
-	return string(out), code
+	return string(out) + fmt.Sprintf("\n[exit code %d]", code), code
 }
 
 // realDeployer performs the actual stack deploy with the real script.

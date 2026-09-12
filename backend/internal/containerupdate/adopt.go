@@ -47,11 +47,26 @@ func adoptScript(dir string) string {
 	b.WriteString("  ls -1 2>/dev/null | grep -iE '^(docker-)?compose\\.ya?ml$' || true\n")
 	b.WriteString("  exit 0\n")
 	b.WriteString("fi\n")
-	// A marker line, then the file verbatim. Not base64: the content has to be
-	// reviewable in the revision history, and an encoding step is one more place
-	// for it to arrive subtly different from what is on disk.
+	// Markers on BOTH sides, and the file verbatim between them. Not base64: the
+	// content has to be reviewable in the revision history, and an encoding step
+	// is one more place for it to arrive subtly different from what is on disk.
+	//
+	// The closing marker is not decoration. Everything this runs through appends
+	// its own trailing line -- the command runner ends every result with
+	// "[exit code N]" -- and taking "everything after the opening marker" as the
+	// file swallowed that into the compose content. It was then written to the
+	// host, where it is not YAML:
+	//
+	//	qdrant_data:
+	//
+	//	[exit code 0]
+	//	  go-yaml: could not find expected ':'
+	//
+	// Bounded on both sides, anything appended afterwards is ignored by
+	// construction rather than by remembering to strip it.
 	b.WriteString("echo '::COMPOSE::'\n")
 	b.WriteString("cat " + shellQuote(composeFilename) + "\n")
+	b.WriteString("echo '::ENDCOMPOSE::'\n")
 	return b.String()
 }
 
@@ -61,6 +76,16 @@ func parseAdopt(dir, out string) (string, error) {
 		body := out[i+len("::COMPOSE::"):]
 		body = strings.TrimPrefix(body, "\r\n")
 		body = strings.TrimPrefix(body, "\n")
+		// Everything up to the closing marker, verbatim. `cat` emits the file's
+		// bytes and the closing `echo` starts wherever cat left off, so the text
+		// before the marker IS the file -- whether or not it ended with a newline.
+		end := strings.Index(body, "::ENDCOMPOSE::")
+		if end < 0 {
+			return "", fmt.Errorf(
+				"the compose file at %s/%s was read but not completely — the output "+
+					"was truncated", dir, composeFilename)
+		}
+		body = body[:end]
 		if strings.TrimSpace(body) == "" {
 			return "", fmt.Errorf("the compose file at %s/%s is empty", dir, composeFilename)
 		}

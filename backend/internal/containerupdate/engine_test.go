@@ -207,7 +207,9 @@ func scripted(running, compose string) *fakeRunner {
 			if compose == "" {
 				return "::NOFILE::\n", 0, false
 			}
-			return "::COMPOSE::\n" + compose, 0, false
+			// What the real script emits: bounded, and with the runner's
+			// trailing line, because that is what the engine actually receives.
+			return "::COMPOSE::\n" + compose + "::ENDCOMPOSE::\n\n[exit code 0]", 0, false
 		}
 		return running, 0, false
 	}}
@@ -711,7 +713,7 @@ func TestAdoptionKeepsTheFileVerbatim(t *testing.T) {
 	// The content has to be reviewable in the revision history, byte for byte:
 	// this is the file an operator is being shown before approving an edit to it.
 	body := "# hand-written\nservices:\n  web:\n    image: nginx:1.24   # pinned\n"
-	got, err := parseAdopt("/opt/x", "::COMPOSE::\n"+body)
+	got, err := parseAdopt("/opt/x", "::COMPOSE::\n"+body+"::ENDCOMPOSE::\n\n[exit code 0]")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -933,5 +935,60 @@ func TestAnUnknownServiceFallsBackToTheWholeProject(t *testing.T) {
 
 	if len(d.services) != 1 || d.services[0] != "" {
 		t.Errorf("services = %v, want one empty (the whole project)", d.services)
+	}
+}
+
+// The runner appends "[exit code N]" to every result. Adoption took "everything
+// after the opening marker" as the compose file, so that line went into the
+// content, was saved as the stack's compose, and was written to a real host:
+//
+//	qdrant_data:
+//
+//	[exit code 0]
+//	  go-yaml load error: could not find expected ':'
+//
+// The stack's own compose file, on a live host, made invalid by the tool that was
+// supposed to be managing it.
+func TestAdoptedContentStopsAtTheClosingMarker(t *testing.T) {
+	file := "services:\n  web:\n    image: nginx:1.24\nvolumes:\n  data:\n"
+	// Exactly what a RunScript result looks like.
+	out := "::COMPOSE::\n" + file + "::ENDCOMPOSE::\n\n[exit code 0]"
+
+	got, err := parseAdopt("/opt/x", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != file {
+		t.Errorf("adopted content is not the file:\n%q\nwant\n%q", got, file)
+	}
+	if strings.Contains(got, "exit code") {
+		t.Error("the runner's trailing line was swallowed into the compose content")
+	}
+}
+
+func TestAFileWithNoTrailingNewlineSurvivesAdoption(t *testing.T) {
+	// `cat` emits the file's bytes and the closing echo starts wherever cat left
+	// off, so the marker can land on the last line. The content must still come
+	// back byte-for-byte.
+	file := "services:\n  web:\n    image: nginx:1.24"
+	out := "::COMPOSE::\n" + file + "::ENDCOMPOSE::\n\n[exit code 0]"
+	got, err := parseAdopt("/opt/x", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != file {
+		t.Errorf("got %q, want %q", got, file)
+	}
+}
+
+func TestTruncatedAdoptOutputIsRefused(t *testing.T) {
+	// No closing marker means the read did not finish. Using what arrived would
+	// write half a compose file to a host.
+	_, err := parseAdopt("/opt/x", "::COMPOSE::\nservices:\n  web:\n")
+	if err == nil {
+		t.Fatal("accepted a truncated read")
+	}
+	if !strings.Contains(err.Error(), "not completely") {
+		t.Errorf("unclear reason: %v", err)
 	}
 }
