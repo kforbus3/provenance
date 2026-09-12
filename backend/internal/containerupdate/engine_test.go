@@ -680,7 +680,7 @@ func TestAdoptionRefusesAComposeFileThatDoesNotNameTheImage(t *testing.T) {
 	if h.State != store.UpdateHostFailed {
 		t.Fatalf("state = %q, want failed", h.State)
 	}
-	if !strings.Contains(h.Error, "does not name nginx:1.24") {
+	if !strings.Contains(h.Error, "names neither nginx:1.24 nor nginx:1.27") {
 		t.Errorf("got %q", h.Error)
 	}
 	if len(f.saved) != 0 {

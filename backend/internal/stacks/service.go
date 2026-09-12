@@ -71,7 +71,7 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 		return nil, "", fmt.Errorf("host: %w", err)
 	}
 
-	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(renderScript(st.Path, st.Compose, st.Revision, pull, service)), h)
+	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(RenderScript(st.Path, st.Compose, st.Revision, pull, service)), h)
 	state := "deployed"
 	if failed || code != 0 {
 		state = "failed"

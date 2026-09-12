@@ -29,6 +29,12 @@ import (
 // rsync --delete deploy already did on this fleet, which is the behaviour being
 // replaced -- being unambiguous about what the source of truth means is the whole
 // job.
+// RenderScript builds the script that writes a stack's compose file to its host
+// and brings it up. Exported so the end-to-end tests can run the REAL deploy
+// against a real Docker rather than a copy of it — every bug this feature has
+// shipped lived in the gap between a script, the shell that runs it and the
+// parser that reads it back, which only a real run can close.
+//
 // pull says whether to fetch images before bringing the stack up.
 //
 // Off for an ordinary deploy, because `up -d` already pulls anything it does not
@@ -52,7 +58,7 @@ import (
 // --remove-orphans is dropped with it: removing containers the file no longer
 // defines is a whole-project decision, and making it as a side effect of updating
 // one image would delete things nobody mentioned.
-func renderScript(dir, compose string, revision int, pull bool, service string) string {
+func RenderScript(dir, compose string, revision int, pull bool, service string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	// The heredoc delimiter is quoted, so nothing inside the compose file is

@@ -219,7 +219,7 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	@echo "  Windows x86_64:      fleet-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
-test: backend-test frontend-typecheck frontend-test scanner-test imaging-test ## Run all tests
+test: backend-test frontend-typecheck frontend-test scanner-test imaging-test container-e2e ## Run all tests
 
 .PHONY: smoke
 smoke: ## Build a real initramfs + bootloader and check what is actually in them (rpm, ~8 min)
@@ -333,6 +333,30 @@ imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runne
 	docker run --rm -v $(PWD):/src -w /src/deploy/builder-runner python:3.13-alpine \
 	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
 	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py && python test_keybackup.py && python test_nofile.py && python test_family_guards.py && python test_reachable.py && python test_initramfs_deps.py && python test_playbook_template.py && python test_nav_routes.py && python test_compose_env.py && python test_rauc_runtime.py && python test_docs_lists.py && python test_documented_settings.py && python test_spelling.py && python test_state_model_guards.py && python test_slot_reset.py && python test_route_collisions.py"
+
+.PHONY: container-e2e
+container-e2e: ## Run the container-update end-to-end tests against the local Docker
+	# The gate the unit tests cannot be.
+	#
+	# Every bug this feature shipped lived in the space between three things that
+	# are only correct TOGETHER: the script sent to a host, the shell that runs it,
+	# and the parser that reads it back. A unit test feeding the parser a
+	# hand-written string cannot see `echo "$$_i\t$$_d"` failing on bash, a script
+	# assuming it runs as root, or a compose file already at the target tag. Each
+	# of those reached production and was found by an operator.
+	#
+	# So these run the real scripts and the real engine against a real daemon.
+	# Skipped, loudly, where Docker is not usable -- a machine without it is not a
+	# reason to pretend the tests passed.
+	@if docker compose version >/dev/null 2>&1; then \
+	  PROVENANCE_E2E_DOCKER=1 $(MAKE) -s container-e2e-run; \
+	else \
+	  echo "SKIPPED container-e2e: docker compose is not usable here"; \
+	fi
+
+.PHONY: container-e2e-run
+container-e2e-run:
+	cd backend && PROVENANCE_E2E_DOCKER=1 go test ./internal/containerupdate/ -run E2E -count=1
 
 .PHONY: lint
 lint: fmt-check ## Run gofmt check + Go vet

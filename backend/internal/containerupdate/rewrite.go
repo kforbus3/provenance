@@ -157,3 +157,25 @@ func ReferencesImage(compose, repo, tag string) bool {
 	}
 	return false
 }
+
+// composeOwnsImage reports whether a compose file is the one this container came
+// from, for an update moving `from` to `to`.
+//
+// Either tag counts. Asking only about `from` was wrong in a way that a live
+// rollout kept hitting: a compose file edited ahead of its containers — by hand,
+// or by an earlier attempt that wrote the file and failed before deploying —
+// already names `to` while the container still runs `from`, because nobody has
+// run `up -d` since.
+//
+//	compose says     curlimages/curl:8.22.0
+//	container runs   curlimages/curl:8.10.1
+//	rollout wants    8.10.1 -> 8.22.0
+//
+// Refusing there concluded "this is not the project this container came from",
+// which is false. It is the project; it is simply already where the rollout wants
+// to get to, and the work left is to deploy it. Every partially-applied change is
+// in exactly this state, so refusing made the rollout unable to finish the job it
+// had itself half-done.
+func composeOwnsImage(compose, repo, from, to string) bool {
+	return ReferencesImage(compose, repo, from) || ReferencesImage(compose, repo, to)
+}

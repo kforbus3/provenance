@@ -439,11 +439,11 @@ func (e *Engine) adopt(ctx context.Context, r store.UpdateRollout, hostID uuid.U
 	// The file has to name the image this rollout is about. If it does not, the
 	// project at that path is not the one this container came from, and rewriting
 	// it would edit somebody else's stack.
-	if !ReferencesImage(compose, r.Repository, r.FromTag) {
+	if !composeOwnsImage(compose, r.Repository, r.FromTag, r.ToTag) {
 		return true, fmt.Errorf(
-			"the compose file at %s/%s does not name %s:%s, so it is not the project "+
-				"this container came from", match.ComposeDir, composeFilename,
-			r.Repository, r.FromTag)
+			"the compose file at %s/%s names neither %s:%s nor %s:%s, so it is not "+
+				"the project this container came from", match.ComposeDir, composeFilename,
+			r.Repository, r.FromTag, r.Repository, r.ToTag)
 	}
 
 	name := match.ComposeProject
@@ -522,10 +522,14 @@ func (e *Engine) targetStack(ctx context.Context, r store.UpdateRollout, hostID 
 		if n > 0 {
 			return st, out, nil
 		}
-		// A digest-only update changes no text, so the rewrite finds nothing to
-		// do. The stack still owns the image if it names it at the current tag,
-		// and pulling is the whole update.
-		if r.FromTag == r.ToTag && ReferencesImage(st.Compose, r.Repository, r.FromTag) {
+		// Nothing to rewrite does not mean nothing to do.
+		//
+		// A digest-only update (the same tag rebuilt) changes no text. So does a
+		// file already edited ahead of its containers — which is the state every
+		// partially-applied change is in, including one this rollout wrote itself
+		// before failing at a later step. In both cases the file is right and the
+		// deploy is the remaining work.
+		if composeOwnsImage(st.Compose, r.Repository, r.FromTag, r.ToTag) {
 			return st, st.Compose, nil
 		}
 	}
