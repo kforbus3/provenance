@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -70,7 +71,7 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 		return nil, "", fmt.Errorf("host: %w", err)
 	}
 
-	out, code, failed := s.run.RunScript(ctx, renderScript(st.Path, st.Compose, st.Revision, pull, service), h)
+	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(renderScript(st.Path, st.Compose, st.Revision, pull, service)), h)
 	state := "deployed"
 	if failed || code != 0 {
 		state = "failed"
@@ -100,7 +101,7 @@ func (s *Service) Rollback(ctx context.Context, stackID uuid.UUID) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("host: %w", err)
 	}
-	out, code, failed := s.run.RunScript(ctx, rollbackScript(st.Path), h)
+	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(rollbackScript(st.Path)), h)
 	if failed || code != 0 {
 		_ = s.store.RecordStackDeployment(ctx, st.ID, st.Revision, "failed", out)
 		return out, fmt.Errorf("rollback failed on %s (exit %d)", h.Hostname, code)

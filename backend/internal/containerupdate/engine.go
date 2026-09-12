@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/pacing"
 	"github.com/kforbus3/provenance/backend/internal/store"
@@ -426,7 +427,7 @@ func (e *Engine) adopt(ctx context.Context, r store.UpdateRollout, hostID uuid.U
 	if err != nil {
 		return true, fmt.Errorf("could not read the host: %w", err)
 	}
-	out, _, failed := e.run.RunScript(ctx, adoptScript(match.ComposeDir), h)
+	out, _, failed := e.run.RunScript(ctx, hostexec.Privileged(adoptScript(match.ComposeDir)), h)
 	if failed {
 		return true, fmt.Errorf("could not read the compose file at %s: %s",
 			match.ComposeDir, trimOutput(out))
@@ -495,7 +496,7 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	if err != nil {
 		return true, fmt.Errorf("could not read the host: %w", err)
 	}
-	out, code, failed := e.run.RunScript(ctx, inPlaceScript(match.ComposeDir, match.ComposeService), h)
+	out, code, failed := e.run.RunScript(ctx, hostexec.Privileged(inPlaceScript(match.ComposeDir, match.ComposeService)), h)
 	if failed || code != 0 {
 		return true, fmt.Errorf("%s", inPlaceFailure(match.ComposeDir, match.ComposeService, out))
 	}
@@ -581,7 +582,7 @@ func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.
 	if err != nil {
 		return fmt.Errorf("could not read the host back: %w", err)
 	}
-	out, _, failed := e.run.RunScript(ctx, verifyScript(r.Repository), h)
+	out, _, failed := e.run.RunScript(ctx, hostexec.Privileged(verifyScript(r.Repository)), h)
 	if failed || !strings.Contains(out, "::OK::") {
 		return fmt.Errorf("deployed, but could not read back what the host is running: %s",
 			trimOutput(out))

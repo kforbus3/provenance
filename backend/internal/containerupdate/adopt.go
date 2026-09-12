@@ -33,7 +33,13 @@ const composeFilename = "docker-compose.yml"
 func adoptScript(dir string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
-	fmt.Fprintf(&b, "cd %s 2>/dev/null || { echo '::NODIR::'; exit 0; }\n", shellQuote(dir))
+	// Missing and unreadable are asked about SEPARATELY. A failed `cd` is
+	// indistinguishable from a missing directory, and reporting "that directory is
+	// not there" about one that plainly is sends an operator looking for the wrong
+	// problem — which it did, for a compose file sitting exactly where it was
+	// expected under a home directory this account could not traverse.
+	fmt.Fprintf(&b, "[ -d %s ] || { echo '::NODIR::'; exit 0; }\n", shellQuote(dir))
+	fmt.Fprintf(&b, "cd %s 2>/dev/null || { echo '::NOACCESS::'; exit 0; }\n", shellQuote(dir))
 	// Report what IS there when the expected name is missing, so the message can
 	// name the file rather than say "not found" about a directory full of them.
 	b.WriteString("if [ ! -f " + shellQuote(composeFilename) + " ]; then\n")
@@ -64,6 +70,12 @@ func parseAdopt(dir, out string) (string, error) {
 		return "", fmt.Errorf(
 			"this container's compose project is recorded at %s, but that directory is "+
 				"not there — it was probably deployed from somewhere else", dir)
+	}
+	if strings.Contains(out, "::NOACCESS::") {
+		return "", fmt.Errorf(
+			"%s exists but could not be read, even with sudo. Check that this host's "+
+				"Provenance account has passwordless sudo, or that the directory is "+
+				"reachable by it", dir)
 	}
 	if strings.Contains(out, "::NOFILE::") {
 		others := []string{}
