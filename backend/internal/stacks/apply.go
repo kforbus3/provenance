@@ -82,24 +82,50 @@ func RenderScript(dir, compose string, revision int, pull bool, service string) 
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s\n",
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
+
+	// Which compose binary, established once and used for both the validation
+	// below and the bring-up. The same two-flavour check as everywhere else: a
+	// host on the older standalone binary must not silently do nothing.
+	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
+	b.WriteString("  _c=\"docker compose\"\n")
+	b.WriteString("elif command -v docker-compose >/dev/null 2>&1; then\n")
+	b.WriteString("  _c=\"docker-compose\"\n")
+	b.WriteString("else\n")
+	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
+	b.WriteString("fi\n")
+
+	// Validate BEFORE acting, and put the previous file back if it does not parse.
+	//
+	// A compose file is written here from whatever the stack record holds, and a
+	// stack record is only as good as what went into it. One did go in bad — an
+	// adoption swallowed the command runner's trailing "[exit code 0]" line — and
+	// because the deploy wrote the stored copy without looking at it, every
+	// attempt rewrote the same broken file onto the host. Fixing the intake
+	// stopped new damage; it did nothing for the record already poisoned, and the
+	// host stayed broken.
+	//
+	// So the deploy refuses to be the thing that breaks a host. compose's own
+	// parser is the check — not a YAML library here, which would be a second
+	// opinion about a format only compose has the final say on.
+	b.WriteString("if ! $_c config -q >/dev/null 2>&1; then\n")
+	b.WriteString("  _why=$($_c config -q 2>&1 | head -5)\n")
+	fmt.Fprintf(&b, "  if [ -f %s ]; then mv -f %s %s; fi\n",
+		shellQuote(dir+"/docker-compose.yml.prev"),
+		shellQuote(dir+"/docker-compose.yml.prev"),
+		shellQuote(dir+"/docker-compose.yml"))
+	b.WriteString("  echo \"::BADCOMPOSE::$_why\" >&2\n")
+	b.WriteString("  exit 5\n")
+	b.WriteString("fi\n")
+
 	// What to act on: one service, or the whole project.
 	target := " --remove-orphans"
 	if service != "" {
 		target = " " + shellQuote(service)
 	}
-	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
 	if pull {
-		b.WriteString("  docker compose pull" + target + "\n")
+		b.WriteString("$_c pull" + target + "\n")
 	}
-	b.WriteString("  docker compose up -d" + target + "\n")
-	b.WriteString("elif command -v docker-compose >/dev/null 2>&1; then\n")
-	if pull {
-		b.WriteString("  docker-compose pull" + target + "\n")
-	}
-	b.WriteString("  docker-compose up -d" + target + "\n")
-	b.WriteString("else\n")
-	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
-	b.WriteString("fi\n")
+	b.WriteString("$_c up -d" + target + "\n")
 	return b.String()
 }
 

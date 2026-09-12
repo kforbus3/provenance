@@ -447,3 +447,85 @@ func TestE2EEngineFinishesAHalfAppliedChange(t *testing.T) {
 		t.Errorf("host is not on the target:\n%s", out)
 	}
 }
+
+// TestE2EABrokenComposeNeverReachesTheHost is the guarantee that would have
+// stopped four failed rollouts from leaving a host worse than they found it.
+//
+// A deploy writes whatever the stack record holds, and a stack record is only as
+// good as what went into it. One went in bad — an adoption swallowed the command
+// runner's trailing "[exit code 0]" line — and because the deploy never looked at
+// what it was writing, every attempt rewrote the same broken file onto the host:
+//
+//	qdrant_data:
+//
+//	[exit code 0]
+//	  go-yaml load error: could not find expected ':'
+//
+// Fixing the intake stopped NEW damage and did nothing for the record already
+// poisoned. The host stayed broken across three more attempts. So the deploy
+// refuses to be the thing that breaks a host, whatever it is handed.
+func TestE2EABrokenComposeNeverReachesTheHost(t *testing.T) {
+	e2eEnabled(t)
+	dir := e2eProject(t, e2eFrom)
+	path := filepath.Join(dir, "docker-compose.yml")
+	good, _ := os.ReadFile(path)
+
+	// Exactly the shape that reached a live host.
+	broken := string(good) + "\n[exit code 0]\n"
+
+	out, code := sh(t, stacks.RenderScript(dir, broken, 3, false, "probe"))
+	if code == 0 {
+		t.Fatal("a compose file that does not parse was deployed")
+	}
+	if !strings.Contains(out, "::BADCOMPOSE::") {
+		t.Errorf("the failure does not say the compose was rejected:\n%s", out)
+	}
+
+	// And the host is left as it was, not half-written.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the compose file is gone entirely: %v", err)
+	}
+	if string(after) != string(good) {
+		t.Errorf("the host's compose file was left modified:\n--- got ---\n%s\n--- want ---\n%s",
+			after, good)
+	}
+	// It still parses, which is the property that actually matters to an operator.
+	cfg := exec.Command("docker", "compose", "config", "-q")
+	cfg.Dir = dir
+	if outB, err := cfg.CombinedOutput(); err != nil {
+		t.Errorf("the host is left with an unparseable compose file: %v\n%s", err, outB)
+	}
+}
+
+// And the same through the engine, since that is the path that failed.
+func TestE2EEngineDoesNotBreakAHostWithABadStackRecord(t *testing.T) {
+	e2eEnabled(t)
+	dir := e2eProject(t, e2eFrom)
+	path := filepath.Join(dir, "docker-compose.yml")
+	good, _ := os.ReadFile(path)
+
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.rollouts[0].Repository, f.rollouts[0].FromTag, f.rollouts[0].ToTag = e2eRepo, "3.20", "3.21"
+	// A stack already adopted, holding poisoned content.
+	f.stacks[ids[0]] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: ids[0], Enabled: true, Name: filepath.Base(dir), Path: dir,
+		Compose: strings.ReplaceAll(string(good), e2eFrom, e2eTo) + "\n[exit code 0]\n",
+	}}
+	f.containers[ids[0]] = []models.Container{{
+		Name: "probe", Image: e2eFrom, Repository: e2eRepo, Tag: "3.20",
+		ComposeProject: filepath.Base(dir), ComposeService: "probe", ComposeDir: dir,
+	}}
+
+	dep := &realDeployer{dir: dir, compose: func() string { return f.stacks[ids[0]][0].Compose }}
+	e := New(f, dep, &realRunner{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e.Tick(context.Background())
+
+	if got := f.hosts[rid][0].State; got != store.UpdateHostFailed {
+		t.Errorf("state = %q — a rollout that could not deploy must not report success", got)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(good) {
+		t.Errorf("the rollout left the host's compose file broken:\n%s", after)
+	}
+}

@@ -97,7 +97,7 @@ func TestAnOrdinaryDeployDoesNotPull(t *testing.T) {
 	// image on every deploy would make a one-line compose edit as slow as a full
 	// update, for no change in what ends up running.
 	got := RenderScript("/opt/stacks/web", "services: {}", 1, false, "")
-	if strings.Contains(got, "compose pull") {
+	if strings.Contains(got, "$_c pull") {
 		t.Errorf("an ordinary deploy pulled:\n%s", got)
 	}
 }
@@ -109,8 +109,8 @@ func TestAnUpdateDeployPullsFirst(t *testing.T) {
 	// never changes, and a rollout marches a no-op across the fleet while every
 	// host stays on the vulnerable image.
 	got := RenderScript("/opt/stacks/web", "services: {}", 1, true, "")
-	pull := strings.Index(got, "docker compose pull")
-	up := strings.Index(got, "docker compose up -d")
+	pull := strings.Index(got, "$_c pull")
+	up := strings.Index(got, "$_c up -d")
 	if pull < 0 {
 		t.Fatalf("an update deploy did not pull:\n%s", got)
 	}
@@ -118,8 +118,10 @@ func TestAnUpdateDeployPullsFirst(t *testing.T) {
 		t.Errorf("pulled after bringing the stack up, which starts the old image first:\n%s", got)
 	}
 	// Both compose flavours, or a host on the older binary silently never pulls.
-	if !strings.Contains(got, "docker-compose pull") {
-		t.Errorf("the docker-compose fallback does not pull:\n%s", got)
+	// The binary is chosen once into $_c, so the check is that the fallback is
+	// still offered rather than that a literal command appears twice.
+	if !strings.Contains(got, `_c="docker-compose"`) {
+		t.Errorf("the docker-compose fallback is gone, so an older host fails:\n%s", got)
 	}
 }
 
@@ -133,10 +135,10 @@ func TestAnUpdateRolloutTouchesOnlyItsOwnService(t *testing.T) {
 	// them.
 	got := RenderScript("/opt/stacks/site", "services: {}", 3, true, "web")
 
-	if !strings.Contains(got, "docker compose pull 'web'") {
+	if !strings.Contains(got, "$_c pull 'web'") {
 		t.Errorf("did not pull just the service:\n%s", got)
 	}
-	if !strings.Contains(got, "docker compose up -d 'web'") {
+	if !strings.Contains(got, "$_c up -d 'web'") {
 		t.Errorf("did not bring up just the service:\n%s", got)
 	}
 	// --remove-orphans deletes containers the file no longer defines. That is a
@@ -145,10 +147,10 @@ func TestAnUpdateRolloutTouchesOnlyItsOwnService(t *testing.T) {
 	if strings.Contains(got, "--remove-orphans") {
 		t.Errorf("a single-service deploy removed orphans:\n%s", got)
 	}
-	// The docker-compose fallback too, or an older host silently does the whole
-	// project while a newer one does not.
-	if !strings.Contains(got, "docker-compose up -d 'web'") {
-		t.Errorf("the docker-compose fallback was not narrowed:\n%s", got)
+	// One binary is chosen up front and used for everything, so there is no
+	// second code path that could silently do the whole project.
+	if strings.Contains(got, "docker compose up -d --remove-orphans") {
+		t.Errorf("a whole-project bring-up survives alongside the narrowed one:\n%s", got)
 	}
 }
 
