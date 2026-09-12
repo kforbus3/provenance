@@ -5,6 +5,34 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.22 — 2026-09-12
+
+**Saving a compose file no longer moves the stack somewhere else.** The compose
+editor sent the text and no directory, and the server read that silence as a
+choice — filling in `/opt/stacks/<name>` and relocating a stack that had been
+adopted from somewhere on the host. The next rollout created the new directory,
+wrote the compose file into it, and ran `docker compose` beside none of the files
+the project needs. The operator was then told their compose file was invalid
+("required variable WIREGUARD_PRIVATE_KEY is missing a value") when the file on
+the host was perfectly good, and the rollout halted on a host that was doing
+nothing wrong.
+
+An empty path now means "not saying", not "move it". The default applies only
+when a stack is first created, because that is the only time there is no
+directory to keep. A stack whose recorded directory has already drifted repairs
+itself from the compose labels of the containers actually running — so a
+deployment that hit this does not need anything done by hand. And the editor
+shows the directory and sends it back, since a path nobody can see is a path
+nobody can notice is wrong.
+
+**A skipped host says which kind of skip it was.** "This host was not running any
+of the images" was also reported to a host that ran one and was skipped because
+its own compose file already names a newer tag. Those point in opposite
+directions — one at the host, one at a rollout that has gone stale — and only one
+of them was ever said.
+
+---
+
 ## v1.2.21 — 2026-09-12
 
 **A compose project the host cannot reach is explained, and no longer halts a
