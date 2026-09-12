@@ -282,7 +282,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		}
 	}
 
-	applied := 0
+	applied, ran, past := 0, 0, 0
 	for _, im := range images {
 		if ctx.Err() != nil {
 			return
@@ -291,7 +291,9 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		if !runs[key] {
 			continue
 		}
+		ran++
 		if superseded(stacks, im) {
+			past++
 			e.log.Info("update rollout: host has moved past this image",
 				"host", hostID, "repository", im.Repository, "from", im.FromTag)
 			continue
@@ -311,6 +313,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 			im.Repository, im.FromTag, im.ToTag, im.TargetDigest
 		if err := e.applyOne(ctx, one, hostID); err != nil {
 			if errors.Is(err, errSuperseded) {
+				past++
 				e.log.Info("update rollout: host has moved past this image",
 					"host", hostID, "repository", im.Repository, "from", im.FromTag,
 					"detail", err.Error())
@@ -324,17 +327,70 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	}
 
 	if applied == 0 {
-		// Enrolled but running none of the images by the time its turn came --
-		// somebody updated it by hand, or the container was removed. Not a
-		// failure, and not a silent success either: skipped says which.
-		if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostSkipped,
-			"this host was not running any of the images by the time its turn came"); err != nil {
+		// Two different things end here, and telling an operator the wrong one
+		// sends them to look in the wrong place. "Running none of them" points at
+		// the host; "already past them" points at the rollout being stale. Both
+		// are skips, neither is a failure.
+		detail := "this host was not running any of the images by the time its turn came"
+		if ran > 0 && past == ran {
+			detail = fmt.Sprintf(
+				"this host was already past every image in this rollout that it runs "+
+					"(%d of %d) — its compose files name newer tags than this rollout's target",
+				past, len(images))
+		} else if past > 0 {
+			detail = fmt.Sprintf(
+				"nothing left to apply: of the %d image(s) this host runs, %d were already "+
+					"past this rollout's target", ran, past)
+		}
+		if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID,
+			store.UpdateHostSkipped, detail); err != nil {
 			e.log.Warn("update rollout: recording skip", "host", hostID, "err", err)
 		}
 		return
 	}
 	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, ""); err != nil {
 		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
+	}
+}
+
+// reconcileStackPath corrects a stack whose recorded directory has drifted from
+// where its project actually runs.
+//
+// A wrong path is not cosmetic. The deploy creates the directory, writes the
+// compose file into it, and leaves behind every file the project needs but that
+// Provenance does not manage -- in the case that produced this function, the
+// .env holding WIREGUARD_PRIVATE_KEY, so the deploy failed to interpolate and
+// the operator was told their compose file was bad when it was fine. The
+// running container's own compose labels are the authority on where a project
+// lives, and they are already collected.
+//
+// Scoped to a container whose compose PROJECT is this stack: a different project
+// in a different directory is somebody else's stack, not this one moved.
+func (e *Engine) reconcileStackPath(ctx context.Context, st *store.ContainerStack, r store.UpdateRollout) {
+	containers, err := e.store.HostContainers(ctx, st.HostID)
+	if err != nil {
+		return
+	}
+	for i := range containers {
+		c := &containers[i]
+		if c.Repository != r.Repository || c.ComposeDir == "" {
+			continue
+		}
+		if c.ComposeProject != st.Name || c.ComposeDir == st.Path {
+			continue
+		}
+		if _, err := e.store.UpsertStack(ctx, store.StackInput{
+			HostID: st.HostID, Name: st.Name, Path: c.ComposeDir, Compose: st.Compose,
+			AuthorName: "container update rollout",
+		}); err != nil {
+			e.log.Warn("update rollout: correcting a stack path",
+				"stack", st.Name, "err", err)
+			return
+		}
+		e.log.Info("corrected a stack path from the host's compose labels",
+			"stack", st.Name, "was", st.Path, "now", c.ComposeDir)
+		st.Path = c.ComposeDir
+		return
 	}
 }
 
@@ -388,6 +444,10 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 			return err
 		}
 	}
+
+	// The path is where a deploy WRITES, so check it against the host before
+	// writing anything.
+	e.reconcileStackPath(ctx, stack, r)
 
 	// Only save a new revision when the text actually changed. A digest-only
 	// update -- the same tag rebuilt -- rewrites nothing, and writing an

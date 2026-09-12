@@ -242,7 +242,9 @@ export function StacksPage() {
   );
 }
 
-function StackEditor({ open, stack, hosts, onClose, onSaved }: {
+// Exported for the test that saving an existing stack does not move it: the
+// path is the thing this dialog quietly dropped.
+export function StackEditor({ open, stack, hosts, onClose, onSaved }: {
   open: boolean;
   stack: ContainerStack | null;
   hosts: { id: string; hostname: string }[];
@@ -252,6 +254,7 @@ function StackEditor({ open, stack, hosts, onClose, onSaved }: {
   const [hostId, setHostId] = useState("");
   const [name, setName] = useState("");
   const [compose, setCompose] = useState("");
+  const [path, setPath] = useState("");
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
 
@@ -263,12 +266,16 @@ function StackEditor({ open, stack, hosts, onClose, onSaved }: {
     setHostId(stack?.hostId ?? "");
     setName(stack?.name ?? "");
     setCompose(stack?.compose ?? "");
+    setPath(stack?.path ?? "");
     setNote("");
     setErr("");
   }
 
   const save = useMutation({
-    mutationFn: () => saveStack({ hostId, name, compose, note }),
+    // The path travels with the save. Leaving it out used to mean "no opinion",
+    // which the server read as "put it under /opt/stacks" — quietly relocating an
+    // adopted stack away from the directory holding its .env.
+    mutationFn: () => saveStack({ hostId, name, compose, path, note }),
     onSuccess: (s) => onSaved(`Saved ${s.name} (r${s.revision}) — not yet deployed`),
     onError: (e) => setErr(errMsg(e, "Could not save that stack.")),
   });
@@ -292,7 +299,16 @@ function StackEditor({ open, stack, hosts, onClose, onSaved }: {
           </TextField>
           <TextField size="small" label="Stack name" value={name} disabled={stack !== null}
                      onChange={(e) => setName(e.target.value)}
-                     helperText="Also the directory on the host, under /opt/stacks" />
+                     helperText="The compose project name" />
+          <TextField size="small" label="Directory on the host" value={path}
+                     onChange={(e) => setPath(e.target.value)}
+                     placeholder={name ? `/opt/stacks/${name}` : "/opt/stacks/<name>"}
+                     helperText={
+                       "Where the compose file is written and `docker compose` is run. " +
+                       "For a stack adopted from a host this is the project's existing " +
+                       "directory — the .env and any bind mounts beside it are why it matters. " +
+                       "Leave blank on a new stack to use /opt/stacks."
+                     } />
           <TextField
             label="docker-compose.yml" value={compose} multiline minRows={14}
             onChange={(e) => setCompose(e.target.value)}

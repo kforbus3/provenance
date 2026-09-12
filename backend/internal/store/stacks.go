@@ -71,6 +71,28 @@ func ValidStackName(name string) bool {
 	return true
 }
 
+// resolveStackPath decides where a stack's files live, given what the caller
+// said and what is already stored.
+//
+// An empty input path means "the caller is not saying where this lives", NOT
+// "move it under /opt/stacks". Those read the same at the call site and are
+// opposite in effect: the compose editor sends only the text, so treating its
+// silence as a choice relocated an adopted stack from /home/keith/media-stack to
+// a fresh directory holding nothing but the compose file. The next deploy wrote
+// there, found no .env, and reported the operator's compose file as invalid.
+//
+// So the default belongs to creation alone, where there is no stored path to
+// keep and something has to be chosen.
+func resolveStackPath(inPath, prevPath, name string) string {
+	if p := strings.TrimSpace(inPath); p != "" {
+		return p
+	}
+	if prevPath != "" {
+		return prevPath
+	}
+	return stackRoot + "/" + name
+}
+
 // StackInput creates or updates a stack.
 type StackInput struct {
 	HostID     uuid.UUID
@@ -94,20 +116,18 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 	if !ValidStackName(in.Name) {
 		return nil, ErrInvalidStackName
 	}
-	path := strings.TrimSpace(in.Path)
-	if path == "" {
-		path = stackRoot + "/" + in.Name
-	}
+	inPath := strings.TrimSpace(in.Path)
 	var st ContainerStack
 	err := s.tx(ctx, func(tx pgx.Tx) error {
-		var prevCompose string
+		var prevCompose, prevPath string
 		var id uuid.UUID
 		var rev int
 		err := tx.QueryRow(ctx,
-			`SELECT id, compose, revision FROM container_stacks WHERE host_id=$1 AND name=$2`,
-			in.HostID, in.Name).Scan(&id, &prevCompose, &rev)
+			`SELECT id, compose, path, revision FROM container_stacks WHERE host_id=$1 AND name=$2`,
+			in.HostID, in.Name).Scan(&id, &prevCompose, &prevPath, &rev)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
+			path := resolveStackPath(inPath, "", in.Name)
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO container_stacks (host_id, name, compose, path, revision)
 				VALUES ($1,$2,$3,$4,1) RETURNING id, revision`,
@@ -117,7 +137,8 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 		case err != nil:
 			return err
 		default:
-			if prevCompose == in.Compose && path == "" {
+			path := resolveStackPath(inPath, prevPath, in.Name)
+			if prevCompose == in.Compose && path == prevPath {
 				return nil // nothing changed
 			}
 			next := rev

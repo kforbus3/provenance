@@ -110,6 +110,12 @@ func (f *fakeStore) UpsertStack(_ context.Context, in store.StackInput) (*store.
 	for i, st := range f.stacks[in.HostID] {
 		if st.Name == in.Name {
 			f.stacks[in.HostID][i].Compose = in.Compose
+			// Path, like the real store: an explicit one is a choice, an empty
+			// one is silence and keeps what is stored. A fake that dropped the
+			// path could not show a path being corrected OR clobbered.
+			if in.Path != "" {
+				f.stacks[in.HostID][i].Path = in.Path
+			}
 			return &f.stacks[in.HostID][i], nil
 		}
 	}
@@ -1144,5 +1150,71 @@ func TestStillOnTheOldTagIsAFailureNotASupersession(t *testing.T) {
 
 	if got := f.hosts[rid][0].State; got != store.UpdateHostFailed {
 		t.Errorf("state = %q, want failed — the deploy left the old image running", got)
+	}
+}
+
+// A stack's path is where the privileged deploy WRITES. When it drifts from the
+// directory the project actually runs in, the deploy does not fail loudly — it
+// creates the wrong directory, writes the compose file there, and leaves behind
+// the .env and bind mounts beside the real one. The operator is then told their
+// compose file is invalid when the file on the host is fine.
+//
+// The running container's compose labels say where the project lives, and they
+// are already collected, so a rollout can put this right before it writes.
+func TestAStackPathIsCorrectedFromTheHostsComposeLabels(t *testing.T) {
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.stacks[ids[0]][0].Name = "media-stack"
+	f.stacks[ids[0]][0].Path = "/opt/stacks/media-stack" // clobbered by an editor save
+	f.containers[ids[0]][0].ComposeProject = "media-stack"
+	f.containers[ids[0]][0].ComposeDir = "/home/keith/media-stack"
+
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	if got := f.stacks[ids[0]][0].Path; got != "/home/keith/media-stack" {
+		t.Errorf("path = %q, want the directory the project actually runs in "+
+			"(/home/keith/media-stack) — deploying to %q writes beside no .env", got, got)
+	}
+}
+
+func TestAStackPathIsNotTakenFromADifferentProject(t *testing.T) {
+	// Another project on the same host running the same image is somebody else's
+	// stack, not this one relocated. Following its directory would move a stack
+	// on top of an unrelated project.
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.stacks[ids[0]][0].Name = "media-stack"
+	f.stacks[ids[0]][0].Path = "/opt/stacks/media-stack"
+	f.containers[ids[0]][0].ComposeProject = "some-other-project"
+	f.containers[ids[0]][0].ComposeDir = "/srv/other"
+
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	if got := f.stacks[ids[0]][0].Path; got != "/opt/stacks/media-stack" {
+		t.Errorf("path = %q, want it left alone — /srv/other belongs to another project", got)
+	}
+}
+
+// Two different things end in a skip, and they send an operator to different
+// places. "Running none of them" points at the host; "already past them" points
+// at the rollout being stale. Reporting the first when the second happened is
+// how an operator ends up checking a host that is doing nothing wrong.
+func TestASupersededHostSaysSoRatherThanClaimingItRanNothing(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	// The host runs nginx:1.24, but its compose already names a newer tag than
+	// this rollout's target: the rollout's premise has expired for this host.
+	f.stacks[ids[0]][0].Compose = "services:\n  web:\n    image: nginx:1.30\n"
+
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State != store.UpdateHostSkipped {
+		t.Fatalf("state = %q, want skipped", h.State)
+	}
+	if strings.Contains(h.Error, "was not running any of the images") {
+		t.Errorf("the skip blames the host for running nothing, but it ran "+
+			"nginx:1.24 and was skipped because its compose is already past "+
+			"the target: %q", h.Error)
+	}
+	if !strings.Contains(h.Error, "already past") {
+		t.Errorf("the skip does not say the host is past the target: %q", h.Error)
 	}
 }

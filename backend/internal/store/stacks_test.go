@@ -46,3 +46,54 @@ func repeat(s string, n int) string {
 	}
 	return string(out)
 }
+
+// A stack's path is where a privileged deploy WRITES. Getting it wrong does not
+// fail loudly — it creates a new directory, writes the compose file into it, and
+// leaves behind every file the project needs that Provenance does not manage.
+//
+// That is not hypothetical. The compose editor sends the text and no path; the
+// server read that silence as a choice and moved media-stack from
+// /home/keith/media-stack to /opt/stacks/media-stack. The next rollout wrote
+// there, found no .env, and told the operator their compose file was invalid
+// when the file on the host was fine.
+func TestResolveStackPath(t *testing.T) {
+	cases := []struct {
+		name           string
+		in, prev, want string
+		why            string
+	}{
+		{
+			name: "editor save keeps the adopted path",
+			in:   "", prev: "/home/keith/media-stack", want: "/home/keith/media-stack",
+			why: "the editor sends no path; that is silence, not a request to relocate",
+		},
+		{
+			name: "blank-padded input is still silence",
+			in:   "   ", prev: "/home/keith/media-stack", want: "/home/keith/media-stack",
+			why: "whitespace from a text field must not read as a new location",
+		},
+		{
+			name: "a new stack gets the default",
+			in:   "", prev: "", want: stackRoot + "/media-stack",
+			why: "creation has no stored path to keep, so something has to be chosen",
+		},
+		{
+			name: "an explicit path wins",
+			in:   "/srv/media-stack", prev: "/home/keith/media-stack", want: "/srv/media-stack",
+			why: "an operator who names a directory means it",
+		},
+		{
+			name: "an explicit path wins on create too",
+			in:   "/srv/media-stack", prev: "", want: "/srv/media-stack",
+			why: "adoption passes the discovered directory on the first save",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolveStackPath(c.in, c.prev, "media-stack"); got != c.want {
+				t.Errorf("resolveStackPath(%q, %q) = %q, want %q — %s",
+					c.in, c.prev, got, c.want, c.why)
+			}
+		})
+	}
+}
