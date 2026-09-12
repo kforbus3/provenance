@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.16 — 2026-09-12
+
+**Provenance can now produce a support bundle about itself.** There was one for a
+managed host but none for the application, so reporting a problem meant knowing
+which container to exec into and which table to query. Settings → Support bundle
+gives one file: versions and cluster members, applied migrations, non-secret
+configuration, scheduled job results, dependency health, a fleet summary, and
+recent logs from every Provenance container. Nothing is stored on the server.
+`fleetctl support-bundle` produces the same thing without the backend, since a
+diagnostic tool that needs the thing being diagnosed to be healthy is not much of
+one — and a source that cannot be reached is recorded in the manifest rather than
+losing the rest of the bundle.
+
+Hostnames are kept; IP addresses are replaced with placeholders from the ranges
+reserved for documentation, and the same address becomes the same placeholder
+throughout so that relationships between machines are still readable. The mapping
+is unique to each bundle. Configuration is reported from a fixed list of
+non-secret fields rather than from the environment, secrets as set or not set, and
+free text is scrubbed for credential shapes. Generating a bundle is audited.
+
+---
+
 ## v1.2.15 — 2026-09-12
 
 **A deploy will no longer write a compose file that does not parse.** The
