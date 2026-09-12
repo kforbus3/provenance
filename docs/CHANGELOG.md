@@ -5,6 +5,31 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.9 — 2026-09-12
+
+**A rollout now restarts only the container being updated.** The stack deploy
+brings up the whole compose project, which is right for a stack deploy and wrong
+for a rollout: on a host where one project holds a model server, a vector
+database, a speech recogniser and five other things, updating curl restarted all
+of them. It also no longer passes --remove-orphans, because removing containers
+the file no longer defines is a whole-project decision and making it as a side
+effect of updating one image would delete things nobody mentioned.
+
+**Provenance's own containers are shown but never updated this way.** Not only
+its own images — those are built locally and already excluded — but the
+third-party containers it is made of: the PostgreSQL holding its data, the Redis
+holding its sessions, the guacd carrying its remote-desktop connections. Those
+are ordinary registry images and were offered for update like any other, and
+restarting the database under the running backend is the least bad thing that
+would have happened. A rollout of them could not even report what it did, because
+the backend running it is what gets restarted. They are upgraded from Settings →
+Updates, by signed bundle, which verifies the signature, backs up the database,
+applies migrations and keeps a rollback. They stay visible — what the instance is
+running, and what is wrong with those images, is exactly what should be visible —
+and carry an "upgraded by bundle" badge.
+
+---
+
 ## v1.2.8 — 2026-09-12
 
 **The upgrade page no longer waits forever for a result it stopped listening
