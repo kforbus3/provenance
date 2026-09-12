@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/kforbus3/provenance/backend/internal/composefile"
@@ -32,6 +33,7 @@ const checkBatch = 40
 type Store interface {
 	TrackedImages(ctx context.Context) ([]store.TrackedImage, error)
 	EnabledStackComposes(ctx context.Context) ([]string, error)
+	LastCheckedAt(ctx context.Context) (map[string]time.Time, error)
 	StaleImageChecks(ctx context.Context, imgs []store.TrackedImage, maxAge time.Duration) ([]store.TrackedImage, error)
 	UpsertImageUpdate(ctx context.Context, in store.ImageUpdate) error
 	PruneImageUpdates(ctx context.Context, keep []store.TrackedImage) error
@@ -109,6 +111,20 @@ func (c *Checker) check(ctx context.Context, force bool) (checked, failed, remai
 			c.log.Warn("image check: selecting stale", "err", err)
 			return 0, 0, 0
 		}
+	}
+	// The batch cap means some images wait for the next pass. WHICH ones wait
+	// must not be decided by where they happen to sit in a list.
+	//
+	// Tracked images arrive ordered by name, with the compose-declared ones
+	// appended after them. With 64 images and a cap of 40, every declared row sat
+	// in positions 52-64 and was cut every single time -- and on a FORCED pass,
+	// which ignores freshness and so re-offers the same first 40, they would have
+	// been cut forever. The operator pressing the button would have seen the
+	// twelve rows they pressed it for never appear.
+	if last, err := c.store.LastCheckedAt(ctx); err != nil {
+		c.log.Warn("image check: reading check times", "err", err)
+	} else {
+		stale = leastRecentlyCheckedFirst(stale, last)
 	}
 	if len(stale) > checkBatch {
 		remaining = len(stale) - checkBatch
@@ -305,4 +321,22 @@ func drifted(img store.TrackedImage) string {
 	}
 	return "a compose file names " + img.Tag + " but the container is still running " +
 		img.RunningTag + " — deploy the stack to apply it"
+}
+
+// leastRecentlyCheckedFirst orders a pass so the images waiting longest go first,
+// and ones never checked at all go before those.
+//
+// A newly discovered image is the one an operator is most likely to be waiting
+// on -- it is new because something just changed -- and it is also the one with
+// no row at all, so any ordering that treats "no record" as "checked at the zero
+// time" gets this right by accident. This one does it on purpose.
+func leastRecentlyCheckedFirst(imgs []store.TrackedImage, last map[string]time.Time) []store.TrackedImage {
+	out := make([]store.TrackedImage, len(imgs))
+	copy(out, imgs)
+	sort.SliceStable(out, func(i, j int) bool {
+		// Absent from the map means never checked, which zero time sorts first.
+		return last[out[i].Repository+":"+out[i].Tag].
+			Before(last[out[j].Repository+":"+out[j].Tag])
+	})
+	return out
 }

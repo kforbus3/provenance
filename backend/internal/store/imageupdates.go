@@ -348,3 +348,26 @@ func (s *Store) EnabledStackComposes(ctx context.Context) ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// LastCheckedAt returns when each recorded image was last asked about.
+//
+// For ordering a pass. See leastRecentlyCheckedFirst: the batch cap means SOME
+// images wait, and which ones wait must not be decided by where they happen to
+// sit in a list.
+func (s *Store) LastCheckedAt(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := s.pool.Query(ctx, `SELECT repository, tag, checked_at FROM container_image_updates`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var repo, tag string
+		var at time.Time
+		if err := rows.Scan(&repo, &tag, &at); err != nil {
+			return nil, err
+		}
+		out[repo+":"+tag] = at
+	}
+	return out, rows.Err()
+}

@@ -15,16 +15,21 @@ import (
 )
 
 type fakeStore struct {
-	tracked  []store.TrackedImage
-	stale    []store.TrackedImage
-	composes []string
-	saved    []store.ImageUpdate
-	pruned   [][]store.TrackedImage
-	maxAgeIn time.Duration
+	tracked     []store.TrackedImage
+	stale       []store.TrackedImage
+	composes    []string
+	lastChecked map[string]time.Time
+	saved       []store.ImageUpdate
+	pruned      [][]store.TrackedImage
+	maxAgeIn    time.Duration
 }
 
 func (f *fakeStore) EnabledStackComposes(context.Context) ([]string, error) {
 	return f.composes, nil
+}
+
+func (f *fakeStore) LastCheckedAt(context.Context) (map[string]time.Time, error) {
+	return f.lastChecked, nil
 }
 
 func (f *fakeStore) TrackedImages(context.Context) ([]store.TrackedImage, error) {
@@ -471,4 +476,70 @@ func TestNoDeclaredRowWhenTheContainerAlreadyMatches(t *testing.T) {
 	if len(extras) != 0 {
 		t.Errorf("duplicated a tag that is already being checked: %+v", extras)
 	}
+}
+
+// The batch cap means some images wait. Which ones wait must not be decided by
+// where they happen to sit in a list.
+//
+// Tracked images arrive ordered by name with compose-declared ones appended
+// after them. On a live fleet that was 64 images against a cap of 40, so every
+// declared row sat in positions 52-64 and was cut every time — and on a FORCED
+// pass, which ignores freshness and re-offers the same first 40, it would have
+// been cut forever. The operator pressing the button never sees the rows they
+// pressed it for.
+func TestNeverCheckedImagesGoFirst(t *testing.T) {
+	now := time.Now()
+	imgs := []store.TrackedImage{
+		{Repository: "a/one", Tag: "1"},
+		{Repository: "b/two", Tag: "1"},
+		{Repository: "z/new", Tag: "1"}, // never checked: no entry below
+		{Repository: "c/three", Tag: "1"},
+	}
+	last := map[string]time.Time{
+		"a/one:1":   now.Add(-time.Hour),
+		"b/two:1":   now.Add(-3 * time.Hour),
+		"c/three:1": now.Add(-2 * time.Hour),
+	}
+	got := leastRecentlyCheckedFirst(imgs, last)
+	want := []string{"z/new", "b/two", "c/three", "a/one"}
+	for i, w := range want {
+		if got[i].Repository != w {
+			t.Errorf("position %d = %s, want %s (order: %v)", i, got[i].Repository, w,
+				[]string{got[0].Repository, got[1].Repository, got[2].Repository, got[3].Repository})
+		}
+	}
+}
+
+func TestADeclaredRowIsNotStarvedByTheBatchCap(t *testing.T) {
+	// The whole pass, with more images than one batch can hold and the declared
+	// row last in line — exactly the shape that made a forced recheck useless.
+	srv := stubRegistry(t, []string{"1.0.0", "1.1.0", "latest"},
+		map[string]string{"latest": "sha256:aaa", "1.0.0": "sha256:aaa"})
+	repo := repoAt(srv, "team/app")
+
+	st := &fakeStore{
+		composes:    []string{"services:\n  app:\n    image: " + repo + ":1.0.0\n"},
+		lastChecked: map[string]time.Time{},
+	}
+	// Fill the batch with images already checked, so the declared row can only
+	// be reached by ordering rather than by luck.
+	for i := 0; i < checkBatch; i++ {
+		filler := store.TrackedImage{
+			Repository: repoAt(srv, "filler/app"), Tag: "1.0.0", Digest: "sha256:aaa"}
+		filler.Repository += string(rune('a' + i%26))
+		st.tracked = append(st.tracked, filler)
+		st.lastChecked[filler.Repository+":1.0.0"] = time.Now().Add(-time.Minute)
+	}
+	st.tracked = append(st.tracked,
+		store.TrackedImage{Repository: repo, Tag: "latest", Digest: "sha256:aaa"})
+	st.lastChecked[repo+":latest"] = time.Now().Add(-time.Minute)
+
+	newChecker(t, st, srv).CheckNow(context.Background())
+
+	for _, r := range st.saved {
+		if r.Repository == repo && r.Tag == "1.0.0" {
+			return // reached, which is the whole point
+		}
+	}
+	t.Errorf("the declared row was never reached in %d checked row(s)", len(st.saved))
 }
