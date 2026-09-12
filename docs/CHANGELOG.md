@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.14 — 2026-09-12
+
+**A rollout no longer writes an invalid compose file to a host.** Every command
+result carries a trailing "[exit code N]" line, and adoption took everything after
+its marker as the file — so that line was swallowed into the compose content,
+saved as the stack's definition, and written to the host, where it is not YAML.
+The adopted content is now bounded on both sides, so anything appended afterwards
+is ignored by construction, and a read that did not finish is refused rather than
+written as half a file.
+
+The end-to-end harness had the same gap: it ran scripts through a shell and
+returned raw output, modelling the host faithfully while stubbing the runner —
+and the runner is what broke. It now reproduces the runner exactly, which makes
+five of its cases fail against the old parser.
+
+---
+
 ## v1.2.13 — 2026-09-12
 
 **A rollout can now finish a change it had half-applied.** When a compose file
