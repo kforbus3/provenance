@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.2.0 — 2026-09-11
 
 **Image options that cannot produce a working machine are now refused at build
 time.** A *keep* is a carve-out from a *reset*, and two ways of writing one
