@@ -141,6 +141,25 @@ func (s *Service) runOne(ctx context.Context, command string, h *models.Host, us
 		return out, code, failed
 	}
 
+	return s.execOn(ctx, command, h, sudo)
+}
+
+// RunScript executes a script on a host for a PRODUCT feature -- a stack deploy,
+// not a command somebody typed -- and deliberately skips the command-control
+// policy.
+//
+// That policy governs what an operator may run interactively. Applying it here
+// would let a rule written to stop a human doing something dangerous silently
+// break a deployment instead, with the failure appearing as a stack that will not
+// come up rather than as a refused command. The governance that belongs on a
+// deploy is approval and rollout staging, which sit above this.
+//
+// Always the privileged tier: bringing a stack up needs the Docker socket.
+func (s *Service) RunScript(ctx context.Context, script string, h *models.Host) (string, int, bool) {
+	return s.execOn(ctx, script, h, true)
+}
+
+func (s *Service) execOn(ctx context.Context, command string, h *models.Host, sudo bool) (string, int, bool) {
 	// Same privilege tier as a terminal: Host.Sudo lands in the privileged account,
 	// everyone else in the host's login-only account. The jump hop always uses the
 	// privileged system principals — the jump host trusts only "fleet" — while the

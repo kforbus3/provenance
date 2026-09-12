@@ -1,0 +1,261 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// ContainerStack is the desired state of one stack on one host.
+type ContainerStack struct {
+	ID       uuid.UUID `json:"id"`
+	HostID   uuid.UUID `json:"hostId"`
+	Hostname string    `json:"hostname,omitempty"`
+	Name     string    `json:"name"`
+	Compose  string    `json:"compose,omitempty"`
+	Path     string    `json:"path"`
+	Revision int       `json:"revision"`
+	Enabled  bool      `json:"enabled"`
+	// Deployed is what the host last confirmed it applied. Separate from Revision
+	// so "should be running" and "is running" cannot be read as the same thing.
+	Deployed     *int       `json:"deployedRevision,omitempty"`
+	DeployState  string     `json:"deployState,omitempty"`
+	DeployDetail string     `json:"deployDetail,omitempty"`
+	DeployedAt   *time.Time `json:"deployedAt,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+}
+
+// StackRevision is one recorded change to a stack: what it became, who changed
+// it and why. This is what replaces `git log` when the definitions move out of a
+// repository.
+type StackRevision struct {
+	Revision   int       `json:"revision"`
+	Compose    string    `json:"compose,omitempty"`
+	Note       string    `json:"note,omitempty"`
+	AuthorName string    `json:"authorName,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+// stackRoot is where a stack's rendered files live on the host unless the stack
+// names somewhere else. /opt/stacks because that is where these already are on
+// this fleet -- adopting an existing layout beats imposing a new one and leaving
+// the old files orphaned.
+const stackRoot = "/opt/stacks"
+
+// ValidStackName reports whether a name is safe to use as a directory.
+//
+// The name is interpolated into a path that a privileged process then writes to,
+// so it may not escape, hide, or reach anywhere the operator did not name. A
+// stack called ".." or "a/b" is not a naming inconvenience; it is a write to
+// somewhere else on the host.
+func ValidStackName(name string) bool {
+	if name == "" || len(name) > 64 || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, `/\:`+"\x00") || strings.HasPrefix(name, ".") {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// StackInput creates or updates a stack.
+type StackInput struct {
+	HostID     uuid.UUID
+	Name       string
+	Compose    string
+	Path       string
+	Note       string
+	AuthorID   *uuid.UUID
+	AuthorName string
+}
+
+var ErrInvalidStackName = errors.New("a stack name may contain only letters, digits, dash, underscore and dot, and may not start with a dot")
+
+// UpsertStack records a stack definition and, when the compose actually changed,
+// a new revision.
+//
+// A revision per SAVE rather than per change would fill the history with entries
+// that changed nothing, and the history is the thing standing in for a git log --
+// it has to be worth reading.
+func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack, error) {
+	if !ValidStackName(in.Name) {
+		return nil, ErrInvalidStackName
+	}
+	path := strings.TrimSpace(in.Path)
+	if path == "" {
+		path = stackRoot + "/" + in.Name
+	}
+	var st ContainerStack
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		var prevCompose string
+		var id uuid.UUID
+		var rev int
+		err := tx.QueryRow(ctx,
+			`SELECT id, compose, revision FROM container_stacks WHERE host_id=$1 AND name=$2`,
+			in.HostID, in.Name).Scan(&id, &prevCompose, &rev)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO container_stacks (host_id, name, compose, path, revision)
+				VALUES ($1,$2,$3,$4,1) RETURNING id, revision`,
+				in.HostID, in.Name, in.Compose, path).Scan(&id, &rev); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		default:
+			if prevCompose == in.Compose && path == "" {
+				return nil // nothing changed
+			}
+			next := rev
+			if prevCompose != in.Compose {
+				next = rev + 1
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE container_stacks SET compose=$2, path=$3, revision=$4, updated_at=now()
+				WHERE id=$1`, id, in.Compose, path, next); err != nil {
+				return err
+			}
+			rev = next
+			if prevCompose == in.Compose {
+				return nil // path-only change: no new revision to record
+			}
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO container_stack_revisions
+				(stack_id, revision, compose, note, author_id, author_name)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (stack_id, revision) DO NOTHING`,
+			id, rev, in.Compose, in.Note, in.AuthorID, in.AuthorName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	got, err := s.StackByHostName(ctx, in.HostID, in.Name)
+	if err != nil {
+		return nil, err
+	}
+	st = *got
+	return &st, nil
+}
+
+const stackCols = `s.id, s.host_id, COALESCE(h.hostname,''), s.name, s.compose, s.path,
+	s.revision, s.enabled, d.revision, COALESCE(d.state,''), COALESCE(d.detail,''),
+	d.applied_at, s.created_at, s.updated_at`
+
+const stackFrom = `container_stacks s
+	LEFT JOIN hosts h ON h.id = s.host_id
+	LEFT JOIN container_stack_deployments d ON d.stack_id = s.id`
+
+func scanStack(row pgx.Row) (*ContainerStack, error) {
+	var st ContainerStack
+	if err := row.Scan(&st.ID, &st.HostID, &st.Hostname, &st.Name, &st.Compose, &st.Path,
+		&st.Revision, &st.Enabled, &st.Deployed, &st.DeployState, &st.DeployDetail,
+		&st.DeployedAt, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		return nil, mapNotFound(err)
+	}
+	return &st, nil
+}
+
+// StackByHostName loads one stack.
+func (s *Store) StackByHostName(ctx context.Context, hostID uuid.UUID, name string) (*ContainerStack, error) {
+	return scanStack(s.pool.QueryRow(ctx,
+		`SELECT `+stackCols+` FROM `+stackFrom+` WHERE s.host_id=$1 AND s.name=$2`, hostID, name))
+}
+
+// GetStack loads one stack by id.
+func (s *Store) GetStack(ctx context.Context, id uuid.UUID) (*ContainerStack, error) {
+	return scanStack(s.pool.QueryRow(ctx,
+		`SELECT `+stackCols+` FROM `+stackFrom+` WHERE s.id=$1`, id))
+}
+
+// ListStacks returns every stack, or those for one host.
+func (s *Store) ListStacks(ctx context.Context, hostID *uuid.UUID) ([]ContainerStack, error) {
+	q := `SELECT ` + stackCols + ` FROM ` + stackFrom
+	args := []any{}
+	if hostID != nil {
+		q += ` WHERE s.host_id=$1`
+		args = append(args, *hostID)
+	}
+	q += ` ORDER BY COALESCE(h.hostname,''), s.name`
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ContainerStack{}
+	for rows.Next() {
+		st, err := scanStack(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *st)
+	}
+	return out, rows.Err()
+}
+
+// StackHistory returns a stack's revisions, newest first.
+func (s *Store) StackHistory(ctx context.Context, stackID uuid.UUID, limit int) ([]StackRevision, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT revision, compose, note, author_name, created_at
+		FROM container_stack_revisions WHERE stack_id=$1
+		ORDER BY revision DESC LIMIT $2`, stackID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []StackRevision{}
+	for rows.Next() {
+		var r StackRevision
+		if err := rows.Scan(&r.Revision, &r.Compose, &r.Note, &r.AuthorName, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecordStackDeployment records what a host confirmed it applied.
+func (s *Store) RecordStackDeployment(ctx context.Context, stackID uuid.UUID, revision int, state, detail string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO container_stack_deployments (stack_id, revision, state, detail, applied_at)
+		VALUES ($1,$2,$3,$4, now())
+		ON CONFLICT (stack_id) DO UPDATE SET
+			revision=EXCLUDED.revision, state=EXCLUDED.state,
+			detail=EXCLUDED.detail, applied_at=now()`,
+		stackID, revision, state, truncateStr(detail, 2000))
+	return err
+}
+
+// DeleteStack removes a definition. It does NOT stop what is running: taking a
+// stack out of the inventory and tearing it down on the host are different
+// intentions, and conflating them would make forgetting to record something a
+// way to destroy it.
+func (s *Store) DeleteStack(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM container_stacks WHERE id=$1`, id)
+	return err
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}

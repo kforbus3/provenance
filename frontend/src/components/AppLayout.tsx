@@ -5,6 +5,7 @@ import {
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import DnsIcon from "@mui/icons-material/Dns";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import ApartmentIcon from "@mui/icons-material/Apartment";
@@ -116,6 +117,10 @@ export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     title: "Access",
     items: [
       { to: "/hosts", label: "Hosts", icon: <DnsIcon />, perm: "Host.View" },
+      // Beside Hosts, because a stack is a property of the host that runs it and
+      // the two questions -- "what is this machine" and "what should it be
+      // running" -- are asked together.
+      { to: "/stacks", label: "Containers", icon: <ViewInArIcon />, perm: "Host.View" },
       { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
       { to: "/databases", label: "Databases", icon: <StorageIcon />, perm: "Database.Connect" },
       { to: "/kubernetes", label: "Kubernetes", icon: <HubIcon />, perm: "Kubernetes.Access" },

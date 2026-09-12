@@ -85,6 +85,7 @@ import (
 	fleetsftp "github.com/kforbus3/provenance/backend/internal/sftp"
 	"github.com/kforbus3/provenance/backend/internal/shadow"
 	"github.com/kforbus3/provenance/backend/internal/sshgw"
+	"github.com/kforbus3/provenance/backend/internal/stacks"
 	"github.com/kforbus3/provenance/backend/internal/store"
 	"github.com/kforbus3/provenance/backend/internal/support"
 	"github.com/kforbus3/provenance/backend/internal/system"
@@ -131,6 +132,7 @@ type Server struct {
 	scanSvc      *scan.Service
 	imagingSvc   *imaging.Service
 	vulnScan     *vulnscan.Service
+	stacks       *stacks.Service
 	msrcSvc      *msrc.Service
 	actionReg    *aiaction.Registry
 	playbookSvc  *playbook.Service
@@ -266,6 +268,10 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.playbookSvc = playbook.New(st, cfg, log, issuer, s.Notify)
 	s.winscriptSvc = winscript.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.commandSvc = command.New(st, cfg, log, gateway, issuer, s.Notify)
+	// After commandSvc, which it uses: the stack deployer runs its scripts through
+	// the ad-hoc command service so there is one implementation of "reach a host
+	// and run something" rather than two that drift.
+	s.stacks = stacks.New(st, s.commandSvc, log)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
@@ -1188,6 +1194,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, s.scanSvc)
 	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
+	stacks.Mount(r, deps, s.stacks)
 	upgrade.Mount(r, deps, s.upgradeSvc)
 
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).

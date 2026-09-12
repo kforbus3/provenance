@@ -1,0 +1,310 @@
+import { useMemo, useState } from "react";
+import {
+  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  IconButton, MenuItem, Paper, Snackbar, Stack, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
+} from "@mui/material";
+import HistoryIcon from "@mui/icons-material/History";
+import PublishIcon from "@mui/icons-material/Publish";
+import UndoIcon from "@mui/icons-material/Undo";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  listStacks, saveStack, deployStack, rollbackStack, deleteStack, stackHistory,
+  type ContainerStack, type StackRevision,
+} from "../api/stacks";
+import { listHosts } from "../api/hosts";
+import { formatDateTime } from "../lib/datetime";
+import { useAuthStore } from "../store/auth";
+
+// Container stacks: what each host should be running.
+//
+// Provenance holds the desired state, and the host holds a rendered copy — so a
+// stack keeps running when Provenance is not. The two numbers on every row say
+// which is which: `revision` is what should be deployed, `deployedRevision` is
+// what the host last confirmed. A tool that showed only the first would report
+// success for a deploy that never landed.
+
+const errMsg = (e: unknown, fallback: string) =>
+  (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
+
+function DeployState({ s }: { s: ContainerStack }) {
+  if (s.deployedRevision == null) {
+    return <Chip label="never deployed" size="small" variant="outlined" />;
+  }
+  if (s.deployState === "failed") {
+    return (
+      <Tooltip title={s.deployDetail?.slice(-400) || "the last deploy failed"}>
+        <Chip label={`failed at r${s.deployedRevision}`} size="small" color="error" />
+      </Tooltip>
+    );
+  }
+  if (s.deployedRevision !== s.revision) {
+    return (
+      <Tooltip title={`the host is running r${s.deployedRevision}; r${s.revision} has not been deployed`}>
+        <Chip label={`behind (r${s.deployedRevision})`} size="small" color="warning" />
+      </Tooltip>
+    );
+  }
+  if (s.deployState === "rolled_back") {
+    return <Chip label={`rolled back to r${s.deployedRevision}`} size="small" color="warning" />;
+  }
+  return <Chip label={`deployed r${s.deployedRevision}`} size="small" color="success" variant="outlined" />;
+}
+
+export function StacksPage() {
+  const qc = useQueryClient();
+  const canEdit = useAuthStore((s) => s.has("Host.Edit"));
+  const canRun = useAuthStore((s) => s.has("Command.Run"));
+  const [editing, setEditing] = useState<ContainerStack | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [historyOf, setHistoryOf] = useState<ContainerStack | null>(null);
+  const [output, setOutput] = useState<{ title: string; body: string } | null>(null);
+  const [snack, setSnack] = useState("");
+
+  const { data: stacks = [], isLoading } = useQuery({
+    queryKey: ["stacks"],
+    queryFn: () => listStacks(),
+    placeholderData: keepPreviousData,
+  });
+  const { data: hostList } = useQuery({ queryKey: ["hosts"], queryFn: () => listHosts() });
+  const hosts = hostList?.hosts ?? [];
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ["stacks"] });
+
+  const deploy = useMutation({
+    mutationFn: deployStack,
+    onSuccess: (r) => { setOutput({ title: `Deployed r${r.revision}`, body: r.output }); refresh(); },
+    onError: (e) => setSnack(errMsg(e, "The deploy failed.")),
+  });
+  const rollback = useMutation({
+    mutationFn: rollbackStack,
+    onSuccess: (r) => { setOutput({ title: "Rolled back", body: r.output }); refresh(); },
+    onError: (e) => setSnack(errMsg(e, "The rollback failed.")),
+  });
+  const remove = useMutation({
+    mutationFn: deleteStack,
+    onSuccess: () => { setSnack("Definition removed — the containers are still running"); refresh(); },
+    onError: (e) => setSnack(errMsg(e, "Could not remove that definition.")),
+  });
+
+  const drifted = useMemo(
+    () => stacks.filter((s) => s.enabled && (s.deployedRevision == null
+      || s.deployedRevision !== s.revision || s.deployState === "failed")),
+    [stacks]);
+
+  return (
+    <Box>
+      <Stack direction="row" alignItems="center" sx={{ mb: 2 }}>
+        <Typography variant="h5" sx={{ flex: 1 }}>Containers</Typography>
+        {canEdit && (
+          <Button startIcon={<AddIcon />} variant="contained" onClick={() => setCreating(true)}>
+            New stack
+          </Button>
+        )}
+      </Stack>
+
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        What each host should be running. Provenance holds the definition and writes a
+        rendered copy to the host, so a stack keeps running even when Provenance does
+        not — you lose the ability to change it, not to run it.
+      </Typography>
+
+      {drifted.length > 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {drifted.length} stack{drifted.length > 1 ? "s are" : " is"} not running the
+          revision {drifted.length > 1 ? "they" : "it"} should be.
+        </Alert>
+      )}
+
+      {isLoading && <Typography variant="body2">Loading…</Typography>}
+      {!isLoading && stacks.length === 0 && (
+        <Typography variant="body2" color="text.secondary">
+          No stacks defined yet. Add one to put a host's compose file under Provenance.
+        </Typography>
+      )}
+
+      {stacks.length > 0 && (
+        <TableContainer component={Paper} variant="outlined" sx={{ overflowX: "auto" }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Host</TableCell>
+                <TableCell>Stack</TableCell>
+                <TableCell>Path</TableCell>
+                <TableCell>State</TableCell>
+                <TableCell>Updated</TableCell>
+                <TableCell align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {stacks.map((s) => (
+                <TableRow key={s.id} hover>
+                  <TableCell>{s.hostname || s.hostId}</TableCell>
+                  <TableCell>{s.name} <Typography variant="caption" color="text.secondary">r{s.revision}</Typography></TableCell>
+                  <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>{s.path}</TableCell>
+                  <TableCell><DeployState s={s} /></TableCell>
+                  <TableCell>{formatDateTime(s.updatedAt)}</TableCell>
+                  <TableCell align="right">
+                    <Tooltip title="History">
+                      <IconButton size="small" onClick={() => setHistoryOf(s)}><HistoryIcon fontSize="small" /></IconButton>
+                    </Tooltip>
+                    {canEdit && (
+                      <Button size="small" onClick={() => setEditing(s)}>Edit</Button>
+                    )}
+                    {canRun && (
+                      <Tooltip title="Write this revision to the host and bring it up">
+                        <span>
+                          <Button size="small" startIcon={<PublishIcon />} disabled={deploy.isPending}
+                                  onClick={() => deploy.mutate(s.id)}>Deploy</Button>
+                        </span>
+                      </Tooltip>
+                    )}
+                    {canRun && s.deployedRevision != null && (
+                      <Tooltip title="Restore the previous compose file kept on the host">
+                        <span>
+                          <IconButton size="small" disabled={rollback.isPending}
+                                      onClick={() => rollback.mutate(s.id)}><UndoIcon fontSize="small" /></IconButton>
+                        </span>
+                      </Tooltip>
+                    )}
+                    {canEdit && (
+                      <Tooltip title="Forget this definition (the containers keep running)">
+                        <IconButton size="small" color="error" onClick={() => remove.mutate(s.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <StackEditor
+        open={creating || editing !== null}
+        stack={editing}
+        hosts={hosts.map((h) => ({ id: h.id, hostname: h.hostname }))}
+        onClose={() => { setCreating(false); setEditing(null); }}
+        onSaved={(msg) => { setCreating(false); setEditing(null); setSnack(msg); refresh(); }}
+      />
+      <HistoryDialog stack={historyOf} onClose={() => setHistoryOf(null)} />
+
+      <Dialog open={output !== null} onClose={() => setOutput(null)} maxWidth="md" fullWidth>
+        <DialogTitle>{output?.title}</DialogTitle>
+        <DialogContent>
+          <Box component="pre" sx={{
+            fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap",
+            maxHeight: 420, overflow: "auto", m: 0,
+          }}>{output?.body || "(no output)"}</Box>
+        </DialogContent>
+        <DialogActions><Button onClick={() => setOutput(null)}>Close</Button></DialogActions>
+      </Dialog>
+
+      <Snackbar open={snack !== ""} autoHideDuration={5000} onClose={() => setSnack("")} message={snack} />
+    </Box>
+  );
+}
+
+function StackEditor({ open, stack, hosts, onClose, onSaved }: {
+  open: boolean;
+  stack: ContainerStack | null;
+  hosts: { id: string; hostname: string }[];
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+}) {
+  const [hostId, setHostId] = useState("");
+  const [name, setName] = useState("");
+  const [compose, setCompose] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+
+  // Reset when the dialog opens on a different stack.
+  const key = stack?.id ?? "new";
+  const [lastKey, setLastKey] = useState(key);
+  if (key !== lastKey) {
+    setLastKey(key);
+    setHostId(stack?.hostId ?? "");
+    setName(stack?.name ?? "");
+    setCompose(stack?.compose ?? "");
+    setNote("");
+    setErr("");
+  }
+
+  const save = useMutation({
+    mutationFn: () => saveStack({ hostId, name, compose, note }),
+    onSuccess: (s) => onSaved(`Saved ${s.name} (r${s.revision}) — not yet deployed`),
+    onError: (e) => setErr(errMsg(e, "Could not save that stack.")),
+  });
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>{stack ? `Edit ${stack.name}` : "New stack"}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          {err && <Alert severity="error" onClose={() => setErr("")}>{err}</Alert>}
+          {/* Saving records the definition and nothing else. Editing a compose
+              file should not restart somebody's database because the editor hit
+              save — deploying is a separate, deliberate act. */}
+          <Alert severity="info">
+            Saving records the definition. It does not deploy — use Deploy when you want
+            the host to pick it up.
+          </Alert>
+          <TextField select size="small" label="Host" value={hostId} disabled={stack !== null}
+                     onChange={(e) => setHostId(e.target.value)}>
+            {hosts.map((h) => <MenuItem key={h.id} value={h.id}>{h.hostname}</MenuItem>)}
+          </TextField>
+          <TextField size="small" label="Stack name" value={name} disabled={stack !== null}
+                     onChange={(e) => setName(e.target.value)}
+                     helperText="Also the directory on the host, under /opt/stacks" />
+          <TextField
+            label="docker-compose.yml" value={compose} multiline minRows={14}
+            onChange={(e) => setCompose(e.target.value)}
+            InputProps={{ style: { fontFamily: "monospace", fontSize: 13 } }}
+          />
+          <TextField size="small" label="What changed, and why" value={note}
+                     onChange={(e) => setNote(e.target.value)}
+                     helperText="Recorded with the revision — this is what replaces a commit message" />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={save.isPending || !hostId || !name}
+                onClick={() => save.mutate()}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function HistoryDialog({ stack, onClose }: { stack: ContainerStack | null; onClose: () => void }) {
+  const { data: revisions = [] } = useQuery<StackRevision[]>({
+    queryKey: ["stack-history", stack?.id],
+    queryFn: () => stackHistory(stack!.id),
+    enabled: stack !== null,
+  });
+  return (
+    <Dialog open={stack !== null} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>{stack?.name} — history</DialogTitle>
+      <DialogContent>
+        {revisions.length === 0 && <Typography variant="body2">No revisions recorded.</Typography>}
+        <Stack spacing={1}>
+          {revisions.map((r) => (
+            <Paper key={r.revision} variant="outlined" sx={{ p: 1 }}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Chip label={`r${r.revision}`} size="small" />
+                <Typography variant="body2" sx={{ flex: 1 }}>{r.note || "(no note)"}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {r.authorName} · {formatDateTime(r.createdAt)}
+                </Typography>
+              </Stack>
+            </Paper>
+          ))}
+        </Stack>
+      </DialogContent>
+      <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
+    </Dialog>
+  );
+}

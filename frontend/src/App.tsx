@@ -16,6 +16,7 @@ import { BootstrapPage } from "./pages/BootstrapPage";
 // the data grid, the scan-report viewer) load only when their page is opened.
 const named = <T,>(p: Promise<T>, key: keyof T) => p.then((m) => ({ default: m[key] as React.ComponentType }));
 const HostsPage = lazy(() => named(import("./pages/HostsPage"), "HostsPage"));
+const StacksPage = lazy(() => named(import("./pages/StacksPage"), "StacksPage"));
 const UsersPage = lazy(() => named(import("./pages/UsersPage"), "UsersPage"));
 const TenantsPage = lazy(() => named(import("./pages/TenantsPage"), "TenantsPage"));
 const RolesPage = lazy(() => named(import("./pages/RolesPage"), "RolesPage"));
@@ -138,6 +139,7 @@ export function App() {
               <Route path="ask" element={<ProtectedRoute permission="Assistant.Use"><AssistantPage /></ProtectedRoute>} />
               <Route path="terminals" element={<ProtectedRoute permission="Host.Connect"><TerminalsPage /></ProtectedRoute>} />
               <Route path="hosts" element={<ProtectedRoute permission="Host.View"><HostsPage /></ProtectedRoute>} />
+              <Route path="stacks" element={<ProtectedRoute permission="Host.View"><StacksPage /></ProtectedRoute>} />
               <Route path="tenants" element={<TenantsPage />} />
               <Route path="sessions" element={<ProtectedRoute permission="Session.Replay"><SessionsPage /></ProtectedRoute>} />
               <Route path="automation" element={<ProtectedRoute permission="Playbook.Edit"><AutomationPage /></ProtectedRoute>} />
