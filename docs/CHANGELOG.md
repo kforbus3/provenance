@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.8 — 2026-09-12
+
+**The upgrade page no longer waits forever for a result it stopped listening
+for.** For the few seconds between starting an upgrade and the updater writing
+its first line, the status file still holds the previous run's result. The page
+stopped polling on any finished upgrade, so it stopped on that one — and the
+check added in v1.2.5, which correctly refuses to announce a version the page did
+not start, then had nothing left polling and waited for a result that could no
+longer arrive. It showed "waiting for the updater" permanently while the upgrade
+had in fact succeeded.
+
+Fixed at both ends, because either alone leaves the window open. The page now
+stops polling only on a result for the version it started. The server no longer
+serves a finished result for a different version than the one it has just
+started — it knows what it started, which is what makes that status the previous
+run's rather than an answer. And after ten minutes with no result, the page shows
+whatever the server does say and becomes usable again: a check that protects a
+screen must not become a screen nobody can leave.
+
+---
+
 ## v1.2.7 — 2026-09-12
 
 **A version bump adopts the host's compose file instead of refusing.** A rollout
