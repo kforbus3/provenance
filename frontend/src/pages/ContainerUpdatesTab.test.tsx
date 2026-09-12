@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ContainerUpdatesTab } from "./ContainerUpdatesTab";
@@ -80,5 +80,71 @@ describe("ContainerUpdatesTab", () => {
     // And the leftover row says what it is, rather than "up to date" — a claim
     // about something you are running.
     expect(screen.getByText("no longer running")).toBeInTheDocument();
+  });
+});
+
+describe("ContainerUpdatesTab filtering", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const rows = [
+    {
+      repository: "blackfriars-dockerproxy", tag: "latest",
+      checkedAt: new Date().toISOString(),
+      hosts: [{ hostId: "h1", hostname: "control01", stale: false }],
+    },
+    {
+      repository: "nginx", tag: "1.24", latestTag: "1.27",
+      checkedAt: new Date().toISOString(),
+      hosts: [{ hostId: "h2", hostname: "docker", stale: true }],
+    },
+  ];
+
+  it("does not match a hostname against image names", async () => {
+    // Typing "docker" matched BOTH the host called docker and the image
+    // blackfriars-dockerproxy running on control01 — which is not what anyone types
+    // a hostname to find. The text box searches images; the host picker is exact.
+    vi.mocked(listContainerUpdates).mockResolvedValue(rows as never);
+    renderTab();
+    await waitFor(() => expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument());
+
+    const imageFilter = screen.getByPlaceholderText("Filter by image");
+    fireEvent.change(imageFilter, { target: { value: "docker" } });
+
+    // The image whose NAME contains "docker" is a legitimate match.
+    await waitFor(() =>
+      expect(screen.getByText(/blackfriars-dockerproxy/)).toBeInTheDocument());
+    // The image merely RUNNING on the host called docker is not.
+    expect(screen.queryByText(/nginx:1\.24/)).not.toBeInTheDocument();
+  });
+
+  it("offers every host reporting containers, and filters to one exactly", async () => {
+    vi.mocked(listContainerUpdates).mockResolvedValue(rows as never);
+    renderTab();
+    await waitFor(() => expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument());
+
+    const host = screen.getByLabelText("Host");
+    fireEvent.mouseDown(host);
+    fireEvent.change(host, { target: { value: "docker" } });
+
+    const option = await screen.findByText("docker", { selector: "li,li *" });
+    fireEvent.click(option);
+
+    await waitFor(() =>
+      expect(screen.queryByText(/blackfriars-dockerproxy/)).not.toBeInTheDocument());
+    expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument();
+  });
+
+  it("says a filter is hiding things rather than looking empty", async () => {
+    // An empty table with a filter set reads as an empty fleet, which is the
+    // same "silence looks like an answer" failure as everywhere else here.
+    vi.mocked(listContainerUpdates).mockResolvedValue(rows as never);
+    renderTab();
+    await waitFor(() => expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText("Filter by image"),
+      { target: { value: "nothing-matches-this" } });
+
+    await waitFor(() =>
+      expect(screen.getByText(/2 images in total/)).toBeInTheDocument());
   });
 });

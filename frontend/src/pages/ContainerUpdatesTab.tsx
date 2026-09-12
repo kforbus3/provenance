@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import {
-  Alert, Box, Button, Chip, Collapse, IconButton, Paper, Snackbar, Stack, Table,
-  TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip,
-  Typography,
+  Alert, Autocomplete, Box, Button, Chip, Collapse, IconButton, Paper, Snackbar,
+  Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  TextField, Tooltip, Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
@@ -205,6 +205,14 @@ export function ContainerUpdatesTab() {
   const canScan = useAuthStore((s) => s.has("Host.Scan"));
   const canRun = useAuthStore((s) => s.has("Command.Run"));
   const [filter, setFilter] = useState("");
+  // Host is its own control, not part of the text search.
+  //
+  // One box matching both meant typing a host's name found images whose NAME
+  // contained it somewhere else entirely — "docker" turned up a container on
+  // control01, which is not what anyone types a hostname to find. An Autocomplete
+  // because the two asks are the same control: pick from what is there, and
+  // type to narrow it when there is a lot of it.
+  const [hostFilter, setHostFilter] = useState<string | null>(null);
   const [snack, setSnack] = useState("");
   const [rollingOut, setRollingOut] = useState<ImageUpdate | null>(null);
   // "Everything with something available", as one rollout rather than one per
@@ -224,20 +232,29 @@ export function ContainerUpdatesTab() {
     onError: (e) => setSnack(errMsg(e, "Could not start a check.")),
   });
 
+  // Every host that reports running something, for the picker.
+  const hostOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const u of updates) for (const h of hostsOf(u)) if (h.hostname) names.add(h.hostname);
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [updates]);
+
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    const rows = q
-      ? updates.filter((u) =>
-          `${u.repository}:${u.tag}`.toLowerCase().includes(q) ||
-          hostsOf(u).some((h) => h.hostname.toLowerCase().includes(q)))
+    // The text box searches IMAGES only now; the host picker is exact.
+    let rows = q
+      ? updates.filter((u) => `${u.repository}:${u.tag}`.toLowerCase().includes(q))
       : updates;
+    if (hostFilter) {
+      rows = rows.filter((u) => hostsOf(u).some((h) => h.hostname === hostFilter));
+    }
     // Actionable first. An operator opening this screen wants the images that
     // need a decision, not an alphabetical list with three of them buried in it.
     const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5, self: 6, gone: 7 };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a)] - rank[verdictOf(b)] ||
       a.repository.localeCompare(b.repository));
-  }, [updates, filter]);
+  }, [updates, filter, hostFilter]);
 
   const actionableUpdates = updates.filter((u) => {
     const v = verdictOf(u);
@@ -257,9 +274,21 @@ export function ContainerUpdatesTab() {
       </Typography>
 
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
-        <TextField size="small" placeholder="Filter by image or host"
+        <Autocomplete
+          size="small"
+          options={hostOptions}
+          value={hostFilter}
+          onChange={(_, v) => setHostFilter(v)}
+          sx={{ minWidth: 240 }}
+          renderInput={(params) => (
+            <TextField {...params} label="Host"
+                       placeholder={hostOptions.length ? "All hosts" : "No hosts reporting"} />
+          )}
+          noOptionsText="No host matches"
+        />
+        <TextField size="small" placeholder="Filter by image"
                    value={filter} onChange={(e) => setFilter(e.target.value)}
-                   sx={{ maxWidth: 320, flex: 1 }} />
+                   sx={{ maxWidth: 280, flex: 1 }} />
         {canScan && (
           <Tooltip title="Re-asks the registries about the images already discovered. It does not go out to your hosts — that is the monitor sweep's job.">
             <span>
@@ -296,6 +325,14 @@ export function ContainerUpdatesTab() {
           has just upgraded fills in over the following few sweeps rather than all at
           once. “Check registries now” re-asks about images already discovered; it does
           not reach out to your hosts, so it will not make an unswept host appear.
+        </Typography>
+      )}
+
+      {!isLoading && updates.length > 0 && shown.length === 0 && (
+        <Typography variant="body2" color="text.secondary">
+          Nothing matches{hostFilter ? ` on ${hostFilter}` : ""}
+          {filter.trim() ? ` for “${filter.trim()}”` : ""}.
+          {" "}({updates.length} image{updates.length === 1 ? "" : "s"} in total.)
         </Typography>
       )}
 

@@ -87,6 +87,12 @@ credentials must not stop the fleet learning about everything else. The row says
 which it was, because "needs credentials", "no such tag" and "rate limited" have
 different answers.
 
+The Updates tab has a **Host** picker and an image filter, deliberately separate.
+One box matching both meant typing a host's name found images whose *name*
+contained it somewhere else entirely — searching for `docker` turned up a
+container on `control01`. The picker lists every host reporting containers and
+accepts typing to narrow it; the text box searches images only.
+
 **"Check registries now"** on the Updates tab runs a pass immediately. It re-asks
 the registries about images **already discovered** — it does not reach out to your
 hosts, so it will not make a host that has not been swept yet appear.
@@ -245,6 +251,27 @@ name the old bytes.
 
 Every rewrite is a normal stack revision, visible in the stack's history and
 rollback-able like any other.
+
+## When a host shows nothing
+
+The **Containers** section of a host's detail page says which of these it is,
+because they need different actions:
+
+- **no container runtime is installed** — nothing to collect.
+- **a container daemon is running but no docker or podman command is installed
+  for this account** — the daemon is there; the client is not.
+- **cannot use /var/run/docker.sock and has no passwordless sudo here** — the
+  socket is root-owned. Provenance tries unprivileged first, then non-interactive
+  `sudo`; when neither works it says so, names the socket's group, and gives both
+  ways out: add the account to that group, or give it `NOPASSWD` sudo.
+
+Sudo is attempted with `-n`, so a host that would prompt fails immediately rather
+than hanging a sweep on a password nobody is there to type. The commands are
+read-only either way — `ps` and `image inspect`.
+
+"Nothing is running" and "we could not look" are recorded separately and never
+rendered the same. An empty list on a host carrying the most software is exactly
+the wrong thing to report as clean.
 
 ## Provenance's own containers
 

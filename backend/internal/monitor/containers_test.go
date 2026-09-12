@@ -165,3 +165,42 @@ func TestTheScriptEmitsDetailAlongsideEveryFailureMarker(t *testing.T) {
 		t.Error("the permission case should name the command that fixes it")
 	}
 }
+
+// Six hosts on a nineteen-host fleet reported no_access — including the one
+// actually called "docker". The advice was "add this account to the docker
+// group", which is a root-equivalent membership nobody should have to grant just
+// to SEE what is running. On this fleet the monitor account already had
+// passwordless sudo on those hosts; the probe simply never used it.
+func TestContainerCollectionFallsBackToPasswordlessSudo(t *testing.T) {
+	// Unprivileged first: where the account IS in the group, nothing changes and
+	// no sudo is invoked.
+	if !strings.Contains(containersScript, `if ! $_rt ps --format '{{.ID}}' >/dev/null 2>&1; then`) {
+		t.Error("the unprivileged attempt is no longer first")
+	}
+	if !strings.Contains(containersScript, "sudo -n $_rt ps") {
+		t.Error("no sudo fallback — six hosts stay invisible over a group membership " +
+			"they should not need")
+	}
+	// -n, or a host that would PROMPT hangs the sweep on a password nobody is
+	// there to type.
+	if strings.Contains(containersScript, "sudo $_rt") {
+		t.Error("sudo without -n can prompt, which hangs the sweep")
+	}
+	// Whatever worked for the probe must be used for the real commands too,
+	// or the check passes and the collection returns nothing.
+	for _, cmd := range []string{"$_pre $_rt ps --no-trunc", "$_pre $_rt image inspect"} {
+		if !strings.Contains(containersScript, cmd) {
+			t.Errorf("%q does not carry the privilege the check established", cmd)
+		}
+	}
+}
+
+func TestTheNoAccessReasonMentionsBothWaysOut(t *testing.T) {
+	// Group membership and NOPASSWD sudo are different trade-offs on different
+	// hosts. Naming only one sends an operator to the wrong one.
+	for _, want := range []string{"usermod -aG", "NOPASSWD sudo"} {
+		if !strings.Contains(containersScript, want) {
+			t.Errorf("the no-access reason does not mention %q", want)
+		}
+	}
+}

@@ -370,18 +370,28 @@ func (s *Store) ResumeUpdateRollout(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	// Failed hosts go back to PENDING, not merely forgiven.
+	//
+	// Forgiving a failure stops it counting against the budget. On its own that
+	// was the whole of resume — and in a PUSH engine a failed host is never
+	// picked up again, so the rollout found nothing pending, nothing in flight,
+	// and marked itself completed. Resume reported success and did nothing, for
+	// a rollout that had updated no host at all. That is worse than a button
+	// that refuses.
+	//
+	// forgiven and error are cleared with it: the budget now measures failures
+	// SINCE the resume, which is what "I have looked at those, carry on" means.
+	// Leaving forgiven set would exempt these hosts from the budget forever, so
+	// a rollout that kept failing would never halt again.
+	//
+	// attempts too. Resume is a deliberate act by somebody who has looked at the
+	// failure; giving a host that has used its attempts no way back would mean
+	// fixing the cause and still being told it had given up.
 	if _, err := tx.Exec(ctx, `
-		UPDATE container_update_rollout_hosts SET forgiven = TRUE
-		WHERE rollout_id = $1 AND state = 'failed'`, id); err != nil {
-		return err
-	}
-	// A host left mid-apply when the rollout halted never finished. Returning it
-	// to pending lets the resumed rollout pick it up again rather than leaving it
-	// stuck in `applying` forever, which would hold a slot and stop the rollout
-	// ever completing.
-	if _, err := tx.Exec(ctx, `
-		UPDATE container_update_rollout_hosts SET state = 'pending', changed_at = now()
-		WHERE rollout_id = $1 AND state = 'applying'`, id); err != nil {
+		UPDATE container_update_rollout_hosts
+		SET state = 'pending', forgiven = FALSE, error = '', attempts = 0, changed_at = now()
+		WHERE rollout_id = $1 AND state IN ('failed', 'applying')`, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `

@@ -71,34 +71,34 @@ if [ -z "$_rt" ]; then
   exit 0
 fi
 
-_err=$($_rt ps --format '{{.ID}}' 2>&1 >/dev/null)
-if [ -n "$_err" ] || ! $_rt ps --format '{{.ID}}' >/dev/null 2>&1; then
-  if [ -S "$_sock" ]; then
-    if [ -r "$_sock" ] && [ -w "$_sock" ]; then
-      _detail="the socket $_sock is readable but the daemon refused: $_err"
-    else
-      # Naming the GROUP matters: it is "docker" on most distributions and not on
-      # all, and the remediation is "add this account to that group".
-      _grp=$(stat -c '%G' "$_sock" 2>/dev/null || echo "?")
-      _detail="$(id -un) cannot use $_sock — it belongs to group $_grp; add this account to that group (usermod -aG $_grp $(id -un)) and reconnect"
-    fi
+# Unprivileged first. The docker socket is root-owned, so on most hosts this only
+# works for an account in its group -- which is a root-equivalent membership that
+# nobody should have to grant just to be able to SEE what is running.
+_pre=""
+if ! $_rt ps --format '{{.ID}}' >/dev/null 2>&1; then
+  # Then non-interactive sudo, if this account has it. -n so a host that would
+  # PROMPT fails immediately instead of hanging a sweep on a password nobody is
+  # there to type. Read-only either way: ps and image inspect.
+  if command -v sudo >/dev/null 2>&1 && sudo -n $_rt ps --format '{{.ID}}' >/dev/null 2>&1; then
+    _pre="sudo -n"
   else
-    _detail="no socket at $_sock — the daemon may not be running, or may be rootless or remote (DOCKER_HOST=${DOCKER_HOST:-unset}): $_err"
+    _err=$($_rt ps --format '{{.ID}}' 2>&1 >/dev/null)
+    if [ -S "$_sock" ]; then
+      _grp=$(stat -c '%G' "$_sock" 2>/dev/null || echo "?")
+      _detail="$(id -un) cannot use $_sock and has no passwordless sudo here. Either add this account to group $_grp (usermod -aG $_grp $(id -un)) or give it NOPASSWD sudo for docker. Error: $_err"
+    else
+      _detail="no socket at $_sock — the daemon may not be running, or may be rootless or remote (DOCKER_HOST=${DOCKER_HOST:-unset}): $_err"
+    fi
+    echo "::NOACCESS::$_detail"
+    exit 0
   fi
-  echo "::NOACCESS::$_detail"
-  exit 0
 fi
 echo "::OK::"
-# The compose labels say where this container's project lives, which is what
-# lets an image be updated in place without Provenance holding its compose file.
-# working_dir is the only one worth carrying: config_files are the paths as seen
-# by whatever ran compose, which for a project deployed FROM a container are that
-# container's paths and mean nothing on the host.
-$_rt ps --no-trunc --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null
+$_pre $_rt ps --no-trunc --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null
 echo "::IMAGES::"
-$_rt ps --no-trunc --format '{{.Image}}' 2>/dev/null | sort -u | while read -r _i; do
+$_pre $_rt ps --no-trunc --format '{{.Image}}' 2>/dev/null | sort -u | while read -r _i; do
   [ -n "$_i" ] || continue
-  _d=$($_rt image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null)
+  _d=$($_pre $_rt image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null)
   echo "$_i\t$_d"
 done
 `
