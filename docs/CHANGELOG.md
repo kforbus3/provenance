@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.18 — 2026-09-12
+
+**A rollout no longer fails on an image the host has been re-pinned past.** An
+"update all" is a snapshot of what the fleet was running; on a fleet somebody is
+actively working on, that snapshot expires. One created while a service was on
+:latest, reaching a host after that service had been pinned to a version,
+deployed correctly and then failed verification against a tag no longer in the
+compose file — halting the whole operation on its failure budget for something
+nobody did wrong. The engine now checks the host's own compose first and skips an
+image the file names at some other tag. Only a repository the file actually names
+counts: a file that says nothing about an image tells us nothing about whether the
+host moved past it.
+
+---
+
 ## v1.2.17 — 2026-09-12
 
 **A rollout no longer fails itself after succeeding.** The target digest was taken
