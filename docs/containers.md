@@ -244,6 +244,18 @@ pass `--remove-orphans`: removing containers the file no longer defines is a
 whole-project decision, and making it as a side effect of updating one image
 would delete things nobody mentioned.
 
+A narrowed deploy still brings along anything sharing that service's **network
+namespace** — `network_mode: "service:vpn"` and the like. Those containers have no
+network stack of their own; recreating the one they live inside destroys it, and
+they are left attached to a container that no longer exists. They keep running and
+keep reporting healthy, with no network at all, which is the worst way for it to
+fail. This is the one case where touching only what was asked for is wrong: the
+blast radius is already wider than the service, whether or not the deploy acts on
+it.
+
+`depends_on` is not followed. That is start order, and a container whose
+dependency restarts is not broken by it.
+
 If the compose service cannot be established, the whole project is brought up
 instead — a deploy that touches more than it needed is recoverable, and one that
 touches nothing because a name was guessed wrong is an update reported as applied

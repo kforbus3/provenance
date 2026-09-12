@@ -1097,3 +1097,52 @@ func TestARepositoryTheComposeDoesNotMentionIsNotSuperseded(t *testing.T) {
 		t.Error("the tag the file actually names is not superseded")
 	}
 }
+
+// The same expired premise, on a host with NO adopted stack.
+//
+// The first fix compared against the host's stack — which works only where one
+// exists. The host it kept failing on had none:
+//
+//	ghcr.io/alexta69/metube:latest → latest: deployed, but no container on
+//	this host is running ghcr.io/alexta69/metube:latest
+//
+// metube had been pinned in that host's own compose file. With no stack there is
+// no copy for the engine to compare against, so the arbiter has to be what is
+// actually RUNNING — which the verify step already reads.
+func TestSupersessionIsDetectedFromWhatIsRunningNotOnlyFromAStack(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1, MaxFailures: 1})
+	f.rollouts[0].Repository, f.rollouts[0].FromTag, f.rollouts[0].ToTag = "metube", "latest", "latest"
+	f.stacks[ids[0]] = nil // no stack on this host at all
+	f.containers[ids[0]] = []models.Container{{
+		Name: "metube", Image: "metube:latest", Repository: "metube", Tag: "latest",
+		ComposeService: "metube", ComposeDir: "/opt/x", ComposeProject: "x",
+	}}
+
+	// The host is in fact running a pinned version, not :latest.
+	r := scripted("::OK::\nmetube:2026.07.24\tmetube@sha256:aaa\n", "")
+	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State == store.UpdateHostFailed {
+		t.Fatalf("failed on an expired premise with no stack to compare against: %q", h.Error)
+	}
+	for _, s := range f.rolloutSet {
+		if strings.HasPrefix(s, store.UpdateRolloutHalted) {
+			t.Errorf("the rollout halted: %v", f.rolloutSet)
+		}
+	}
+}
+
+func TestStillOnTheOldTagIsAFailureNotASupersession(t *testing.T) {
+	// The distinction that matters. A container left on the tag the rollout was
+	// moving AWAY from is a deploy that reported success and changed nothing —
+	// the exact failure this feature exists to catch. Only some THIRD tag means
+	// the host moved past the image.
+	f, rid, _ := inPlaceFixture("1.24", "1.27")
+	r := scripted("::OK::\nnginx:1.24\tnginx@sha256:old\n", composeNginx)
+	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
+
+	if got := f.hosts[rid][0].State; got != store.UpdateHostFailed {
+		t.Errorf("state = %q, want failed — the deploy left the old image running", got)
+	}
+}

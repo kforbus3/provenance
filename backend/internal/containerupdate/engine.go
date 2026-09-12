@@ -3,6 +3,7 @@ package containerupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -43,6 +44,15 @@ type Deployer interface {
 type Runner interface {
 	RunScript(ctx context.Context, script string, h *models.Host) (output string, exitCode int, failed bool)
 }
+
+// errSuperseded means the host is running this repository at some other tag, so
+// the rollout's premise has expired for it.
+//
+// Distinguished from a failure because it is not one. A host that has been
+// re-pinned since the rollout was created has moved past the image, and treating
+// that as a failure halts the whole operation on its budget for something nobody
+// did wrong.
+var errSuperseded = errors.New("the host is running this repository at another tag")
 
 // MaxAttempts is how many times one host may be started before it counts as
 // failed. A host that takes the work and does not finish three times is not
@@ -300,6 +310,12 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		one.Repository, one.FromTag, one.ToTag, one.TargetDigest =
 			im.Repository, im.FromTag, im.ToTag, im.TargetDigest
 		if err := e.applyOne(ctx, one, hostID); err != nil {
+			if errors.Is(err, errSuperseded) {
+				e.log.Info("update rollout: host has moved past this image",
+					"host", hostID, "repository", im.Repository, "from", im.FromTag,
+					"detail", err.Error())
+				continue
+			}
 			e.fail(ctx, r.ID, hostID,
 				fmt.Sprintf("%s:%s → %s: %s", im.Repository, im.FromTag, im.ToTag, err.Error()))
 			return
@@ -632,6 +648,28 @@ func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.
 		}
 		return fmt.Errorf("deployed, but %s is running %s rather than the %s this rollout targets",
 			want, shortDigest(digest), shortDigest(r.TargetDigest))
+	}
+	// Nothing running the tag we wanted. If the repository is running at some
+	// OTHER tag, the host has moved past this image rather than failed to take it
+	// — somebody re-pinned the service between the rollout being created and it
+	// reaching this host, which is ordinary on a fleet anybody is working on.
+	//
+	// Checked HERE, from what is actually running, rather than only from an
+	// adopted stack: a host with no stack has no copy for the engine to compare
+	// against, and that is exactly the host this kept failing on.
+	from := r.Repository + ":" + r.FromTag
+	for _, line := range strings.Split(out, "\n") {
+		ref, _, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if !strings.HasPrefix(ref, r.Repository+":") || ref == want {
+			continue
+		}
+		// Still on the tag we were moving AWAY from is a failure, not a
+		// supersession: that is a deploy which reported success and changed
+		// nothing, which is the exact failure this whole feature exists to catch.
+		if ref == from {
+			continue
+		}
+		return fmt.Errorf("%w: %s", errSuperseded, ref)
 	}
 	return fmt.Errorf("deployed, but no container on this host is running %s", want)
 }

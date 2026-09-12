@@ -118,9 +118,16 @@ func RenderScript(dir, compose string, revision int, pull bool, service string) 
 	b.WriteString("fi\n")
 
 	// What to act on: one service, or the whole project.
+	//
+	// A narrowed deploy still brings anything sharing that service's network
+	// namespace. Leaving those behind strands them on a namespace that no longer
+	// exists — running, healthy, and with no network. See networkDependents.
 	target := " --remove-orphans"
 	if service != "" {
 		target = " " + shellQuote(service)
+		for _, dep := range networkDependents(compose, service) {
+			target += " " + shellQuote(dep)
+		}
 	}
 	if pull {
 		b.WriteString("$_c pull" + target + "\n")

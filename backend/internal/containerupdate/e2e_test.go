@@ -529,3 +529,64 @@ func TestE2EEngineDoesNotBreakAHostWithABadStackRecord(t *testing.T) {
 		t.Errorf("the rollout left the host's compose file broken:\n%s", after)
 	}
 }
+
+// TestE2EANetworkNamespaceDependentIsBroughtAlong proves the fix against a real
+// daemon, because "the container is running" and "the container has a network"
+// are different things and only one of them is visible in `docker ps`.
+func TestE2EANetworkNamespaceDependentIsBroughtAlong(t *testing.T) {
+	e2eEnabled(t)
+	dir := t.TempDir()
+	compose := `services:
+  net:
+    image: ` + e2eFrom + `
+    command: ["sleep", "600"]
+  rider:
+    image: ` + e2eFrom + `
+    command: ["sleep", "600"]
+    network_mode: "service:net"
+`
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(compose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	up := exec.Command("docker", "compose", "up", "-d")
+	up.Dir = dir
+	if out, err := up.CombinedOutput(); err != nil {
+		t.Fatalf("compose up: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		down := exec.Command("docker", "compose", "down", "-v", "--remove-orphans")
+		down.Dir = dir
+		_ = down.Run()
+	})
+
+	namespaceOf := func(service string) string {
+		id := exec.Command("docker", "compose", "ps", "-q", service)
+		id.Dir = dir
+		b, _ := id.Output()
+		cid := strings.TrimSpace(string(b))
+		ins := exec.Command("docker", "inspect", cid, "--format", "{{.HostConfig.NetworkMode}}")
+		out, _ := ins.Output()
+		return strings.TrimSpace(string(out))
+	}
+	before := namespaceOf("rider")
+
+	// Recreate the namespace owner, exactly as a rollout would.
+	updated := strings.Replace(compose, e2eFrom, e2eTo, 1)
+	if out, code := sh(t, stacks.RenderScript(dir, updated, 2, true, "net")); code != 0 {
+		t.Fatalf("deploy failed (%d):\n%s", code, out)
+	}
+
+	after := namespaceOf("rider")
+	if after == before {
+		t.Fatal("the dependent was not recreated, so it is still attached to the " +
+			"namespace of a container that no longer exists — running, healthy, " +
+			"and with no network")
+	}
+	// And it points at the NEW owner.
+	ownerID := exec.Command("docker", "compose", "ps", "-q", "net")
+	ownerID.Dir = dir
+	b, _ := ownerID.Output()
+	if want := "container:" + strings.TrimSpace(string(b)); after != want {
+		t.Errorf("dependent namespace = %s, want %s", after, want)
+	}
+}
