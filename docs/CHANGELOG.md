@@ -5,6 +5,25 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.26 — 2026-09-12
+
+**Check now checks everything.** A pass was capped at forty images, so a fleet of
+sixty-four left twenty-four unchecked — and the count went to a log line while
+the screen said only that a check had started. Two of the images in that
+remainder had real updates waiting behind them. Nothing told anyone a second
+press was needed.
+
+The cap is about a registry's rate limit, and for the unattended sweep that runs
+every twelve hours it is exactly right: a fleet-wide pass must not exhaust a
+limit nobody is watching. A press is rare, deliberate and waited on, and applying
+an unattended bound to it made the button do part of its job in silence — the
+same mistake as applying the twelve-hour freshness window to a press, which was
+fixed earlier for the same reason. Batching is a budget now: one batch for the
+sweep, ten for a press, bounded either way, and a pass that reaches its bound
+still says what is left.
+
+---
+
 ## v1.2.25 — 2026-09-12
 
 **A repository's tag list is now read in full, and an answer says so when it
