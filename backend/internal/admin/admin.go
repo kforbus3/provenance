@@ -38,13 +38,26 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Session.Terminate")).Post("/users/{id}/terminate-sessions", h.terminateSessions)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Get("/users/{id}/login-history", h.loginHistory)
 
-		// Sessions. Gated on Session.Terminate for the list as well as the
-		// revoke: "who is signed in right now" is an oversight capability, it is
-		// the same audience, and the alternative was inventing a Session.View
-		// permission that no role is seeded with -- which ships a screen nobody
-		// can open until somebody edits a role.
-		pr.With(d.Auth.RequirePermission("Session.Terminate")).Get("/sessions", h.listActiveSessions)
-		pr.With(d.Auth.RequirePermission("Session.Terminate")).Delete("/sessions/{id}", h.terminateSession)
+		// Browser sign-ins, at /active-sessions rather than /sessions.
+		//
+		// /sessions was already taken by the SSH session RECORDINGS api
+		// (sessionsapi), and registering a second GET for it did not fail: chi
+		// took one and the other never ran. The recordings route won, so this
+		// screen rendered SSH recordings as browser sign-ins -- dozens of rows
+		// for one user, every device "unknown" because a recording has no user
+		// agent, and every row badged "no MFA" because it has no mfaPassed
+		// either. It reached production looking like a bug in the data.
+		//
+		// Two things share the word "session" in this product and they are not
+		// the same thing. The path now says which one it means.
+		//
+		// Gated on Session.Terminate for the list as well as the revoke: "who is
+		// signed in right now" is an oversight capability, it is the same
+		// audience, and the alternative was inventing a Session.View permission
+		// that no role is seeded with -- which ships a screen nobody can open
+		// until somebody edits a role.
+		pr.With(d.Auth.RequirePermission("Session.Terminate")).Get("/active-sessions", h.listActiveSessions)
+		pr.With(d.Auth.RequirePermission("Session.Terminate")).Delete("/active-sessions/{id}", h.terminateSession)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Get("/users/{id}/session-policy", h.getUserSessionPolicy)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Put("/users/{id}/session-policy", h.setUserSessionPolicy)
 		pr.With(d.Auth.RequirePermission("User.Edit")).Delete("/users/{id}/session-policy", h.clearUserSessionPolicy)

@@ -78,12 +78,17 @@ func TestTerminateSessionGuardsSuperAdmin(t *testing.T) {
 	}
 }
 
+// NOTE: this asserts the route is mounted and gated. It cannot see another
+// module registering the same path -- which is exactly what happened: /sessions
+// already belonged to the SSH recordings api, chi took that one, and this test
+// passed while the screen showed recordings. Collisions are checked across every
+// module by deploy/builder-runner/test_route_collisions.py.
 func TestSessionRoutesRequireTerminatePermission(t *testing.T) {
 	src := readFile(t, "admin.go")
 
 	for _, want := range []string{
-		`RequirePermission("Session.Terminate")).Get("/sessions"`,
-		`RequirePermission("Session.Terminate")).Delete("/sessions/{id}"`,
+		`RequirePermission("Session.Terminate")).Get("/active-sessions"`,
+		`RequirePermission("Session.Terminate")).Delete("/active-sessions/{id}"`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("admin.go does not mount a route gated as: %s\n"+

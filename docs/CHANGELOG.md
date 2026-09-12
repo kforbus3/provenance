@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.1 — 2026-09-11
+
+**Active sign-ins listed SSH recordings instead.** `GET /sessions` already
+belonged to the session-recordings API, and the new browser sign-ins screen
+registered it a second time. That does not fail: chi takes one route and the
+other never runs. The recordings route won, so the panel showed recorded SSH
+sessions as sign-ins — dozens of rows for one user, every device "unknown"
+because a recording carries no user agent, and every row badged "no MFA" because
+it carries no `mfaPassed` either. Three symptoms that all read as defects in the
+sign-in data, and none of them were.
+
+Moved to `/active-sessions`. Two different things in this product are called a
+"session"; the path now says which one it means.
+
+The tests that existed asserted the admin route was mounted and gated correctly,
+which it was — a test can only see the module it reads. Route collisions are now
+checked across every module, and the permission mismatch is part of why it
+matters: whichever registration loses, its permission gate is not the one being
+enforced.
+
+---
+
 ## v1.2.0 — 2026-09-11
 
 **Image options that cannot produce a working machine are now refused at build

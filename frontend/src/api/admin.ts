@@ -316,12 +316,12 @@ export interface ActiveSession {
 }
 
 export async function listActiveSessions(): Promise<ActiveSession[]> {
-  const { data } = await api.get<{ sessions: ActiveSession[] }>(`/api/v1/sessions`);
+  const { data } = await api.get<{ sessions: ActiveSession[] }>(`/api/v1/active-sessions`);
   return data.sessions ?? [];
 }
 
 // Ends one sign-in rather than all of a user's: the server closes any live
 // terminal on it and revokes its certificates, not only marks it revoked.
 export async function terminateSession(id: string): Promise<void> {
-  await api.delete(`/api/v1/sessions/${id}`);
+  await api.delete(`/api/v1/active-sessions/${id}`);
 }
