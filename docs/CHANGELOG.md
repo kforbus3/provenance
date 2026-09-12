@@ -5,6 +5,36 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.25 — 2026-09-12
+
+**A repository's tag list is now read in full, and an answer says so when it
+could not be.** The listing stopped after one page of a thousand tags. That was
+never a bound, it was a wrong answer: registries return tags in roughly insertion
+order, so the current release is at the END. The first page of
+`lscr.io/linuxserver/bazarr` is a thousand tags from 2019 and does not contain
+the tag the host is running, let alone anything newer — and "nothing newer
+exists" was then reported with complete confidence about a list that never
+reached the present. That repository has 9,261 tags across ten pages; jackett has
+31,667 across thirty-two. The Link headers saying so were being sent and ignored.
+
+Pagination is followed now, bounded at forty pages, and a listing stopped by that
+bound reports itself incomplete. An incomplete list can only support "this is
+what was found", never "this is everything there is", and the note says which.
+
+Two smaller corrections came out of checking real registries rather than a
+fixture. A row for a compose-declared tag dropped the REASON when nothing newer
+was found, so "nothing newer exists" and "nothing here could be compared" looked
+identical. And a suffix stem may contain digits: qbittorrent is tagged
+`5.2.3_v2.0.13-ls469`, where those digits are the bundled libtorrent version, and
+refusing them left it unorderable against the very next build. Every refusal that
+matters still holds, because the stem must match exactly — `-alpine` against
+`-bookworm`, `-alpine3.` against `-alpine4.`, a release against a prerelease.
+
+Eleven of this fleet's images resolve to a real newer tag as a result, where
+before they reported having no comparable tag in their own repository.
+
+---
+
 ## v1.2.24 — 2026-09-12
 
 **A forced recheck now reaches the images it was pressed for.** A pass checks a
