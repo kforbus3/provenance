@@ -46,6 +46,9 @@ func (f *fakeSource) FleetSummary(context.Context) (FleetSummary, error) {
 func (f *fakeSource) UpgradeStatus(context.Context) (any, error) {
 	return map[string]string{"state": "success", "targetVersion": "1.2.15"}, nil
 }
+func (f *fakeSource) Hostnames(context.Context) ([]string, error) {
+	return []string{"control01", "docker", "ai"}, nil
+}
 func (f *fakeSource) Diagnostics(context.Context) (Diagnostics, error) {
 	if f.failDiagnostics {
 		return Diagnostics{}, errors.New("the updater is not reachable")
@@ -83,9 +86,13 @@ func read(t *testing.T, b []byte) map[string]string {
 }
 
 func collect(t *testing.T, src Source) map[string]string {
+	return collectWith(t, src, Options{})
+}
+
+func collectWith(t *testing.T, src Source, opt Options) map[string]string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := New(src).Collect(context.Background(), &buf, "keith"); err != nil {
+	if err := New(src).Collect(context.Background(), &buf, "keith", opt); err != nil {
 		t.Fatal(err)
 	}
 	return read(t, buf.Bytes())
@@ -122,12 +129,40 @@ func TestNoSecretSurvivesIntoTheBundle(t *testing.T) {
 	}
 }
 
-func TestHostnamesStayAndAddressesAreConsistentlyReplaced(t *testing.T) {
+// Default: everything as it is. A bundle usually goes to somebody who already
+// knows the estate, and real names make it far easier to read.
+func TestByDefaultNothingIsMaskedExceptSecrets(t *testing.T) {
 	files := collect(t, &fakeSource{})
 	all := strings.Join(valuesOf(files), "\n")
-
 	if !strings.Contains(all, "control01") {
-		t.Error("hostnames should be kept — they are what makes a bundle readable")
+		t.Error("hostnames should be present by default")
+	}
+	if !strings.Contains(all, "10.10.0.9") {
+		t.Error("addresses should be present by default")
+	}
+	// But never the secrets — that is not part of the choice.
+	if strings.Contains(all, "s3cr3t") {
+		t.Error("a credential survived, which no setting should allow")
+	}
+	var m Manifest
+	_ = json.Unmarshal([]byte(files["manifest.json"]), &m)
+	if m.Masked {
+		t.Error("the manifest claims masking that did not happen")
+	}
+	if !strings.Contains(strings.Join(m.Notes, " "), "AS THEY ARE") {
+		t.Error("the manifest should say plainly that real names are in the bundle")
+	}
+}
+
+func TestHostnamesStayAndAddressesAreConsistentlyReplaced(t *testing.T) {
+	files := collectWith(t, &fakeSource{}, Options{Anonymise: true})
+	all := strings.Join(valuesOf(files), "\n")
+
+	if strings.Contains(all, "control01") {
+		t.Error("a hostname survived masking")
+	}
+	if !strings.Contains(all, "host-") {
+		t.Error("hostnames should be replaced with stable placeholders")
 	}
 	if strings.Contains(all, "10.10.0.9") || strings.Contains(all, "10.10.0.5") {
 		t.Errorf("a real address survived:\n%s", all)
@@ -150,6 +185,14 @@ func TestHostnamesStayAndAddressesAreConsistentlyReplaced(t *testing.T) {
 	var m Manifest
 	if err := json.Unmarshal([]byte(files["manifest.json"]), &m); err != nil {
 		t.Fatal(err)
+	}
+	if !m.Masked {
+		t.Error("the manifest does not record that masking happened")
+	}
+	// docker is both a host here and an ordinary word, so it must be called out.
+	if len(m.Ambiguous) == 0 {
+		t.Error("the manifest should name hostnames that are also ordinary words, " +
+			"since those are replaced where they did not mean the host")
 	}
 	if m.Anonymised == 0 {
 		t.Error("the manifest does not record that anonymisation happened")

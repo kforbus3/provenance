@@ -237,7 +237,9 @@ export function ContainerUpdatesTab() {
   });
 
   const check = useMutation({
-    mutationFn: checkContainerUpdates,
+    // Wrapped, so the mutation takes no variable: react-query would otherwise
+    // infer the force parameter as a required argument to mutate().
+    mutationFn: () => checkContainerUpdates(),
     onSuccess: (r) => setSnack(r.note || "Asking the registries…"),
     onError: (e) => setSnack(errMsg(e, "Could not start a check.")),
   });
@@ -266,11 +268,18 @@ export function ContainerUpdatesTab() {
       a.repository.localeCompare(b.repository));
   }, [updates, filter, hostFilter]);
 
-  const actionableUpdates = updates.filter((u) => {
-    const v = verdictOf(u);
-    return (v === "newer" || v === "moved") && hostsOf(u).length > 0 &&
-      !hostsOf(u).some((h) => h.protected);
-  });
+  // Counted separately, because they are not the same news.
+  //
+  // One line saying "8 images have something newer available" over a list where
+  // seven rows read "rebuilt" and one reads "1.27 available" invites exactly the
+  // question it got: why does only one show an update? Both are actionable and
+  // only one is a new VERSION — which is the distinction the rest of this screen
+  // is built around, so the summary should not be the one place that flattens it.
+  const canAct = (u: ImageUpdate) =>
+    hostsOf(u).length > 0 && !hostsOf(u).some((h) => h.protected);
+  const newerUpdates = updates.filter((u) => verdictOf(u) === "newer" && canAct(u));
+  const rebuiltUpdates = updates.filter((u) => verdictOf(u) === "moved" && canAct(u));
+  const actionableUpdates = [...newerUpdates, ...rebuiltUpdates];
   const actionable = actionableUpdates.length;
 
   return (
@@ -323,7 +332,19 @@ export function ContainerUpdatesTab() {
             </Button>
           ) : undefined}
         >
-          {actionable} image{actionable > 1 ? "s have" : " has"} something newer available.
+          {[
+            newerUpdates.length > 0 &&
+              `${newerUpdates.length} image${newerUpdates.length > 1 ? "s have" : " has"} a newer version`,
+            rebuiltUpdates.length > 0 &&
+              `${rebuiltUpdates.length} ${rebuiltUpdates.length > 1 ? "have" : "has"} been rebuilt at the same version`,
+          ].filter(Boolean).join(", and ")}.
+          {rebuiltUpdates.length > 0 && (
+            <Typography variant="caption" color="inherit" sx={{ display: "block", mt: 0.5 }}>
+              A rebuild is the same version republished — usually a patched base
+              image. It shows as “rebuilt” rather than a version number, which is
+              why the list may look shorter than the count.
+            </Typography>
+          )}
         </Alert>
       )}
 

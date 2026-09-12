@@ -66,3 +66,32 @@ func TestTheNarrowWriterStillOverwritesTheStatus(t *testing.T) {
 			"a host that stopped answering would keep its last good status")
 	}
 }
+
+// Forty images were reported "built locally — nothing to compare against" when
+// they were ordinary registry images. They had been checked during a window when
+// container digests were not being collected at all, and "built locally" is
+// concluded from a MISSING digest — so the verdict was right about the input and
+// wrong about the world.
+//
+// The freshness rule then held it: a row with no error is not re-checked for
+// twelve hours, so correcting the collection did not correct the conclusions. The
+// updates page showed one actionable image out of forty-eight.
+func TestAnImageWithNoDigestIsAlwaysRechecked(t *testing.T) {
+	src, err := os.ReadFile("imageupdates.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := funcBody(string(src), "func (s *Store) StaleImageChecks")
+	if body == "" {
+		t.Fatal("StaleImageChecks not found")
+	}
+	if !strings.Contains(body, "current_digest <> ''") {
+		t.Error("a row with no digest is treated as fresh, so a 'built locally' " +
+			"verdict survives the digests arriving — for twelve hours, per image")
+	}
+	// The freshness rule itself must still apply to rows that DO have a digest,
+	// or every pass re-asks every registry and the rate limit is the ceiling.
+	if !strings.Contains(body, "checked_at > now()") {
+		t.Error("the freshness window is gone; every pass would re-ask every registry")
+	}
+}

@@ -121,7 +121,17 @@ func (s *Store) StaleImageChecks(ctx context.Context, imgs []TrackedImage, maxAg
 	rows, err := s.pool.Query(ctx, `
 		SELECT repository, tag FROM container_image_updates
 		WHERE checked_at > now() - $1::interval
-		  AND error = ''`,
+		  AND error = ''
+		  -- A row with no digest concluded "built locally, nothing to ask about".
+		  -- That conclusion is drawn from what the FLEET reported at the time, and
+		  -- the fleet changes: forty images were marked built-locally during a
+		  -- window when digests were not being collected at all, and the freshness
+		  -- rule then held that verdict for twelve hours after the digests arrived.
+		  --
+		  -- Re-checking them is nearly free: an image with no digest is answered
+		  -- without asking a registry anything, so this costs one row read per pass
+		  -- for the genuinely local ones and corrects the rest immediately.
+		  AND current_digest <> ''`,
 		maxAge.String())
 	if err != nil {
 		return nil, err

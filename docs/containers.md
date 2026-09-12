@@ -102,9 +102,18 @@ contained it somewhere else entirely — searching for `docker` turned up a
 container on `control01`. The picker lists every host reporting containers and
 accepts typing to narrow it; the text box searches images only.
 
-**"Check registries now"** on the Updates tab runs a pass immediately. It re-asks
-the registries about images **already discovered** — it does not reach out to your
-hosts, so it will not make a host that has not been swept yet appear.
+**"Check registries now"** on the Updates tab runs a pass immediately, and
+**ignores the twelve-hour freshness window**. That window exists to stop the
+scheduled sweep re-asking registries about answers it already has; it has no
+business overriding somebody who has just pressed a button, since the reason to
+press it is believing the answer has changed.
+
+It re-asks the registries about images **already discovered** — it does not reach
+out to your hosts, so it will not make a host that has not been swept yet appear.
+
+The batch cap still applies: that one is about a registry's rate limit, which does
+not care why a request was made. A forced pass that could not cover everything
+says how many images are still waiting, rather than quietly doing part of the job.
 
 Images are discovered by the monitor sweep as it reaches each host, on a ten-minute
 cadence of their own. Containers change whenever somebody deploys, so they are

@@ -311,3 +311,49 @@ func TestALocallyBuiltImageIsNotAskedAboutAtAll(t *testing.T) {
 		t.Errorf("the row should say why it cannot be checked, got note %q", got.Note)
 	}
 }
+
+// The button that did nothing whenever it was most wanted.
+//
+// "Check registries now" ran the same pass as the scheduler, freshness window and
+// all — so pressing it after changing something, which is the only reason anyone
+// presses it, re-asked nothing and reported success.
+func TestCheckNowIgnoresTheFreshnessWindow(t *testing.T) {
+	srv := stubRegistry(t, []string{"1.0.0", "2.0.0"}, map[string]string{"1.0.0": "sha256:aaa"})
+	repo := repoAt(srv, "team/app")
+
+	st := &fakeStore{
+		tracked: []store.TrackedImage{{Repository: repo, Tag: "1.0.0", Digest: "sha256:aaa"}},
+		// Everything is fresh: the scheduled pass would select nothing.
+		stale: []store.TrackedImage{},
+	}
+	c := newChecker(t, st, srv)
+
+	if checked, _ := c.Check(context.Background()); checked != 0 {
+		t.Fatalf("fixture wrong: the scheduled pass checked %d", checked)
+	}
+	checked, _, _ := c.CheckNow(context.Background())
+	if checked != 1 {
+		t.Errorf("a forced check re-asked %d images; the window must not apply to "+
+			"somebody who has just pressed the button", checked)
+	}
+}
+
+func TestAForcedCheckStillRespectsTheBatchCap(t *testing.T) {
+	// The cap is about a registry's rate limit, which does not care why the
+	// request was made. A forced pass reports what is left rather than quietly
+	// doing part of the job.
+	srv := stubRegistry(t, []string{"1.0.0"}, map[string]string{"1.0.0": "sha256:aaa"})
+	st := &fakeStore{stale: []store.TrackedImage{}}
+	for i := 0; i < checkBatch+7; i++ {
+		st.tracked = append(st.tracked, store.TrackedImage{
+			Repository: repoAt(srv, "team/app"), Tag: "1.0.0", Digest: "sha256:aaa"})
+	}
+	checked, failed, remaining := newChecker(t, st, srv).CheckNow(context.Background())
+	if checked+failed > checkBatch {
+		t.Errorf("checked %d, over the cap of %d", checked+failed, checkBatch)
+	}
+	if remaining != 7 {
+		t.Errorf("remaining = %d, want 7 — an operator should know the pass was "+
+			"not the whole fleet", remaining)
+	}
+}

@@ -139,6 +139,25 @@ func (b bundleSource) FleetSummary(ctx context.Context) (appsupport.FleetSummary
 	return fs, rows.Err()
 }
 
+// Hostnames is the fleet's own names, used only when masking is requested.
+func (b bundleSource) Hostnames(ctx context.Context) ([]string, error) {
+	rows, err := b.s.Store.Pool().Query(ctx,
+		`SELECT hostname FROM hosts WHERE COALESCE(hostname,'') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 func (b bundleSource) UpgradeStatus(ctx context.Context) (any, error) {
 	return b.s.upgradeSvc.Status(ctx), nil
 }
@@ -167,24 +186,34 @@ func (s *Server) supportBundle(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
 	defer cancel()
 
+	// Opt in, not out. A bundle usually goes to somebody who already knows the
+	// estate, and real names make it far easier to read.
+	anonymise := r.URL.Query().Get("anonymise") == "1" ||
+		r.URL.Query().Get("anonymize") == "1"
+
 	if p := auth.MustPrincipal(r); p != nil {
 		_, _ = s.Store.AppendAudit(r.Context(), models.AuditEvent{
 			ActorID: &p.UserID, ActorName: p.Username,
 			Action: "system.support_bundle",
 			// Recorded because a bundle leaves the instance carrying its
-			// configuration and logs. Who generated one, and when, is exactly the
-			// kind of thing an audit log exists to answer afterwards.
-			Detail: map[string]any{"version": s.Version},
+			// configuration and logs. Who generated one, when, and whether it was
+			// anonymised is exactly what an audit log exists to answer afterwards.
+			Detail: map[string]any{"version": s.Version, "anonymised": anonymise},
 		})
 	}
 
-	name := fmt.Sprintf("provenance-support-%s-%s.tar.gz",
-		s.Version, time.Now().UTC().Format("20060102-150405"))
+	suffix := ""
+	if anonymise {
+		suffix = "-anonymised"
+	}
+	name := fmt.Sprintf("provenance-support-%s-%s%s.tar.gz",
+		s.Version, time.Now().UTC().Format("20060102-150405"), suffix)
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	// No Content-Length: the bundle is built as it streams, and guessing a length
 	// would mean buffering the whole thing to be able to say it.
-	if err := appsupport.New(bundleSource{s}).Collect(ctx, w, by); err != nil {
+	if err := appsupport.New(bundleSource{s}).Collect(ctx, w, by,
+		appsupport.Options{Anonymise: anonymise}); err != nil {
 		// The body has already started; the only honest signal left is to stop.
 		s.Log.Error("support bundle", "err", err)
 	}

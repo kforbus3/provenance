@@ -52,13 +52,33 @@ func NewChecker(st Store, log *slog.Logger) *Checker {
 // -- is recorded against that image and the pass continues; one unreachable
 // registry must not stop the fleet from learning about every other image.
 func (c *Checker) Check(ctx context.Context) (checked, failed int) {
+	checked, failed, _ = c.check(ctx, false)
+	return checked, failed
+}
+
+// CheckNow ignores the freshness window.
+//
+// The window exists to stop the scheduled sweep re-asking registries about
+// answers it already has. It has no business overriding somebody who has just
+// pressed a button: they are asking because they believe the answer has changed,
+// which is usually because they just changed it.
+//
+// The batch cap still applies. That one is not about staleness but about a
+// registry's rate limit, which does not care why the request was made — so a
+// forced pass reports how many images are still waiting rather than quietly
+// doing part of the job.
+func (c *Checker) CheckNow(ctx context.Context) (checked, failed, remaining int) {
+	return c.check(ctx, true)
+}
+
+func (c *Checker) check(ctx context.Context, force bool) (checked, failed, remaining int) {
 	tracked, err := c.store.TrackedImages(ctx)
 	if err != nil {
 		c.log.Warn("image check: listing tracked images", "err", err)
-		return 0, 0
+		return 0, 0, 0
 	}
 	if len(tracked) == 0 {
-		return 0, 0
+		return 0, 0, 0
 	}
 	// Drop rows for images nothing runs any more before checking, so the pass
 	// budget is not spent on an image that was removed from the fleet.
@@ -66,18 +86,23 @@ func (c *Checker) Check(ctx context.Context) (checked, failed int) {
 		c.log.Warn("image check: pruning", "err", err)
 	}
 
-	stale, err := c.store.StaleImageChecks(ctx, tracked, checkMaxAge)
-	if err != nil {
-		c.log.Warn("image check: selecting stale", "err", err)
-		return 0, 0
+	stale := tracked
+	if !force {
+		var err error
+		stale, err = c.store.StaleImageChecks(ctx, tracked, checkMaxAge)
+		if err != nil {
+			c.log.Warn("image check: selecting stale", "err", err)
+			return 0, 0, 0
+		}
 	}
 	if len(stale) > checkBatch {
+		remaining = len(stale) - checkBatch
 		stale = stale[:checkBatch]
 	}
 
 	for _, img := range stale {
 		if ctx.Err() != nil {
-			return checked, failed
+			return checked, failed, remaining
 		}
 		rec := c.checkOne(ctx, img)
 		if rec.Error != "" {
@@ -92,9 +117,10 @@ func (c *Checker) Check(ctx context.Context) (checked, failed int) {
 	}
 	if checked > 0 || failed > 0 {
 		c.log.Info("container image check", "checked", checked, "failed", failed,
-			"stale", len(stale), "tracked", len(tracked))
+			"stale", len(stale), "tracked", len(tracked), "forced", force,
+			"remaining", remaining)
 	}
-	return checked, failed
+	return checked, failed, remaining
 }
 
 // checkOne asks about a single repository:tag.

@@ -1,6 +1,7 @@
 package containerupdate
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/app"
 	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/registry"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -18,6 +20,9 @@ type handler struct {
 	d  *app.Deps
 	st *store.Store
 	e  *Engine
+	// reg resolves what a target tag points at. The server does this itself
+	// rather than believing the client; see resolveTargets.
+	reg *registry.Client
 }
 
 // Mount attaches container-update rollout routes.
@@ -30,7 +35,7 @@ type handler struct {
 // Reading needs only Host.View, so an operator who cannot change anything can
 // still see what is happening to the fleet.
 func Mount(r chi.Router, d *app.Deps, st *store.Store, e *Engine) {
-	h := &handler{d: d, st: st, e: e}
+	h := &handler{d: d, st: st, e: e, reg: registry.New()}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/container-update-rollouts", h.list)
@@ -201,6 +206,22 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The server decides what each target points at.
+	//
+	// The client was sending the digest from the updates row, which is what the
+	// FROM tag points at now. For a rebuild those are the same thing and it was
+	// right; for a version bump it is the OLD image's digest, so verification
+	// compared a correctly-updated container against the bytes it had just moved
+	// away from:
+	//
+	//	deployed, but curlimages/curl:8.22.0 is running sha256:58adaa4e…
+	//	rather than the sha256:d9b4541e… this rollout targets
+	//
+	// The deploy had worked. The rollout failed itself on its own expectation,
+	// which is worse than failing to act: the fleet moved and the record says it
+	// did not. A value the server can look up is not one to accept from a caller.
+	h.resolveTargets(r.Context(), images)
+
 	var by *uuid.UUID
 	if p := auth.MustPrincipal(r); p != nil {
 		id := p.UserID
@@ -256,4 +277,22 @@ func (h *handler) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"state": store.UpdateRolloutRunning})
+}
+
+// resolveTargets fills in what each image's TARGET tag points at, in place.
+//
+// Best-effort. A registry that will not answer leaves the digest empty, and
+// verification then accepts the tag alone — weaker, but it is the difference
+// between "we could not pin this exactly" and refusing to do the update at all.
+func (h *handler) resolveTargets(ctx context.Context, images []store.RolloutImage) {
+	for i := range images {
+		d, err := h.reg.Digest(ctx, images[i].Repository, images[i].ToTag)
+		if err != nil {
+			h.d.Log.Info("update rollout: could not resolve the target digest",
+				"repository", images[i].Repository, "tag", images[i].ToTag, "err", err)
+			images[i].TargetDigest = ""
+			continue
+		}
+		images[i].TargetDigest = d
+	}
 }

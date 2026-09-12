@@ -49,11 +49,16 @@ export function StartRolloutDialog({
   const toTag = update?.latestTag || update?.tag || "";
   const isRebuild = !!update && toTag === update.tag;
 
+  // No targetDigest. The server resolves what the TARGET tag points at.
+  //
+  // This used to send u.digest, which is what the FROM tag points at — the same
+  // thing for a rebuild, and the OLD image's digest for a version bump. A
+  // correctly updated container was then compared against the bytes it had just
+  // moved away from, and the rollout failed itself after succeeding.
   const imageOf = (u: ImageUpdate): RolloutImage => ({
     repository: u.repository,
     fromTag: u.tag,
     toTag: u.latestTag || u.tag,
-    targetDigest: u.digest,
   });
   const images = many ? many.map(imageOf) : [];
 
@@ -65,7 +70,6 @@ export function StartRolloutDialog({
             repository: update!.repository,
             fromTag: update!.tag,
             toTag,
-            targetDigest: update!.digest,
           }),
       canary, batchSize, soakSeconds, maxFailures,
       ...(windowStart && windowEnd ? { windowStart, windowEnd } : {}),

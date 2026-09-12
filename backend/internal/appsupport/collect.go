@@ -41,6 +41,10 @@ type Source interface {
 	Settings() []Setting
 	Health(ctx context.Context) []Check
 	FleetSummary(ctx context.Context) (FleetSummary, error)
+	// Hostnames is the fleet's own names, used only when masking is asked for.
+	// Only names this instance manages are masked: matching hostname-shaped words
+	// generally would catch every domain in every log, and most belong to others.
+	Hostnames(ctx context.Context) ([]string, error)
 	UpgradeStatus(ctx context.Context) (any, error)
 	Diagnostics(ctx context.Context) (Diagnostics, error)
 }
@@ -101,6 +105,8 @@ type Manifest struct {
 	By            string    `json:"generatedBy,omitempty"`
 	Version       string    `json:"provenanceVersion"`
 	Anonymised    int       `json:"addressesAnonymised"`
+	Masked        bool      `json:"hostnamesMasked"`
+	Ambiguous     []string  `json:"ambiguousHostnames,omitempty"`
 	Notes         []string  `json:"notes"`
 	CollectErrors []string  `json:"collectionErrors,omitempty"`
 }
@@ -111,8 +117,28 @@ type Manifest struct {
 // so a collector that refuses to produce anything because one source is
 // unreachable fails at the only moment it matters. Each failure is recorded in
 // the manifest and the rest of the bundle is written.
-func (c *Collector) Collect(ctx context.Context, w io.Writer, by string) error {
+// Options are the choices an operator makes when producing a bundle.
+type Options struct {
+	// Anonymise masks the fleet's hostnames and replaces IP addresses.
+	//
+	// Off by default, deliberately. A bundle usually goes to somebody who already
+	// knows the estate, and the real names make it far easier to read; masking is
+	// for the case where it is going further afield. Credential scrubbing is not
+	// part of this choice and always happens — a password has no audience.
+	Anonymise bool
+}
+
+func (c *Collector) Collect(ctx context.Context, w io.Writer, by string, opt Options) error {
 	anon := NewAnonymiser()
+	var ambiguous []string
+	if opt.Anonymise {
+		anon.Enable()
+		names, err := c.src.Hostnames(ctx)
+		if err == nil {
+			anon.MaskHostnames(names)
+			ambiguous = anon.AmbiguousHostnames()
+		}
+	}
 	var problems []string
 	note := func(what string, err error) {
 		if err != nil {
@@ -200,19 +226,15 @@ func (c *Collector) Collect(ctx context.Context, w io.Writer, by string) error {
 	// The manifest is written LAST, so it can report what went wrong collecting
 	// everything else and how many addresses were replaced.
 	m := Manifest{
-		Kind:      "provenance-support-bundle",
-		Format:    1,
-		Generated: time.Now().UTC(),
-		By:        by,
-		Version:   c.src.Version(),
-		Notes: []string{
-			"Hostnames are included. IP addresses are replaced with placeholders from the ranges reserved for documentation (RFC 5737, RFC 3849).",
-			"The same address maps to the same placeholder throughout this bundle, so relationships between machines are still readable.",
-			"The mapping is specific to this bundle: two bundles from the same instance use different placeholders and cannot be lined up against each other.",
-			"Loopback and unspecified addresses are left as they are, being diagnostic and identifying nobody.",
-			"Credential-shaped text has been removed. Configuration is reported from a fixed list of non-secret fields rather than from the environment.",
-		},
+		Kind:          "provenance-support-bundle",
+		Format:        1,
+		Generated:     time.Now().UTC(),
+		By:            by,
+		Version:       c.src.Version(),
+		Notes:         notes(opt.Anonymise, ambiguous),
 		Anonymised:    anon.Count(),
+		Masked:        opt.Anonymise,
+		Ambiguous:     ambiguous,
 		CollectErrors: problems,
 	}
 	addJSON("manifest.json", m)
@@ -249,4 +271,27 @@ func FetchDiagnostics(ctx context.Context, client *http.Client, baseURL, token s
 		return d, fmt.Errorf("the updater answered %d", resp.StatusCode)
 	}
 	return d, json.NewDecoder(io.LimitReader(resp.Body, 256<<20)).Decode(&d)
+}
+
+// notes says plainly what was and was not done, because a bundle outlives the
+// conversation in which it was produced.
+func notes(anonymised bool, ambiguous []string) []string {
+	out := []string{
+		"Credential-shaped text has been removed. Configuration is reported from a fixed list of non-secret fields rather than from the environment. This happens regardless of the anonymisation setting.",
+	}
+	if !anonymised {
+		return append(out,
+			"Hostnames and IP addresses are AS THEY ARE. This bundle describes a real network; treat it accordingly.",
+			"It can be produced with hostnames masked and addresses replaced instead — the option is offered when generating one.")
+	}
+	out = append(out,
+		"Hostnames have been masked, and IP addresses replaced with placeholders from the ranges reserved for documentation (RFC 5737, RFC 3849).",
+		"The same hostname and the same address map to the same placeholder throughout this bundle, so relationships between machines are still readable.",
+		"The mapping is specific to this bundle: two bundles from the same instance use different placeholders and cannot be lined up against each other.",
+		"Loopback and unspecified addresses are left as they are, being diagnostic and identifying nobody.")
+	if len(ambiguous) > 0 {
+		out = append(out, "These hostnames are also ordinary words, so they have been replaced wherever they appear — including where they did not refer to the host: "+
+			strings.Join(ambiguous, ", ")+".")
+	}
+	return out
 }

@@ -13,7 +13,7 @@ import (
 // lines are one client" — which is the actual diagnostic content of an address.
 // Randomising each occurrence anonymises perfectly and leaves nothing to read.
 func TestTheSameAddressAlwaysBecomesTheSamePseudonym(t *testing.T) {
-	a := NewAnonymiser()
+	a := newEnabled()
 	in := `10.10.0.120 connected
 10.10.0.5 refused
 10.10.0.120 retried
@@ -47,7 +47,7 @@ func TestTheSameAddressAlwaysBecomesTheSamePseudonym(t *testing.T) {
 func TestPseudonymsAreObviouslyNotReal(t *testing.T) {
 	// A reader must be able to tell at a glance that an address is a placeholder,
 	// or they will go and try to connect to it.
-	a := NewAnonymiser()
+	a := newEnabled()
 	out := a.Text("peer 192.168.1.50 and 172.16.0.9")
 	for _, want := range []string{"198.51.100."} {
 		if !strings.Contains(out, want) {
@@ -59,7 +59,7 @@ func TestPseudonymsAreObviouslyNotReal(t *testing.T) {
 func TestLoopbackAndUnspecifiedSurvive(t *testing.T) {
 	// Replacing 127.0.0.1 turns "the backend cannot reach its own database" into a
 	// puzzle, and reveals nothing about anybody.
-	a := NewAnonymiser()
+	a := newEnabled()
 	in := "listening on 0.0.0.0:8080; db at 127.0.0.1:5432; ::1 also"
 	out := a.Text(in)
 	for _, keep := range []string{"0.0.0.0:8080", "127.0.0.1:5432", "::1"} {
@@ -70,7 +70,7 @@ func TestLoopbackAndUnspecifiedSurvive(t *testing.T) {
 }
 
 func TestPortsAndSurroundingTextAreKept(t *testing.T) {
-	a := NewAnonymiser()
+	a := newEnabled()
 	out := a.Text(`10.10.0.120:55050 - "GET /api/v1/hosts HTTP/1.1" 200`)
 	if !strings.Contains(out, ":55050") {
 		t.Errorf("the port was lost, and a port is diagnostic:\n%s", out)
@@ -82,7 +82,7 @@ func TestPortsAndSurroundingTextAreKept(t *testing.T) {
 
 // The trap: version strings look like addresses.
 func TestVersionStringsAreNotMistakenForAddresses(t *testing.T) {
-	a := NewAnonymiser()
+	a := newEnabled()
 	versions := []string{
 		"4.0.19.2979-ls320", // sonarr
 		"6.3.0.10514-ls312", // radarr
@@ -101,7 +101,7 @@ func TestVersionStringsAreNotMistakenForAddresses(t *testing.T) {
 }
 
 func TestIPv6IsMappedToo(t *testing.T) {
-	a := NewAnonymiser()
+	a := newEnabled()
 	out := a.Text("peer fd00:1234:5678::1 and again fd00:1234:5678::1")
 	if strings.Contains(out, "fd00:1234") {
 		t.Errorf("an IPv6 address survived:\n%s", out)
@@ -119,11 +119,61 @@ func TestIPv6IsMappedToo(t *testing.T) {
 func TestTwoBundlesDoNotShareAMapping(t *testing.T) {
 	// Per-bundle, deliberately: a recipient holding two bundles should not be able
 	// to line them up into a longer-lived picture of the network.
-	a, b := NewAnonymiser(), NewAnonymiser()
+	a, b := newEnabled(), newEnabled()
 	_ = a.Text("10.10.0.5")
 	out := b.Text("10.10.0.9 then 10.10.0.5")
 	// In b, .9 was seen first, so .5 cannot have b's first pseudonym.
 	if strings.HasPrefix(out, "198.51.100.1 ") && strings.HasSuffix(out, "198.51.100.1") {
 		t.Error("mappings are shared between anonymisers")
+	}
+}
+
+// newEnabled is the anonymiser as Collect configures it when masking is asked
+// for. It does nothing unless enabled, which is the default everywhere else.
+func newEnabled() *Anonymiser {
+	a := NewAnonymiser()
+	a.Enable()
+	return a
+}
+
+func TestADisabledAnonymiserChangesNothing(t *testing.T) {
+	// The default. A bundle usually goes to somebody who already knows the estate.
+	a := NewAnonymiser()
+	a.MaskHostnames([]string{"control01"})
+	in := "control01 at 10.10.0.120 talking to fd00::1"
+	if got := a.Text(in); got != in {
+		t.Errorf("an anonymiser that was never enabled altered its input:\n  %s", got)
+	}
+	if a.Count() != 0 {
+		t.Errorf("counted %d replacements while disabled", a.Count())
+	}
+}
+
+func TestHostnamesAreMaskedConsistentlyOnWordBoundaries(t *testing.T) {
+	a := newEnabled()
+	a.MaskHostnames([]string{"control01", "docker", "ai"})
+	out := a.Text("control01 reached docker; control01 retried")
+
+	if strings.Contains(out, "control01") {
+		t.Errorf("a hostname survived: %s", out)
+	}
+	f := strings.Fields(out)
+	if f[0] != f[3] {
+		t.Errorf("the same host got two placeholders (%s vs %s)", f[0], f[3])
+	}
+	// A substring must not be caught: "aim" contains "ai".
+	if got := a.Text("the aim was clear"); got != "the aim was clear" {
+		t.Errorf("a hostname matched inside another word: %s", got)
+	}
+}
+
+func TestAmbiguousHostnamesAreReported(t *testing.T) {
+	// "docker" as a host means every mention of the tool is replaced too. That is
+	// the price of masking, not a defect — but a reader has to be told.
+	a := newEnabled()
+	a.MaskHostnames([]string{"control01", "docker", "repo"})
+	got := a.AmbiguousHostnames()
+	if len(got) != 2 {
+		t.Errorf("ambiguous = %v, want docker and repo", got)
 	}
 }

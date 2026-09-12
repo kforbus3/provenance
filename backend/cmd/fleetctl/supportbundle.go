@@ -125,6 +125,23 @@ func (c cliSource) FleetSummary(ctx context.Context) (appsupport.FleetSummary, e
 
 // UpgradeStatus comes from the updater, which holds it on disk — so it survives
 // the backend being down, which is when this path is used.
+func (c cliSource) Hostnames(ctx context.Context) ([]string, error) {
+	rows, err := c.pool.Query(ctx, `SELECT hostname FROM hosts WHERE COALESCE(hostname,'') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 func (c cliSource) UpgradeStatus(ctx context.Context) (any, error) {
 	d, err := c.Diagnostics(ctx)
 	if err != nil {
@@ -139,7 +156,7 @@ func (c cliSource) Diagnostics(ctx context.Context) (appsupport.Diagnostics, err
 }
 
 // supportBundleCmd writes a bundle to a file.
-func supportBundleCmd(ctx context.Context, pool *pgxpool.Pool, st *store.Store, cfg *config.Config, version, out string) error {
+func supportBundleCmd(ctx context.Context, pool *pgxpool.Pool, st *store.Store, cfg *config.Config, version, out string, anonymise bool) error {
 	if out == "" {
 		out = fmt.Sprintf("provenance-support-%s.tar.gz", time.Now().UTC().Format("20060102-150405"))
 	}
@@ -152,11 +169,16 @@ func supportBundleCmd(ctx context.Context, pool *pgxpool.Pool, st *store.Store, 
 	defer f.Close()
 
 	src := cliSource{pool: pool, cfg: cfg, st: st, version: version}
-	if err := appsupport.New(src).Collect(ctx, f, "fleetctl"); err != nil {
+	if err := appsupport.New(src).Collect(ctx, f, "fleetctl",
+		appsupport.Options{Anonymise: anonymise}); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s\n", out)
-	fmt.Println("Hostnames are included; IP addresses are replaced with consistent placeholders.")
+	if anonymise {
+		fmt.Println("Hostnames are masked and IP addresses replaced with consistent placeholders.")
+	} else {
+		fmt.Println("Hostnames and IP addresses are AS THEY ARE. Pass --anonymise to mask them.")
+	}
 	fmt.Println("See manifest.json inside the bundle for exactly what was collected and redacted.")
 	return nil
 }

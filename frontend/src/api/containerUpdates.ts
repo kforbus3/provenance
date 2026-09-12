@@ -52,9 +52,13 @@ export async function listContainerUpdates(): Promise<ImageUpdate[]> {
   return data.updates ?? [];
 }
 
-export async function checkContainerUpdates(): Promise<{ status: string; note?: string }> {
+// Forced by default: somebody pressing the button is asking because they believe
+// the answer has changed, usually because they just changed it. Pass force=false
+// for a pass that respects the twelve-hour freshness window, which is what a
+// script polling this should do.
+export async function checkContainerUpdates(force = true): Promise<{ status: string; note?: string }> {
   const { data } = await api.post<{ status: string; note?: string }>(
-    "/api/v1/container-updates/check");
+    "/api/v1/container-updates/check", null, { params: force ? undefined : { force: 0 } });
   return data;
 }
 

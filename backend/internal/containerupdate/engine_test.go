@@ -992,3 +992,43 @@ func TestTruncatedAdoptOutputIsRefused(t *testing.T) {
 		t.Errorf("unclear reason: %v", err)
 	}
 }
+
+// The rollout that updated a container correctly and then failed itself.
+//
+//	deployed, but curlimages/curl:8.22.0 is running sha256:58adaa4e…
+//	rather than the sha256:d9b4541e… this rollout targets
+//
+// 58adaa4e was the right digest for 8.22.0. d9b4541e was 8.10.1 — the image it
+// had just moved AWAY from. The client had sent the digest from the updates row,
+// which is what the FROM tag points at: correct for a rebuild, where from and to
+// are the same tag, and the old image's digest for a version bump.
+//
+// The deploy had worked. Failing on your own expectation is worse than failing to
+// act, because the fleet moved and the record says it did not.
+func TestVerifyComparesAgainstTheTargetTagNotTheOldOne(t *testing.T) {
+	f, rid, _ := inPlaceFixture("1.24", "1.24") // a rebuild
+	f.rollouts[0].TargetDigest = "sha256:new"
+	newEngine(f, &fakeDeployer{}, scripted("::OK::\nnginx:1.24\tnginx@sha256:new\n", composeNginx)).
+		Tick(context.Background())
+	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
+		t.Fatalf("a rebuild landing on its target digest should verify: %q (%q)",
+			got, f.hosts[rid][0].Error)
+	}
+
+	// A version bump whose target digest is the OLD image's: the host lands on the
+	// NEW tag with the NEW digest and must not be reported as a failure for it.
+	// The server resolving the digest itself is what prevents this; the engine's
+	// job is to compare against whatever it was given, so this pins the shape of
+	// the failure rather than the fix.
+	g, gid, _ := inPlaceFixture("1.24", "1.27")
+	g.rollouts[0].TargetDigest = "sha256:old" // what the client used to send
+	newEngine(g, &fakeDeployer{}, scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)).
+		Tick(context.Background())
+	h := g.hosts[gid][0]
+	if h.State != store.UpdateHostFailed {
+		t.Skip("engine no longer compares digests; the server-side resolution covers it")
+	}
+	if !strings.Contains(h.Error, "rather than the") {
+		t.Errorf("got %q", h.Error)
+	}
+}

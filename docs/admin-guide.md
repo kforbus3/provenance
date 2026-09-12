@@ -1201,20 +1201,40 @@ Nothing is stored on the server — the file is built as it downloads.
 A bundle exists to be **sent** somewhere, so this is the part worth reading before
 you send one.
 
-**Hostnames are kept.** They are what makes a bundle readable, and an operator
-sending one already knows their own estate.
+**Credentials are always removed**, whatever else you choose. Free text is
+scrubbed for the shapes they take: passwords and tokens in `key=value` form,
+`Authorization` headers, connection strings with inline credentials, private-key
+blocks, and JWTs. That is not part of any option — a password has no audience.
 
-**IP addresses are replaced** with placeholders from the ranges reserved for
-documentation (RFC 5737, RFC 3849), so a reader can tell at a glance that an
-address is not real. The **same address becomes the same placeholder throughout
-the bundle** — without that, "this host talked to the same peer twice" and "these
-forty lines are one client" are lost, which is most of what an address is
-diagnostically for. The mapping is unique to each bundle, so two bundles from the
-same instance cannot be lined up against each other into a longer-lived picture of
-the network.
+**Hostnames and IP addresses are included as they are, unless you ask otherwise.**
+There is a checkbox when you generate a bundle, and `--anonymise` on the command
+line. It is off by default because a bundle usually goes to somebody who already
+knows the estate, and real names make it far easier to read; masking is for when
+it is going further afield.
 
-Loopback and unspecified addresses are left alone: replacing `127.0.0.1` turns
-"the backend cannot reach its own database" into a puzzle and identifies nobody.
+With masking on:
+
+- hostnames become `host-1`, `host-2` and so on, and IP addresses are replaced
+  with placeholders from the ranges reserved for documentation (RFC 5737, RFC
+  3849), so a reader can tell at a glance that an address is not real
+- the **same name and the same address become the same placeholder throughout** —
+  without that, "this host talked to the same peer twice" and "these forty lines
+  are one client" are lost, which is most of what an address is diagnostically for
+- the mapping is unique to each bundle, so two bundles from the same instance
+  cannot be lined up against each other into a longer-lived picture of the network
+- loopback and unspecified addresses are left alone: replacing `127.0.0.1` turns
+  "the backend cannot reach its own database" into a puzzle and identifies nobody
+
+One cost worth knowing about. A hostname that is also an ordinary word — `docker`,
+`repo`, `ai`, `python` are all plausible — is replaced **wherever it appears**,
+including where it did not refer to the host. A line about the docker daemon will
+read as a line about `host-4`. That is the price of masking rather than a defect
+in it, and `manifest.json` lists which names were ambiguous so a reader can allow
+for it.
+
+Only hostnames this instance manages are masked. Matching hostname-shaped words
+generally would catch every domain in every log line, and most of those belong to
+other people.
 
 **Configuration comes from a fixed list of non-secret fields**, never from the
 environment. Deny by default: a newly added setting is absent from a bundle until
@@ -1228,8 +1248,9 @@ credentials, private-key blocks, and JWTs. Scrubbing is the second line, not the
 first — a value that does not *look* like a secret survives it, which is why
 configuration goes through the allowlist instead.
 
-`manifest.json` repeats all of this and records how many addresses were replaced,
-so somebody opening the bundle months later can tell what they are holding.
+`manifest.json` repeats all of this — including whether masking was used and how
+many addresses were replaced — so somebody opening the bundle months later can
+tell what they are holding.
 
 ### When the interface is unavailable
 
@@ -1237,7 +1258,7 @@ A diagnostic tool that needs the thing being diagnosed to be healthy is not much
 of one. The same bundle can be produced from the host:
 
 ```
-fleetctl support-bundle --out provenance-support.tar.gz
+fleetctl support-bundle --out provenance-support.tar.gz [--anonymise]
 ```
 
 It needs only the database and, if it is running, the updater — not the backend.

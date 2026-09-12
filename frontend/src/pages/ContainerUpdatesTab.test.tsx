@@ -173,3 +173,35 @@ describe("ContainerUpdatesTab unchecked images", () => {
     expect(screen.queryByText("up to date")).not.toBeInTheDocument();
   });
 });
+
+describe("ContainerUpdatesTab summary", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("counts newer versions and rebuilds separately", async () => {
+    // "8 images have something newer available" over a list where seven rows read
+    // "rebuilt" and one reads a version number invites exactly one question: why
+    // does only one show an update? Both are actionable and only one is a new
+    // version, which is the distinction the rest of the screen is built on.
+    const rows = [
+      {
+        repository: "nginx", tag: "1.24", latestTag: "1.27",
+        checkedAt: new Date().toISOString(),
+        hosts: [{ hostId: "h1", hostname: "web1", stale: false }],
+      },
+      ...["redis", "caddy"].map((r) => ({
+        repository: r, tag: "1", digest: "sha256:new",
+        note: "tag moved: rebuilt at the same version",
+        checkedAt: new Date().toISOString(),
+        hosts: [{ hostId: "h2", hostname: "docker", stale: true }],
+      })),
+    ];
+    vi.mocked(listContainerUpdates).mockResolvedValue(rows as never);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText(/1 image has a newer version/)).toBeInTheDocument());
+    expect(screen.getByText(/2 have been rebuilt at the same version/)).toBeInTheDocument();
+    // And it explains why the list can look shorter than the total.
+    expect(screen.getByText(/same version republished/)).toBeInTheDocument();
+  });
+});

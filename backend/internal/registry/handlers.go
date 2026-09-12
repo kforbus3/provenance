@@ -58,16 +58,35 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) check(w http.ResponseWriter, r *http.Request) {
+	// A deliberate press means now.
+	//
+	// The twelve-hour window exists to stop the scheduled sweep re-asking
+	// registries about answers it already has. Applying it to somebody who has
+	// just pressed a button made the button do nothing whenever it was most
+	// wanted — after changing something and wanting to see the effect.
+	//
+	// Opt out with ?force=0 for a pass that respects the window, which is what a
+	// script polling this endpoint should do.
+	force := r.URL.Query().Get("force") != "0"
+
 	// Detached from the request: a sweep over every image the fleet runs takes
 	// longer than the 60s router timeout, and cancelling it halfway would leave
 	// half the table updated with no record of why the rest was skipped.
 	ctx := context.WithoutCancel(r.Context())
 	go func() {
-		checked, failed := h.svc.Check(ctx)
-		h.d.Log.Info("container update check (manual)", "checked", checked, "failed", failed)
+		var checked, failed, remaining int
+		if force {
+			checked, failed, remaining = h.svc.CheckNow(ctx)
+		} else {
+			checked, failed = h.svc.Check(ctx)
+		}
+		h.d.Log.Info("container update check (manual)",
+			"checked", checked, "failed", failed, "forced", force, "remaining", remaining)
 	}()
-	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{
-		"status": "checking",
-		"note":   "results appear as each registry answers; refresh to see them",
-	})
+
+	note := "results appear as each registry answers; refresh to see them"
+	if force {
+		note = "re-asking every registry, ignoring the twelve-hour freshness window — results appear as each answers"
+	}
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "checking", "note": note})
 }
