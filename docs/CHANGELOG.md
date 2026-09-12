@@ -5,6 +5,31 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.5 — 2026-09-12
+
+**The Containers page no longer blanks after an upgrade.** An image no host runs
+any more came back with `hosts: null` rather than an empty list, and one
+`.filter` on that unmounted the whole app — a white screen on a page that worked
+a moment earlier. It was not an edge case: upgrading this product replaces its
+own containers, so the tags it just superseded keep their rows until the next
+check pass prunes them. Every upgrade produced several, so the page broke right
+after every upgrade. Fixed in the query, in the page, and behind a per-tab error
+boundary, because the next null will be a different field. Those leftover rows
+also said "up to date" — a claim about something you are running; they say
+"no longer running" now.
+
+**Install no longer needs clicking three times.** The status endpoint reports
+the previous run until the updater picks the new job up, so the spinner appeared,
+then vanished a poll later when the old run's result arrived, and the Install
+button came back with nothing on screen to say anything was happening. It stays
+in progress now until the server reports a result for the version this page
+dispatched, and says it is waiting for the updater rather than echoing the last
+run. A duplicate apply is refused with a clear message instead of returning
+"applying" and being discarded out of sight — three upgrades were dispatched in
+sixteen seconds, two of which did nothing but write audit rows.
+
+---
+
 ## v1.2.4 — 2026-09-12
 
 **Containers are collected on their own cadence.** v1.2.3 shipped container
