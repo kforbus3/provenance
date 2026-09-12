@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.20 — 2026-09-12
+
+**Every compose project on the fleet is now visible, and none of it needs setting
+up.** The Containers screen listed only the compose files Provenance had taken a
+copy of — and it takes one as a side effect of a rollout that needs it. So a
+working deployment showed one row, or none, and read as an empty product with a
+configuration task attached. In fact sixteen projects across seven hosts were
+already discovered, in five different parts of the filesystem, because every
+compose-managed container records its own project and directory. A Discovered tab
+now lists them and is the default, and says plainly that updates work without
+adopting anything: a rebuild is pulled and recreated in place, and a version
+change takes a copy of the file by itself. A short Managed stacks list is the
+normal state of a working deployment, not a backlog.
+
+**A calendar version is no longer compared with a semantic one.** One repository
+publishes both `2.8.3` and `2021.11.28`; every ordering rule passed and then 2021
+was larger than 2, so a four-year-old image was offered as an upgrade over a
+current one. Mixing the two schemes now reads "cannot compare". Dates still order
+against dates.
+
+---
+
 ## v1.2.19 — 2026-09-12
 
 **A deploy no longer strands containers that share another's network.** A service
