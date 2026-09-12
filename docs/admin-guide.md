@@ -1165,3 +1165,85 @@ Two more controls tighten the platform:
   **site** instances into a single pane of glass (site-initiated tunnels, Ed25519 acting-user
   assertions, a global site selector). Opt-in via `FLEET_MODE=hub|site`; off by default. See
   **[Multi-site federation](./federation.md)**.
+
+## 25. Support bundles
+
+Two kinds, for two different questions.
+
+**A host support bundle** answers "what is wrong with that machine": system,
+CPU/memory, disk and filesystems, network, processes, services, updates, security
+posture, and recent logs, collected over the SSH gateway. It is on a host's detail
+page.
+
+**A Provenance support bundle** answers "what is wrong with this application", and
+is on **Settings → Support bundle**. Reporting a problem should not require
+knowing which container to exec into, which log to tail, or which table to query.
+
+It contains:
+
+| file | what it answers |
+|---|---|
+| `manifest.json` | what this bundle is, when and by whom, and what was redacted |
+| `instances.json` | versions and cluster members, and which is leader |
+| `migrations.txt` | which schema migrations have been applied |
+| `settings.json` | non-secret configuration, and whether each secret is *set* |
+| `jobs.json` | every scheduled job, when it last ran, and its last error |
+| `health.json` | database and updater reachability |
+| `upgrade-status.json` | the last upgrade and how it ended |
+| `fleet-summary.json` | host counts by status, containers, stacks, running rollouts |
+| `containers.txt` | every Provenance container and its state |
+| `logs/*.log` | recent logs from each, timestamped |
+
+Nothing is stored on the server — the file is built as it downloads.
+
+### What is redacted, and what is not
+
+A bundle exists to be **sent** somewhere, so this is the part worth reading before
+you send one.
+
+**Hostnames are kept.** They are what makes a bundle readable, and an operator
+sending one already knows their own estate.
+
+**IP addresses are replaced** with placeholders from the ranges reserved for
+documentation (RFC 5737, RFC 3849), so a reader can tell at a glance that an
+address is not real. The **same address becomes the same placeholder throughout
+the bundle** — without that, "this host talked to the same peer twice" and "these
+forty lines are one client" are lost, which is most of what an address is
+diagnostically for. The mapping is unique to each bundle, so two bundles from the
+same instance cannot be lined up against each other into a longer-lived picture of
+the network.
+
+Loopback and unspecified addresses are left alone: replacing `127.0.0.1` turns
+"the backend cannot reach its own database" into a puzzle and identifies nobody.
+
+**Configuration comes from a fixed list of non-secret fields**, never from the
+environment. Deny by default: a newly added setting is absent from a bundle until
+somebody decides it is safe to include. Secrets are reported as `set` or
+`not set`, which is the diagnostic half — an audit HMAC key that is empty explains
+a whole class of symptom and its bytes explain nothing.
+
+**Free text is scrubbed** for the shapes credentials take: passwords and tokens in
+`key=value` form, `Authorization` headers, connection strings with inline
+credentials, private-key blocks, and JWTs. Scrubbing is the second line, not the
+first — a value that does not *look* like a secret survives it, which is why
+configuration goes through the allowlist instead.
+
+`manifest.json` repeats all of this and records how many addresses were replaced,
+so somebody opening the bundle months later can tell what they are holding.
+
+### When the interface is unavailable
+
+A diagnostic tool that needs the thing being diagnosed to be healthy is not much
+of one. The same bundle can be produced from the host:
+
+```
+fleetctl support-bundle --out provenance-support.tar.gz
+```
+
+It needs only the database and, if it is running, the updater — not the backend.
+Scheduled job history lives in the running backend's memory, so that section is
+reported as unavailable rather than omitted: "no jobs have run" and "this bundle
+could not ask" are different answers.
+
+Generating a bundle is recorded in the audit log, because it leaves the instance
+carrying configuration and logs.

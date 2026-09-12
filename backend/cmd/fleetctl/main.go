@@ -50,6 +50,7 @@ Usage:
   fleetctl enable-user <username>                        Re-enable and unlock a disabled account
   fleetctl rotate-ca                                     Generate a new active user CA
   fleetctl list-users                                    List accounts
+  fleetctl support-bundle [--out FILE]                   Write a support bundle about this instance (for problem reports)
   fleetctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
   fleetctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
   fleetctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
@@ -111,6 +112,17 @@ func run(cmd string, args []string) error {
 	st := store.New(pool)
 
 	switch cmd {
+	case "support-bundle":
+		// The same bundle the web interface offers, produced without it — which is
+		// the point, since "something is wrong" sometimes means the interface will
+		// not load.
+		out := ""
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == "--out" || args[i] == "-o" {
+				out = args[i+1]
+			}
+		}
+		return supportBundleCmd(ctx, pool, st, cfg, os.Getenv("FLEET_VERSION"), out)
 	case "create-admin":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: fleetctl create-admin <username> <password> [email]")

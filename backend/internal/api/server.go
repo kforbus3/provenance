@@ -1260,6 +1260,15 @@ func (s *Server) registerRoutes(r chi.Router) {
 	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
 	stacks.Mount(r, deps, s.stacks)
 	registry.Mount(r, deps, s.imageCheck, s.Store)
+
+	// The application's own support bundle, for when Provenance is the thing
+	// misbehaving. System.Configure: it carries configuration, cluster identity
+	// and this instance's logs.
+	r.Group(func(pr chi.Router) {
+		pr.Use(deps.Auth.RequireAuth)
+		pr.With(deps.Auth.RequirePermission("System.Configure")).
+			Get("/system/support-bundle", s.supportBundle)
+	})
 	containerupdate.Mount(r, deps, s.Store, s.updateEngine)
 	upgrade.Mount(r, deps, s.upgradeSvc)
 

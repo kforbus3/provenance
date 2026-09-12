@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,6 +92,19 @@ func main() {
 			return
 		}
 		writeJSON(w, u.getStatus())
+	})
+	// Read-only diagnostics for the application's own support bundle. This is the
+	// only component with a Docker socket, so it is the only one that can say what
+	// the containers are doing.
+	mux.HandleFunc("/diagnostics", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(cfg.Token, r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		writeJSON(w, u.docker.(*execDocker).collectDiagnostics(ctx, lines))
 	})
 	mux.HandleFunc("/apply", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
