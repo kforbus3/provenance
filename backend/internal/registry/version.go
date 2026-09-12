@@ -46,22 +46,25 @@ var buildCounter = regexp.MustCompile(`^(.*?[^0-9])([0-9]+)$`)
 // behind.
 //
 // A build counter is not a variant. It is the same stem with a number after it,
-// which is exactly what this splits out -- and "-alpine" against "-bookworm"
-// still has two different stems, so that refusal is untouched.
+// which is exactly what this splits out, and every refusal that matters survives
+// it because the STEM still has to match exactly:
+//
+//   - "-alpine" against "-bookworm": different distributions, different stems.
+//   - "-alpine3.21" against "-alpine4.0": stems "-alpine3." and "-alpine4.", so
+//     an OS major is never crossed. What DOES compare is "-alpine3.21" against
+//     "-alpine3.22", a patch of the same base image, which is the same kind of
+//     move a build counter is.
+//   - "1.0.0" against "1.0.0-rc1": stems "" and "-rc", so a prerelease and a
+//     release stay separate.
+//
+// The stem may contain digits, because in practice it does: qbittorrent is
+// tagged 5.2.3_v2.0.13-ls469, where the digits are the bundled libtorrent
+// version. Refusing those left it unorderable against 5.2.3_v2.0.13-ls470, the
+// very next build -- while "_v2.0.14-ls471" is still refused, since bumping
+// libtorrent changes the stem.
 func suffixParts(suffix string) (stem string, counter int) {
 	m := buildCounter.FindStringSubmatch(suffix)
 	if m == nil {
-		return suffix, -1
-	}
-	// The stem may not itself contain digits.
-	//
-	// "-alpine3.21" would otherwise split into a stem of "-alpine3." and a
-	// counter of 21, making "-alpine3.22" its successor and, worse, putting
-	// "-alpine4.0" one step away from looking orderable. The number in that
-	// suffix is the base image's OWN version, not a count of builds, and the
-	// whole point of the suffix rule is that changing the operating system
-	// inside a container is not a patch bump.
-	if strings.ContainsAny(m[1], "0123456789") {
 		return suffix, -1
 	}
 	n, err := strconv.Atoi(m[2])

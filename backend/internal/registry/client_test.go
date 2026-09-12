@@ -126,7 +126,7 @@ func TestTokenChallengeFlow(t *testing.T) {
 
 	// A second call to the same repository must reuse the token. Registries rate
 	// limit, and a sweep over a fleet multiplies every avoidable request.
-	if _, err := c.Tags(context.Background(), repo); err != nil {
+	if _, _, err := c.Tags(context.Background(), repo); err != nil {
 		t.Fatalf("Tags: %v", err)
 	}
 	if *tokenRequests != 1 {
@@ -138,7 +138,7 @@ func TestTokenChallengeFlow(t *testing.T) {
 func TestTagsListed(t *testing.T) {
 	srv, _ := newTestRegistry(t, []string{"1.0", "1.1", "latest"}, "sha256:x")
 	c := testClient(t, srv)
-	tags, err := c.Tags(context.Background(),
+	tags, _, err := c.Tags(context.Background(),
 		strings.TrimPrefix(srv.URL, "http://")+"/team/app")
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
@@ -204,5 +204,85 @@ func TestMissingDigestHeaderIsAnError(t *testing.T) {
 		strings.TrimPrefix(srv.URL, "http://")+"/team/app", "1.0")
 	if err == nil {
 		t.Errorf("expected an error, got digest %q", got)
+	}
+}
+
+// One page of 1000 was not a bound, it was a wrong answer.
+//
+// A tag list is not ordered by anything useful — registries return roughly
+// insertion order, so the CURRENT release is at the END. Stopping after the
+// first page of lscr.io/linuxserver/bazarr returned 1000 tags from 2019 and no
+// sign of the tag actually running, and "nothing newer exists" was then reported
+// with complete confidence about a list that did not contain the present. That
+// repository has 9261 tags across ten pages.
+func TestTagsFollowsPagination(t *testing.T) {
+	var pages int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("last") {
+		case "":
+			pages++
+			w.Header().Set("Link", `</v2/team/app/tags/list?n=1000&last=old>; rel="next"`)
+			json.NewEncoder(w).Encode(map[string]any{"tags": []string{"1.0.0", "1.1.0"}})
+		case "old":
+			pages++
+			// The last page, and the only one carrying the current release.
+			json.NewEncoder(w).Encode(map[string]any{"tags": []string{"1.2.0"}})
+		default:
+			t.Errorf("unexpected page %q", r.URL.String())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(t, srv)
+	tags, complete, err := c.Tags(context.Background(),
+		strings.TrimPrefix(srv.URL, "http://")+"/team/app")
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if pages != 2 {
+		t.Errorf("read %d page(s), want 2 — the newest tag is on the last one", pages)
+	}
+	if !complete {
+		t.Error("a listing that reached the end must report itself complete")
+	}
+	if got := strings.Join(tags, ","); got != "1.0.0,1.1.0,1.2.0" {
+		t.Errorf("tags = %q", got)
+	}
+}
+
+func TestATruncatedListingIsNotReportedAsComplete(t *testing.T) {
+	// A registry that keeps offering another page forever. The bound holds, and
+	// the answer says it is partial — "nothing newer was found" is all a
+	// truncated list can support.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `</v2/team/app/tags/list?n=1000&last=x>; rel="next"`)
+		json.NewEncoder(w).Encode(map[string]any{"tags": []string{"1.0.0"}})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(t, srv)
+	_, complete, err := c.Tags(context.Background(),
+		strings.TrimPrefix(srv.URL, "http://")+"/team/app")
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if complete {
+		t.Error("a listing stopped by the page bound must not report itself complete")
+	}
+}
+
+func TestNextLink(t *testing.T) {
+	cases := map[string]string{
+		`</v2/team/app/tags/list?n=1000&last=x>; rel="next"`:          "/v2/team/app/tags/list?n=1000&last=x",
+		`<https://reg.example.com/v2/a/tags/list?last=x>; rel="next"`: "/v2/a/tags/list?last=x",
+		`<v2/a/tags/list?last=x>; rel="next"`:                         "/v2/a/tags/list?last=x",
+		`</v2/a/tags/list>; rel="prev"`:                               "",
+		``:                                                            "",
+		`garbage`:                                                     "",
+	}
+	for header, want := range cases {
+		if got := nextLink(header); got != want {
+			t.Errorf("nextLink(%q) = %q, want %q", header, got, want)
+		}
 	}
 }

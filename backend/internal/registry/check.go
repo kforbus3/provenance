@@ -200,7 +200,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		return rec
 	}
 
-	tags, err := c.client.Tags(ctx, img.Repository)
+	tags, complete, err := c.client.Tags(ctx, img.Repository)
 	if err != nil {
 		// The digest answer is still good and worth keeping. Record the tag
 		// listing failure as a note rather than an error so the row does not read
@@ -216,13 +216,24 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	newest, reason := Newest(img.Tag, tags)
 	rec.LatestTag = newest
 	rec.Note = reason
+	// A truncated listing can support "nothing newer was FOUND", never "nothing
+	// newer exists". Saying the second about the first is how an operator is told
+	// an image is current when the list never reached the present.
+	if !complete && newest == "" {
+		reason = "the tag list was too long to read in full, so this is what was " +
+			"found rather than everything there is"
+		rec.Note = reason
+	}
 	if img.Declared {
 		// The digest comparison below asks "did the bytes behind the tag this
 		// host PULLED change". For a declared tag the host has not pulled it, so
 		// there is nothing truthful to say about a rebuild -- but the drift
 		// itself is worth saying, and it is the reason the version above was
 		// findable at all.
-		if newest == "" {
+		// The reason is kept, not dropped. "Nothing was found" and "nothing could
+		// be compared" are different facts, and a declared row that showed only
+		// the drift message hid which of them applied.
+		if reason == "" {
 			rec.Note = drifted(img)
 		} else {
 			rec.Note = reason + "; " + drifted(img)

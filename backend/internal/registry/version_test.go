@@ -183,6 +183,8 @@ func TestABuildCounterIsNotAVariant(t *testing.T) {
 		{"v1.6.0-ls356", "v1.7.1-ls372", "a version bump carrying a later build number"},
 		{"v1.6.0-ls356", "v1.6.0-ls372", "the same version rebuilt, which is what the counter counts"},
 		{"5.0.4-ls263", "5.1.0-ls270", "sabnzbd, as it is actually tagged"},
+		{"5.2.3_v2.0.13-ls469", "5.2.3_v2.0.13-ls470", "qbittorrent: the stem carries the bundled libtorrent version, digits and all"},
+		{"1.27-alpine3.21", "1.30-alpine3.22", "a patch of the same base image is the same kind of move a counter is"},
 	}
 	for _, c := range newer {
 		a, _ := ParseVersion(c.from)
@@ -195,8 +197,8 @@ func TestABuildCounterIsNotAVariant(t *testing.T) {
 	// Everything the suffix rule exists to refuse still has to be refused.
 	refused := []struct{ a, b, why string }{
 		{"15-alpine", "16-bookworm", "a different base image is not a patch bump"},
-		{"1.27-alpine3.21", "1.30-alpine3.22", "the number in -alpine3.21 is the OS version, not a build count"},
-		{"1.27-alpine3.21", "1.30-alpine4.0", "and it must not become orderable across an OS major"},
+		{"1.27-alpine3.21", "1.30-alpine4.0", "an OS major is a different stem and must never be crossed"},
+		{"5.2.3_v2.0.13-ls469", "5.2.3_v2.0.14-ls475", "bumping the bundled libtorrent changes the stem"},
 		{"1.0.0-rc1", "1.1.0", "a prerelease and a release are different things"},
 		{"1.0.0", "1.1.0-rc1", "and in that direction too"},
 		{"2.8.3", "2021.11.28", "heimdall publishes both schemes; the year is not a major version"},

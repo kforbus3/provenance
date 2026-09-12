@@ -205,32 +205,105 @@ func (c *Client) Digest(ctx context.Context, repo, tag string) (string, error) {
 	return d, nil
 }
 
-// Tags lists a repository's tags.
-func (c *Client) Tags(ctx context.Context, repo string) ([]string, error) {
+// Bounds on a tag listing.
+//
+// One page of 1000 was not a bound, it was a wrong answer. A tag list is not
+// ordered by anything useful -- registries return roughly insertion order, and
+// the CURRENT release is therefore at the END -- so stopping after the first
+// page of lscr.io/linuxserver/bazarr returned 1000 tags from 2019 and no sign of
+// the tag actually running. "Nothing newer exists" was then reported with
+// complete confidence about a list that did not contain the present.
+//
+// Ten pages covers bazarr's 9261 tags; jackett needs more than twenty. Forty is
+// room for these to grow and still a bound: a runaway listing costs forty
+// requests, not thousands.
+const (
+	maxTagPages = 40
+	maxTags     = 40000
+)
+
+// Tags lists a repository's tags, following pagination.
+//
+// complete reports whether the listing finished. A truncated list can only
+// support "nothing newer was FOUND", never "nothing newer exists", and the
+// difference has to survive as far as the operator -- so it is returned rather
+// than logged.
+func (c *Client) Tags(ctx context.Context, repo string) (tags []string, complete bool, err error) {
 	host, path := splitRepository(repo)
-	// n=1000: enough for any repository worth tracking, and a bound rather than
-	// following pagination forever against a rate limit.
-	resp, err := c.do(ctx, http.MethodGet, host, "/v2/"+path+"/tags/list?n=1000", path, nil)
+	next := "/v2/" + path + "/tags/list?n=1000"
+	for page := 0; page < maxTagPages && next != ""; page++ {
+		var got []string
+		got, next, err = c.tagPage(ctx, host, next, path, repo)
+		if err != nil {
+			return nil, false, err
+		}
+		tags = append(tags, got...)
+		if len(tags) >= maxTags {
+			return tags, false, nil
+		}
+	}
+	return tags, next == "", nil
+}
+
+// tagPage reads one page and the link to the next, if the registry sent one.
+func (c *Client) tagPage(ctx context.Context, host, path, repoPath, repo string) ([]string, string, error) {
+	resp, err := c.do(ctx, http.MethodGet, host, path, repoPath, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusTooManyRequests:
-		return nil, fmt.Errorf("the registry is rate limiting this instance; try again later or configure credentials")
+		return nil, "", fmt.Errorf("the registry is rate limiting this instance; try again later or configure credentials")
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, fmt.Errorf("this registry needs credentials for %s", repo)
+		return nil, "", fmt.Errorf("this registry needs credentials for %s", repo)
 	default:
-		return nil, fmt.Errorf("registry answered %d listing tags for %s", resp.StatusCode, repo)
+		return nil, "", fmt.Errorf("registry answered %d listing tags for %s", resp.StatusCode, repo)
 	}
 	var out struct {
 		Tags []string `json:"tags"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&out); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return out.Tags, nil
+	return out.Tags, nextLink(resp.Header.Get("Link")), nil
+}
+
+// nextLink reads the path out of a Link header advertising the next page.
+//
+// RFC 5988, as the distribution spec uses it:
+//
+//	Link: </v2/name/tags/list?n=1000&last=xyz>; rel="next"
+//
+// Only a rel="next" is followed, and only its path is kept: the host is already
+// known, and a registry redirecting this client to somewhere else mid-listing is
+// not something to follow blindly.
+func nextLink(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		open := strings.Index(part, "<")
+		close := strings.Index(part, ">")
+		if open < 0 || close <= open {
+			continue
+		}
+		if !strings.Contains(part[close:], `rel="next"`) && !strings.Contains(part[close:], "rel=next") {
+			continue
+		}
+		target := part[open+1 : close]
+		// An absolute URL keeps only its path and query.
+		if i := strings.Index(target, "://"); i >= 0 {
+			if j := strings.IndexByte(target[i+3:], '/'); j >= 0 {
+				target = target[i+3+j:]
+			} else {
+				continue
+			}
+		}
+		if !strings.HasPrefix(target, "/") {
+			target = "/" + target
+		}
+		return target
+	}
+	return ""
 }
 
 func firstWord(s string) string {
