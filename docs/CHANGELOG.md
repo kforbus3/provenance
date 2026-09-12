@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.10 — 2026-09-12
+
+**Resume now actually retries.** It marked failed hosts as forgiven — which stops
+them counting against the failure budget — but left them failed, and this engine
+pushes, so a failed host was never picked up again. The rollout found nothing
+pending, marked itself completed, and had updated nothing. Failed hosts go back to
+pending now, with the forgiveness, error and attempt count cleared, so the budget
+measures failures since the resume and a host whose cause has been fixed is not
+refused for having used its attempts.
+
+**Containers are collected using sudo where the account has it.** Six hosts of
+nineteen reported that the monitor account could not reach the Docker socket, and
+the advice was to add it to the docker group — which is root-equivalent, and a
+strange thing to require merely to see what is running. Those accounts already had
+passwordless sudo; the probe never used it. It tries unprivileged first, then
+non-interactive sudo, and only then reports that it cannot look — naming both ways
+out rather than only the group. The commands are read-only either way.
+
+**The host filter is its own control.** Searching for a host name also matched
+image names, so typing "docker" found a container on a different host entirely.
+There is now a host picker listing every host reporting containers, which also
+accepts typing to narrow it, and the text box searches images only. An empty
+result says a filter is hiding things rather than looking like an empty fleet.
+
+---
+
 ## v1.2.9 — 2026-09-12
 
 **A rollout now restarts only the container being updated.** The stack deploy
