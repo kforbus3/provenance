@@ -7,6 +7,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## v1.2.12 — 2026-09-12
 
+**Container digests were being dropped on every bash host, and are not any
+more.** The line that reported them used `echo` with a tab escape, which dash
+expands and bash does not — so on most hosts it emitted a literal backslash-t,
+the parser found no tab, and every digest was lost. Nothing failed; every
+consequence was a silence. Rebuild detection compares digests, so rebuilds were
+invisible. Container vulnerability scanning is keyed by digest, so it scanned
+nothing. And an image with no digest is treated as built locally and never asked
+about, so the updates page had nothing to show for any of them.
+
 **Scripts run on a host now use sudo where the account has it.** A "privileged"
 run means the connection lands in the host's privileged account rather than its
 login-only one — sshd decides which account opens — but it never meant the
