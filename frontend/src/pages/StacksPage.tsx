@@ -19,6 +19,7 @@ import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { ContainerUpdatesTab } from "./ContainerUpdatesTab";
 import { RolloutsTab } from "./RolloutsTab";
+import { TabErrorBoundary } from "../components/TabErrorBoundary";
 
 // Container stacks: what each host should be running.
 //
@@ -117,8 +118,12 @@ export function StacksPage() {
         <Tab label="Rollouts" value="rollouts" />
       </Tabs>
 
-      {tab === "updates" && <ContainerUpdatesTab />}
-      {tab === "rollouts" && <RolloutsTab />}
+      {tab === "updates" && (
+        <TabErrorBoundary name="Updates"><ContainerUpdatesTab /></TabErrorBoundary>
+      )}
+      {tab === "rollouts" && (
+        <TabErrorBoundary name="Rollouts"><RolloutsTab /></TabErrorBoundary>
+      )}
 
       {tab === "stacks" && <>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

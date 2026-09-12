@@ -32,7 +32,11 @@ export interface ImageUpdate {
   note?: string;
   error?: string;
   checkedAt: string;
-  hosts: ImageUpdateHost[];
+  // Nullable, not just empty: Go marshals a nil slice as `null`. An image no host
+  // runs any more is ordinary — the tags an upgrade just replaced keep their rows
+  // until the next check pass prunes them — so the type says so and callers go
+  // through hostsOf().
+  hosts: ImageUpdateHost[] | null;
 }
 
 export async function listContainerUpdates(): Promise<ImageUpdate[]> {

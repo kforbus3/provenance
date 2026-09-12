@@ -60,7 +60,9 @@ export function StartRolloutDialog({
     onError: (e) => setErr(errMsg(e, "Could not start the rollout.")),
   });
 
-  const hostCount = update?.hosts.length ?? 0;
+  // ?? not ?. — the server sends null, not [], for an image no host runs, and
+  // update?.hosts.length throws on it just as surely as update.hosts.length does.
+  const hostCount = update?.hosts?.length ?? 0;
 
   return (
     <Dialog open={update !== null} onClose={onClose} maxWidth="sm" fullWidth>

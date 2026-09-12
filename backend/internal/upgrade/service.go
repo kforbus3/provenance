@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -135,30 +136,46 @@ func (s *Service) Verify(path string) (release.Manifest, error) {
 // Apply verifies the staged bundle, takes a pre-upgrade DB backup, and dispatches the
 // apply to the updater sidecar. It returns once dispatch succeeds; progress is then
 // polled via Status (which proxies the updater). Only one apply may be in flight.
+// ErrUpgradeInProgress is returned when an upgrade is already running.
+var ErrUpgradeInProgress = errors.New("an upgrade is already in progress")
+
+// InProgress reports whether an upgrade is already running.
+//
+// Exported so the HTTP handler can refuse a duplicate BEFORE returning 202 and
+// writing an audit event. It used to be checked only inside the goroutine the
+// handler spawns, so every click got "applying" and an audit row saying an
+// upgrade was applied, while the second and third were quietly rejected out of
+// sight. An operator clicking a button that reports success and does nothing
+// clicks it again — which is exactly what happened: three applies in sixteen
+// seconds, two of them nothing but audit noise.
+func (s *Service) InProgress(ctx context.Context) bool {
+	s.mu.Lock()
+	inProgress := s.local.State == "verifying" || s.local.State == "backing_up" || s.local.State == "dispatched"
+	dispatched := s.local.State == "dispatched"
+	s.mu.Unlock()
+	if !inProgress {
+		return false
+	}
+	// A local "dispatched" state persists after we hand off to the updater. If a
+	// prior apply then failed (or finished) on the updater, that local state is
+	// STALE and would otherwise block every future apply forever. Self-heal: if we
+	// dispatched but the updater is no longer running, allow a new apply. Only a
+	// genuinely-running updater (or an in-flight local verify/backup) blocks.
+	if dispatched {
+		if us, ok := s.updaterStatus(ctx); ok && us.State != "running" {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) Apply(ctx context.Context, path string, actorName string) error {
 	m, err := s.Verify(path)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	inProgress := s.local.State == "verifying" || s.local.State == "backing_up" || s.local.State == "dispatched"
-	dispatched := s.local.State == "dispatched"
-	s.mu.Unlock()
-	if inProgress {
-		// A local "dispatched" state persists after we hand off to the updater. If a
-		// prior apply then failed (or finished) on the updater, that local state is
-		// STALE and would otherwise block every future apply forever. Self-heal: if we
-		// dispatched but the updater is no longer running, allow a new apply. Only a
-		// genuinely-running updater (or an in-flight local verify/backup) blocks.
-		blocked := true
-		if dispatched {
-			if us, ok := s.updaterStatus(ctx); ok && us.State != "running" {
-				blocked = false // stale dispatched state; the updater is done/idle
-			}
-		}
-		if blocked {
-			return fmt.Errorf("an upgrade is already in progress")
-		}
+	if s.InProgress(ctx) {
+		return ErrUpgradeInProgress
 	}
 	now := time.Now()
 	s.mu.Lock()

@@ -72,7 +72,24 @@ export function UpdatesCard() {
     }
   }
 
-  const active = status && (status.state === "dispatched" || status.state === "running" || status.state === "backing_up");
+  // The status endpoint reports the PREVIOUS run until the updater picks the new
+  // job up — several seconds. Without a latch the sequence is: dispatch, spinner,
+  // one poll later the stale "success" for the old version arrives, `active` goes
+  // false, the spinner vanishes and the Install button comes back. The success
+  // banner is (correctly) suppressed because it names a version this page did not
+  // dispatch, so the screen shows nothing at all and the button gets pressed
+  // again. That is three applies in sixteen seconds, and it is what happened.
+  //
+  // So: once this page dispatches a version, it stays in-progress until the
+  // server reports a terminal state FOR THAT VERSION.
+  const settledForDispatched =
+    dispatchedVersion !== null &&
+    status?.targetVersion === dispatchedVersion &&
+    (status?.state === "success" || status?.state === "failed");
+  const awaitingDispatched = dispatchedVersion !== null && !settledForDispatched;
+
+  const serverActive = status && (status.state === "dispatched" || status.state === "running" || status.state === "backing_up");
+  const active = serverActive || awaitingDispatched;
 
   function startPolling() {
     if (polling.current) window.clearInterval(polling.current);
@@ -95,6 +112,10 @@ export function UpdatesCard() {
     const file = fileRef.current?.files?.[0];
     if (!file) return;
     setError(""); setManifest(null); setBusy(true);
+    // A newly uploaded bundle is a new intent: clear the latch from any previous
+    // dispatch, or the Install button would stay hidden behind a finished
+    // upgrade's in-progress state.
+    setDispatchedVersion(null);
     try {
       setManifest(await previewUpgrade(file));
     } catch (e: any) {
@@ -113,7 +134,13 @@ export function UpdatesCard() {
       setStatus({ state: "running", targetVersion: manifest.version, step: "starting…" });
       startPolling();
     } catch (e: any) {
-      setError(e?.response?.data?.error || e?.message || "Could not start the upgrade.");
+      // 409 means an upgrade is already running — not a failure to report as one.
+      if (e?.response?.status === 409) {
+        setDispatchedVersion(manifest.version);
+        startPolling();
+      } else {
+        setError(e?.response?.data?.error || e?.message || "Could not start the upgrade.");
+      }
     } finally {
       setBusy(false);
     }
@@ -168,11 +195,16 @@ export function UpdatesCard() {
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
               <CircularProgress size={18} />
               <Typography variant="body2">
-                {reconnecting ? "Reconnecting to the backend…" : (status?.step || "Working…")}
-                {status?.targetVersion ? ` (→ ${status.targetVersion})` : ""}
+                {reconnecting
+                  ? "Reconnecting to the backend…"
+                  : serverActive
+                    ? (status?.step || "Working…")
+                    : "Waiting for the updater to pick this up…"}
+                {(serverActive ? status?.targetVersion : dispatchedVersion)
+                  ? ` (→ ${serverActive ? status?.targetVersion : dispatchedVersion})` : ""}
               </Typography>
             </Stack>
-            {status?.log && status.log.length > 0 && (
+            {serverActive && status?.log && status.log.length > 0 && (
               <Box component="pre" sx={{ maxHeight: 160, overflow: "auto", bgcolor: "action.hover", p: 1, borderRadius: 1, fontSize: 12, m: 0 }}>
                 {status.log.join("\n")}
               </Box>

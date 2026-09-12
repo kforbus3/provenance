@@ -10,7 +10,8 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listContainerUpdates, checkContainerUpdates, type ImageUpdate,
+  listContainerUpdates, checkContainerUpdates,
+  type ImageUpdate, type ImageUpdateHost,
 } from "../api/containerUpdates";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
@@ -28,16 +29,32 @@ const errMsg = (e: unknown, fallback: string) =>
 // What this row is telling the operator, as one of four states. Kept in one
 // place because the states overlap: an image can have a newer tag AND a moved
 // digest, and showing both as separate badges reads as two problems.
-type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local";
+type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local" | "gone";
+
+// hostsOf normalises the hosts list.
+//
+// The server sends `null` rather than `[]` for an image no host runs any more —
+// which is the ordinary case right after an upgrade, since the tags this product
+// just replaced still have rows until the next check pass prunes them. One
+// `.filter` on that blanked the whole page. Guarding at each use site would work
+// until somebody adds the eighth one, so there is one accessor and the rest of
+// this file goes through it.
+function hostsOf(u: ImageUpdate): ImageUpdateHost[] {
+  return u.hosts ?? [];
+}
 
 function verdictOf(u: ImageUpdate): Verdict {
+  // Nothing runs this any more. Says so rather than "up to date", which is a
+  // claim about something you are running — and this is the row an operator
+  // sees immediately after an upgrade, for the tags the upgrade just replaced.
+  if (hostsOf(u).length === 0) return "gone";
   if (u.error) return "error";
   // Built on the host and never in a registry. Not a problem and not a failure —
   // there is simply nothing to compare against, and showing it as either would
   // put this product's own containers permanently in the needs-attention list.
   if (u.note?.startsWith("built locally")) return "local";
   if (u.latestTag) return "newer";
-  if (u.hosts.some((h) => h.stale)) return "moved";
+  if (hostsOf(u).some((h) => h.stale)) return "moved";
   // A note with no newer tag means the registry answered but its tags could not
   // be ordered confidently. That is NOT "up to date" — saying so would be a
   // guess presented as a fact.
@@ -67,6 +84,12 @@ function VerdictChip({ u }: { u: ImageUpdate }) {
           <Chip label="cannot compare" size="small" variant="outlined" />
         </Tooltip>
       );
+    case "gone":
+      return (
+        <Tooltip title="No host reports running this image any more — it is left over from a previous version and will be dropped at the next check.">
+          <Chip label="no longer running" size="small" variant="outlined" />
+        </Tooltip>
+      );
     case "local":
       return (
         <Tooltip title="Built on the host rather than pulled from a registry, so there is no published version to compare against.">
@@ -82,12 +105,13 @@ function UpdateRow({ u, canRun, onRollOut }: {
   u: ImageUpdate; canRun: boolean; onRollOut: (u: ImageUpdate) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const stale = u.hosts.filter((h) => h.stale).length;
+  const hosts = hostsOf(u);
+  const stale = hosts.filter((h) => h.stale).length;
   const verdict = verdictOf(u);
   // Only something actionable can be rolled out. Offering the button on a row
   // that says "up to date" would invite a rollout that deploys the same bytes
   // to every host and reports success for a change nobody made.
-  const canRollOut = canRun && (verdict === "newer" || verdict === "moved") && u.hosts.length > 0;
+  const canRollOut = canRun && (verdict === "newer" || verdict === "moved") && hosts.length > 0;
   return (
     <>
       <TableRow hover>
@@ -101,7 +125,7 @@ function UpdateRow({ u, canRun, onRollOut }: {
         </TableCell>
         <TableCell><VerdictChip u={u} /></TableCell>
         <TableCell>
-          {u.hosts.length}
+          {hosts.length}
           {stale > 0 && (
             <Typography component="span" variant="caption" color="text.secondary">
               {" "}({stale} behind)
@@ -135,12 +159,12 @@ function UpdateRow({ u, canRun, onRollOut }: {
                   registry: {u.digest.slice(0, 19)}…
                 </Typography>
               )}
-              {u.hosts.length === 0 && (
+              {hosts.length === 0 && (
                 <Typography variant="body2" color="text.secondary">
                   No host currently reports running this image.
                 </Typography>
               )}
-              {u.hosts.map((h) => (
+              {hosts.map((h) => (
                 <Stack key={`${h.hostId}-${h.container}`} direction="row" spacing={1}
                        alignItems="center" sx={{ mb: 0.5 }}>
                   <Typography variant="body2" sx={{ minWidth: 160 }}>{h.hostname}</Typography>
@@ -188,11 +212,11 @@ export function ContainerUpdatesTab() {
     const rows = q
       ? updates.filter((u) =>
           `${u.repository}:${u.tag}`.toLowerCase().includes(q) ||
-          u.hosts.some((h) => h.hostname.toLowerCase().includes(q)))
+          hostsOf(u).some((h) => h.hostname.toLowerCase().includes(q)))
       : updates;
     // Actionable first. An operator opening this screen wants the images that
     // need a decision, not an alphabetical list with three of them buried in it.
-    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5 };
+    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5, gone: 6 };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a)] - rank[verdictOf(b)] ||
       a.repository.localeCompare(b.repository));

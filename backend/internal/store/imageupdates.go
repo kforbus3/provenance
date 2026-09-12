@@ -224,7 +224,15 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context) ([]ImageUpdateRow, er
 	}
 	out := make([]ImageUpdateRow, 0, len(updates))
 	for _, u := range updates {
+		// Never nil. A missing key yields a nil slice, which marshals to JSON
+		// `null` rather than `[]` — and an image whose hosts have all moved on is
+		// the normal case, not an edge one: upgrading this product itself leaves
+		// rows for the tags it just replaced, until the next check pass prunes
+		// them. A client doing hosts.filter(...) on that gets a white screen.
 		hosts := byImage[u.Repository+":"+u.Tag]
+		if hosts == nil {
+			hosts = []ImageUpdateHost{}
+		}
 		for i := range hosts {
 			// Only a host with a known digest can be called stale. An unknown
 			// digest is unknown, not old -- claiming otherwise would show a host

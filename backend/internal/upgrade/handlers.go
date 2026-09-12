@@ -78,6 +78,17 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "the staged bundle version changed since preview; re-upload and review again")
 		return
 	}
+	// Refused here, before the 202 and before the audit event. The same check
+	// runs inside Apply, but by then the handler has already told the client
+	// "applying" and written a row saying an upgrade was applied — so a second
+	// click looked like it worked, did nothing, and showed nothing, which is why
+	// it got clicked a third time.
+	if h.svc.InProgress(r.Context()) {
+		httpx.WriteError(w, http.StatusConflict,
+			"an upgrade is already in progress — watch its progress rather than starting another")
+		return
+	}
+
 	p := auth.MustPrincipal(r)
 	actor := ""
 	if p != nil {
