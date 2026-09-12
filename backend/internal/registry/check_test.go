@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ type fakeStore struct {
 	stale       []store.TrackedImage
 	composes    []string
 	lastChecked map[string]time.Time
+	clock       time.Time
 	saved       []store.ImageUpdate
 	pruned      [][]store.TrackedImage
 	maxAgeIn    time.Duration
@@ -46,6 +48,14 @@ func (f *fakeStore) StaleImageChecks(_ context.Context, imgs []store.TrackedImag
 
 func (f *fakeStore) UpsertImageUpdate(_ context.Context, in store.ImageUpdate) error {
 	f.saved = append(f.saved, in)
+	// Like the real store, which stamps checked_at on every write. Without this
+	// a second pass would re-order on stale times and re-check the same images,
+	// so the fake would hide exactly the bug the ordering exists to prevent.
+	if f.lastChecked == nil {
+		f.lastChecked = map[string]time.Time{}
+	}
+	f.clock = f.clock.Add(time.Second)
+	f.lastChecked[in.Repository+":"+in.Tag] = f.clock
 	return nil
 }
 
@@ -348,19 +358,21 @@ func TestCheckNowIgnoresTheFreshnessWindow(t *testing.T) {
 	}
 }
 
-func TestAForcedCheckStillRespectsTheBatchCap(t *testing.T) {
-	// The cap is about a registry's rate limit, which does not care why the
-	// request was made. A forced pass reports what is left rather than quietly
-	// doing part of the job.
+func TestAForcedCheckIsStillBounded(t *testing.T) {
+	// A press finishes the job, but not at any price: the budget is bounded, and
+	// a pass that hits the bound reports what is left rather than quietly doing
+	// part of the work and saying nothing.
 	srv := stubRegistry(t, []string{"1.0.0"}, map[string]string{"1.0.0": "sha256:aaa"})
-	st := &fakeStore{stale: []store.TrackedImage{}}
-	for i := 0; i < checkBatch+7; i++ {
+	st := &fakeStore{stale: []store.TrackedImage{}, lastChecked: map[string]time.Time{}, clock: time.Now()}
+	over := forcedBatches*checkBatch + 7
+	for i := 0; i < over; i++ {
 		st.tracked = append(st.tracked, store.TrackedImage{
-			Repository: repoAt(srv, "team/app"), Tag: "1.0.0", Digest: "sha256:aaa"})
+			Repository: repoAt(srv, fmt.Sprintf("team/app%03d", i)),
+			Tag:        "1.0.0", Digest: "sha256:aaa"})
 	}
 	checked, failed, remaining := newChecker(t, st, srv).CheckNow(context.Background())
-	if checked+failed > checkBatch {
-		t.Errorf("checked %d, over the cap of %d", checked+failed, checkBatch)
+	if checked+failed > forcedBatches*checkBatch {
+		t.Errorf("checked %d, over the budget of %d", checked+failed, forcedBatches*checkBatch)
 	}
 	if remaining != 7 {
 		t.Errorf("remaining = %d, want 7 — an operator should know the pass was "+
@@ -542,4 +554,63 @@ func TestADeclaredRowIsNotStarvedByTheBatchCap(t *testing.T) {
 		}
 	}
 	t.Errorf("the declared row was never reached in %d checked row(s)", len(st.saved))
+}
+
+// One press, the whole fleet.
+//
+// The batch cap is about a registry's rate limit and still governs each pass.
+// What it must not do is turn a deliberate press into PART of the work: 64
+// images against a cap of 40 left 24 unchecked, the count went to a log line,
+// and the operator had no way to know a second press was needed. jackett and
+// prowlarr sat in that remainder with real updates waiting behind them.
+func TestAForcedCheckFinishesTheWholeFleet(t *testing.T) {
+	srv := stubRegistry(t, []string{"1.0.0", "1.1.0"}, map[string]string{"1.0.0": "sha256:aaa"})
+	st := &fakeStore{lastChecked: map[string]time.Time{}, clock: time.Now()}
+
+	const total = checkBatch + 24 // the shape the fleet was actually in
+	for i := 0; i < total; i++ {
+		st.tracked = append(st.tracked, store.TrackedImage{
+			Repository: repoAt(srv, fmt.Sprintf("team/app%03d", i)),
+			Tag:        "1.0.0", Digest: "sha256:aaa",
+		})
+	}
+
+	checked, failed, remaining := newChecker(t, st, srv).CheckNow(context.Background())
+
+	if remaining != 0 {
+		t.Errorf("left %d image(s) unchecked after a deliberate press", remaining)
+	}
+	if failed != 0 {
+		t.Errorf("failed=%d", failed)
+	}
+	if checked != total {
+		t.Errorf("checked %d of %d", checked, total)
+	}
+	// Every image, not the first batch twice.
+	seen := map[string]bool{}
+	for _, r := range st.saved {
+		seen[r.Repository] = true
+	}
+	if len(seen) != total {
+		t.Errorf("reached %d distinct image(s), want %d — the passes re-checked the same ones",
+			len(seen), total)
+	}
+}
+
+func TestTheScheduledSweepStillRespectsTheBatchCap(t *testing.T) {
+	// Only a press finishes the job. The unattended sweep stays bounded, because
+	// the cap is there to keep a fleet-wide pass from exhausting a rate limit
+	// nobody is watching.
+	srv := stubRegistry(t, []string{"1.0.0"}, map[string]string{"1.0.0": "sha256:aaa"})
+	st := &fakeStore{lastChecked: map[string]time.Time{}, clock: time.Now()}
+	for i := 0; i < checkBatch+5; i++ {
+		st.tracked = append(st.tracked, store.TrackedImage{
+			Repository: repoAt(srv, fmt.Sprintf("team/app%03d", i)),
+			Tag:        "1.0.0", Digest: "sha256:aaa",
+		})
+	}
+	checked, _ := newChecker(t, st, srv).Check(context.Background())
+	if checked != checkBatch {
+		t.Errorf("a scheduled sweep checked %d, want the cap of %d", checked, checkBatch)
+	}
 }

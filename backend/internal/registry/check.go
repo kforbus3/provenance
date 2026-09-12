@@ -56,7 +56,7 @@ func NewChecker(st Store, log *slog.Logger) *Checker {
 // -- is recorded against that image and the pass continues; one unreachable
 // registry must not stop the fleet from learning about every other image.
 func (c *Checker) Check(ctx context.Context) (checked, failed int) {
-	checked, failed, _ = c.check(ctx, false)
+	checked, failed, _ = c.check(ctx, false, scheduledBatches)
 	return checked, failed
 }
 
@@ -72,10 +72,30 @@ func (c *Checker) Check(ctx context.Context) (checked, failed int) {
 // forced pass reports how many images are still waiting rather than quietly
 // doing part of the job.
 func (c *Checker) CheckNow(ctx context.Context) (checked, failed, remaining int) {
-	return c.check(ctx, true)
+	// A press finishes the job.
+	//
+	// The batch cap is about a registry's rate limit and still bounds the work.
+	// What it must not do is turn one deliberate press into PART of the work: 64
+	// images against a cap of 40 left 24 unchecked, the count went to a log line
+	// nobody reads, and the operator had no way to know a second press was
+	// needed. jackett and prowlarr sat in that remainder with real updates
+	// behind them. A button that silently does 60% of what it says is worse than
+	// a slow one.
+	return c.check(ctx, true, forcedBatches)
 }
 
-func (c *Checker) check(ctx context.Context, force bool) (checked, failed, remaining int) {
+// How much work one pass may do, in batches of checkBatch.
+//
+// One for the unattended sweep, which runs every twelve hours and must not
+// exhaust a rate limit nobody is watching. More for a press, which is rare,
+// deliberate, and waited on -- bounded rather than unbounded so a runaway costs
+// 400 images and not a whole registry.
+const (
+	scheduledBatches = 1
+	forcedBatches    = 10
+)
+
+func (c *Checker) check(ctx context.Context, force bool, batches int) (checked, failed, remaining int) {
 	tracked, err := c.store.TrackedImages(ctx)
 	if err != nil {
 		c.log.Warn("image check: listing tracked images", "err", err)
@@ -126,9 +146,10 @@ func (c *Checker) check(ctx context.Context, force bool) (checked, failed, remai
 	} else {
 		stale = leastRecentlyCheckedFirst(stale, last)
 	}
-	if len(stale) > checkBatch {
-		remaining = len(stale) - checkBatch
-		stale = stale[:checkBatch]
+	limit := batches * checkBatch
+	if len(stale) > limit {
+		remaining = len(stale) - limit
+		stale = stale[:limit]
 	}
 
 	for _, img := range stale {
