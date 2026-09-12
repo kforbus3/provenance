@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.7 — 2026-09-12
+
+**A version bump adopts the host's compose file instead of refusing.** A rollout
+that had to change a version stopped with "adopt its compose file to make it
+updatable" — correct, and a dead end: the operator was told to do by hand the one
+thing the product is for. The file is now read off the host and recorded as a
+stack, and the change applied as a normal revision with an author, a note and a
+rollback. It refuses rather than guesses when the file is called something other
+than docker-compose.yml (adopting would leave the original and put a second one
+beside it), when it does not name the image being updated, or when the directory
+is not there. Rebuilds still need nothing adopted. If your compose files are
+deployed from a git repository or an rsync target, adopting one gives you two
+sources of truth for the same file — reversible by deleting the stack.
+
+**An upgrade status the updater never finished writing is now settled.** The
+updater's last act in a successful upgrade is replacing the backend, so the run
+that succeeds is the run that may not get to record it. Only terminal states were
+aged out, so a "running" left over from a previous boot was reported as though an
+upgrade were in flight. A status written before this process started describes an
+upgrade that is over; if it was moving this instance to the version it is now
+running, it worked.
+
+---
+
 ## v1.2.6 — 2026-09-12
 
 **Containers can be updated without adopting them first.** Every compose-managed
