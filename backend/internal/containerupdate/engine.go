@@ -252,6 +252,12 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		e.fail(ctx, r.ID, hostID, "could not read what this host is running: "+err.Error())
 		return
 	}
+	// What this host's compose files currently say. A rollout is created from a
+	// snapshot of what the fleet was running; by the time it reaches a given host
+	// that host may have been re-pinned, and an image it has moved past should be
+	// skipped rather than attempted and failed.
+	stacks, _ := e.store.ListStacks(ctx, &hostID)
+
 	// Never this application's own containers. Checked here as well as when a
 	// rollout is created, because a rollout created before this rule existed --
 	// or one whose targets changed -- must not be applied by a later tick.
@@ -273,6 +279,11 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		}
 		key := im.Repository + ":" + im.FromTag
 		if !runs[key] {
+			continue
+		}
+		if superseded(stacks, im) {
+			e.log.Info("update rollout: host has moved past this image",
+				"host", hostID, "repository", im.Repository, "from", im.FromTag)
 			continue
 		}
 		if name, ok := protected[key]; ok {
@@ -309,6 +320,21 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, ""); err != nil {
 		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
 	}
+}
+
+// superseded reports that a host's own compose files name this repository at some
+// other tag, so the rollout's premise has expired for it.
+func superseded(stacks []store.ContainerStack, im store.RolloutImage) bool {
+	for i := range stacks {
+		st := &stacks[i]
+		if !st.Enabled || strings.TrimSpace(st.Compose) == "" {
+			continue
+		}
+		if composeSupersedes(st.Compose, im.Repository, im.FromTag, im.ToTag) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyOne moves one host onto one target image, and reports what went wrong.

@@ -179,3 +179,49 @@ func ReferencesImage(compose, repo, tag string) bool {
 func composeOwnsImage(compose, repo, from, to string) bool {
 	return ReferencesImage(compose, repo, from) || ReferencesImage(compose, repo, to)
 }
+
+// composeSupersedes reports that a compose file names this repository, but at
+// neither the tag the rollout is moving from nor the one it is moving to.
+//
+// The host has moved past this image. Somebody re-pinned the service between the
+// rollout being created and reaching this host — which is ordinary on a fleet
+// anybody is actively working on, and was produced here by pinning :latest to a
+// version while a rollout for :latest was queued.
+//
+// Attempting it anyway deploys correctly and then fails verification, because the
+// tag the rollout is looking for is no longer in the file:
+//
+//	qdrant/qdrant:latest → latest: deployed, but no container on this host
+//	is running qdrant/qdrant:latest
+//
+// That reads as a broken rollout. It is a rollout whose premise expired, which is
+// a different thing and deserves to be skipped rather than failed.
+func composeSupersedes(compose, repo, from, to string) bool {
+	if !mentionsRepository(compose, repo) {
+		return false
+	}
+	return !ReferencesImage(compose, repo, from) && !ReferencesImage(compose, repo, to)
+}
+
+// mentionsRepository reports whether any image line names this repository, at
+// whatever tag.
+func mentionsRepository(compose, repo string) bool {
+	if repo == "" {
+		return false
+	}
+	for _, line := range strings.Split(compose, "\n") {
+		_, value, ok := splitImageLine(line)
+		if !ok {
+			continue
+		}
+		ref, _ := splitTrailingComment(value)
+		_, bare := unquote(strings.TrimSpace(ref))
+		if at := strings.Index(bare, "@"); at >= 0 {
+			bare = bare[:at]
+		}
+		if r, _, ok := splitRef(bare); ok && r == repo {
+			return true
+		}
+	}
+	return false
+}

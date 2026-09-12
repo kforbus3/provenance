@@ -1032,3 +1032,68 @@ func TestVerifyComparesAgainstTheTargetTagNotTheOldOne(t *testing.T) {
 		t.Errorf("got %q", h.Error)
 	}
 }
+
+// A rollout whose premise expired for one host.
+//
+// An "update all" was created while qdrant was on :latest. Before it reached the
+// host, that service was pinned to a version — ordinary on a fleet somebody is
+// working on. The rollout then deployed correctly and failed verification,
+// because the tag it was looking for was no longer in the compose file:
+//
+//	qdrant/qdrant:latest → latest: deployed, but no container on this host
+//	is running qdrant/qdrant:latest
+//
+// That reads as a broken rollout. It is a rollout whose premise expired, which
+// deserves to be skipped rather than failed — failing it halts the whole
+// operation on its budget for something nobody did wrong.
+func TestAnImageTheHostHasBeenRepinnedPastIsSkipped(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1, MaxFailures: 1})
+	f.rollouts[0].Repository, f.rollouts[0].FromTag, f.rollouts[0].ToTag = "qdrant/qdrant", "latest", "latest"
+	// Inventory still says :latest — it is a snapshot, and this is exactly the
+	// window in which it is out of date.
+	f.containers[ids[0]] = []models.Container{{
+		Name: "qdrant", Image: "qdrant/qdrant:latest",
+		Repository: "qdrant/qdrant", Tag: "latest",
+		ComposeService: "qdrant", ComposeDir: "/opt/x", ComposeProject: "x",
+	}}
+	// But the stack — the definition of record — names a version.
+	f.stacks[ids[0]] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: ids[0], Enabled: true, Name: "x", Path: "/opt/x",
+		Compose: "services:\n  qdrant:\n    image: qdrant/qdrant:v1.18.2\n",
+	}}
+
+	d := &fakeDeployer{}
+	newEngine(f, d, scripted("::OK::\n", "")).Tick(context.Background())
+
+	if d.calls != 0 {
+		t.Error("deployed an image the host has been re-pinned past")
+	}
+	h := f.hosts[rid][0]
+	if h.State == store.UpdateHostFailed {
+		t.Fatalf("failed on an expired premise: %q", h.Error)
+	}
+	if h.State != store.UpdateHostSkipped {
+		t.Errorf("state = %q, want skipped — nothing applied, and nothing wrong", h.State)
+	}
+	for _, s := range f.rolloutSet {
+		if strings.HasPrefix(s, store.UpdateRolloutHalted) {
+			t.Errorf("the whole rollout halted over an expired premise: %v", f.rolloutSet)
+		}
+	}
+}
+
+func TestARepositoryTheComposeDoesNotMentionIsNotSuperseded(t *testing.T) {
+	// Only a repository the file NAMES counts. A compose file that says nothing
+	// about an image tells us nothing about whether the host moved past it — the
+	// container may be running outside any stack.
+	compose := "services:\n  web:\n    image: nginx:1.24\n"
+	if composeSupersedes(compose, "qdrant/qdrant", "latest", "latest") {
+		t.Error("a repository the file never mentions was treated as superseded")
+	}
+	if !composeSupersedes(compose, "nginx", "1.20", "1.21") {
+		t.Error("a repository pinned to some other tag should be superseded")
+	}
+	if composeSupersedes(compose, "nginx", "1.24", "1.27") {
+		t.Error("the tag the file actually names is not superseded")
+	}
+}
