@@ -235,14 +235,55 @@ func (s *Service) fail(msg string) {
 // a previous upgrade's outcome, not ours: the updater persists its last run
 // indefinitely, and without this check a fresh apply briefly shows the prior run's
 // "Upgraded to <old version>" before (or instead of) the real progress.
+// settleStaleUpdaterStatus turns an updater status that predates this process
+// into a result, and reports whether it did.
+//
+// The updater's LAST act in a successful upgrade is replacing the backend — so
+// the run that succeeds is exactly the run that never gets to write "success".
+// Its status file is left saying `running`, and a non-terminal state was never
+// aged out, so it was returned forever: the Updates page showed an in-progress
+// spinner for an upgrade that had finished, and (with the client-side latch that
+// keeps a dispatch visible) would never let another one start.
+//
+// A status written before this process booted describes an upgrade that is over,
+// whatever it says. Which way it went is not a guess: if it was moving us to the
+// version we are now running, it worked.
+func (s *Service) settleStaleUpdaterStatus(us Status) (Status, bool) {
+	// A nil timestamp means we cannot tell WHEN it was written, and declaring it
+	// history would settle an upgrade that might be running right now. Only a
+	// status we can prove predates this process is over.
+	if us.UpdatedAt == nil || !us.UpdatedAt.Before(s.bootAt) {
+		return Status{}, false
+	}
+	switch us.State {
+	case "success", "failed":
+		return Status{}, false // terminal and old — the caller falls back to local
+	case "":
+		return Status{}, false
+	}
+	// Non-terminal and older than this process. The run is over either way.
+	out := us
+	out.Draining = s.IsDraining()
+	if us.TargetVersion != "" && us.TargetVersion == s.version {
+		out.State = "success"
+		return out, true
+	}
+	out.State = "failed"
+	if out.Error == "" {
+		out.Error = fmt.Sprintf(
+			"the upgrade to %s stopped before finishing; this instance is running %s",
+			us.TargetVersion, s.version)
+	}
+	return out, true
+}
+
 func (s *Service) Status(ctx context.Context) Status {
 	if us, ok := s.updaterStatus(ctx); ok {
-		terminal := us.State == "success" || us.State == "failed"
-		stale := terminal && (us.UpdatedAt == nil || us.UpdatedAt.Before(s.bootAt))
-		if !stale {
-			us.Draining = s.IsDraining()
-			return us
+		if settled, ok := s.settleStaleUpdaterStatus(us); ok {
+			return settled
 		}
+		us.Draining = s.IsDraining()
+		return us
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

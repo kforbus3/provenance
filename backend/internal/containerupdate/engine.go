@@ -301,13 +301,28 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 		// own compose project is enough, and asking an operator to adopt a file
 		// just to pull a rebuilt image is work for nothing.
 		applied, ierr := e.applyInPlace(ctx, r, hostID)
-		if !applied {
+		if applied {
+			if ierr != nil {
+				return ierr
+			}
+			return e.verify(ctx, r, hostID)
+		}
+
+		// A version bump. The new version has to be written into the compose file,
+		// so adopt the host's own file and carry on as a stack — the edit then has
+		// an author, a note, a revision and a rollback, which an edit made to a
+		// file nobody owns would not.
+		adopted, aerr := e.adopt(ctx, r, hostID)
+		if aerr != nil {
+			return aerr
+		}
+		if !adopted {
 			return err
 		}
-		if ierr != nil {
-			return ierr
+		stack, compose, err = e.targetStack(ctx, r, hostID)
+		if err != nil {
+			return err
 		}
-		return e.verify(ctx, r, hostID)
 	}
 
 	// Only save a new revision when the text actually changed. A digest-only
@@ -338,6 +353,69 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// rollout that counted the exit code would march a no-op across the fleet
 	// while reporting every host as updated.
 	return e.verify(ctx, r, hostID)
+}
+
+// adopt reads the host's compose file for this image and records it as a stack.
+//
+// Reports whether adoption applies at all, and if so whether it worked. It
+// applies only when the container names a compose project — a plain `docker run`
+// container has no file to adopt, and reproducing its arguments is the guessing
+// this product does not do.
+func (e *Engine) adopt(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) (bool, error) {
+	containers, err := e.store.HostContainers(ctx, hostID)
+	if err != nil {
+		return false, nil
+	}
+	var match *models.Container
+	for i := range containers {
+		c := &containers[i]
+		if c.Repository == r.Repository && c.Tag == r.FromTag && c.ComposeDir != "" {
+			match = c
+			break
+		}
+	}
+	if match == nil {
+		return false, nil
+	}
+	h, err := e.store.GetHost(ctx, hostID)
+	if err != nil {
+		return true, fmt.Errorf("could not read the host: %w", err)
+	}
+	out, _, failed := e.run.RunScript(ctx, adoptScript(match.ComposeDir), h)
+	if failed {
+		return true, fmt.Errorf("could not read the compose file at %s: %s",
+			match.ComposeDir, trimOutput(out))
+	}
+	compose, perr := parseAdopt(match.ComposeDir, out)
+	if perr != nil {
+		return true, perr
+	}
+	// The file has to name the image this rollout is about. If it does not, the
+	// project at that path is not the one this container came from, and rewriting
+	// it would edit somebody else's stack.
+	if !ReferencesImage(compose, r.Repository, r.FromTag) {
+		return true, fmt.Errorf(
+			"the compose file at %s/%s does not name %s:%s, so it is not the project "+
+				"this container came from", match.ComposeDir, composeFilename,
+			r.Repository, r.FromTag)
+	}
+
+	name := match.ComposeProject
+	if name == "" {
+		name = match.ComposeService
+	}
+	if _, err := e.store.UpsertStack(ctx, store.StackInput{
+		HostID: hostID, Name: name, Path: match.ComposeDir, Compose: compose,
+		Note: fmt.Sprintf("adopted from the host to apply %s:%s → %s",
+			r.Repository, r.FromTag, r.ToTag),
+		AuthorName: "container update rollout",
+	}); err != nil {
+		return true, fmt.Errorf("could not adopt the compose file: %w", err)
+	}
+	e.log.Info("adopted a compose file from the host",
+		"host", h.Hostname, "project", name, "dir", match.ComposeDir,
+		"reason", fmt.Sprintf("%s:%s → %s", r.Repository, r.FromTag, r.ToTag))
+	return true, nil
 }
 
 // applyInPlace updates a container through its own compose project.

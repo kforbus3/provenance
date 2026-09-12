@@ -173,10 +173,28 @@ go to that directory, pull that service, bring that service back up. Nothing to
 adopt.
 
 **A version bump** — `1.24` to `1.27` — is written *into* the compose file, so
-something has to edit it. That needs a stack Provenance owns, added on the
-**Stacks** tab. Editing a file Provenance does not own would be reverted on the
-next deploy for any host whose compose files come from a git repository or an
-rsync target — silently, leaving the fleet on an image nobody can explain.
+something has to edit it. If no stack owns that file yet, Provenance **adopts the
+host's own**: it reads the file, records it as a stack, and applies the change as
+a normal revision. From then on the edit has an author, a note and a rollback,
+which an edit made to a file nobody owns would not.
+
+Adoption refuses rather than guesses in three cases:
+
+- the compose file is called something other than `docker-compose.yml`. The
+  deploy writes that name, so adopting would leave the original **and** put a
+  second compose file beside it, and compose would then use whichever its own
+  rules prefer. Rename it, or add it as a stack yourself.
+- the file does not name the image being updated — then the project at that path
+  is not the one this container came from, and rewriting it would edit somebody
+  else's stack.
+- the recorded directory is not there, which usually means the project was
+  deployed from somewhere else.
+
+**If your compose files are deployed from somewhere else** — a git repository, an
+rsync target — be aware that adopting one gives you two sources of truth for the
+same file, and the next deploy from that source will overwrite what Provenance
+wrote. Delete the stack afterwards if you want that host left alone; rebuilds
+still work without one.
 
 Two cases still report rather than guess:
 

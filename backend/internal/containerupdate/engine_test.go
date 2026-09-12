@@ -104,7 +104,20 @@ func (f *fakeStore) UpsertStack(_ context.Context, in store.StackInput) (*store.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.saved = append(f.saved, in.Compose)
-	return &store.ContainerStack{HostID: in.HostID, Compose: in.Compose}, nil
+	// Upsert, like the real one: a stack adopted here has to be findable by the
+	// retry that follows it, or adoption looks like it worked and changes nothing.
+	for i, st := range f.stacks[in.HostID] {
+		if st.Name == in.Name {
+			f.stacks[in.HostID][i].Compose = in.Compose
+			return &f.stacks[in.HostID][i], nil
+		}
+	}
+	st := store.ContainerStack{
+		ID: uuid.New(), HostID: in.HostID, Name: in.Name,
+		Path: in.Path, Compose: in.Compose, Enabled: true,
+	}
+	f.stacks[in.HostID] = append(f.stacks[in.HostID], st)
+	return &st, nil
 }
 
 func (f *fakeStore) RolloutImages(_ context.Context, id uuid.UUID) ([]store.RolloutImage, error) {
@@ -153,16 +166,37 @@ type fakeRunner struct {
 	out    string
 	failed bool
 	calls  int
+	// respond lets a test answer differently per script. The engine runs several
+	// kinds — read back what is running, read a compose file to adopt, pull and
+	// recreate — and one fixed string for all of them tests none of them properly.
+	respond func(script string) (string, int, bool)
 }
 
-func (r *fakeRunner) RunScript(context.Context, string, *models.Host) (string, int, bool) {
+func (r *fakeRunner) RunScript(_ context.Context, script string, _ *models.Host) (string, int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
+	if r.respond != nil {
+		return r.respond(script)
+	}
 	if r.failed {
 		return r.out, 1, true
 	}
 	return r.out, 0, false
+}
+
+// scripted answers the verify read-back with `running` and any compose-file read
+// with `compose`, which is what most of these tests need.
+func scripted(running, compose string) *fakeRunner {
+	return &fakeRunner{respond: func(script string) (string, int, bool) {
+		if strings.Contains(script, "::COMPOSE::") {
+			if compose == "" {
+				return "::NOFILE::\n", 0, false
+			}
+			return "::COMPOSE::\n" + compose, 0, false
+		}
+		return running, 0, false
+	}}
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -593,21 +627,82 @@ func TestTheInPlaceScriptRefusesAProjectItCannotSee(t *testing.T) {
 	}
 }
 
-func TestAVersionBumpIsNotAppliedInPlace(t *testing.T) {
-	// The new version has to be written into the compose file. Doing that to a
-	// file Provenance does not own is reverted on the next deploy for any host
-	// whose compose files come from somewhere else — silently, leaving the fleet
-	// on an image nobody can explain.
+func TestAVersionBumpAdoptsTheHostsComposeFileAndApplies(t *testing.T) {
+	// The new version is written INTO the compose file, so something has to edit
+	// it. Requiring an operator to copy that file into Provenance by hand first is
+	// the chore that leaves a feature unused — which is how the bot-and-merge-
+	// request arrangement this replaces came to be ignored.
 	f, rid, _ := inPlaceFixture("1.24", "1.27")
-	r := &fakeRunner{out: "::OK::\nnginx:1.27\tnginx@sha256:new\n"}
+	d := &fakeDeployer{}
+	r := scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)
+	newEngine(f, d, r).Tick(context.Background())
+
+	if len(f.saved) == 0 {
+		t.Fatalf("nothing was adopted (host state %q: %q)",
+			f.hosts[rid][0].State, f.hosts[rid][0].Error)
+	}
+	// Adopted, then rewritten to the new version, then deployed.
+	if !strings.Contains(f.saved[len(f.saved)-1], "nginx:1.27") {
+		t.Errorf("the adopted compose was not moved to the new version:\n%s",
+			f.saved[len(f.saved)-1])
+	}
+	if d.calls != 1 {
+		t.Errorf("deployed %d times, want 1", d.calls)
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
+		t.Errorf("state = %q (%q)", got, f.hosts[rid][0].Error)
+	}
+}
+
+func TestAdoptionRefusesAComposeFileThatDoesNotNameTheImage(t *testing.T) {
+	// The project at that path is not the one this container came from, and
+	// rewriting it would edit somebody else's stack.
+	f, rid, _ := inPlaceFixture("1.24", "1.27")
+	r := scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n",
+		"services:\n  other:\n    image: caddy:2\n")
 	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
 
 	h := f.hosts[rid][0]
 	if h.State != store.UpdateHostFailed {
 		t.Fatalf("state = %q, want failed", h.State)
 	}
-	if !strings.Contains(h.Error, "adopt this host's compose file") {
-		t.Errorf("the error should say a stack is needed for a version change, got %q", h.Error)
+	if !strings.Contains(h.Error, "does not name nginx:1.24") {
+		t.Errorf("got %q", h.Error)
+	}
+	if len(f.saved) != 0 {
+		t.Error("adopted a compose file that names a different image")
+	}
+}
+
+func TestAdoptionRefusesADifferentlyNamedComposeFile(t *testing.T) {
+	// The deploy writes docker-compose.yml. Adopting a project called something
+	// else would leave the original AND write a second one beside it, and compose
+	// would then pick whichever its own rules prefer.
+	if _, err := parseAdopt("/opt/stacks/site", "::NOFILE::\ncompose.yaml\n"); err == nil {
+		t.Fatal("accepted a differently-named compose file")
+	} else if !strings.Contains(err.Error(), "compose.yaml") ||
+		!strings.Contains(err.Error(), "two compose files") {
+		t.Errorf("the error should name the file it found and say why: %v", err)
+	}
+}
+
+func TestAdoptionReportsAMissingDirectory(t *testing.T) {
+	_, err := parseAdopt("/opt/stacks/site", "::NODIR::\n")
+	if err == nil || !strings.Contains(err.Error(), "not there") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestAdoptionKeepsTheFileVerbatim(t *testing.T) {
+	// The content has to be reviewable in the revision history, byte for byte:
+	// this is the file an operator is being shown before approving an edit to it.
+	body := "# hand-written\nservices:\n  web:\n    image: nginx:1.24   # pinned\n"
+	got, err := parseAdopt("/opt/x", "::COMPOSE::\n"+body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != body {
+		t.Errorf("the adopted file differs from what was on disk:\n%q\nwant\n%q", got, body)
 	}
 }
 
