@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, MenuItem, Paper, Snackbar, Stack, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
+  IconButton, MenuItem, Paper, Snackbar, Stack, Tab, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, Tabs, TextField, Tooltip, Typography,
 } from "@mui/material";
 import HistoryIcon from "@mui/icons-material/History";
 import PublishIcon from "@mui/icons-material/Publish";
@@ -17,6 +17,7 @@ import {
 import { listHosts } from "../api/hosts";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
+import { ContainerUpdatesTab } from "./ContainerUpdatesTab";
 
 // Container stacks: what each host should be running.
 //
@@ -62,6 +63,7 @@ export function StacksPage() {
   const [historyOf, setHistoryOf] = useState<ContainerStack | null>(null);
   const [output, setOutput] = useState<{ title: string; body: string } | null>(null);
   const [snack, setSnack] = useState("");
+  const [tab, setTab] = useState<"stacks" | "updates">("stacks");
 
   const { data: stacks = [], isLoading } = useQuery({
     queryKey: ["stacks"],
@@ -98,13 +100,24 @@ export function StacksPage() {
     <Box>
       <Stack direction="row" alignItems="center" sx={{ mb: 2 }}>
         <Typography variant="h5" sx={{ flex: 1 }}>Containers</Typography>
-        {canEdit && (
+        {canEdit && tab === "stacks" && (
           <Button startIcon={<AddIcon />} variant="contained" onClick={() => setCreating(true)}>
             New stack
           </Button>
         )}
       </Stack>
 
+      {/* Two halves of one job: what a host SHOULD run, and what is available to
+          run. Separate tabs rather than separate pages because deciding to take
+          an update and applying it are the same visit. */}
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+        <Tab label="Stacks" value="stacks" />
+        <Tab label="Updates" value="updates" />
+      </Tabs>
+
+      {tab === "updates" && <ContainerUpdatesTab />}
+
+      {tab === "stacks" && <>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         What each host should be running. Provenance holds the definition and writes a
         rendered copy to the host, so a stack keeps running even when Provenance does
@@ -203,6 +216,7 @@ export function StacksPage() {
         </DialogContent>
         <DialogActions><Button onClick={() => setOutput(null)}>Close</Button></DialogActions>
       </Dialog>
+      </>}
 
       <Snackbar open={snack !== ""} autoHideDuration={5000} onClose={() => setSnack("")} message={snack} />
     </Box>

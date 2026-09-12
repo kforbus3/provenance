@@ -33,6 +33,8 @@ import (
 // table here is a deliberate security decision — it asserts the table holds no
 // per-tenant data (or is isolated some other way). Keep the reason accurate.
 var rlsGlobalAllowlist = map[string]string{
+	// --- container image updates (0089) ---
+	"container_image_updates": "a cache of what a public registry says about a public tag, keyed by repository+tag and holding no tenant data: the registry gives the same answer to everyone. Shared for the same reason as container_image_scans — asking per tenant would multiply registry rate-limit pressure for an identical answer (0089).",
 	// --- container image scanning (0087) ---
 	"container_image_scans": "a cache of public CVE data keyed by image DIGEST, holding no tenant data: the same digest is the same bytes for everyone, and the host->image linkage that would identify a tenant lives in host_inventory, which is scoped. Shared on purpose — grype fetches each image from its registry to scan it, so per-tenant copies would multiply bandwidth, disk and registry rate-limit pressure for an identical answer (0087).",
 	// --- imaging control plane (0080) ---

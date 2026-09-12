@@ -75,6 +75,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/ratelimit"
 	"github.com/kforbus3/provenance/backend/internal/rdp"
 	"github.com/kforbus3/provenance/backend/internal/recorder"
+	"github.com/kforbus3/provenance/backend/internal/registry"
 	"github.com/kforbus3/provenance/backend/internal/reports"
 	"github.com/kforbus3/provenance/backend/internal/reportsched"
 	"github.com/kforbus3/provenance/backend/internal/scan"
@@ -133,6 +134,7 @@ type Server struct {
 	imagingSvc   *imaging.Service
 	vulnScan     *vulnscan.Service
 	stacks       *stacks.Service
+	imageCheck   *registry.Checker
 	msrcSvc      *msrc.Service
 	actionReg    *aiaction.Registry
 	playbookSvc  *playbook.Service
@@ -272,6 +274,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// the ad-hoc command service so there is one implementation of "reach a host
 	// and run something" rather than two that drift.
 	s.stacks = stacks.New(st, s.commandSvc, log)
+	s.imageCheck = registry.NewChecker(st, log)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
@@ -393,6 +396,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.krlLoop(ctx)
 	go s.vaultRotationLoop(ctx)
 	go s.containerScanLoop(ctx)
+	go s.imageUpdateLoop(ctx)
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx, s.isLeader)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx, s.isLeader)
@@ -650,6 +654,51 @@ func (s *Server) containerScanLoop(ctx context.Context) {
 	case <-ctx.Done():
 		return
 	case <-time.After(15 * time.Minute):
+		run()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// imageUpdateLoop asks registries what is available for the images the fleet runs.
+//
+// Twice a day. A published tag moving is not an emergency -- it is something an
+// operator decides about during working hours -- and every check spends a
+// manifest request against a rate limit registries apply per IP, shared across
+// every image the whole fleet runs. Checking hourly would burn that budget to
+// learn the same answer twelve times.
+//
+// Leader-only, like the other sweeps: in a multi-instance deployment every
+// instance would otherwise ask about every image and multiply the rate-limit
+// pressure by the number of instances, for one identical answer.
+func (s *Server) imageUpdateLoop(ctx context.Context) {
+	t := time.NewTicker(12 * time.Hour)
+	defer t.Stop()
+	run := func() {
+		if !s.isLeader() || s.imageCheck == nil {
+			return
+		}
+		_, failed := s.imageCheck.Check(ctx)
+		var err error
+		if failed > 0 {
+			// Recorded but not alarming: a private registry with no credentials
+			// fails every pass by design, and the per-image reason is on the row.
+			err = fmt.Errorf("%d image(s) could not be checked", failed)
+		}
+		s.Jobs.Record("container-image-check", err)
+	}
+	// Wait for the first monitor sweep to collect container lists; before that
+	// there is nothing to check and the pass would record an empty result.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(20 * time.Minute):
 		run()
 	}
 	for {
@@ -1195,6 +1244,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	scan.Mount(r, deps, s.scanSvc)
 	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
 	stacks.Mount(r, deps, s.stacks)
+	registry.Mount(r, deps, s.imageCheck, s.Store)
 	upgrade.Mount(r, deps, s.upgradeSvc)
 
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).
