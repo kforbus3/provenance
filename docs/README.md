@@ -90,6 +90,7 @@ brokering:
 | [access-policies.md](./access-policies.md) | security / admins | Attribute-based access control (ABAC) layered on RBAC to deny connections by context |
 | [automation.md](./automation.md) | integrators / operators | Driving Provenance as code with the Go SDK and the `fleet` CLI |
 | [behavior-analytics.md](./behavior-analytics.md) | security | UEBA: explainable, ML-free detection of access patterns deviating from a user's baseline |
+| [containers.md](./containers.md) | operators | What each host runs, image vulnerability scans, compose files under Provenance, and staged rollouts of image updates |
 | [database-broker.md](./database-broker.md) | operators / security | Brokered privileged access to databases with vaulted credentials, run through the jump host |
 | [kubernetes.md](./kubernetes.md) | operators / security | Brokered Kubernetes access via an authenticating proxy with a vaulted bearer token |
 | [external-secrets.md](./external-secrets.md) | operators / security | External-backed vault credentials fetched on demand from your secrets manager |

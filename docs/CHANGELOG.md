@@ -31,6 +31,73 @@ do about it.
 This is the first half of managing containers rather than only observing them:
 you cannot roll out an update to something you cannot see.
 
+**Container images are scanned for vulnerabilities.** The same grype sidecar the
+host scans use, keyed by image **digest** and deduplicated across the fleet: the
+same image on twenty hosts is fetched and scanned once, because the answer is
+identical. A digest's contents never change, so a result is re-scanned when the
+vulnerability *database* moves — which is what turns a clean image into a
+vulnerable one without anybody touching the image. An image that could not be
+pulled records why, because that must never read as an image with no findings.
+
+**Compose files can be held by Provenance and deployed to their hosts.**
+Provenance holds the definition and writes a rendered copy to the host, so a
+stack keeps running when Provenance does not — you lose the ability to change it,
+not to run it. Every row shows both the revision that *should* be deployed and
+the one the host last confirmed, because a tool that showed only the first would
+report success for a deploy that never landed.
+
+**Registries are asked what is available.** This is the half a renovate bot did,
+without the half that opened merge requests nobody read. Two signals, reported
+separately because they answer different questions: a newer version tag exists,
+and the tag a host runs now points at *different bytes*. The second is the one a
+version comparison can never see — a base-image security rebuild republishes the
+same version number, so a tool comparing only version strings says you are
+current while you run months-old bytes.
+
+The ordering **refuses to guess**. Tags are compared only when their prefix,
+suffix and component count all match, so `15-alpine` is never offered
+`16-bookworm` and `v2` is never ordered against `release-3`. When tags cannot be
+ordered the row says "cannot compare", not "up to date" — silence there reads as
+an answer, and it would be the wrong one.
+
+Registries are asked directly over their HTTP API, with no Docker daemon: an
+anonymous token per repository, cached for the pass, and `HEAD` for manifests so
+no body is transferred. Rate limits are the binding constraint — Docker Hub
+counts per IP across every image the whole fleet runs — so a pass checks at most
+40 images, results last 12 hours, and only the leader checks. A registry that
+will not answer is recorded against that image and the pass continues.
+
+**Updates roll out in stages, and a host counts as done only when it is running
+the target.** Canary, soak, batches and a failure budget — the same rules image
+rollouts obey, now shared code rather than a second copy that would drift.
+
+Verifying against what the host is actually running is the point. When a tag has
+moved, `docker compose up -d` finds it already present locally, starts the old
+bytes again and exits zero; a rollout counting the exit code would march that
+no-op across the fleet, report every host updated, and leave every host on the
+vulnerable image. An update deploy pulls first, and every host is read back and
+compared against the digest the rollout targets.
+
+Compose files are edited line by line rather than parsed and re-emitted — a YAML
+round-trip drops your comments, renormalises your quoting and reorders your keys,
+burying a one-line tag bump in a diff nobody can review. Only exact
+repository-and-tag matches move, so `nginx-extras:1.24`, `ghcr.io/nginx:1.24` and
+`nginx:1.24-alpine` are all left alone when `nginx:1.24` is rewritten.
+
+A host running the image outside a managed stack is **reported, not guessed at**:
+recreating a container whose run configuration was never recorded would mean
+inventing the parts nobody told us, and one that comes back missing a volume is
+worse than one never touched.
+
+Extracting the shared pacing rules surfaced a defect in them: `canary - flying`
+ignores the canaries that already verified, so a canary of 2 started two more the
+moment the first passed — three machines taking an unproven update where two were
+asked for. Every existing test passed either way, because every one of them used
+a canary of 1, where that branch is unreachable.
+
+**New documentation:** [containers.md](./containers.md), covering all of the
+above, in the in-app Help and answerable by Ask Provenance.
+
 ---
 
 ## v1.2.2 — 2026-09-11

@@ -35,6 +35,7 @@ var curated = []struct{ File, Title string }{
 	{"host-enrollment-guide.md", "Host Enrollment"},
 	{"certificate-lifecycle.md", "Certificate Lifecycle"},
 	{"imaging.md", "Imaging & A/B Updates"},
+	{"containers.md", "Containers"},
 	{"access-policies.md", "Access Policies (ABAC)"},
 	{"database-broker.md", "Database Access"},
 	{"kubernetes.md", "Kubernetes Access"},

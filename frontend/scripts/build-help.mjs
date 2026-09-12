@@ -23,6 +23,7 @@ const DOCS = [
   { file: "host-enrollment-guide.md", title: "Host Enrollment", category: "Administration", order: 5 },
   { file: "certificate-lifecycle.md", title: "Certificate Lifecycle", category: "Administration", order: 6 },
   { file: "imaging.md", title: "Imaging & A/B Updates", category: "Imaging & updates", order: 6.5 },
+  { file: "containers.md", title: "Containers", category: "Imaging & updates", order: 6.6 },
   { file: "access-policies.md", title: "Access Policies (ABAC)", category: "Administration", order: 7 },
   { file: "database-broker.md", title: "Database Access", category: "Brokered access", order: 8 },
   { file: "kubernetes.md", title: "Kubernetes Access", category: "Brokered access", order: 9 },
