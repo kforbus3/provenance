@@ -696,3 +696,31 @@ func (s *Store) OverlayModesInUse(ctx context.Context) ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// UpdateHostContainers writes only the container columns for a host.
+//
+// Narrow on purpose. UpsertInventory overwrites os_name, kernel_version and the
+// rest unconditionally and sets collected_at=now(), so routing a container-only
+// collection through it would blank the host's facts and — worse — keep pushing
+// collected_at forward, so the inventory refresh those facts depend on would
+// never come due again.
+//
+// UPDATE rather than upsert: a host with no inventory row yet has never been
+// collected at all, and its first full pass will bring the containers with it.
+func (s *Store) UpdateHostContainers(ctx context.Context, hostID uuid.UUID, inv models.HostInventory) error {
+	var containers []byte
+	if inv.Containers != nil {
+		containers, _ = json.Marshal(inv.Containers)
+	}
+	// Same rule as UpsertInventory: a sweep that could not reach the docker socket
+	// must not blank a list collected when it could, but the STATUS is current
+	// news either way.
+	_, err := s.pool.Exec(ctx, `
+		UPDATE host_inventory SET
+			containers = COALESCE($2, containers),
+			containers_checked_at = COALESCE($3, containers_checked_at),
+			containers_status = $4
+		WHERE host_id = $1`,
+		hostID, containers, inv.ContainersCheckedAt, inv.ContainersStatus)
+	return err
+}

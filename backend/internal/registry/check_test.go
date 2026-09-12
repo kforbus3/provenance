@@ -193,7 +193,10 @@ func TestUnreachableRegistryIsRecordedNotDropped(t *testing.T) {
 	defer srv.Close()
 	st := &fakeStore{}
 	repo := repoAt(srv, "team/app")
-	st.tracked = []store.TrackedImage{{Repository: repo, Tag: "1.0.0"}}
+	// A digest, because this is an image that WAS pulled from a registry — the
+	// case where a registry failure is real news. An image with no digest never
+	// came from one and is not asked about at all.
+	st.tracked = []store.TrackedImage{{Repository: repo, Tag: "1.0.0", Digest: "sha256:aaa"}}
 
 	checked, failed := newChecker(t, st, srv).Check(context.Background())
 	if failed != 1 || checked != 0 {
@@ -211,7 +214,7 @@ func TestOneBadRegistryDoesNotStopThePass(t *testing.T) {
 	}))
 	defer bad.Close()
 	st := &fakeStore{tracked: []store.TrackedImage{
-		{Repository: repoAt(bad, "team/broken"), Tag: "1.0.0"},
+		{Repository: repoAt(bad, "team/broken"), Tag: "1.0.0", Digest: "sha256:bbb"},
 		{Repository: repoAt(good, "team/app"), Tag: "1.0.0", Digest: "sha256:aaa"},
 	}}
 
@@ -269,5 +272,42 @@ func TestNoTrackedImagesPrunesNothing(t *testing.T) {
 	newChecker(t, st, srv).Check(context.Background())
 	if len(st.pruned) != 0 {
 		t.Error("pruned with an empty tracked list")
+	}
+}
+
+func TestALocallyBuiltImageIsNotAskedAboutAtAll(t *testing.T) {
+	// Docker records RepoDigests only for images it PULLED, so a locally built
+	// one has none. Asking a registry about it is worse than useless: a bare name
+	// resolves to Docker Hub, the repository does not exist there, and Hub answers
+	// 401 — which surfaces as "needs credentials" and sends an operator to
+	// configure credentials that cannot help. On the host running this product
+	// that was ten rows out of thirteen.
+	asked := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = true
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repoAt(srv, "fleet-terminal-backend"), Tag: "1.2.3"}, // no digest
+	}}
+	checked, failed := newChecker(t, st, srv).Check(context.Background())
+
+	if asked {
+		t.Error("a registry was asked about an image that was never pulled from one")
+	}
+	if failed != 0 {
+		t.Errorf("failed=%d — a locally built image is not a failed check", failed)
+	}
+	if checked != 1 {
+		t.Errorf("checked=%d, want 1", checked)
+	}
+	got := st.saved[0]
+	if got.Error != "" {
+		t.Errorf("recorded an error for a locally built image: %q", got.Error)
+	}
+	if !strings.Contains(got.Note, "built locally") {
+		t.Errorf("the row should say why it cannot be checked, got note %q", got.Note)
 	}
 }

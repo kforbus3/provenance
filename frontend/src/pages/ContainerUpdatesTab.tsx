@@ -28,10 +28,14 @@ const errMsg = (e: unknown, fallback: string) =>
 // What this row is telling the operator, as one of four states. Kept in one
 // place because the states overlap: an image can have a newer tag AND a moved
 // digest, and showing both as separate badges reads as two problems.
-type Verdict = "error" | "newer" | "moved" | "current" | "unknown";
+type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local";
 
 function verdictOf(u: ImageUpdate): Verdict {
   if (u.error) return "error";
+  // Built on the host and never in a registry. Not a problem and not a failure —
+  // there is simply nothing to compare against, and showing it as either would
+  // put this product's own containers permanently in the needs-attention list.
+  if (u.note?.startsWith("built locally")) return "local";
   if (u.latestTag) return "newer";
   if (u.hosts.some((h) => h.stale)) return "moved";
   // A note with no newer tag means the registry answered but its tags could not
@@ -61,6 +65,12 @@ function VerdictChip({ u }: { u: ImageUpdate }) {
       return (
         <Tooltip title={u.note ?? ""}>
           <Chip label="cannot compare" size="small" variant="outlined" />
+        </Tooltip>
+      );
+    case "local":
+      return (
+        <Tooltip title="Built on the host rather than pulled from a registry, so there is no published version to compare against.">
+          <Chip label="built locally" size="small" variant="outlined" />
         </Tooltip>
       );
     default:
@@ -169,7 +179,7 @@ export function ContainerUpdatesTab() {
 
   const check = useMutation({
     mutationFn: checkContainerUpdates,
-    onSuccess: (r) => setSnack(r.note || "Checking registries…"),
+    onSuccess: (r) => setSnack(r.note || "Asking the registries…"),
     onError: (e) => setSnack(errMsg(e, "Could not start a check.")),
   });
 
@@ -182,7 +192,7 @@ export function ContainerUpdatesTab() {
       : updates;
     // Actionable first. An operator opening this screen wants the images that
     // need a decision, not an alphabetical list with three of them buried in it.
-    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4 };
+    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, current: 4, local: 5 };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a)] - rank[verdictOf(b)] ||
       a.repository.localeCompare(b.repository));
@@ -199,6 +209,8 @@ export function ContainerUpdatesTab() {
         What the registries say is available for the images your hosts are running.
         Checked twice a day; a newer version tag and a rebuilt tag are reported
         separately, because a rebuild keeps the same version number.
+        The images themselves are discovered by the monitor sweep as it reaches each
+        host, so a newly added host appears here once it has been swept.
       </Typography>
 
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
@@ -206,8 +218,12 @@ export function ContainerUpdatesTab() {
                    value={filter} onChange={(e) => setFilter(e.target.value)}
                    sx={{ maxWidth: 320, flex: 1 }} />
         {canScan && (
-          <Button startIcon={<RefreshIcon />} disabled={check.isPending}
-                  onClick={() => check.mutate()}>Check now</Button>
+          <Tooltip title="Re-asks the registries about the images already discovered. It does not go out to your hosts — that is the monitor sweep's job.">
+            <span>
+              <Button startIcon={<RefreshIcon />} disabled={check.isPending}
+                      onClick={() => check.mutate()}>Check registries now</Button>
+            </span>
+          </Tooltip>
         )}
         <Button size="small" onClick={() => qc.invalidateQueries({ queryKey: ["container-updates"] })}>
           Refresh
@@ -223,8 +239,11 @@ export function ContainerUpdatesTab() {
       {isLoading && <Typography variant="body2">Loading…</Typography>}
       {!isLoading && updates.length === 0 && (
         <Typography variant="body2" color="text.secondary">
-          Nothing checked yet. Container lists are collected on the monitor sweep, and
-          registries are asked shortly after — or press “Check now”.
+          Nothing here yet. Images are discovered by the monitor sweep as it reaches
+          each host, and the registries are asked shortly afterwards — so a fleet that
+          has just upgraded fills in over the following few sweeps rather than all at
+          once. “Check registries now” re-asks about images already discovered; it does
+          not reach out to your hosts, so it will not make an unswept host appear.
         </Typography>
       )}
 

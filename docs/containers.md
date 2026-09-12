@@ -74,14 +74,28 @@ IP, shared across every image your whole fleet runs, so:
 - a result stays good for 12 hours
 - only the leader instance checks, in a multi-instance deployment
 
+**Images built on the host are not asked about at all.** Docker records a
+repository digest only for images it *pulled*, so a locally built one has none —
+including this product's own containers. Asking a registry about such a name
+resolves it to Docker Hub, where the repository does not exist and the answer is
+a 401, which would read as "needs credentials" and send you to configure
+credentials that cannot help. Those rows say **built locally** instead.
+
 A registry that will not answer — private, offline, rate limited — is recorded
 against *that image* and the pass continues. One private registry with no
 credentials must not stop the fleet learning about everything else. The row says
 which it was, because "needs credentials", "no such tag" and "rate limited" have
 different answers.
 
-**"Check now"** on the Updates tab runs a pass immediately. Results appear as
-each registry answers.
+**"Check registries now"** on the Updates tab runs a pass immediately. It re-asks
+the registries about images **already discovered** — it does not reach out to your
+hosts, so it will not make a host that has not been swept yet appear.
+
+Images are discovered by the monitor sweep as it reaches each host, on a ten-minute
+cadence of their own. Containers change whenever somebody deploys, so they are
+deliberately not aged like a kernel version, which changes at a reboot. A fleet
+that has just upgraded therefore fills in over the following few sweeps rather
+than all at once.
 
 ## Rolling an update out
 

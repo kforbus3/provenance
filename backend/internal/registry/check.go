@@ -101,6 +101,25 @@ func (c *Checker) Check(ctx context.Context) (checked, failed int) {
 func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.ImageUpdate {
 	rec := store.ImageUpdate{Repository: img.Repository, Tag: img.Tag}
 
+	// An image with no repository digest was never pulled from a registry. Docker
+	// records RepoDigests only for images it fetched, so a locally built one --
+	// this product's own containers among them -- has none.
+	//
+	// Asking a registry about it is worse than useless: a bare name resolves to
+	// Docker Hub, "fleet-terminal-backend" is not a repository there, and Hub
+	// answers 401 for repositories that do not exist. That surfaces as "this
+	// registry needs credentials", which sends an operator to configure
+	// credentials that cannot help, for an image that will never be in a registry
+	// at all. On a host running this product it was ten rows of that out of
+	// thirteen.
+	//
+	// The digest is the MAX across every host running the image, so this is only
+	// reached when NO host has one.
+	if img.Digest == "" {
+		rec.Note = "built locally — no registry digest on any host running it, so there is nothing to compare against"
+		return rec
+	}
+
 	digest, err := c.client.Digest(ctx, img.Repository, img.Tag)
 	if err != nil {
 		rec.Error = truncate(err.Error(), 400)

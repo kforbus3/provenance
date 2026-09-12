@@ -724,6 +724,25 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 		}
 	}
 
+	// Containers on their own cadence, and written through a narrow UPDATE rather
+	// than folded into the inventory row: UpsertInventory pushes collected_at
+	// forward, so carrying containers through it would keep the inventory refresh
+	// perpetually not-due.
+	if containersStale(h.Inventory) {
+		var c models.HostInventory
+		collectContainers(conn, &c)
+		if err := m.store.UpdateHostContainers(ctx, h.ID, c); err != nil {
+			m.log.Warn("monitor: recording containers", "host", h.Hostname, "err", err)
+		}
+		if inv != nil {
+			// The full-inventory write is about to happen too; carry what was just
+			// read so the two do not disagree for a sweep.
+			inv.Containers = c.Containers
+			inv.ContainersCheckedAt = c.ContainersCheckedAt
+			inv.ContainersStatus = c.ContainersStatus
+		}
+	}
+
 	// Resource metrics (disk/memory/load/network) change continuously, so collect
 	// them every probe. CPU count (for load-per-core) comes from inventory.
 	cpu := 0
@@ -743,6 +762,26 @@ const inventoryTTL = time.Hour
 
 func inventoryStale(inv *models.HostInventory) bool {
 	return inv == nil || inv.CollectedAt == nil || time.Since(*inv.CollectedAt) > inventoryTTL
+}
+
+// containersTTL bounds how often the running-container list is re-collected.
+//
+// Much shorter than inventoryTTL because containers are not a fact of the same
+// kind. A kernel version changes at a reboot; what a host is running changes
+// whenever somebody deploys — and an update rollout decides what to send from
+// this list, so a stale one is worse than a slower sweep.
+//
+// Keeping it inside collectInventory is also what made the container feature
+// look broken on the release that introduced it: every host whose facts were
+// already fresh skipped collection entirely, so a fleet showed one host's
+// containers and nothing else, for up to an hour, with nothing saying why.
+// A collector added to a gate designed for things that rarely change inherits a
+// cadence nobody chose for it.
+const containersTTL = 10 * time.Minute
+
+func containersStale(inv *models.HostInventory) bool {
+	return inv == nil || inv.ContainersCheckedAt == nil ||
+		time.Since(*inv.ContainersCheckedAt) > containersTTL
 }
 
 // updatesStale bounds how often the pending-updates search runs (heavier than the
@@ -790,7 +829,7 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 	collectUpdates(conn, &inv)
 	collectObsolete(conn, &inv)
 	collectListeningPorts(conn, &inv)
-	collectContainers(conn, &inv)
+	// Containers are deliberately NOT collected here. See containersTTL.
 	return inv, true
 }
 
