@@ -5,6 +5,43 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.17 — 2026-09-12
+
+**A rollout no longer fails itself after succeeding.** The target digest was taken
+from the updates row, which records what the *current* tag points at — the same
+thing for a rebuild, and the old image's digest for a version change. So a
+container that had been updated correctly was compared against the bytes it had
+just moved away from, and the rollout reported failure for work it had done. The
+server now resolves what the target tag points at rather than accepting it from
+the caller.
+
+**"Check registries now" now means now.** It ran the same pass as the scheduler,
+twelve-hour freshness window and all, so pressing it after changing something —
+the only reason to press it — re-asked nothing and reported success. The batch cap
+still applies, since that one is about a registry's rate limit rather than
+staleness, and a pass that could not cover everything says how many images are
+still waiting.
+
+**A verdict is no longer held after the facts change.** Images checked while
+container digests were briefly not being collected were recorded as "built
+locally", and the freshness window then held that answer for twelve hours after
+the digests arrived — on one fleet, forty images out of forty-eight. An image with
+no digest is now always re-checked, which costs nothing because it is answered
+without asking a registry anything.
+
+**The updates summary no longer counts two different things as one.** A newer
+version and a rebuild at the same version are reported separately, so a count of
+eight over a list showing one version number is no longer confusing.
+
+**Support bundles: masking is now a choice.** Hostnames and IP addresses are
+included as they are unless you ask for them to be masked, which suits a bundle
+going to somebody who already knows the estate. Credential removal is not part of
+the choice and always happens. With masking on, hostnames are replaced
+consistently the way addresses already were — and the manifest names any hostname
+that is also an ordinary word, since those are replaced wherever they appear.
+
+---
+
 ## v1.2.16 — 2026-09-12
 
 **Provenance can now produce a support bundle about itself.** There was one for a
