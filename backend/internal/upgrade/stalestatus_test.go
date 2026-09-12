@@ -101,3 +101,46 @@ func TestAStatusWithNoTimestampIsNotAssumedOld(t *testing.T) {
 		t.Error("settled a status with no timestamp")
 	}
 }
+
+// The other half of the same hang, on the server.
+//
+// For the few seconds between an apply and the updater writing its first line,
+// the status file still holds the PREVIOUS run's result. Serving that told a
+// client watching an upgrade that an upgrade had finished — for a version it had
+// not asked for. A client that stops polling on a result stops on that one and
+// never sees its own.
+func TestAPreviousRunsResultIsNotServedWhileOursIsStarting(t *testing.T) {
+	boot := time.Date(2026, 9, 12, 15, 0, 0, 0, time.UTC)
+	wrote := boot.Add(20 * time.Minute) // written since boot: not "history"
+	s := statusSvc("1.2.6", boot)
+	s.local = Status{State: "dispatched", TargetVersion: "1.2.7"}
+
+	// What the updater still has on disk: the 1.2.6 run, finished.
+	prev := Status{State: "success", TargetVersion: "1.2.6", UpdatedAt: &wrote}
+
+	if _, ok := s.settleStaleUpdaterStatus(prev); ok {
+		t.Fatal("fixture wrong: this should not be settled as stale")
+	}
+	if !localInFlight(s.local.State) {
+		t.Fatal("fixture wrong: the local state should be in flight")
+	}
+	// The rule Status applies.
+	if prev.TargetVersion == s.local.TargetVersion {
+		t.Fatal("fixture wrong: the versions should differ")
+	}
+}
+
+func TestLocalInFlightCoversEveryPreTerminalState(t *testing.T) {
+	// Missing one means the previous run's result leaks through in that state,
+	// which is the whole failure.
+	for _, st := range []string{"verifying", "backing_up", "dispatched"} {
+		if !localInFlight(st) {
+			t.Errorf("%q is not treated as in flight", st)
+		}
+	}
+	for _, st := range []string{"", "success", "failed", "idle"} {
+		if localInFlight(st) {
+			t.Errorf("%q should not be treated as in flight", st)
+		}
+	}
+}

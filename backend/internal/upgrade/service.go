@@ -278,18 +278,47 @@ func (s *Service) settleStaleUpdaterStatus(us Status) (Status, bool) {
 }
 
 func (s *Service) Status(ctx context.Context) Status {
+	s.mu.Lock()
+	local := s.local
+	draining := s.draining
+	s.mu.Unlock()
+
 	if us, ok := s.updaterStatus(ctx); ok {
 		if settled, ok := s.settleStaleUpdaterStatus(us); ok {
 			return settled
 		}
+		terminal := us.State == "success" || us.State == "failed"
+
+		// A terminal result for a DIFFERENT version than the one just dispatched is
+		// the PREVIOUS run's, still on disk because the updater has not begun
+		// writing ours yet — a few seconds, every time.
+		//
+		// Serving it told a client watching an upgrade that an upgrade had
+		// finished, for a version it had not asked for. A client that stops polling
+		// on a result then stops on that one and never sees its own, which is a
+		// page waiting forever for an upgrade that already succeeded.
+		if terminal && localInFlight(local.State) && us.TargetVersion != local.TargetVersion {
+			local.Draining = draining
+			return local
+		}
+
+		// Terminal and older than this process: history, not news.
+		if terminal && (us.UpdatedAt == nil || us.UpdatedAt.Before(s.bootAt)) {
+			local.Draining = draining
+			return local
+		}
+
 		us.Draining = s.IsDraining()
 		return us
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st := s.local
-	st.Draining = s.draining
-	return st
+
+	local.Draining = draining
+	return local
+}
+
+// localInFlight reports whether this process believes it has an upgrade running.
+func localInFlight(state string) bool {
+	return state == "verifying" || state == "backing_up" || state == "dispatched"
 }
 
 // ClusterMember is a compact view of a cluster instance for the upgrade UI, so an

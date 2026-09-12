@@ -94,4 +94,47 @@ describe("UpdatesCard", () => {
       { timeout: 5000 },
     );
   });
+
+  it("keeps polling when the first result names the PREVIOUS version", async () => {
+    // The hang, exactly as it happened.
+    //
+    // At dispatch the status file still held the previous upgrade's `success`
+    // for a few seconds, until the updater began writing the new run. The first
+    // poll saw success-for-1.2.6, and stopping on ANY terminal state killed the
+    // interval. The latch then correctly refused to settle on a version it had
+    // not dispatched — and with nothing left polling, waited forever:
+    //
+    //     Waiting for the updater to pick this up… (→ 1.2.7)
+    //
+    // while the upgrade to 1.2.7 had in fact already succeeded.
+    let poll = 0;
+    vi.mocked(getUpgradeStatus).mockImplementation(async () => {
+      poll += 1;
+      // First answer: the PREVIOUS run, already finished.
+      if (poll === 1) return { state: "success", targetVersion: "1.2.6" } as never;
+      // Then the real one.
+      return { state: "success", targetVersion: "1.2.4-DISPATCHED" } as never;
+    });
+
+    // Dispatch 1.2.4-DISPATCHED so the second answer is "ours".
+    vi.mocked(previewUpgrade).mockResolvedValue({
+      version: "1.2.4-DISPATCHED", migrationCompatibility: "additive", components: [],
+    } as never);
+    vi.mocked(applyUpgrade).mockResolvedValue({} as never);
+
+    const { container } = render(<UpdatesCard />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", { value: [new File(["x"], "b.fleetup")] });
+    fireEvent.change(input);
+    fireEvent.click(await screen.findByText(/Install 1\.2\.4-DISPATCHED/));
+
+    await waitFor(() => expect(applyUpgrade).toHaveBeenCalledTimes(1));
+
+    // If polling stopped on the stale success, this never arrives.
+    await waitFor(
+      () => expect(screen.getByText(/Upgraded to 1\.2\.4-DISPATCHED/)).toBeInTheDocument(),
+      { timeout: 12000 },
+    );
+    expect(poll).toBeGreaterThan(1);
+  }, 20000);
 });

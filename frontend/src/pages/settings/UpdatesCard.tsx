@@ -36,6 +36,11 @@ export function UpdatesCard() {
   // A success is only this page's to announce if it names the version this page
   // sent.
   const [dispatchedVersion, setDispatchedVersion] = useState<string | null>(null);
+  // The polling closure is created once and captures whatever dispatchedVersion
+  // was then — which is null, since polling starts in the same tick as the
+  // dispatch. A ref is what the interval can actually read.
+  const dispatchedRef = useRef<string | null>(null);
+  const dispatchedAt = useRef<number>(0);
   const [checking, setChecking] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const polling = useRef<number | null>(null);
@@ -86,7 +91,22 @@ export function UpdatesCard() {
     dispatchedVersion !== null &&
     status?.targetVersion === dispatchedVersion &&
     (status?.state === "success" || status?.state === "failed");
-  const awaitingDispatched = dispatchedVersion !== null && !settledForDispatched;
+  // And an escape hatch. The latch exists so a stale status cannot clear a real
+  // upgrade off the screen; it must not become a screen nobody can leave. After
+  // this long with no result for the dispatched version, show whatever the server
+  // does say and let the page be used again.
+  const [waitedTooLong, setWaitedTooLong] = useState(false);
+  useEffect(() => {
+    if (dispatchedVersion === null || settledForDispatched) {
+      setWaitedTooLong(false);
+      return;
+    }
+    const t = window.setTimeout(() => setWaitedTooLong(true), 10 * 60 * 1000);
+    return () => window.clearTimeout(t);
+  }, [dispatchedVersion, settledForDispatched]);
+
+  const awaitingDispatched =
+    dispatchedVersion !== null && !settledForDispatched && !waitedTooLong;
 
   const serverActive = status && (status.state === "dispatched" || status.state === "running" || status.state === "backing_up");
   const active = serverActive || awaitingDispatched;
@@ -98,7 +118,17 @@ export function UpdatesCard() {
         const s = await getUpgradeStatus();
         setReconnecting(false);
         setStatus(s);
-        if (s.state === "success" || s.state === "failed") {
+        // Stop only on a result for the version THIS page dispatched.
+        //
+        // Stopping on any terminal state was a permanent hang: the status file
+        // still holds the PREVIOUS upgrade's `success` for the few seconds before
+        // the updater starts writing the new run, so the first poll after a
+        // dispatch sees success-for-the-old-version, kills the interval, and the
+        // latch — which correctly refuses to settle on a version it did not
+        // dispatch — then waits forever with nothing left to poll.
+        const terminal = s.state === "success" || s.state === "failed";
+        const mine = dispatchedRef.current === null || s.targetVersion === dispatchedRef.current;
+        if (terminal && mine) {
           if (polling.current) window.clearInterval(polling.current);
         }
       } catch {
@@ -116,6 +146,7 @@ export function UpdatesCard() {
     // dispatch, or the Install button would stay hidden behind a finished
     // upgrade's in-progress state.
     setDispatchedVersion(null);
+    dispatchedRef.current = null;
     try {
       setManifest(await previewUpgrade(file));
     } catch (e: any) {
@@ -131,12 +162,16 @@ export function UpdatesCard() {
     try {
       await applyUpgrade(manifest.version);
       setDispatchedVersion(manifest.version);
+      dispatchedRef.current = manifest.version;
+      dispatchedAt.current = Date.now();
       setStatus({ state: "running", targetVersion: manifest.version, step: "starting…" });
       startPolling();
     } catch (e: any) {
       // 409 means an upgrade is already running — not a failure to report as one.
       if (e?.response?.status === 409) {
         setDispatchedVersion(manifest.version);
+        dispatchedRef.current = manifest.version;
+        dispatchedAt.current = Date.now();
         startPolling();
       } else {
         setError(e?.response?.data?.error || e?.message || "Could not start the upgrade.");
