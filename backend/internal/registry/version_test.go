@@ -171,3 +171,60 @@ func TestAnOrdinaryMajorVersionIsNotMistakenForAYear(t *testing.T) {
 		}
 	}
 }
+
+// linuxserver.io publishes v1.6.0-ls356, and the next build of the same image is
+// v1.6.0-ls372. The suffix rule -- written so 15-alpine is never offered as an
+// upgrade to 16-bookworm -- read a build number as a variant, so EVERY
+// linuxserver image on the fleet was permanently unupdatable: seven of them,
+// each reported as "no tag in this repository has the same shape", each in fact
+// a plain version behind.
+func TestABuildCounterIsNotAVariant(t *testing.T) {
+	newer := []struct{ from, to, why string }{
+		{"v1.6.0-ls356", "v1.7.1-ls372", "a version bump carrying a later build number"},
+		{"v1.6.0-ls356", "v1.6.0-ls372", "the same version rebuilt, which is what the counter counts"},
+		{"5.0.4-ls263", "5.1.0-ls270", "sabnzbd, as it is actually tagged"},
+	}
+	for _, c := range newer {
+		a, _ := ParseVersion(c.from)
+		b, _ := ParseVersion(c.to)
+		if !IsNewer(a, b) {
+			t.Errorf("%s -> %s should be newer — %s", c.from, c.to, c.why)
+		}
+	}
+
+	// Everything the suffix rule exists to refuse still has to be refused.
+	refused := []struct{ a, b, why string }{
+		{"15-alpine", "16-bookworm", "a different base image is not a patch bump"},
+		{"1.27-alpine3.21", "1.30-alpine3.22", "the number in -alpine3.21 is the OS version, not a build count"},
+		{"1.27-alpine3.21", "1.30-alpine4.0", "and it must not become orderable across an OS major"},
+		{"1.0.0-rc1", "1.1.0", "a prerelease and a release are different things"},
+		{"1.0.0", "1.1.0-rc1", "and in that direction too"},
+		{"2.8.3", "2021.11.28", "heimdall publishes both schemes; the year is not a major version"},
+		{"v1.6.0-ls356", "v1.7.1-beta2", "a build counter does not make every numbered suffix equivalent"},
+	}
+	for _, c := range refused {
+		a, _ := ParseVersion(c.a)
+		b, _ := ParseVersion(c.b)
+		if Comparable(a, b) {
+			t.Errorf("%s and %s must not be comparable — %s", c.a, c.b, c.why)
+		}
+	}
+}
+
+func TestNewestPicksTheLatestBuildOfTheLatestVersion(t *testing.T) {
+	tags := []string{"v1.5.1-ls340", "v1.6.0-ls356", "v1.7.1-ls372", "v1.7.1-ls371", "latest"}
+	got, reason := Newest("v1.6.0-ls356", tags)
+	if got != "v1.7.1-ls372" {
+		t.Errorf("newest = %q (%s), want v1.7.1-ls372", got, reason)
+	}
+}
+
+func TestABareSuffixAndACountedOneAreNotTheSameShape(t *testing.T) {
+	// "-alpine" against "-alpine3" is a suffix that happens to end in a digit
+	// next to one that does not; there is no counter to compare.
+	a, _ := ParseVersion("1.0-alpine")
+	b, _ := ParseVersion("1.1-alpine3")
+	if Comparable(a, b) {
+		t.Error("-alpine and -alpine3 must not be comparable")
+	}
+}

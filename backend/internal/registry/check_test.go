@@ -17,9 +17,14 @@ import (
 type fakeStore struct {
 	tracked  []store.TrackedImage
 	stale    []store.TrackedImage
+	composes []string
 	saved    []store.ImageUpdate
 	pruned   [][]store.TrackedImage
 	maxAgeIn time.Duration
+}
+
+func (f *fakeStore) EnabledStackComposes(context.Context) ([]string, error) {
+	return f.composes, nil
 }
 
 func (f *fakeStore) TrackedImages(context.Context) ([]store.TrackedImage, error) {
@@ -355,5 +360,115 @@ func TestAForcedCheckStillRespectsTheBatchCap(t *testing.T) {
 	if remaining != 7 {
 		t.Errorf("remaining = %d, want 7 — an operator should know the pass was "+
 			"not the whole fleet", remaining)
+	}
+}
+
+// The situation this exists for, reproduced with the real shape it had on the
+// fleet: every compose file correctly pinned, and the containers still running
+// the floating tag they were created from because pinning a file to the version
+// a container is ALREADY on recreates nothing.
+//
+// Asked about under ":latest", the only answer available is "latest moved
+// again" — so v1.6.0-ls356 was never compared against anything, and the newer
+// version sitting in the registry was invisible. Thirteen services across two
+// hosts were in exactly that state.
+func TestAPinnedTagIsCheckedEvenWhileTheContainerStillRunsLatest(t *testing.T) {
+	srv := stubRegistry(t,
+		[]string{"v1.6.0-ls356", "v1.7.1-ls372", "latest"},
+		map[string]string{"latest": "sha256:aaa", "v1.6.0-ls356": "sha256:aaa"})
+	repo := repoAt(srv, "linuxserver/bazarr")
+
+	st := &fakeStore{
+		tracked:  []store.TrackedImage{{Repository: repo, Tag: "latest", Digest: "sha256:aaa"}},
+		composes: []string{"services:\n  bazarr:\n    image: " + repo + ":v1.6.0-ls356\n"},
+	}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	var pinned *store.ImageUpdate
+	for i := range st.saved {
+		if st.saved[i].Tag == "v1.6.0-ls356" {
+			pinned = &st.saved[i]
+		}
+	}
+	if pinned == nil {
+		t.Fatalf("the pinned tag was never checked; saved %d row(s): %+v", len(st.saved), st.saved)
+	}
+	if pinned.LatestTag != "v1.7.1-ls372" {
+		t.Errorf("latest = %q, want v1.7.1-ls372 — the upgrade the operator could not see",
+			pinned.LatestTag)
+	}
+	if !strings.Contains(pinned.Note, "still running latest") {
+		t.Errorf("the note should say the container has not caught up yet, got %q", pinned.Note)
+	}
+}
+
+func TestTheRunningTagIsStillCheckedAlongsideThePin(t *testing.T) {
+	// Another host may legitimately run the same repository unpinned, and a tag
+	// that moved under it is a true fact worth keeping. The declared row answers
+	// a different question, so it is carried as a different row rather than
+	// replacing this one.
+	srv := stubRegistry(t, []string{"1.0.0", "latest"},
+		map[string]string{"latest": "sha256:new", "1.0.0": "sha256:aaa"})
+	repo := repoAt(srv, "team/app")
+
+	st := &fakeStore{
+		tracked:  []store.TrackedImage{{Repository: repo, Tag: "latest", Digest: "sha256:old"}},
+		composes: []string{"services:\n  app:\n    image: " + repo + ":1.0.0\n"},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	var sawLatest bool
+	for _, r := range st.saved {
+		if r.Tag == "latest" && strings.Contains(r.Note, "older build") {
+			sawLatest = true
+		}
+	}
+	if !sawLatest {
+		t.Errorf("the running tag's moved-tag answer was lost: %+v", st.saved)
+	}
+}
+
+func TestADeclaredTagSaysNothingAboutRebuilds(t *testing.T) {
+	// The digest borrowed for a declared row is the RUNNING container's, because
+	// it is the only one the fleet has. Comparing it against the declared tag's
+	// digest would answer a question nobody asked — "did the bytes behind a tag
+	// this host never pulled change" — and phrase the answer as though the host
+	// had pulled it.
+	srv := stubRegistry(t, []string{"1.0.0"}, map[string]string{"1.0.0": "sha256:different"})
+	repo := repoAt(srv, "team/app")
+
+	st := &fakeStore{
+		tracked:  []store.TrackedImage{{Repository: repo, Tag: "latest", Digest: "sha256:running"}},
+		composes: []string{"services:\n  app:\n    image: " + repo + ":1.0.0\n"},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	for _, r := range st.saved {
+		if r.Tag == "1.0.0" && strings.Contains(r.Note, "rebuilt") {
+			t.Errorf("a declared tag must not claim a rebuild: %q", r.Note)
+		}
+	}
+}
+
+func TestNoDeclaredRowForARepositoryNothingRuns(t *testing.T) {
+	// A compose file may name a service that is scaled to zero or commented out
+	// of the running project. Asking a registry about it spends a rate-limited
+	// request on nobody's behalf.
+	tracked := []store.TrackedImage{{Repository: "team/app", Tag: "latest", Digest: "sha256:aaa"}}
+	extras := declaredExtras(tracked,
+		[]string{"services:\n  other:\n    image: team/unrelated:2.0.0\n"})
+	if len(extras) != 0 {
+		t.Errorf("asked about %d image(s) nothing runs: %+v", len(extras), extras)
+	}
+}
+
+func TestNoDeclaredRowWhenTheContainerAlreadyMatches(t *testing.T) {
+	// The ordinary, healthy case: pinned AND recreated. One row, not two.
+	tracked := []store.TrackedImage{{Repository: "team/app", Tag: "1.0.0", Digest: "sha256:aaa"}}
+	extras := declaredExtras(tracked,
+		[]string{"services:\n  app:\n    image: team/app:1.0.0\n"})
+	if len(extras) != 0 {
+		t.Errorf("duplicated a tag that is already being checked: %+v", extras)
 	}
 }

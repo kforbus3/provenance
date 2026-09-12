@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kforbus3/provenance/backend/internal/composefile"
 	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/pacing"
@@ -274,11 +275,38 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	self := selfProject(ctx, e.store)
 	runs := map[string]bool{}
 	protected := map[string]string{}
+	runsRepo := map[string]bool{}
 	for _, c := range containers {
 		key := c.Repository + ":" + c.Tag
 		runs[key] = true
+		runsRepo[c.Repository] = true
 		if isSelfContainer(self, c.ComposeProject, c.Image) {
 			protected[key] = c.Name
+		}
+	}
+	// A tag this host's compose file NAMES counts as one it runs.
+	//
+	// Pinning a compose file to the version a container is already on recreates
+	// nothing, so between the pin and the next deploy the file says
+	// bazarr:v1.6.0-ls356 while the container is still on :latest. The registry
+	// check follows the file -- that is the version an operator chose, and the
+	// only one a newer version can be found against -- so a rollout built from it
+	// arrives here naming a from-tag no container is running. Matching only the
+	// running tag would skip every host and offer an update that can never be
+	// applied.
+	//
+	// Restricted to repositories this host actually runs: a compose file may name
+	// a service that is not up, and deploying one because a rollout mentioned it
+	// would start something nobody asked to start.
+	for i := range stacks {
+		st := &stacks[i]
+		if !st.Enabled {
+			continue
+		}
+		for _, ref := range composefile.Images(st.Compose) {
+			if runsRepo[ref.Repository] {
+				runs[ref.Repository+":"+ref.Tag] = true
+			}
 		}
 	}
 

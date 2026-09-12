@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/kforbus3/provenance/backend/internal/composefile"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -30,6 +31,7 @@ const checkBatch = 40
 // against a live database and a live registry.
 type Store interface {
 	TrackedImages(ctx context.Context) ([]store.TrackedImage, error)
+	EnabledStackComposes(ctx context.Context) ([]string, error)
 	StaleImageChecks(ctx context.Context, imgs []store.TrackedImage, maxAge time.Duration) ([]store.TrackedImage, error)
 	UpsertImageUpdate(ctx context.Context, in store.ImageUpdate) error
 	PruneImageUpdates(ctx context.Context, keep []store.TrackedImage) error
@@ -80,8 +82,21 @@ func (c *Checker) check(ctx context.Context, force bool) (checked, failed, remai
 	if len(tracked) == 0 {
 		return 0, 0, 0
 	}
+	// What the operator CHOSE, alongside what happens to be running. See
+	// declaredExtras: a pinned service that has not been recreated yet is only
+	// ever asked about under the tag it is still running.
+	composes, err := c.store.EnabledStackComposes(ctx)
+	if err != nil {
+		c.log.Warn("image check: listing stack composes", "err", err)
+	} else {
+		tracked = append(tracked, declaredExtras(tracked, composes)...)
+	}
+
 	// Drop rows for images nothing runs any more before checking, so the pass
 	// budget is not spent on an image that was removed from the fleet.
+	//
+	// Pruning takes the combined list, or every declared row written by the pass
+	// before would be deleted by the pass after it.
 	if err := c.store.PruneImageUpdates(ctx, tracked); err != nil {
 		c.log.Warn("image check: pruning", "err", err)
 	}
@@ -159,6 +174,10 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	// is the whole answer for these -- and it is a good one: a moved "latest" IS
 	// the update.
 	if !looksVersioned(img.Tag) {
+		if img.Declared {
+			rec.Note = drifted(img)
+			return rec
+		}
 		if img.Digest != "" && digest != img.Digest {
 			rec.Note = "tag moved: this host is running an older build of " + img.Tag
 		}
@@ -181,6 +200,19 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	newest, reason := Newest(img.Tag, tags)
 	rec.LatestTag = newest
 	rec.Note = reason
+	if img.Declared {
+		// The digest comparison below asks "did the bytes behind the tag this
+		// host PULLED change". For a declared tag the host has not pulled it, so
+		// there is nothing truthful to say about a rebuild -- but the drift
+		// itself is worth saying, and it is the reason the version above was
+		// findable at all.
+		if newest == "" {
+			rec.Note = drifted(img)
+		} else {
+			rec.Note = reason + "; " + drifted(img)
+		}
+		return rec
+	}
 	if newest == "" && img.Digest != "" && digest != img.Digest {
 		// No newer version tag, but the tag this host runs does not point where
 		// the host's copy came from. A rebuild of the same version -- a base
@@ -204,4 +236,73 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// declaredExtras returns the tags a managed stack names that nothing is running.
+//
+// A compose file pinned to bazarr:v1.6.0-ls356 whose container is still on
+// :latest -- the state every service is in between being pinned and being
+// recreated -- is otherwise only ever asked about under :latest. Against a
+// moving tag the only available answer is "latest moved again", so the version
+// the operator actually chose is never compared against the registry and a real
+// upgrade waiting there stays invisible. Thirteen services across two hosts were
+// in exactly that state.
+//
+// Added rather than substituted. The running tag is still a true fact about the
+// fleet, and another host may legitimately be running that repository unpinned;
+// dropping its row would hide a moved tag that does matter. These rows answer a
+// different question, so they are carried as different rows.
+//
+// The digest comes from the running container because it is the only one the
+// fleet has -- which is also why checkOne says nothing about rebuilds for these.
+func declaredExtras(tracked []store.TrackedImage, composes []string) []store.TrackedImage {
+	// What is already being asked about, so a declared tag that some host does
+	// run is not asked about twice.
+	have := map[string]bool{}
+	running := map[string]store.TrackedImage{}
+	for _, t := range tracked {
+		have[t.Repository+":"+t.Tag] = true
+		// One row per repository is enough to borrow a digest from; which host it
+		// came from does not change the question being asked.
+		if _, ok := running[t.Repository]; !ok && t.Digest != "" {
+			running[t.Repository] = t
+		}
+	}
+
+	var out []store.TrackedImage
+	added := map[string]bool{}
+	for _, compose := range composes {
+		for _, ref := range composefile.Images(compose) {
+			key := ref.Repository + ":" + ref.Tag
+			if have[key] || added[key] {
+				continue
+			}
+			// Only for a repository the fleet actually runs. A compose file may
+			// name a service that is scaled to zero or commented out of the
+			// running project, and asking a registry about an image nothing runs
+			// spends a rate-limited request on nobody's behalf.
+			run, ok := running[ref.Repository]
+			if !ok {
+				continue
+			}
+			added[key] = true
+			out = append(out, store.TrackedImage{
+				Repository: ref.Repository,
+				Tag:        ref.Tag,
+				Digest:     run.Digest,
+				Declared:   true,
+				RunningTag: run.Tag,
+			})
+		}
+	}
+	return out
+}
+
+// drifted states the gap between what a compose file names and what is running.
+func drifted(img store.TrackedImage) string {
+	if img.RunningTag == "" || img.RunningTag == img.Tag {
+		return "named by a compose file; no container is running this tag yet"
+	}
+	return "a compose file names " + img.Tag + " but the container is still running " +
+		img.RunningTag + " — deploy the stack to apply it"
 }

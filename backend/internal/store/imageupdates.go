@@ -31,6 +31,19 @@ type TrackedImage struct {
 	// tag points at in the registry is how a moved tag -- same tag, new bytes --
 	// becomes visible, which a version-number comparison alone can never see.
 	Digest string `json:"digest,omitempty"`
+	// Declared marks a tag that comes from a managed stack's compose file rather
+	// than from a running container.
+	//
+	// These are not the same question. A compose file pinned to bazarr:v1.6.0
+	// whose container still runs :latest -- which is every service pinned but not
+	// yet recreated -- is asked about under :latest, so the only answer available
+	// is "latest moved again". The version the operator actually chose is never
+	// compared against anything, and a real upgrade sitting in the registry is
+	// invisible.
+	Declared bool `json:"declared,omitempty"`
+	// RunningTag is the tag the container is on when that differs from the
+	// declared one, so the difference can be stated rather than implied.
+	RunningTag string `json:"runningTag,omitempty"`
 }
 
 // TrackedImages returns every repository:tag running anywhere, once each.
@@ -312,4 +325,26 @@ func (s *Store) HostContainers(ctx context.Context, hostID uuid.UUID) ([]models.
 		return nil, err
 	}
 	return out, nil
+}
+
+// EnabledStackComposes returns the compose text of every enabled stack.
+//
+// For the registry check, which needs the tags an operator has CHOSEN and not
+// only the ones that happen to be running.
+func (s *Store) EnabledStackComposes(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT compose FROM container_stacks WHERE enabled AND COALESCE(compose,'') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

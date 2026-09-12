@@ -1218,3 +1218,43 @@ func TestASupersededHostSaysSoRatherThanClaimingItRanNothing(t *testing.T) {
 		t.Errorf("the skip does not say the host is past the target: %q", h.Error)
 	}
 }
+
+// A rollout built from a compose-declared tag names a from-tag no container is
+// running, because pinning a file to the version a container is already on
+// recreates nothing. Matching only the running tag skips every host and offers
+// an update that can never be applied.
+func TestATagTheComposeFileNamesCountsAsOneTheHostRuns(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	// The file is pinned to 1.24; the container is still on :latest.
+	f.containers[ids[0]][0].Tag = "latest"
+	f.containers[ids[0]][0].Image = "nginx:latest"
+
+	d := &fakeDeployer{}
+	newEngine(f, d, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	if d.calls != 1 {
+		t.Fatalf("deployed %d times, want 1 — the host's compose file names nginx:1.24, "+
+			"so the update applies to it even though the container still runs :latest", d.calls)
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
+		t.Errorf("state = %q (%q)", got, f.hosts[rid][0].Error)
+	}
+}
+
+func TestAComposeFileCannotStartSomethingTheHostIsNotRunning(t *testing.T) {
+	// A compose file may name a service that is not up. Deploying one because a
+	// rollout mentioned it would start something nobody asked to start.
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.containers[ids[0]] = []models.Container{{
+		Name: "other", Image: "redis:7", Repository: "redis", Tag: "7"}}
+
+	d := &fakeDeployer{}
+	newEngine(f, d, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	if d.calls != 0 {
+		t.Errorf("deployed %d times — nothing on this host runs nginx", d.calls)
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostSkipped {
+		t.Errorf("state = %q, want skipped", got)
+	}
+}

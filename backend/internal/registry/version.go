@@ -32,6 +32,45 @@ type Version struct {
 	Raw    string
 }
 
+// buildCounter splits a suffix into a stem and a trailing build number:
+// "-ls356" -> ("-ls", 356). No trailing digits gives a counter of -1.
+var buildCounter = regexp.MustCompile(`^(.*?[^0-9])([0-9]+)$`)
+
+// suffixParts separates a variant from a build number.
+//
+// linuxserver.io publishes v1.6.0-ls356, and the NEXT build of the same image is
+// v1.6.0-ls372. The suffix rule -- which exists so 15-alpine is never offered as
+// an upgrade to 16-bookworm -- read those as two different variants, so every
+// linuxserver image on a fleet was permanently unupdatable: seven of them here,
+// each reported as "no tag has the same shape", each in fact a plain version
+// behind.
+//
+// A build counter is not a variant. It is the same stem with a number after it,
+// which is exactly what this splits out -- and "-alpine" against "-bookworm"
+// still has two different stems, so that refusal is untouched.
+func suffixParts(suffix string) (stem string, counter int) {
+	m := buildCounter.FindStringSubmatch(suffix)
+	if m == nil {
+		return suffix, -1
+	}
+	// The stem may not itself contain digits.
+	//
+	// "-alpine3.21" would otherwise split into a stem of "-alpine3." and a
+	// counter of 21, making "-alpine3.22" its successor and, worse, putting
+	// "-alpine4.0" one step away from looking orderable. The number in that
+	// suffix is the base image's OWN version, not a count of builds, and the
+	// whole point of the suffix rule is that changing the operating system
+	// inside a container is not a patch bump.
+	if strings.ContainsAny(m[1], "0123456789") {
+		return suffix, -1
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return suffix, -1
+	}
+	return m[1], n
+}
+
 // ParseVersion reads a tag. ok is false when the tag carries no number at all --
 // "latest", "stable", "edge" -- which are not versions and must never be ordered.
 func ParseVersion(tag string) (Version, bool) {
@@ -66,7 +105,20 @@ func ParseVersion(tag string) (Version, bool) {
 // A prerelease suffix compares equal in shape to another prerelease, but that is
 // as far as it goes -- IsNewer refuses to move between prerelease and release.
 func Comparable(a, b Version) bool {
-	if a.Prefix != b.Prefix || a.Suffix != b.Suffix || len(a.Parts) != len(b.Parts) {
+	if a.Prefix != b.Prefix || len(a.Parts) != len(b.Parts) {
+		return false
+	}
+	// Suffixes match on their VARIANT, not on their build number. See
+	// suffixParts: "-ls356" and "-ls372" are the same image, counted; "-alpine"
+	// and "-bookworm" are not, and still compare unequal here.
+	as, ac := suffixParts(a.Suffix)
+	bs, bc := suffixParts(b.Suffix)
+	if as != bs {
+		return false
+	}
+	// One side numbered and the other not is not a build counter at all -- it is
+	// a suffix that happens to end in a digit next to one that does not.
+	if (ac < 0) != (bc < 0) {
 		return false
 	}
 	// A calendar version and a semantic one are different schemes wearing the same
@@ -110,7 +162,12 @@ func IsNewer(a, b Version) bool {
 			return false
 		}
 	}
-	return false
+	// Same version, later build. A rebuild with a higher counter is genuinely
+	// newer -- that is what the counter is for -- and it is the only thing left
+	// to order on once every numeric component is equal.
+	_, ac := suffixParts(a.Suffix)
+	_, bc := suffixParts(b.Suffix)
+	return ac >= 0 && bc > ac
 }
 
 // Newest returns the newest tag comparable to current, and why it stopped if it
