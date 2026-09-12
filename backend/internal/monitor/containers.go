@@ -99,7 +99,13 @@ echo "::IMAGES::"
 $_pre $_rt ps --no-trunc --format '{{.Image}}' 2>/dev/null | sort -u | while read -r _i; do
   [ -n "$_i" ] || continue
   _d=$($_pre $_rt image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null)
-  echo "$_i\t$_d"
+  # printf, not echo. Whether echo expands \t depends on the shell: dash does,
+  # bash does not. On a bash host this line emitted a literal backslash-t, the
+  # parser found no tab, and EVERY digest was dropped -- which silently turned off
+  # rebuild detection, container vulnerability scanning (which is keyed by digest),
+  # and update checking, since an image with no digest is treated as built locally
+  # and never asked about.
+  printf '%s\t%s\n' "$_i" "$_d"
 done
 `
 

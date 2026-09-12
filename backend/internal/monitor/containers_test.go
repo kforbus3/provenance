@@ -204,3 +204,47 @@ func TestTheNoAccessReasonMentionsBothWaysOut(t *testing.T) {
 		}
 	}
 }
+
+// Every digest was dropped, on every bash host, for six releases.
+//
+// The images block ended `echo "$_i\t$_d"`. Whether echo expands \t depends on
+// the shell — dash does, bash does not — so on a bash host the line emitted a
+// literal backslash-t, the parser found no tab, and the digest never arrived.
+//
+// Nothing failed. The consequences were all silences:
+//
+//   - "tag moved" detection needs the digest, so rebuilds became invisible
+//   - container vulnerability scanning is keyed BY digest, so it scanned nothing
+//   - an image with no digest is treated as built locally and never asked about,
+//     so the updates page had nothing to show for any of them
+//
+// A test that fed the parser hand-written strings could not see it: the bug was
+// in what the host actually emits.
+func TestTheImagesBlockEmitsARealTab(t *testing.T) {
+	if strings.Contains(containersScript, `echo "$_i\t$_d"`) {
+		t.Fatal(`the images block uses echo with \t, which bash does not expand — ` +
+			`every digest is dropped on every bash host`)
+	}
+	if !strings.Contains(containersScript, `printf '%s\t%s\n'`) {
+		t.Error("the images block should use printf, whose \\t is defined by POSIX " +
+			"rather than left to the shell")
+	}
+}
+
+func TestParseContainersNeedsARealTabToFindADigest(t *testing.T) {
+	// Pins the other half: the parser splits on a tab, so anything else is a
+	// dropped digest. This is what the script must produce.
+	withTab := "::OK::\nabc\tweb\tnginx:1.24\trunning\t\t\n::IMAGES::\n" +
+		"nginx:1.24\tnginx@sha256:aaaa\n"
+	got, _, _ := parseContainers(withTab)
+	if len(got) != 1 || got[0].Digest != "sha256:aaaa" {
+		t.Fatalf("a tab-separated digest was not parsed: %+v", got)
+	}
+
+	literal := strings.ReplaceAll(withTab, "nginx:1.24\tnginx@sha256:aaaa",
+		`nginx:1.24\tnginx@sha256:aaaa`)
+	got2, _, _ := parseContainers(literal)
+	if len(got2) == 1 && got2[0].Digest != "" {
+		t.Error("fixture wrong: a backslash-t should NOT parse as a digest")
+	}
+}
