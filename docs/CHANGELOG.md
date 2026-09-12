@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.12 — 2026-09-12
+
+**Scripts run on a host now use sudo where the account has it.** A "privileged"
+run means the connection lands in the host's privileged account rather than its
+login-only one — sshd decides which account opens — but it never meant the
+commands ran as root, and every script written for the container features assumed
+it did. A rollout reported that a compose directory "is not there" when it was
+there with exactly the file being looked for, under a home directory mode 700 that
+the account could not traverse. The same applied to writing a compose file into a
+directory owned by a deploy account, and to reading docker on a host where the
+account is not in the docker group. Scripts re-exec under non-interactive sudo
+when it is available and run unchanged when it is not, so a host whose account has
+no sudo behaves exactly as before. Missing and unreadable are also reported
+separately now, rather than both as missing.
+
+---
+
 ## v1.2.11 — 2026-09-12
 
 **Every image the fleet runs now has a row on the Updates tab.** It listed only
