@@ -114,3 +114,60 @@ func TestParseVersion(t *testing.T) {
 		t.Errorf("v2.1.0-rc1 parsed as %+v", v)
 	}
 }
+
+// A four-year-old image offered as an upgrade over a current one.
+//
+// linuxserver/heimdall publishes two schemes wearing the same punctuation:
+// semantic (2.8.3) and calendar (2021.11.28). Every rule here passed — same
+// prefix, same suffix, three components each — and then 2021 > 2.
+//
+//	linuxserver/heimdall:2.8.3 -> 2021.11.28
+//
+// That reached a live rollout. Had it run, it would have deployed a 2021 image
+// and written the tag into the compose file, where it would have stayed.
+//
+// It is the same refusal as v2 against release-3, which the prefix rule already
+// catches. It only needed catching separately because a year is spelled with
+// digits, and so hides inside a rule about digits.
+func TestACalendarVersionIsNotComparedWithASemanticOne(t *testing.T) {
+	got, reason := Newest("2.8.3", []string{"2.8.3", "2.8.2", "2021.11.28", "2020.05.03"})
+	if got != "" {
+		t.Errorf("offered %q as newer than 2.8.3 — that is a calendar version, and "+
+			"a downgrade of four years", got)
+	}
+	if reason == "" {
+		t.Error("refusing silently reads as 'nothing newer', which is the wrong " +
+			"answer twice over: there ARE other tags, and they cannot be ordered")
+	}
+
+	// The reverse direction too: somebody already on a calendar scheme must not be
+	// offered a semantic tag.
+	got, _ = Newest("2021.11.28", []string{"2021.11.28", "2.8.3"})
+	if got != "" {
+		t.Errorf("offered %q to a calendar-versioned image", got)
+	}
+}
+
+func TestCalendarVersionsAreStillOrderedAmongThemselves(t *testing.T) {
+	// Refusing to mix schemes must not mean refusing to work within one. metube
+	// and searxng both use dates, and those comparisons are the point.
+	if got, _ := Newest("2026.07.24", []string{"2026.07.24", "2026.08.28"}); got != "2026.08.28" {
+		t.Errorf("Newest = %q, want 2026.08.28 — dates order fine against dates", got)
+	}
+}
+
+func TestAnOrdinaryMajorVersionIsNotMistakenForAYear(t *testing.T) {
+	// The window has to be wide enough to catch real years and narrow enough that
+	// no major version anybody ships falls into it.
+	for _, v := range []string{"1.2.3", "16.4.1", "120.0.1", "1989.1.1", "2201.1.1"} {
+		a, ok := ParseVersion(v)
+		if !ok {
+			t.Fatalf("fixture %q did not parse", v)
+		}
+		b, _ := ParseVersion("3.4.5")
+		if !Comparable(a, b) {
+			t.Errorf("%q was treated as a calendar version and refused comparison "+
+				"with an ordinary one", v)
+		}
+	}
+}

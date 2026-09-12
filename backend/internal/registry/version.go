@@ -66,7 +66,35 @@ func ParseVersion(tag string) (Version, bool) {
 // A prerelease suffix compares equal in shape to another prerelease, but that is
 // as far as it goes -- IsNewer refuses to move between prerelease and release.
 func Comparable(a, b Version) bool {
-	return a.Prefix == b.Prefix && a.Suffix == b.Suffix && len(a.Parts) == len(b.Parts)
+	if a.Prefix != b.Prefix || a.Suffix != b.Suffix || len(a.Parts) != len(b.Parts) {
+		return false
+	}
+	// A calendar version and a semantic one are different schemes wearing the same
+	// punctuation.
+	//
+	// linuxserver/heimdall publishes both: 2.8.3 and 2021.11.28. Every other rule
+	// here passes — same prefix, same suffix, three components each — and then
+	// 2021 > 2, so a four-year-old image is offered as an upgrade over a current
+	// one. It was, on a live fleet, and the rollout would have written that tag
+	// into the compose file where it would have stayed.
+	//
+	// This is the same refusal as v2 against release-3, which the prefix rule
+	// already catches. It only needed catching here too because a year is spelled
+	// with digits and so hides inside a rule about digits.
+	return looksCalendar(a) == looksCalendar(b)
+}
+
+// looksCalendar reports a leading component that can only be a year.
+//
+// Bounded deliberately. A major version of 2021 is not a thing anybody ships, and
+// a year outside this range is not one anybody is running — so the window is wide
+// enough to be safe and narrow enough that an ordinary major version cannot fall
+// into it.
+func looksCalendar(v Version) bool {
+	if len(v.Parts) == 0 {
+		return false
+	}
+	return v.Parts[0] >= 1990 && v.Parts[0] <= 2200
 }
 
 // IsNewer reports whether b is a later version of the same thing as a.
