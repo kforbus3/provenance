@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -207,10 +208,18 @@ type ActiveSession struct {
 //
 // The bound matters because this is the query behind a screen an operator reads
 // to decide whether to cut somebody off.
-func (s *Store) ListActiveSessions(ctx context.Context, limit int) ([]ActiveSession, error) {
+func (s *Store) ListActiveSessions(ctx context.Context, q string, limit int) ([]ActiveSession, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
+	// Filtered in SQL rather than in the browser. The limit is the reason: the
+	// query returns at most `limit` rows, so filtering after the fact searches
+	// only the page that happened to come back — on a fleet with more sessions
+	// than that, looking for one person's would silently miss them. The whole
+	// point of the search is the case where the list is too long to read.
+	//
+	// Username, display name and address, because "find this user's sessions" and
+	// "find whoever is on this address" are the same job from an operator's side.
 	rows, err := s.pool.Query(ctx, `
 		SELECT s.id, s.user_id, COALESCE(host(s.ip),''), s.user_agent, s.mfa_passed,
 		       s.created_at, s.last_seen_at, s.expires_at, s.revoked_at,
@@ -218,8 +227,11 @@ func (s *Store) ListActiveSessions(ctx context.Context, limit int) ([]ActiveSess
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.revoked_at IS NULL AND s.expires_at > now()
+		  AND ($2 = '' OR u.username ILIKE '%' || $2 || '%'
+		                OR u.display_name ILIKE '%' || $2 || '%'
+		                OR COALESCE(host(s.ip),'') ILIKE '%' || $2 || '%')
 		ORDER BY s.last_seen_at DESC NULLS LAST
-		LIMIT $1`, limit)
+		LIMIT $1`, limit, strings.TrimSpace(q))
 	if err != nil {
 		return nil, err
 	}

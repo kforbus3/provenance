@@ -22,8 +22,15 @@ type fakeDocker struct {
 	failCompose  bool
 	detachedImgs []string // images passed to RunDetached (self-update handoff)
 	detachedCmds []string // shell commands passed to RunDetached
+	imageTags    []string // what ListImageTags returns
+	removed      []string // refs passed to RemoveImage
 }
 
+func (f *fakeDocker) ListImageTags(context.Context) ([]string, error) { return f.imageTags, nil }
+func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
+	f.removed = append(f.removed, ref)
+	return nil
+}
 func (f *fakeDocker) Load(_ context.Context, tar string) error {
 	f.loaded = append(f.loaded, tar)
 	return nil

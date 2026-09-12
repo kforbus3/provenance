@@ -41,6 +41,11 @@ type Docker interface {
 	// RunDetached launches a throwaway `docker run -d --rm` container from image with
 	// the given host binds, overriding the entrypoint to run shellCmd via /bin/sh -c.
 	RunDetached(ctx context.Context, image string, binds []string, shellCmd string) error
+	// ListImageTags returns every "repository:tag" the daemon holds.
+	ListImageTags(ctx context.Context) ([]string, error)
+	// RemoveImage untags one "repository:tag". It fails, harmlessly, for an image a
+	// container is still using -- which is the backstop for the keep rules below.
+	RemoveImage(ctx context.Context, ref string) error
 }
 
 // Health waits for a backend instance (at baseURL) to come back healthy on the wanted
@@ -303,7 +308,18 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 	u.persistLocked()
 	u.mu.Unlock()
 
-	// 7. Self-update LAST, only after everything else has succeeded and the success
+	// 8. Remove the images this upgrade superseded, BEFORE the self-update handoff
+	// and after the success status is on disk. This product is installed once and
+	// upgraded by bundle from then on, so anything an install leaves behind stays
+	// forever: a fleet upgraded since 0.70 was holding 152 stack images, 9.2GB,
+	// and the operator's first sign of it was a disk-filling alert.
+	//
+	// Before the handoff because that replaces this very container; after success
+	// because an upgrade that worked must never be reported as failed by a
+	// cleanup that did not.
+	u.pruneSuperseded(ctx, m.Version, componentNames(comps))
+
+	// 9. Self-update LAST, after everything else has succeeded and the success
 	// status is on disk. The updater can't recreate its own container inline, so it
 	// hands the swap to a detached helper (see selfUpdate). The upgrade is already
 	// "success" from the operator's view; this replaces the updater in the background.

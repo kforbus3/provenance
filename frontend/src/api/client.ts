@@ -108,9 +108,28 @@ function refreshAccessToken(): Promise<string | null> {
         onTokenChange?.(t);
         return t;
       })
-      .catch(() => {
-        accessToken = null;
-        onTokenChange?.(null);
+      .catch((err) => {
+        // Only a definitive refusal means "you are not signed in".
+        //
+        // This used to clear the session on ANY failure, so being unable to
+        // REACH the backend was indistinguishable from being rejected by it.
+        // Every bundle install restarts the stack for a few seconds; refreshing
+        // the page in that window made the refresh call fail with no HTTP
+        // response at all, and the app showed the login screen for a session
+        // that was valid the whole time. The operator signs in again, and the
+        // session they abandoned stays active for its full lifetime because
+        // nothing ever told the server it had been replaced.
+        //
+        // The same reasoning as the 429 case below, which was fixed after it
+        // locked an operator out of their own account: a transient failure must
+        // never read as a sign-out. 401/403 is the server saying no; anything
+        // else -- a network error, a 502 from a proxy, a 503 while the backend
+        // comes up -- is the server not answering yet.
+        const st = err?.response?.status;
+        if (st === 401 || st === 403) {
+          accessToken = null;
+          onTokenChange?.(null);
+        }
         return null;
       })
       .finally(() => { refreshing = null; });

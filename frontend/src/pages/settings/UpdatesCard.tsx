@@ -23,6 +23,19 @@ export function UpdatesCard() {
   const [error, setError] = useState<string>("");
   const [reconnecting, setReconnecting] = useState(false);
   const [check, setCheck] = useState<CheckResult | null>(null);
+  // The version THIS page dispatched, if any.
+  //
+  // The updater keeps its last status on disk, so a finished upgrade still reads
+  // "success" days later. Without this, opening Settings showed a success banner
+  // for the PREVIOUS upgrade, and — worse — an upgrade dispatched now would flip
+  // back to that stale banner the moment polling returned it, before the new run
+  // had replaced it. An operator was told "Upgraded to 1.2.0. Reload" while 1.2.1
+  // was still installing, clicked Reload into the middle of the restart, and was
+  // shown a login screen for a session that was perfectly valid.
+  //
+  // A success is only this page's to announce if it names the version this page
+  // sent.
+  const [dispatchedVersion, setDispatchedVersion] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const polling = useRef<number | null>(null);
@@ -96,6 +109,7 @@ export function UpdatesCard() {
     setError(""); setBusy(true);
     try {
       await applyUpgrade(manifest.version);
+      setDispatchedVersion(manifest.version);
       setStatus({ state: "running", targetVersion: manifest.version, step: "starting…" });
       startPolling();
     } catch (e: any) {
@@ -137,7 +151,8 @@ export function UpdatesCard() {
 
         {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError("")}>{error}</Alert>}
 
-        {!active && status?.state === "success" && (
+        {!active && status?.state === "success" &&
+          dispatchedVersion !== null && status.targetVersion === dispatchedVersion && (
           <Alert severity="success" sx={{ mb: 1.5 }}>
             Upgraded to {status.targetVersion}. <Button size="small" onClick={() => window.location.reload()}>Reload</Button>
           </Alert>

@@ -5,6 +5,50 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.2 — 2026-09-11
+
+**Installing a bundle now cleans up after itself.** This product is installed once
+and upgraded by bundle from then on, so anything an install leaves behind stays
+forever — nobody runs `docker image prune` on an appliance. Every bundle since the
+first had been leaving its predecessor: a fleet upgraded since 0.70 was holding
+**152 stack images across five components, 9.2GB**, 49 tags of the backend alone,
+and the first sign of it was a disk-filling alert. An upgrade now removes the
+images it superseded, keeping the version just installed and anything tagged
+`:rollback` — the anchor it would revert to. Only images this product publishes,
+and never with `--force`: Docker refusing to remove an image a container is using
+is the backstop if the keep rules are ever wrong. It cannot clean up
+retroactively; installs before this one still need a manual prune.
+
+**A restart no longer signs you out.** The token refresh treated *every* failure
+as "you are not signed in" — so being unable to REACH the backend was
+indistinguishable from being rejected by it. Every bundle install restarts the
+stack for a few seconds, and refreshing the page in that window showed the login
+screen for a session that was valid the whole time. Only a definitive 401/403
+ends a session now.
+
+**Signing in again ends the session you are replacing.** Login created a session
+and never looked at the one the browser already held, so signing in from the same
+tab left the previous session alive: its cookie had been overwritten, so nothing
+could reach it, but the server was never told and kept it valid for its full
+lifetime. It is revoked now — on proof of ownership, requiring the browser to
+present the refresh token whose hash that row stores, because without that check
+it would be a way to end somebody else's session by naming it.
+
+**An upgrade no longer announces the previous one's result.** The updater keeps
+its last status on disk, so a finished upgrade still reads "success" days later —
+and an upgrade dispatched now flipped back to that stale banner the moment
+polling returned it. An operator was told "Upgraded to 1.2.0. Reload" while 1.2.1
+was still installing, and reloading into the middle of the restart is what
+produced the sign-out above. A success is only announced if it names the version
+that page dispatched.
+
+**Active sign-ins can be searched** by username, display name or address. Filtered
+in SQL rather than in the browser: the endpoint returns at most 200 rows, so
+filtering afterwards would search only the page that came back and could miss the
+person being looked for — which is the failure the search exists to prevent.
+
+---
+
 ## v1.2.1 — 2026-09-11
 
 **Active sign-ins listed SSH recordings instead.** `GET /sessions` already

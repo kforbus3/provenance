@@ -217,6 +217,11 @@ func (h *Handler) mfaSetupConfirm(w http.ResponseWriter, r *http.Request) {
 // completeLogin issues a session + tokens and writes the login response. Shared
 // by the password-only path and the post-MFA path.
 func (h *Handler) completeLogin(w http.ResponseWriter, r *http.Request, u *models.User, ip, ua string) {
+	// End the session this browser is replacing, if it is holding one. Before
+	// creating the new one, so a concurrent-session limit counts the seat being
+	// vacated rather than refusing the login that vacates it.
+	h.svc.RevokeSupersededSession(r.Context(), r, u.ID)
+
 	tokens, err := h.svc.CreateSession(r.Context(), u, ip, ua, true)
 	if err != nil {
 		if PolicyDenied(err) {

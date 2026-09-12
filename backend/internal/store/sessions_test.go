@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func TestListActiveSessionsExcludesEnded(t *testing.T) {
 	expired := mk("expired", time.Now().Add(-time.Hour), false)
 	revoked := mk("revoked", time.Now().Add(time.Hour), true)
 
-	got, err := s.ListActiveSessions(ctx, 500)
+	got, err := s.ListActiveSessions(ctx, "", 500)
 	if err != nil {
 		t.Fatalf("ListActiveSessions: %v", err)
 	}
@@ -93,5 +94,37 @@ func TestListActiveSessionsExcludesEnded(t *testing.T) {
 	}
 	if a := seen[live]; a.DisplayName != "Session Test" {
 		t.Errorf("displayName = %q, want %q", a.DisplayName, "Session Test")
+	}
+
+	// Search runs in SQL, not in the browser. The query returns at most `limit`
+	// rows, so filtering after the fact searches only the page that came back --
+	// on a fleet with more sessions than that, looking for one person's would
+	// silently miss them, which is the exact failure the search exists to prevent.
+	hasLive := func(rows []ActiveSession) bool {
+		for _, a := range rows {
+			if a.ID == live {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range []struct {
+		name, q string
+		want    bool
+	}{
+		{"by username", uname, true},
+		{"by a fragment of the username", uname[4:12], true},
+		{"case-insensitively", strings.ToUpper(uname), true},
+		{"by display name", "Session Test", true},
+		{"by address", "10.0.0.9", true},
+		{"a term that matches nothing", "no-such-operator", false},
+	} {
+		rows, err := s.ListActiveSessions(ctx, c.q, 500)
+		if err != nil {
+			t.Fatalf("search %q: %v", c.q, err)
+		}
+		if hasLive(rows) != c.want {
+			t.Errorf("search %s (%q): found=%v, want %v", c.name, c.q, !c.want, c.want)
+		}
 	}
 }

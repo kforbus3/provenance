@@ -315,8 +315,13 @@ export interface ActiveSession {
   expiresAt: string;
 }
 
-export async function listActiveSessions(): Promise<ActiveSession[]> {
-  const { data } = await api.get<{ sessions: ActiveSession[] }>(`/api/v1/active-sessions`);
+// Filtered server-side: the endpoint returns at most 200 rows, so filtering in
+// the browser would search only the page that came back — and missing somebody
+// is the exact failure the search exists to prevent.
+export async function listActiveSessions(q = ""): Promise<ActiveSession[]> {
+  const { data } = await api.get<{ sessions: ActiveSession[] }>(`/api/v1/active-sessions`, {
+    params: q.trim() ? { q: q.trim() } : undefined,
+  });
   return data.sessions ?? [];
 }
 

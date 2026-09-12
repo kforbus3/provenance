@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogContentText,
-  DialogTitle, Paper, Snackbar, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Tooltip, Typography,
+  DialogTitle, InputAdornment, Paper, Snackbar, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import LogoutIcon from "@mui/icons-material/Logout";
+import SearchIcon from "@mui/icons-material/Search";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
 import { listActiveSessions, terminateSession, type ActiveSession } from "../api/admin";
@@ -51,11 +52,18 @@ export function ActiveSessionsPanel() {
   // be shown an empty panel on a screen built for exactly that audience.
   const canTerminate = useAuthStore((s) => s.has("Session.Terminate"));
   const [confirm, setConfirm] = useState<ActiveSession | null>(null);
+  const [search, setSearch] = useState("");
+  // Debounced so typing does not issue a request per keystroke.
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
   const [snack, setSnack] = useState("");
 
   const { data: sessions = [], isLoading, error } = useQuery({
-    queryKey: ["active-sessions"],
-    queryFn: listActiveSessions,
+    queryKey: ["active-sessions", query],
+    queryFn: () => listActiveSessions(query),
     enabled: canTerminate,
     // Someone signing in or out is the thing this screen is for, so it should
     // not need a manual reload to be true.
@@ -83,11 +91,24 @@ export function ActiveSessionsPanel() {
         mark it expired.
       </Typography>
 
+      <TextField
+        size="small" fullWidth value={search} sx={{ mb: 2 }}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Filter by user, display name or address"
+        InputProps={{
+          startAdornment: (
+            <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+          ),
+        }}
+      />
+
       {error && <Alert severity="error" sx={{ mb: 2 }}>Could not load sessions.</Alert>}
       {isLoading && <Typography variant="body2">Loading…</Typography>}
 
       {!isLoading && sessions.length === 0 && (
-        <Typography variant="body2" color="text.secondary">Nobody is signed in.</Typography>
+        <Typography variant="body2" color="text.secondary">
+          {query ? `No sign-ins match “${query}”.` : "Nobody is signed in."}
+        </Typography>
       )}
 
       {sessions.length > 0 && (

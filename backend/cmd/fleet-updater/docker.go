@@ -186,3 +186,29 @@ func (h *httpHealth) check(client *http.Client, baseURL, wantVersion string) err
 	}
 	return nil
 }
+
+// ListImageTags returns every "repository:tag" the daemon holds.
+func (d *execDocker) ListImageTags(ctx context.Context) ([]string, error) {
+	out, err := d.run(ctx, "images", "--format", "{{.Repository}}:{{.Tag}}")
+	if err != nil {
+		return nil, err
+	}
+	var tags []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			tags = append(tags, line)
+		}
+	}
+	return tags, nil
+}
+
+// RemoveImage untags one image reference.
+//
+// Deliberately `rmi`, not `rmi -f`: Docker refuses to remove an image a container
+// is still using, and that refusal is the backstop for the keep rules in
+// supersededImages. Forcing past it would let a wrong rule pull the image out
+// from under a running service.
+func (d *execDocker) RemoveImage(ctx context.Context, ref string) error {
+	_, err := d.run(ctx, "rmi", ref)
+	return err
+}

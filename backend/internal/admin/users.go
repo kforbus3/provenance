@@ -575,7 +575,7 @@ func (h *handler) cutHostAccessNow(ctx context.Context, userID, hostID uuid.UUID
 // exists for: seeing who is on the system and cutting off the one that should
 // not be.
 func (h *handler) listActiveSessions(w http.ResponseWriter, r *http.Request) {
-	sessions, err := h.d.Store.ListActiveSessions(r.Context(), 200)
+	sessions, err := h.d.Store.ListActiveSessions(r.Context(), r.URL.Query().Get("q"), 200)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not load sessions")
 		return
