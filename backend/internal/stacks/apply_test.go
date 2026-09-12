@@ -23,7 +23,7 @@ func TestRenderScriptDoesNotExpandTheComposeFile(t *testing.T) {
 		"      test: [\"CMD-SHELL\", \"curl -f http://localhost || exit 1\"]",
 	}, "\n")
 
-	got := renderScript("/opt/stacks/web", compose, 7)
+	got := renderScript("/opt/stacks/web", compose, 7, false)
 
 	// Quoted delimiter: the shell must not touch anything inside.
 	if !strings.Contains(got, "<<'PROVENANCE_COMPOSE_EOF'") {
@@ -73,7 +73,7 @@ func TestShellQuote(t *testing.T) {
 	}
 
 	// And end to end: a hostile path must appear only inside quotes.
-	got := renderScript(`/opt/stacks/x'; rm -rf /; '`, "services: {}", 1)
+	got := renderScript(`/opt/stacks/x'; rm -rf /; '`, "services: {}", 1, false)
 	if strings.Contains(got, "; rm -rf /; \n") {
 		t.Error("a quoted path escaped its quoting and became a command")
 	}
@@ -89,5 +89,36 @@ func TestRollbackScriptRefusesWithoutAPreviousRevision(t *testing.T) {
 	if !strings.Contains(got, "exit 1") {
 		t.Error("rollback with nothing to restore does not fail; it would re-apply " +
 			"the revision being rolled back and report success")
+	}
+}
+
+func TestAnOrdinaryDeployDoesNotPull(t *testing.T) {
+	// `up -d` already fetches anything the host does not have. Pulling every
+	// image on every deploy would make a one-line compose edit as slow as a full
+	// update, for no change in what ends up running.
+	got := renderScript("/opt/stacks/web", "services: {}", 1, false)
+	if strings.Contains(got, "compose pull") {
+		t.Errorf("an ordinary deploy pulled:\n%s", got)
+	}
+}
+
+func TestAnUpdateDeployPullsFirst(t *testing.T) {
+	// The whole point when a tag has MOVED — the same 1.0.0 rebuilt on a patched
+	// base image. Without a pull, `up -d` finds the tag already present locally
+	// and starts the old bytes again: the deploy reports success, the digest
+	// never changes, and a rollout marches a no-op across the fleet while every
+	// host stays on the vulnerable image.
+	got := renderScript("/opt/stacks/web", "services: {}", 1, true)
+	pull := strings.Index(got, "docker compose pull")
+	up := strings.Index(got, "docker compose up -d")
+	if pull < 0 {
+		t.Fatalf("an update deploy did not pull:\n%s", got)
+	}
+	if pull > up {
+		t.Errorf("pulled after bringing the stack up, which starts the old image first:\n%s", got)
+	}
+	// Both compose flavours, or a host on the older binary silently never pulls.
+	if !strings.Contains(got, "docker-compose pull") {
+		t.Errorf("the docker-compose fallback does not pull:\n%s", got)
 	}
 }

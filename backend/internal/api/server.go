@@ -45,6 +45,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/command"
 	"github.com/kforbus3/provenance/backend/internal/commandpolicyapi"
 	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/containerupdate"
 	"github.com/kforbus3/provenance/backend/internal/dbbroker"
 	"github.com/kforbus3/provenance/backend/internal/digest"
 	"github.com/kforbus3/provenance/backend/internal/dr"
@@ -135,6 +136,7 @@ type Server struct {
 	vulnScan     *vulnscan.Service
 	stacks       *stacks.Service
 	imageCheck   *registry.Checker
+	updateEngine *containerupdate.Engine
 	msrcSvc      *msrc.Service
 	actionReg    *aiaction.Registry
 	playbookSvc  *playbook.Service
@@ -275,6 +277,10 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// and run something" rather than two that drift.
 	s.stacks = stacks.New(st, s.commandSvc, log)
 	s.imageCheck = registry.NewChecker(st, log)
+	// The rollout engine drives stack deploys, so it is given the stacks service
+	// rather than a second implementation of "write a compose file and bring it
+	// up" that would drift from the one an operator uses by hand.
+	s.updateEngine = containerupdate.New(st, s.stacks, s.commandSvc, log)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
@@ -397,6 +403,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.vaultRotationLoop(ctx)
 	go s.containerScanLoop(ctx)
 	go s.imageUpdateLoop(ctx)
+	go s.updateEngine.Run(ctx, s.isLeader)
 	go s.scheduler.Run(ctx)
 	go s.backups.Run(ctx, s.isLeader)
 	go monitor.New(s.Store, s.Cfg, s.Log, s.Gateway, s.Issuer, s.Hub, s.Jobs, s.Notify).Run(ctx, s.isLeader)
@@ -1245,6 +1252,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
 	stacks.Mount(r, deps, s.stacks)
 	registry.Mount(r, deps, s.imageCheck, s.Store)
+	containerupdate.Mount(r, deps, s.Store, s.updateEngine)
 	upgrade.Mount(r, deps, s.upgradeSvc)
 
 	// Host support bundles (diagnostics + logs, streamed as a .tar.gz).

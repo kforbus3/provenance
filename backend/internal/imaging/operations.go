@@ -12,6 +12,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/pacing"
 )
 
 // The operations behind the API: reading the fleet, running rollouts, and the
@@ -317,10 +318,10 @@ func (s *Service) CreateRollout(ctx context.Context, req NewRollout, p *auth.Pri
 	}
 	if req.WindowStart != "" && req.WindowEnd != "" {
 		start, end := req.WindowStart, req.WindowEnd
-		if _, err := parseHM(start); err != nil {
+		if _, err := pacing.ParseHM(start); err != nil {
 			return nil, errors.New("the window start must look like 22:00")
 		}
-		if _, err := parseHM(end); err != nil {
+		if _, err := pacing.ParseHM(end); err != nil {
 			return nil, errors.New("the window end must look like 04:00")
 		}
 		rec.WindowStart, rec.WindowEnd, rec.WindowDays = &start, &end, req.WindowDays

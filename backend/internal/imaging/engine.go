@@ -3,6 +3,8 @@ package imaging
 import (
 	"fmt"
 	"time"
+
+	"github.com/kforbus3/provenance/backend/internal/pacing"
 )
 
 // The rollout engine, brought across from Flipside.
@@ -80,24 +82,15 @@ type MachineProgress struct {
 }
 
 // Strategy is how fast a rollout is allowed to go.
-type Strategy struct {
-	Canary      int
-	BatchSize   int
-	SoakSeconds int
-	MaxFailures int
-}
-
-// Window is when a rollout may *start* machines, in server-local time.
 //
-// Server-local on purpose. The alternative -- each machine deciding against its
-// own clock -- means a maintenance window means different things on different
-// machines, and the machine whose timezone is wrong is exactly the one nobody
-// notices until it reboots mid-shift.
-type Window struct {
-	Start string // "22:00"
-	End   string // "04:00"
-	Days  []int  // time.Weekday values; empty means every day
-}
+// An alias, not a copy: the rules that read it live in internal/pacing so that
+// container-update rollouts obey the same ones rather than a second set that
+// drifts from these.
+type Strategy = pacing.Strategy
+
+// Window is when a rollout may *start* machines, in server-local time. See
+// pacing.Window for why server-local.
+type Window = pacing.Window
 
 // Rollout is the engine's view of one. The store fills it in and writes back
 // whatever the engine changed.
@@ -267,91 +260,11 @@ func (r *Rollout) capacity(now time.Time) int {
 			verified++
 		}
 	}
-	canary := r.Strategy.Canary
-	if canary < 0 {
-		canary = 0
-	}
-
-	if verified < canary {
-		// Still proving the canaries. Never more than `canary` at once, and a
-		// failed canary means the batch phase is never reached at all.
-		return max(0, canary-flying)
-	}
-
-	if canary > 0 && r.Strategy.SoakSeconds > 0 {
-		// The canaries have to have been up for a while before the rest of the
-		// fleet follows. An update that bricks a machine ten minutes in is
-		// still a bricked machine, and without this the whole fleet would
-		// already have it.
-		if r.CanaryDoneAt == nil {
-			return 0
-		}
-		if now.Sub(*r.CanaryDoneAt) < time.Duration(r.Strategy.SoakSeconds)*time.Second {
-			return 0
-		}
-	}
-
-	batch := r.Strategy.BatchSize
-	if batch < 1 {
-		batch = 1
-	}
-	return max(0, batch-flying)
+	return pacing.Capacity(r.Strategy, flying, verified, r.CanaryDoneAt, now)
 }
 
 // inWindow reports whether the rollout may start machines at this moment.
-func (r *Rollout) inWindow(now time.Time) bool {
-	w := r.Window
-	if w == nil || w.Start == "" || w.End == "" {
-		return true
-	}
-	start, err1 := parseHM(w.Start)
-	end, err2 := parseHM(w.End)
-	if err1 != nil || err2 != nil {
-		// An unparseable window is not a reason to stop a rollout forever;
-		// it is a reason for the window not to apply.
-		return true
-	}
-	minutes := now.Hour()*60 + now.Minute()
-	onDay := func(d time.Weekday) bool {
-		if len(w.Days) == 0 {
-			return true
-		}
-		for _, allowed := range w.Days {
-			if time.Weekday(allowed) == d {
-				return true
-			}
-		}
-		return false
-	}
-	if start <= end {
-		return onDay(now.Weekday()) && minutes >= start && minutes < end
-	}
-	// A window that wraps past midnight belongs to the day it *started* on, so
-	// "Sat 22:00-04:00" permits work at 23:00 on Saturday and at 01:00 on Sunday
-	// morning -- and at neither noon.
-	//
-	// The second half needs the `minutes < end` test as much as the first needs
-	// `minutes >= start`. Without it every moment before the start hour falls
-	// through to "was yesterday an allowed day", which for the common case of no
-	// day restriction is always true -- so a 22:00-04:00 window silently permits
-	// updates at any hour, which is the exact opposite of what it was set for
-	// and is invisible until a machine reboots in the middle of the day.
-	if minutes >= start {
-		return onDay(now.Weekday())
-	}
-	return minutes < end && onDay((now.Weekday()+6)%7)
-}
-
-func parseHM(s string) (int, error) {
-	var h, m int
-	if _, err := fmt.Sscanf(s, "%d:%d", &h, &m); err != nil {
-		return 0, err
-	}
-	if h < 0 || h > 23 || m < 0 || m > 59 {
-		return 0, fmt.Errorf("out of range")
-	}
-	return h*60 + m, nil
-}
+func (r *Rollout) inWindow(now time.Time) bool { return pacing.InWindow(r.Window, now) }
 
 // Evaluate folds one report into the rollout and says what the machine should do
 // next. It returns whether anything about the rollout changed, so the caller
@@ -397,8 +310,8 @@ func (r *Rollout) Evaluate(machineID string, rep Report, members []string, held 
 		}
 	}
 
-	if budget := r.Strategy.MaxFailures; budget > 0 && r.State == RolloutRunning {
-		if failed := r.Failures(); failed >= budget {
+	if r.State == RolloutRunning {
+		if failed := r.Failures(); pacing.BudgetExceeded(r.Strategy, failed) {
 			r.State = RolloutHalted
 			r.HaltReason = fmt.Sprintf("%d machines failed; the rollout stopped on its own.", failed)
 			changed = true

@@ -29,7 +29,18 @@ import (
 // rsync --delete deploy already did on this fleet, which is the behaviour being
 // replaced -- being unambiguous about what the source of truth means is the whole
 // job.
-func renderScript(dir, compose string, revision int) string {
+// pull says whether to fetch images before bringing the stack up.
+//
+// Off for an ordinary deploy, because `up -d` already pulls anything it does not
+// have and pulling every image on every deploy would make a one-line compose
+// edit as slow as a full update.
+//
+// On for an update rollout, where it is the entire point: when a tag has MOVED
+// -- the same 1.0.0 rebuilt on a patched base image -- `up -d` finds the tag
+// already present locally and starts the old bytes again. The deploy reports
+// success, the digest never changes, and the rollout marches a no-op across the
+// fleet while every host stays on the vulnerable image.
+func renderScript(dir, compose string, revision int, pull bool) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	// The heredoc delimiter is quoted, so nothing inside the compose file is
@@ -54,8 +65,14 @@ func renderScript(dir, compose string, revision int) string {
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
 	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
+	if pull {
+		b.WriteString("  docker compose pull\n")
+	}
 	b.WriteString("  docker compose up -d --remove-orphans\n")
 	b.WriteString("elif command -v docker-compose >/dev/null 2>&1; then\n")
+	if pull {
+		b.WriteString("  docker-compose pull\n")
+	}
 	b.WriteString("  docker-compose up -d --remove-orphans\n")
 	b.WriteString("else\n")
 	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")

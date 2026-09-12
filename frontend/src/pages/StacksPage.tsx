@@ -18,6 +18,7 @@ import { listHosts } from "../api/hosts";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { ContainerUpdatesTab } from "./ContainerUpdatesTab";
+import { RolloutsTab } from "./RolloutsTab";
 
 // Container stacks: what each host should be running.
 //
@@ -63,7 +64,7 @@ export function StacksPage() {
   const [historyOf, setHistoryOf] = useState<ContainerStack | null>(null);
   const [output, setOutput] = useState<{ title: string; body: string } | null>(null);
   const [snack, setSnack] = useState("");
-  const [tab, setTab] = useState<"stacks" | "updates">("stacks");
+  const [tab, setTab] = useState<"stacks" | "updates" | "rollouts">("stacks");
 
   const { data: stacks = [], isLoading } = useQuery({
     queryKey: ["stacks"],
@@ -113,9 +114,11 @@ export function StacksPage() {
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Stacks" value="stacks" />
         <Tab label="Updates" value="updates" />
+        <Tab label="Rollouts" value="rollouts" />
       </Tabs>
 
       {tab === "updates" && <ContainerUpdatesTab />}
+      {tab === "rollouts" && <RolloutsTab />}
 
       {tab === "stacks" && <>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

@@ -38,6 +38,18 @@ var ErrNoCompose = errors.New("this stack has no compose file to deploy")
 // of a deployment: leaving the previous success in place would say the host is
 // running a revision it is not, and that lie is worse than the failure.
 func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
+	return s.deploy(ctx, stackID, false)
+}
+
+// DeployPulling is Deploy, fetching images first.
+//
+// For update rollouts. See renderScript's `pull` for why an ordinary deploy does
+// not do this and why an update rollout must.
+func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
+	return s.deploy(ctx, stackID, true)
+}
+
+func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool) (*store.ContainerStack, string, error) {
 	st, err := s.store.GetStack(ctx, stackID)
 	if err != nil {
 		return nil, "", err
@@ -50,7 +62,7 @@ func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.Contain
 		return nil, "", fmt.Errorf("host: %w", err)
 	}
 
-	out, code, failed := s.run.RunScript(ctx, renderScript(st.Path, st.Compose, st.Revision), h)
+	out, code, failed := s.run.RunScript(ctx, renderScript(st.Path, st.Compose, st.Revision, pull), h)
 	state := "deployed"
 	if failed || code != 0 {
 		state = "failed"

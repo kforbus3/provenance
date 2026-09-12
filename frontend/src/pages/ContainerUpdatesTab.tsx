@@ -5,6 +5,7 @@ import {
   Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,6 +14,7 @@ import {
 } from "../api/containerUpdates";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
+import { StartRolloutDialog } from "./StartRolloutDialog";
 
 // Available container image updates.
 //
@@ -66,9 +68,16 @@ function VerdictChip({ u }: { u: ImageUpdate }) {
   }
 }
 
-function UpdateRow({ u }: { u: ImageUpdate }) {
+function UpdateRow({ u, canRun, onRollOut }: {
+  u: ImageUpdate; canRun: boolean; onRollOut: (u: ImageUpdate) => void;
+}) {
   const [open, setOpen] = useState(false);
   const stale = u.hosts.filter((h) => h.stale).length;
+  const verdict = verdictOf(u);
+  // Only something actionable can be rolled out. Offering the button on a row
+  // that says "up to date" would invite a rollout that deploys the same bytes
+  // to every host and reports success for a change nobody made.
+  const canRollOut = canRun && (verdict === "newer" || verdict === "moved") && u.hosts.length > 0;
   return (
     <>
       <TableRow hover>
@@ -90,9 +99,19 @@ function UpdateRow({ u }: { u: ImageUpdate }) {
           )}
         </TableCell>
         <TableCell>{formatDateTime(u.checkedAt)}</TableCell>
+        <TableCell align="right">
+          {canRollOut && (
+            <Tooltip title={verdict === "moved"
+              ? "Pull the rebuilt image onto these hosts, a few at a time"
+              : `Move these hosts to ${u.latestTag}, a few at a time`}>
+              <Button size="small" startIcon={<RocketLaunchIcon fontSize="small" />}
+                      onClick={() => onRollOut(u)}>Roll out</Button>
+            </Tooltip>
+          )}
+        </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0, borderBottom: open ? undefined : "none" }} colSpan={5}>
+        <TableCell sx={{ py: 0, borderBottom: open ? undefined : "none" }} colSpan={6}>
           <Collapse in={open} unmountOnExit>
             <Box sx={{ py: 1.5, pl: 5 }}>
               {(u.note || u.error) && (
@@ -137,8 +156,10 @@ function UpdateRow({ u }: { u: ImageUpdate }) {
 export function ContainerUpdatesTab() {
   const qc = useQueryClient();
   const canScan = useAuthStore((s) => s.has("Host.Scan"));
+  const canRun = useAuthStore((s) => s.has("Command.Run"));
   const [filter, setFilter] = useState("");
   const [snack, setSnack] = useState("");
+  const [rollingOut, setRollingOut] = useState<ImageUpdate | null>(null);
 
   const { data: updates = [], isLoading } = useQuery({
     queryKey: ["container-updates"],
@@ -217,14 +238,24 @@ export function ContainerUpdatesTab() {
                 <TableCell>Status</TableCell>
                 <TableCell>Hosts</TableCell>
                 <TableCell>Checked</TableCell>
+                <TableCell />
               </TableRow>
             </TableHead>
             <TableBody>
-              {shown.map((u) => <UpdateRow key={`${u.repository}:${u.tag}`} u={u} />)}
+              {shown.map((u) => (
+                <UpdateRow key={`${u.repository}:${u.tag}`} u={u} canRun={canRun}
+                           onRollOut={setRollingOut} />
+              ))}
             </TableBody>
           </Table>
         </TableContainer>
       )}
+
+      <StartRolloutDialog update={rollingOut} onClose={() => setRollingOut(null)}
+                          onStarted={(m) => {
+                            setSnack(m);
+                            qc.invalidateQueries({ queryKey: ["rollouts"] });
+                          }} />
 
       <Snackbar open={!!snack} autoHideDuration={6000} onClose={() => setSnack("")}
                 message={snack} />

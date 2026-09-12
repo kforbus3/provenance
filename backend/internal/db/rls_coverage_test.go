@@ -33,6 +33,8 @@ import (
 // table here is a deliberate security decision — it asserts the table holds no
 // per-tenant data (or is isolated some other way). Keep the reason accurate.
 var rlsGlobalAllowlist = map[string]string{
+	// --- container update rollouts (0090) ---
+	"container_update_rollout_hosts": "one host's progress through one container-update rollout; reachable only via container_update_rollouts, which is RLS-scoped. A tenant_id here would be a second copy of the parent's and a second place for the two to disagree — same reasoning as imaging_rollout_machines (0090).",
 	// --- container image updates (0089) ---
 	"container_image_updates": "a cache of what a public registry says about a public tag, keyed by repository+tag and holding no tenant data: the registry gives the same answer to everyone. Shared for the same reason as container_image_scans — asking per tenant would multiply registry rate-limit pressure for an identical answer (0089).",
 	// --- container image scanning (0087) ---

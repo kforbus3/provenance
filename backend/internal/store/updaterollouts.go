@@ -1,0 +1,369 @@
+package store
+
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// UpdateRollout is a staged rollout of one container image update.
+type UpdateRollout struct {
+	ID           uuid.UUID `json:"id"`
+	Repository   string    `json:"repository"`
+	FromTag      string    `json:"fromTag"`
+	ToTag        string    `json:"toTag"`
+	TargetDigest string    `json:"targetDigest,omitempty"`
+
+	State      string `json:"state"`
+	HaltReason string `json:"haltReason,omitempty"`
+
+	Canary      int `json:"canary"`
+	BatchSize   int `json:"batchSize"`
+	SoakSeconds int `json:"soakSeconds"`
+	MaxFailures int `json:"maxFailures"`
+
+	WindowStart *string `json:"windowStart,omitempty"`
+	WindowEnd   *string `json:"windowEnd,omitempty"`
+	WindowDays  []int32 `json:"windowDays,omitempty"`
+
+	CanaryDoneAt *time.Time `json:"canaryDoneAt,omitempty"`
+
+	CreatedAt     time.Time `json:"createdAt"`
+	CreatedByName string    `json:"createdBy,omitempty"`
+
+	// Filled in by the service layer.
+	Hosts  []UpdateRolloutHost `json:"hosts,omitempty"`
+	Counts map[string]int      `json:"counts,omitempty"`
+}
+
+// UpdateRolloutHost is one host's place in one rollout.
+type UpdateRolloutHost struct {
+	HostID    uuid.UUID `json:"hostId"`
+	Hostname  string    `json:"hostname,omitempty"`
+	State     string    `json:"state"`
+	Error     string    `json:"error,omitempty"`
+	Attempts  int       `json:"attempts"`
+	Forgiven  bool      `json:"-"`
+	ChangedAt time.Time `json:"changedAt"`
+}
+
+const (
+	UpdateHostPending  = "pending"
+	UpdateHostApplying = "applying"
+	UpdateHostVerified = "verified"
+	UpdateHostFailed   = "failed"
+	UpdateHostSkipped  = "skipped"
+
+	UpdateRolloutRunning   = "running"
+	UpdateRolloutPaused    = "paused"
+	UpdateRolloutHalted    = "halted"
+	UpdateRolloutCompleted = "completed"
+	UpdateRolloutCancelled = "cancelled"
+)
+
+// CreateUpdateRollout records the intent and enrolls its hosts.
+//
+// Hosts are enrolled at creation, not discovered as the rollout runs. A rollout
+// whose membership changed underneath it could never be "complete", and a host
+// that started running the image after the operator approved the change was
+// never part of what they approved.
+func (s *Store) CreateUpdateRollout(ctx context.Context, r UpdateRollout, hosts []uuid.UUID, createdBy *uuid.UUID) (*UpdateRollout, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var id uuid.UUID
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `
+		INSERT INTO container_update_rollouts
+		    (repository, from_tag, to_tag, target_digest, canary, batch_size,
+		     soak_seconds, max_failures, window_start, window_end, window_days, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		RETURNING id, created_at`,
+		r.Repository, r.FromTag, r.ToTag, r.TargetDigest, r.Canary, r.BatchSize,
+		r.SoakSeconds, r.MaxFailures, r.WindowStart, r.WindowEnd, r.WindowDays, createdBy).
+		Scan(&id, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hosts {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO container_update_rollout_hosts (rollout_id, host_id)
+			VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, h); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	r.ID = id
+	r.CreatedAt = createdAt
+	r.State = UpdateRolloutRunning
+	return &r, nil
+}
+
+const updateRolloutCols = `r.id, r.repository, r.from_tag, r.to_tag, r.target_digest,
+	r.state, r.halt_reason, r.canary, r.batch_size, r.soak_seconds, r.max_failures,
+	r.window_start, r.window_end, r.window_days, r.canary_done_at, r.created_at,
+	COALESCE(u.display_name, u.username, '')`
+
+func scanUpdateRollout(row interface{ Scan(...any) error }) (*UpdateRollout, error) {
+	var r UpdateRollout
+	err := row.Scan(&r.ID, &r.Repository, &r.FromTag, &r.ToTag, &r.TargetDigest,
+		&r.State, &r.HaltReason, &r.Canary, &r.BatchSize, &r.SoakSeconds, &r.MaxFailures,
+		&r.WindowStart, &r.WindowEnd, &r.WindowDays, &r.CanaryDoneAt, &r.CreatedAt,
+		&r.CreatedByName)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ListUpdateRollouts returns every rollout, newest first, with per-state counts.
+//
+// The counts come with the list rather than only on the detail view because
+// without them a rollout in which every host failed still reads as "completed",
+// which is the state it is genuinely in and exactly the wrong thing to show on
+// its own. A row that can say "completed, 3 of 5 verified" cannot mislead.
+func (s *Store) ListUpdateRollouts(ctx context.Context) ([]UpdateRollout, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+updateRolloutCols+`
+		FROM container_update_rollouts r
+		LEFT JOIN users u ON u.id = r.created_by
+		ORDER BY r.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UpdateRollout{}
+	for rows.Next() {
+		r, err := scanUpdateRollout(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// One grouped query for every rollout rather than one per row.
+	crows, err := s.pool.Query(ctx, `
+		SELECT rh.rollout_id, rh.state, count(*)
+		FROM container_update_rollout_hosts rh
+		JOIN container_update_rollouts r ON r.id = rh.rollout_id
+		GROUP BY 1, 2`)
+	if err != nil {
+		return nil, err
+	}
+	defer crows.Close()
+	counts := map[uuid.UUID]map[string]int{}
+	for crows.Next() {
+		var id uuid.UUID
+		var state string
+		var n int
+		if err := crows.Scan(&id, &state, &n); err != nil {
+			return nil, err
+		}
+		if counts[id] == nil {
+			counts[id] = map[string]int{}
+		}
+		counts[id][state] = n
+	}
+	if err := crows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Counts = counts[out[i].ID]
+	}
+	return out, nil
+}
+
+// GetUpdateRollout returns one rollout with its hosts.
+func (s *Store) GetUpdateRollout(ctx context.Context, id uuid.UUID) (*UpdateRollout, error) {
+	r, err := scanUpdateRollout(s.pool.QueryRow(ctx, `
+		SELECT `+updateRolloutCols+`
+		FROM container_update_rollouts r
+		LEFT JOIN users u ON u.id = r.created_by
+		WHERE r.id = $1`, id))
+	if err != nil {
+		return nil, err
+	}
+	r.Hosts, err = s.UpdateRolloutHosts(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	r.Counts = map[string]int{}
+	for _, h := range r.Hosts {
+		r.Counts[h.State]++
+	}
+	return r, nil
+}
+
+// UpdateRolloutHosts returns every host in a rollout.
+func (s *Store) UpdateRolloutHosts(ctx context.Context, id uuid.UUID) ([]UpdateRolloutHost, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT rh.host_id, COALESCE(h.hostname,''), rh.state, rh.error, rh.attempts,
+		       rh.forgiven, rh.changed_at
+		FROM container_update_rollout_hosts rh
+		LEFT JOIN hosts h ON h.id = rh.host_id
+		WHERE rh.rollout_id = $1
+		ORDER BY h.hostname`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UpdateRolloutHost{}
+	for rows.Next() {
+		var h UpdateRolloutHost
+		if err := rows.Scan(&h.HostID, &h.Hostname, &h.State, &h.Error, &h.Attempts,
+			&h.Forgiven, &h.ChangedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// ActiveUpdateRollouts returns the rollouts the engine should be driving.
+func (s *Store) ActiveUpdateRollouts(ctx context.Context) ([]UpdateRollout, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+updateRolloutCols+`
+		FROM container_update_rollouts r
+		LEFT JOIN users u ON u.id = r.created_by
+		WHERE r.state = 'running'
+		ORDER BY r.created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UpdateRollout{}
+	for rows.Next() {
+		r, err := scanUpdateRollout(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// SetUpdateRolloutHostState records where a host has got to.
+func (s *Store) SetUpdateRolloutHostState(ctx context.Context, rollout, host uuid.UUID, state, errMsg string) error {
+	// attempts is NOT touched here. ClaimUpdateRolloutHost is the single place a
+	// host starts an attempt and the single place the counter moves; incrementing
+	// in both would count every attempt twice and trip an attempt limit at half
+	// the number an operator configured.
+	_, err := s.pool.Exec(ctx, `
+		UPDATE container_update_rollout_hosts
+		SET state = $3, error = $4, changed_at = now()
+		WHERE rollout_id = $1 AND host_id = $2`, rollout, host, state, errMsg)
+	return err
+}
+
+// ClaimUpdateRolloutHost moves a host from pending to applying, and reports
+// whether THIS caller is the one that moved it.
+//
+// The conditional update is the point. Two engine ticks overlapping -- a slow
+// deploy and the next tick, or two instances if leadership ever flapped -- would
+// otherwise both read the host as pending and both deploy to it, which for a
+// compose file means two writers racing on the same path.
+func (s *Store) ClaimUpdateRolloutHost(ctx context.Context, rollout, host uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE container_update_rollout_hosts
+		SET state = 'applying', attempts = attempts + 1, changed_at = now()
+		WHERE rollout_id = $1 AND host_id = $2 AND state = 'pending'`, rollout, host)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// SetUpdateRolloutState changes a rollout's own state.
+func (s *Store) SetUpdateRolloutState(ctx context.Context, id uuid.UUID, state, reason string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE container_update_rollouts SET state = $2, halt_reason = $3 WHERE id = $1`,
+		id, state, reason)
+	return err
+}
+
+// StampUpdateRolloutCanaryDone records when the canary phase finished.
+//
+// Only if it is not already set: the soak is measured from the END of the canary
+// phase, and re-stamping as later hosts verify would restart the soak on every
+// batch, so a fleet of any size would never finish.
+func (s *Store) StampUpdateRolloutCanaryDone(ctx context.Context, id uuid.UUID, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE container_update_rollouts SET canary_done_at = $2
+		WHERE id = $1 AND canary_done_at IS NULL`, id, at)
+	return err
+}
+
+// ResumeUpdateRollout restarts a halted or paused rollout, forgiving the
+// failures that stopped it.
+//
+// The hosts that failed stay failed and are marked forgiven, so the budget counts
+// from here. Without this a rollout that halted on its budget re-halts on the
+// very next tick, and `resume` becomes a button that reports success and does
+// nothing -- worse than one that refuses.
+func (s *Store) ResumeUpdateRollout(ctx context.Context, id uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		UPDATE container_update_rollout_hosts SET forgiven = TRUE
+		WHERE rollout_id = $1 AND state = 'failed'`, id); err != nil {
+		return err
+	}
+	// A host left mid-apply when the rollout halted never finished. Returning it
+	// to pending lets the resumed rollout pick it up again rather than leaving it
+	// stuck in `applying` forever, which would hold a slot and stop the rollout
+	// ever completing.
+	if _, err := tx.Exec(ctx, `
+		UPDATE container_update_rollout_hosts SET state = 'pending', changed_at = now()
+		WHERE rollout_id = $1 AND state = 'applying'`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE container_update_rollouts SET state = 'running', halt_reason = ''
+		WHERE id = $1`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// HostsRunningImage returns the hosts running a given repository:tag.
+func (s *Store) HostsRunningImage(ctx context.Context, repo, tag string) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT hi.host_id
+		FROM host_inventory hi,
+		     LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
+		WHERE c->>'repository' = $1 AND c->>'tag' = $2`, repo, tag)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// StacksReferencingImage returns the managed stacks on a host whose compose
+// mentions a repository, so a rollout can find the file it needs to rewrite.
+//
+// Matching is done in Go by the caller, on the compose text: a SQL LIKE would
+// match "nginx" inside "nginx-extras" and rewrite the wrong service.
+func (s *Store) StacksReferencingImage(ctx context.Context, hostID uuid.UUID) ([]ContainerStack, error) {
+	return s.ListStacks(ctx, &hostID)
+}
