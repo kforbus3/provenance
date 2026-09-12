@@ -5,6 +5,40 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.3.0 — 2026-09-12
+
+**Containers can be updated without adopting them first.** Every compose-managed
+container records which project and service it is and where that project lives,
+so a rebuild — the same tag republished on a patched base image — needs nothing
+adopted: go to that directory, pull that service, bring it back up. A version
+bump still needs a stack, deliberately: the new version is written into the
+compose file, and editing a file Provenance does not own is reverted on the next
+deploy for any host whose compose files come from a git repository or an rsync
+target — silently, leaving the fleet on an image nobody can explain. Where a
+stack is adopted it still wins; it is the definition of record and the one with a
+history.
+
+**Update all.** One rollout covering every image with something available,
+instead of one rollout per image started by hand. That was not a cosmetic
+difference: ten separate rollouts each paced themselves, so a canary of one meant
+ten hosts taking an unproven update at the same moment. One rollout paces the
+whole operation, by host — a host takes every update that applies to it, then the
+next host follows, so a host is either current or it is not rather than
+half-updated across the fleet. An image a host does not run is not a failure, and
+a host running none of them by the time its turn comes is marked skipped rather
+than claimed as updated.
+
+**A host that cannot be collected now says why.** "No access" reported that
+something was wrong and nothing about what to do, and its two causes need
+opposite actions: an account missing from the socket's group is a one line fix, a
+daemon that is not running is a different problem. Six hosts on a nineteen host
+fleet reported it with no way to tell which, and finding out meant an SSH session
+per host. The probe now reports the socket, its group, the command that fixes it,
+and the daemon's own error — and no longer hides the case where a daemon is
+running but no client is installed for that account.
+
+---
+
 ## v1.2.5 — 2026-09-12
 
 **The Containers page no longer blanks after an upgrade.** An image no host runs
