@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/kforbus3/provenance/backend/internal/controlplane"
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
@@ -23,14 +24,35 @@ import (
 // boundary, not a nicety. POSIX portable username charset, plus a length cap.
 var accountName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,30}$`)
 
+// MigrateOptions controls how far the migration goes.
+type MigrateOptions struct {
+	// User is the account to move to. Empty means the current default.
+	User string `json:"user"`
+	// RemoveOld deletes the superseded account and its on-host artefacts.
+	//
+	// DEFAULT FALSE, deliberately. Creating an account is reversible and deleting
+	// one is not, and the two failure modes are not comparable: an extra idle
+	// account is untidy, while a deleted one can take an operator's own access with
+	// it. Retiring is a separate, explicit pass run after the fleet is verified
+	// healthy on the new account.
+	RemoveOld bool `json:"removeOld"`
+	// ConfirmControlPlane is required to touch a host that Provenance's own access
+	// depends on. Without it such a host is refused.
+	ConfirmControlPlane bool `json:"confirmControlPlane"`
+}
+
 // MigrateResult reports what the migration did, step by step, so the UI can show
 // the same detail an enrollment shows.
 type MigrateResult struct {
-	Host     string   `json:"host"`
-	From     string   `json:"from"`
-	To       string   `json:"to"`
-	Migrated bool     `json:"migrated"`
-	Steps    []string `json:"steps"`
+	Host     string `json:"host"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Migrated bool   `json:"migrated"`
+	// OldAccountLeft is true when the superseded account is still on the host,
+	// because RemoveOld was not set. The caller needs to know the host is not
+	// finished, not just that nothing failed.
+	OldAccountLeft bool     `json:"oldAccountLeft"`
+	Steps          []string `json:"steps"`
 }
 
 // MigrateLoginAccount moves a host from its current Provenance login account to
@@ -47,11 +69,11 @@ type MigrateResult struct {
 // A failure at any step leaves the host exactly as it was, still reachable through
 // the account the row names. The one thing never done is removing the bridge
 // before standing on the far bank.
-func (s *Service) MigrateLoginAccount(ctx context.Context, host *models.Host, newUser string) (*MigrateResult, error) {
+func (s *Service) MigrateLoginAccount(ctx context.Context, host *models.Host, opts MigrateOptions) (*MigrateResult, error) {
 	if host == nil {
 		return nil, fmt.Errorf("no host")
 	}
-	newUser = strings.TrimSpace(newUser)
+	newUser := strings.TrimSpace(opts.User)
 	if newUser == "" {
 		newUser = "prov"
 	}
@@ -67,10 +89,30 @@ func (s *Service) MigrateLoginAccount(ctx context.Context, host *models.Host, ne
 		res.Steps = append(res.Steps, "already on "+newUser+"; nothing to do")
 		return res, nil
 	}
-	// Never remove an account Provenance did not create. "root" and any account an
-	// operator nominated as the bootstrap user are theirs, not ours.
-	if oldUser == "root" {
-		return nil, fmt.Errorf("host logs in as root; migrating would delete the host's root account")
+	// Never remove an account Provenance did not create. The migration's last step
+	// deletes the old account outright, so this is the difference between retiring
+	// our own account and deleting the operator's.
+	//
+	// "root" is the obvious case, but not the only one: a host enrolled against an
+	// existing account (coreswitch logs in as "admin") would have had that account
+	// deleted. Allow only the names enrollment itself creates -- the current default
+	// and the one it had before the rename.
+	if !provenanceManagedAccount(oldUser) {
+		return nil, fmt.Errorf("host logs in as %q, which Provenance did not create; "+
+			"migrating would delete that account. Change the host's SSH user first if this is wrong", oldUser)
+	}
+
+	// A host Provenance's own access depends on -- the jump host, the machine the
+	// stack runs on, anything tagged control-plane -- is refused unless the caller
+	// says so explicitly. This is the guard that was missing: a bulk sweep included
+	// the Provenance host, replaced its login account, and deleted the account its
+	// operators connect with. controlplane.Is is the same check scan remediation
+	// uses, not a second implementation of it.
+	if controlplane.Is(host, s.cfg) && !opts.ConfirmControlPlane {
+		return nil, fmt.Errorf("%s is part of Provenance's own control plane; "+
+			"migrating its login account can sever access to the whole fleet. "+
+			"Confirm explicitly for this host, one at a time, with a way back in that "+
+			"does not depend on Provenance", host.Hostname)
 	}
 
 	caKeys, err := s.store.ListActiveCAPublicKeys(ctx, "user")
@@ -110,29 +152,46 @@ func (s *Service) MigrateLoginAccount(ctx context.Context, host *models.Host, ne
 		}
 		res.Steps = append(res.Steps, "verified certificate login as "+newUser)
 
-		// 3) Now the old generation can go.
+		// 3) Record it BEFORE removing anything. The row is what makes the new
+		// account reachable; until it is written the host is only reachable through
+		// the old one. Doing this last meant a failed write left a host whose old
+		// account was already gone and whose row still named it -- reachable by
+		// nothing. ChangeHostSSHUser, not SetHostSSHUser: that one only fills a
+		// blank, so it matched no rows here and reported success.
+		if serr := s.store.ChangeHostSSHUser(ctx, host.ID, newUser); serr != nil {
+			return nil, fmt.Errorf("%s now has a working %q account but recording it FAILED: %w. "+
+				"Nothing was removed, so the host is still reachable as %q",
+				host.Hostname, newUser, serr, oldUser)
+		}
+		res.Steps = append(res.Steps, "recorded ssh_user="+newUser)
+
+		// 4) Retiring the old account is opt-in, and deliberately not the default:
+		// creating an account is reversible and deleting one is not.
+		if !opts.RemoveOld {
+			res.OldAccountLeft = true
+			res.Steps = append(res.Steps, "left "+oldUser+" in place (retire it separately once the fleet is verified)")
+			res.Migrated = true
+			s.log.Info("adopted new host login account", "host", host.Hostname,
+				"from", oldUser, "to", newUser, "addr", addr, "old_account_left", true)
+			return res, nil
+		}
 		conn2, derr := s.gw.DialSystemForHost(ctx, host.ID, addr, host.SSHPort, newUser)
 		if derr != nil {
-			return nil, fmt.Errorf("reconnect as %s on %s: %w (old account left in place)", newUser, addr, derr)
+			res.OldAccountLeft = true
+			res.Steps = append(res.Steps, "WARNING: could not reconnect as "+newUser+" to retire "+oldUser+"; left it in place")
+			res.Migrated = true
+			return res, nil
 		}
 		out, rerr = run(conn2.Client, "sudo sh -c "+shellQuote(retireAccountScript(oldUser)))
 		conn2.Close()
 		if rerr != nil || !strings.Contains(out, "RETIRE_OK") {
-			// The new account works and the row has not moved yet, so the host is
-			// reachable either way. Report it rather than failing the migration:
-			// leftover artefacts are a cleanup problem, not an outage.
+			res.OldAccountLeft = true
 			res.Steps = append(res.Steps, "WARNING: could not fully remove "+oldUser+": "+oneLine(strings.TrimSpace(out)))
 			s.log.Warn("login account migration left artefacts behind",
 				"host", host.Hostname, "old", oldUser, "new", newUser, "err", orErr(rerr, out))
 		} else {
 			res.Steps = append(res.Steps, "removed "+oldUser+" and its sudoers/CA/sshd artefacts")
 		}
-
-		// 4) Last: point the row at the account that has now been proven to work.
-		if serr := s.store.SetHostSSHUser(ctx, host.ID, newUser); serr != nil {
-			return nil, fmt.Errorf("host migrated on disk but recording it failed: %w", serr)
-		}
-		res.Steps = append(res.Steps, "recorded ssh_user="+newUser)
 		res.Migrated = true
 		s.log.Info("migrated host login account", "host", host.Hostname, "from", oldUser, "to", newUser, "addr", addr)
 		return res, nil
@@ -204,4 +263,18 @@ done
 # Any remaining state directory from the old name.
 rm -rf /etc/fleet
 echo RETIRE_OK`, oldUser)
+}
+
+// provenanceManagedAccount reports whether an account name is one enrollment
+// creates itself, and may therefore be retired by a migration.
+//
+// Deliberately a fixed list rather than "anything that is not root": the point is
+// to delete only accounts we made. An operator-nominated account looks identical
+// on the wire and is not ours to remove.
+func provenanceManagedAccount(name string) bool {
+	switch name {
+	case "prov", "fleet":
+		return true
+	}
+	return false
 }

@@ -1,4 +1,4 @@
-package scan
+package controlplane
 
 import (
 	"testing"
@@ -32,7 +32,7 @@ func TestIsControlPlaneHost(t *testing.T) {
 		{"case-insensitive declared", &models.Host{Hostname: "PROV-HOST"}, true},
 	}
 	for _, tc := range cases {
-		if got := isControlPlaneHost(tc.host, cfg); got != tc.want {
+		if got := Is(tc.host, cfg); got != tc.want {
 			t.Errorf("%s: isControlPlaneHost = %v, want %v", tc.name, got, tc.want)
 		}
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/kforbus3/provenance/backend/internal/app"
 	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/controlplane"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
@@ -287,7 +288,7 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"findings":     f,
 		"count":        len(f),
-		"controlPlane": isControlPlaneHost(host, h.d.Cfg),
+		"controlPlane": controlplane.Is(host, h.d.Cfg),
 	})
 }
 
@@ -357,7 +358,7 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 	// Remediating Provenance's own control-plane host can lock Provenance out of the whole
 	// fleet (this is how the ip_forward sysctl took down the web UI). Require a
 	// distinct confirmation regardless of which rules are selected.
-	if isControlPlaneHost(host, h.d.Cfg) && !rq.ConfirmControlPlane {
+	if controlplane.Is(host, h.d.Cfg) && !rq.ConfirmControlPlane {
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
 			"error":        "target is a Provenance control-plane host; remediating it can lock Provenance out of the fleet — explicit confirmation required",
 			"controlPlane": true,
@@ -373,7 +374,7 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 	go h.svc.Remediate(context.WithoutCancel(r.Context()), rec.ID, scan, host, rq.RuleIDs, &p.UserID, p.Username)
 	h.audit(r, "host.remediate", rec.ID.String(), map[string]any{
 		"hostId": host.ID, "hostname": host.Hostname, "rules": rq.RuleIDs,
-		"accessImpacting": impacting, "controlPlane": isControlPlaneHost(host, h.d.Cfg),
+		"accessImpacting": impacting, "controlPlane": controlplane.Is(host, h.d.Cfg),
 	})
 	httpx.WriteJSON(w, http.StatusAccepted, rec)
 }

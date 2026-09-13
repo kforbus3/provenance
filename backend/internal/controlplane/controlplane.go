@@ -1,4 +1,11 @@
-package scan
+// Package controlplane answers one question: would acting on this host risk
+// severing Provenance's access to the fleet?
+//
+// It lives in its own package because two very different operations need the same
+// answer and must not disagree: hardening a host (scan remediation), and moving a
+// host's login account. The account migration was written without it and swept the
+// Provenance host itself, deleting the account its own operators connect with.
+package controlplane
 
 import (
 	"strings"
@@ -10,9 +17,10 @@ import (
 // controlPlaneTags mark a host as part of Provenance's own control plane. Remediating
 // such a host can sever Provenance's access to the entire fleet, so the UI/API
 // require an extra confirmation before applying fixes to it.
+// Tags that mark a host as control plane.
 var controlPlaneTags = map[string]bool{"control-plane": true, "protected": true}
 
-// isControlPlaneHost reports whether remediating this host risks locking Provenance
+// Is reports whether remediating this host risks locking Provenance
 // out of the fleet. It is true when the host:
 //   - carries a "control-plane" or "protected" tag,
 //   - is explicitly listed in PROV_CONTROL_PLANE_HOSTS, or
@@ -21,7 +29,7 @@ var controlPlaneTags = map[string]bool{"control-plane": true, "protected": true}
 //
 // It is intentionally a warning gate, not a hard block: an operator may still
 // harden such a host deliberately, but not by accident.
-func isControlPlaneHost(host *models.Host, cfg *config.Config) bool {
+func Is(host *models.Host, cfg *config.Config) bool {
 	if host == nil || cfg == nil {
 		return false
 	}

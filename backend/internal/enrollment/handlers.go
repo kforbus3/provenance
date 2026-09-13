@@ -208,11 +208,11 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, job)
 }
 
-// migrateLoginAccountReq names the account to move the host to. An empty user
-// means the current default, which is what the post-rename migration wants.
-type migrateLoginAccountReq struct {
-	User string `json:"user"`
-}
+// migrateLoginAccountReq names the account to move the host to and how far to go.
+// An empty user means the current default, which is what the post-rename migration
+// wants. removeOld defaults to false: adopting the new account is reversible,
+// deleting the old one is not.
+type migrateLoginAccountReq = MigrateOptions
 
 // migrateLoginAccount moves one host onto a different Provenance login account,
 // verifying the new account works before the old one is removed.
@@ -229,10 +229,10 @@ func (h *handler) migrateLoginAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req migrateLoginAccountReq
-	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; defaults to the current default account
+	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; defaults to adopt-only, current default account
 
 	actor := p.UserID
-	res, err := h.svc.MigrateLoginAccount(r.Context(), host, req.User)
+	res, err := h.svc.MigrateLoginAccount(r.Context(), host, req)
 	if err != nil {
 		_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
 			ActorID: &actor, Action: "host.login_account_migrate_failed", TargetKind: "host",
@@ -244,7 +244,8 @@ func (h *handler) migrateLoginAccount(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: &actor, Action: "host.login_account_migrated", TargetKind: "host",
 		TargetID: hostID.String(),
-		Detail:   map[string]any{"from": res.From, "to": res.To, "migrated": res.Migrated},
+		Detail: map[string]any{"from": res.From, "to": res.To, "migrated": res.Migrated,
+			"oldAccountLeft": res.OldAccountLeft},
 	})
 	httpx.WriteJSON(w, http.StatusOK, res)
 }

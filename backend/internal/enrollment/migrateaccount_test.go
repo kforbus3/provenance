@@ -2,6 +2,7 @@ package enrollment
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -25,21 +26,38 @@ func TestMigrateRejectsAccountNamesThatAreNotAccountNames(t *testing.T) {
 		strings.Repeat("a", 32),
 	} {
 		_, err := svc.MigrateLoginAccount(context.Background(),
-			&models.Host{Hostname: "h", SSHUser: "fleet"}, bad)
+			&models.Host{Hostname: "h", SSHUser: "fleet"}, MigrateOptions{User: bad})
 		if err == nil || !strings.Contains(err.Error(), "invalid account name") {
 			t.Errorf("account name %q was accepted (err=%v)", bad, err)
 		}
 	}
 }
 
-// Migrating a host that logs in as root would hand userdel the host's root
-// account. Refuse before any connection is made.
-func TestMigrateRefusesToDeleteRoot(t *testing.T) {
+// The migration's last step deletes the old account. That is fine for an account
+// enrollment created, and not fine for one the operator nominated — which is what
+// a host enrolled against an existing login has. "root" is the obvious case;
+// coreswitch, which logs in as "admin", is the one that actually occurred.
+func TestMigrateRefusesToDeleteAnAccountProvenanceDidNotCreate(t *testing.T) {
 	svc := &Service{}
-	_, err := svc.MigrateLoginAccount(context.Background(),
-		&models.Host{Hostname: "h", SSHUser: "root"}, "prov")
-	if err == nil || !strings.Contains(err.Error(), "root") {
-		t.Fatalf("migrating a root-login host was allowed (err=%v)", err)
+	for _, account := range []string{"root", "admin", "ubuntu", "ec2-user", "keith"} {
+		_, err := svc.MigrateLoginAccount(context.Background(),
+			&models.Host{Hostname: "h", SSHUser: account}, MigrateOptions{User: "prov"})
+		if err == nil || !strings.Contains(err.Error(), "did not create") {
+			t.Errorf("migrating a host that logs in as %q was allowed (err=%v)", account, err)
+		}
+	}
+	// The accounts enrollment does create must still be migratable, or the feature
+	// refuses itself. Checked on the predicate rather than through
+	// MigrateLoginAccount, which would get past the guard and go on to need a CA.
+	for _, account := range []string{"prov", "fleet"} {
+		if !provenanceManagedAccount(account) {
+			t.Errorf("%q is created by enrollment but is not treated as migratable", account)
+		}
+	}
+	for _, account := range []string{"root", "admin", "ubuntu", "", "Prov"} {
+		if provenanceManagedAccount(account) {
+			t.Errorf("%q is not an account enrollment creates, but is treated as migratable", account)
+		}
 	}
 }
 
@@ -48,7 +66,7 @@ func TestMigrateRefusesToDeleteRoot(t *testing.T) {
 func TestMigrateIsANoOpWhenAlreadyOnTheTargetAccount(t *testing.T) {
 	svc := &Service{}
 	res, err := svc.MigrateLoginAccount(context.Background(),
-		&models.Host{Hostname: "h", SSHUser: "prov"}, "prov")
+		&models.Host{Hostname: "h", SSHUser: "prov"}, MigrateOptions{User: "prov"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,5 +162,39 @@ func TestTeardownStripsBothKRLDirectives(t *testing.T) {
 	s := svc.hostTeardownScript("fleet", "")
 	if !strings.Contains(s, `RevokedKeys /etc/ssh/\(prov\|fleet\)_krl`) {
 		t.Errorf("teardown removes the KRL files but leaves the directive naming them:\n%s", s)
+	}
+}
+
+// Removal must be opt-in. The bulk sweep that caused the incident deleted the old
+// account on every host it touched, including the one Provenance itself runs on,
+// because removal was unconditional. Creating an account is reversible; deleting
+// one is not, so the default has to be the reversible half.
+func TestRemovalIsOptIn(t *testing.T) {
+	var zero MigrateOptions
+	if zero.RemoveOld {
+		t.Fatal("MigrateOptions defaults to removing the old account")
+	}
+	if zero.ConfirmControlPlane {
+		t.Fatal("MigrateOptions defaults to overriding the control-plane guard")
+	}
+}
+
+// The row must be written BEFORE the old account is removed: the row is what makes
+// the new account reachable, so a failed write after removal leaves a host
+// reachable by nothing. Pinned on the source order, which is the thing that was
+// wrong -- the assertion cannot be made against a nil gateway.
+func TestTheRowIsRecordedBeforeTheOldAccountIsRemoved(t *testing.T) {
+	src, err := os.ReadFile("migrateaccount.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	record := strings.Index(body, "ChangeHostSSHUser(ctx, host.ID, newUser)")
+	retire := strings.Index(body, "retireAccountScript(oldUser)))")
+	if record < 0 || retire < 0 {
+		t.Fatalf("cannot find both steps (record=%d retire=%d)", record, retire)
+	}
+	if record > retire {
+		t.Error("removes the old account before recording the new one, so a failed write strands the host")
 	}
 }

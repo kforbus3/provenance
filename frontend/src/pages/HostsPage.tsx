@@ -111,7 +111,7 @@ function SupportBundleButton({ host }: { host: Host }) {
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
-type BulkAction = "scan" | "refresh" | "maintenance" | "tags" | "migrateAccount";
+type BulkAction = "scan" | "refresh" | "maintenance" | "tags" | "migrateAccount" | "retireOldAccount";
 
 interface ToolbarProps {
   selectedCount: number;
@@ -143,7 +143,8 @@ function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh, onBulk }: Too
             <MenuItem onClick={() => pick("refresh")}>Refresh facts</MenuItem>
             <MenuItem onClick={() => pick("maintenance")}>Maintenance…</MenuItem>
             <MenuItem onClick={() => pick("tags")}>Edit tags…</MenuItem>
-            <MenuItem onClick={() => pick("migrateAccount")}>Migrate login account…</MenuItem>
+            <MenuItem onClick={() => pick("migrateAccount")}>Migrate login account (keeps the old one)</MenuItem>
+            <MenuItem onClick={() => pick("retireOldAccount")}>Retire the superseded account…</MenuItem>
           </Menu>
           <Button
             color="error"
@@ -552,6 +553,13 @@ export function HostsPage() {
   const [scanTarget, setScanTarget] = useState<Host | null>(null);
   const [editTarget, setEditTarget] = useState<Host | null>(null);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  // A message that must stay on screen: progress while a long sweep runs, and any
+  // summary naming hosts that failed. The default 4s is right for "queued 12 scans"
+  // and wrong for both of those.
+  const [bulkSticky, setBulkSticky] = useState(false);
+  // Which half of the account migration the menu asked for. A ref, not state: the
+  // mutation reads it when it runs and must not need a re-render first.
+  const bulkRemoveOldRef = useRef(false);
   const [bulkMaintOpen, setBulkMaintOpen] = useState(false);
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
 
@@ -572,20 +580,28 @@ export function HostsPage() {
   // jump-host pile-up. Each host reports its own outcome, so one failure does not
   // hide the others' results.
   const bulkMigrateAccountMut = useMutation({
+    // Each host is a real SSH round trip — create the account, prove a certificate
+    // login as it, remove the old one — so this takes roughly ten seconds per host
+    // and runs sequentially. Without per-host progress the whole sweep looks like a
+    // button that did nothing, for minutes.
     mutationFn: async () => {
       const results: { host: string; ok: boolean; detail: string }[] = [];
-      for (const id of selectedIds) {
+      const total = selectedIds.length;
+      const removeOld = bulkRemoveOldRef.current;
+      for (const [i, id] of selectedIds.entries()) {
+        const name = data?.hosts?.find((h) => h.id === id)?.hostname ?? String(id);
+        setBulkSticky(true);
+        setBulkMsg(`Migrating login account ${i + 1}/${total}: ${name}…`);
         try {
-          const r = await migrateLoginAccount(id);
+          const r = await migrateLoginAccount(id, { removeOld });
           results.push({
-            host: r.host,
+            host: r.host || name,
             ok: true,
             detail: r.migrated ? `${r.from} → ${r.to}` : "already migrated",
           });
         } catch (err) {
           const e = err as { response?: { data?: { error?: string } } };
-          const host = data?.hosts?.find((h) => h.id === id)?.hostname ?? id;
-          results.push({ host, ok: false, detail: e.response?.data?.error ?? "failed" });
+          results.push({ host: name, ok: false, detail: e.response?.data?.error ?? "failed" });
         }
       }
       return results;
@@ -594,18 +610,35 @@ export function HostsPage() {
       const failed = results.filter((r) => !r.ok);
       void qc.invalidateQueries({ queryKey: ["hosts"] });
       if (failed.length === 0) {
-        setBulkMsg(`Migrated ${results.length} host(s); each one still reachable`);
+        const left = results.filter((r) => r.detail.includes("→")).length;
+        if (bulkRemoveOldRef.current) {
+          setBulkSticky(false);
+          setBulkMsg(`Retired the old account on ${results.length} host(s)`);
+        } else {
+          // Say that the job is half done. "Migrated N hosts" reads as finished.
+          setBulkSticky(true);
+          setBulkMsg(
+            `Migrated ${left} host(s). The old accounts are still in place — check these hosts ` +
+            "are online, then use \u201cRetire the superseded account\u201d.",
+          );
+        }
         return;
       }
-      // Name the hosts that did not move. They are unchanged and still reachable
-      // on their existing account — the migration removes nothing until the new
-      // account has been proven to work.
+      // Name the hosts that did not move, and keep it on screen. They are unchanged
+      // and still reachable on their existing account — nothing is removed until the
+      // new account has been proven to work — but the operator has to be able to read
+      // which ones and why.
+      setBulkSticky(true);
       setBulkMsg(
-        `${results.length - failed.length} migrated, ${failed.length} unchanged: ` +
-          failed.map((r) => `${r.host} (${r.detail})`).join("; "),
+        `${results.length - failed.length} migrated, ${failed.length} unchanged — ` +
+          failed.map((r) => `${r.host}: ${r.detail}`).join("; "),
       );
     },
-    onError: () => setBulkMsg("Login-account migration failed"),
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { error?: string } } };
+      setBulkSticky(true);
+      setBulkMsg(e.response?.data?.error ?? "Login-account migration failed");
+    },
   });
 
   const onBulk = (action: BulkAction) => {
@@ -613,7 +646,20 @@ export function HostsPage() {
     else if (action === "refresh") bulkRefreshMut.mutate();
     else if (action === "maintenance") setBulkMaintOpen(true);
     else if (action === "tags") setBulkTagsOpen(true);
-    else if (action === "migrateAccount") bulkMigrateAccountMut.mutate();
+    else if (action === "migrateAccount") { bulkRemoveOldRef.current = false; bulkMigrateAccountMut.mutate(); }
+    else if (action === "retireOldAccount") {
+      // Deleting an account is the irreversible half, so it is confirmed rather
+      // than just clicked — and it is only safe once the fleet is verified healthy
+      // on the new account.
+      if (window.confirm(
+        `Delete the superseded login account on ${selectedIds.length} host(s)?\n\n` +
+        "Only do this once those hosts show online on their new account. " +
+        "This cannot be undone, and on a host you reach by that same account it " +
+        "removes your own access.")) {
+        bulkRemoveOldRef.current = true;
+        bulkMigrateAccountMut.mutate();
+      }
+    }
   };
 
   const createMut = useMutation({
@@ -1042,10 +1088,12 @@ export function HostsPage() {
         }}
       />
       <Snackbar
-        open={!!bulkMsg} autoHideDuration={4000} onClose={() => setBulkMsg(null)}
+        open={!!bulkMsg} autoHideDuration={bulkSticky ? null : 4000}
+        onClose={() => { setBulkMsg(null); setBulkSticky(false); }}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Alert severity="info" onClose={() => setBulkMsg(null)}>{bulkMsg}</Alert>
+        <Alert severity={bulkSticky ? "warning" : "info"}
+               onClose={() => { setBulkMsg(null); setBulkSticky(false); }}>{bulkMsg}</Alert>
       </Snackbar>
     </Box>
   );

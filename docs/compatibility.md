@@ -177,13 +177,34 @@ the host would point the backend at an account sshd has never heard of. So:
   that removed only the current spelling would leave a trusted CA and a NOPASSWD
   sudoers entry on a host the operator believes is clean.
 
-Move hosts across from **Hosts → select → Bulk actions → Migrate login account**,
-or `POST /api/v1/hosts/{id}/login-account` (permission `Host.Enroll`). For each
-host the application creates and trusts the new account, **proves a certificate
-login as it works**, and only then removes the old account and its artefacts. A
-failure at any point leaves the host exactly as it was, still reachable on the
-account it has. A host that logs in as `root` is refused rather than having its
-root account deleted.
+Move hosts across in **two passes**, both from **Hosts → select → Bulk actions**
+(or `POST /api/v1/hosts/{id}/login-account`, permission `Host.Enroll`):
+
+1. **Migrate login account (keeps the old one).** Creates and trusts the new
+   account, **proves a certificate login as it works**, then records it against the
+   host. Nothing is deleted. A failure at any point leaves the host exactly as it
+   was, still reachable on the account it has.
+2. **Retire the superseded account**, once those hosts show online on the new
+   account. This is the irreversible half, so it is separate and confirmed.
+
+The order inside pass 1 matters and is pinned by a test: the host row is written
+*before* anything is removed, because the row is what makes the new account
+reachable. Doing it the other way round leaves a host whose old account is gone and
+whose row still names it — reachable by nothing, offline with a working SSH server
+and a valid certificate.
+
+Two hosts are refused outright rather than migrated:
+
+* **An account Provenance did not create** (`root`, or an operator-nominated login
+  such as `admin`). The retire step deletes the old account, and that account is
+  not ours to delete.
+* **A control-plane host** — the jump host, the machine the stack runs on, anything
+  tagged `control-plane` or `protected`, anything in `PROV_CONTROL_PLANE_HOSTS`.
+  Migrating its login account can sever Provenance's access to the whole fleet, and
+  if you reach that host by the same account it removes your own access with it. Do
+  those one at a time, deliberately, with a way back in that does not depend on
+  Provenance. This is the same check (`controlplane.Is`) that gates scan
+  remediation.
 
 ## Machine endpoints are unchanged
 

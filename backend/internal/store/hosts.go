@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -681,6 +682,30 @@ func (s *Store) SetHostSSHUser(ctx context.Context, hostID uuid.UUID, user strin
 		`UPDATE hosts SET ssh_user=$2, updated_at=now()
 		 WHERE id=$1 AND (ssh_user IS NULL OR ssh_user='')`, hostID, user)
 	return err
+}
+
+// ChangeHostSSHUser moves a host onto a different login account.
+//
+// Deliberately separate from SetHostSSHUser, which only ever fills a blank. That
+// one is the right behaviour for enrollment recording what it defaulted to, and
+// the wrong behaviour for a migration that has just replaced the account ON the
+// host: it matches no rows, Exec reports no error, and the caller is told it
+// succeeded while the row still names an account that no longer exists. The host
+// then goes offline with a working SSH server and a valid certificate -- the exact
+// failure the comment above was written about, reached from the other side.
+//
+// So this one asserts it changed something. A migration that cannot record itself
+// has to fail loudly, because the account it is recording has already been removed.
+func (s *Store) ChangeHostSSHUser(ctx context.Context, hostID uuid.UUID, user string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET ssh_user=$2, updated_at=now() WHERE id=$1`, hostID, user)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("host %s not found", hostID)
+	}
+	return nil
 }
 
 // OverlayModesInUse returns the distinct overlay transports enrolled hosts are
