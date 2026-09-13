@@ -247,6 +247,7 @@ func releaseBuild(args []string) error {
 	}
 	m := release.Manifest{
 		SchemaVersion: release.ManifestSchema, Version: *version, BuildDate: date,
+		Lineage:        release.Lineage,
 		MinFromVersion: *from, Components: splitCSV(*components), Images: images,
 		Migrations: splitCSV(*migrations), MigrationCompatibility: compat, Notes: *notes,
 		ConfigAdditions: configAdditions,

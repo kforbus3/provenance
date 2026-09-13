@@ -85,6 +85,7 @@ func makeBundleCompat(t *testing.T, compat string) (path string, pub ed25519.Pub
 	be := mk("backend", "backend-image")
 	fe := mk("frontend", "frontend-image")
 	m := release.Manifest{
+		Lineage:       release.Lineage,
 		SchemaVersion: release.ManifestSchema, Version: "v1.2.3", MinFromVersion: "v1.0.0",
 		Components: []string{"backend", "frontend"}, Images: []release.ImageRef{be, fe},
 		MigrationCompatibility: compat,
@@ -222,6 +223,7 @@ func makeBundleWith(t *testing.T, components []string, adds []release.ConfigAddi
 		files["images/"+c+".tar"] = p
 	}
 	m := release.Manifest{
+		Lineage:       release.Lineage,
 		SchemaVersion: release.ManifestSchema, Version: "v1.2.3", MinFromVersion: "v1.0.0",
 		Components: components, Images: imgs, MigrationCompatibility: release.CompatAdditive,
 		ConfigAdditions: adds,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,7 @@ func buildTestBundle(t *testing.T, version, minFrom string, imgContent []byte) (
 		t.Fatal(err)
 	}
 	m = Manifest{
+		Lineage:                Lineage,
 		SchemaVersion:          ManifestSchema,
 		Version:                version,
 		BuildDate:              "2026-07-25T00:00:00Z",
@@ -137,7 +139,7 @@ func TestExtractDetectsDigestTamper(t *testing.T) {
 }
 
 func TestCheckUpgradeable(t *testing.T) {
-	m := Manifest{Version: "v0.61.0", MinFromVersion: "v0.55.0"}
+	m := Manifest{Version: "v0.61.0", MinFromVersion: "v0.55.0", Lineage: Lineage}
 	cases := []struct {
 		current string
 		wantErr bool
@@ -171,5 +173,88 @@ func TestParseKeysRoundTrip(t *testing.T) {
 	}
 	if _, err := ParsePublicKeys("not-base64!!"); err == nil {
 		t.Fatal("expected ParsePublicKeys to reject garbage")
+	}
+}
+
+// Version numbers alone cannot answer "is this the same product?". This repository
+// carries tags from two earlier product lines it was forked from, and their
+// numbering runs AHEAD of the current one — so a Moorgate-era v2.0.2 bundle
+// outranks a running v1.3.0 by semver. A gate that only asks "is it newer?" accepts
+// it and installs a different, older codebase over the running stack.
+//
+// This is not hypothetical: that exact bundle was sitting in the deployment's
+// updates volume.
+func TestABundleFromAnotherProductLineIsRefusedEvenWhenItIsNewer(t *testing.T) {
+	moorgate := Manifest{Version: "v2.0.2", MinFromVersion: "0.0.0", Lineage: "moorgate"}
+	err := moorgate.CheckUpgradeable("v1.3.0")
+	if err == nil {
+		t.Fatal("a v2.0.2 bundle from another product line was accepted over a running v1.3.0")
+	}
+	if !strings.Contains(err.Error(), "different product") {
+		t.Errorf("error %q does not say the product differs", err)
+	}
+	// And it must be refused for being a different product, not merely for being
+	// older — because it is NOT older, which is the whole trap.
+	if strings.Contains(err.Error(), "not newer") {
+		t.Errorf("refused on version ordering rather than identity: %v", err)
+	}
+}
+
+// A bundle that predates lineage tagging cannot assert it is this product, and the
+// bundles that predate it are exactly the dangerous ones. Refused, with the remedy
+// named.
+func TestABundleWithNoLineageIsRefused(t *testing.T) {
+	old := Manifest{Version: "v9.9.9", MinFromVersion: "0.0.0"}
+	err := old.CheckUpgradeable("v1.3.0")
+	if err == nil {
+		t.Fatal("a bundle declaring no lineage was accepted")
+	}
+	if !strings.Contains(err.Error(), "lineage") || !strings.Contains(err.Error(), "provctl") {
+		t.Errorf("error %q does not name the problem and the remedy", err)
+	}
+}
+
+// Identity is checked BEFORE ordering, or a foreign bundle with a high version
+// number never reaches the identity test at all.
+func TestLineageIsCheckedBeforeVersionOrdering(t *testing.T) {
+	// Same version as the running build: ordering alone would reject this as "not
+	// newer". The error must still be the lineage one, proving identity ran first.
+	foreign := Manifest{Version: "v1.3.0", MinFromVersion: "0.0.0", Lineage: "moorgate"}
+	err := foreign.CheckUpgradeable("v1.3.0")
+	if err == nil || !strings.Contains(err.Error(), "different product") {
+		t.Fatalf("identity is not checked first; got %v", err)
+	}
+}
+
+// A genuine release of this line still installs, and the lineage match is not
+// case-sensitive — it is a name, not a token to be typed exactly.
+func TestOurOwnLineageStillInstalls(t *testing.T) {
+	for _, l := range []string{Lineage, strings.ToUpper(Lineage), " " + Lineage + " "} {
+		m := Manifest{Version: "v1.4.0", MinFromVersion: "0.0.0", Lineage: l}
+		if err := m.CheckUpgradeable("v1.3.0"); err != nil {
+			t.Errorf("lineage %q was refused: %v", l, err)
+		}
+	}
+}
+
+// A "dev" running build is allowed to install anything on version grounds, and that
+// must NOT become a hole in the identity check — a developer machine is exactly
+// where a stray foreign bundle gets tried.
+func TestADevBuildStillRefusesAForeignBundle(t *testing.T) {
+	foreign := Manifest{Version: "v2.0.2", MinFromVersion: "0.0.0", Lineage: "moorgate"}
+	if err := foreign.CheckUpgradeable("dev"); err == nil {
+		t.Fatal("a dev build accepted a bundle from another product line")
+	}
+}
+
+// The builder must stamp the lineage, or every bundle it produces is refused by the
+// gate it just gained.
+func TestBuiltManifestsDeclareTheLineage(t *testing.T) {
+	if Lineage == "" {
+		t.Fatal("Lineage constant is empty")
+	}
+	m := Manifest{Version: "v1.4.0", MinFromVersion: "0.0.0", Lineage: Lineage}
+	if err := m.CheckUpgradeable("v1.3.0"); err != nil {
+		t.Fatalf("a manifest stamped with the build's own lineage was refused: %v", err)
 	}
 }

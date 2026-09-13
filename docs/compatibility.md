@@ -47,7 +47,14 @@ working for the remainder of the MAJOR series.
 safe to run against a database written by any release in the same MAJOR series.
 
 **Upgrade bundles.** A `.provup` bundle installs onto any earlier release in
-the same MAJOR series.
+the same MAJOR series — and only within the same **product lineage**. Every bundle
+declares the line it belongs to and the updater refuses one that does not match,
+before it compares version numbers at all. This repository carries tags from two
+earlier product lines it was forked from whose numbering runs *ahead* of the current
+one, so "newer" is not the same question as "the same product": a Moorgate-era
+`v2.0.2` bundle outranks a running `v1.3.0` by semver. A bundle that declares no
+lineage predates the field and is refused too — rebuild it with a current
+`provctl release build`, which stamps it.
 
 **Host enrollment.** An enrolled host keeps working across upgrades of the
 server without re-enrollment.

@@ -17,6 +17,17 @@ import (
 // ManifestSchema is the current manifest schema version.
 const ManifestSchema = 1
 
+// Lineage names the product line these releases belong to. It is compared against a
+// bundle's own declared lineage before the version numbers are even looked at.
+//
+// Version numbers alone cannot answer "is this bundle the same product?". This
+// repository carries tags from two earlier product lines it was forked from, and
+// their numbering runs AHEAD of the current one — a Moorgate-era v2.0.2 bundle
+// outranks a running v1.3.0 by semver, so a gate that only asks "is it newer?"
+// accepts it and installs a different, older codebase over the running one. Applying
+// a bundle is remote code execution by design; "newer" is not identity.
+const Lineage = "provenance"
+
 // Migration-compatibility values. They drive rolling-upgrade ordering: an "additive"
 // release (only new tables / nullable columns) is safe to run with older peers still
 // live, so a cluster can roll one instance at a time; a "breaking" release requires a
@@ -30,8 +41,13 @@ const (
 // pins each image's content digest, a valid signature over the manifest transitively
 // authenticates the image payloads.
 type Manifest struct {
-	SchemaVersion          int        `json:"schemaVersion"`
-	Version                string     `json:"version"`                // app version this bundle installs, e.g. "v0.61.0"
+	SchemaVersion int    `json:"schemaVersion"`
+	Version       string `json:"version"` // app version this bundle installs, e.g. "v0.61.0"
+	// Lineage is the product line this bundle belongs to; it must equal the running
+	// build's Lineage. Omitted by bundles built before the field existed, which is
+	// why an absent value is refused rather than assumed compatible — the bundles
+	// that predate it are exactly the ones from the other product lines.
+	Lineage                string     `json:"lineage,omitempty"`
 	BuildDate              string     `json:"buildDate"`              // RFC3339
 	MinFromVersion         string     `json:"minFromVersion"`         // lowest running version this may upgrade from
 	Components             []string   `json:"components"`             // e.g. ["backend","frontend","grype-scanner"]
@@ -123,6 +139,12 @@ func (m *Manifest) Validate() error {
 // build) is treated as a development build and allowed to install anything — real
 // releases carry a "vX.Y.Z" version.
 func (m *Manifest) CheckUpgradeable(currentVersion string) error {
+	// Identity before ordering. A bundle from another product line can carry a
+	// higher version number than anything this line has released, so checking
+	// "newer" first would accept it and then never reach this test.
+	if err := m.checkLineage(); err != nil {
+		return err
+	}
 	cur, curOK := parseVersion(currentVersion)
 	newV, newOK := parseVersion(m.Version)
 	if !newOK {
@@ -156,6 +178,32 @@ func NewerVersion(a, b string) bool {
 
 // semver is a parsed major.minor.patch (pre-release/build metadata ignored).
 type semver struct{ major, minor, patch int }
+
+// checkLineage refuses a bundle that does not declare this product line.
+//
+// An absent lineage is refused rather than tolerated. The rule reads harshly for a
+// legitimately old bundle, but the bundles that predate the field are precisely the
+// dangerous ones — the earlier product lines this repository was forked from, whose
+// version numbers run ahead of the current line. A bundle that cannot say what it is
+// cannot be shown to be the same product, and the cost of being wrong is the whole
+// stack replaced by an older, different codebase.
+//
+// The remedy is to rebuild it: `provctl release build` stamps the lineage.
+func (m *Manifest) checkLineage() error {
+	got := strings.TrimSpace(m.Lineage)
+	switch {
+	case got == "":
+		return fmt.Errorf("bundle %s does not declare a product lineage, so it cannot be shown to be a %s release — "+
+			"bundles built before lineage tagging include the earlier product lines this one was forked from, whose "+
+			"version numbers run ahead of it. Rebuild the bundle with a current provctl if it is genuinely a %s release",
+			m.Version, Lineage, Lineage)
+	case !strings.EqualFold(got, Lineage):
+		return fmt.Errorf("bundle %s belongs to the %q product line, but this deployment runs %q — "+
+			"installing it would replace the running stack with a different product",
+			m.Version, got, Lineage)
+	}
+	return nil
+}
 
 // parseVersion parses "vX.Y.Z" (optionally with a -prerelease/+build suffix, which is
 // ignored). ok=false for anything that isn't a clean numeric triple.

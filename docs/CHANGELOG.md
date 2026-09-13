@@ -5,6 +5,67 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.4.0 — 2026-09-13
+
+**Ask can talk to an OpenAI-compatible model server.** It spoke only Ollama's native
+API — `/api/tags` and `/api/chat`, with the model's context length read out of
+`/api/tags`. llama.cpp serves no `/api/*` routes at all, so a deployment that moves
+to it cannot be repointed by changing a URL: the protocol has to change with it.
+Select **OpenAI-compatible (/v1)** in Settings → AI assistant, and the same screen
+takes an optional bearer token for a server that wants one.
+
+Everything above the client stays written against Ollama's shapes, because that is
+what the tool loop, the fast paths and the direct answers were tuned against; the new
+client adapts to those shapes rather than the reverse. Three differences had to be
+translated and each one is silent when it is wrong: tool-call arguments are a JSON
+string on this wire and a JSON object in Ollama's, every tool call carries an id that
+the result must quote back, and sampling options are top-level fields rather than a
+nested map.
+
+A setting saved before this release has no `provider` value. That is not a choice to
+run OpenAI, so it resolves to Ollama — which is necessarily what such a deployment
+was talking to — and the protocol is never inferred from the URL or the port, because
+an OpenAI-compatible server on `:11434` is perfectly legal and guessing wrong fails
+as a connection error naming the wrong cause. `baseUrl` supersedes `ollamaUrl`; both
+are read, and the settings page writes both, so a rollback still finds its server.
+
+**The context warning had to change with it.** On Ollama the number that matters is
+the model's trained length, and an overlong prompt is silently truncated from the
+front — which is why Provenance sends an explicit `num_ctx`. An OpenAI-compatible
+server fixes its window when it starts and no request can raise it, so `num_ctx` is
+dropped rather than sent (sending it would let the caller believe it had asked for a
+window it never got), and the comparison is against the **prompt floor** instead: the
+system prompt plus every tool schema, about 10,200 tokens before a single row of
+data. Below that the assistant cannot work at all, and the settings page now says so
+with the number the server reported, the number required, and the setting to change —
+on the server. llama.cpp also *errors* on an overlong prompt rather than truncating,
+and the server's own message is surfaced, since "model not found" and a context
+overflow are both actionable and both arrive as a bare 400 otherwise.
+
+Also handled: a reasoning model that spends its whole token budget thinking returns
+empty content with `finish_reason: length`. Returned as a successful blank answer it
+is indistinguishable from a broken model — nothing errors and the log says nothing —
+so it is reported as the configuration problem it is.
+
+**An upgrade bundle now has to say which product it is.** The updater asked only
+whether a bundle was *newer* than the running version, and newer is not the same
+question as the same product: this repository carries tags from two earlier product
+lines it was forked from whose numbering runs **ahead** of the current one, so a
+Moorgate-era `v2.0.2` bundle outranks a running `v1.3.0` by semver and would have
+been accepted — replacing the whole stack with an older, different codebase. It was
+not hypothetical; that bundle was sitting in a deployment's updates volume.
+
+Every bundle now declares its product lineage, and the updater checks it **before**
+comparing versions — otherwise a foreign bundle with a high version number never
+reaches the check. A bundle that declares no lineage is refused as well: the ones
+that predate the field are exactly the ones from the other lines, and a bundle that
+cannot say what it is cannot be shown to be the same product. Rebuild it with a
+current `provctl release build`, which stamps it. No legitimate upgrade path
+narrows — a bundle installed onto this release must be newer than it, and so was
+built with the field.
+
+---
+
 ## v1.3.0 — 2026-09-13
 
 **Every Fleet identifier is now a Provenance one.** The product has been called
