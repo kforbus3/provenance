@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.30 — 2026-09-13
+
+**A deploy is narrowed using the compose file it is about to apply, and no longer
+fails on a flag that command does not take.** Seven rollouts failed with "unknown
+flag: --remove-orphans" — a flag that belongs to `up` and was being handed to
+`pull`, killing the deploy before a single image was fetched. It only ever fired
+on a whole-project pulling deploy, which is why it had gone unnoticed.
+
+The deploy should not have been whole-project. The service to narrow to was
+looked up from a running container matching the repository AND the tag being
+moved away from — and no container runs that tag when the file is pinned ahead of
+the container, which is the state every pinned-but-not-yet-recreated service is
+in. All seven found nothing, and nothing means the whole project. On a media
+stack that would have recreated the VPN container and, with it, every container
+sharing its network namespace, in order to update one service. The flag error is
+the only reason it did not; fixing the flag alone would have turned seven
+failures into one very large restart.
+
+The compose file is the better authority in any case — it is the thing about to
+be applied, and it names the tag the rollout is moving to. It is read anchored on
+the services block, so an anchor carrying an image line cannot be mistaken for a
+service; narrowing to the wrong name is worse than not narrowing, because it
+reports an update that never touched what it named. The whole project remains the
+fallback when neither the container nor the file can name the service.
+
+---
+
 ## v1.2.29 — 2026-09-13
 
 **An update the screen offers can now be started.** Rolling out one of the
