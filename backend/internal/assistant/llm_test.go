@@ -1,6 +1,9 @@
 package assistant
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A setting stored before `provider` existed has no opinion about the protocol —
 // that is not the operator choosing OpenAI. It must resolve to Ollama, which is
@@ -81,5 +84,43 @@ func TestProviderMatchingIsCaseInsensitive(t *testing.T) {
 func TestNoURLIsRefusedUpFront(t *testing.T) {
 	if _, err := newLLMClient(Settings{Provider: ProviderOpenAI}); err == nil {
 		t.Fatal("expected an error when no server URL is configured")
+	}
+}
+
+// On an OpenAI-compatible server the window is fixed at startup and no request can
+// raise it, so the number to compare against is the PROMPT FLOOR — the system prompt
+// plus every tool schema, before a single row of data. Below it the assistant cannot
+// work at all, and the operator needs to be told which knob to turn, on which side.
+//
+// This is the case the fleet actually hit: gemma4-26b served at 8192 against a floor
+// of ~10,157.
+func TestContextWarningNamesTheServerSideFixForOpenAI(t *testing.T) {
+	floor := promptFloorTokens()
+	if floor < 8192 {
+		t.Skipf("prompt floor %d no longer exceeds a typical 8192 window; rewrite this test", floor)
+	}
+	msg := openAIContextWarning("gemma4-26b", 8192, numCtx(0), floor)
+	if msg == "" {
+		t.Fatal("a served window below the prompt floor produced no warning")
+	}
+	for _, want := range []string{"8192", "ctx-size"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("warning does not mention %q: %s", want, msg)
+		}
+	}
+	// Above the floor but below what this deployment configured is a mismatch worth
+	// saying, but not the same failure — the assistant works, it just cannot have the
+	// window it asked for.
+	mismatch := openAIContextWarning("m", floor+1000, 32768, floor)
+	if mismatch == "" || strings.Contains(mismatch, "ctx-size") {
+		t.Errorf("a window above the floor should report a mismatch, not the floor failure: %q", mismatch)
+	}
+	// A window that satisfies both says nothing.
+	if got := openAIContextWarning("m", 32768, 32768, floor); got != "" {
+		t.Errorf("a sufficient window still warned: %q", got)
+	}
+	// Unknown (a model the server has not loaded) is not a complaint.
+	if got := openAIContextWarning("m", 0, 32768, floor); got != "" {
+		t.Errorf("an unknown window warned: %q", got)
 	}
 }

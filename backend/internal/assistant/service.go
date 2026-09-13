@@ -143,20 +143,8 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 		out["modelContextLimit"] = modelCtx
 		switch provider {
 		case ProviderOpenAI:
-			// On an OpenAI-compatible server the window is fixed when the server
-			// starts (llama.cpp's --ctx-size) and no request can ask for more, so the
-			// number to compare against is the PROMPT FLOOR, not the window this
-			// deployment would like. Below the floor the assistant cannot work at
-			// all: the instructions and tool schemas do not fit before a single row
-			// of data is added.
-			if modelCtx < floor {
-				out["contextWarning"] = fmt.Sprintf(
-					"%s is served with a %d-token context, but the assistant's instructions and tool definitions need about %d before any data. The server fixes this window at startup — raise it there (llama.cpp: --ctx-size / ctx-size in the model preset) or use a model served with a larger one. Answers will be wrong or empty until then.",
-					cfg.Model, modelCtx, floor)
-			} else if modelCtx < window {
-				out["contextWarning"] = fmt.Sprintf(
-					"%s is served with a %d-token context; Provenance is configured for %d. The server's value is the one that applies — it cannot be raised per request. Lower the configured window to match, or serve the model with a larger one.",
-					cfg.Model, modelCtx, window)
+			if w := openAIContextWarning(cfg.Model, modelCtx, window, floor); w != "" {
+				out["contextWarning"] = w
 			}
 		default:
 			if modelCtx < window {
@@ -2191,4 +2179,31 @@ func friendlyErr(err error) string {
 		msg = msg[:200]
 	}
 	return "The assistant could not reach the model or it failed: " + msg
+}
+
+// openAIContextWarning describes a served context window that cannot do the job.
+//
+// On an OpenAI-compatible server the window is fixed when the server starts
+// (llama.cpp's --ctx-size, or ctx-size in the model's preset) and no request can ask
+// for more, so there are two distinct problems and they need different advice:
+// below the PROMPT FLOOR the assistant cannot work at all, because the instructions
+// and tool schemas do not fit before a single row of data; above the floor but below
+// what this deployment configured, it works but cannot have the window it asked for.
+//
+// A zero served window means unknown — a model the server has not loaded yet
+// reports nothing — and is not a complaint.
+func openAIContextWarning(model string, served, configured, floor int) string {
+	switch {
+	case served <= 0:
+		return ""
+	case served < floor:
+		return fmt.Sprintf(
+			"%s is served with a %d-token context, but the assistant's instructions and tool definitions need about %d before any fleet data. An OpenAI-compatible server fixes this window at startup, so it cannot be raised from here — raise it on the server (llama.cpp: --ctx-size, or ctx-size in the model's preset) or use a model served with a larger window. Until then answers will be wrong or empty, because the instructions are what gets dropped.",
+			model, served, floor)
+	case served < configured:
+		return fmt.Sprintf(
+			"%s is served with a %d-token context; Provenance is configured for %d. The server's value is the one that applies — it cannot be raised per request. Lower the configured window to match, or serve the model with a larger one.",
+			model, served, configured)
+	}
+	return ""
 }
