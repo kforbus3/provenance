@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.32 — 2026-09-13
+
+**A rollout that wrote the compose file but never deployed it can now finish the
+job.** A rollout does two things: it rewrites the file to the target version,
+then applies it. One that did the first and failed the second — and was then
+resumed — went looking for the version it was moving away from, and by that point
+the file named the target, no container ran either version, and the version it
+was looking for existed nowhere. Seven of them reported "this host was not
+running any of the images by the time its turn came" about a host where every one
+of them still had a container to recreate. Nothing to match was being reported as
+nothing to do.
+
+An image now also applies when a compose file on the host names the target and no
+container is running it yet, which is exactly "the file landed, the deploy did
+not". Everything after that point already handled it — the stack is recognised,
+the service is read from the file, and the deploy is narrowed to it. Bounded so
+that once a container IS on the target the work counts as done, and a resumed
+rollout will not restart a service for nothing.
+
+---
+
 ## v1.2.31 — 2026-09-13
 
 **A check that found nothing newer no longer reads as a check that failed.**
