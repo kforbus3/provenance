@@ -5,6 +5,34 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.29 — 2026-09-13
+
+**An update the screen offers can now be started.** Rolling out one of the
+versions a compose file names was refused with "no host is running
+lscr.io/linuxserver/bazarr:v1.6.0-ls356" — for an update that had just been
+offered on the screen above it. Pinning a compose file to the version a container
+is already on recreates nothing, so the file names the version while the
+container still carries the floating tag, and the update therefore has a
+from-tag no container has. The rollout engine already understood that; the code
+that CREATES a rollout did not, so the two disagreed and the offer could never be
+taken. Both now apply the same rule, restricted to repositories the host actually
+runs so a compose file cannot start a service that is down.
+
+**Finished rollouts can be cleared.** A rollout that is over is history, not
+state, and an evening of single-image rollouts leaves thirty finished rows above
+the one actually running. A "Clear finished" button removes the completed,
+cancelled and halted ones together, in a single request rather than one per row.
+Paused rollouts are deliberately kept: a paused rollout looks inert and is not,
+because the hosts it has claimed are mid-update and resume is a button somebody
+may still intend to press. The containers a rollout updated are untouched — this
+clears the record, not the state.
+
+Also backfills the `declared` flag added in v1.2.27, which defaulted to false on
+upgrade and so hid exactly the rows an operator had upgraded to see until the
+next registry check happened to rewrite them.
+
+---
+
 ## v1.2.28 — 2026-09-13
 
 **A container recreated onto the version its compose file names is reported as
