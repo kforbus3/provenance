@@ -167,3 +167,33 @@ func TestAServiceNameCannotEscapeIntoTheScript(t *testing.T) {
 		t.Errorf("a service name reached the shell unquoted:\n%s", got)
 	}
 }
+
+// `docker compose pull` has no --remove-orphans flag. Passing it failed the
+// whole deploy with "unknown flag" and exit 16 before a single image was
+// fetched, and it only ever fired on a WHOLE-project pulling deploy — which is
+// why it survived until seven rollouts hit it at once.
+func TestPullIsNotGivenAnUpOnlyFlag(t *testing.T) {
+	script := RenderScript("/opt/stacks/app", "services:\n  web:\n    image: nginx:1.27\n", 3, true, "")
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, "pull") && strings.Contains(line, "--remove-orphans") {
+			t.Errorf("pull was given an up-only flag: %q", line)
+		}
+	}
+	// The up still removes orphans: a container the file no longer names must
+	// not be left running.
+	if !strings.Contains(script, "up -d --remove-orphans") {
+		t.Error("a whole-project up must still remove orphans")
+	}
+}
+
+func TestANarrowedPullNamesTheServiceAndNothingElse(t *testing.T) {
+	script := RenderScript("/opt/stacks/app",
+		"services:\n  web:\n    image: nginx:1.27\n  db:\n    image: postgres:16\n", 3, true, "web")
+	if !strings.Contains(script, "pull 'web'") {
+		t.Errorf("narrowed pull missing:\n%s", script)
+	}
+	if strings.Contains(script, "--remove-orphans") {
+		t.Error("a narrowed deploy must not remove orphans — it would delete the " +
+			"services it was told not to touch")
+	}
+}

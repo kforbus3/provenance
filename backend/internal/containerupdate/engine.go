@@ -498,7 +498,7 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// Narrowed to the service that runs this image. Bringing up the whole project
 	// would restart everything beside it — on a host running a model server and a
 	// vector database, updating curl would have restarted both.
-	service := e.composeServiceFor(ctx, r, hostID)
+	service := e.composeServiceFor(ctx, r, hostID, compose)
 	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, service); err != nil {
 		return fmt.Errorf("%s", trimOutput(err.Error()+"\n"+out))
 	}
@@ -518,17 +518,31 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 // fallback: a deploy that touches more than it needed is recoverable, and one
 // that touches nothing because a name was guessed wrong is an update reported as
 // applied that never happened.
-func (e *Engine) composeServiceFor(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) string {
+func (e *Engine) composeServiceFor(ctx context.Context, r store.UpdateRollout,
+	hostID uuid.UUID, compose string) string {
 	containers, err := e.store.HostContainers(ctx, hostID)
-	if err != nil {
-		return ""
-	}
-	for _, c := range containers {
-		if c.Repository == r.Repository && c.Tag == r.FromTag && c.ComposeService != "" {
-			return c.ComposeService
+	if err == nil {
+		for _, c := range containers {
+			if c.Repository == r.Repository && c.Tag == r.FromTag && c.ComposeService != "" {
+				return c.ComposeService
+			}
 		}
 	}
-	return ""
+
+	// No container is running the from-tag. That is not an edge case: it is the
+	// state every pinned-but-not-yet-recreated service is in, where the compose
+	// file names v1.6.0-ls356 and the container still carries :latest. Matching
+	// only on the running tag returned "" for all seven of them, and "" means the
+	// WHOLE project -- which on a media stack would have recreated gluetun and
+	// everything sharing its network namespace in order to update one service.
+	//
+	// The compose file being deployed is the better authority anyway: it is the
+	// thing about to be applied, and it names the tag this rollout is moving to
+	// or from.
+	if svc := composefile.ServiceFor(compose, r.Repository, r.ToTag); svc != "" {
+		return svc
+	}
+	return composefile.ServiceFor(compose, r.Repository, r.FromTag)
 }
 
 // adopt reads the host's compose file for this image and records it as a stack.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kforbus3/provenance/backend/internal/composefile"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -926,11 +927,15 @@ func TestTheRolloutDeploysOnlyTheServiceRunningTheImage(t *testing.T) {
 	}
 }
 
-func TestAnUnknownServiceFallsBackToTheWholeProject(t *testing.T) {
-	// Empty means the whole project, which is the old behaviour and the safe
-	// fallback: a deploy that touches more than it needed is recoverable, and one
-	// that touches nothing because a name was guessed wrong is an update reported
-	// as applied that never happened.
+func TestTheServiceIsReadFromTheComposeFileWhenTheContainerCannotSayIt(t *testing.T) {
+	// The container carries no compose service label, so there is nothing to
+	// match against. The FILE being deployed still names the service, and that
+	// is a better authority than a label anyway: it is the thing about to be
+	// applied.
+	//
+	// This used to fall back to the whole project. On a media stack that meant
+	// recreating gluetun -- and every container sharing its network namespace --
+	// in order to update one service.
 	f, _, ids := inPlaceFixture("1.24", "1.27")
 	f.containers[ids] = []models.Container{
 		{Name: "web", Repository: "nginx", Tag: "1.24", ComposeDir: "/opt/site"}, // no service
@@ -939,8 +944,24 @@ func TestAnUnknownServiceFallsBackToTheWholeProject(t *testing.T) {
 	newEngine(f, d, scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)).
 		Tick(context.Background())
 
-	if len(d.services) != 1 || d.services[0] != "" {
-		t.Errorf("services = %v, want one empty (the whole project)", d.services)
+	if len(d.services) != 1 {
+		t.Fatalf("deployed %d times, want 1 (services: %v)", len(d.services), d.services)
+	}
+	if d.services[0] != "web" {
+		t.Errorf("deployed %q, want \"web\" — the compose file names it, and the "+
+			"whole project must not be recreated to update one service", d.services[0])
+	}
+}
+
+func TestAnUnnameableServiceStillFallsBackToTheWholeProject(t *testing.T) {
+	// When neither the container nor the file can name the service -- an image
+	// built from a variable, say -- empty means the whole project. A deploy that
+	// touches more than it needed is recoverable; one that touches nothing
+	// because a name was guessed wrong is an update reported as applied that
+	// never happened.
+	if got := composefile.ServiceFor(
+		"services:\n  web:\n    image: ${NGINX_IMAGE}\n", "nginx", "1.27"); got != "" {
+		t.Errorf("got %q, want empty — nothing here names nginx:1.27", got)
 	}
 }
 

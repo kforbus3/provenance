@@ -79,3 +79,69 @@ func TestATrailingCommentIsNotPartOfTheReference(t *testing.T) {
 		t.Errorf("ref = %q, trailer = %q", ref, trailer)
 	}
 }
+
+// The engine used to find the service from a RUNNING container matching
+// repository:tag. That fails for exactly the update that matters most: a file
+// pinned to v1.6.0-ls356 whose container is still on :latest names no container
+// at that tag, so the lookup returned "" and the deploy fell back to the WHOLE
+// project — recreating gluetun and everything sharing its network namespace in
+// order to update one service.
+func TestServiceFor(t *testing.T) {
+	const compose = `services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.3
+    cap_add: ["NET_ADMIN"]
+  bazarr:
+    image: "lscr.io/linuxserver/bazarr:v1.6.0-ls356"   # pinned
+    network_mode: "service:gluetun"
+  pinned:
+    image: nginx:1.27-alpine@sha256:abc123
+  builder:
+    build:
+      context: .
+      image: not-a-service:1.0
+volumes:
+  media:
+networks:
+  default:
+`
+	cases := map[string]string{
+		"qmcgaw/gluetun:v3.41.3":                  "gluetun",
+		"lscr.io/linuxserver/bazarr:v1.6.0-ls356": "bazarr",
+		"nginx:1.27-alpine":                       "pinned",
+		"lscr.io/linuxserver/bazarr:latest":       "",
+		"nothing/here:1.0":                        "",
+	}
+	for ref, want := range cases {
+		repo, tag, _ := SplitRef(ref)
+		if got := ServiceFor(compose, repo, tag); got != want {
+			t.Errorf("ServiceFor(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+func TestServiceForHandlesFourSpaceIndentation(t *testing.T) {
+	const compose = `services:
+    web:
+        image: nginx:1.27
+    db:
+        image: postgres:16
+`
+	if got := ServiceFor(compose, "postgres", "16"); got != "db" {
+		t.Errorf("got %q, want db", got)
+	}
+}
+
+func TestServiceForIgnoresAnImageUnderATopLevelKey(t *testing.T) {
+	// Narrowing a deploy to the wrong name is worse than not narrowing: it
+	// reports an update that never touched the service it named.
+	const compose = `x-shared: &shared
+  image: redis:7
+services:
+  cache:
+    image: redis:8
+`
+	if got := ServiceFor(compose, "redis", "8"); got != "cache" {
+		t.Errorf("got %q, want cache", got)
+	}
+}

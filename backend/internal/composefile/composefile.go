@@ -52,6 +52,76 @@ func Images(compose string) []Ref {
 	return out
 }
 
+// ServiceFor returns the name of the service whose image is repo:tag, or "" when
+// the file does not name it.
+//
+// The compose file is the right place to ask. The engine used to find the
+// service from a RUNNING container matching repository:tag -- which fails for
+// exactly the update that matters most: a file pinned to v1.6.0-ls356 whose
+// container is still on :latest names no container at that tag, so the lookup
+// returned "" and the deploy fell back to the whole project. On a media stack
+// that meant recreating gluetun and everything sharing its network namespace in
+// order to update one service.
+//
+// A service key is the last key shallower than the "image:" line, which holds
+// for two-space and four-space files alike without assuming either.
+func ServiceFor(compose, repo, tag string) string {
+	want := repo + ":" + tag
+	var inServices bool
+	servicesIndent, serviceIndent := 0, -1
+	service := ""
+
+	for _, line := range strings.Split(compose, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(trimmed)
+
+		// The services block, found rather than assumed: an anchor such as
+		// "x-shared: &shared" carrying an image: line lives outside it, and
+		// narrowing a deploy to the wrong name is worse than not narrowing at
+		// all -- it reports an update that never touched the service it named.
+		if !inServices {
+			if strings.TrimRight(trimmed, " \t") == "services:" {
+				inServices, servicesIndent = true, indent
+			}
+			continue
+		}
+		if indent <= servicesIndent {
+			break // out of the block: "volumes:", "networks:"
+		}
+
+		if _, value, ok := SplitImageLine(line); ok {
+			if service == "" || indent <= serviceIndent {
+				continue
+			}
+			ref, _ := SplitTrailingComment(value)
+			_, bare := Unquote(strings.TrimSpace(ref))
+			if at := strings.Index(bare, "@"); at >= 0 {
+				bare = bare[:at]
+			}
+			if strings.TrimSpace(bare) == want {
+				return service
+			}
+			continue
+		}
+
+		// A service key is one at the block's first level of indentation.
+		key, rest, ok := strings.Cut(trimmed, ":")
+		if !ok || strings.TrimSpace(rest) != "" || key == "" {
+			continue
+		}
+		if serviceIndent < 0 {
+			serviceIndent = indent
+		}
+		if indent == serviceIndent {
+			service = key
+		}
+	}
+	return ""
+}
+
 // SplitImageLine splits a compose "image:" line into the part up to and
 // including the key with its following whitespace, and the value after it.
 func SplitImageLine(line string) (key, value string, ok bool) {

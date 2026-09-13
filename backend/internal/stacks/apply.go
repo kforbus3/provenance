@@ -129,8 +129,16 @@ func RenderScript(dir, compose string, revision int, pull bool, service string) 
 			target += " " + shellQuote(dep)
 		}
 	}
+	// `pull` takes services, never --remove-orphans: that flag is an `up`
+	// concept, and passing it here failed the whole deploy with "unknown flag"
+	// and exit 16 before a single image was fetched. It only ever fired on a
+	// WHOLE-project pulling deploy, which is why it survived so long.
+	pullTarget := target
+	if service == "" {
+		pullTarget = ""
+	}
 	if pull {
-		b.WriteString("$_c pull" + target + "\n")
+		b.WriteString("$_c pull" + pullTarget + "\n")
 	}
 	b.WriteString("$_c up -d" + target + "\n")
 	return b.String()
