@@ -19,7 +19,15 @@ type ImageUpdate struct {
 	// Declared marks a tag that came from a compose file rather than a running
 	// container. The two need different treatment: only the declared row can be
 	// applied when a host's compose has moved past what it is running.
-	Declared  bool      `json:"declared"`
+	Declared bool `json:"declared"`
+	// Status is the verdict, as a value rather than as prose.
+	//
+	// The client used to infer one from Note. "nothing newer with the same shape
+	// as 10.11.11; the repository carries other version tags that cannot be
+	// ordered against it" means up to date, and rendered identically to a check
+	// that failed -- so twenty-two healthy images read as broken. Note stays as
+	// the explanation a person reads; this is what code reads.
+	Status    string    `json:"status,omitempty"`
 	Digest    string    `json:"digest,omitempty"`
 	LatestTag string    `json:"latestTag,omitempty"`
 	Note      string    `json:"note,omitempty"`
@@ -90,23 +98,24 @@ func (s *Store) TrackedImages(ctx context.Context) ([]TrackedImage, error) {
 func (s *Store) UpsertImageUpdate(ctx context.Context, in ImageUpdate) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO container_image_updates
-		    (repository, tag, current_digest, latest_tag, note, error, declared, checked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		    (repository, tag, current_digest, latest_tag, note, error, declared, status, checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 		ON CONFLICT (repository, tag) DO UPDATE SET
 		    current_digest = EXCLUDED.current_digest,
 		    latest_tag     = EXCLUDED.latest_tag,
 		    note           = EXCLUDED.note,
 		    error          = EXCLUDED.error,
 		    declared       = EXCLUDED.declared,
+		    status         = EXCLUDED.status,
 		    checked_at     = now()`,
-		in.Repository, in.Tag, in.Digest, in.LatestTag, in.Note, in.Error, in.Declared)
+		in.Repository, in.Tag, in.Digest, in.LatestTag, in.Note, in.Error, in.Declared, in.Status)
 	return err
 }
 
 // ImageUpdates returns every recorded check.
 func (s *Store) ImageUpdates(ctx context.Context) ([]ImageUpdate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT repository, tag, current_digest, latest_tag, note, error, declared, checked_at
+		SELECT repository, tag, current_digest, latest_tag, note, error, declared, status, checked_at
 		FROM container_image_updates
 		ORDER BY repository, tag`)
 	if err != nil {
@@ -117,7 +126,7 @@ func (s *Store) ImageUpdates(ctx context.Context) ([]ImageUpdate, error) {
 	for rows.Next() {
 		var u ImageUpdate
 		if err := rows.Scan(&u.Repository, &u.Tag, &u.Digest, &u.LatestTag,
-			&u.Note, &u.Error, &u.Declared, &u.CheckedAt); err != nil {
+			&u.Note, &u.Error, &u.Declared, &u.Status, &u.CheckedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -443,4 +452,56 @@ func (s *Store) LastCheckedAt(ctx context.Context) (map[string]time.Time, error)
 		out[repo+":"+tag] = at
 	}
 	return out, rows.Err()
+}
+
+// Image check verdicts, as values rather than prose. See ImageUpdate.Status.
+const (
+	ImageStatusUpdate      = "update"      // a newer tag of the same shape exists
+	ImageStatusMoved       = "moved"       // same tag, different bytes
+	ImageStatusCurrent     = "current"     // checked; nothing newer of the same shape
+	ImageStatusUnorderable = "unorderable" // no tag in the repository can be ordered against this one
+	ImageStatusLocal       = "local"       // built on the host; never in a registry
+	ImageStatusUnavailable = "unavailable" // the registry would not answer in full
+)
+
+// CachedTags returns a repository's cached tag listing when it is fresh enough.
+func (s *Store) CachedTags(ctx context.Context, repo string, maxAge time.Duration) ([]string, bool, bool) {
+	var raw []byte
+	var complete bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT tags, complete FROM registry_tag_cache
+		WHERE repository = $1 AND fetched_at > now() - $2::interval`,
+		repo, maxAge.String()).Scan(&raw, &complete)
+	if err != nil {
+		return nil, false, false
+	}
+	var tags []string
+	if json.Unmarshal(raw, &tags) != nil {
+		return nil, false, false
+	}
+	return tags, complete, true
+}
+
+// AnyCachedTags returns a repository's cached listing at any age.
+//
+// For a registry that has just refused to answer: a stale list beats no list,
+// and "here is what was published as of this morning" is a better answer than
+// "could not check" against an image that is fine.
+func (s *Store) AnyCachedTags(ctx context.Context, repo string) ([]string, bool, bool) {
+	return s.CachedTags(ctx, repo, 365*24*time.Hour)
+}
+
+// PutCachedTags records a repository's tag listing.
+func (s *Store) PutCachedTags(ctx context.Context, repo string, tags []string, complete bool) error {
+	raw, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO registry_tag_cache (repository, tags, complete, fetched_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (repository) DO UPDATE SET
+		    tags = EXCLUDED.tags, complete = EXCLUDED.complete, fetched_at = now()`,
+		repo, raw, complete)
+	return err
 }

@@ -31,7 +31,7 @@ const errMsg = (e: unknown, fallback: string) =>
 // digest, and showing both as separate badges reads as two problems.
 type Verdict =
   | "error" | "newer" | "moved" | "current" | "unknown"
-  | "local" | "gone" | "self" | "unchecked" | "superseded";
+  | "local" | "gone" | "self" | "unchecked" | "superseded" | "unavailable";
 
 // hostsOf normalises the hosts list.
 //
@@ -71,13 +71,24 @@ export function verdictOf(u: ImageUpdate, all: ImageUpdate[] = []): Verdict {
   // Built on the host and never in a registry. Not a problem and not a failure —
   // there is simply nothing to compare against, and showing it as either would
   // put this product's own containers permanently in the needs-attention list.
-  if (u.note?.startsWith("built locally")) return "local";
   if (supersededBy(u, all)) return "superseded";
+
+  // The backend's own verdict, when it has one. Everything below is the
+  // fallback for rows written before `status` existed — inferring a verdict
+  // from prose, which is how twenty-two up-to-date images came to read
+  // "cannot compare".
+  switch (u.status) {
+    case "local": return "local";
+    case "update": return "newer";
+    case "moved": return "moved";
+    case "unorderable": return "unknown";
+    case "unavailable": return "unavailable";
+    case "current": return "current";
+  }
+
+  if (u.note?.startsWith("built locally")) return "local";
   if (u.latestTag) return "newer";
   if (hostsOf(u).some((h) => h.stale)) return "moved";
-  // A note with no newer tag means the registry answered but its tags could not
-  // be ordered confidently. That is NOT "up to date" — saying so would be a
-  // guess presented as a fact.
   if (u.note && !u.latestTag) return "unknown";
   return "current";
 }
@@ -109,6 +120,12 @@ function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
       return (
         <Tooltip title={u.note ?? ""}>
           <Chip label="cannot compare" size="small" variant="outlined" />
+        </Tooltip>
+      );
+    case "unavailable":
+      return (
+        <Tooltip title={u.note ?? "The registry would not list this repository's tags — often its own rate limit. The last known listing is used when there is one, and the next check retries."}>
+          <Chip label="registry unavailable" size="small" color="warning" variant="outlined" />
         </Tooltip>
       );
     case "unchecked":
@@ -285,8 +302,8 @@ export function ContainerUpdatesTab() {
     // not a decision, but it is the row an operator will look for after
     // wondering why a rollout of the tag above it changed nothing.
     const rank: Record<Verdict, number> = {
-      newer: 0, moved: 1, superseded: 2, unknown: 3, error: 4,
-      unchecked: 5, current: 6, local: 7, self: 8, gone: 9,
+      newer: 0, moved: 1, superseded: 2, unavailable: 3, unknown: 4, error: 5,
+      unchecked: 6, current: 7, local: 8, self: 9, gone: 10,
     };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a, updates)] - rank[verdictOf(b, updates)] ||

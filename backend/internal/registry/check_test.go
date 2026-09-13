@@ -16,14 +16,17 @@ import (
 )
 
 type fakeStore struct {
-	tracked     []store.TrackedImage
-	stale       []store.TrackedImage
-	composes    []string
-	lastChecked map[string]time.Time
-	clock       time.Time
-	saved       []store.ImageUpdate
-	pruned      [][]store.TrackedImage
-	maxAgeIn    time.Duration
+	tracked      []store.TrackedImage
+	stale        []store.TrackedImage
+	composes     []string
+	lastChecked  map[string]time.Time
+	clock        time.Time
+	tagCache     map[string][]string
+	tagCacheAny  map[string][]string
+	tagCachePuts map[string]int
+	saved        []store.ImageUpdate
+	pruned       [][]store.TrackedImage
+	maxAgeIn     time.Duration
 }
 
 func (f *fakeStore) EnabledStackComposes(context.Context) ([]string, error) {
@@ -32,6 +35,24 @@ func (f *fakeStore) EnabledStackComposes(context.Context) ([]string, error) {
 
 func (f *fakeStore) LastCheckedAt(context.Context) (map[string]time.Time, error) {
 	return f.lastChecked, nil
+}
+
+func (f *fakeStore) CachedTags(_ context.Context, repo string, _ time.Duration) ([]string, bool, bool) {
+	t, ok := f.tagCache[repo]
+	return t, true, ok
+}
+
+func (f *fakeStore) AnyCachedTags(_ context.Context, repo string) ([]string, bool, bool) {
+	t, ok := f.tagCacheAny[repo]
+	return t, true, ok
+}
+
+func (f *fakeStore) PutCachedTags(_ context.Context, repo string, tags []string, _ bool) error {
+	if f.tagCachePuts == nil {
+		f.tagCachePuts = map[string]int{}
+	}
+	f.tagCachePuts[repo]++
+	return nil
 }
 
 func (f *fakeStore) TrackedImages(context.Context) ([]store.TrackedImage, error) {
@@ -612,5 +633,104 @@ func TestTheScheduledSweepStillRespectsTheBatchCap(t *testing.T) {
 	checked, _ := newChecker(t, st, srv).Check(context.Background())
 	if checked != checkBatch {
 		t.Errorf("a scheduled sweep checked %d, want the cap of %d", checked, checkBatch)
+	}
+}
+
+// Twenty-two healthy images read as "cannot compare" because the client was
+// inferring a verdict from the NOTE, and "nothing newer with the same shape as
+// 10.11.11; the repository carries other version tags that cannot be ordered
+// against it" is prose that means "up to date". Prose is not an API — that text
+// changed twice in one evening.
+func TestCheckedAndCurrentIsNotTheSameAsCouldNotCheck(t *testing.T) {
+	// Versions of two different shapes: 1.0.0 is current, and the repository
+	// also carries dated tags that cannot be ordered against it.
+	srv := stubRegistry(t, []string{"1.0.0", "2026.01.01", "latest"},
+		map[string]string{"1.0.0": "sha256:aaa"})
+	repo := repoAt(srv, "team/app")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "1.0.0", Digest: "sha256:aaa"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status != store.ImageStatusCurrent {
+		t.Errorf("status = %q, want %q — it was checked and nothing newer of the "+
+			"same shape exists; note was %q", got.Status, store.ImageStatusCurrent, got.Note)
+	}
+}
+
+func TestARepositoryWithNothingComparableSaysSo(t *testing.T) {
+	// Genuinely different: no tag here shares a shape with the running one.
+	srv := stubRegistry(t, []string{"alpha", "2026.01.01"},
+		map[string]string{"1.0.0-rc1": "sha256:aaa"})
+	repo := repoAt(srv, "team/app")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "1.0.0-rc1", Digest: "sha256:aaa"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	if got := st.saved[0].Status; got != store.ImageStatusUnorderable {
+		t.Errorf("status = %q, want %q (note %q)", got, store.ImageStatusUnorderable, st.saved[0].Note)
+	}
+}
+
+func TestATagListingIsReusedRatherThanRefetched(t *testing.T) {
+	// Following pagination made a listing correct and made it cost up to 32
+	// requests per repository. A forced sweep is then hundreds of requests to one
+	// registry, and pressing the button twice in an hour rate-limits the
+	// instance — which reports as "could not list tags" against images that are
+	// fine.
+	srv := stubRegistry(t, []string{"1.0.0", "1.1.0"}, map[string]string{"1.0.0": "sha256:aaa"})
+	repo := repoAt(srv, "team/app")
+	st := &fakeStore{
+		tracked:  []store.TrackedImage{{Repository: repo, Tag: "1.0.0", Digest: "sha256:aaa"}},
+		tagCache: map[string][]string{repo: {"1.0.0", "1.1.0", "1.2.0"}},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	// The cached listing carries 1.2.0, which the live stub does not — so the
+	// answer proves the cache was used rather than the registry.
+	if got := st.saved[0].LatestTag; got != "1.2.0" {
+		t.Errorf("latest = %q, want 1.2.0 from the cached listing", got)
+	}
+	if st.tagCachePuts[repo] != 0 {
+		t.Errorf("re-fetched and re-cached a listing that was still fresh")
+	}
+}
+
+func TestARateLimitedListingFallsBackToWhatIsKnown(t *testing.T) {
+	// A stale list beats no list: "what was published as of this morning" is a
+	// better answer than "could not check" against an image that is fine.
+	srv := stubRegistry(t, nil, map[string]string{"1.0.0": "sha256:aaa"}) // tags 403
+	repo := repoAt(srv, "team/app")
+	st := &fakeStore{
+		tracked:     []store.TrackedImage{{Repository: repo, Tag: "1.0.0", Digest: "sha256:aaa"}},
+		tagCacheAny: map[string][]string{repo: {"1.0.0", "1.1.0"}},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	if got := st.saved[0].LatestTag; got != "1.1.0" {
+		t.Errorf("latest = %q, want 1.1.0 from the last known listing (note %q)",
+			got, st.saved[0].Note)
+	}
+}
+
+// The digest carried on a declared row is the RUNNING container's, because it is
+// the only one the fleet has. "This host pulled something else" is a claim about
+// a tag the host has never pulled — and a rate-limited registry put that
+// sentence on every declared row at once.
+func TestARateLimitedDeclaredRowMakesNoClaimAboutWhatWasPulled(t *testing.T) {
+	srv := stubRegistry(t, nil, map[string]string{"v1.6.0-ls363": "sha256:different"})
+	repo := repoAt(srv, "linuxserver/bazarr")
+	st := &fakeStore{
+		tracked: []store.TrackedImage{{
+			Repository: repo, Tag: "v1.6.0-ls363", Digest: "sha256:running",
+			Declared: true, RunningTag: "latest",
+		}},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	if got := st.saved[0].Note; strings.Contains(got, "pulled") {
+		t.Errorf("a declared row claims something about what the host pulled: %q", got)
 	}
 }

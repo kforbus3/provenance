@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kforbus3/provenance/backend/internal/composefile"
@@ -26,6 +27,21 @@ const checkMaxAge = 12 * time.Hour
 // halfway and leaves the table half-updated with errors that look like outages.
 const checkBatch = 40
 
+// How long a tag listing stays good.
+//
+// Following pagination made a listing correct and made it cost 10-32 requests
+// per repository instead of one -- lscr.io/linuxserver/jackett is 31,667 tags
+// over 32 pages. A forced sweep is then several hundred requests to one
+// registry, and pressing the button a few times in an hour rate-limits the
+// instance, which reports as "could not list tags" against images that are
+// perfectly fine.
+//
+// A maintainer publishing a release is not on the timescale of somebody pressing
+// a button twice. An hour is short enough that a check made BECAUSE something
+// was just published still sees it, and long enough that repeated presses cost
+// one listing rather than one each.
+const tagListMaxAge = time.Hour
+
 // Store is the slice of the store this package needs. An interface rather than
 // *store.Store so the check loop -- which decides what an operator is told about
 // every image the fleet runs -- can be tested against a fake instead of only
@@ -34,6 +50,9 @@ type Store interface {
 	TrackedImages(ctx context.Context) ([]store.TrackedImage, error)
 	EnabledStackComposes(ctx context.Context) ([]string, error)
 	LastCheckedAt(ctx context.Context) (map[string]time.Time, error)
+	CachedTags(ctx context.Context, repo string, maxAge time.Duration) ([]string, bool, bool)
+	AnyCachedTags(ctx context.Context, repo string) ([]string, bool, bool)
+	PutCachedTags(ctx context.Context, repo string, tags []string, complete bool) error
 	StaleImageChecks(ctx context.Context, imgs []store.TrackedImage, maxAge time.Duration) ([]store.TrackedImage, error)
 	UpsertImageUpdate(ctx context.Context, in store.ImageUpdate) error
 	PruneImageUpdates(ctx context.Context, keep []store.TrackedImage) error
@@ -195,6 +214,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	// The digest is the MAX across every host running the image, so this is only
 	// reached when NO host has one.
 	if img.Digest == "" {
+		rec.Status = store.ImageStatusLocal
 		rec.Note = "built locally — no registry digest on any host running it, so there is nothing to compare against"
 		return rec
 	}
@@ -213,23 +233,34 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	// the update.
 	if !looksVersioned(img.Tag) {
 		if img.Declared {
+			rec.Status = store.ImageStatusCurrent
 			rec.Note = drifted(img)
 			return rec
 		}
 		if img.Digest != "" && digest != img.Digest {
+			rec.Status = store.ImageStatusMoved
 			rec.Note = "tag moved: this host is running an older build of " + img.Tag
+			return rec
 		}
+		rec.Status = store.ImageStatusCurrent
 		return rec
 	}
 
-	tags, complete, err := c.client.Tags(ctx, img.Repository)
+	tags, complete, err := c.tags(ctx, img.Repository)
 	if err != nil {
 		// The digest answer is still good and worth keeping. Record the tag
 		// listing failure as a note rather than an error so the row does not read
 		// as "this image could not be checked at all" -- some registries allow
 		// manifest reads but not catalog listing.
+		rec.Status = store.ImageStatusUnavailable
 		rec.Note = "could not list tags: " + truncate(err.Error(), 200)
-		if img.Digest != "" && digest != img.Digest {
+		// NOT for a declared row. The digest carried on one of those is the
+		// RUNNING container's, because it is the only one the fleet has -- so
+		// "this host pulled something else" is a claim about a tag the host has
+		// never pulled. The same guard exists below for the ordinary path; it was
+		// missing here, and a rate-limited registry put that sentence on every
+		// declared row.
+		if !img.Declared && img.Digest != "" && digest != img.Digest {
 			rec.Note = "tag moved since this host pulled it; " + rec.Note
 		}
 		return rec
@@ -238,6 +269,17 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	newest, reason := Newest(img.Tag, tags)
 	rec.LatestTag = newest
 	rec.Note = reason
+	switch {
+	case newest != "":
+		rec.Status = store.ImageStatusUpdate
+	case strings.HasPrefix(reason, "no tag in this repository"):
+		rec.Status = store.ImageStatusUnorderable
+	default:
+		// Checked, and nothing newer of the same shape. That is "up to date",
+		// even when the note goes on to say other shapes exist -- which it does
+		// for most of a fleet, and which used to render as "cannot compare".
+		rec.Status = store.ImageStatusCurrent
+	}
 	// A truncated listing can support "nothing newer was FOUND", never "nothing
 	// newer exists". Saying the second about the first is how an operator is told
 	// an image is current when the list never reached the present.
@@ -263,6 +305,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		return rec
 	}
 	if newest == "" && img.Digest != "" && digest != img.Digest {
+		rec.Status = store.ImageStatusMoved
 		// No newer version tag, but the tag this host runs does not point where
 		// the host's copy came from. A rebuild of the same version -- a base
 		// image security update, most often -- looks exactly like this, and it is
@@ -372,4 +415,29 @@ func leastRecentlyCheckedFirst(imgs []store.TrackedImage, last map[string]time.T
 			Before(last[out[j].Repository+":"+out[j].Tag])
 	})
 	return out
+}
+
+// tags lists a repository, reusing a recent listing rather than re-fetching it.
+//
+// See tagListMaxAge. On a refusal -- a rate limit, most often, and most often
+// caused by this very sweep -- a cached listing at ANY age beats none: "what was
+// published as of this morning" is a better answer than "could not check"
+// against an image that is fine.
+func (c *Checker) tags(ctx context.Context, repo string) ([]string, bool, error) {
+	if tags, complete, ok := c.store.CachedTags(ctx, repo, tagListMaxAge); ok {
+		return tags, complete, nil
+	}
+	tags, complete, err := c.client.Tags(ctx, repo)
+	if err != nil {
+		if cached, ccomplete, ok := c.store.AnyCachedTags(ctx, repo); ok {
+			c.log.Info("registry would not list tags; using the last listing",
+				"repository", repo, "err", err)
+			return cached, ccomplete, nil
+		}
+		return nil, false, err
+	}
+	if err := c.store.PutCachedTags(ctx, repo, tags, complete); err != nil {
+		c.log.Warn("caching tag listing", "repository", repo, "err", err)
+	}
+	return tags, complete, nil
 }

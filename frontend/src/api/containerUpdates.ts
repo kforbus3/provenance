@@ -34,6 +34,12 @@ export interface ImageUpdate {
   // whose compose names a version can only skip, while a rollout of the declared
   // row rewrites the file and recreates the container.
   declared?: boolean;
+  // The verdict, as a value. The client used to infer one from `note`, and
+  // "nothing newer with the same shape as 10.11.11; the repository carries other
+  // version tags that cannot be ordered against it" — which means up to date —
+  // rendered identically to a check that failed. Empty on rows written before
+  // this existed; the note is the fallback for those.
+  status?: "update" | "moved" | "current" | "unorderable" | "local" | "unavailable" | "";
   // What the tag points at in the registry now.
   digest?: string;
   // A newer tag, when one was found AND could be ordered confidently. Empty is a
