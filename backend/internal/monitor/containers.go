@@ -48,6 +48,15 @@ const (
 // tell which, so the probe now reports what it actually found — the socket, its
 // group, and the daemon's stderr — rather than leaving that to be worked out
 // host by host over SSH.
+// ContainersScript is the collection script, exported so work that has just
+// CHANGED a host's containers can re-read them immediately instead of waiting
+// for the next sweep.
+//
+// One script and one parser, deliberately. A second implementation drifts from
+// this one, and the two would disagree about what a host is running -- which is
+// the question this whole feature turns on.
+const ContainersScript = containersScript
+
 const containersScript = `
 _detail=""
 _sock=/var/run/docker.sock
@@ -132,6 +141,11 @@ func collectContainers(conn *sshgw.Conn, inv *models.HostInventory) {
 
 // parseContainers turns the script's output into a list, a reason, and the
 // detail behind that reason.
+// ParseContainers reads what ContainersScript produced. See ContainersScript.
+func ParseContainers(out string) ([]models.Container, string, string) {
+	return parseContainers(out)
+}
+
 func parseContainers(out string) ([]models.Container, string, string) {
 	switch {
 	case strings.Contains(out, "::NORUNTIME::"):

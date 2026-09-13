@@ -36,6 +36,7 @@ type fakeStore struct {
 	rolloutSet []string // "rollout:state:reason"
 	canaryAt   *time.Time
 	claimFail  map[uuid.UUID]bool
+	refreshed  []uuid.UUID // hosts whose containers were re-read after a change
 }
 
 func (f *fakeStore) ActiveUpdateRollouts(context.Context) ([]store.UpdateRollout, error) {
@@ -156,6 +157,17 @@ func (f *fakeStore) HostContainers(_ context.Context, hostID uuid.UUID) ([]model
 	return f.containers[hostID], nil
 }
 
+// Like the real store: what a host is running is re-read straight after it is
+// changed, so the screens driven by the inventory do not describe the containers
+// that were there before the update.
+func (f *fakeStore) UpdateHostContainers(_ context.Context, hostID uuid.UUID, inv models.HostInventory) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containers[hostID] = inv.Containers
+	f.refreshed = append(f.refreshed, hostID)
+	return nil
+}
+
 func (f *fakeStore) GetHost(_ context.Context, id uuid.UUID) (*models.Host, error) {
 	return &models.Host{ID: id, Hostname: "h-" + id.String()[:4]}, nil
 }
@@ -191,6 +203,9 @@ type fakeRunner struct {
 	// kinds — read back what is running, read a compose file to adopt, pull and
 	// recreate — and one fixed string for all of them tests none of them properly.
 	respond func(script string) (string, int, bool)
+	// What the container-collection script returns, for a test that exercises the
+	// refresh after a deploy.
+	containersOut string
 }
 
 func (r *fakeRunner) RunScript(_ context.Context, script string, _ *models.Host) (string, int, bool) {
@@ -199,6 +214,19 @@ func (r *fakeRunner) RunScript(_ context.Context, script string, _ *models.Host)
 	r.calls++
 	if r.respond != nil {
 		return r.respond(script)
+	}
+	// The container-collection script, which this fake cannot answer faithfully.
+	//
+	// Returning the verify output for it -- which is what a single fixed answer
+	// does -- would have the engine parse a verification as a container list and
+	// overwrite the fixture with fiction. Saying "no runtime here" is the honest
+	// answer from a fake that does not model it, and the refresh then correctly
+	// leaves the previous list alone. A test that cares sets containersOut.
+	if strings.Contains(script, "::IMAGES::") {
+		if r.containersOut != "" {
+			return r.containersOut, 0, false
+		}
+		return "::NORUNTIME::not modelled by this fake", 0, false
 	}
 	if r.failed {
 		return r.out, 1, true
@@ -1382,5 +1410,63 @@ func TestAContainerAlreadyOnTheTargetIsNotRedeployed(t *testing.T) {
 	}
 	if got := f.hosts[rid][0].State; got != store.UpdateHostSkipped {
 		t.Errorf("state = %q, want skipped", got)
+	}
+}
+
+// After an update lands, the screens that describe what a host runs must
+// describe what it runs NOW.
+//
+// Containers are collected on a ten-minute cadence, so for up to ten minutes
+// after a rollout the updates list still described the containers that were
+// there before it — an update that had just been applied went on reading
+// "update available", which is indistinguishable from one that failed.
+func TestAnAppliedUpdateRefreshesWhatTheHostIsRunning(t *testing.T) {
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.rollouts[0].FromTag, f.rollouts[0].ToTag = "latest", "latest"
+	f.stacks[ids[0]] = nil // no managed stack: the in-place path
+	f.containers[ids[0]][0].Tag = "latest"
+	f.containers[ids[0]][0].Image = "nginx:latest"
+	f.containers[ids[0]][0].ComposeDir = "/opt/site"
+	f.containers[ids[0]][0].ComposeService = "web"
+
+	run := &fakeRunner{
+		out: "::OK::\nnginx:1.27\tnginx@sha256:new\n",
+		// What the host reports once the update has landed.
+		containersOut: "::OK::\nweb\tnginx:1.27\trunning\tabc123\tsite\tweb\t/opt/site\n" +
+			"::IMAGES::\nnginx:1.27\tnginx@sha256:new\n",
+	}
+	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
+
+	if len(f.refreshed) == 0 {
+		t.Fatal("the host's containers were not re-read after the update")
+	}
+	if f.refreshed[0] != ids[0] {
+		t.Errorf("refreshed %v, want the host that was updated", f.refreshed)
+	}
+}
+
+func TestAnUnreadableRefreshLeavesThePreviousListAlone(t *testing.T) {
+	// A script that dies, or a runtime that cannot be reached, parses to an EMPTY
+	// list with a reason. Writing that would blank the host's containers and turn
+	// a momentary hiccup into "this host runs nothing" across every screen.
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.rollouts[0].FromTag, f.rollouts[0].ToTag = "latest", "latest"
+	f.stacks[ids[0]] = nil
+	f.containers[ids[0]][0].Tag = "latest"
+	f.containers[ids[0]][0].Image = "nginx:latest"
+	f.containers[ids[0]][0].ComposeDir = "/opt/site"
+	f.containers[ids[0]][0].ComposeService = "web"
+
+	run := &fakeRunner{
+		out:           "::OK::\nnginx:1.27\tnginx@sha256:new\n",
+		containersOut: "::NOACCESS::the monitor account cannot reach the socket",
+	}
+	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
+
+	if len(f.refreshed) != 0 {
+		t.Errorf("blanked a host's container list from a failed collection: %v", f.refreshed)
+	}
+	if len(f.containers[ids[0]]) == 0 {
+		t.Error("the previous container list was lost")
 	}
 }

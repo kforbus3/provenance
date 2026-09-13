@@ -15,6 +15,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/composefile"
 	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/monitor"
 	"github.com/kforbus3/provenance/backend/internal/pacing"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -31,6 +32,7 @@ type Store interface {
 	UpsertStack(ctx context.Context, in store.StackInput) (*store.ContainerStack, error)
 	GetHost(ctx context.Context, id uuid.UUID) (*models.Host, error)
 	HostContainers(ctx context.Context, hostID uuid.UUID) ([]models.Container, error)
+	UpdateHostContainers(ctx context.Context, hostID uuid.UUID, inv models.HostInventory) error
 	RolloutImages(ctx context.Context, id uuid.UUID) ([]store.RolloutImage, error)
 	GetSetting(ctx context.Context, key string) (json.RawMessage, error)
 }
@@ -679,6 +681,7 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	e.log.Info("container updated in place",
 		"host", h.Hostname, "project", match.ComposeProject,
 		"service", match.ComposeService, "dir", match.ComposeDir)
+	e.refreshContainers(ctx, h)
 	return true, nil
 }
 
@@ -861,4 +864,42 @@ func shortDigest(d string) string {
 		return "(unknown)"
 	}
 	return d
+}
+
+// refreshContainers re-reads what a host is running, right after changing it.
+//
+// The same script and parser the monitor uses; see monitor.ContainersScript.
+// Containers are otherwise collected on a ten-minute cadence, so for up to ten
+// minutes after a rollout the updates screen still described what was there
+// BEFORE it -- an update that had just been applied went on reading "update
+// available", which is indistinguishable from one that failed.
+//
+// Best effort, and after the fact: the deploy has happened and been recorded, so
+// a failure here costs freshness and nothing else.
+func (e *Engine) refreshContainers(ctx context.Context, h *models.Host) {
+	out, _, failed := e.run.RunScript(ctx, hostexec.Privileged(monitor.ContainersScript), h)
+	if failed {
+		e.log.Warn("refreshing containers after an update", "host", h.Hostname)
+		return
+	}
+	containers, status, detail := monitor.ParseContainers(out)
+	// Only a collection that actually ASKED and got an answer may replace the
+	// list. A script that died, or a host whose runtime is unreachable, parses to
+	// an empty list with a reason -- and writing that would blank the host's
+	// containers, turning a momentary hiccup into "this host runs nothing" across
+	// every screen. The monitor's own sweep records those cases deliberately; a
+	// best-effort refresh after a deploy has no business doing it.
+	if status != monitor.ContainersOK {
+		e.log.Warn("containers unreadable straight after a deploy; leaving the "+
+			"previous list for the next sweep", "host", h.Hostname, "status", status)
+		return
+	}
+	now := e.now()
+	inv := models.HostInventory{
+		Containers: containers, ContainersCheckedAt: &now,
+		ContainersStatus: status, ContainersDetail: detail,
+	}
+	if err := e.store.UpdateHostContainers(ctx, h.ID, inv); err != nil {
+		e.log.Warn("recording containers after an update", "host", h.Hostname, "err", err)
+	}
 }

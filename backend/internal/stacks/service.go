@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/monitor"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -91,6 +93,20 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 	if failed || code != 0 {
 		state = "failed"
 	}
+	// Re-read what the host is running, now that it has just been changed.
+	//
+	// Containers are otherwise collected on a ten-minute cadence, so for up to
+	// ten minutes after a successful deploy every screen driven by the inventory
+	// -- the updates list above all -- still described the containers that were
+	// there BEFORE it. An update that had just been applied went on reading
+	// "update available", which is indistinguishable from one that failed.
+	//
+	// Only on success: a failed deploy changed nothing, and spending an SSH round
+	// trip to confirm that is work for nothing.
+	if state == DeployStateDeployed {
+		s.refreshContainers(ctx, h)
+	}
+
 	if rerr := s.store.RecordStackDeployment(ctx, st.ID, st.Revision, state, out); rerr != nil {
 		s.log.Warn("recording stack deployment", "stack", st.ID, "err", rerr)
 	}
@@ -168,4 +184,41 @@ func driftsFrom(st store.ContainerStack) bool {
 		return false
 	}
 	return st.Deployed == nil || *st.Deployed != st.Revision || st.DeployState == DeployStateFailed
+}
+
+// refreshContainers re-collects one host's running containers, immediately.
+//
+// The same script and the same parser the monitor uses -- see
+// monitor.ContainersScript. A second implementation would drift from that one,
+// and the two would disagree about what a host is running, which is the question
+// the whole update feature turns on.
+//
+// Best effort: the deploy has already happened and already been recorded, so a
+// failure here costs freshness, not correctness. The next sweep collects anyway.
+func (s *Service) refreshContainers(ctx context.Context, h *models.Host) {
+	out, _, failed := s.run.RunScript(ctx, hostexec.Privileged(monitor.ContainersScript), h)
+	if failed {
+		s.log.Warn("refreshing containers after a deploy", "host", h.Hostname)
+		return
+	}
+	containers, status, detail := monitor.ParseContainers(out)
+	// Only a collection that actually ASKED and got an answer may replace the
+	// list. A script that died, or a host whose runtime is unreachable, parses to
+	// an empty list with a reason -- and writing that would blank the host's
+	// containers, turning a momentary hiccup into "this host runs nothing" across
+	// every screen. The monitor's own sweep records those cases deliberately; a
+	// best-effort refresh after a deploy has no business doing it.
+	if status != monitor.ContainersOK {
+		s.log.Warn("containers unreadable straight after a deploy; leaving the "+
+			"previous list for the next sweep", "host", h.Hostname, "status", status)
+		return
+	}
+	now := time.Now()
+	inv := models.HostInventory{
+		Containers: containers, ContainersCheckedAt: &now,
+		ContainersStatus: status, ContainersDetail: detail,
+	}
+	if err := s.store.UpdateHostContainers(ctx, h.ID, inv); err != nil {
+		s.log.Warn("recording containers after a deploy", "host", h.Hostname, "err", err)
+	}
 }
