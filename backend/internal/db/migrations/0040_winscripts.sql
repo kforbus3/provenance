@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS winscript_versions (
 CREATE INDEX IF NOT EXISTS idx_winscript_versions_s ON winscript_versions(script_id, version DESC);
 
 -- One execution of a script against a target (a single Windows host, several hosts,
--- or a Fleet group). output holds the combined per-host captured log.
+-- or a Provenance group). output holds the combined per-host captured log.
 CREATE TABLE IF NOT EXISTS winscript_runs (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     script_id      UUID NOT NULL REFERENCES winscripts(id) ON DELETE CASCADE,

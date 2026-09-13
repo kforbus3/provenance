@@ -17,7 +17,7 @@ import (
 // keep is worse than no promise, so the code checks it and says what it found.
 //
 // This classifies rather than blocks. An operator with a model server one rack
-// over has a legitimate reason for a non-loopback address, and Fleet is not in a
+// over has a legitimate reason for a non-loopback address, and Provenance is not in a
 // position to know whose network is whose. What it can do is refuse to claim the
 // data stayed home when it did not.
 

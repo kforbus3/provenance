@@ -3,7 +3,7 @@
 // BeforeAcquire hook, which sets the `app.tenant_id` GUC on the connection so every
 // query is filtered by the RLS policies — with no per-query changes.
 //
-// Semantics (only relevant when FLEET_MULTI_TENANCY is on; with the flag off the pool
+// Semantics (only relevant when PROV_MULTI_TENANCY is on; with the flag off the pool
 // always sets Bypass so behavior is unchanged):
 //   - WithID   → scope to one tenant (a normal authenticated request).
 //   - WithBypass → cross-tenant (background sweeps, migrations, the provider console

@@ -2,10 +2,10 @@ name: Release
 
 # Tag-triggered publish pipeline. Pushing a semver tag (e.g. `v0.70.5`) builds
 # the backend and frontend images, pushes them to GHCR under the real
-# `kforbus3/blackfriars-*` namespace, generates an SBOM per image, and signs
+# `kforbus3/provenance-*` namespace, generates an SBOM per image, and signs
 # both images with cosign keyless (Sigstore OIDC — no long-lived key).
 #
-# Note: this workflow deliberately does NOT sign or publish the `.fleetup`
+# Note: this workflow deliberately does NOT sign or publish the `.provup`
 # update bundle. That bundle is signed with the maintainer's release key, which
 # is offline on the maintainer's machine by design (see the deploy runbook) and
 # is never present in CI. Bundle building stays a manual, local step; only the
@@ -30,9 +30,9 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   # Lowercased, real namespace. The old ci.yml referenced
-  # ghcr.io/fleet-terminal/* which never existed.
-  BACKEND_IMAGE: ghcr.io/kforbus3/blackfriars-backend
-  FRONTEND_IMAGE: ghcr.io/kforbus3/blackfriars-frontend
+  # ghcr.io/provenance/* which never existed.
+  BACKEND_IMAGE: ghcr.io/kforbus3/provenance-backend
+  FRONTEND_IMAGE: ghcr.io/kforbus3/provenance-frontend
 
 jobs:
   publish:
@@ -47,11 +47,11 @@ jobs:
       matrix:
         include:
           - name: backend
-            image: ghcr.io/kforbus3/blackfriars-backend
+            image: ghcr.io/kforbus3/provenance-backend
             context: ./backend
             dockerfile: ./backend/Dockerfile
           - name: frontend
-            image: ghcr.io/kforbus3/blackfriars-frontend
+            image: ghcr.io/kforbus3/provenance-frontend
             # The frontend Dockerfile COPYs frontend/ and docs/, so its build
             # context is the repository root (see frontend/Dockerfile).
             context: .

@@ -1,4 +1,4 @@
-Blackfriars
+Provenance
 Copyright 2026 Keith L. Forbus
 
 This product includes software developed by Keith L. Forbus.
@@ -13,7 +13,7 @@ You may obtain a copy of the License at
 
 This product combines two previously separate projects, both Apache-2.0:
 
-  Moorgate  https://github.com/kforbus3/Moorgate
+  Provenance  https://github.com/kforbus3/Provenance
             SSH/RDP fleet management, jump host, overlay, RBAC, audit.
             This repository carries its full history.
 

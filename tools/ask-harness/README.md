@@ -1,11 +1,11 @@
-# Ask Fleet regression harness
+# Ask Provenance regression harness
 
 The acceptance suite for the **Ask** (AI assistant) feature. It runs the standard
-question battery against a live Fleet instance through the real API and prints every
+question battery against a live Provenance instance through the real API and prints every
 answer, so a change to the assistant can be validated end-to-end in one run.
 
 ```sh
-FLEET_URL=http://127.0.0.1:8080 FLEET_USER=<admin> FLEET_PASS=<password> \
+PROV_URL=http://127.0.0.1:8080 PROV_USER=<admin> PROV_PASS=<password> \
     python3 askharness.py --multi-turn
 ```
 
@@ -23,7 +23,7 @@ e.g. confirm "today" answers contain only today's rows, and that host lists matc
 hosts page. No Python dependencies beyond the standard library.
 
 The user needs `Assistant.Use` plus broad view permissions; a temporary super-admin
-(`fleetctl create-admin`) is simplest. Delete it when done.
+(`provctl create-admin`) is simplest. Delete it when done.
 
 What this battery guards (each was a real regression):
 
@@ -39,7 +39,7 @@ What this battery guards (each was a real regression):
 - "Security scan" reaches **compliance** (OpenSCAP benchmark) results, not CVEs, and a
   "for each host" question is answered for every host — never by asking which host.
 - Correcting the assistant ("I meant the security scans, not the vulnerability scans")
-  switches datasets instead of claiming Fleet cannot retrieve compliance results.
+  switches datasets instead of claiming Provenance cannot retrieve compliance results.
 - Groups, roles, service accounts, access reviews and expiring credentials answer from
   their own tools rather than "I have no tool for that".
 

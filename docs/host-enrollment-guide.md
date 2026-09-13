@@ -9,9 +9,9 @@ the platform issues is accepted — without distributing per-user keys or managi
 
 - **User CA.** Provenance runs an SSH certificate authority (`ssh-ed25519`). Its public
   key is configured as a `TrustedUserCAKeys` on every managed host. Its private
-  key is encrypted at rest (`FLEET_CA_PASSPHRASE`) and never leaves the backend.
+  key is encrypted at rest (`PROV_CA_PASSPHRASE`) and never leaves the backend.
 - **Reachability.** Managed hosts are not exposed directly. The backend reaches
-  them through the **jump host** (`FLEET_JUMP_HOST`) over a **WireGuard** tunnel
+  them through the **jump host** (`PROV_JUMP_HOST`) over a **WireGuard** tunnel
   network. Each host record carries both a routable `address` and a `wg_address`.
 - **Host record.** A row in the `hosts` table holds hostname, environment, owner,
   addresses, SSH port/user, tags, and an `enrolled` flag. Collected facts land in
@@ -75,12 +75,12 @@ the overlay lets such a host enroll and be reached directly. When you select it,
 the management **Address must be reachable from the jump host** (the WireGuard
 endpoint field is disabled).
 
-**SSH agent** runs `fleet-enroll-agent` (build with `make enroll-agent-all`,
+**SSH agent** runs `prov-enroll-agent` (build with `make enroll-agent-all`,
 distribute the per-OS binary). With your key loaded (`ssh-add`):
 
 ```sh
-fleet-enroll-agent -url https://fleet.example.com -host web-01 \
-  -token "$FLEET_TOKEN" -bootstrap-user opsadmin [-via-jump]
+prov-enroll-agent -url https://provenance.example.com -host web-01 \
+  -token "$PROV_TOKEN" -bootstrap-user opsadmin [-via-jump]
 ```
 
 **No install (ssh-pipe)** generates a command you run in your own terminal; it
@@ -89,9 +89,9 @@ back into the Finish step:
 
 ```sh
 curl -fsSL -H "Authorization: Bearer $TOKEN" \
-  "https://fleet.example.com/api/v1/hosts/<id>/enroll/script" \
-  | ssh opsadmin@web-01 'cat > ~/fleet-enroll.sh' \
-  && ssh -t opsadmin@web-01 'sudo sh ~/fleet-enroll.sh; rm -f ~/fleet-enroll.sh'
+  "https://provenance.example.com/api/v1/hosts/<id>/enroll/script" \
+  | ssh opsadmin@web-01 'cat > ~/prov-enroll.sh' \
+  && ssh -t opsadmin@web-01 'sudo sh ~/prov-enroll.sh; rm -f ~/prov-enroll.sh'
 ```
 
 The script lands on the host over the first connection and runs over a second
@@ -101,18 +101,18 @@ a password fails with `sudo: a terminal is required to read the password`.
 
 **Switching a host between VPN overlays.** Which transport a host uses is the
 enroll dialog's **VPN overlay** field, and changing it is just a re-enrollment — any
-method. The two overlays are separate subnets (`FLEET_WG_SUBNET` and
-`FLEET_OVPN_SUBNET`), so the host is **renumbered** into the pool it joins; the
+method. The two overlays are separate subnets (`PROV_WG_SUBNET` and
+`PROV_OVPN_SUBNET`), so the host is **renumbered** into the pool it joins; the
 dialog shows the new pool and the address it will leave. Provenance proves the new tunnel
 by dialing the host at its new overlay address from the jump host, then retires the
 old transport on both ends — client stopped and disabled on the host (config renamed
-`*.fleet-disabled`, issued key material kept), peer or pinned address removed on the
+`*.prov-disabled`, issued key material kept), peer or pinned address removed on the
 jump host. If the new tunnel does not answer, the old one stays and the enrollment
 step says so, so a failed switch never costs you the host.
 
 Both UDP ports must be open on the jump host for the transports you use:
-`FLEET_WG_PORT` (51820) and `FLEET_OVPN_PORT` (1194). OpenVPN clients always dial
-`FLEET_OVPN_PORT` regardless of the port in the endpoint field.
+`PROV_WG_PORT` (51820) and `PROV_OVPN_PORT` (1194). OpenVPN clients always dial
+`PROV_OVPN_PORT` regardless of the port in the endpoint field.
 
 **Choosing the VPN overlay.** The script is generated *for one overlay*, and the
 dialog's **VPN overlay** dropdown rides the URL (`?overlay=openvpn`) — so pick it
@@ -125,7 +125,7 @@ than a silent fallback.
 
 **Where the token comes from.** For both no-install methods the dialog prints the
 command with your live session token already filled in — use its copy button and
-run it as-is. The token is short-lived (`FLEET_ACCESS_TOKEN_TTL`, 15 min by
+run it as-is. The token is short-lived (`PROV_ACCESS_TOKEN_TTL`, 15 min by
 default), so copy it again after a re-login rather than reusing an old command.
 The **ssh-pipe** REST calls also accept a service-account API token
 (`Authorization: Bearer flt_…`, see the [API reference](./api.md#service-accounts))
@@ -133,10 +133,10 @@ for scripted enrollment; the **SSH agent** bridge does not — its WebSocket
 authenticates a session JWT only, so `-token` must be a session token.
 
 Each method streams its step log and shows the assigned overlay address.
-Enrollment installs `/etc/ssh/fleet_ca.pub`, `TrustedUserCAKeys`, the
+Enrollment installs `/etc/ssh/prov_ca.pub`, `TrustedUserCAKeys`, the
 `AuthorizedPrincipalsFile` mapping, and **two login accounts** — the privileged
 `fleet` account (principal `fleet`, NOPASSWD sudo) and a login-only
-`fleet-login` account (principal `fleet-login`, no sudo); the requester's
+`prov-login` account (principal `prov-login`, no sudo); the requester's
 `Host.Sudo` permission selects which one their certificate maps to. So you never
 add per-user keys to `authorized_keys`. For the fully manual path,
 fetch the CA with `GET /api/v1/certificates/ca`, configure `sshd_config`
@@ -182,7 +182,7 @@ everything below automatically.
 
 1. Installs **WireGuard for Windows** (via `winget`) if it isn't already present.
 2. Generates a WireGuard keypair and writes a tunnel config with a fixed
-   `ListenPort` (the configured `FLEET_WG_PORT`, default **51820**), so the jump
+   `ListenPort` (the configured `PROV_WG_PORT`, default **51820**), so the jump
    host can reach the host inbound over the overlay exactly as it does a Linux
    host. Installs it as a persistent tunnel service (auto-connects on boot).
 3. **Enables Remote Desktop** and opens its Windows Firewall group (TCP **3389**).
@@ -214,7 +214,7 @@ without dropping its tunnel.
 
 | Port | Proto | Purpose | Opened by |
 |---|---|---|---|
-| 51820 (`FLEET_WG_PORT`) | UDP | WireGuard overlay | WireGuard for Windows |
+| 51820 (`PROV_WG_PORT`) | UDP | WireGuard overlay | WireGuard for Windows |
 | 3389 | TCP | RDP session | script (`Remote Desktop` firewall group) |
 | 5986 | TCP | WinRM HTTPS (host facts) | script (`Provenance WinRM HTTPS` rule) |
 
@@ -230,7 +230,7 @@ WireGuard endpoint by default. A host that shares the jump host's **LAN** still
 works with the public endpoint — the jump reaches it *inbound* over the LAN (the
 fixed `ListenPort` above), so the host never has to dial its own public address
 (which a LAN host can't hairpin to). A **remote** host dials the public endpoint
-outbound; ensure UDP `FLEET_WG_PORT` is forwarded to the jump host, exactly as a
+outbound; ensure UDP `PROV_WG_PORT` is forwarded to the jump host, exactly as a
 remote Linux host requires.
 
 ### Manual WinRM setup (only if the script's step 4 was skipped)
@@ -328,12 +328,12 @@ before retiring its overlay, and removes:
 
 | Removed | Left alone |
 |---|---|
-| `/etc/sudoers.d/fleet` | Every other file in `/etc/sudoers.d` |
+| `/etc/sudoers.d/prov` | Every other file in `/etc/sudoers.d` |
 | The `<ssh-user>` and `<ssh-user>-login` accounts, with their home directories | Every other account |
-| `/etc/ssh/fleet_ca.pub`, `/etc/ssh/fleet_krl` | Any other CA or key material |
+| `/etc/ssh/prov_ca.pub`, `/etc/ssh/prov_krl` | Any other CA or key material |
 | `/etc/ssh/auth_principals/*` (and the directory, if empty) | — |
-| `/etc/ssh/sshd_config.d/00-fleet.conf`, and the `# Provenance` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
-| The overlay client **and its key material** — the WireGuard interface, its boot units, config and keys, or everything under `/etc/openvpn/fleet` | Any other VPN this host runs |
+| `/etc/ssh/sshd_config.d/00-prov.conf`, and the `# Provenance` block appended to `sshd_config` on hosts with no `Include` | Every other sshd directive, and `authorized_keys` |
+| The overlay client **and its key material** — the WireGuard interface, its boot units, config and keys, or everything under `/etc/openvpn/prov` | Any other VPN this host runs |
 | The host's peer / pinned address on the jump host, so the tunnel stops from the other end too | Every other peer |
 | On a certificate overlay, the host's **client certificate is revoked** and the server's CRL republished | Every other certificate |
 
@@ -347,9 +347,9 @@ Two details worth knowing:
 
 - **The work runs detached on the host.** The teardown deletes the account its own
   SSH session is using, and `userdel` refuses while a process of that account is
-  alive. Provenance therefore writes `/usr/local/sbin/fleet-unenroll.sh`, launches it with
+  alive. Provenance therefore writes `/usr/local/sbin/prov-unenroll.sh`, launches it with
   `setsid`, and returns. The API reports that teardown *started*, not that it
-  finished. The host's own record is `/var/log/fleet-unenroll.log`.
+  finished. The host's own record is `/var/log/prov-unenroll.log`.
 - **On a certificate overlay, deleting the host's copy is not enough — it is
   revoked.** WireGuard and OpenVPN fail differently here. A WireGuard hub keeps an
   allowlist, so removing the peer *is* the revocation. An OpenVPN server authenticates
@@ -379,12 +379,12 @@ Two details worth knowing:
 
 If the host was already offline when it was deleted, was removed from the database
 directly, or was enrolled by a Provenance deployment that no longer exists, run
-[`scripts/fleet-unenroll.sh`](../scripts/fleet-unenroll.sh) **on the machine**:
+[`scripts/prov-unenroll.sh`](../scripts/prov-unenroll.sh) **on the machine**:
 
 ```sh
-sudo sh fleet-unenroll.sh --dry-run     # show what would be removed
-sudo sh fleet-unenroll.sh               # remove it
-sudo sh fleet-unenroll.sh -u ops        # host was enrolled with a non-default SSH user
+sudo sh prov-unenroll.sh --dry-run     # show what would be removed
+sudo sh prov-unenroll.sh               # remove it
+sudo sh prov-unenroll.sh -u ops        # host was enrolled with a non-default SSH user
 ```
 
 It removes the same set as the table above and is safe to re-run. When Provenance fails

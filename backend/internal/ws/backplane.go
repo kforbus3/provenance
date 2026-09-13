@@ -11,7 +11,7 @@ import (
 )
 
 // notifyChannel is the Postgres LISTEN/NOTIFY channel the backplane fans events over.
-const notifyChannel = "fleet_events"
+const notifyChannel = "prov_events"
 
 // controlTerminate is a cross-instance control action asking the owning instance to
 // force-close a session's live connections.
@@ -57,7 +57,7 @@ type envelope struct {
 }
 
 // Backplane bridges the per-instance Hub across instances using Postgres
-// LISTEN/NOTIFY — no extra infrastructure beyond the database Fleet already
+// LISTEN/NOTIFY — no extra infrastructure beyond the database Provenance already
 // requires. It publishes local broadcasts to every instance and delivers remote
 // broadcasts to this instance's clients.
 type Backplane struct {

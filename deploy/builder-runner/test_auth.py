@@ -19,7 +19,7 @@ import os
 import sys
 import tempfile
 
-os.environ.setdefault("FLEET_BUILDER_RUNNER_TOKEN", "test-token-not-a-real-secret")
+os.environ.setdefault("PROV_BUILDER_RUNNER_TOKEN", "test-token-not-a-real-secret")
 # A real, empty, writable directory. The job manager creates its state directory
 # at import time and refuses to start without one -- correctly, since a runner
 # that cannot record what it is doing is worse than one that does not start.
@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app  # noqa: E402
 
-TOKEN = os.environ["FLEET_BUILDER_RUNNER_TOKEN"]
+TOKEN = os.environ["PROV_BUILDER_RUNNER_TOKEN"]
 GOOD = {"X-Runner-Token": TOKEN}
 WRONG = {"X-Runner-Token": TOKEN + "x"}
 

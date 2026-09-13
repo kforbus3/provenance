@@ -4,5 +4,5 @@
 -- login and bootstrap screens can display it.
 
 INSERT INTO settings(key, value) VALUES
-    ('branding', '{"app_name":"Blackfriars"}')
+    ('branding', '{"app_name":"Provenance"}')
 ON CONFLICT (key) DO NOTHING;

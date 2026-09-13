@@ -41,7 +41,7 @@ const selfProjectKey = "containers.selfProject"
 // Overridable because the project name comes from whoever ran compose -- a
 // deployment that renamed it would otherwise have its own database offered for
 // update, which is the failure this exists to prevent, silently.
-const defaultSelfProject = "fleet-terminal"
+const defaultSelfProject = "provenance"
 
 // SettingsReader is the slice of the store this needs.
 type SettingsReader interface {

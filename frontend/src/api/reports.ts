@@ -23,7 +23,7 @@ export async function downloadEvidencePack(from: string, to: string): Promise<vo
     responseType: "blob",
   });
   saveBlob(data as BlobPart, "application/pdf", headers["content-disposition"] as string | undefined,
-    `fleet-evidence-pack-${from}-${to}.pdf`);
+    `provenance-evidence-pack-${from}-${to}.pdf`);
 }
 
 function saveBlob(data: BlobPart, type: string, contentDisposition: string | undefined, fallback: string) {

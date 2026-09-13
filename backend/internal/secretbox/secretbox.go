@@ -45,7 +45,7 @@ const (
 const pbkdf2Iterations = 600_000
 
 // useFIPS selects the KDF for NEW seals. It is set once at boot (SetFIPS) from
-// FLEET_FIPS_MODE; default false keeps argon2id (v2) so non-FIPS installs are
+// PROV_FIPS_MODE; default false keeps argon2id (v2) so non-FIPS installs are
 // unchanged. Open always auto-detects the format, so both KDFs decrypt regardless.
 var useFIPS bool
 

@@ -32,7 +32,7 @@ export function DisasterRecoveryPage() {
     <Box>
       <Typography variant="h5" sx={{ mb: 1 }}>Disaster Recovery</Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Warm-standby DR across two independent instances. Fleet reflects replication state and
+        Warm-standby DR across two independent instances. Provenance reflects replication state and
         triggers your orchestration — it does <b>not</b> replicate the database or move DNS itself.
         The failover/failback buttons optionally promote this instance's PostgreSQL and POST to the
         webhook you wire to your promotion / DNS / WireGuard-endpoint automation. See the

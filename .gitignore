@@ -7,9 +7,9 @@
 *.test
 *.out
 # Built command binaries (produced by `go build ./cmd/...` in backend/)
-/backend/fleetctl
-/backend/fleetd
-/backend/fleet-enroll-agent
+/backend/provctl
+/backend/provd
+/backend/prov-enroll-agent
 
 # Node
 node_modules/
@@ -34,9 +34,9 @@ recordings/
 __pycache__/
 *.pyc
 
-# Release artifacts and signing keys. A .fleetup is ~300 MB of build output, and
+# Release artifacts and signing keys. A .provup is ~300 MB of build output, and
 # a release key is the trust anchor for in-UI upgrades — neither belongs in git.
-*.fleetup
+*.provup
 release.key
 *.release.key
 

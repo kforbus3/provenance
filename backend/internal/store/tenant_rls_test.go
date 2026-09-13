@@ -52,7 +52,7 @@ func (r rlsTable) seedFor(ctx context.Context, t *testing.T, q *pgxpool.Pool, la
 	return id
 }
 
-// insertDefaultSQL inserts WITHOUT tenant_id (relying on the fleet_current_tenant()
+// insertDefaultSQL inserts WITHOUT tenant_id (relying on the prov_current_tenant()
 // column default) — exactly how the store CRUD (CreateDatabase / CreateAccessPolicy /
 // CreateK8sCluster) inserts. Returns the SQL + args for the given label.
 func (r rlsTable) insertDefaultSQL(label string) (string, []any) {
@@ -84,15 +84,15 @@ func (r rlsTable) insertForTenantSQL(label, tid string) (string, []any) {
 // see A's rows and not B's, its inserts land in A, and it cannot write a row for tenant B
 // (WITH CHECK denies it). An unscoped connection is denied entirely (fail closed).
 //
-// Gated on FLEET_RLS_TEST_DB (a DSN to a throwaway Postgres). The DSN normally connects
+// Gated on PROV_RLS_TEST_DB (a DSN to a throwaway Postgres). The DSN normally connects
 // as a superuser; the test drops into a freshly-created NOSUPERUSER/NOBYPASSRLS role via
 // SET ROLE, because Postgres only enforces RLS (even FORCE'd) against a non-superuser,
 // non-BYPASSRLS role — this is the same requirement db.verifyRLSCapableRole enforces at
 // boot.
 func TestTenantRLSIsolation(t *testing.T) {
-	dsn := os.Getenv("FLEET_RLS_TEST_DB")
+	dsn := os.Getenv("PROV_RLS_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_RLS_TEST_DB to a throwaway Postgres DSN to run tenant-isolation tests")
+		t.Skip("set PROV_RLS_TEST_DB to a throwaway Postgres DSN to run tenant-isolation tests")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -107,7 +107,7 @@ func TestTenantRLSIsolation(t *testing.T) {
 	}
 
 	// A non-superuser, NOBYPASSRLS role we can SET ROLE into so RLS is enforced.
-	const role = "fleet_rls_tester"
+	const role = "prov_rls_tester"
 	mustExec(ctx, t, pool, fmt.Sprintf(`DO $$ BEGIN
 		IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '%s') THEN
 			CREATE ROLE %s NOSUPERUSER NOBYPASSRLS NOLOGIN;

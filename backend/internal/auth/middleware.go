@@ -62,12 +62,12 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 		}
 		// Scope the request to the caller's tenant so row-level security filters every
 		// query. A provider admin may act within a customer tenant by selecting it via
-		// the X-Fleet-Tenant header (audited by the tenant API).
+		// the X-Prov-Tenant header (audited by the tenant API).
 		effective := p.TenantID
 		if effective == uuid.Nil {
 			effective = ProviderTenantID
 		}
-		if sel := r.Header.Get("X-Fleet-Tenant"); sel != "" && p.IsProviderAdmin() {
+		if sel := r.Header.Get("X-Prov-Tenant"); sel != "" && p.IsProviderAdmin() {
 			if tid, err := uuid.Parse(sel); err == nil {
 				effective = tid
 			}
@@ -98,7 +98,7 @@ func (s *Service) RequirePermission(perm string) func(http.Handler) http.Handler
 
 // RequirePrivilegedPermission gates an endpoint that runs as root on managed hosts
 // and has no unprivileged mode — Ansible playbook runs, OpenSCAP remediation, and
-// support-bundle collection all execute arbitrary root commands through Fleet's SSH
+// support-bundle collection all execute arbitrary root commands through Provenance's SSH
 // path. It requires perm AND Host.Sudo.
 //
 // Why both: Host.Sudo is the permission an operator revokes to say "this user may
@@ -136,20 +136,20 @@ func (s *Service) RequirePrivilegedPermission(perm string) func(http.Handler) ht
 // which a cross-site attacker cannot forge (the browser never attaches it
 // automatically); the only cookie-authenticated endpoints (refresh/logout) use a
 // SameSite=Strict cookie, so the browser won't send it on a cross-site request.
-// A readable double-submit token is still issued (fleet_csrf cookie + login
+// A readable double-submit token is still issued (prov_csrf cookie + login
 // response) so explicit double-submit enforcement can be layered on later without
 // re-plumbing, but it is not required by the current design.
 
 // WSToken extracts the access token from a WebSocket upgrade request. Browsers
 // cannot set an Authorization header on a WebSocket, so the token is carried in the
-// Sec-WebSocket-Protocol subprotocol ("fleet-bearer, <token>") — which, unlike a
+// Sec-WebSocket-Protocol subprotocol ("prov-bearer, <token>") — which, unlike a
 // ?token= query parameter, never appears in the request URL or in reverse-proxy
 // access logs. It falls back to the legacy ?token= query param for older clients
 // and non-browser callers. respHeader is what to pass to Upgrade: when the token
-// came from the subprotocol it echoes the "fleet-bearer" marker (required, or the
+// came from the subprotocol it echoes the "prov-bearer" marker (required, or the
 // browser handshake fails); it is nil when the token came from the query param.
 func (s *Service) WSToken(r *http.Request) (token string, respHeader http.Header) {
-	const marker = "fleet-bearer"
+	const marker = "prov-bearer"
 	var protos []string
 	for _, h := range r.Header.Values("Sec-WebSocket-Protocol") {
 		for _, p := range strings.Split(h, ",") {
@@ -194,7 +194,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, tokenStr string) (*Prin
 // including a detached context.Background() used for work that must outlive the
 // request (session-end audit, recording writes) — those need the tenant too. No-op
 // when multi-tenancy is off (the pool's BeforeAcquire hook bypasses RLS regardless).
-// WebSocket clients can't send the X-Fleet-Tenant switch header, so this scopes to the
+// WebSocket clients can't send the X-Prov-Tenant switch header, so this scopes to the
 // principal's home tenant; a provider admin reaches only their own tenant over a socket.
 func (s *Service) TenantScope(ctx context.Context, p *Principal) context.Context {
 	return s.TenantScopeID(ctx, p.TenantID)

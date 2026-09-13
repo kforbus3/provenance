@@ -15,8 +15,8 @@ import (
 var (
 	ruleIDRe    = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
 	benchmarkRe = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
-	scriptDelim = "=====FLEET_FIX_SCRIPT====="
-	outputDelim = "=====FLEET_FIX_OUTPUT====="
+	scriptDelim = "=====PROV_FIX_SCRIPT====="
+	outputDelim = "=====PROV_FIX_OUTPUT====="
 )
 
 // Findings returns the failed rules from a completed scan's stored results.

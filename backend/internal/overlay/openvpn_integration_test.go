@@ -13,7 +13,7 @@ import (
 )
 
 func testCfg() *config.Config {
-	// An OpenVPN-ONLY deployment: FLEET_OVERLAY=openvpn, so Load leaves the cert
+	// An OpenVPN-ONLY deployment: PROV_OVERLAY=openvpn, so Load leaves the cert
 	// overlay on the WireGuard subnet rather than renumbering an existing fleet.
 	// See mixedCfg for the two-overlay shape.
 	return &config.Config{
@@ -24,7 +24,7 @@ func testCfg() *config.Config {
 		OVPNSubnet:     "10.100.0.0/24",
 		OVPNJumpIP:     "10.100.0.1",
 		Overlay:        "openvpn",
-		// Matches the production default (FLEET_OVERLAY_PEER_ISOLATION=1) rather
+		// Matches the production default (PROV_OVERLAY_PEER_ISOLATION=1) rather
 		// than the bool zero value, so what the integration harness emits is what a
 		// real deployment provisions.
 		OverlayPeerIsolation: true,
@@ -37,7 +37,7 @@ func TestConfigGenerationShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"server 10.100.0.0 255.255.255.0", "tls-groups secp256r1:secp384r1", "data-ciphers AES-256-GCM", "client-config-dir /etc/openvpn/fleet/ccd", "port 1194"} {
+	for _, want := range []string{"server 10.100.0.0 255.255.255.0", "tls-groups secp256r1:secp384r1", "data-ciphers AES-256-GCM", "client-config-dir /etc/openvpn/prov/ccd", "port 1194"} {
 		if !contains(srv, want) {
 			t.Errorf("server config missing %q", want)
 		}
@@ -55,12 +55,12 @@ func TestConfigGenerationShape(t *testing.T) {
 }
 
 // TestEmitOverlayConfigs writes the full jump-server + managed-host material (real
-// generated configs + real PKI certs) to $FLEET_OVPN_TEST_OUT for the container
+// generated configs + real PKI certs) to $PROV_OVPN_TEST_OUT for the container
 // integration harness. Skipped in normal runs.
 func TestEmitOverlayConfigs(t *testing.T) {
-	out := os.Getenv("FLEET_OVPN_TEST_OUT")
+	out := os.Getenv("PROV_OVPN_TEST_OUT")
 	if out == "" {
-		t.Skip("set FLEET_OVPN_TEST_OUT to emit overlay configs")
+		t.Skip("set PROV_OVPN_TEST_OUT to emit overlay configs")
 	}
 	const hostID = "11111111-2222-3333-4444-555555555555"
 	overlayIP := "10.100.0.50"
@@ -70,7 +70,7 @@ func TestEmitOverlayConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srvCert, srvKey, _, err := overlaypki.IssueFrom(caCert, caKey, "fleet-overlay-server", nil, []net.IP{net.ParseIP("127.0.0.1")}, 24*time.Hour, x509.ExtKeyUsageServerAuth)
+	srvCert, srvKey, _, err := overlaypki.IssueFrom(caCert, caKey, "prov-overlay-server", nil, []net.IP{net.ParseIP("127.0.0.1")}, 24*time.Hour, x509.ExtKeyUsageServerAuth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestEmitOverlayConfigs(t *testing.T) {
 	must(filepath.Join(out, "client.ovpn"), []byte(cliConf))
 	must(filepath.Join(out, "ccd", ClientCN(hostID)), []byte(ccd))
 
-	// The actual provisioning scripts Fleet runs over SSH on the jump host + managed
+	// The actual provisioning scripts Provenance runs over SSH on the jump host + managed
 	// host (self-contained: install openvpn, write material, start the daemon).
 	must(filepath.Join(out, "jump-server.sh"), []byte(o.JumpServerScript(caPEM, srvCert, srvKey, []byte(testCRLPEM), srvConf)))
 	must(filepath.Join(out, "jump-ccd.sh"), []byte(o.JumpCCDScript(ClientCN(hostID), ccd)))

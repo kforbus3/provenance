@@ -31,7 +31,7 @@ const (
 const pbkdf2Iterations = 600_000
 
 // passwordFIPS selects PBKDF2 (FIPS) vs Argon2id for NEW hashes. Set once at boot
-// from FLEET_FIPS_MODE; default false keeps Argon2id so non-FIPS installs are
+// from PROV_FIPS_MODE; default false keeps Argon2id so non-FIPS installs are
 // unchanged. VerifyPassword auto-detects the stored algorithm, so both verify
 // regardless — enabling verify-then-upgrade-on-login during a FIPS migration.
 var passwordFIPS bool

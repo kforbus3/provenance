@@ -44,7 +44,7 @@ type availabilityRoll struct {
 // runHostAvailability answers uptime/downtime/outage-history questions from the
 // recorded online<->offline transitions (scoped to the caller's hosts). It is the
 // ONLY source for "did anything go offline?" — current status (query_hosts /
-// fleet_insights) cannot see a host that already went down and recovered.
+// prov_insights) cannot see a host that already went down and recovered.
 func (s *Service) runHostAvailability(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
 	var a hostAvailabilityArgs
 	_ = json.Unmarshal(raw, &a)
@@ -445,7 +445,7 @@ func (s *Service) runVulnerabilities(ctx context.Context, raw json.RawMessage, w
 
 	hostname := strings.TrimSpace(a.Hostname)
 	if hostname == "" {
-		// Fleet roll-up: latest completed scan per accessible host.
+		// Provenance roll-up: latest completed scan per accessible host.
 		scans, err := s.store.LatestVulnScansForAssistant(ctx, who.UserID, who.IsSuperAdmin)
 		if err != nil {
 			s.log.Warn("assistant vulnerabilities rollup", "err", err)
@@ -648,7 +648,7 @@ func (s *Service) runListUsers(ctx context.Context, raw json.RawMessage, who Cal
 			continue
 		}
 		// MFA enrolled = has a confirmed factor. External (SSO) accounts authenticate
-		// at the IdP, so Fleet MFA does not apply to them.
+		// at the IdP, so Provenance MFA does not apply to them.
 		mfa := false
 		if u.AuthSource == "" || u.AuthSource == "local" {
 			mfa, _ = s.store.HasConfirmedMFA(ctx, u.ID)

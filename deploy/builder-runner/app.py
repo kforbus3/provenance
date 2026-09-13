@@ -1,4 +1,4 @@
-"""Blackfriars — builder-runner sidecar.
+"""Provenance — builder-runner sidecar.
 
 A small internal HTTP service the backend calls to build OS images and update
 bundles, manage the artefact library, and drive the PXE provisioning stack.
@@ -48,19 +48,19 @@ from pydantic.alias_generators import to_camel
 import orchestrator as orch
 from jobs import jobs
 
-app = FastAPI(title="blackfriars-builder-runner", version="1")
+app = FastAPI(title="provenance-builder-runner", version="1")
 
-log = logging.getLogger("blackfriars-builder-runner")
+log = logging.getLogger("provenance-builder-runner")
 
 # Shared-secret authentication, matching the ansible-runner sidecar: the backend
-# sends X-Runner-Token, sourced from FLEET_BUILDER_RUNNER_TOKEN. An empty env var
+# sends X-Runner-Token, sourced from PROV_BUILDER_RUNNER_TOKEN. An empty env var
 # disables the check for local development and is logged loudly, because this
 # service starts privileged containers and an unauthenticated one on a shared
 # network is the whole host.
-RUNNER_TOKEN = os.environ.get("FLEET_BUILDER_RUNNER_TOKEN", "")
+RUNNER_TOKEN = os.environ.get("PROV_BUILDER_RUNNER_TOKEN", "")
 if not RUNNER_TOKEN:
     log.warning(
-        "FLEET_BUILDER_RUNNER_TOKEN is empty — this runner is UNAUTHENTICATED and it "
+        "PROV_BUILDER_RUNNER_TOKEN is empty — this runner is UNAUTHENTICATED and it "
         "can start privileged containers. Set it anywhere but a laptop."
     )
 

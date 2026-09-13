@@ -10,11 +10,11 @@ import (
 
 // TestRLSCoverage is a regression guard against multi-tenancy row-level-security (RLS)
 // gaps. The H1 audit finding was that seven tenant-data tables shipped with NO tenant_id
-// column and NO RLS policy, so in a FLEET_MULTI_TENANCY deployment one customer tenant
+// column and NO RLS policy, so in a PROV_MULTI_TENANCY deployment one customer tenant
 // could read/edit/delete every other tenant's rows in those tables (fixed by migration
 // 0074). This test forces every FUTURE table to make an explicit, reviewed choice: it
 // must either be RLS-protected, or be listed in rlsGlobalAllowlist below with a one-line
-// reason explaining why it is intentionally fleet-global / not tenant-scoped.
+// reason explaining why it is intentionally prov-global / not tenant-scoped.
 //
 // A brand-new table that is neither RLS-enabled nor allowlisted fails this test with a
 // message telling the developer to add RLS (the tenant_id + FORCE ROW LEVEL SECURITY
@@ -166,7 +166,7 @@ func TestRLSCoverage(t *testing.T) {
 			"For each, make an explicit choice:\n"+
 			"  * tenant data  -> add the tenancy envelope (tenant_id column + ENABLE/FORCE ROW "+
 			"LEVEL SECURITY + tenant_isolation policy), e.g. add it to a scoped ARRAY[] like 0074.\n"+
-			"  * genuinely fleet-global -> add it to rlsGlobalAllowlist in %s with a one-line reason.",
+			"  * genuinely prov-global -> add it to rlsGlobalAllowlist in %s with a one-line reason.",
 			len(gaps), strings.Join(gaps, ", "), "internal/db/rls_coverage_test.go")
 	}
 

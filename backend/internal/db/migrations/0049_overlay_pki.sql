@@ -1,7 +1,7 @@
 -- Overlay PKI: an X.509 certificate authority (ECDSA P-256) for the FIPS OpenVPN /
 -- strongSwan overlay. This is DISTINCT from the SSH CA (ca_keys): OpenVPN
 -- authenticates peers with X.509 certificates, which an SSH CA cannot issue. These
--- tables are only touched when FLEET_OVERLAY=openvpn (FIPS mode) — the default
+-- tables are only touched when PROV_OVERLAY=openvpn (FIPS mode) — the default
 -- WireGuard overlay never uses them, so a non-FIPS install is unaffected.
 CREATE TABLE IF NOT EXISTS overlay_ca (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

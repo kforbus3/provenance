@@ -1,6 +1,6 @@
 // Package scim implements a SCIM 2.0 (RFC 7643/7644) provisioning endpoint so an
 // identity provider (Okta, Azure AD, etc.) can create, update, and — critically —
-// deprovision Fleet user accounts automatically. It pairs with SAML SSO: SCIM
+// deprovision Provenance user accounts automatically. It pairs with SAML SSO: SCIM
 // manages the account lifecycle, SAML authenticates the login.
 //
 // Authentication is a dedicated static bearer token (prefix "scim_"), issued from

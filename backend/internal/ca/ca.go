@@ -19,6 +19,7 @@ import (
 
 	"github.com/kforbus3/provenance/backend/internal/config"
 	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
+	princ "github.com/kforbus3/provenance/backend/internal/principals"
 	"github.com/kforbus3/provenance/backend/internal/secretbox"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -149,6 +150,13 @@ func (c *CA) Rotate(ctx context.Context) error {
 
 // SignUserCertificate signs pub as a user certificate with the given identity.
 // validFor bounds the certificate lifetime; serial uniquely identifies it.
+//
+// Every certificate also carries the pre-rename spelling of each principal
+// (principals.WithLegacy). Hosts enrolled before the product was renamed have the
+// old names in their AuthorizedPrincipalsFile, and it is sshd that checks them, so
+// a certificate carrying only the new names would be rejected by every host not yet
+// migrated. This is the one place principals are stamped into a certificate, so
+// doing it here means no issuance path can forget.
 func (c *CA) SignUserCertificate(pub ssh.PublicKey, keyID string, principals []string, serial uint64, validFor time.Duration) (*ssh.Certificate, error) {
 	c.mu.RLock()
 	signer := c.signer
@@ -162,7 +170,7 @@ func (c *CA) SignUserCertificate(pub ssh.PublicKey, keyID string, principals []s
 		Serial:          serial,
 		CertType:        ssh.UserCert,
 		KeyId:           keyID,
-		ValidPrincipals: principals,
+		ValidPrincipals: princ.WithLegacy(principals),
 		ValidAfter:      uint64(now.Add(-1 * time.Minute).Unix()),
 		ValidBefore:     uint64(now.Add(validFor).Unix()),
 		Permissions: ssh.Permissions{

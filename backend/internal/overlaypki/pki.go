@@ -1,7 +1,7 @@
 // Package overlaypki is an X.509 certificate authority (ECDSA P-256) for the FIPS
 // OpenVPN overlay. OpenVPN authenticates peers with X.509 certificates,
-// which Fleet's SSH CA (internal/ca) cannot issue — so this is a parallel PKI of the
-// same key type and assurance. It is only used when FLEET_OVERLAY=openvpn; the
+// which Provenance's SSH CA (internal/ca) cannot issue — so this is a parallel PKI of the
+// same key type and assurance. It is only used when PROV_OVERLAY=openvpn; the
 // default WireGuard overlay never touches it.
 //
 // The CA private key is generated and held in the backend, sealed at rest with the
@@ -112,7 +112,7 @@ func GenerateCA() (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          randSerial(),
-		Subject:               pkix.Name{CommonName: "Fleet Overlay CA"},
+		Subject:               pkix.Name{CommonName: "Provenance Overlay CA"},
 		NotBefore:             now.Add(-1 * time.Minute),
 		NotAfter:              now.Add(caTTL),
 		IsCA:                  true,
@@ -254,7 +254,7 @@ func (p *PKI) RecordClient(ctx context.Context, hostID uuid.UUID, cn, serial str
 // host for a while" into a fleet-wide outage, which is a far worse failure than a
 // stale revocation list. Freshness here comes from regenerating and redistributing
 // on every revocation, not from expiry: the CA, the server and the list are all
-// Fleet-managed and the list is pushed the moment it changes.
+// Provenance-managed and the list is pushed the moment it changes.
 const crlValidity = 10 * 365 * 24 * time.Hour
 
 // RevokeHostClients revokes every unexpired client certificate issued to a host and

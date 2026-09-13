@@ -32,9 +32,9 @@ import (
 // behind if the build then fails, which costs nothing and is visible in the
 // credential list.
 //
-// Where it goes: the external secrets manager when one is connected, so Fleet does
+// Where it goes: the external secrets manager when one is connected, so Provenance does
 // not become a second copy of record for an organization that already has one;
-// otherwise Fleet's own credential vault, sealed at rest. Either way a
+// otherwise Provenance's own credential vault, sealed at rest. Either way a
 // vault_secrets row is created, so the passphrase is found the same way in the UI
 // whichever backend holds the material.
 
@@ -167,7 +167,7 @@ func (s *Service) StoreImagePassphrase(
 	}
 
 	// External manager when one is connected: an organization that already has a
-	// secrets manager should not need a second copy of record. Fleet's own vault
+	// secrets manager should not need a second copy of record. Provenance's own vault
 	// still gets a row, pointing at it, so the credential is found the same way.
 	if s.cfg.ExtSecretEnabled() {
 		provider, ref, perr := s.storeExternally(ctx, name, fields)

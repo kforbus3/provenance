@@ -22,7 +22,7 @@ the root.
   Administrator) passes every permission check. Missing permission → `403`.
 - **CSRF:** cookie-authenticated, state-changing calls (`refresh`, `logout`)
   require the double-submit header `X-CSRF-Token: <csrfToken>` matching the
-  `fleet_csrf` cookie.
+  `prov_csrf` cookie.
 - **Errors:** failures return `{"error": "<message>"}` with an appropriate HTTP
   status (`400`, `401`, `403`, `404`, `409`, `500`).
 - **Pagination:** list endpoints accept `?limit=&offset=` query parameters.
@@ -57,7 +57,7 @@ the root.
 ## Bootstrap
 
 First-run wizard. Intentionally unauthenticated — self-gated on the absence of
-any user account and on `FLEET_ALLOW_BOOTSTRAP`.
+any user account and on `PROV_ALLOW_BOOTSTRAP`.
 
 | Method | Path | Required permission |
 |--------|------|---------------------|
@@ -107,7 +107,7 @@ Returns `409` once any user exists, `400` on weak password.
 ```json
 { "username": "admin", "password": "…" }
 ```
-→ `200 OK` (also sets `fleet_refresh`, `fleet_sid`, `fleet_csrf` cookies)
+→ `200 OK` (also sets `prov_refresh`, `prov_sid`, `prov_csrf` cookies)
 ```json
 { "accessToken": "eyJ…", "accessExpiresAt": "2026-06-26T12:15:00Z",
   "csrfToken": "…", "user": { "id": "…", "username": "admin", "roles": ["Super Administrator"] },
@@ -126,7 +126,7 @@ configured and enabled, login falls back to verifying the credentials against
 the directory (finding or provisioning the matching Provenance account) before
 returning `401`.
 
-**`POST /auth/refresh`** → rotates tokens using the `fleet_refresh` + `fleet_sid`
+**`POST /auth/refresh`** → rotates tokens using the `prov_refresh` + `prov_sid`
 cookies; returns a fresh `accessToken`, `accessExpiresAt`, and `csrfToken`.
 
 **`GET /auth/me`** →
@@ -236,7 +236,7 @@ bootstrap through the jump host), `skipWireGuard` (boolean — enroll a host
 that is directly reachable from the jump host, skipping WireGuard tunnel
 provisioning), and `overlay` (`""` for the deployment default, `"wireguard"`, or
 `"openvpn"` — the VPN transport this host uses to reach the jump host).
-`agent` uses the WebSocket (`fleet-enroll-agent` bridge); the
+`agent` uses the WebSocket (`prov-enroll-agent` bridge); the
 no-install flow uses `GET …/enroll/script` (pipe through your own ssh) then
 `POST …/enroll/finish` `{ "hostPublicKey": "…" }`. See the
 [Host Enrollment Guide](./host-enrollment-guide.md).
@@ -623,7 +623,7 @@ require host access. Rules touching SSH/firewall/lockout are flagged
 
 The backend runs `oscap` over the gateway as the privileged host account
 (installing `openscap-scanner` + SCAP content if missing), stores the HTML report
-under `FLEET_SCAN_DIR`, and records a parsed summary:
+under `PROV_SCAN_DIR`, and records a parsed summary:
 ```json
 { "id":"…","status":"completed","profile":"xccdf_org.ssgproject.content_profile_standard",
   "score":86.7,"passCount":210,"failCount":32,"otherCount":40,"totalRules":282 }
@@ -636,7 +636,7 @@ under `FLEET_SCAN_DIR`, and records a parsed summary:
 CVE scanning, distinct from OpenSCAP compliance: a host's installed packages are
 matched against a CVE database and reported with **CVSS scores**. The backend
 tars the host's package databases over SSH (through the jump host) and posts them
-to a **grype-scanner sidecar** (`FLEET_GRYPE_SCANNER_URL`, default
+to a **grype-scanner sidecar** (`PROV_GRYPE_SCANNER_URL`, default
 `http://grype-scanner:8000`) — nothing is installed on managed hosts. Running and
 viewing scans require `Host.Scan`; CVE-database management requires
 `System.Configure`.
@@ -799,7 +799,7 @@ additionally gated by the caller's permissions):
   enrollment jobs, federation site link state, and database replication role/lag.
 - **`security_events`** — failed logins, lockouts and MFA failures, with a per-IP
   tally and behavioural (UEBA) anomalies.
-- **`fleet_insights`** — the explainable-issues engine (below): offline hosts,
+- **`prov_insights`** — the explainable-issues engine (below): offline hosts,
   low/critical disk, high memory/load, pending security updates, and disk-runway
   projections. Additional tools: `host_metric_history`, `session_history`,
   `audit_log`, `list_schedules`, `recent_file_transfers`, `list_users`,
@@ -825,7 +825,7 @@ ML) from host status + metric history: offline hosts, low/critically-low disk,
 high memory/load, pending security updates, and a disk-runway projection
 (days-to-full with a confidence level from the trend fit). Results are scoped to
 the caller's accessible hosts; the same engine powers the Dashboard "Needs
-attention" card and the `fleet_insights` assistant tool.
+attention" card and the `prov_insights` assistant tool.
 
 **Scheduled health digests** — a daily/weekly fleet-health digest built from the
 same insights and delivered via notify (the `fleet.digest` event).
@@ -1063,7 +1063,7 @@ terminal as users connect/disconnect (drives the dashboard's live-sessions panel
 
 - `GET /health` — process liveness.
 - `GET /ready` — DB-backed readiness (used by orchestrators).
-- `GET /version` — build version string, runtime environment (`FLEET_ENV`), and the
+- `GET /version` — build version string, runtime environment (`PROV_ENV`), and the
   customizable application name (public, so the login screen can render it).
-- `GET /metrics` — Prometheus counters/histograms (`fleet_http_requests_total`,
-  `fleet_http_request_duration_seconds`, plus session/gateway metrics).
+- `GET /metrics` — Prometheus counters/histograms (`prov_http_requests_total`,
+  `prov_http_request_duration_seconds`, plus session/gateway metrics).

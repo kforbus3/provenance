@@ -92,11 +92,11 @@ func TestFastPathTool(t *testing.T) {
 		// disk-provenance follow-up -> host_detail
 		{"on nas, which filesystem does the disk-free percentage refer to?", "host_detail", map[string]string{"hostname": "nas"}},
 
-		// open-ended health -> fleet_insights
-		{"any problems?", "fleet_insights", map[string]string{}},
-		{"anything wrong with the fleet?", "fleet_insights", map[string]string{}},
-		{"anything I should worry about this morning?", "fleet_insights", map[string]string{}},
-		{"does anything need my attention today?", "fleet_insights", map[string]string{}},
+		// open-ended health -> prov_insights
+		{"any problems?", "prov_insights", map[string]string{}},
+		{"anything wrong with the fleet?", "prov_insights", map[string]string{}},
+		{"anything I should worry about this morning?", "prov_insights", map[string]string{}},
+		{"does anything need my attention today?", "prov_insights", map[string]string{}},
 
 		// schedules -> list_schedules
 		{"what runs on a schedule, and when does it fire next?", "list_schedules", map[string]string{}},
@@ -118,7 +118,7 @@ func TestFastPathTool(t *testing.T) {
 		// must NOT fast-path (defer to the model)
 		{"who logged into web-01 yesterday?", "session_history", nil},
 		{"who has access to db-02?", "", nil},
-		{"how do I update Fleet?", "", nil},
+		{"how do I update Provenance?", "", nil},
 		{"what is the disk usage on web-01?", "", nil},
 		{"which hosts are offline?", "", nil}, // current state, not history -> model
 		{"are any hosts offline right now?", "", nil},

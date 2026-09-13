@@ -223,18 +223,18 @@ func oidcEndSessionEndpoint(p *gooidc.Provider) string {
 	return strings.TrimSpace(extra.EndSessionEndpoint)
 }
 
-// oidcLogout ends the local Fleet session and, when the provider advertises an
+// oidcLogout ends the local Provenance session and, when the provider advertises an
 // end_session_endpoint (RP-initiated logout), redirects the browser there so the
 // IdP session is torn down too. When the provider advertises none, it degrades to
-// a plain local logout. It is a public browser-redirect endpoint (no Fleet session
+// a plain local logout. It is a public browser-redirect endpoint (no Provenance session
 // principal in context), so it revokes the session best-effort from the sid cookie.
 func (h *Handler) oidcLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c := h.oidcConfig(ctx)
 
-	// Best-effort revoke of the current Fleet session (the sid cookie is scoped to
+	// Best-effort revoke of the current Provenance session (the sid cookie is scoped to
 	// /api/v1/auth, which covers this route).
-	if sc, err := r.Cookie("fleet_sid"); err == nil {
+	if sc, err := r.Cookie("prov_sid"); err == nil {
 		if sid, perr := uuid.Parse(sc.Value); perr == nil {
 			_ = h.svc.Logout(ctx, sid)
 		}
@@ -264,7 +264,7 @@ func (h *Handler) oidcLogout(w http.ResponseWriter, r *http.Request) {
 
 // oidcCallback completes the flow: validate state, exchange the code, verify the
 // ID token (signature/issuer/audience/nonce), provision/find the user, issue a
-// Fleet session, and redirect into the app.
+// Provenance session, and redirect into the app.
 func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c := h.oidcConfig(ctx)
@@ -430,7 +430,7 @@ func (h *Handler) provisionOIDCUser(ctx context.Context, c oidcConfig, claims ma
 	if user.IsDisabled {
 		return nil, errors.New("disabled")
 	}
-	// Group → role mapping, authoritative for IdP-managed roles: Fleet roles the
+	// Group → role mapping, authoritative for IdP-managed roles: Provenance roles the
 	// user's current IdP groups grant are assigned, and IdP-managed roles they no
 	// longer grant are revoked (see reconcileGroupRoles).
 	h.svc.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, claimStrings(claims, c.GroupsClaim))

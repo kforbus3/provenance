@@ -25,9 +25,9 @@ import (
 // else is plain keyless SHA-256, kept so rows written before the key existed
 // still verify. The attacker chooses the column value.
 func TestAuditChainRejectsKeylessRowAfterKeying(t *testing.T) {
-	dsn := os.Getenv("FLEET_STORE_TEST_DB")
+	dsn := os.Getenv("PROV_STORE_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_STORE_TEST_DB to a Postgres DSN with the schema applied")
+		t.Skip("set PROV_STORE_TEST_DB to a Postgres DSN with the schema applied")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)

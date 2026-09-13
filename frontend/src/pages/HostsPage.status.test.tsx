@@ -28,7 +28,7 @@ const PIN_ERROR =
 function host(lastError: string, status = "offline") {
   return {
     id: "h1", hostname: "debian-ab-test", description: "", environment: "lab", owner: "ops",
-    sshPort: 22, sshUser: "fleet", tags: [], authMethod: "fleet_cert", protocol: "ssh",
+    sshPort: 22, sshUser: "fleet", tags: [], authMethod: "prov_cert", protocol: "ssh",
     rdpPort: 3389, enrolled: true, createdAt: "", updatedAt: "", wgAddress: "10.100.0.26",
     status: { status, sshOk: false, wgOk: false, lastError },
   } as unknown as hostsApi.Host;

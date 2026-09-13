@@ -18,9 +18,9 @@ import (
 // written. And every scan wrongly SKIPPED is a vulnerable image nobody is told
 // about, which is the failure that matters.
 func TestContainerImageScanSelection(t *testing.T) {
-	dsn := os.Getenv("FLEET_STORE_TEST_DB")
+	dsn := os.Getenv("PROV_STORE_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_STORE_TEST_DB to a Postgres DSN with the schema applied")
+		t.Skip("set PROV_STORE_TEST_DB to a Postgres DSN with the schema applied")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -107,9 +107,9 @@ func TestContainerImageScanSelection(t *testing.T) {
 
 // Only digest-pinned containers are scannable, and each distinct image once.
 func TestDistinctContainerImages(t *testing.T) {
-	dsn := os.Getenv("FLEET_STORE_TEST_DB")
+	dsn := os.Getenv("PROV_STORE_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_STORE_TEST_DB to a Postgres DSN with the schema applied")
+		t.Skip("set PROV_STORE_TEST_DB to a Postgres DSN with the schema applied")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)

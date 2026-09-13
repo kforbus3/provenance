@@ -34,7 +34,7 @@ export function WatchSessionPage() {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     // Token via subprotocol (see events.ts) so it stays out of the URL / proxy logs.
     const url = `${proto}://${window.location.host}/api/v1/sessions/${id}/watch`;
-    const ws = new WebSocket(url, ["fleet-bearer", accessToken]);
+    const ws = new WebSocket(url, ["prov-bearer", accessToken]);
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => setStatus("watching");

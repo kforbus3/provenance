@@ -12,7 +12,7 @@ between them is where the interesting failures live (see
 
 The access half gives operators secure, audited SSH access to Linux fleets
 **from the browser** — hundreds of hosts on the default configuration, scaling to thousands with a
-wider overlay subnet (`FLEET_WG_SUBNET`) and tuned monitor concurrency — with no SSH
+wider overlay subnet (`PROV_WG_SUBNET`) and tuned monitor concurrency — with no SSH
 client, VPN, WireGuard, keys, or
 certificates on the user side. The browser talks only to the backend over HTTPS/WebSocket;
 the **backend is the sole SSH client** and brokers every connection through a jump host and
@@ -97,7 +97,7 @@ docs/       architecture, API, schema, admin/user/developer/security/DR guides
 scripts/    orchestration + dev helpers; scripts/imaging/ is the boot-test suite
 ```
 
-The Go module path, the binary names and the `FLEET_*` environment prefix are
+The Go module path, the binary names and the `PROV_*` environment prefix are
 unchanged from this codebase's earlier life. Renaming them would be a migration
 for every existing deployment in exchange for nothing.
 
@@ -161,7 +161,7 @@ Working and verified end-to-end (see `git log` for the milestone history):
   with the fleet?", low-disk / high-load / pending-update detection + disk-runway projections),
   and scheduled **fleet-health digests**
 - Admin suite (users/roles/groups/settings), **System Health dashboard** with **CA-key
-  rotation reminders** (`FLEET_CA_ROTATE_AFTER`), **app-wide display timezone**, Prometheus
+  rotation reminders** (`PROV_CA_ROTATE_AFTER`), **app-wide display timezone**, Prometheus
   metrics, health/ready
 - Docker Compose + local SSH test fabric; K8s manifests, Helm chart, systemd units
 

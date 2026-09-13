@@ -1,9 +1,9 @@
 // Package overlay generates the FIPS OpenVPN overlay's server, client, and per-host
 // configuration. It is the parallel sibling of the WireGuard enrollment path
-// (internal/enrollment): selected only when FLEET_OVERLAY=openvpn, so the default
+// (internal/enrollment): selected only when PROV_OVERLAY=openvpn, so the default
 // WireGuard overlay is completely untouched.
 //
-// The overlay has its own subnet/jump-IP (FLEET_OVPN_SUBNET) but reuses the
+// The overlay has its own subnet/jump-IP (PROV_OVPN_SUBNET) but reuses the
 // hosts.wg_address column for a host's assigned address, so the SSH gateway's address
 // resolution needs no changes — a host is dialed at its overlay address whichever
 // overlay assigned it. All configs here are the exact shape validated end-to-end
@@ -28,10 +28,10 @@ import (
 // overlay is persistent); rotation is a future migration step.
 const clientCertTTL = 2 * 365 * 24 * time.Hour
 
-// fleetDir is where overlay material lives on both the jump host and managed hosts.
-const fleetDir = "/etc/openvpn/fleet"
+// provDir is where overlay material lives on both the jump host and managed hosts.
+const provDir = "/etc/openvpn/prov"
 
-// OpenVPN builds the OpenVPN overlay's configuration from Fleet's settings + PKI.
+// OpenVPN builds the OpenVPN overlay's configuration from Provenance's settings + PKI.
 type OpenVPN struct {
 	cfg *config.Config
 	pki certAuthority
@@ -64,7 +64,7 @@ func New(cfg *config.Config, pki *overlaypki.PKI) *OpenVPN {
 func (o *OpenVPN) subnetParts() (network, netmask string, err error) {
 	_, ipnet, err := net.ParseCIDR(o.cfg.OVPNSubnet)
 	if err != nil {
-		return "", "", fmt.Errorf("bad FLEET_OVPN_SUBNET %q: %w", o.cfg.OVPNSubnet, err)
+		return "", "", fmt.Errorf("bad PROV_OVPN_SUBNET %q: %w", o.cfg.OVPNSubnet, err)
 	}
 	mask := ipnet.Mask
 	if len(mask) != net.IPv4len {
@@ -87,7 +87,7 @@ func (o *OpenVPN) ServerConfig() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`# Fleet OpenVPN overlay — jump-host server (FIPS). Managed by Fleet; do not edit.
+	return fmt.Sprintf(`# Provenance OpenVPN overlay — jump-host server (FIPS). Managed by Provenance; do not edit.
 dev tun
 proto udp
 port %d
@@ -114,7 +114,7 @@ keepalive 10 60
 persist-key
 persist-tun
 verb 3
-`, o.cfg.OVPNPort, fleetDir, fleetDir, fleetDir, network, netmask, fleetDir, fleetDir), nil
+`, o.cfg.OVPNPort, provDir, provDir, provDir, network, netmask, provDir, provDir), nil
 }
 
 // ClientConfig returns a managed host's client.ovpn (references the cert/key/ca
@@ -126,7 +126,7 @@ func (o *OpenVPN) ClientConfig(endpoint string) string {
 		host = h
 	}
 	port := o.cfg.OVPNPort
-	return fmt.Sprintf(`# Fleet OpenVPN overlay — managed-host client (FIPS). Managed by Fleet; do not edit.
+	return fmt.Sprintf(`# Provenance OpenVPN overlay — managed-host client (FIPS). Managed by Provenance; do not edit.
 dev tun
 proto udp
 client
@@ -144,7 +144,7 @@ persist-key
 persist-tun
 keepalive 10 60
 verb 3
-%s`, host, port, fleetDir, fleetDir, fleetDir, o.clientIsolationDirectives())
+%s`, host, port, provDir, provDir, provDir, o.clientIsolationDirectives())
 }
 
 // clientIsolationDirectives hooks the host-side peer-isolation script into the
@@ -155,7 +155,7 @@ verb 3
 // jump host isolates the host at its own end. OpenVPN has no equivalent: a client
 // accepts whatever arrives down the tunnel. Without this, an OpenVPN deployment's
 // isolation rests entirely on one iptables rule on the jump host — which fails open
-// by design, and on a jump host Fleet does not own may never be applied at all.
+// by design, and on a jump host Provenance does not own may never be applied at all.
 //
 // It runs on `up` rather than being written once at install because that is what
 // makes it survive a reboot (a plain iptables rule does not) and what gives it the
@@ -165,8 +165,8 @@ func (o *OpenVPN) clientIsolationDirectives() string {
 		return ""
 	}
 	// script-security 2 is the minimum that lets OpenVPN run a user script. The
-	// script is root-owned, 0700, and written by Fleet.
-	return fmt.Sprintf("script-security 2\nup %s/peer-isolation.sh\n", fleetDir)
+	// script is root-owned, 0700, and written by Provenance.
+	return fmt.Sprintf("script-security 2\nup %s/peer-isolation.sh\n", provDir)
 }
 
 // hostIsolationScript renders the managed host's `up` script: everything arriving on
@@ -179,7 +179,7 @@ func (o *OpenVPN) clientIsolationDirectives() string {
 // the device number.
 //
 // It always exits 0. With script-security 2 a failing `up` script aborts the tunnel,
-// and a host that cannot filter is still a host Fleet must be able to reach — so this
+// and a host that cannot filter is still a host Provenance must be able to reach — so this
 // fails open like every other half of peer isolation, loudly, in the OpenVPN log.
 func (o *OpenVPN) hostIsolationScript() string {
 	if !o.cfg.OverlayPeerIsolation {
@@ -190,34 +190,34 @@ func (o *OpenVPN) hostIsolationScript() string {
 		return ""
 	}
 	return fmt.Sprintf(`#!/bin/sh
-# Fleet overlay peer isolation — managed-host side. Managed by Fleet; do not edit.
+# Provenance overlay peer isolation — managed-host side. Managed by Provenance; do not edit.
 # OpenVPN runs this as the tunnel comes up, with $dev set to the tun device.
 JUMP=%s
 [ -n "$dev" ] || { echo "fleet: no \$dev; peer isolation NOT applied" >&2; exit 0; }
 if ! command -v iptables >/dev/null 2>&1; then
   echo "fleet: iptables unavailable; peer isolation NOT applied" >&2; exit 0
 fi
-# The rules live in Fleet's own chains, flushed and refilled on every run. Inserting
+# The rules live in Provenance's own chains, flushed and refilled on every run. Inserting
 # them directly into INPUT/OUTPUT was idempotent but not self-correcting: the rule
 # names the jump host by address, so changing it (as moving the overlay onto its own
 # subnet did) left the previous DROP in place, matching everything from the NEW jump
 # host and blackholing the tunnel with no error anywhere. Flushing a chain we own
 # removes the stale rule as a side effect of writing the current one.
-for _c in FLEET-OVPN-IN FLEET-OVPN-OUT; do
+for _c in PROV-OVPN-IN PROV-OVPN-OUT; do
   iptables -N "$_c" 2>/dev/null
   iptables -F "$_c" 2>/dev/null
 done
 # -C before -I on the jumps into those chains: this runs on every reconnect and must
 # not stack duplicates.
-iptables -C INPUT  -i "$dev" -j FLEET-OVPN-IN 2>/dev/null || \
-  iptables -I INPUT  1 -i "$dev" -j FLEET-OVPN-IN 2>/dev/null || \
+iptables -C INPUT  -i "$dev" -j PROV-OVPN-IN 2>/dev/null || \
+  iptables -I INPUT  1 -i "$dev" -j PROV-OVPN-IN 2>/dev/null || \
   echo "fleet: could not hook inbound peer isolation on $dev" >&2
-iptables -C OUTPUT -o "$dev" -j FLEET-OVPN-OUT 2>/dev/null || \
-  iptables -I OUTPUT 1 -o "$dev" -j FLEET-OVPN-OUT 2>/dev/null || \
+iptables -C OUTPUT -o "$dev" -j PROV-OVPN-OUT 2>/dev/null || \
+  iptables -I OUTPUT 1 -o "$dev" -j PROV-OVPN-OUT 2>/dev/null || \
   echo "fleet: could not hook outbound peer isolation on $dev" >&2
-iptables -A FLEET-OVPN-IN  ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
+iptables -A PROV-OVPN-IN  ! -s "$JUMP"/32 -j DROP 2>/dev/null || \
   echo "fleet: could not apply inbound peer isolation on $dev" >&2
-iptables -A FLEET-OVPN-OUT ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
+iptables -A PROV-OVPN-OUT ! -d "$JUMP"/32 -j DROP 2>/dev/null || \
   echo "fleet: could not apply outbound peer isolation on $dev" >&2
 exit 0
 `, jump)
@@ -234,7 +234,7 @@ func (o *OpenVPN) CCDEntry(overlayIP string) (string, error) {
 
 // ClientCN returns the OpenVPN client common-name (and ccd filename) for a host —
 // its stable UUID, so the pinned address can never be spoofed by a chosen hostname.
-func ClientCN(hostID string) string { return "fleet-h-" + hostID }
+func ClientCN(hostID string) string { return "prov-h-" + hostID }
 
 // EnsureJumpMaterial issues the jump-host OpenVPN server certificate (SAN = the
 // jump endpoint host) and returns the CA cert + server cert/key PEM to install.
@@ -247,7 +247,7 @@ func (o *OpenVPN) EnsureJumpMaterial(ctx context.Context) (caPEM, certPEM, keyPE
 	} else if host != "" {
 		dns = append(dns, host)
 	}
-	certPEM, keyPEM, err = o.pki.IssueServer("fleet-overlay-server", dns, ips, clientCertTTL)
+	certPEM, keyPEM, err = o.pki.IssueServer("prov-overlay-server", dns, ips, clientCertTTL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -275,7 +275,7 @@ func (o *OpenVPN) IssueHostMaterial(ctx context.Context, hostID uuid.UUID) (caPE
 //
 // It matches on the process NAME (pgrep -x openvpn) and then reads /proc/<pid>/cmdline
 // to confirm the config, and it must keep doing both. The obvious `pgrep -f 'openvpn
-// .*server.conf'` is what shipped, and it always answered yes: Fleet runs these
+// .*server.conf'` is what shipped, and it always answered yes: Provenance runs these
 // scripts as `sh -c "<the whole script>"`, so the script's own shell has that exact
 // command line in its argv and pgrep -f matches command lines. The server was
 // therefore reported "already running" on every enrollment and never actually
@@ -326,8 +326,8 @@ else
   # a log is named. That log is the only account of WHY a start failed, and it is
   # tailed into the enrollment step below.
   : > %[1]s/server.log
-  openvpn --config %[1]s/server.conf --daemon fleet-overlay \
-    --writepid /run/fleet-ovpn.pid --log-append %[1]s/server.log || true
+  openvpn --config %[1]s/server.conf --daemon prov-overlay \
+    --writepid /run/prov-ovpn.pid --log-append %[1]s/server.log || true
   _i=0
   while [ $_i -lt 10 ]; do
     if ovpn_server_running; then break; fi
@@ -340,8 +340,8 @@ else
     echo '--- openvpn server log ---'
     tail -n 15 %[1]s/server.log 2>/dev/null
   fi
-fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), string(crlPEM), serverConf,
-		o.peerIsolationScript(), runningCheck("ovpn_server_running", fleetDir+"/server.conf"))
+fi`, provDir, string(caPEM), string(certPEM), string(keyPEM), string(crlPEM), serverConf,
+		o.peerIsolationScript(), runningCheck("ovpn_server_running", provDir+"/server.conf"))
 }
 
 // JumpCRLScript replaces the revocation list on the jump host. No restart: the server
@@ -356,27 +356,27 @@ cat > %[1]s/crl.pem.new <<'FLEOF'
 %[2]sFLEOF
 chmod 0644 %[1]s/crl.pem.new
 mv -f %[1]s/crl.pem.new %[1]s/crl.pem
-echo OVPN_CRL_UPDATED`, fleetDir, string(crlPEM))
+echo OVPN_CRL_UPDATED`, provDir, string(crlPEM))
 }
 
 // PurgeHostScript implements Overlay: retire the client, then destroy every file
-// Fleet put under /etc/openvpn/fleet — including the ones RetireHostScript renamed to
-// .fleet-disabled, which are a complete, working config and not merely a record of
+// Provenance put under /etc/openvpn/prov — including the ones RetireHostScript renamed to
+// .prov-disabled, which are a complete, working config and not merely a record of
 // what was there.
 func (o *OpenVPN) PurgeHostScript() HostBringup {
 	retire := o.RetireHostScript()
 	return HostBringup{
 		Marker: "OVPN_PURGED",
 		Script: retire.Script + fmt.Sprintf(`
-# Everything Fleet wrote lives under one directory, so this is bounded by
+# Everything Provenance wrote lives under one directory, so this is bounded by
 # construction — no globbing outside it, and no other openvpn config is touched.
-rm -f %[1]s/ca.crt %[1]s/client.crt %[1]s/client.key       %[1]s/client.ovpn %[1]s/client.ovpn.fleet-disabled       %[1]s/peer-isolation.sh
-rm -f /etc/openvpn/fleet-overlay.conf /etc/openvpn/fleet-overlay.conf.fleet-disabled       /etc/openvpn/client/fleet-overlay.conf /etc/openvpn/client/fleet-overlay.conf.fleet-disabled
+rm -f %[1]s/ca.crt %[1]s/client.crt %[1]s/client.key       %[1]s/client.ovpn %[1]s/client.ovpn.prov-disabled       %[1]s/peer-isolation.sh
+rm -f /etc/openvpn/prov-overlay.conf /etc/openvpn/prov-overlay.conf.prov-disabled       /etc/openvpn/client/prov-overlay.conf /etc/openvpn/client/prov-overlay.conf.prov-disabled
 rmdir %[1]s 2>/dev/null
 if [ -e %[1]s ]; then
-  echo "[fleet] NOTE: %[1]s still holds files Fleet did not write; left in place"
+  echo "[prov] NOTE: %[1]s still holds files Provenance did not write; left in place"
 fi
-echo OVPN_PURGED`, fleetDir),
+echo OVPN_PURGED`, provDir),
 	}
 }
 
@@ -392,7 +392,7 @@ echo OVPN_PURGED`, fleetDir),
 //
 // The rule matches on the overlay subnet rather than the interface, because
 // OpenVPN picks its tun device number at runtime — the subnet is the one thing
-// known here. Nothing Fleet does is affected: every connection it makes to a
+// known here. Nothing Provenance does is affected: every connection it makes to a
 // managed host is dialed FROM the jump host, so it leaves via OUTPUT and is not
 // a forwarded flow.
 //
@@ -438,7 +438,7 @@ func (o *OpenVPN) JumpCCDScript(cn, ccdEntry string) string {
 mkdir -p %[1]s/ccd
 cat > %[1]s/ccd/%[2]s <<'FLEOF'
 %[3]sFLEOF
-echo OVPN_CCD_WRITTEN`, fleetDir, cn, ccdEntry)
+echo OVPN_CCD_WRITTEN`, provDir, cn, ccdEntry)
 }
 
 // JumpCCDRemoveScript drops a host's pinned address from the server. The client
@@ -447,7 +447,7 @@ echo OVPN_CCD_WRITTEN`, fleetDir, cn, ccdEntry)
 // but with no ccd entry the server no longer holds an address for it.
 func (o *OpenVPN) JumpCCDRemoveScript(cn string) string {
 	return fmt.Sprintf(`if [ -f %[1]s/ccd/%[2]s ]; then rm -f %[1]s/ccd/%[2]s; echo OVPN_CCD_REMOVED; else echo OVPN_CCD_ABSENT; fi`,
-		fleetDir, cn)
+		provDir, cn)
 }
 
 // RetireJump implements Overlay.
@@ -484,7 +484,7 @@ func (o *OpenVPN) RetireJump(ctx context.Context, hostID uuid.UUID, jumpRun RunF
 // boot, and set the config aside.
 //
 // The client material (ca/cert/key) is deliberately left in place — a host moved
-// back later re-uses the certificate Fleet already issued it, and the files are
+// back later re-uses the certificate Provenance already issued it, and the files are
 // root-only. The config is renamed rather than deleted so an operator can see what
 // was retired, matching how the WireGuard teardown treats wg-quick's config.
 func (o *OpenVPN) RetireHostScript() HostBringup {
@@ -492,8 +492,8 @@ func (o *OpenVPN) RetireHostScript() HostBringup {
 		Marker: "OVPN_RETIRED",
 		Script: fmt.Sprintf(`set +e
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl disable --now openvpn@fleet-overlay >/dev/null 2>&1
-  systemctl disable --now openvpn-client@fleet-overlay >/dev/null 2>&1
+  systemctl disable --now openvpn@prov-overlay >/dev/null 2>&1
+  systemctl disable --now openvpn-client@prov-overlay >/dev/null 2>&1
 fi
 # Whatever systemd did or did not manage, stop any daemon still running against
 # this config. Matched by process NAME plus /proc: a command-line match would also
@@ -503,18 +503,18 @@ for _p in $(pgrep -x openvpn 2>/dev/null); do
     kill "$_p" 2>/dev/null
   fi
 done
-rm -f /run/fleet-ovpn-client.pid
-for f in /etc/openvpn/fleet-overlay.conf /etc/openvpn/client/fleet-overlay.conf; do
-  [ -f "$f" ] && mv -f "$f" "$f.fleet-disabled"
+rm -f /run/prov-ovpn-client.pid
+for f in /etc/openvpn/prov-overlay.conf /etc/openvpn/client/prov-overlay.conf; do
+  [ -f "$f" ] && mv -f "$f" "$f.prov-disabled"
 done
-if [ -f %[1]s/client.ovpn ]; then mv -f %[1]s/client.ovpn %[1]s/client.ovpn.fleet-disabled; fi
+if [ -f %[1]s/client.ovpn ]; then mv -f %[1]s/client.ovpn %[1]s/client.ovpn.prov-disabled; fi
 # Take the peer-isolation rules with it. They are scoped to the tunnel device, so
 # once that device is gone they match nothing — but they are not harmless: tun0 is a
 # name the kernel reuses, so the next VPN this host runs inherits a DROP naming a
 # jump host it has never heard of. Leaving them also means an operator auditing the
-# host finds Fleet rules for an overlay Fleet no longer uses.
+# host finds Provenance rules for an overlay Provenance no longer uses.
 if command -v iptables >/dev/null 2>&1; then
-  for _pair in "INPUT FLEET-OVPN-IN" "OUTPUT FLEET-OVPN-OUT"; do
+  for _pair in "INPUT PROV-OVPN-IN" "OUTPUT PROV-OVPN-OUT"; do
     set -- $_pair
     _chain=$1; _own=$2
     # Delete every jump into our chain, whatever device it names. Bounded so a
@@ -530,7 +530,7 @@ if command -v iptables >/dev/null 2>&1; then
     iptables -X "$_own" 2>/dev/null
   done
 fi
-echo OVPN_RETIRED`, fleetDir),
+echo OVPN_RETIRED`, provDir),
 	}
 }
 
@@ -574,34 +574,34 @@ cat > %[1]s/client.ovpn <<'FLEOF'
     # Enrollment then saw a working tunnel and reported success. The host stayed
     # connected until it was rebooted, and came back with no overlay.
     mkdir -p /etc/openvpn/client 2>/dev/null || true
-    cp %[1]s/client.ovpn /etc/openvpn/client/fleet-overlay.conf 2>/dev/null || true
-    cp %[1]s/client.ovpn /etc/openvpn/fleet-overlay.conf 2>/dev/null || true
+    cp %[1]s/client.ovpn /etc/openvpn/client/prov-overlay.conf 2>/dev/null || true
+    cp %[1]s/client.ovpn /etc/openvpn/prov-overlay.conf 2>/dev/null || true
     # openvpn-client@ first: it is what current distributions ship. openvpn@ is
     # the legacy template, still present on older Debian/Ubuntu.
-    if systemctl enable --now openvpn-client@fleet-overlay >/dev/null 2>&1; then
+    if systemctl enable --now openvpn-client@prov-overlay >/dev/null 2>&1; then
       OVPN_PERSISTENT=1
-    elif systemctl enable --now openvpn@fleet-overlay >/dev/null 2>&1; then
+    elif systemctl enable --now openvpn@prov-overlay >/dev/null 2>&1; then
       OVPN_PERSISTENT=1
     else
       # Last resort: a daemon that is running now and is enabled by nothing. It
       # is better than no tunnel, and it must not be mistaken for a configured
       # one -- so say so rather than letting the address check below report a
       # success that will not survive a reboot.
-      systemctl disable openvpn-client@fleet-overlay >/dev/null 2>&1 || true
-      openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid --log-append %[1]s/client.log || true
+      systemctl disable openvpn-client@prov-overlay >/dev/null 2>&1 || true
+      openvpn --config %[1]s/client.ovpn --daemon prov-overlay --writepid /run/prov-ovpn-client.pid --log-append %[1]s/client.log || true
       OVPN_PERSISTENT=0
     fi
   else
     : > %[1]s/client.log
-    openvpn --config %[1]s/client.ovpn --daemon fleet-overlay --writepid /run/fleet-ovpn-client.pid --log-append %[1]s/client.log || true
+    openvpn --config %[1]s/client.ovpn --daemon prov-overlay --writepid /run/prov-ovpn-client.pid --log-append %[1]s/client.log || true
     OVPN_PERSISTENT=0
   fi
 else
   # Already running when this ran. Whether it is enabled is a separate question
   # from whether it is up, and it is the one that decides what happens at the
   # next reboot, so answer it rather than assuming.
-  if systemctl is-enabled openvpn-client@fleet-overlay >/dev/null 2>&1 ||
-     systemctl is-enabled openvpn@fleet-overlay >/dev/null 2>&1; then
+  if systemctl is-enabled openvpn-client@prov-overlay >/dev/null 2>&1 ||
+     systemctl is-enabled openvpn@prov-overlay >/dev/null 2>&1; then
     OVPN_PERSISTENT=1
   else
     OVPN_PERSISTENT=0
@@ -609,7 +609,7 @@ else
 fi
 # The tunnel is not up because a process started — it is up when the server has
 # pushed this host its overlay address. Wait for that address to appear on a tun
-# device and report what was actually observed. Reporting the address Fleet MEANT
+# device and report what was actually observed. Reporting the address Provenance MEANT
 # to assign, off a script that printed success unconditionally, is what let a
 # never-configured overlay pass for a working one.
 #
@@ -663,16 +663,16 @@ else
     tail -n 20 %[1]s/client.log
   else
     echo '(no client.log: started under systemd — unit state follows)'
-    systemctl --no-pager --lines=20 status openvpn@fleet-overlay 2>/dev/null
-    systemctl --no-pager --lines=20 status openvpn-client@fleet-overlay 2>/dev/null
-    journalctl -u openvpn@fleet-overlay -u openvpn-client@fleet-overlay -n 20 --no-pager 2>/dev/null
+    systemctl --no-pager --lines=20 status openvpn@prov-overlay 2>/dev/null
+    systemctl --no-pager --lines=20 status openvpn-client@prov-overlay 2>/dev/null
+    journalctl -u openvpn@prov-overlay -u openvpn-client@prov-overlay -n 20 --no-pager 2>/dev/null
   fi
   # The verdict is the marker, not the exit status: these diagnostics all exit
   # non-zero for an inactive unit, and letting that become the script's status buried
   # the report under a bare "Process exited with status 1".
   true
-fi`, fleetDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
-		o.hostIsolationInstall(), runningCheck("ovpn_client_running", fleetDir+"/client.ovpn"), overlayIP,
+fi`, provDir, string(caPEM), string(certPEM), string(keyPEM), clientConf,
+		o.hostIsolationInstall(), runningCheck("ovpn_client_running", provDir+"/client.ovpn"), overlayIP,
 		o.hostIsolationApply())
 }
 
@@ -706,7 +706,7 @@ command -v iptables >/dev/null 2>&1 || echo OVPN_IPTABLES_MISSING
 cat > %[1]s/peer-isolation.sh <<'FLEOF'
 %[2]sFLEOF
 chmod 0700 %[1]s/peer-isolation.sh
-`, fleetDir, body)
+`, provDir, body)
 }
 
 // hostIsolationApply renders the fragment that APPLIES peer isolation once the tunnel
@@ -731,13 +731,13 @@ func (o *OpenVPN) hostIsolationApply() string {
     fi
     # Report what is in place, not that the script ran: it fails open by design, so a
     # clean run and an unisolated host look identical from here.
-    if iptables -S FLEET-OVPN-IN >/dev/null 2>&1; then
+    if iptables -S PROV-OVPN-IN >/dev/null 2>&1; then
       echo OVPN_ISOLATION_OK
     else
       echo OVPN_ISOLATION_MISSING
     fi
   fi
-`, fleetDir)
+`, provDir)
 }
 
 // endpoint returns the OpenVPN endpoint managed hosts dial: the DB/settings value

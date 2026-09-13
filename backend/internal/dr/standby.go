@@ -44,7 +44,7 @@ func (h *standbyHandler) mode(w http.ResponseWriter, r *http.Request) {
 func (h *standbyHandler) promoteAndRestart(w http.ResponseWriter, r *http.Request) {
 	if h.token == "" {
 		httpx.WriteError(w, http.StatusForbidden,
-			"console promotion is disabled (set FLEET_DR_STANDBY_TOKEN, or promote via fleetctl / your DB tooling)")
+			"console promotion is disabled (set PROV_DR_STANDBY_TOKEN, or promote via provctl / your DB tooling)")
 		return
 	}
 	var body struct {

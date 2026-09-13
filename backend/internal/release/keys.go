@@ -11,7 +11,7 @@ var embeddedTrustKeys = ""
 
 // TrustedKeys returns the release public keys to verify bundles against: the
 // build-embedded key(s) plus any supplied at runtime (extra is a comma/space list,
-// typically from FLEET_RELEASE_TRUST_KEYS — used for key rotation or bringing your own
+// typically from PROV_RELEASE_TRUST_KEYS — used for key rotation or bringing your own
 // key to a source build). Deduplication isn't necessary; Verify tries each in turn.
 func TrustedKeys(extra string) ([]ed25519.PublicKey, error) {
 	keys, err := ParsePublicKeys(embeddedTrustKeys)

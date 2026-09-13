@@ -229,7 +229,7 @@ func (s *Store) RecordImagingEvent(ctx context.Context, machineID, event string,
 		detail = map[string]any{}
 	}
 	// tenant_id is omitted throughout this file: the column's DEFAULT is
-	// fleet_current_tenant(), which resolves the request's tenant, the provider
+	// prov_current_tenant(), which resolves the request's tenant, the provider
 	// tenant under bypass, and the background contexts a machine's heartbeat
 	// arrives in. Supplying it here meant a second implementation of that rule,
 	// and it was wrong -- it cast 'bypass' straight to uuid, so every write

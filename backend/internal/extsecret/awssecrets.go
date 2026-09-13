@@ -29,10 +29,10 @@ type awsSecrets struct {
 func newAWSSecrets(cfg Config) (Provider, error) {
 	region := strings.TrimSpace(cfg.AWSRegion)
 	if region == "" {
-		return nil, fmt.Errorf("extsecret(aws-secrets): FLEET_EXTSECRET_AWS_REGION is required")
+		return nil, fmt.Errorf("extsecret(aws-secrets): PROV_EXTSECRET_AWS_REGION is required")
 	}
 	if strings.TrimSpace(cfg.AWSAccessKey) == "" || strings.TrimSpace(cfg.AWSSecretKey) == "" {
-		return nil, fmt.Errorf("extsecret(aws-secrets): FLEET_EXTSECRET_AWS_ACCESS_KEY_ID and FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY are required")
+		return nil, fmt.Errorf("extsecret(aws-secrets): PROV_EXTSECRET_AWS_ACCESS_KEY_ID and PROV_EXTSECRET_AWS_SECRET_ACCESS_KEY are required")
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(cfg.AWSEndpoint), "/")
 	if endpoint == "" {

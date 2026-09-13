@@ -146,8 +146,8 @@ func (i *Issuer) EnsureHostCredential(ctx context.Context, sessionID, userID, ho
 }
 
 // scopeForHost adds each fleet-wide principal's host-scoped counterpart to a
-// certificate: "fleet" also gets "fleet-h-<hostID>", "fleet-login" also gets
-// "fleet-login-h-<hostID>". The fleet-wide principals are always retained — they
+// certificate: "fleet" also gets "prov-h-<hostID>", "prov-login" also gets
+// "prov-login-h-<hostID>". The fleet-wide principals are always retained — they
 // are what authenticates the jump-host hop (the jump host always trusts "fleet"),
 // and once a managed host is locked down it trusts ONLY its host-scoped principal,
 // so a certificate minted for another host is rejected there regardless of also

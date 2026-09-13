@@ -21,10 +21,10 @@ Relevant configuration (`internal/config`):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `FLEET_CA_PASSPHRASE` | — (required in prod, ≥16B) | encrypts the CA private key |
-| `FLEET_USER_CERT_TTL` | `12h` | ephemeral user certificate lifetime |
-| `FLEET_CERT_RENEW_BEFORE` | `3h` | renew certs this far ahead of expiry |
-| `FLEET_HOST_CERT_TTL` | `8760h` (365 days) | host certificate lifetime |
+| `PROV_CA_PASSPHRASE` | — (required in prod, ≥16B) | encrypts the CA private key |
+| `PROV_USER_CERT_TTL` | `12h` | ephemeral user certificate lifetime |
+| `PROV_CERT_RENEW_BEFORE` | `3h` | renew certs this far ahead of expiry |
+| `PROV_HOST_CERT_TTL` | `8760h` (365 days) | host certificate lifetime |
 
 ## 1. CA creation (bootstrap of trust)
 
@@ -32,7 +32,7 @@ On first backend startup, `InitBackground` calls `EnsureUserCA`, which creates a
 **user CA** (`kind = 'user'`, `algo = ssh-ed25519`) if none is active:
 
 - A keypair is generated; the private key is **encrypted with
-  `FLEET_CA_PASSPHRASE`** and stored in `ca_keys.private_enc`. It never leaves the
+  `PROV_CA_PASSPHRASE`** and stored in `ca_keys.private_enc`. It never leaves the
   backend.
 - The public key (authorized_keys form) is stored and exposed via
   `GET /api/v1/certificates/ca` (`activeUserCA`).
@@ -48,15 +48,15 @@ When a user logs in, a session hook fires the **Issuer**:
 1. Generate a fresh `ssh-ed25519` keypair **in the in-RAM vault** (never persisted).
 2. Allocate a unique serial from `ssh_cert_serial_seq`.
 3. Sign a user certificate with principals `fleet` + the username, validity
-   `now … now + FLEET_USER_CERT_TTL`, bound to the browser `session_id`.
+   `now … now + PROV_USER_CERT_TTL`, bound to the browser `session_id`.
 4. Persist **metadata only** to `ssh_certificates` (serial, `ca_key_id`,
    `user_id`, `session_id`, `key_id`, `principals`, `public_key`, `issued_at`,
    `expires_at`, `audit_id`). The private key stays in the vault.
 
 When the gateway dials a managed host it mints a **separate per-host certificate**
 that carries both `fleet` — which authenticates the shared **jump-host** hop — and
-a **host-scoped** principal `fleet-h-<hostID>` (or `fleet-login-h-<hostID>` for the
-login-only tier) for the managed host itself. With `FLEET_HOST_SCOPED_ONLY=true`,
+a **host-scoped** principal `prov-h-<hostID>` (or `prov-login-h-<hostID>` for the
+login-only tier) for the managed host itself. With `PROV_HOST_SCOPED_ONLY=true`,
 each managed host is enrolled to trust **only** its scoped principal (not `fleet`),
 so the certificate authenticates on that one host and is rejected everywhere else,
 even though it still carries `fleet` for the jump hop. See
@@ -65,7 +65,7 @@ even though it still carries `fleet` for the jump hop. See
 ## 3. Renewal
 
 A background loop (`renewalLoop`, hourly) calls `RenewExpiring`, which re-signs
-certificates that fall within `FLEET_CERT_RENEW_BEFORE` of expiry for still-active
+certificates that fall within `PROV_CERT_RENEW_BEFORE` of expiry for still-active
 sessions. This keeps long-lived browser sessions working without forcing
 re-login, while individual certificates remain short-lived.
 
@@ -123,7 +123,7 @@ GET /api/v1/certificates       ->   recently issued certificates (metadata)
 
 ## 7. Host certificates
 
-Host certificates (`kind = 'host'`, `FLEET_HOST_CERT_TTL` default 365 days) let
+Host certificates (`kind = 'host'`, `PROV_HOST_CERT_TTL` default 365 days) let
 clients verify host identity. They follow the same model: signed by the host CA,
 metadata recorded in `ssh_certificates`, revocable by serial. Operators with
 `Host.RotateCertificate` rotate them as part of host maintenance.

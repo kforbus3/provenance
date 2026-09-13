@@ -48,7 +48,7 @@ func (i *Issuer) SystemKeyMaterial(ctx context.Context, principals []string, ttl
 	if err != nil {
 		return nil, err
 	}
-	block, err := ssh.MarshalPrivateKey(priv, "fleet-ansible")
+	block, err := ssh.MarshalPrivateKey(priv, "prov-ansible")
 	if err != nil {
 		return nil, err
 	}

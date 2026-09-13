@@ -1,5 +1,5 @@
 // Package itsm opens change/incident tickets in an IT service-management system
-// (ServiceNow or Jira) and links them to Fleet access approvals, so privileged-access
+// (ServiceNow or Jira) and links them to Provenance access approvals, so privileged-access
 // requests carry a ticket reference for change management. Implemented against the
 // vendor REST APIs directly (basic auth over HTTPS) — no SDK.
 package itsm

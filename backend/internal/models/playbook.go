@@ -32,7 +32,7 @@ type PlaybookVersion struct {
 }
 
 // PlaybookRun is one execution of a playbook against a target (a single host or
-// a Fleet group). Execution wiring lands in Phase 2; the record exists now so
+// a Provenance group). Execution wiring lands in Phase 2; the record exists now so
 // the model and the startup reconciler are in place.
 type PlaybookRun struct {
 	ID              uuid.UUID  `json:"id"`

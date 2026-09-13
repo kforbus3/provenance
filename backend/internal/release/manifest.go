@@ -1,4 +1,4 @@
-// Package release defines Provenance's signed upgrade bundle (`.fleetup`): its
+// Package release defines Provenance's signed upgrade bundle (`.provup`): its
 // manifest, Ed25519 detached-signature signing/verification, and streaming
 // read/write of the bundle tar (a manifest + detached signature + one saved Docker
 // image tar per changed component). It is the trust foundation for the in-UI
@@ -43,13 +43,13 @@ type Manifest struct {
 	// merges them into the deployment's .env before recreating containers — additive
 	// only (an existing key is never touched), so operator-set values are preserved.
 	// This is what lets a release that introduces a new setting (or a generated secret
-	// like FLEET_UPDATER_TOKEN) install from a bundle without hand-editing .env.
+	// like PROV_UPDATER_TOKEN) install from a bundle without hand-editing .env.
 	ConfigAdditions []ConfigAddition `json:"configAdditions,omitempty"`
 }
 
 // ConfigAddition is one env key a bundle adds to the deployment's .env if absent.
 type ConfigAddition struct {
-	Key      string `json:"key"`                // e.g. FLEET_UPDATER_TOKEN; must match ^[A-Z][A-Z0-9_]*$
+	Key      string `json:"key"`                // e.g. PROV_UPDATER_TOKEN; must match ^[A-Z][A-Z0-9_]*$
 	Default  string `json:"default,omitempty"`  // literal value written when the key is absent
 	Generate string `json:"generate,omitempty"` // "" (use Default) or "secret" (generate 32 random bytes, hex)
 	Comment  string `json:"comment,omitempty"`  // written as a # comment line above the key
@@ -78,7 +78,7 @@ func (c ConfigAddition) Validate() error {
 // ImageRef pins one component's saved Docker image inside the bundle.
 type ImageRef struct {
 	Component string `json:"component"` // backend | frontend | grype-scanner
-	Image     string `json:"image"`     // repository, e.g. "fleet-terminal-backend"
+	Image     string `json:"image"`     // repository, e.g. "provenance-backend"
 	Tag       string `json:"tag"`       // version tag loaded on the host
 	File      string `json:"file"`      // path within the bundle tar, e.g. "images/backend.tar"
 	Digest    string `json:"digest"`    // "sha256:<hex>" over the image tar file

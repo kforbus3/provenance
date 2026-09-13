@@ -27,14 +27,14 @@ func dialTunnel(t *testing.T, addr string) net.Conn {
 }
 
 func TestExecuteMySQLLive(t *testing.T) {
-	addr := os.Getenv("FLEET_TEST_MYSQL_ADDR") // host:port
+	addr := os.Getenv("PROV_TEST_MYSQL_ADDR") // host:port
 	if addr == "" {
-		t.Skip("set FLEET_TEST_MYSQL_ADDR to run the live MySQL executor test")
+		t.Skip("set PROV_TEST_MYSQL_ADDR to run the live MySQL executor test")
 	}
 	host, port := splitHostPort(t, addr)
-	db := &models.Database{Engine: "mysql", Address: host, Port: port, DatabaseName: os.Getenv("FLEET_TEST_MYSQL_DB")}
-	user := envOr("FLEET_TEST_MYSQL_USER", "root")
-	pass := os.Getenv("FLEET_TEST_MYSQL_PASS")
+	db := &models.Database{Engine: "mysql", Address: host, Port: port, DatabaseName: os.Getenv("PROV_TEST_MYSQL_DB")}
+	user := envOr("PROV_TEST_MYSQL_USER", "root")
+	pass := os.Getenv("PROV_TEST_MYSQL_PASS")
 	ctx := context.Background()
 	sid := uuid.New()
 
@@ -56,14 +56,14 @@ func TestExecuteMySQLLive(t *testing.T) {
 }
 
 func TestExecuteSQLServerLive(t *testing.T) {
-	addr := os.Getenv("FLEET_TEST_MSSQL_ADDR")
+	addr := os.Getenv("PROV_TEST_MSSQL_ADDR")
 	if addr == "" {
-		t.Skip("set FLEET_TEST_MSSQL_ADDR to run the live SQL Server executor test")
+		t.Skip("set PROV_TEST_MSSQL_ADDR to run the live SQL Server executor test")
 	}
 	host, port := splitHostPort(t, addr)
-	db := &models.Database{Engine: "sqlserver", Address: host, Port: port, DatabaseName: envOr("FLEET_TEST_MSSQL_DB", "master")}
-	user := envOr("FLEET_TEST_MSSQL_USER", "sa")
-	pass := os.Getenv("FLEET_TEST_MSSQL_PASS")
+	db := &models.Database{Engine: "sqlserver", Address: host, Port: port, DatabaseName: envOr("PROV_TEST_MSSQL_DB", "master")}
+	user := envOr("PROV_TEST_MSSQL_USER", "sa")
+	pass := os.Getenv("PROV_TEST_MSSQL_PASS")
 	ctx := context.Background()
 
 	res, err := executeSQLServer(ctx, dialTunnel(t, addr), db, user, pass, "SELECT 1 AS one, 'hi' AS greeting")

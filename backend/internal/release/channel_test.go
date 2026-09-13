@@ -18,7 +18,7 @@ func serveChannel(t *testing.T, idx ChannelIndex, priv ed25519.PrivateKey) *http
 	sig := Sign(body, priv)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/channel.json", func(w http.ResponseWriter, r *http.Request) { w.Write(body) })
-	// Serve the base64 form the `fleetctl release channel` builder writes (EncodeSig),
+	// Serve the base64 form the `provctl release channel` builder writes (EncodeSig),
 	// exercising decodeSig's base64 branch end-to-end.
 	mux.HandleFunc("/channel.json.sig", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(EncodeSig(sig))) })
 	return httptest.NewServer(mux)
@@ -29,9 +29,9 @@ func TestFetchChannelAndPick(t *testing.T) {
 	idx := ChannelIndex{
 		SchemaVersion: ChannelSchema, Latest: "v0.62.0",
 		Releases: []ChannelRelease{
-			{Version: "v0.60.0", MinFromVersion: "v0.50.0", BundleURL: "http://x/60.fleetup", MigrationCompatibility: "additive"},
-			{Version: "v0.62.0", MinFromVersion: "v0.55.0", BundleURL: "http://x/62.fleetup", MigrationCompatibility: "additive"},
-			{Version: "v0.61.0", MinFromVersion: "v0.55.0", BundleURL: "http://x/61.fleetup", MigrationCompatibility: "breaking"},
+			{Version: "v0.60.0", MinFromVersion: "v0.50.0", BundleURL: "http://x/60.provup", MigrationCompatibility: "additive"},
+			{Version: "v0.62.0", MinFromVersion: "v0.55.0", BundleURL: "http://x/62.provup", MigrationCompatibility: "additive"},
+			{Version: "v0.61.0", MinFromVersion: "v0.55.0", BundleURL: "http://x/61.provup", MigrationCompatibility: "breaking"},
 		},
 	}
 	srv := serveChannel(t, idx, priv)

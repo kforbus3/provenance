@@ -49,7 +49,7 @@ func TestValidAddress(t *testing.T) {
 }
 
 func TestValidSSHUser(t *testing.T) {
-	ok := []string{"", "fleet", "root", "fleet-login", "svc_deploy", "a1"}
+	ok := []string{"", "fleet", "root", "prov-login", "svc_deploy", "a1"}
 	for _, s := range ok {
 		if !validSSHUser(s) {
 			t.Errorf("validSSHUser(%q) = false, want true", s)

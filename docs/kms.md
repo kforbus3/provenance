@@ -5,7 +5,7 @@ credential-vault entry (`vault_secret_versions.sealed`) — with **AES-256-GCM**
 derived per record (argon2id, or PBKDF2 under FIPS). See `internal/secretbox`.
 
 By default those passphrases are supplied as environment variables
-(`FLEET_CA_PASSPHRASE`, `FLEET_VAULT_PASSPHRASE`). An external **Key Management Service (KMS)** or
+(`PROV_CA_PASSPHRASE`, `PROV_VAULT_PASSPHRASE`). An external **Key Management Service (KMS)** or
 **HSM** lets you keep them off disk in plaintext: you store only a KMS-**wrapped** blob, and Provenance
 asks the KMS to unwrap it into memory once at boot.
 
@@ -22,7 +22,7 @@ migration and no re-seal — only the passphrase *source* moves.
 
 ## Providers
 
-| Provider        | `FLEET_KMS_PROVIDER` | Notes |
+| Provider        | `PROV_KMS_PROVIDER` | Notes |
 |-----------------|----------------------|-------|
 | Local (default) | `local`              | No external KMS. Passphrases read from the environment. Behavior unchanged. |
 | HashiCorp Vault Transit | `vault-transit` | Vault's encryption-as-a-service. The key never leaves Vault. |
@@ -37,53 +37,53 @@ dependency** — behind the same `internal/kms` interface.
 
 Common:
 
-    FLEET_KMS_PROVIDER=vault-transit        # or aws-kms, or local (default)
-    FLEET_KMS_KEY_ID=fleet-master           # transit key name, or AWS key id/ARN/alias
+    PROV_KMS_PROVIDER=vault-transit        # or aws-kms, or local (default)
+    PROV_KMS_KEY_ID=fleet-master           # transit key name, or AWS key id/ARN/alias
 
 HashiCorp Vault Transit:
 
-    FLEET_KMS_VAULT_ADDR=https://vault.internal:8200
-    FLEET_KMS_VAULT_TOKEN=<token with encrypt/decrypt on transit/keys/fleet-master>
-    FLEET_KMS_VAULT_CACERT=/etc/fleet/vault-ca.pem   # optional, for a private CA
-    # FLEET_KMS_VAULT_SKIP_VERIFY=true               # DEV ONLY — refused in production
+    PROV_KMS_VAULT_ADDR=https://vault.internal:8200
+    PROV_KMS_VAULT_TOKEN=<token with encrypt/decrypt on transit/keys/prov-master>
+    PROV_KMS_VAULT_CACERT=/etc/prov/vault-ca.pem   # optional, for a private CA
+    # PROV_KMS_VAULT_SKIP_VERIFY=true               # DEV ONLY — refused in production
 
 AWS KMS:
 
-    FLEET_KMS_AWS_REGION=us-east-1
-    FLEET_KMS_AWS_ACCESS_KEY_ID=...
-    FLEET_KMS_AWS_SECRET_ACCESS_KEY=...
-    # FLEET_KMS_AWS_SESSION_TOKEN=...                 # optional (STS)
-    # FLEET_KMS_AWS_ENDPOINT=http://localstack:4566   # optional override (emulator/testing)
+    PROV_KMS_AWS_REGION=us-east-1
+    PROV_KMS_AWS_ACCESS_KEY_ID=...
+    PROV_KMS_AWS_SECRET_ACCESS_KEY=...
+    # PROV_KMS_AWS_SESSION_TOKEN=...                 # optional (STS)
+    # PROV_KMS_AWS_ENDPOINT=http://localstack:4566   # optional override (emulator/testing)
 
-Azure Key Vault (FLEET_KMS_KEY_ID is the key name in the vault):
+Azure Key Vault (PROV_KMS_KEY_ID is the key name in the vault):
 
-    FLEET_KMS_AZURE_VAULT_URL=https://myvault.vault.azure.net
-    FLEET_KMS_AZURE_TENANT_ID=...
-    FLEET_KMS_AZURE_CLIENT_ID=...
-    FLEET_KMS_AZURE_CLIENT_SECRET=...
+    PROV_KMS_AZURE_VAULT_URL=https://myvault.vault.azure.net
+    PROV_KMS_AZURE_TENANT_ID=...
+    PROV_KMS_AZURE_CLIENT_ID=...
+    PROV_KMS_AZURE_CLIENT_SECRET=...
 
-GCP Cloud KMS (FLEET_KMS_KEY_ID is the full cryptoKey resource name,
+GCP Cloud KMS (PROV_KMS_KEY_ID is the full cryptoKey resource name,
 projects/P/locations/L/keyRings/KR/cryptoKeys/K):
 
-    FLEET_KMS_GCP_CREDENTIALS_FILE=/etc/fleet/gcp-sa.json   # service-account key JSON
-    # or inline: FLEET_KMS_GCP_CREDENTIALS='{"client_email":...,"private_key":...}'
+    PROV_KMS_GCP_CREDENTIALS_FILE=/etc/prov/gcp-sa.json   # service-account key JSON
+    # or inline: PROV_KMS_GCP_CREDENTIALS='{"client_email":...,"private_key":...}'
 
 ## One-time setup: wrap your passphrases
 
 With the KMS environment set, wrap each passphrase and capture the printed blob:
 
     # CA passphrase (pipe on stdin so it isn't captured in shell history):
-    printf '%s' "$FLEET_CA_PASSPHRASE" | fleetctl kms wrap
+    printf '%s' "$PROV_CA_PASSPHRASE" | provctl kms wrap
     # -> vault:v1:AAAA...        (or awskms:v1:....)
 
-    printf '%s' "$FLEET_VAULT_PASSPHRASE" | fleetctl kms wrap
+    printf '%s' "$PROV_VAULT_PASSPHRASE" | provctl kms wrap
     # -> vault:v1:BBBB...
 
 Then in your deployment environment, **replace the plaintext passphrases with the wrapped blobs**:
 
-    # remove (or leave unset):  FLEET_CA_PASSPHRASE / FLEET_VAULT_PASSPHRASE
-    FLEET_CA_PASSPHRASE_WRAPPED=vault:v1:AAAA...
-    FLEET_VAULT_PASSPHRASE_WRAPPED=vault:v1:BBBB...
+    # remove (or leave unset):  PROV_CA_PASSPHRASE / PROV_VAULT_PASSPHRASE
+    PROV_CA_PASSPHRASE_WRAPPED=vault:v1:AAAA...
+    PROV_VAULT_PASSPHRASE_WRAPPED=vault:v1:BBBB...
 
 You can wrap only one of the two if you prefer a phased rollout; a plaintext value and a wrapped
 value can coexist across the CA and vault passphrases.
@@ -94,12 +94,12 @@ unusable CA/vault.
 
 ## Verifying
 
-- `fleetctl kms status` — prints the provider, key ID, which passphrases are wrapped, and a live
+- `provctl kms status` — prints the provider, key ID, which passphrases are wrapped, and a live
   health check against the backend.
 - Settings → Infrastructure → **Encryption at rest** — the same status in-product (read-only),
   including backend health and per-passphrase wrapped/plaintext state. `GET /kms/status`
   (System.Configure).
-- `fleetctl kms unwrap <blob>` — unwraps a blob to confirm it round-trips (prints the plaintext, so
+- `provctl kms unwrap <blob>` — unwraps a blob to confirm it round-trips (prints the plaintext, so
   use with care).
 
 ## Rotating the KMS key
@@ -107,10 +107,10 @@ unusable CA/vault.
 Because wrapping is independent of the sealed data, rotating the *KMS* key does not touch the CA key
 or vault secrets. Re-wrap the same passphrases under the new key and swap the `*_WRAPPED` values:
 
-    printf '%s' "$FLEET_CA_PASSPHRASE" | FLEET_KMS_KEY_ID=fleet-master-v2 fleetctl kms wrap
+    printf '%s' "$PROV_CA_PASSPHRASE" | PROV_KMS_KEY_ID=fleet-master-v2 provctl kms wrap
 
 Rotating the *passphrase itself* (not the KMS key) is the existing at-rest re-seal flow
-(`fleetctl fips reseal-secrets` re-seals to a new envelope); KMS wrapping layers on top of whichever
+(`provctl fips reseal-secrets` re-seals to a new envelope); KMS wrapping layers on top of whichever
 passphrase is current.
 
 ## Notes

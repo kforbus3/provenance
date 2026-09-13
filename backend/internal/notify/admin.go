@@ -113,7 +113,7 @@ func (s *Service) SendTest(ctx context.Context, channel string) error {
 	ev := Event{
 		Type:     "test",
 		Severity: SeverityInfo,
-		Title:    "Fleet test notification",
+		Title:    "Provenance test notification",
 		Body:     "This is a test notification from Provenance. If you received it, the channel is configured correctly.",
 	}
 	switch channel {

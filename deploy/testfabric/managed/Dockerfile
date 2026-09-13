@@ -1,4 +1,4 @@
-# Fleet Terminal test fabric — managed host.
+# Provenance test fabric — managed host.
 #
 # Parameterized base image (ubuntu:22.04 or rockylinux:9). Runs OpenSSH
 # trusting the fleet user CA, plus userspace WireGuard (wireguard-go) peered
@@ -34,21 +34,21 @@ RUN if command -v apt-get >/dev/null 2>&1; then \
 COPY --from=wgbuild /src/wireguard-go /usr/local/bin/wireguard-go
 
 # Two login accounts (matching enrollment): 'fleet' has passwordless sudo;
-# 'fleet-login' is login-only (no sudo). Fleet CA-signed certs map to each by
-# principal (fleet / fleet-login).
+# 'prov-login' is login-only (no sudo). Provenance CA-signed certs map to each by
+# principal (fleet / prov-login).
 RUN useradd -m -s /bin/bash fleet \
- && useradd -m -s /bin/bash fleet-login \
- && echo 'fleet ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/fleet \
- && chmod 0440 /etc/sudoers.d/fleet
+ && useradd -m -s /bin/bash prov-login \
+ && echo 'fleet ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/prov \
+ && chmod 0440 /etc/sudoers.d/prov
 
 # sshd privilege-separation dir, principals mapping, and fleet CA placeholder.
 RUN mkdir -p /run/sshd /etc/ssh/auth_principals \
- && printf 'fleet\n' > /etc/ssh/auth_principals/fleet \
- && printf 'fleet-login\n' > /etc/ssh/auth_principals/fleet-login \
- && printf '# Placeholder for the Fleet Terminal user CA public key.\n# The enrollment flow overwrites this file with the real CA key.\n' \
-      > /etc/ssh/fleet_ca.pub
+ && printf 'fleet\n' > /etc/ssh/auth_principals/prov \
+ && printf 'prov-login\n' > /etc/ssh/auth_principals/prov-login \
+ && printf '# Placeholder for the Provenance user CA public key.\n# The enrollment flow overwrites this file with the real CA key.\n' \
+      > /etc/ssh/prov_ca.pub
 
-COPY sshd_fleet.conf /etc/ssh/sshd_config.d/00-fleet.conf
+COPY sshd_prov.conf /etc/ssh/sshd_config.d/00-prov.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

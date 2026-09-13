@@ -27,7 +27,7 @@ per namespace, with no `kubectl` required. Every listing is audited (`k8s.list`)
 
 Point `kubectl` at Provenance's proxy for a cluster and authenticate with a Provenance token:
 
-    kubectl --server=https://<fleet-host>/api/v1/k8s/clusters/<clusterId>/proxy \
+    kubectl --server=https://<prov-host>/api/v1/k8s/clusters/<clusterId>/proxy \
             --token=<fleet-access-token> \
             get pods -n <namespace>
 

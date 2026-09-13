@@ -18,14 +18,14 @@ type RekeyResult struct {
 
 // RekeySecrets rotates the vault master key: it decrypts every locally-sealed vault
 // secret version with oldKey and re-encrypts it under newKey, verifying the round-trip
-// before writing. This is the remediation for a suspected FLEET_VAULT_PASSPHRASE
+// before writing. This is the remediation for a suspected PROV_VAULT_PASSPHRASE
 // compromise — changing the passphrase alone would render every sealed secret
 // undecryptable; this migrates them.
 //
 // It is RESUMABLE and idempotent per row: a version already readable with newKey is
 // skipped, so re-running after an interruption completes the migration. Run it OFFLINE
 // (app stopped) so no other writer adds a version under the old key mid-rotation; then
-// set FLEET_VAULT_PASSPHRASE to the new value and start the app.
+// set PROV_VAULT_PASSPHRASE to the new value and start the app.
 //
 // Plaintext never leaves this process and each decrypted buffer is zeroized after use.
 func RekeySecrets(ctx context.Context, st *store.Store, oldKey, newKey []byte) (RekeyResult, error) {

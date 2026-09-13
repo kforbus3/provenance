@@ -63,7 +63,7 @@ type Service struct {
 func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gateway, issuer *identity.Issuer, nfy *notify.Service) *Service {
 	// The client timeout must cover a per-host request that queues behind other
 	// hosts at the shared grype-scanner during a fleet-wide scan (configurable via
-	// FLEET_VULN_SCAN_TIMEOUT). The per-scan context in Run uses the same bound.
+	// PROV_VULN_SCAN_TIMEOUT). The per-scan context in Run uses the same bound.
 	return &Service{store: st, cfg: cfg, log: log, gw: gw, issuer: issuer, nfy: nfy,
 		client: &http.Client{Timeout: cfg.VulnScanTimeout}}
 }

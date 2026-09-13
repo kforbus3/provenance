@@ -204,7 +204,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	// this product's own containers among them -- has none.
 	//
 	// Asking a registry about it is worse than useless: a bare name resolves to
-	// Docker Hub, "fleet-terminal-backend" is not a repository there, and Hub
+	// Docker Hub, "provenance-backend" is not a repository there, and Hub
 	// answers 401 for repositories that do not exist. That surfaces as "this
 	// registry needs credentials", which sends an operator to configure
 	// credentials that cannot help, for an image that will never be in a registry

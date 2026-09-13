@@ -85,7 +85,7 @@ server {
     # still on this segment, right after imaging -- and appearing in the fleet
     # immediately, rather than after it has been moved and reconfigured, is what
     # tells an operator the imaging run actually worked.
-    location = /api/fleet/heartbeat {
+    location ~ ^/api/(fleet|prov)/heartbeat$ {
         proxy_pass http://${WEBUI_ADDR};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;

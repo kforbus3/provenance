@@ -32,7 +32,7 @@ func (s *Service) RevokeSupersededSession(ctx context.Context, r *http.Request, 
 	if err != nil || rc.Value == "" {
 		return
 	}
-	sc, err := r.Cookie("fleet_sid")
+	sc, err := r.Cookie("prov_sid")
 	if err != nil {
 		return
 	}

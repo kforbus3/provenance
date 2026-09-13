@@ -63,7 +63,7 @@ func (h *handler) evidencePack(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not build evidence pack")
 		return
 	}
-	filename := "fleet-evidence-pack-" + from.Format("20060102") + "-" + to.Format("20060102") + ".pdf"
+	filename := "provenance-evidence-pack-" + from.Format("20060102") + "-" + to.Format("20060102") + ".pdf"
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	_, _ = w.Write(pdf)
@@ -83,7 +83,7 @@ func (h *handler) csv(name string, fn queryFn) http.HandlerFunc {
 			httpx.WriteError(w, http.StatusInternalServerError, "could not build report")
 			return
 		}
-		filename := "fleet-" + name + "-" + from.Format("20060102") + "-" + to.Format("20060102") + ".csv"
+		filename := "prov-" + name + "-" + from.Format("20060102") + "-" + to.Format("20060102") + ".csv"
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 		cw := csv.NewWriter(w)

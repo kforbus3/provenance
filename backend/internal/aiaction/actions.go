@@ -261,7 +261,7 @@ type deleteHostResolved struct {
 	Hostname string    `json:"hostname"`
 }
 
-// deleteHostAction proposes removing a host from Fleet. Destructive → requires
+// deleteHostAction proposes removing a host from Provenance. Destructive → requires
 // approval.
 func deleteHostAction() ActionDef {
 	return ActionDef{
@@ -282,7 +282,7 @@ func deleteHostAction() ActionDef {
 				}
 			}
 			resolved, _ := json.Marshal(deleteHostResolved{HostID: h.ID, Hostname: h.Hostname})
-			return resolved, fmt.Sprintf("Delete host %s from Fleet — removes its enrollment, access grants, and history.", h.Hostname), nil
+			return resolved, fmt.Sprintf("Delete host %s from Provenance — removes its enrollment, access grants, and history.", h.Hostname), nil
 		},
 		Execute: func(ctx context.Context, r *Registry, actor Actor, params json.RawMessage) (string, error) {
 			var p deleteHostResolved
@@ -310,7 +310,7 @@ func deleteHostAction() ActionDef {
 					}
 				}(*host)
 			}
-			return fmt.Sprintf("Deleted host %s from Fleet.", p.Hostname), nil
+			return fmt.Sprintf("Deleted host %s from Provenance.", p.Hostname), nil
 		},
 	}
 }

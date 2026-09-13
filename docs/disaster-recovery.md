@@ -4,13 +4,13 @@ This guide covers the **DR planning** side of Provenance: recovery objectives
 (RPO/RTO), what state must be protected, and the failure scenarios you should
 rehearse for. The platform's durable state lives in **PostgreSQL** and the
 **session recordings directory**; the CA private key (encrypted) lives in the
-database, protected by `FLEET_CA_PASSPHRASE`.
+database, protected by `PROV_CA_PASSPHRASE`.
 
 > **The encrypted-backup and rebuild procedure lives in
 > [break-glass.md](./break-glass.md) — that runbook is authoritative.** Provenance's
 > shipped backups are produced under **Settings → Backup & Restore**: `pg_dump`
-> piped through `openssl` (AES-256-CBC, PBKDF2) into `FLEET_BACKUP_DIR`
-> (default `/var/lib/fleet/backups`), with optional scheduling + retention.
+> piped through `openssl` (AES-256-CBC, PBKDF2) into `PROV_BACKUP_DIR`
+> (default `/var/lib/prov/backups`), with optional scheduling + retention.
 > This document does **not** repeat those steps; it covers what to protect and
 > the recovery scenarios around them.
 
@@ -19,20 +19,20 @@ database, protected by `FLEET_CA_PASSPHRASE`.
 | Asset | Where | Notes |
 |-------|-------|-------|
 | Relational state | PostgreSQL (`pgdata` volume) | users, RBAC, hosts, certs, sessions, audit, settings — captured by the encrypted backup |
-| CA private key | `ca_keys.private_enc` in PostgreSQL | encrypted with `FLEET_CA_PASSPHRASE`; rides along inside the DB backup (still ciphertext) |
-| Encrypted backups | `backups` volume (`FLEET_BACKUP_DIR`, default `/var/lib/fleet/backups`) | `pg_dump` + `openssl` AES-256 files; **get them off the host** |
-| `FLEET_CA_PASSPHRASE` | password manager / sealed offline copy | **without it the CA key is unrecoverable**; deliberately **not** in any backup |
-| `FLEET_BACKUP_PASSPHRASE` | password manager / sealed offline copy | decrypts the backups; falls back to `FLEET_CA_PASSPHRASE`; deliberately **not** in any backup |
-| `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET` | secret store / `.env` | losing these invalidates live tokens (users re-login) |
+| CA private key | `ca_keys.private_enc` in PostgreSQL | encrypted with `PROV_CA_PASSPHRASE`; rides along inside the DB backup (still ciphertext) |
+| Encrypted backups | `backups` volume (`PROV_BACKUP_DIR`, default `/var/lib/prov/backups`) | `pg_dump` + `openssl` AES-256 files; **get them off the host** |
+| `PROV_CA_PASSPHRASE` | password manager / sealed offline copy | **without it the CA key is unrecoverable**; deliberately **not** in any backup |
+| `PROV_BACKUP_PASSPHRASE` | password manager / sealed offline copy | decrypts the backups; falls back to `PROV_CA_PASSPHRASE`; deliberately **not** in any backup |
+| `PROV_JWT_SECRET`, `PROV_CSRF_SECRET` | secret store / `.env` | losing these invalidates live tokens (users re-login) |
 | Jump host volumes | `jump_wg`, `jump_ssh` Docker volumes | WireGuard peers + SSH host key; recoverable by re-enrolling hosts, but tedious |
-| Session recordings | `recordings` volume (`FLEET_RECORDING_DIR`) | asciicast files referenced by `session_recordings.path` |
+| Session recordings | `recordings` volume (`PROV_RECORDING_DIR`) | asciicast files referenced by `session_recordings.path` |
 | Audit export | external archive | immutable copy of the hash chain |
 
-> **Critical:** keep `FLEET_CA_PASSPHRASE` and `FLEET_BACKUP_PASSPHRASE` **off the
+> **Critical:** keep `PROV_CA_PASSPHRASE` and `PROV_BACKUP_PASSPHRASE` **off the
 > server** — a copy in a password manager (or a sealed envelope). They are
 > deliberately excluded from backups, so a stolen backup can't be decrypted, but
 > that also means a backup is useless for recovery without them. Losing
-> `FLEET_CA_PASSPHRASE` means rotating to a brand-new CA and re-trusting it on
+> `PROV_CA_PASSPHRASE` means rotating to a brand-new CA and re-trusting it on
 > every managed host.
 
 ## Backups (where DR fits)
@@ -40,7 +40,7 @@ database, protected by `FLEET_CA_PASSPHRASE`.
 Provenance's **database backup is the encrypted `pg_dump | openssl` artifact** managed
 under **Settings → Backup & Restore** and documented step-by-step in
 [break-glass.md](./break-glass.md): enable scheduling + retention, get the files
-**off the host** (map `FLEET_BACKUP_DIR` to off-host storage or rsync the
+**off the host** (map `PROV_BACKUP_DIR` to off-host storage or rsync the
 directory elsewhere), and rehearse the decrypt/restore. Do **not** treat an ad-hoc
 plain `pg_dump` as your backup path — it omits encryption, scheduling, and
 retention.
@@ -49,7 +49,7 @@ The database backup captures **everything in PostgreSQL**, including the encrypt
 CA key, RBAC, hosts, and the audit chain. The pieces it does **not** cover, and
 that DR planning must account for separately:
 
-- **Session recordings** — on the `recordings` volume (`FLEET_RECORDING_DIR`), not
+- **Session recordings** — on the `recordings` volume (`PROV_RECORDING_DIR`), not
   in the database. Snapshot the volume alongside the DB backup:
   ```sh
   docker run --rm -v compose_recordings:/data -v "$PWD/backups:/backup" alpine \
@@ -67,27 +67,27 @@ that DR planning must account for separately:
     -H "Authorization: Bearer $TOKEN" \
     -o backups/audit-$(date +%Y%m%d).json
   ```
-- **Secrets** — keep `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`,
-  `FLEET_CA_PASSPHRASE`, and `FLEET_BACKUP_PASSPHRASE` in your secret manager (or
+- **Secrets** — keep `PROV_JWT_SECRET`, `PROV_CSRF_SECRET`,
+  `PROV_CA_PASSPHRASE`, and `PROV_BACKUP_PASSPHRASE` in your secret manager (or
   `deploy/k8s/11-secret.yaml`), with sealed offline copies of the two passphrases.
   Redis (`redisdata`) is a cache/job broker and does not need backup.
 
 ## Restore (full)
 
 The end-to-end **rebuild-from-backup** procedure — decrypting the backup with
-`openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE"` and
-piping into `psql "$FLEET_DATABASE_URL"`, then restarting the backend — is in
+`openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PROV_BACKUP_PASSPHRASE"` and
+piping into `psql "$PROV_DATABASE_URL"`, then restarting the backend — is in
 [break-glass.md](./break-glass.md). DR-specific notes that complete that flow:
 
 1. Bring the stack up with the **same `.env`** — crucially the same
-   `FLEET_CA_PASSPHRASE`, `FLEET_BACKUP_PASSPHRASE`, `FLEET_JWT_SECRET`, and
-   `FLEET_CSRF_SECRET` as the original deployment.
+   `PROV_CA_PASSPHRASE`, `PROV_BACKUP_PASSPHRASE`, `PROV_JWT_SECRET`, and
+   `PROV_CSRF_SECRET` as the original deployment.
 2. After restoring the database, restore the **recordings volume** (reverse of the
    tar above) and, if the jump host was lost, the **`jump_wg` / `jump_ssh`**
    volumes.
 3. **Verify** (see below).
 
-On startup the backend runs migrations idempotently (`FLEET_MIGRATE_ON_START`)
+On startup the backend runs migrations idempotently (`PROV_MIGRATE_ON_START`)
 and `EnsureUserCA` finds the existing CA — it will **not** create a new one, so
 managed hosts continue to trust it.
 
@@ -121,9 +121,9 @@ The bootstrap wizard self-closes once any user exists. To recover:
    account that holds `User.ResetPassword`.
 3. **Reopen bootstrap (offline recovery):** with the app stopped, delete the
    remaining (orphaned) user rows so the user count reaches zero, set
-   `FLEET_ALLOW_BOOTSTRAP=true`, restart, and re-run the wizard. This is a
+   `PROV_ALLOW_BOOTSTRAP=true`, restart, and re-run the wizard. This is a
    break-glass procedure — perform it deliberately and audit it. Re-disable
-   bootstrap (`FLEET_ALLOW_BOOTSTRAP=false`) afterward.
+   bootstrap (`PROV_ALLOW_BOOTSTRAP=false`) afterward.
 
 ### CA key compromise
 
@@ -134,14 +134,14 @@ The bootstrap wizard self-closes once any user exists. To recover:
    (`GET /api/v1/certificates/krl`) to hosts' `RevokedKeys`.
 See [certificate-lifecycle.md](./certificate-lifecycle.md).
 
-### Lost `FLEET_CA_PASSPHRASE`
+### Lost `PROV_CA_PASSPHRASE`
 
 The stored CA private key cannot be decrypted. You must generate a **new** CA
 (rotate) and re-trust its public key on all hosts. Existing certificates signed by
 the old CA can no longer be renewed; sessions will need re-issuance under the new
 CA.
 
-### Lost `FLEET_JWT_SECRET` / `FLEET_CSRF_SECRET`
+### Lost `PROV_JWT_SECRET` / `PROV_CSRF_SECRET`
 
 Live access tokens and CSRF cookies become invalid; users simply log in again. Set
 fresh strong secrets and restart.
@@ -165,16 +165,16 @@ as a security incident, and preserve evidence (DB snapshot + exports).
 
 **Backup** — Admins manage encrypted backups under **Settings → Backup & Restore**:
 "Back up now", scheduled backups with a retention count, and download. Each file is
-`pg_dump` piped through `openssl` (AES-256-CBC, PBKDF2) into `FLEET_BACKUP_DIR`
-(default `/var/lib/fleet/backups`, the `backups` volume). See
+`pg_dump` piped through `openssl` (AES-256-CBC, PBKDF2) into `PROV_BACKUP_DIR`
+(default `/var/lib/prov/backups`, the `backups` volume). See
 [break-glass.md](./break-glass.md) for the full procedure.
 
 **Restore** — performed offline; the encrypted file is standard openssl, so it
 restores anywhere with no Provenance-specific tooling:
 
 ```bash
-openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \
-  -in fleet-backup-YYYYMMDD-HHMMSS.sql.enc | psql "$FLEET_DATABASE_URL"
+openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PROV_BACKUP_PASSPHRASE" \
+  -in prov-backup-YYYYMMDD-HHMMSS.sql.enc | psql "$PROV_DATABASE_URL"
 ```
 
 **Verify integrity first (recommended).** Each backup ships a detached
@@ -182,8 +182,8 @@ openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \
 file wasn't corrupted or tampered with *before* restoring it into your database:
 
 ```bash
-F=fleet-backup-YYYYMMDD-HHMMSS.sql.enc
-KEY=$(printf 'fleet-backup-hmac:%s' "$FLEET_BACKUP_PASSPHRASE" | openssl dgst -sha256 -binary | xxd -p -c256)
+F=prov-backup-YYYYMMDD-HHMMSS.sql.enc
+KEY=$(printf 'prov-backup-hmac:%s' "$PROV_BACKUP_PASSPHRASE" | openssl dgst -sha256 -binary | xxd -p -c256)
 GOT=$(openssl dgst -sha256 -mac HMAC -macopt hexkey:"$KEY" -r "$F" | cut -d' ' -f1)
 [ "$GOT" = "$(cut -d' ' -f1 "$F.hmac")" ] && echo "OK: authentic" || echo "FAIL: do NOT restore"
 ```
@@ -191,16 +191,16 @@ GOT=$(openssl dgst -sha256 -mac HMAC -macopt hexkey:"$KEY" -r "$F" | cut -d' ' -
 (Backups created before v0.68.2 have no `.hmac` sidecar; the openssl decrypt above still
 works, just without the integrity check.)
 
-**Recovery when locked out** — use the bundled `fleetctl` CLI (ships in the backend image):
+**Recovery when locked out** — use the bundled `provctl` CLI (ships in the backend image):
 
 ```bash
-fleetctl create-admin <username> <password>   # new Super Administrator
-fleetctl reset-mfa <username>                  # clear a user's MFA
-fleetctl enable-user <username>                # re-enable + unlock
-fleetctl rotate-ca                             # rotate the user CA
+provctl create-admin <username> <password>   # new Super Administrator
+provctl reset-mfa <username>                  # clear a user's MFA
+provctl enable-user <username>                # re-enable + unlock
+provctl rotate-ca                             # rotate the user CA
 ```
 
-Note: SSH **session recordings** live on the recordings volume (`FLEET_RECORDING_DIR`),
+Note: SSH **session recordings** live on the recordings volume (`PROV_RECORDING_DIR`),
 not in the database — back that volume up alongside the database backup.
 
 ---
@@ -239,14 +239,14 @@ write to it until you fail over.
 - **Streaming replication** primary → standby: **async** (RPO = lag, seconds) or
   **synchronous** (zero loss, WAN latency cost). Provenance does not manage this — use
   native replication, Patroni, or a managed cross-region replica; Provenance only needs
-  `FLEET_DATABASE_URL` pointed at whatever is currently primary. The DR page shows
+  `PROV_DATABASE_URL` pointed at whatever is currently primary. The DR page shows
   this instance's live posture (in-recovery + replay lag).
-- **Identical secrets on both stacks** — mandatory: `FLEET_CA_PASSPHRASE` (**the
+- **Identical secrets on both stacks** — mandatory: `PROV_CA_PASSPHRASE` (**the
   linchpin** — the CA private key lives encrypted in `ca_keys`; a different CA means
-  no host accepts the standby's certs), `FLEET_VAULT_PASSPHRASE`, `FLEET_JWT_SECRET`,
-  `FLEET_CSRF_SECRET`. The in-RAM ephemeral cert vault is per-instance and rebuilt on
+  no host accepts the standby's certs), `PROV_VAULT_PASSPHRASE`, `PROV_JWT_SECRET`,
+  `PROV_CSRF_SECRET`. The in-RAM ephemeral cert vault is per-instance and rebuilt on
   demand — it is not replicated, and that is fine.
-- **Recordings** (`FLEET_RECORDING_DIR`) are on disk, not in the DB — replicate the
+- **Recordings** (`PROV_RECORDING_DIR`) are on disk, not in the DB — replicate the
   directory only if you want replay history to survive failover.
 
 ## Requirement 2 — web reachability (easy)
@@ -264,7 +264,7 @@ pointed at the primary) need one of:
 
 - **Option A — fail the WireGuard endpoint *name* over:** repoint the WG endpoint DNS
   to the standby jump host, which holds the **replicated WG server private key** and
-  rebuilds peers from the promoted DB (`wg addconf wg0 <(fleetctl wg-peers)`). Peers
+  rebuilds peers from the promoted DB (`wg addconf wg0 <(provctl wg-peers)`). Peers
   roam and re-handshake with no re-enrollment. Your *web* domains stay separate; only
   the *WG endpoint name* fails over. (This is `high-availability.md` §5 across sites.)
 - **Option B — dual-home the hosts:** enroll each survive-critical host into **both**
@@ -297,7 +297,7 @@ repoint and jump-host WireGuard bring-up happen in your webhook.**
 
 **Planned:** quiesce the primary → confirm standby lag ≈ 0 (DR page) → on the
 standby, **Force failover** with "Also promote this database" → point the standby's
-`FLEET_DATABASE_URL` at the now-primary DB if needed → operators move to the standby
+`PROV_DATABASE_URL` at the now-primary DB if needed → operators move to the standby
 domain.
 
 **Unplanned (primary down):** the standby runs a **read-only standby console**
@@ -305,17 +305,17 @@ automatically — when Provenance detects its database is a replica (`pg_is_in_r
 it boots in **standby mode**: migrations are skipped, no background writers start,
 and the entire UI is replaced by a break-glass console (login isn't possible against
 a replica). Go to the standby's address, and the console shows replication lag and a
-**Promote this instance to primary** action gated by `FLEET_DR_STANDBY_TOKEN`. Enter
+**Promote this instance to primary** action gated by `PROV_DR_STANDBY_TOKEN`. Enter
 the token and promote: Provenance runs `pg_promote()` and **restarts into normal mode**
 against the now-primary database (ensure the container has a restart policy). Then
 fire the DNS/WG webhook (from the now-normal **Force failover**, or your automation).
-`fleetctl` on the standby remains the fallback if the console can't run.
+`provctl` on the standby remains the fallback if the console can't run.
 **Hosts that died with the primary site do not come back** — that is workload DR.
 
 > Standby mode is automatic (driven by `pg_is_in_recovery()`); migrations are
-> auto-skipped on a replica, so `FLEET_MIGRATE_ON_START=false` is belt-and-suspenders
-> rather than required. Set `FLEET_DR_STANDBY_TOKEN` (a strong secret, same on both
-> stacks) to enable console promotion; leave it unset to require `fleetctl`/DB
+> auto-skipped on a replica, so `PROV_MIGRATE_ON_START=false` is belt-and-suspenders
+> rather than required. Set `PROV_DR_STANDBY_TOKEN` (a strong secret, same on both
+> stacks) to enable console promotion; leave it unset to require `provctl`/DB
 > promotion instead.
 
 ## Failback

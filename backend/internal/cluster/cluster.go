@@ -27,7 +27,7 @@ import (
 
 // leaderLockKey is the fixed advisory-lock key contended for leadership. Arbitrary
 // but must be identical across all instances (and not collide with other advisory
-// locks — Fleet uses none elsewhere).
+// locks — Provenance uses none elsewhere).
 const leaderLockKey int64 = 0x466C74484100 // "FltHA"
 
 const (

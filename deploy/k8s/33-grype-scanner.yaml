@@ -1,17 +1,17 @@
 # Grype scanner sidecar — runs Anchore Grype vulnerability scans for the backend.
-# Internal only (ClusterIP): reachable at http://fleet-grype-scanner:8000. The ~1 GB
+# Internal only (ClusterIP): reachable at http://prov-grype-scanner:8000. The ~1 GB
 # vuln DB is fetched at runtime and persisted on a PVC (not baked into the image).
 apiVersion: v1
 kind: Service
 metadata:
-  name: fleet-grype-scanner
-  namespace: fleet-terminal
+  name: prov-grype-scanner
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: grype-scanner
 spec:
   selector:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: grype-scanner
   ports:
     - name: http
@@ -21,10 +21,10 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fleet-grype-scanner
-  namespace: fleet-terminal
+  name: prov-grype-scanner
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: grype-scanner
 spec:
   replicas: 1
@@ -32,12 +32,12 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: fleet-terminal
+      app.kubernetes.io/name: provenance
       app.kubernetes.io/component: grype-scanner
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fleet-terminal
+        app.kubernetes.io/name: provenance
         app.kubernetes.io/component: grype-scanner
     spec:
       securityContext:
@@ -50,7 +50,7 @@ spec:
       containers:
         - name: grype-scanner
           # Build/push from deploy/grype-scanner (no public image is published).
-          image: ghcr.io/kforbus3/blackfriars-grype-scanner:latest
+          image: ghcr.io/kforbus3/provenance-grype-scanner:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -103,7 +103,7 @@ spec:
       volumes:
         - name: grype-db
           persistentVolumeClaim:
-            claimName: fleet-grype-db
+            claimName: prov-grype-db
         - name: tmp
           emptyDir: {}
 ---
@@ -112,10 +112,10 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: fleet-grype-db
-  namespace: fleet-terminal
+  name: prov-grype-db
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: grype-scanner
 spec:
   accessModes: ["ReadWriteOnce"]

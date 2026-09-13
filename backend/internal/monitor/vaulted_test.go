@@ -17,7 +17,7 @@ func TestHasVaultedCredential(t *testing.T) {
 	}{
 		{"vault password with credential", models.Host{AuthMethod: "vault_password", CredentialID: &cid}, true},
 		{"vault key with credential", models.Host{AuthMethod: "vault_ssh_key", CredentialID: &cid}, true},
-		{"fleet cert", models.Host{AuthMethod: "fleet_cert", CredentialID: &cid}, false},
+		{"fleet cert", models.Host{AuthMethod: "prov_cert", CredentialID: &cid}, false},
 		{"default (empty) auth", models.Host{AuthMethod: "", CredentialID: &cid}, false},
 		{"vaulted method but no credential attached", models.Host{AuthMethod: "vault_password"}, false},
 	}

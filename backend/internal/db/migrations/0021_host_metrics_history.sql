@@ -3,8 +3,8 @@
 -- 48h". host_metrics keeps only the latest snapshot (one row per host, overwritten
 -- each probe); this table retains scalar samples over time. Only the scalars useful
 -- for trends are kept (not the full per-filesystem/network JSONB) so rows stay small.
--- Sampling cadence and retention are bounded by the app (FLEET_METRIC_HISTORY_SAMPLE
--- / FLEET_METRIC_HISTORY_RETENTION); old rows are pruned by the retention loop.
+-- Sampling cadence and retention are bounded by the app (PROV_METRIC_HISTORY_SAMPLE
+-- / PROV_METRIC_HISTORY_RETENTION); old rows are pruned by the retention loop.
 
 CREATE TABLE IF NOT EXISTS host_metrics_history (
     host_id           UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,

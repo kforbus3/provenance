@@ -38,7 +38,7 @@ server {
     # rest of /api/ is the admin surface, and this address is by definition the
     # more exposed of the two: it is bound wherever the fleet lives, which may
     # be a general-purpose LAN rather than a segment kept for provisioning.
-    location = /api/fleet/heartbeat {
+    location ~ ^/api/(fleet|prov)/heartbeat$ {
         proxy_pass http://${WEBUI_ADDR};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;

@@ -93,11 +93,11 @@ func (g *Gateway) dialWithCred(ctx context.Context, cred *identity.Credential, h
 //     never locked down (see docs/security-guide.md §13), so jumpSigner must carry
 //     "fleet". The session-level certificate is the one that does.
 //   - A managed host maps a certificate to an account via AuthorizedPrincipalsFile.
-//     A login-only certificate deliberately carries "fleet-login"/"fleet-login-h-<id>"
+//     A login-only certificate deliberately carries "prov-login"/"prov-login-h-<id>"
 //     and NOT "fleet", which is what keeps sshd — not just the backend — enforcing
 //     the no-sudo tier. Reusing that certificate for the jump hop would be rejected
 //     there; adding "fleet" to it would surrender the account split on any host not
-//     yet under FLEET_HOST_SCOPED_ONLY.
+//     yet under PROV_HOST_SCOPED_ONLY.
 //
 // Hence: jumpSigner authenticates the jump hop, hostSigner the managed host.
 func (g *Gateway) dialWithSigners(ctx context.Context, jumpSigner, hostSigner ssh.Signer, host string, port int, user string) (*Conn, error) {
@@ -106,7 +106,7 @@ func (g *Gateway) dialWithSigners(ctx context.Context, jumpSigner, hostSigner ss
 	}
 
 	// Host keys are verified trust-on-first-use (see hostKeyCallback); the local
-	// test fabric sets FLEET_SSH_INSECURE_HOST_KEYS to accept ephemeral keys.
+	// test fabric sets PROV_SSH_INSECURE_HOST_KEYS to accept ephemeral keys.
 	hostKeyCB := g.hostKeyCallback()
 
 	jumpCfg := g.pin(&ssh.ClientConfig{
@@ -179,16 +179,16 @@ func (g *Gateway) DialForHost(ctx context.Context, sessionID, userID, hostID uui
 // the certificate principals that authorize it. Enrollment provisions two
 // accounts per host: the privileged shared account (sshUser, NOPASSWD sudo,
 // principal "fleet") and a login-only account (sshUser+"-login", no sudo,
-// principal "fleet-login"). sudo callers get the former; everyone else the
+// principal "prov-login"). sudo callers get the former; everyone else the
 // latter. The username is added as a namespaced, informational principal
 // (principals.User → "user:<name>"); it matches no AuthorizedPrincipalsFile entry
-// and cannot collide with a "fleet"/"fleet-h-<id>" principal, so it grants no
+// and cannot collide with a "fleet"/"prov-h-<id>" principal, so it grants no
 // access on its own even if the username were chosen adversarially.
 //
 // The returned principals are for the MANAGED-HOST hop only. The login-only set
 // omits the fleet-wide "fleet" on purpose: that is what makes sshd, rather than
 // only the backend, refuse to open the sudo account for a login-only user on a
-// host that still trusts "fleet" (i.e. not yet under FLEET_HOST_SCOPED_ONLY).
+// host that still trusts "fleet" (i.e. not yet under PROV_HOST_SCOPED_ONLY).
 // The jump hop is authenticated separately by the session certificate.
 func LoginTier(sudo bool, sshUser, username string) (loginUser string, principals []string) {
 	if sudo {
@@ -246,7 +246,7 @@ func (g *Gateway) DialHost(handle, host string, port int, user string) (any, err
 
 // DialDirectPassword opens a direct SSH connection authenticating with a
 // password. Enrollment uses this to bootstrap a brand-new host that does not yet
-// trust the Fleet CA (chicken-and-egg: we install the trust over this session).
+// trust the Provenance CA (chicken-and-egg: we install the trust over this session).
 func (g *Gateway) DialDirectPassword(ctx context.Context, addr string, port int, user, password string) (*ssh.Client, error) {
 	cfg := g.pin(&ssh.ClientConfig{
 		User:            user,
@@ -321,7 +321,7 @@ func (g *Gateway) DialSystemPasswordViaJump(ctx context.Context, hostID uuid.UUI
 // jump host using an arbitrary auth method for the host (typically an injected
 // vault credential), while a short-lived system certificate authenticates to the
 // jump. No user session is involved — the background monitor and credential rotator
-// use this to reach directly-managed hosts that don't trust the Fleet CA.
+// use this to reach directly-managed hosts that don't trust the Provenance CA.
 func (g *Gateway) DialSystemAuthViaJump(ctx context.Context, hostID uuid.UUID, host string, port int, user string, auth ssh.AuthMethod) (*Conn, error) {
 	if g.issuer == nil {
 		return nil, fmt.Errorf("gateway issuer unavailable")
@@ -357,7 +357,7 @@ func (g *Gateway) DialSystemAuthViaJump(ctx context.Context, hostID uuid.UUID, h
 // DialDirectKey opens a direct SSH connection authenticating with a raw key
 // signer (a plain public key, not a certificate). Enrollment uses this to
 // bootstrap a host that has no password auth but already trusts an operator's
-// key in authorized_keys, and does not yet trust the Fleet CA.
+// key in authorized_keys, and does not yet trust the Provenance CA.
 func (g *Gateway) DialDirectKey(ctx context.Context, addr string, port int, user string, signer ssh.Signer) (*ssh.Client, error) {
 	return g.DialDirectAuth(ctx, addr, port, user, ssh.PublicKeys(signer))
 }

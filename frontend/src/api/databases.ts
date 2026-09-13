@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-// Brokered database access: register database targets and run SQL through Fleet,
+// Brokered database access: register database targets and run SQL through Provenance,
 // which reaches the database via the jump host with a vaulted credential injected.
 
 export interface Database {

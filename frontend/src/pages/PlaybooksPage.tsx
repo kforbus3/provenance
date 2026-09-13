@@ -29,7 +29,7 @@ import { PLAYBOOK_TEMPLATES } from "../lib/playbook-templates";
 
 const STARTER = PLAYBOOK_TEMPLATES[0].content;
 
-// Authoring surface for Ansible playbooks. Playbooks are stored in Fleet,
+// Authoring surface for Ansible playbooks. Playbooks are stored in Provenance,
 // edited here, and validated/linted by the ansible-runner sidecar. Running them
 // against hosts arrives in a later phase.
 export function PlaybooksPage() {
@@ -207,8 +207,8 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
         {!runId ? (
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Alert severity="info">
-              The playbook runs through the Fleet jump host as the privileged host account. Make sure
-              its plays target <code>hosts: all</code> — Fleet supplies the inventory and limits it to
+              The playbook runs through the Provenance jump host as the privileged host account. Make sure
+              its plays target <code>hosts: all</code> — Provenance supplies the inventory and limits it to
               the targets you pick.
             </Alert>
             <ToggleButtonGroup
@@ -386,8 +386,8 @@ function PlaybookRunsDialog({ playbook, onClose }: { playbook: Playbook; onClose
 }
 
 function RunStatusChip({ status }: { status?: string }) {
-  // "interrupted" (amber) = Fleet restarted mid-run and the result was never
-  // collected (e.g. the playbook rebooted the machine hosting Fleet) — the
+  // "interrupted" (amber) = Provenance restarted mid-run and the result was never
+  // collected (e.g. the playbook rebooted the machine hosting Provenance) — the
   // target hosts may still have completed their tasks. Distinct from a red
   // "failed", where ansible itself reported failure.
   const color =

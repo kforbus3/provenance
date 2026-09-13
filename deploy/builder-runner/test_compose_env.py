@@ -1,6 +1,6 @@
 """Every setting the backend reads must reach the backend.
 
-FLEET_TRUSTED_PROXY_HOPS was added to config.go, wired into the middleware,
+PROV_TRUSTED_PROXY_HOPS was added to config.go, wired into the middleware,
 tested, merged and deployed -- and did nothing, because docker-compose.yml never
 passed it. Compose does not forward a .env file's contents to a container; it
 uses them for substitution, and the service must name the variable. So the
@@ -11,7 +11,7 @@ Nothing catches that shape. The Go code compiles, its tests pass (they construct
 a Config directly), the container starts, and the only symptom is a setting that
 has no effect -- which looks exactly like the setting not being the problem.
 
-So: every FLEET_* variable config.go reads must be declared in the compose file,
+So: every PROV_* variable config.go reads must be declared in the compose file,
 or listed below as a deliberate exception.
 
 The exceptions are a snapshot taken when this check was written, NOT an
@@ -32,14 +32,14 @@ COMPOSE = os.path.join(ROOT, "deploy/compose/docker-compose.yml")
 
 # Known-undeclared as of 2026-09-09. See the docstring: a snapshot, not a target.
 KNOWN_UNDECLARED = {
-    "FLEET_BACKUP_DIR", "FLEET_DR_STANDBY_TOKEN", "FLEET_FIPS_MODE",
-    "FLEET_GUACD_ADDR", "FLEET_IMAGING_SECRET_PREFIX",
-    "FLEET_KMS_AWS_SESSION_TOKEN", "FLEET_KMS_GCP_CREDENTIALS",
-    "FLEET_KMS_VAULT_CACERT", "FLEET_KMS_VAULT_SKIP_VERIFY",
-    "FLEET_MFA_ENCRYPTION_KEY", "FLEET_MIGRATE_ON_START",
-    "FLEET_MONITOR_OFFLINE_CONFIRMATIONS", "FLEET_MSRC_API_URL",
-    "FLEET_MSRC_MONTHS", "FLEET_OVERLAY", "FLEET_OVERLAY_PEER_ISOLATION",
-    "FLEET_RDP_DRIVE_DIR", "FLEET_RDP_PROXY_HOST", "FLEET_REDIS_URL",
+    "PROV_BACKUP_DIR", "PROV_DR_STANDBY_TOKEN", "PROV_FIPS_MODE",
+    "PROV_GUACD_ADDR", "PROV_IMAGING_SECRET_PREFIX",
+    "PROV_KMS_AWS_SESSION_TOKEN", "PROV_KMS_GCP_CREDENTIALS",
+    "PROV_KMS_VAULT_CACERT", "PROV_KMS_VAULT_SKIP_VERIFY",
+    "PROV_MFA_ENCRYPTION_KEY", "PROV_MIGRATE_ON_START",
+    "PROV_MONITOR_OFFLINE_CONFIRMATIONS", "PROV_MSRC_API_URL",
+    "PROV_MSRC_MONTHS", "PROV_OVERLAY", "PROV_OVERLAY_PEER_ISOLATION",
+    "PROV_RDP_DRIVE_DIR", "PROV_RDP_PROXY_HOST", "PROV_REDIS_URL",
 }
 
 failures = []
@@ -63,9 +63,9 @@ if not (os.path.exists(CONFIG) and os.path.exists(COMPOSE)):
 else:
     cfg = open(CONFIG, encoding="utf-8").read()
     # env("X"), envInt("X"), envBool("X"), envInt64("X"), ...
-    used = set(re.findall(r'env(?:Int64|Int|Bool|Dur|Float)?\(\s*"(FLEET_[A-Z0-9_]+)"', cfg))
+    used = set(re.findall(r'env(?:Int64|Int|Bool|Dur|Float)?\(\s*"(PROV_[A-Z0-9_]+)"', cfg))
     compose = open(COMPOSE, encoding="utf-8").read()
-    declared = set(re.findall(r'^\s{6}(FLEET_[A-Z0-9_]+):', compose, re.M))
+    declared = set(re.findall(r'^\s{6}(PROV_[A-Z0-9_]+):', compose, re.M))
 
     check("found the settings to compare", len(used) > 50 and len(declared) > 50,
           f"        parsed {len(used)} read / {len(declared)} declared. If either "

@@ -21,7 +21,7 @@ FROM nginx:1.27-alpine AS runtime
 # nginx.conf is an envsubst template: the base image renders it into
 # /etc/nginx/conf.d/ at startup, substituting BACKEND_HOST (below) and the
 # resolver. Default targets the Compose service name; Kubernetes overrides
-# BACKEND_HOST to the backend Service (e.g. moorgate-backend:8080).
+# BACKEND_HOST to the backend Service (e.g. provenance-backend:8080).
 ENV BACKEND_HOST=backend:8080
 COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html

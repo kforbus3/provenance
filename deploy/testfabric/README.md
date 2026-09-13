@@ -1,7 +1,7 @@
-# Fleet Terminal — Local SSH Test Fabric
+# Provenance — Local SSH Test Fabric
 
 This directory contains a self-contained, browser-demonstrable SSH fabric for
-Fleet Terminal. It lets you exercise the full connect path on a laptop —
+Provenance. It lets you exercise the full connect path on a laptop —
 including **macOS + Docker Desktop**, which has **no WireGuard kernel module**.
 Each node prefers the **kernel** WireGuard module and falls back to userspace
 [`wireguard-go`](https://git.zx2c4.com/wireguard-go) over `/dev/net/tun` when the
@@ -18,8 +18,8 @@ with the module loaded (kernel) without changes.
        fleet docker bridge (172.30.0.0/16)
 ```
 
-- **backend** opens an SSH connection to `jumphost:22` (`FLEET_JUMP_HOST` /
-  `FLEET_JUMP_USER` in the main compose file) and uses the jump host as an SSH
+- **backend** opens an SSH connection to `jumphost:22` (`PROV_JUMP_HOST` /
+  `PROV_JUMP_USER` in the main compose file) and uses the jump host as an SSH
   `ProxyJump` to reach the managed hosts over the WireGuard overlay.
 - **jumphost** is the WireGuard **hub**. It listens on UDP `51820` and peers
   with every managed host.
@@ -90,23 +90,23 @@ There are no hard-coded keys. On first boot each node:
 
 ## SSH / certificate trust
 
-Each node runs `sshd` configured (via `/etc/ssh/sshd_config.d/00-fleet.conf`)
+Each node runs `sshd` configured (via `/etc/ssh/sshd_config.d/00-prov.conf`)
 to trust the **fleet user CA**:
 
 ```
 PasswordAuthentication no
 PubkeyAuthentication   yes
-TrustedUserCAKeys      /etc/ssh/fleet_ca.pub
+TrustedUserCAKeys      /etc/ssh/prov_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 ```
 
-- `/etc/ssh/fleet_ca.pub` ships as a **placeholder**. The Fleet Terminal
+- `/etc/ssh/prov_ca.pub` ships as a **placeholder**. The Provenance
   enrollment flow overwrites it with the real CA public key so that
   certificates minted by the platform are accepted.
-- `/etc/ssh/auth_principals/fleet` contains the single principal `fleet`, so a
+- `/etc/ssh/auth_principals/prov` contains the single principal `fleet`, so a
   certificate carrying the `fleet` principal may log in as the `fleet` user.
 - The login user `fleet` exists on every node; on the managed hosts it also has
-  **passwordless sudo** (`/etc/sudoers.d/fleet`).
+  **passwordless sudo** (`/etc/sudoers.d/prov`).
 
 ## Running
 
@@ -136,5 +136,5 @@ docker compose -f deploy/compose/docker-compose.yml \
                exec jumphost ping -c2 10.100.0.21
 ```
 
-After enrollment has replaced `/etc/ssh/fleet_ca.pub` with the real CA key, the
+After enrollment has replaced `/etc/ssh/prov_ca.pub` with the real CA key, the
 backend can connect: `backend → jumphost:22 → ProxyJump → 10.100.0.21 (fleet@host-ubuntu)`.

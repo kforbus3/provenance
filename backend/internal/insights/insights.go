@@ -83,7 +83,7 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 		}
 		// Offline hosts: one clear card; skip stale metric checks on them.
 		if h.Status != nil && h.Status.Status == "offline" {
-			detail := "Fleet can no longer reach this host over SSH."
+			detail := "Provenance can no longer reach this host over SSH."
 			if h.Status.LastSuccessAt != nil {
 				detail = "Last reachable " + h.Status.LastSuccessAt.Format("Jan 2 15:04") + "."
 			}
@@ -267,10 +267,10 @@ func linreg(xs, ys []float64) (slope, intercept, r2 float64, ok bool) {
 func overlayDownDetail(overlayName, addr string) string {
 	switch strings.TrimSpace(overlayName) {
 	case "openvpn":
-		return fmt.Sprintf("The OpenVPN tunnel (%s) is down; Fleet is reaching this host over its direct address. "+
+		return fmt.Sprintf("The OpenVPN tunnel (%s) is down; Provenance is reaching this host over its direct address. "+
 			"Check the openvpn client on the host and the openvpn server on the jump host.", addr)
 	default:
-		return fmt.Sprintf("The WireGuard tunnel (%s) is down; Fleet is reaching this host over its direct address. "+
+		return fmt.Sprintf("The WireGuard tunnel (%s) is down; Provenance is reaching this host over its direct address. "+
 			"Check the WireGuard service on the host and the peer entry on the jump host.", addr)
 	}
 }

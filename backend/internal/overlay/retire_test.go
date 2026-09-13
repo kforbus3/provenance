@@ -18,8 +18,8 @@ func TestRetireHostScriptStopsAndDisablesTheClient(t *testing.T) {
 	hb := startTestOverlay().RetireHostScript()
 
 	for _, want := range []string{
-		"systemctl disable --now openvpn@fleet-overlay",
-		"systemctl disable --now openvpn-client@fleet-overlay",
+		"systemctl disable --now openvpn@prov-overlay",
+		"systemctl disable --now openvpn-client@prov-overlay",
 		"pgrep -x openvpn",
 		"OVPN_RETIRED",
 	} {
@@ -44,8 +44,8 @@ func TestRetireHostScriptStopsAndDisablesTheClient(t *testing.T) {
 		`iptables -D "$_chain" $_rule`,
 		`iptables -F "$_own"`,
 		`iptables -X "$_own"`,
-		"FLEET-OVPN-IN",
-		"FLEET-OVPN-OUT",
+		"PROV-OVPN-IN",
+		"PROV-OVPN-OUT",
 	} {
 		if !strings.Contains(hb.Script, want) {
 			t.Errorf("retire script leaves the isolation rules behind (%q missing):\n%s", want, hb.Script)
@@ -54,10 +54,10 @@ func TestRetireHostScriptStopsAndDisablesTheClient(t *testing.T) {
 
 	// The client certificate stays valid — the host was moved, not revoked — but the
 	// config is set aside so nothing restarts it.
-	if !strings.Contains(hb.Script, "client.ovpn.fleet-disabled") {
+	if !strings.Contains(hb.Script, "client.ovpn.prov-disabled") {
 		t.Error("retire script does not set the client config aside")
 	}
-	if strings.Contains(hb.Script, "rm -f /etc/openvpn/fleet/client.key") {
+	if strings.Contains(hb.Script, "rm -f /etc/openvpn/prov/client.key") {
 		t.Error("retire script deletes the host's issued key material")
 	}
 	if hb.Marker == "" || !strings.Contains(hb.Script, hb.Marker) {
@@ -173,7 +173,7 @@ func TestNoTunnelErrorNamesTheEndpointAndWhatToCheck(t *testing.T) {
 const testCRLPEM = "-----BEGIN X509 CRL-----\ntest\n-----END X509 CRL-----\n"
 
 // THE BUG THIS PINS DOWN: teardown reused RetireHostScript, which renames
-// client.ovpn to .fleet-disabled and deliberately KEEPS ca.crt/client.crt/client.key.
+// client.ovpn to .prov-disabled and deliberately KEEPS ca.crt/client.crt/client.key.
 // The renamed file is a complete, working config that references those keys by
 // absolute path, so a decommissioned host could be put straight back on the overlay
 // by moving it back — or by pointing openvpn at it where it lay.
@@ -194,7 +194,7 @@ func TestPurgeDestroysTheClientMaterialRetireKeeps(t *testing.T) {
 	}
 	// The renamed config is the thing that actually reconnects; it has to go too, not
 	// just the live one.
-	if !strings.Contains(purge, "client.ovpn.fleet-disabled") {
+	if !strings.Contains(purge, "client.ovpn.prov-disabled") {
 		t.Error("purge leaves the renamed client.ovpn, which is a complete working config")
 	}
 	// Purging is a superset of retiring: the client still has to be stopped and kept
@@ -206,14 +206,14 @@ func TestPurgeDestroysTheClientMaterialRetireKeeps(t *testing.T) {
 		t.Error("purge should build on the retire script rather than reimplement it")
 	}
 
-	// Bounded to Fleet's own directory — no globbing that could take an operator's
+	// Bounded to Provenance's own directory — no globbing that could take an operator's
 	// other openvpn configuration with it.
 	if strings.Contains(purge, "rm -rf") {
 		t.Error("purge should remove named files, not recurse")
 	}
 	for _, forbidden := range []string{"/etc/openvpn/*", "/etc/openvpn/server", "/etc/ssl", "/etc/pki"} {
 		if strings.Contains(purge, forbidden) {
-			t.Errorf("purge reaches outside Fleet's directory: %q", forbidden)
+			t.Errorf("purge reaches outside Provenance's directory: %q", forbidden)
 		}
 	}
 
@@ -248,7 +248,7 @@ func TestServerConfigVerifiesTheCRL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(conf, "crl-verify "+fleetDir+"/crl.pem") {
+	if !strings.Contains(conf, "crl-verify "+provDir+"/crl.pem") {
 		t.Errorf("server config does not verify the revocation list:\n%s", conf)
 	}
 

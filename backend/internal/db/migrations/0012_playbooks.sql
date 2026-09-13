@@ -1,5 +1,5 @@
 -- Ansible playbook management: author/edit playbooks in the UI, validate/lint
--- them, and (later) run them against hosts/groups through the Fleet SSH path.
+-- them, and (later) run them against hosts/groups through the Provenance SSH path.
 --
 -- Two permissions, both Administrator-only by default:
 --   Playbook.Edit  -- author, upload, edit, delete playbooks; validate/lint.
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS playbook_versions (
 
 CREATE INDEX IF NOT EXISTS idx_playbook_versions_pb ON playbook_versions(playbook_id, version DESC);
 
--- One execution of a playbook against a target (a single host or a Fleet group).
+-- One execution of a playbook against a target (a single host or a Provenance group).
 -- The actual SSH/run wiring lands in Phase 2; the table is created now so the
 -- model and startup reconciler are in place. output holds the captured log.
 CREATE TABLE IF NOT EXISTS playbook_runs (

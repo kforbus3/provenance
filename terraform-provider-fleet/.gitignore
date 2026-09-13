@@ -1,9 +1,0 @@
-# Built provider binary
-terraform-provider-fleet
-
-# Terraform working files
-.terraform/
-.terraform.lock.hcl
-*.tfstate
-*.tfstate.*
-crash.log

@@ -558,7 +558,7 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 	// propagates promptly even on a large fleet without stampeding the jump host.
 	hosts, _ := s.Store.AllHosts(ctx)
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
-	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/fleet_krl >/dev/null && sudo chmod 644 /etc/ssh/fleet_krl && echo OK"
+	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/prov_krl >/dev/null && sudo chmod 644 /etc/ssh/prov_krl && echo OK"
 	// Kept small: each push opens a fresh SSH connection to the jump host, so a
 	// large fan-out would trip its sshd MaxStartups limit (as the monitor sweep
 	// did) and drop pushes. Revocation is infrequent, so modest parallelism is fine.
@@ -917,7 +917,7 @@ func (s *Server) pruneAudit(ctx context.Context) {
 // vaultRotationLoop rotates vaulted password credentials whose scheduled rotation is
 // due. Leader-gated (a singleton across the cluster) and RLS-bypassed (ctx is the
 // background context) so it sees due credentials across all tenants — each version
-// write inherits the credential's own tenant. FLEET_VAULT_ROTATION_CHECK only sets how
+// write inherits the credential's own tenant. PROV_VAULT_ROTATION_CHECK only sets how
 // often the leader checks; the per-credential interval is configured per credential.
 func (s *Server) vaultRotationLoop(ctx context.Context) {
 	interval := s.Cfg.VaultRotationCheck
@@ -1044,8 +1044,8 @@ func (s *Server) checkCAAge(ctx context.Context) {
 	s.Notify.Notify(ctx, notify.Event{
 		Type: notify.EventCAKeyAging, Severity: notify.SeverityWarning,
 		Title: "SSH CA key due for rotation",
-		Body: fmt.Sprintf("Fleet's active SSH certificate authority key is %d days old. "+
-			"Consider rotating it (fleetctl rotate-ca, or the Certificates page).", days),
+		Body: fmt.Sprintf("Provenance's active SSH certificate authority key is %d days old. "+
+			"Consider rotating it (provctl rotate-ca, or the Certificates page).", days),
 		DedupeKey: "ca-user",
 	})
 }
@@ -1066,7 +1066,7 @@ func dedupe(in []string) []string {
 // Handler returns the root HTTP handler, instrumented with OpenTelemetry so each
 // request is a span (a no-op when tracing is disabled).
 func (s *Server) Handler() http.Handler {
-	return otelhttp.NewHandler(s.router, "fleet-api")
+	return otelhttp.NewHandler(s.router, "prov-api")
 }
 
 func (s *Server) buildRouter() chi.Router {
@@ -1359,8 +1359,8 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{
-		"version":     s.Version,         // build label (FLEET_VERSION; "dev" if unset)
-		"environment": s.Cfg.Environment, // runtime mode (FLEET_ENV: production|development)
+		"version":     s.Version,         // build label (PROV_VERSION; "dev" if unset)
+		"environment": s.Cfg.Environment, // runtime mode (PROV_ENV: production|development)
 		"appName":     s.appName(r),      // customizable brand name (settings.branding)
 	})
 }

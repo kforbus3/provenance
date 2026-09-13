@@ -1,0 +1,550 @@
+// Command provctl is the offline administrative CLI for Provenance. It
+// connects directly to the database (using the same PROV_DATABASE_URL) and is
+// the documented out-of-band recovery path — e.g. restoring access when every
+// administrator is locked out, resetting MFA, or rotating the CA.
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/kforbus3/provenance/backend/internal/auth"
+	"github.com/kforbus3/provenance/backend/internal/ca"
+	"github.com/kforbus3/provenance/backend/internal/config"
+	"github.com/kforbus3/provenance/backend/internal/cryptoprofile"
+	"github.com/kforbus3/provenance/backend/internal/db"
+	"github.com/kforbus3/provenance/backend/internal/kms"
+	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/notify"
+	"github.com/kforbus3/provenance/backend/internal/overlaypki"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
+	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/vault"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	if err := run(os.Args[1], os.Args[2:]); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Fprint(os.Stderr, `provctl — Provenance offline admin CLI
+
+Usage:
+  provctl create-admin <username> <password> [email]   Create a Super Administrator (recovery)
+  provctl reset-mfa <username>                          Remove all of a user's MFA factors
+  provctl enable-user <username>                        Re-enable and unlock a disabled account
+  provctl rotate-ca                                     Generate a new active user CA
+  provctl list-users                                    List accounts
+  provctl support-bundle [--out FILE] [--anonymise]      Write a support bundle about this instance (--anonymise masks hostnames + IPs)
+  provctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
+  provctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
+  provctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
+  provctl fips flag-stale-passwords                     Force non-FIPS local passwords to change (re-hash) on next login
+  provctl vault rekey --old … --new …                   Rotate the vault master passphrase (re-encrypt all vault secrets)
+  provctl kms status                                    Report the configured external KMS/HSM backend and its health
+  provctl kms wrap [value]                              Wrap a passphrase with the external KMS (reads stdin if no value)
+  provctl kms unwrap <token>                            Unwrap a KMS blob to verify it (prints the plaintext)
+  provctl release keygen [--out release.key]            Generate an Ed25519 release signing keypair
+  provctl release build --version … --from … --key …   Build + sign a .provup upgrade bundle (see 'make bundle')
+  provctl release verify --bundle <f> --keys <pub>      Verify a bundle's signature + image digests
+  provctl release channel --key … --base-url … <f>…    Build + sign a release-channel index from bundles
+
+Reads PROV_DATABASE_URL (and PROV_CA_PASSPHRASE for rotate-ca) from the environment.
+`)
+}
+
+func run(cmd string, args []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Release tooling (keygen / bundle build+sign+verify) is an offline build-time
+	// operation that needs no config or database — dispatch it before loading either.
+	if cmd == "release" {
+		return runRelease(args)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	// KMS operations are pure crypto calls to the external backend and need no
+	// database, so dispatch them before connecting (the default DATABASE_URL only
+	// resolves inside the compose network).
+	if cmd == "kms" {
+		return runKMS(ctx, cfg, args)
+	}
+
+	// Key the audit chain, exactly as the server does. Without this provctl loads
+	// the key into cfg and never installs it, so every row it writes falls back to
+	// the legacy keyless SHA-256 (hash_alg=1) -- and provctl's commands are the
+	// most sensitive in the product: create-admin, rotate-ca, reset-mfa,
+	// enable-user. The one thing an attacker would most want to forge was the one
+	// thing written without a MAC.
+	//
+	// It showed up as a warning nobody could act on: "audit chain is UNKEYED: no
+	// AuditHMACKey configured", printed by provctl on a deployment whose server
+	// had the key set all along.
+	store.SetAuditHMACKey(cfg.AuditHMACKey)
+
+	// The recovery CLI operates across all tenants; pass multiTenancy=false so its
+	// connections always bypass row-level security regardless of the deployment flag.
+	pool, err := db.Connect(ctx, cfg.DatabaseURL, 4, 1, false)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	st := store.New(pool)
+
+	switch cmd {
+	case "support-bundle":
+		// The same bundle the web interface offers, produced without it — which is
+		// the point, since "something is wrong" sometimes means the interface will
+		// not load.
+		out, anonymise := "", false
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "--out", "-o":
+				if i+1 < len(args) {
+					out = args[i+1]
+				}
+			case "--anonymise", "--anonymize":
+				anonymise = true
+			}
+		}
+		return supportBundleCmd(ctx, pool, st, cfg, os.Getenv("PROV_VERSION"), out, anonymise)
+	case "create-admin":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: provctl create-admin <username> <password> [email]")
+		}
+		email := ""
+		if len(args) >= 3 {
+			email = args[2]
+		}
+		if err := auth.DefaultPolicy.Validate(args[1]); err != nil {
+			return err
+		}
+		hash, err := auth.HashPassword(args[1])
+		if err != nil {
+			return err
+		}
+		u, err := st.CreateUser(ctx, store.CreateUserParams{
+			Username: args[0], Email: email, DisplayName: args[0],
+			PasswordHash: hash, IsSuperAdmin: true,
+		})
+		if err != nil {
+			return err
+		}
+		_ = st.AssignRoleByName(ctx, u.ID, "Super Administrator")
+		_, _ = st.AppendAudit(ctx, models.AuditEvent{
+			ActorName: "provctl", Action: "recovery.create_admin",
+			TargetKind: "user", TargetID: u.ID.String(),
+			Detail: map[string]any{"username": u.Username},
+		})
+		fmt.Printf("created super administrator %q (%s)\n", u.Username, u.ID)
+
+	case "reset-mfa":
+		if len(args) < 1 {
+			return fmt.Errorf("usage: provctl reset-mfa <username>")
+		}
+		u, err := st.GetUserByUsername(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if err := st.ResetUserMFA(ctx, u.ID); err != nil {
+			return err
+		}
+		_, _ = st.AppendAudit(ctx, models.AuditEvent{
+			ActorName: "provctl", Action: "recovery.reset_mfa",
+			TargetKind: "user", TargetID: u.ID.String(),
+		})
+		fmt.Printf("reset MFA for %q\n", u.Username)
+
+	case "enable-user":
+		if len(args) < 1 {
+			return fmt.Errorf("usage: provctl enable-user <username>")
+		}
+		u, err := st.GetUserByUsername(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if err := st.SetDisabled(ctx, u.ID, false); err != nil {
+			return err
+		}
+		if err := st.Unlock(ctx, u.ID); err != nil {
+			return err
+		}
+		fmt.Printf("enabled and unlocked %q\n", u.Username)
+
+	case "rotate-ca":
+		caMgr := ca.New(st, cfg)
+		if err := caMgr.EnsureUserCA(ctx); err != nil {
+			return err
+		}
+		if err := caMgr.Rotate(ctx); err != nil {
+			return err
+		}
+		fmt.Printf("rotated user CA; new active id %s\n", caMgr.ActiveID())
+
+	case "list-users":
+		users, err := st.ListUsers(ctx)
+		if err != nil {
+			return err
+		}
+		for _, u := range users {
+			flags := ""
+			if u.IsSuperAdmin {
+				flags += " [super]"
+			}
+			if u.IsDisabled {
+				flags += " [disabled]"
+			}
+			fmt.Printf("%-24s %s%s\n", u.Username, u.ID, flags)
+		}
+
+	case "wg-peers":
+		// Emit the overlay peer list from Postgres as WireGuard [Peer] stanzas, so a
+		// STANDBY jump host can rebuild the hub on failover (HA). Endpoint-free: peers
+		// roam and dial in, so the hub never needs their Endpoint. Apply on the
+		// standby with `wg addconf <iface> <(provctl wg-peers)` after restoring the
+		// replicated hub private key. See docs/high-availability.md.
+		peers, err := st.ListWGPeers(ctx)
+		if err != nil {
+			return err
+		}
+		for _, p := range peers {
+			fmt.Printf("# %s\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n\n", p.Hostname, p.PublicKey, p.Address)
+		}
+		fmt.Fprintf(os.Stderr, "emitted %d overlay peer(s)\n", len(peers))
+
+	case "fips":
+		sub := ""
+		if len(args) > 0 {
+			sub = args[0]
+		}
+		switch sub {
+		case "check":
+			return fipsCheck(ctx, pool, cfg)
+		case "reseal-secrets":
+			return fipsReseal(st, cfg)
+		case "flag-stale-passwords":
+			n, err := st.FlagNonFIPSPasswords(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("flagged %d local account(s) with a non-FIPS password hash to change on next login\n", n)
+			return nil
+		default:
+			return fmt.Errorf("usage: provctl fips check | reseal-secrets | flag-stale-passwords")
+		}
+
+	case "vault":
+		sub := ""
+		if len(args) > 0 {
+			sub = args[0]
+		}
+		switch sub {
+		case "rekey":
+			return vaultRekey(ctx, st, cfg, args[1:])
+		default:
+			return fmt.Errorf("usage: provctl vault rekey --old <passphrase> --new <passphrase>")
+		}
+
+	default:
+		usage()
+		return fmt.Errorf("unknown command %q", cmd)
+	}
+	return nil
+}
+
+// runKMS handles the external-KMS subcommands (status / wrap / unwrap). These operate
+// only against the configured KMS backend and never touch the database. An operator
+// uses `wrap` once to convert a plaintext passphrase into the KMS-wrapped blob stored
+// in PROV_CA_PASSPHRASE_WRAPPED / PROV_VAULT_PASSPHRASE_WRAPPED.
+func runKMS(ctx context.Context, cfg *config.Config, args []string) error {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	if !cfg.KMSEnabled() && sub != "status" {
+		return fmt.Errorf("no external KMS configured — set PROV_KMS_PROVIDER (vault-transit|aws-kms) and the backend settings")
+	}
+	prov, err := kms.New(cfg.KMS())
+	if err != nil {
+		return err
+	}
+
+	switch sub {
+	case "status":
+		fmt.Println("Provenance — external KMS status")
+		fmt.Println("====================================")
+		fmt.Printf("  Provider              : %s\n", cfg.KMSProvider)
+		fmt.Printf("  Key ID                : %s\n", orNone(cfg.KMSKeyID))
+		fmt.Printf("  CA passphrase wrapped : %v\n", cfg.CAKeyPassphraseWrapped != "")
+		fmt.Printf("  Vault passphrase wrap : %v\n", cfg.VaultPassphraseWrapped != "")
+		if !cfg.KMSEnabled() {
+			fmt.Println("  Health                : n/a (local provider — no external KMS)")
+			return nil
+		}
+		if err := prov.Health(ctx); err != nil {
+			fmt.Printf("  Health                : UNHEALTHY — %v\n", err)
+			return err
+		}
+		fmt.Println("  Health                : OK")
+		return nil
+
+	case "wrap":
+		var value []byte
+		if len(args) >= 2 {
+			value = []byte(args[1])
+		} else {
+			// Read the secret from stdin so it isn't captured in shell history/argv.
+			b, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+			if err != nil {
+				return err
+			}
+			value = []byte(strings.TrimRight(string(b), "\r\n"))
+		}
+		if len(value) == 0 {
+			return fmt.Errorf("nothing to wrap (pass a value or pipe it on stdin)")
+		}
+		token, err := prov.Wrap(ctx, value)
+		if err != nil {
+			return err
+		}
+		fmt.Println(token)
+		return nil
+
+	case "unwrap":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: provctl kms unwrap <token>")
+		}
+		pt, err := prov.Unwrap(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		os.Stdout.Write(pt)
+		fmt.Println()
+		return nil
+
+	default:
+		return fmt.Errorf("usage: provctl kms status | wrap [value] | unwrap <token>")
+	}
+}
+
+// fipsCheck prints a FIPS readiness report: the module/runtime status, config, the
+// active CA key type, and password-hash algorithm counts, plus a ready/not-ready
+// verdict for flipping PROV_FIPS_MODE=true. Read-only.
+func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) error {
+	ok := func(b bool) string {
+		if b {
+			return "OK"
+		}
+		return "NOT-FIPS"
+	}
+
+	fmt.Println("Provenance — FIPS readiness report")
+	fmt.Println("======================================")
+	fmt.Printf("  Config PROV_FIPS_MODE : %v\n", cfg.FIPSMode)
+	fmt.Printf("  Config PROV_OVERLAY   : %s   [%s]\n", cfg.Overlay, ok(cfg.Overlay != "wireguard"))
+	fmt.Printf("    wireguard pool       : %s (jump %s, udp %d)\n", cfg.WGSubnet, cfg.WGJumpIP, cfg.WGPort)
+	fmt.Printf("    openvpn pool         : %s (jump %s, udp %d)\n", cfg.OVPNSubnet, cfg.OVPNJumpIP, cfg.OVPNPort)
+	// A per-host overlay choice is only sound while the two pools are distinct, and
+	// a FIPS report that lists a compliant transport without saying every host on the
+	// other one is unreachable would be telling half the truth.
+	if cfg.OVPNSubnet == cfg.WGSubnet {
+		fmt.Println("    NOTE: both overlays share one subnet — this deployment can run ONE of them.")
+		fmt.Println("          Set PROV_OVPN_SUBNET to a separate range to mix transports per host.")
+	}
+	// Hosts still on the non-FIPS transport are the actual migration work.
+	var wgHosts int
+	_ = pool.QueryRow(ctx,
+		`SELECT count(*) FROM hosts WHERE enrolled AND coalesce(overlay,'') <> 'openvpn' AND wg_address IS NOT NULL`).Scan(&wgHosts)
+	fmt.Printf("  Hosts on WireGuard     : %d   [%s]\n", wgHosts, ok(wgHosts == 0))
+	fmt.Printf("  Go FIPS module active  : %v   [%s]\n", cryptoprofile.ModuleActive(), ok(cryptoprofile.ModuleActive()))
+
+	var caAlgo string
+	_ = pool.QueryRow(ctx, `SELECT algo FROM ca_keys WHERE kind='user' AND active=true ORDER BY created_at DESC LIMIT 1`).Scan(&caAlgo)
+	caOK := caAlgo != "" && !strings.Contains(caAlgo, "ed25519")
+	fmt.Printf("  Active user CA key     : %s   [%s]\n", orNone(caAlgo), ok(caOK))
+
+	rows, err := pool.Query(ctx, `SELECT split_part(password_hash,'$',2) AS alg, count(*) FROM user_credentials GROUP BY 1 ORDER BY 1`)
+	if err == nil {
+		fmt.Println("  Password hashes by algorithm:")
+		anyArgon := false
+		for rows.Next() {
+			var alg string
+			var n int
+			if rows.Scan(&alg, &n) == nil {
+				fipsAlg := alg == "pbkdf2-sha256"
+				if !fipsAlg {
+					anyArgon = true
+				}
+				fmt.Printf("      %-14s : %d   [%s]\n", orNone(alg), n, ok(fipsAlg))
+			}
+		}
+		rows.Close()
+		_ = anyArgon
+	}
+
+	// MFA factors: TOTP secrets re-seal with the other at-rest secrets, but a WebAuthn
+	// passkey registered before FIPS may use an EdDSA (Ed25519) COSE key, which FIPS
+	// forbids — that can't be told from the sealed blob here, so we surface the count
+	// and advise re-registration rather than assert compliance.
+	var totpN, webauthnN int
+	_ = pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE kind='totp' AND confirmed),
+		count(*) FILTER (WHERE kind='webauthn' AND confirmed) FROM mfa_methods`).Scan(&totpN, &webauthnN)
+	fmt.Printf("  MFA factors            : %d TOTP, %d WebAuthn\n", totpN, webauthnN)
+	if webauthnN > 0 {
+		fmt.Println("      note: WebAuthn passkeys registered before FIPS may use EdDSA (not")
+		fmt.Println("            FIPS-approved). Have those users re-register a passkey under FIPS")
+		fmt.Println("            (new registrations are restricted to ES256/RS256).")
+	}
+
+	fmt.Println("--------------------------------------")
+	ready := cryptoprofile.ModuleActive() && caOK && cfg.Overlay != "wireguard"
+	if ready {
+		fmt.Println("  VERDICT: core artifacts are FIPS-approved. Note: this report does not")
+		fmt.Println("           scan every at-rest secret's KDF or the running overlay — see")
+		fmt.Println("           docs/fips-mode-plan.md for the full M0–M6 migration.")
+	} else {
+		fmt.Println("  VERDICT: NOT ready to enable FIPS. Address the [NOT-FIPS] items above")
+		fmt.Println("           (CA migration, OpenVPN overlay, GOFIPS140 binary). See")
+		fmt.Println("           docs/fips-mode-plan.md.")
+	}
+	return nil
+}
+
+// fipsReseal re-seals every at-rest secret Provenance holds to the FIPS (PBKDF2 / v3)
+// envelope, in place, without needing any secret re-entered. It targets the FIPS
+// profile unconditionally — you run this DURING migration, before flipping
+// PROV_FIPS_MODE=true (M4). Every re-seal verifies the new envelope decrypts to the
+// identical plaintext before overwriting, and values already on the target profile are
+// left untouched, so it is safe and idempotent. Password hashes are NOT covered here:
+// they upgrade on next login (verify-then-upgrade); MFA/WebAuthn re-enroll as needed.
+func fipsReseal(st *store.Store, cfg *config.Config) error {
+	// Re-KDF work (argon2 open + 600k-iter PBKDF2 seal) is slow per secret, so give the
+	// sweep a generous budget independent of the CLI's default 30s.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	// The whole point of the command is to prepare for FIPS, so target v3 regardless of
+	// the current mode. v3 is readable by every build, so this is safe pre-flip.
+	secretbox.SetFIPS(true)
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	total := 0
+	report := func(name string, n int, err error) error {
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		fmt.Printf("  %-22s %d re-sealed\n", name, n)
+		total += n
+		return nil
+	}
+	b2i := func(b bool) int {
+		if b {
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Println("Re-sealing at-rest secrets to the FIPS (PBKDF2) envelope…")
+
+	changed, err := ca.New(st, cfg).ResealActiveKey(ctx)
+	if err := report("user CA key", b2i(changed), err); err != nil {
+		return err
+	}
+
+	if _, gerr := st.GetActiveOverlayCA(ctx); gerr == nil {
+		changed, err := overlaypki.New(st, cfg).ResealCA(ctx)
+		if err := report("overlay CA key", b2i(changed), err); err != nil {
+			return err
+		}
+	}
+
+	nn, err := notify.New(st, cfg, log).ResealSecrets(ctx)
+	if err := report("notification secrets", nn, err); err != nil {
+		return err
+	}
+
+	an, err := auth.NewService(st, cfg, log).ResealSecrets(ctx)
+	if err := report("LDAP/OIDC secrets", an, err); err != nil {
+		return err
+	}
+
+	if key, verr := cfg.VaultKey(); verr == nil {
+		vn, err := vault.ResealSecrets(ctx, st, key)
+		if err := report("vault entries", vn, err); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("  %-22s skipped (%v)\n", "vault entries", verr)
+	}
+
+	fmt.Printf("Done — %d secret(s) upgraded to PBKDF2. Run `provctl fips check` to confirm readiness.\n", total)
+	return nil
+}
+
+// vaultRekey rotates the vault master passphrase, re-encrypting every locally-sealed
+// vault secret from the old key to the new one. Remediation for a suspected
+// PROV_VAULT_PASSPHRASE compromise. Run OFFLINE (app stopped); afterward set
+// PROV_VAULT_PASSPHRASE to the new value and start the app.
+func vaultRekey(ctx context.Context, st *store.Store, cfg *config.Config, args []string) error {
+	fs := flag.NewFlagSet("vault rekey", flag.ContinueOnError)
+	oldPass := fs.String("old", "", "current vault passphrase (default: PROV_VAULT_PASSPHRASE from the environment)")
+	newPass := fs.String("new", "", "new vault passphrase (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *newPass == "" {
+		return fmt.Errorf("provctl vault rekey requires --new <passphrase>")
+	}
+	oldKey := []byte(*oldPass)
+	if *oldPass == "" {
+		k, err := cfg.VaultKey() // the passphrase the app currently runs with
+		if err != nil {
+			return fmt.Errorf("no --old given and could not resolve the current vault key: %w", err)
+		}
+		oldKey = k
+	}
+	if cfg.IsProduction() && *newPass == string(cfg.CAKeyPassphrase) {
+		return fmt.Errorf("the new vault passphrase must differ from PROV_CA_PASSPHRASE")
+	}
+	// Re-encrypting many secrets (argon2/PBKDF2 per row) can be slow; give it room.
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	fmt.Println("Re-encrypting vault secrets from the old key to the new key…")
+	res, err := vault.RekeySecrets(rctx, st, oldKey, []byte(*newPass))
+	if err != nil {
+		return fmt.Errorf("rekey aborted (no partial state is left inconsistent for un-migrated rows; re-run to resume): %w", err)
+	}
+	fmt.Printf("Done — %d re-encrypted, %d already on the new key, %d external (no local material).\n",
+		res.Rekeyed, res.AlreadyNew, res.External)
+	fmt.Println("Now set PROV_VAULT_PASSPHRASE to the new value and restart the app.")
+	return nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}

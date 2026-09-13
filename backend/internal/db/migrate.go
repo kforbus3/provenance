@@ -15,7 +15,7 @@ import (
 var migrationsFS embed.FS
 
 // InRecovery reports whether the connected PostgreSQL is a standby (in recovery /
-// read-only). Fleet uses this to boot into read-only DR standby mode — skipping
+// read-only). Provenance uses this to boot into read-only DR standby mode — skipping
 // migrations and every write subsystem — when pointed at a replica.
 func InRecovery(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var inRecovery bool

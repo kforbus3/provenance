@@ -1,6 +1,6 @@
-"""Fleet Terminal — ansible-runner sidecar.
+"""Provenance — ansible-runner sidecar.
 
-A small internal HTTP service the Fleet backend calls to validate and lint
+A small internal HTTP service the Provenance backend calls to validate and lint
 Ansible playbooks. It keeps Python + Ansible out of the lean Go backend and
 isolates the (eventual) execution blast radius in its own container.
 
@@ -28,9 +28,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-app = FastAPI(title="fleet-ansible-runner", version="1")
+app = FastAPI(title="prov-ansible-runner", version="1")
 
-log = logging.getLogger("fleet-ansible-runner")
+log = logging.getLogger("prov-ansible-runner")
 
 # Cap how long a validation/lint may run so a pathological file can't wedge the
 # sidecar.
@@ -38,14 +38,14 @@ CHECK_TIMEOUT = int(os.environ.get("RUNNER_CHECK_TIMEOUT", "60"))
 MAX_CONTENT = 1 << 20  # 1 MiB of YAML is plenty for a single playbook.
 
 # M2: shared-secret authentication for the state-changing endpoints. The backend
-# sends X-Runner-Token (sourced from FLEET_ANSIBLE_RUNNER_TOKEN); the runner rejects
+# sends X-Runner-Token (sourced from PROV_ANSIBLE_RUNNER_TOKEN); the runner rejects
 # any request whose token is missing or does not match. An EMPTY env var disables the
 # check (dev / back-compat) but is logged loudly so it can't pass unnoticed in prod —
 # the backend additionally refuses to boot in production without a >=16 byte token.
-RUNNER_TOKEN = os.environ.get("FLEET_ANSIBLE_RUNNER_TOKEN", "")
+RUNNER_TOKEN = os.environ.get("PROV_ANSIBLE_RUNNER_TOKEN", "")
 if not RUNNER_TOKEN:
     log.warning(
-        "FLEET_ANSIBLE_RUNNER_TOKEN is empty — the runner's execution/check endpoints "
+        "PROV_ANSIBLE_RUNNER_TOKEN is empty — the runner's execution/check endpoints "
         "are UNAUTHENTICATED (dev/back-compat mode). Set it in production."
     )
 
@@ -150,16 +150,16 @@ class RunHost(BaseModel):
     address: str
     user: str = "fleet"
     port: int = 22
-    # How the FINAL hop to this host authenticates. "fleet_cert" (default) uses the
-    # run's Fleet certificate; "vault_ssh_key"/"vault_password" inject a per-host
-    # vaulted credential so appliances that don't trust the Fleet CA still work. The
-    # jump hop always uses the Fleet certificate.
-    auth_method: str = "fleet_cert"
+    # How the FINAL hop to this host authenticates. "prov_cert" (default) uses the
+    # run's Provenance certificate; "vault_ssh_key"/"vault_password" inject a per-host
+    # vaulted credential so appliances that don't trust the Provenance CA still work. The
+    # jump hop always uses the Provenance certificate.
+    auth_method: str = "prov_cert"
     private_key: str = ""  # vault_ssh_key: this host's private key
     password: str = ""     # vault_password: this host's password
     # RouterOS API device: open a local TCP forward to api_port on this host through the
     # jump, so a community.routeros.api play (connection: local) can reach it — RouterOS's
-    # SSH exec channel is unusable for automation. Injects fleet_api_host/fleet_api_port.
+    # SSH exec channel is unusable for automation. Injects prov_api_host/prov_api_port.
     api_tunnel: bool = False
     api_port: int = 8728
 
@@ -173,7 +173,7 @@ class RunRequest(BaseModel):
     private_key: str = ""       # OpenSSH private key (the run credential)
     certificate: str = ""       # matching user certificate (authorized_keys form)
     hosts: List[RunHost] = []
-    jump_host: str = ""         # host:port of the Fleet jump host
+    jump_host: str = ""         # host:port of the Provenance jump host
     jump_user: str = "fleet"
     check_mode: bool = False    # ansible --check (dry run)
     become: bool = True
@@ -250,14 +250,14 @@ def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict,
                       known_hosts_path: str) -> str:
     # A real ssh_config so BOTH hops authenticate correctly and command-line options
     # (which do NOT propagate to a ProxyJump's inner connection) aren't relied on. The
-    # jump hop ALWAYS uses the Fleet certificate; the final hop uses the Fleet cert for
-    # fleet_cert hosts, or a per-host vaulted key/password for vaulted hosts. ssh_config
+    # jump hop ALWAYS uses the Provenance certificate; the final hop uses the Provenance cert for
+    # prov_cert hosts, or a per-host vaulted key/password for vaulted hosts. ssh_config
     # `Host` patterns match the ADDRESS ansible connects to (ansible_host), not the
     # inventory alias — so per-host stanzas and the catch-all key on the address.
     common = _common(known_hosts_path)
     jhost, jport = _split_host_port(req.jump_host)
     lines = [
-        "Host fleet-jump",
+        "Host prov-jump",
         f"    HostName {jhost}",
         f"    Port {jport}",
         f"    User {req.jump_user}",
@@ -270,25 +270,25 @@ def _build_ssh_config(req: RunRequest, key_path: str, vault_key_paths: dict,
             vaulted_addrs.append(h.address)
             lines += [
                 f"Host {h.address}",
-                "    ProxyJump fleet-jump",
+                "    ProxyJump prov-jump",
                 f"    IdentityFile {vault_key_paths[h.address]}",
             ] + common
         elif h.auth_method == "vault_password":
             vaulted_addrs.append(h.address)
             lines += [
                 f"Host {h.address}",
-                "    ProxyJump fleet-jump",
+                "    ProxyJump prov-jump",
                 "    PubkeyAuthentication no",
                 "    PreferredAuthentications password,keyboard-interactive",
                 "    NumberOfPasswordPrompts 1",
             ] + common
 
-    # Catch-all for fleet_cert hosts — reached via the jump using the Fleet cert.
+    # Catch-all for prov_cert hosts — reached via the jump using the Provenance cert.
     # Exclude the jump alias and every vaulted address so they keep their own stanza.
-    exclusions = " ".join(["!fleet-jump"] + [f"!{a}" for a in vaulted_addrs])
+    exclusions = " ".join(["!prov-jump"] + [f"!{a}" for a in vaulted_addrs])
     lines += [
         f"Host * {exclusions}",
-        "    ProxyJump fleet-jump",
+        "    ProxyJump prov-jump",
         f"    IdentityFile {key_path}",
     ] + common
     return "\n".join(lines)
@@ -302,7 +302,7 @@ def _inv_quote(v: str) -> str:
 def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dict) -> str:
     # Identity/keys for the default ssh connection are driven by the ssh_config (per-host
     # IdentityFile / auth), so no GLOBAL ansible_ssh_private_key_file is set — that would
-    # force the Fleet key onto vaulted hosts too. Password hosts carry their secret as a
+    # force the Provenance key onto vaulted hosts too. Password hosts carry their secret as a
     # per-host var. A vaulted-key host ALSO gets an explicit per-host key file so the
     # network_cli connection (community.routeros / paramiko), which doesn't read the
     # ssh_config, can authenticate; it's the same key, so the raw/ssh path is unaffected.
@@ -315,18 +315,18 @@ def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dic
         if h.auth_method == "vault_ssh_key" and h.address in vault_key_paths:
             entry += f" ansible_ssh_private_key_file={vault_key_paths[h.address]}"
         # RouterOS API host: expose the local port-forward endpoint the runner opens so a
-        # community.routeros.api task (connection: local) can `hostname: {{ fleet_api_host }}`
-        # port: {{ fleet_api_port }}` — reaching the device's API through the jump tunnel.
+        # community.routeros.api task (connection: local) can `hostname: {{ prov_api_host }}`
+        # port: {{ prov_api_port }}` — reaching the device's API through the jump tunnel.
         if h.api_tunnel:
-            entry += f" fleet_api_host=127.0.0.1 fleet_api_port={_api_local_port(i)}"
-        # Privilege-escalation default is PER HOST: enrolled (fleet_cert) Linux hosts run
+            entry += f" prov_api_host=127.0.0.1 prov_api_port={_api_local_port(i)}"
+        # Privilege-escalation default is PER HOST: enrolled (prov_cert) Linux hosts run
         # under sudo as before, but a vaulted host is typically an appliance / network
         # device (router, switch) with no sudo, where forcing become breaks every task
         # ("timeout waiting for privilege escalation prompt"). So become defaults OFF for
         # vaulted hosts. A playbook can still opt a host in with an explicit `become: true`
         # (a play/task keyword overrides this inventory default).
         if req.become:
-            escalate = h.auth_method in ("", "fleet_cert")
+            escalate = h.auth_method in ("", "prov_cert")
             entry += " ansible_become=true" if escalate else " ansible_become=false"
         lines.append(entry)
     lines += [
@@ -335,9 +335,9 @@ def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dic
         f"ansible_ssh_common_args={common}",
         # The network_cli connection (community.routeros etc.) uses paramiko/libssh, which
         # does NOT read the ssh_config ProxyJump — so give it an explicit ProxyCommand that
-        # tunnels through the Fleet jump host (authenticated by the Fleet cert in the config).
+        # tunnels through the Provenance jump host (authenticated by the Provenance cert in the config).
         # Ignored by the default ssh connection, so raw/command tasks are unaffected.
-        f"ansible_paramiko_proxy_command=ssh -F {ssh_config_path} -W %h:%p fleet-jump",
+        f"ansible_paramiko_proxy_command=ssh -F {ssh_config_path} -W %h:%p prov-jump",
     ]
     if req.become:
         lines += ["ansible_become_method=sudo"]
@@ -346,7 +346,7 @@ def _build_inventory(req: RunRequest, ssh_config_path: str, vault_key_paths: dic
 
 def _api_local_port(index: int) -> int:
     # Deterministic per-host local forward port. MUST match between the inventory var
-    # (fleet_api_port) and the ssh -L setup — both enumerate req.hosts in the same order.
+    # (prov_api_port) and the ssh -L setup — both enumerate req.hosts in the same order.
     return 18728 + index
 
 
@@ -364,8 +364,8 @@ def _wait_port(port: int, timeout_s: float) -> bool:
 
 
 def _open_api_tunnels(req: RunRequest, ssh_config_path: str):
-    # For each RouterOS-API host, open `ssh -L 127.0.0.1:<lp>:<device>:<apiport> -N fleet-jump`
-    # (reusing the fleet-jump cert stanza) so a community.routeros.api play reaches the device's
+    # For each RouterOS-API host, open `ssh -L 127.0.0.1:<lp>:<device>:<apiport> -N prov-jump`
+    # (reusing the prov-jump cert stanza) so a community.routeros.api play reaches the device's
     # API through the jump. Waits (bounded) for each forward to accept so ansible doesn't race it.
     # Returns (procs, notices).
     procs, notices = [], []
@@ -375,7 +375,7 @@ def _open_api_tunnels(req: RunRequest, ssh_config_path: str):
         lp = _api_local_port(i)
         cmd = [
             "ssh", "-F", ssh_config_path, "-o", "ExitOnForwardFailure=yes",
-            "-L", f"127.0.0.1:{lp}:{h.address}:{h.api_port}", "-N", "fleet-jump",
+            "-L", f"127.0.0.1:{lp}:{h.address}:{h.api_port}", "-N", "prov-jump",
         ]
         procs.append(subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         if _wait_port(lp, 15):
@@ -480,7 +480,7 @@ def _stream_run(req: RunRequest):
             # privilege escalation prompt" and fails the host. 30s rides out a single
             # retransmit cycle; ConnectTimeout in the generated ssh_config still bounds
             # the initial TCP connect.
-            "ANSIBLE_TIMEOUT": os.environ.get("FLEET_ANSIBLE_TIMEOUT", "30"),
+            "ANSIBLE_TIMEOUT": os.environ.get("PROV_ANSIBLE_TIMEOUT", "30"),
             "ANSIBLE_LOCAL_TEMP": workdir,
             # Find the build-time installed collections (community.routeros etc.) even
             # though HOME is the ephemeral workdir.

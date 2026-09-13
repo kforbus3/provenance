@@ -4,10 +4,10 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: fleet-terminal
-  namespace: fleet-terminal
+  name: provenance
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
@@ -19,23 +19,23 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - fleet.example.com
-      secretName: fleet-tls
+        - provenance.example.com
+      secretName: prov-tls
   rules:
-    - host: fleet.example.com
+    - host: provenance.example.com
       http:
         paths:
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: fleet-backend
+                name: prov-backend
                 port:
                   number: 8080
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: fleet-frontend
+                name: prov-frontend
                 port:
                   number: 80

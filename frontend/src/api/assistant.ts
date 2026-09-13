@@ -17,7 +17,7 @@ export interface AssistantStatus {
   reachable: boolean;
   ready: boolean;
   destination?: AssistantDestination;
-  /** Context window Fleet requests from Ollama. */
+  /** Context window Provenance requests from Ollama. */
   contextWindow?: number;
   /** Tokens the system prompt + tool schemas cost before any fleet data. Ollama
    *  silently drops the OLDEST tokens when the prompt overflows the window, so a

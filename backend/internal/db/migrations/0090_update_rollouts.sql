@@ -11,7 +11,7 @@
 -- starts the work, not the rules about when it may start.
 CREATE TABLE IF NOT EXISTS container_update_rollouts (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id     UUID NOT NULL DEFAULT fleet_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id     UUID NOT NULL DEFAULT prov_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
 
     repository    TEXT NOT NULL,
     -- The tag hosts are on now, and the one they are moving to. They are equal
@@ -81,5 +81,5 @@ BEGIN
   EXECUTE 'ALTER TABLE container_update_rollouts ENABLE ROW LEVEL SECURITY';
   EXECUTE 'ALTER TABLE container_update_rollouts FORCE ROW LEVEL SECURITY';
   EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON container_update_rollouts';
-  EXECUTE 'CREATE POLICY tenant_isolation ON container_update_rollouts USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id))';
+  EXECUTE 'CREATE POLICY tenant_isolation ON container_update_rollouts USING (prov_rls_visible(tenant_id)) WITH CHECK (prov_rls_visible(tenant_id))';
 END $$;

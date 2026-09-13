@@ -91,6 +91,6 @@ func MustPrincipal(r *http.Request) *Principal {
 
 // Cookie names used by the auth layer.
 const (
-	RefreshCookie = "fleet_refresh"
-	CSRFCookie    = "fleet_csrf"
+	RefreshCookie = "prov_refresh"
+	CSRFCookie    = "prov_csrf"
 )

@@ -9,15 +9,15 @@ import (
 func TestWSToken(t *testing.T) {
 	var s Service
 
-	// Subprotocol path: token after the "fleet-bearer" marker; server echoes the marker.
+	// Subprotocol path: token after the "prov-bearer" marker; server echoes the marker.
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/terminal/x", nil)
-	r.Header.Set("Sec-WebSocket-Protocol", "fleet-bearer, abc.def.ghi")
+	r.Header.Set("Sec-WebSocket-Protocol", "prov-bearer, abc.def.ghi")
 	tok, hdr := s.WSToken(r)
 	if tok != "abc.def.ghi" {
 		t.Fatalf("subprotocol token = %q, want abc.def.ghi", tok)
 	}
-	if hdr == nil || hdr.Get("Sec-WebSocket-Protocol") != "fleet-bearer" {
-		t.Fatalf("respHeader = %v, want echo of fleet-bearer marker", hdr)
+	if hdr == nil || hdr.Get("Sec-WebSocket-Protocol") != "prov-bearer" {
+		t.Fatalf("respHeader = %v, want echo of prov-bearer marker", hdr)
 	}
 
 	// The token must never be echoed back in the response (would re-leak it).
@@ -37,7 +37,7 @@ func TestWSToken(t *testing.T) {
 
 	// Marker present but no following value → not treated as a token.
 	r3 := httptest.NewRequest(http.MethodGet, "/x", nil)
-	r3.Header.Set("Sec-WebSocket-Protocol", "fleet-bearer")
+	r3.Header.Set("Sec-WebSocket-Protocol", "prov-bearer")
 	if tok3, _ := s.WSToken(r3); tok3 != "" {
 		t.Fatalf("lone marker token = %q, want empty", tok3)
 	}

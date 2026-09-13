@@ -73,7 +73,12 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 // machine has neither.
 func MountMachineCompat(r chi.Router, d *app.Deps, svc *Service) {
 	h := &handler{d: d, svc: svc}
+	// Both spellings, permanently. The product rename could not reach machines
+	// already in the field -- reaching them is what this endpoint is FOR -- so the
+	// original path stays mounted forever. `/api/prov/heartbeat` is what newly
+	// built images use; neither is a deprecated alias of the other.
 	r.Post("/api/fleet/heartbeat", h.heartbeat)
+	r.Post("/api/prov/heartbeat", h.heartbeat)
 	r.Post("/api/imaging/report", h.imagerReport)
 	r.Post("/api/imaging/checkin", h.imagerCheckin)
 }
@@ -217,7 +222,7 @@ func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 // would have to authenticate to receive -- so the server accepts what the fleet
 // sends, exactly as it serves the unversioned machine paths.
 //
-// Getting this wrong is silent and total. FLEET_AGENT_TOKEN is set precisely
+// Getting this wrong is silent and total. PROV_AGENT_TOKEN is set precisely
 // when the control plane is reachable from a network that is not the
 // provisioning one, which is the moment a fleet is at its most spread out; a
 // mismatch 401s every heartbeat from every machine at once, and the only symptom

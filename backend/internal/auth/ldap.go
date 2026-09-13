@@ -63,7 +63,7 @@ func (s *Service) ldapEnabled(ctx context.Context) bool {
 }
 
 // authenticateLDAP verifies credentials against the directory and find-or-
-// provisions the matching Fleet account.
+// provisions the matching Provenance account.
 func (s *Service) authenticateLDAP(ctx context.Context, username, password string) (*models.User, error) {
 	c := s.ldapConfig(ctx)
 	if !c.Enabled || c.URL == "" || c.BaseDN == "" || password == "" {

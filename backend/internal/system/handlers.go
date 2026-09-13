@@ -85,7 +85,7 @@ func (h *handler) backup(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "backup failed to start")
 		return
 	}
-	filename := fmt.Sprintf("fleet-backup-%d.sql", time.Now().Unix())
+	filename := fmt.Sprintf("prov-backup-%d.sql", time.Now().Unix())
 	w.Header().Set("Content-Type", "application/sql")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	_, _ = io.Copy(w, stdout)

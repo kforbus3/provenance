@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-// Fleet insights: explainable, at-a-glance health observations derived from host
+// Provenance insights: explainable, at-a-glance health observations derived from host
 // status/metrics and metric-history trends. Scoped to hosts the caller can access.
 
 export interface Insight {

@@ -47,7 +47,7 @@ func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "bad upstream request")
 		return
 	}
-	// Forward content headers, then inject auth (never forward the caller's Fleet auth).
+	// Forward content headers, then inject auth (never forward the caller's Provenance auth).
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}

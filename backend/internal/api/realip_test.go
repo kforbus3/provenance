@@ -70,7 +70,7 @@ func TestClientFromXFF(t *testing.T) {
 // Every one of these is a private client address, which is the case the
 // original tests never covered and the only case the shipped default ever sees.
 //
-// FLEET_TRUSTED_PROXIES defaults to the whole of RFC1918, because the reverse
+// PROV_TRUSTED_PROXIES defaults to the whole of RFC1918, because the reverse
 // proxy sits on a Docker bridge or the LAN. The chain walk then skipped any XFF
 // entry inside those ranges as "another proxy" — so for a client on the LAN it
 // skipped the client, ran out of entries, and returned nothing at all. Every
@@ -176,7 +176,7 @@ func TestGarbageEntriesAreSkippedWithoutLosingTheClient(t *testing.T) {
 	}
 }
 
-// inDefaultTrusted mirrors the shipped FLEET_TRUSTED_PROXIES default, so these
+// inDefaultTrusted mirrors the shipped PROV_TRUSTED_PROXIES default, so these
 // tests fail the way production would rather than the way a hand-picked CIDR
 // list would.
 func inDefaultTrusted(ip net.IP) bool {

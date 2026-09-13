@@ -1,7 +1,7 @@
 #!/bin/sh
-# Fleet Terminal test fabric — managed host entrypoint.
+# Provenance test fabric — managed host entrypoint.
 #
-# Starts sshd only. WireGuard is intentionally NOT configured here: the Fleet
+# Starts sshd only. WireGuard is intentionally NOT configured here: the Provenance
 # Terminal enrollment flow connects over SSH, generates the host's WireGuard
 # keypair, brings up wg0, and registers the peer on the jump host. The
 # wireguard-go binary is present for enrollment to use.

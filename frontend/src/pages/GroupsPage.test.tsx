@@ -44,7 +44,7 @@ const member = {
 function host(id: string, hostname: string) {
   return {
     id, hostname, description: "", environment: "production", owner: "ops",
-    sshPort: 22, sshUser: "fleet", tags: [], authMethod: "fleet_cert", protocol: "ssh",
+    sshPort: 22, sshUser: "fleet", tags: [], authMethod: "prov_cert", protocol: "ssh",
     rdpPort: 3389, enrolled: true, createdAt: "", updatedAt: "",
   } as unknown as hostsApi.Host;
 }

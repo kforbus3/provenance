@@ -1,6 +1,6 @@
 // Package extsecret resolves "external-backed" vault credentials: secret material held
-// in an external secrets manager (HashiCorp Vault KV today) that Fleet fetches on
-// demand rather than storing as a locally sealed blob. This lets Fleet broker secrets
+// in an external secrets manager (HashiCorp Vault KV today) that Provenance fetches on
+// demand rather than storing as a locally sealed blob. This lets Provenance broker secrets
 // from an organization's existing secrets manager without becoming a second copy of
 // record. The provider connection is configured once from the environment; each vault
 // secret carries a provider name and an opaque reference.
@@ -32,7 +32,7 @@ type Provider interface {
 // deployment that only does that should not be asked for a writable one. Callers
 // type-assert for this and fall back when it is absent.
 //
-// The one thing Fleet writes is a LUKS recovery passphrase it generated itself
+// The one thing Provenance writes is a LUKS recovery passphrase it generated itself
 // for an image it is about to build — a secret that has no other copy anywhere,
 // which is exactly the case where "we do not become a second copy of record" does
 // not apply.
@@ -72,7 +72,7 @@ type Config struct {
 	AWSEndpoint     string // optional override (e.g. LocalStack)
 }
 
-// Providers is the set of provider names Fleet understands for external secrets. A
+// Providers is the set of provider names Provenance understands for external secrets. A
 // vault secret's external_provider column must be one of these.
 const (
 	ProviderVaultKV    = "vault-kv"
@@ -97,7 +97,7 @@ func New(provider string, cfg Config) (Provider, error) {
 	}
 }
 
-// Supported reports whether a provider name is one Fleet can resolve.
+// Supported reports whether a provider name is one Provenance can resolve.
 func Supported(provider string) bool {
 	return provider == ProviderVaultKV || provider == ProviderAWSSecrets
 }

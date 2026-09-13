@@ -30,7 +30,7 @@ export function StandbyConsole() {
             <Chip size="small" color="warning" label="read-only" />
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            This instance's database is a <b>replica (in recovery)</b>, so Fleet is running in
+            This instance's database is a <b>replica (in recovery)</b>, so Provenance is running in
             read-only standby mode — normal sign-in and management are unavailable here. Promote it
             to take over as the primary; the instance then restarts into normal operation and you
             manage the fleet from this site's address.
@@ -56,14 +56,14 @@ export function StandbyConsole() {
               )}
               {!promotionEnabled && (
                 <Alert severity="warning">
-                  Console promotion is disabled (no <code>FLEET_DR_STANDBY_TOKEN</code> set). Promote
-                  via <code>fleetctl</code> or your database tooling, then restart this instance.
+                  Console promotion is disabled (no <code>PROV_DR_STANDBY_TOKEN</code> set). Promote
+                  via <code>provctl</code> or your database tooling, then restart this instance.
                 </Alert>
               )}
               <TextField
                 label="DR token" type="password" value={token} fullWidth size="small"
                 onChange={(e) => setToken(e.target.value)} disabled={!promotionEnabled}
-                helperText="The FLEET_DR_STANDBY_TOKEN configured on this instance"
+                helperText="The PROV_DR_STANDBY_TOKEN configured on this instance"
               />
               <Box>
                 <Button

@@ -1,4 +1,4 @@
-# Fleet Terminal — 2-instance High Availability TEST stack.
+# Provenance — 2-instance High Availability TEST stack.
 #
 # Runs two backend instances against one Postgres, behind a round-robin nginx load
 # balancer, so you can exercise leader election, ownership reconciliation, the event
@@ -10,7 +10,7 @@
 # KNOWN HA CAVEAT — per-instance rate limiting. The per-IP rate limiter
 # (internal/ratelimit) is an in-memory token bucket local to each backend process,
 # so with N instances behind the LB the EFFECTIVE limit an attacker sees is N× the
-# configured FLEET_RATE_LIMIT_* / FLEET_AUTH_RATE_LIMIT_* values (a round-robin LB
+# configured PROV_RATE_LIMIT_* / PROV_AUTH_RATE_LIMIT_* values (a round-robin LB
 # spreads their requests across all N buckets). This is a defense-in-depth throttle,
 # not the primary control (per-account lockout is enforced in Postgres and IS
 # cluster-wide), but size it accordingly:
@@ -21,34 +21,34 @@
 # add a hot dependency on the request path for a secondary control.
 #
 # Run (from the repo root):
-#   docker compose --env-file .env -f deploy/compose/docker-compose.ha.yml -p fleet-ha up -d --build
-#   docker compose -p fleet-ha logs -f backend1 backend2 | grep -i cluster   # watch leadership
+#   docker compose --env-file .env -f deploy/compose/docker-compose.ha.yml -p provenance-ha up -d --build
+#   docker compose -p provenance-ha logs -f backend1 backend2 | grep -i cluster   # watch leadership
 # Reach the API through the LB at http://localhost:8080  (backends also on :8091/:8092).
 # Tear down:
-#   docker compose -p fleet-ha down -v
+#   docker compose -p provenance-ha down -v
 
-name: fleet-ha
+name: provenance-ha
 
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    # Two backends × FLEET_DB_MAX_CONNS (20) + leader-lock/backplane conns comfortably
+    # Two backends × PROV_DB_MAX_CONNS (20) + leader-lock/backplane conns comfortably
     # fits max_connections=200; raise this in lockstep if you add instances or raise
-    # FLEET_DB_MAX_CONNS (keep (instances × FLEET_DB_MAX_CONNS) well under this).
+    # PROV_DB_MAX_CONNS (keep (instances × PROV_DB_MAX_CONNS) well under this).
     command: ["postgres", "-c", "max_connections=200"]
     environment:
-      POSTGRES_USER: fleet
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
-      POSTGRES_DB: fleet
+      POSTGRES_USER: prov
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prov}
+      POSTGRES_DB: prov
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
+      test: ["CMD-SHELL", "pg_isready -U prov -d prov"]
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [fleet]
+    networks: [prov]
 
   # Both backends inherit the full environment/build of the base `backend` service
   # (secrets from --env-file .env) and only override ports + dependencies. They share
@@ -56,8 +56,8 @@ services:
   #
   # This is a SELF-CONTAINED HA test stack: it pins the two backends to THIS stack's
   # own Postgres as the superuser and runs single-tenant, overriding any
-  # FLEET_DATABASE_URL / FLEET_MULTI_TENANCY your .env sets for production (a
-  # multi-tenant URL points at a `fleet_app` role this fresh Postgres doesn't have, so
+  # PROV_DATABASE_URL / PROV_MULTI_TENANCY your .env sets for production (a
+  # multi-tenant URL points at a `prov_app` role this fresh Postgres doesn't have, so
   # the backends would hang on connect). HA is orthogonal to multi-tenancy, so testing
   # it single-tenant exercises the full cluster machinery. Always `down -v` between
   # runs — a stale pgdata volume carries a CA key sealed with a different passphrase.
@@ -66,28 +66,28 @@ services:
       file: docker-compose.yml
       service: backend
     environment:
-      FLEET_DATABASE_URL: "postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable"
-      FLEET_MULTI_TENANCY: "false"
+      PROV_DATABASE_URL: "postgres://prov:${POSTGRES_PASSWORD:-prov}@postgres:5432/prov?sslmode=disable"
+      PROV_MULTI_TENANCY: "false"
     depends_on:
       postgres:
         condition: service_healthy
     ports: !override
       - "127.0.0.1:8091:8080"
-    networks: [fleet]
+    networks: [prov]
 
   backend2:
     extends:
       file: docker-compose.yml
       service: backend
     environment:
-      FLEET_DATABASE_URL: "postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable"
-      FLEET_MULTI_TENANCY: "false"
+      PROV_DATABASE_URL: "postgres://prov:${POSTGRES_PASSWORD:-prov}@postgres:5432/prov?sslmode=disable"
+      PROV_MULTI_TENANCY: "false"
     depends_on:
       postgres:
         condition: service_healthy
     ports: !override
       - "127.0.0.1:8092:8080"
-    networks: [fleet]
+    networks: [prov]
 
   lb:
     image: nginx:1.27-alpine
@@ -98,7 +98,7 @@ services:
       # 8088 (not 8080) to avoid clashing with a co-running up-single/up-app stack.
       - "127.0.0.1:8088:80"
     depends_on: [backend1, backend2]
-    networks: [fleet]
+    networks: [prov]
 
 volumes:
   pgdata:
@@ -112,5 +112,5 @@ volumes:
   updates:
 
 networks:
-  fleet:
+  prov:
     driver: bridge

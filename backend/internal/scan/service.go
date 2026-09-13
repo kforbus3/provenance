@@ -36,7 +36,7 @@ const (
 )
 
 // scanTimeout resolves the scan/remediation budget. Precedence: the `scan_policy`
-// setting (timeoutMinutes, editable in the UI) overrides FLEET_SCAN_TIMEOUT,
+// setting (timeoutMinutes, editable in the UI) overrides PROV_SCAN_TIMEOUT,
 // which overrides the built-in default. Clamped to a sane range.
 func (s *Service) scanTimeout() time.Duration {
 	d := defaultScanTimeout
@@ -222,7 +222,7 @@ func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host, 
 	// Make sure the host has content matching its OS version before evaluating.
 	s.ensureContent(ctx, conn, h)
 
-	// Host-side oscap budget: a minute under Fleet's session timeout so oscap is
+	// Host-side oscap budget: a minute under Provenance's session timeout so oscap is
 	// killed cleanly on the host (and reports rc 124) before the SSH session is
 	// torn down — avoiding an orphaned oscap that keeps a core pegged.
 	hostBudget := int(s.scanTimeout().Seconds()) - 60
@@ -316,8 +316,8 @@ func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host, 
 
 // --- remote scripts ---
 
-const reportDelimiter = "=====FLEET_REPORT_HTML_BEGIN====="
-const resultsDelimiter = "=====FLEET_RESULTS_XML_BEGIN====="
+const reportDelimiter = "=====PROV_REPORT_HTML_BEGIN====="
+const resultsDelimiter = "=====PROV_RESULTS_XML_BEGIN====="
 
 const discoverScript = `C=/usr/share/xml/scap/ssg/content
 command -v oscap >/dev/null 2>&1 || { echo "STATUS=missing"; exit 0; }
@@ -393,7 +393,7 @@ if [ -z "$PROFILE" ]; then
 fi
 [ -z "$PROFILE" ] && { echo "STATUS=no_profile"; exit 0; }
 PT=$(oscap info --profiles "$DS" 2>/dev/null | grep -F "$PROFILE:" | head -1 | cut -d: -f2-)
-R=/tmp/fleet-scan-$$
+R=/tmp/provenance-scan-$$
 sudo timeout "$TMO" oscap xccdf eval $SKIP --profile "$PROFILE" --results "$R-results.xml" --report "$R-report.html" "$DS" >"$R-out.log" 2>&1
 RC=$?
 if [ $RC -ne 0 ] && [ $RC -ne 2 ]; then

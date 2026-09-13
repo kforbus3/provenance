@@ -1,4 +1,4 @@
--- Federation upgrade ordering: track each site's running BUILD version (fleetd
+-- Federation upgrade ordering: track each site's running BUILD version (provd
 -- version, refreshed on the read-model heartbeat) and its federation PROTOCOL version
 -- (negotiated at join). Build version gives the hub visibility into version skew and
 -- lets it enforce sites-first upgrade ordering; protocol version lets the hub reject a

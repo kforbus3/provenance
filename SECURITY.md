@@ -55,7 +55,7 @@ Provenance is self-hosted; deployment security is partly your responsibility.
 A few essentials, covered in more detail in the
 [Security Guide](docs/security-guide.md):
 
-- **`FLEET_CA_PASSPHRASE`** and **`FLEET_BACKUP_PASSPHRASE`** are the root of trust.
+- **`PROV_CA_PASSPHRASE`** and **`PROV_BACKUP_PASSPHRASE`** are the root of trust.
   Keep them off the server (e.g. in a password manager); they are deliberately
   excluded from backups. Losing them is unrecoverable; leaking them is fatal.
 - Never commit a real `.env`. Only `*.example` files belong in version control.

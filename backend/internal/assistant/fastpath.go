@@ -174,7 +174,7 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	// 5a2) compliance / OpenSCAP benchmark questions -> compliance_scans or
 	// scan_findings. Pinned because "security scan" is the phrase operators actually
 	// use and it collides head-on with the CVE tool: on a small model it routed to
-	// `vulnerabilities` and then, when corrected, claimed Fleet had no compliance data
+	// `vulnerabilities` and then, when corrected, claimed Provenance had no compliance data
 	// at all. Ordered BEFORE the vulnerability intent so an explicitly compliance-
 	// flavoured question ("benchmark", "CIS", "failed rules") wins.
 	if !scanVerbRE.MatchString(lq) {
@@ -245,7 +245,7 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	// 6c) groups / roles / service accounts / access reviews -> access_control with the
 	// topic pinned. The topic enum is exactly the kind of argument a small model fills
 	// in plausibly but wrongly ("topic": "hosts"), which returns an unknown-topic error
-	// the user reads as "Fleet has no groups".
+	// the user reads as "Provenance has no groups".
 	if topic, name, ok := accessControlIntent(lq); ok {
 		a, _ := json.Marshal(accessControlArgs{Topic: topic, Name: name})
 		return "access_control", a, true
@@ -292,19 +292,19 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 	}
 
 	// 12) open-ended health questions ("any problems?", "anything wrong?", "morning
-	// report") -> fleet_insights alone. The model tends to answer these correctly but
+	// report") -> prov_insights alone. The model tends to answer these correctly but
 	// then tack on an extra, unrelated tool call (e.g. list_schedules) whose table
 	// clobbers the insights table shown to the user. Routing to a single grounded call
 	// keeps the right data attached. Kept last so any specific intent wins first.
 	if healthIntent(lq) {
-		return "fleet_insights", nil, true
+		return "prov_insights", nil, true
 	}
 
 	return "", nil, false
 }
 
 // healthIntent matches open-ended "is anything wrong / needs attention" questions
-// that the fleet-insights aggregate is meant to answer.
+// that the prov-insights aggregate is meant to answer.
 func healthIntent(lq string) bool {
 	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
 		return false
@@ -483,7 +483,7 @@ func complianceIntent(lq string) (failedOnly, ok bool) {
 }
 
 // explicitComplianceWord reports whether the question uses unambiguous compliance /
-// benchmark vocabulary, as opposed to the bare word "scan" (which Fleet uses for
+// benchmark vocabulary, as opposed to the bare word "scan" (which Provenance uses for
 // compliance scans, CVE scans and the scan job log alike).
 func explicitComplianceWord(lq string) bool {
 	for _, t := range []string{
@@ -532,7 +532,7 @@ func scanFindingsIntent(lq string) (host, severity string, ok bool) {
 	return host, sev, true
 }
 
-// expiringIntent matches "what is expiring / needs rotating" questions about Fleet's
+// expiringIntent matches "what is expiring / needs rotating" questions about Provenance's
 // own credentials. It stands down for host-level package and certificate-issuance
 // questions, which are different tools entirely.
 func expiringIntent(lq string) bool {
@@ -560,7 +560,7 @@ func expiringIntent(lq string) bool {
 		}
 	}
 	// "what's expiring" with no explicit subject is still this question — nothing else
-	// in Fleet expires — so the verb alone is enough when no other subject is named.
+	// in Provenance expires — so the verb alone is enough when no other subject is named.
 	return verb && (subject || !strings.Contains(lq, "host"))
 }
 
@@ -819,7 +819,7 @@ func auditChangesIntent(lq string) bool {
 func sessionHistoryIntent(lq string) (host string, hours, limit int, ok bool) {
 	// "who/anyone/anybody connected/logged in/accessed <host>" — including "has anyone",
 	// "did anyone", "anyone logged into". These are host-session questions and must NOT
-	// fall through to the model (which mis-routes "logged into <host>" to Fleet sign-in
+	// fall through to the model (which mis-routes "logged into <host>" to Provenance sign-in
 	// auth events, and "recently" to a too-narrow 24h window — both false results).
 	isWho := strings.Contains(lq, "who connected") || strings.Contains(lq, "who logged") ||
 		strings.Contains(lq, "who accessed") || strings.Contains(lq, "who signed") ||

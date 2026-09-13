@@ -10,7 +10,7 @@ import (
 
 func switchTestService() *Service {
 	return &Service{cfg: &config.Config{
-		WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1", WGPort: 51820, WGInterface: "wgfleet",
+		WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1", WGPort: 51820, WGInterface: "wgprov",
 		OVPNSubnet: "10.101.0.0/24", OVPNJumpIP: "10.101.0.1", OVPNPort: 1194,
 	}}
 }
@@ -100,7 +100,7 @@ func TestTeardownScriptsAreBestEffortAndReversible(t *testing.T) {
 	if !strings.HasPrefix(wg, "set +e") {
 		t.Error("WireGuard teardown is not best-effort")
 	}
-	if !strings.Contains(wg, "$IF.conf.fleet-disabled") {
+	if !strings.Contains(wg, "$IF.conf.prov-disabled") {
 		t.Error("WireGuard teardown does not preserve the retired config")
 	}
 	if !strings.Contains(wg, "systemctl disable --now wg-quick@$IF") {

@@ -209,11 +209,11 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	loginUser, principals := sshgw.LoginTier(
 		auth.MaySudo(ctx, h.d.Store, h.d.Log, p, host.ID), host.SSHUser, p.Username)
 
-	// If the host authenticates with a vaulted credential (not Fleet certs), resolve
+	// If the host authenticates with a vaulted credential (not Provenance certs), resolve
 	// it — the plaintext is used only inside the gateway dial, never exposed here or
 	// to the operator.
 	var injection *credinject.Injection
-	if host.AuthMethod != "" && host.AuthMethod != "fleet_cert" {
+	if host.AuthMethod != "" && host.AuthMethod != "prov_cert" {
 		key, kerr := h.d.Cfg.VaultKey()
 		if kerr != nil {
 			sendErr(kerr.Error())

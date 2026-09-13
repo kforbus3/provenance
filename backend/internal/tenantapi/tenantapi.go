@@ -37,7 +37,7 @@ type handler struct{ d *app.Deps }
 func (h *handler) gate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.d.Cfg.MultiTenancy {
-			httpx.WriteError(w, http.StatusBadRequest, "multi-tenancy is not enabled (set FLEET_MULTI_TENANCY=true)")
+			httpx.WriteError(w, http.StatusBadRequest, "multi-tenancy is not enabled (set PROV_MULTI_TENANCY=true)")
 			return
 		}
 		if p := auth.MustPrincipal(r); p == nil || !p.IsProviderAdmin() {

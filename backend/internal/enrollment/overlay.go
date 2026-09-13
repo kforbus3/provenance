@@ -86,7 +86,7 @@ func (s *Service) enrollCertOverlay(
 }
 
 // verifyOverlayReachable dials the host's overlay address FROM the jump host, which is
-// the path every Fleet session takes. It is deliberately narrow: no management-address
+// the path every Provenance session takes. It is deliberately narrow: no management-address
 // fallback, no hostname, nothing that can succeed while the overlay is dead.
 //
 // It retries to a deadline rather than deciding on one attempt, because a tunnel that

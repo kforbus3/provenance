@@ -17,7 +17,7 @@ func testScript(t *testing.T) string {
 	t.Helper()
 	s := &Service{cfg: &config.Config{WGSubnet: "10.9.0.0/24", WGJumpIP: "10.9.0.1", WGPort: 51820}}
 	return s.bootstrapScript(
-		"fleet", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-ca fleet-ca",
+		"fleet", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-ca prov-ca",
 		"10.9.0.5", "jumppubkey=", "vpn.example.com:51820", "",
 		uuid.MustParse("abcdef01-2345-6789-abcd-ef0123456789"),
 	)
@@ -49,7 +49,7 @@ func TestBootstrapScriptIsPOSIXSh(t *testing.T) {
 func accountBlock(t *testing.T) string {
 	t.Helper()
 	script := testScript(t)
-	start := strings.Index(script, "FLEETSHELL=")
+	start := strings.Index(script, "PROVSHELL=")
 	if start < 0 {
 		t.Fatal("account-creation block not found in the generated script")
 	}
@@ -57,7 +57,7 @@ func accountBlock(t *testing.T) string {
 	if end < 0 {
 		t.Fatal("account-creation loop is not terminated")
 	}
-	return "set -e\nLOGIN=fleet\nNOSUDO=fleet-login\n" + script[start:start+end+len("\ndone\n")]
+	return "set -e\nLOGIN=fleet\nNOSUDO=prov-login\n" + script[start:start+end+len("\ndone\n")]
 }
 
 // runWithStubs executes a shell fragment with a PATH holding only the stubs given
@@ -78,7 +78,7 @@ func runWithStubs(t *testing.T, fragment string, exits map[string]int) error {
 	return err
 }
 
-// A host that trusts the Fleet CA but has no account to map principals onto
+// A host that trusts the Provenance CA but has no account to map principals onto
 // accepts nobody. Account creation used to end in `|| true` with both tools'
 // stderr sent to /dev/null, so the phase printed its CA_OK marker and enrollment
 // reported success while the accounts silently did not exist. Both tools failing

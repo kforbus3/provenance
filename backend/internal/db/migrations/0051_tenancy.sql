@@ -3,7 +3,7 @@
 -- query is automatically filtered to the caller's tenant. Enforcement is driven by the
 -- `app.tenant_id` GUC the app sets per connection (see internal/tenant + internal/db).
 --
--- With FLEET_MULTI_TENANCY off the app always sets app.tenant_id='bypass', so the
+-- With PROV_MULTI_TENANCY off the app always sets app.tenant_id='bypass', so the
 -- policies below are satisfied for every row and behavior is unchanged. RLS is only
 -- actually enforced when (a) the flag is on AND (b) the app connects as a NON-superuser
 -- role (Postgres superusers and BYPASSRLS roles ignore RLS even with FORCE).
@@ -25,9 +25,9 @@ INSERT INTO tenants (id, name, slug, kind)
 VALUES ('00000000-0000-0000-0000-000000000001', 'Provider', 'provider', 'provider')
 ON CONFLICT (id) DO NOTHING;
 
--- fleet_current_tenant: the tenant a NEW row belongs to — the request's tenant, or the
+-- prov_current_tenant: the tenant a NEW row belongs to — the request's tenant, or the
 -- provider tenant for bypass/background/unset contexts. Used as the tenant_id default.
-CREATE OR REPLACE FUNCTION fleet_current_tenant() RETURNS uuid
+CREATE OR REPLACE FUNCTION prov_current_tenant() RETURNS uuid
 LANGUAGE sql STABLE AS $$
   SELECT COALESCE(
     NULLIF(NULLIF(current_setting('app.tenant_id', true), 'bypass'), ''),
@@ -35,10 +35,10 @@ LANGUAGE sql STABLE AS $$
   )::uuid
 $$;
 
--- fleet_rls_visible: the row-visibility predicate. 'bypass' sees everything; otherwise a
+-- prov_rls_visible: the row-visibility predicate. 'bypass' sees everything; otherwise a
 -- row is visible only when its tenant matches the connection's tenant. An unset/empty
 -- setting matches nothing (deny) so a request that forgot to scope fails closed.
-CREATE OR REPLACE FUNCTION fleet_rls_visible(tid uuid) RETURNS boolean
+CREATE OR REPLACE FUNCTION prov_rls_visible(tid uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
   SELECT current_setting('app.tenant_id', true) = 'bypass'
       OR tid::text = current_setting('app.tenant_id', true)
@@ -46,7 +46,7 @@ $$;
 
 -- Apply tenant_id + RLS to every tenant-scoped table. tenant_id is added with a CONSTANT
 -- default (fast: no table rewrite in PG11+; existing rows -> provider tenant), then the
--- default is swapped to fleet_current_tenant() for future inserts.
+-- default is swapped to prov_current_tenant() for future inserts.
 DO $$
 DECLARE
   t text;
@@ -83,13 +83,13 @@ BEGIN
     EXECUTE format(
       'ALTER TABLE %I ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT ''00000000-0000-0000-0000-000000000001''::uuid',
       t);
-    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT fleet_current_tenant()', t);
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT prov_current_tenant()', t);
     EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (tenant_id)', 'idx_' || t || '_tenant', t);
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
     EXECUTE format(
-      'CREATE POLICY tenant_isolation ON %I USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id))',
+      'CREATE POLICY tenant_isolation ON %I USING (prov_rls_visible(tenant_id)) WITH CHECK (prov_rls_visible(tenant_id))',
       t);
   END LOOP;
 END $$;

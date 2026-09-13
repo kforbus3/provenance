@@ -303,7 +303,7 @@ func (s *Service) runExpiringCredentials(ctx context.Context, raw json.RawMessag
 		s.log.Warn("assistant expiring_credentials lifecycle", "err", err)
 	}
 
-	// SSH certificates expiring inside the window. Fleet's session certificates are
+	// SSH certificates expiring inside the window. Provenance's session certificates are
 	// short-lived by design, so a bare "expiring certificate" count would be pure
 	// noise — only ones still valid now are reported, and the note says why.
 	if certs, err := s.store.ExpiringCertificates(ctx, now.Add(time.Duration(days)*24*time.Hour)); err == nil {

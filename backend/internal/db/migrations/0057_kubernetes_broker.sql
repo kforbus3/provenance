@@ -1,7 +1,7 @@
 -- Kubernetes access brokering: register clusters and reach their API server through
--- Fleet, which injects a vaulted bearer-token credential (the operator never sees it)
--- and audits every call. Fleet acts as an authenticating proxy, so a user's kubectl (or
--- the built-in resource browser) authenticates to Fleet, and Fleet authenticates to the
+-- Provenance, which injects a vaulted bearer-token credential (the operator never sees it)
+-- and audits every call. Provenance acts as an authenticating proxy, so a user's kubectl (or
+-- the built-in resource browser) authenticates to Provenance, and Provenance authenticates to the
 -- cluster. Mirrors the database broker.
 CREATE TABLE IF NOT EXISTS k8s_clusters (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

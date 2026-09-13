@@ -21,7 +21,7 @@ func (h *handler) serviceProviderConfig(w http.ResponseWriter, r *http.Request) 
 		"authenticationSchemes": []map[string]any{{
 			"type":        "oauthbearertoken",
 			"name":        "Bearer Token",
-			"description": "Static bearer token issued from the Fleet admin console",
+			"description": "Static bearer token issued from the Provenance admin console",
 			"primary":     true,
 		}},
 		"meta": map[string]any{"resourceType": "ServiceProviderConfig", "location": h.baseURL() + "/ServiceProviderConfig"},
@@ -49,7 +49,7 @@ func (h *handler) resourceTypes(w http.ResponseWriter, r *http.Request) {
 }
 
 // schemas returns the core User schema definition (RFC 7643 §7). Kept minimal —
-// the attributes Fleet actually maps.
+// the attributes Provenance actually maps.
 func (h *handler) schemas(w http.ResponseWriter, r *http.Request) {
 	attr := func(name, typ string, multi bool) map[string]any {
 		return map[string]any{

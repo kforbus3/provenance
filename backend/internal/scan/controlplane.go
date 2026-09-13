@@ -7,15 +7,15 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
-// controlPlaneTags mark a host as part of Fleet's own control plane. Remediating
-// such a host can sever Fleet's access to the entire fleet, so the UI/API
+// controlPlaneTags mark a host as part of Provenance's own control plane. Remediating
+// such a host can sever Provenance's access to the entire fleet, so the UI/API
 // require an extra confirmation before applying fixes to it.
 var controlPlaneTags = map[string]bool{"control-plane": true, "protected": true}
 
-// isControlPlaneHost reports whether remediating this host risks locking Fleet
+// isControlPlaneHost reports whether remediating this host risks locking Provenance
 // out of the fleet. It is true when the host:
 //   - carries a "control-plane" or "protected" tag,
-//   - is explicitly listed in FLEET_CONTROL_PLANE_HOSTS, or
+//   - is explicitly listed in PROV_CONTROL_PLANE_HOSTS, or
 //   - matches the jump host's identity — remediating the SSH gateway breaks the
 //     path to every managed host.
 //

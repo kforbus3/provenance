@@ -17,7 +17,7 @@ type healthComponent struct {
 	Detail string `json:"detail"`
 }
 
-// handleHealth aggregates a live status report of Fleet's subsystems for the
+// handleHealth aggregates a live status report of Provenance's subsystems for the
 // admin System Health page. Each check is bounded so one slow dependency can't
 // stall the whole report.
 func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {

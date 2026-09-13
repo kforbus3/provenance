@@ -206,7 +206,7 @@ Building is **opt-in**:
 docker compose --profile imaging up -d
 ```
 
-with `FLEET_BUILDER_RUNNER_URL` and `FLEET_BUILDER_RUNNER_TOKEN` set. With no
+with `PROV_BUILDER_RUNNER_URL` and `PROV_BUILDER_RUNNER_TOKEN` set. With no
 runner URL the build routes answer `501` and say so; nothing is broken, the
 deployment simply does not include the privileged sidecar. A fleet that consumes
 images somebody else builds should not have to run one, nor invent a secret for
@@ -266,9 +266,9 @@ passphrase cannot be stored, the build is not started.**
 Where it goes:
 
 - **An external secrets manager, when one is connected** — HashiCorp Vault KV v2
-  or AWS Secrets Manager, from `FLEET_EXTSECRET_*`. An organization that already
+  or AWS Secrets Manager, from `PROV_EXTSECRET_*`. An organization that already
   has a secrets manager should not need a second copy of record. The path is
-  `FLEET_IMAGING_SECRET_PREFIX` (default `secret/blackfriars/images`) plus the
+  `PROV_IMAGING_SECRET_PREFIX` (default `secret/provenance/images`) plus the
   image name.
 - **Provenance's own credential vault otherwise**, sealed at rest, under
   `imaging/luks/<image>`.
@@ -746,7 +746,7 @@ no moment at which a credential could have been given to it.
 ever heard from a machine — and it is sent *before* the reboot, so a machine that
 images perfectly and then fails to boot looks exactly like a success.
 
-Note these paths are **unversioned**, and deliberately so. `/api/fleet/heartbeat`
+Note these paths are **unversioned**, and deliberately so. `/api/prov/heartbeat`
 is compiled into every agent on every image ever built, and the report URL is
 derived inside a netboot initramfs from the address the image came from. Neither
 can be changed by editing this repository: the change would have to reach
@@ -763,7 +763,7 @@ rather than left in the changelog.
 |---|---|---|
 | `rauc: error while loading shared libraries: libjson-glib-1.0.so.0` | rpm images built before the runtime libraries were kept: `dnf remove` of the build toolchain took `json-glib` with it | `dnf install -y json-glib`, then rebuild the image and the bundle |
 | Update fails at 99% with `failed to start tar extract: Failed to execute child process "tar"` | rpm images built before `tar`/`gzip` were installed — a bundle's payload is a tar archive, and `dnf --installroot` never provided one | `dnf install -y tar gzip`, then rebuild the image and the bundle |
-| Machine comes up after an update with no VPN, but its config and certificate are intact | the overlay client was installed by enrollment into `/usr`, which the update replaced | reinstall it (`dnf install -y openvpn`; `systemctl enable --now openvpn-client@fleet-overlay`) — permanent once re-imaged from a current image |
+| Machine comes up after an update with no VPN, but its config and certificate are intact | the overlay client was installed by enrollment into `/usr`, which the update replaced | reinstall it (`dnf install -y openvpn`; `systemctl enable --now openvpn-client@prov-overlay`) — permanent once re-imaged from a current image |
 | OpenVPN tunnel works until the machine reboots, then never comes back | RHEL-family hosts enrolled before the client config was written where `openvpn-client@.service` reads it — the tunnel was a bare daemon enabled by nothing | re-enroll the host |
 
 The first two are the ones to watch for, because the machine images and boots
@@ -774,15 +774,15 @@ nothing else.
 
 | variable | meaning |
 | --- | --- |
-| `FLEET_ARTIFACT_DIR` | where the builder writes images and bundles, and the provisioning server serves them from (default `/output`) |
-| `FLEET_CONTROL_URL` | the base URL **machines in the field** use to reach this server |
-| `FLEET_AGENT_INTERVAL` | seconds between agent check-ins (default 300) |
-| `FLEET_AGENT_TOKEN` | optional shared token required on the heartbeat endpoint |
-| `FLEET_IMAGING_NUDGE` | `true` (default) to reach machines a rollout is waiting on; `false` to leave rollouts to poll |
-| `FLEET_BUILDER_RUNNER_URL` | the builder-runner sidecar. Empty (default) = no build path at all |
-| `FLEET_BUILDER_RUNNER_TOKEN` | shared secret sent as `X-Runner-Token`. Required whenever a runner URL is set |
+| `PROV_ARTIFACT_DIR` | where the builder writes images and bundles, and the provisioning server serves them from (default `/output`) |
+| `PROV_CONTROL_URL` | the base URL **machines in the field** use to reach this server |
+| `PROV_AGENT_INTERVAL` | seconds between agent check-ins (default 300) |
+| `PROV_AGENT_TOKEN` | optional shared token required on the heartbeat endpoint |
+| `PROV_IMAGING_NUDGE` | `true` (default) to reach machines a rollout is waiting on; `false` to leave rollouts to poll |
+| `PROV_BUILDER_RUNNER_URL` | the builder-runner sidecar. Empty (default) = no build path at all |
+| `PROV_BUILDER_RUNNER_TOKEN` | shared secret sent as `X-Runner-Token`. Required whenever a runner URL is set |
 
-`FLEET_CONTROL_URL` is the one that catches people. It is the address a machine
+`PROV_CONTROL_URL` is the one that catches people. It is the address a machine
 on the far side of the fleet can reach, which is routinely **not** the address
 an operator's browser uses. Getting it wrong produces a bundle URL that fails on
 the machine and nowhere else. Creating a rollout without it set is refused
@@ -793,12 +793,12 @@ at build time is the *provisioning server's*, which the machine stops being able
 to reach the moment it is unracked. Every heartbeat reply carries the current
 control URL, so the fleet can be re-pointed centrally.
 
-`FLEET_AGENT_INTERVAL` is likewise sent in every reply, so re-pacing the whole
+`PROV_AGENT_INTERVAL` is likewise sent in every reply, so re-pacing the whole
 fleet does not mean touching a machine.
 
 ### Serving updates to machines that have left the imaging network
 
-`FLEET_CONTROL_URL` tells machines where to find this server after they leave the
+`PROV_CONTROL_URL` tells machines where to find this server after they leave the
 provisioning segment — it is returned in every heartbeat reply, so the fleet
 re-points itself, and it is what a rollout builds its bundle URL from.
 
@@ -818,10 +818,10 @@ UPDATE_PORT=80           # optional, defaults to 80
 
 It serves `/bundles/`, `/health` and the heartbeat endpoint, and nothing else —
 not the image library. It is skipped as a no-op if it would duplicate the imaging
-listener. Then set the backend's `FLEET_CONTROL_URL` to that same address:
+listener. Then set the backend's `PROV_CONTROL_URL` to that same address:
 
 ```sh
-FLEET_CONTROL_URL=http://provisioning.example.com
+PROV_CONTROL_URL=http://provisioning.example.com
 ```
 
 Check it end to end before relying on it — a wrong value fails on the machine and
@@ -831,7 +831,7 @@ nowhere else:
 curl -o /dev/null -w '%{http_code}\n' http://provisioning.example.com/bundles/<bundle>.raucb
 ```
 
-> The two names are easy to confuse: the backend reads **`FLEET_CONTROL_URL`**,
+> The two names are easy to confuse: the backend reads **`PROV_CONTROL_URL`**,
 > and the PXE server's own compose file uses **`CONTROL_URL`** for the value it
 > writes into each machine's deploy marker at imaging time.
 
@@ -853,7 +853,7 @@ Note what the heartbeat cannot set: groups, hold, label. Those are an operator's
 word about a machine, never the machine's word about itself — otherwise anything
 on the network could put itself into a rollout it was never targeted by.
 
-Set `FLEET_AGENT_TOKEN` when the control plane is reachable from a network that
+Set `PROV_AGENT_TOKEN` when the control plane is reachable from a network that
 is not the provisioning one.
 
 It answers `key=value` lines rather than JSON. The agent is a shell script on a
@@ -907,7 +907,7 @@ on a host they cannot already see.
   properly on Kubernetes means a different build strategy (BuildKit or Kaniko in
   a pod, with its own cache and registry story), not a translated compose file.
   Until that exists, run the builder on a Docker host and point the cluster at
-  the artefacts it produces; `FLEET_BUILDER_RUNNER_URL` is a URL precisely so the
+  the artefacts it produces; `PROV_BUILDER_RUNNER_URL` is a URL precisely so the
   builder does not have to live where the backend does.
 
   The rest of imaging — rollouts, machines, heartbeats, the artefact library —

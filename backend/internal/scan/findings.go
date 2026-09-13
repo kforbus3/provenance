@@ -7,21 +7,21 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
-// accessImpactingTokens flags rules whose remediation could sever Fleet's own
+// accessImpactingTokens flags rules whose remediation could sever Provenance's own
 // access to the host (SSH, the WireGuard/firewall path, or account lockout).
 // Matched as case-insensitive substrings of the rule id.
 //
 // The ip_forward/rp_filter/route_localnet/send_redirects/ip_local_port_range
-// tokens catch the kernel networking sysctls that break Fleet's own reachability
+// tokens catch the kernel networking sysctls that break Provenance's own reachability
 // on a routed deployment: disabling IP forwarding or tightening reverse-path
 // filtering severs Docker's bridge networking (which serves the web UI) and the
 // jump-host WireGuard routing path. Tokens stay specific so unrelated sysctls
 // (e.g. sysctl_kernel_*) are not falsely flagged.
 //
-// The sudo/root_login tokens catch fixes that break Fleet's own privilege path:
+// The sudo/root_login tokens catch fixes that break Provenance's own privilege path:
 // enrollment and remediation run non-interactive `sudo bash` as the fleet user,
 // so `Defaults noexec`/`requiretty` (sudo_*) or disabling direct/root login
-// (no_direct_root_logins, sshd_*_root_login) can stop Fleet automating the host.
+// (no_direct_root_logins, sshd_*_root_login) can stop Provenance automating the host.
 var accessImpactingTokens = []string{
 	"sshd", "ssh_", "_ssh", "firewall", "firewalld", "nftables", "iptables",
 	"ufw", "_pam_", "faillock", "tally", "lockout", "wireless", "network_",

@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-// Read-only status of the external KMS/HSM backend that envelope-protects Fleet's
+// Read-only status of the external KMS/HSM backend that envelope-protects Provenance's
 // master passphrases. Configuration is boot-time environment only — there is no
 // write path from the UI.
 export interface KMSStatus {

@@ -43,7 +43,7 @@ describe("ContainerUpdatesTab", () => {
   it("renders an image whose hosts are null instead of blanking the page", async () => {
     vi.mocked(listContainerUpdates).mockResolvedValue([
       {
-        repository: "fleet-terminal-backend",
+        repository: "provenance-backend",
         tag: "1.2.3",
         checkedAt: new Date().toISOString(),
         hosts: null, // what the server actually sends after an upgrade
@@ -53,14 +53,14 @@ describe("ContainerUpdatesTab", () => {
     renderTab();
 
     await waitFor(() =>
-      expect(screen.getByText(/fleet-terminal-backend:1\.2\.3/)).toBeInTheDocument(),
+      expect(screen.getByText(/provenance-backend:1\.2\.3/)).toBeInTheDocument(),
     );
   });
 
   it("still renders when a normal row and a null-hosts row are mixed", async () => {
     vi.mocked(listContainerUpdates).mockResolvedValue([
       {
-        repository: "fleet-terminal-backend", tag: "1.2.3",
+        repository: "provenance-backend", tag: "1.2.3",
         checkedAt: new Date().toISOString(), hosts: null,
       },
       {
@@ -73,7 +73,7 @@ describe("ContainerUpdatesTab", () => {
     renderTab();
 
     await waitFor(() => expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument());
-    expect(screen.getByText(/fleet-terminal-backend:1\.2\.3/)).toBeInTheDocument();
+    expect(screen.getByText(/provenance-backend:1\.2\.3/)).toBeInTheDocument();
     // The actionable one sorts first and is offered a rollout; the null-hosts one
     // must not be, because there is nothing to roll out to.
     expect(screen.getAllByText("Roll out")).toHaveLength(1);
@@ -88,7 +88,7 @@ describe("ContainerUpdatesTab filtering", () => {
 
   const rows = [
     {
-      repository: "blackfriars-dockerproxy", tag: "latest",
+      repository: "provenance-dockerproxy", tag: "latest",
       checkedAt: new Date().toISOString(),
       hosts: [{ hostId: "h1", hostname: "control01", stale: false }],
     },
@@ -101,7 +101,7 @@ describe("ContainerUpdatesTab filtering", () => {
 
   it("does not match a hostname against image names", async () => {
     // Typing "docker" matched BOTH the host called docker and the image
-    // blackfriars-dockerproxy running on control01 — which is not what anyone types
+    // provenance-dockerproxy running on control01 — which is not what anyone types
     // a hostname to find. The text box searches images; the host picker is exact.
     vi.mocked(listContainerUpdates).mockResolvedValue(rows as never);
     renderTab();
@@ -112,7 +112,7 @@ describe("ContainerUpdatesTab filtering", () => {
 
     // The image whose NAME contains "docker" is a legitimate match.
     await waitFor(() =>
-      expect(screen.getByText(/blackfriars-dockerproxy/)).toBeInTheDocument());
+      expect(screen.getByText(/provenance-dockerproxy/)).toBeInTheDocument());
     // The image merely RUNNING on the host called docker is not.
     expect(screen.queryByText(/nginx:1\.24/)).not.toBeInTheDocument();
   });
@@ -130,7 +130,7 @@ describe("ContainerUpdatesTab filtering", () => {
     fireEvent.click(option);
 
     await waitFor(() =>
-      expect(screen.queryByText(/blackfriars-dockerproxy/)).not.toBeInTheDocument());
+      expect(screen.queryByText(/provenance-dockerproxy/)).not.toBeInTheDocument());
     expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument();
   });
 

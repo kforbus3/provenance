@@ -1,5 +1,5 @@
 // Package winrm collects host facts from a Windows host over WinRM (PowerShell
-// remoting). Windows exposes no SSH for Fleet's usual fact collection, so RDP hosts
+// remoting). Windows exposes no SSH for Provenance's usual fact collection, so RDP hosts
 // are queried over WinRM instead, authenticated with the host's vaulted credential
 // and tunneled through the jump host (the same path as the RDP session).
 package winrm

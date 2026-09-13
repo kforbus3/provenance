@@ -14,9 +14,9 @@ from a backup, and (3) how to reach a host when Provenance itself is down.
 
 | Item | Where it lives | If you lose it |
 | --- | --- | --- |
-| **`FLEET_CA_PASSPHRASE`** | your `.env` (and your memory / password manager) | The CA private key in the DB can't be decrypted → you must **re-enroll every host**. |
-| **`FLEET_BACKUP_PASSPHRASE`** | your `.env` / password manager | Encrypted backups can't be decrypted. (Falls back to the CA passphrase if unset.) |
-| **Database backups** | `FLEET_BACKUP_DIR` (`/var/lib/fleet/backups`) | All state — users, RBAC, hosts, the (encrypted) CA key, audit — is gone. |
+| **`PROV_CA_PASSPHRASE`** | your `.env` (and your memory / password manager) | The CA private key in the DB can't be decrypted → you must **re-enroll every host**. |
+| **`PROV_BACKUP_PASSPHRASE`** | your `.env` / password manager | Encrypted backups can't be decrypted. (Falls back to the CA passphrase if unset.) |
+| **Database backups** | `PROV_BACKUP_DIR` (`/var/lib/prov/backups`) | All state — users, RBAC, hosts, the (encrypted) CA key, audit — is gone. |
 | **Jump host volumes** | `jump_wg`, `jump_ssh` Docker volumes (capture with `make backup-volumes`) | WireGuard peers + the SSH host key; recoverable by re-enrolling hosts, but tedious. |
 
 **Store the two passphrases off the server** (a password manager or a sealed
@@ -31,12 +31,12 @@ Configure under **Settings → Backup & Restore**:
 
 - **Automatic scheduled backups** — enable, set an interval and how many to keep.
   The backend runs `pg_dump` and encrypts it with `openssl` (AES-256-CBC,
-  PBKDF2) into `FLEET_BACKUP_DIR`.
+  PBKDF2) into `PROV_BACKUP_DIR`.
 - **Back up now** — produce one immediately.
 - **Download** — pull an encrypted backup to your workstation.
 
 **Get the backups off the host.** A backup on the same disk that dies with the
-host protects nothing. Map `FLEET_BACKUP_DIR` to off-host storage (an NFS mount,
+host protects nothing. Map `PROV_BACKUP_DIR` to off-host storage (an NFS mount,
 an external disk, or rsync the directory to another machine on a cron).
 
 The encrypted file format is standard openssl, so it restores **anywhere** with
@@ -68,12 +68,12 @@ snapshot (optional for the mostly-static jump host files).
 On a fresh host (or after wiping a broken one):
 
 1. **Restore config + state volumes first**, using the **same `.env`** — crucially
-   the same `FLEET_CA_PASSPHRASE` (and `FLEET_BACKUP_PASSPHRASE`). Restoring the
+   the same `PROV_CA_PASSPHRASE` (and `PROV_BACKUP_PASSPHRASE`). Restoring the
    volumes *before* the first start means the jump host comes up with its original
    WireGuard and SSH-host identity, so the overlay and known_hosts pinning still
    line up and no host needs re-enrollment:
    ```sh
-   git clone <repo> && cd fleet-terminal
+   git clone <repo> && cd provenance
    cp /secure/offsite/.env .env          # your saved env with the passphrases
    cp -r /secure/offsite/volume-backups ./volume-backups   # if you have them
    make restore-volumes                  # jump_wg, jump_ssh, recordings, scans
@@ -83,13 +83,13 @@ On a fresh host (or after wiping a broken one):
    re-enroll each host to rebuild the WireGuard overlay.)
 2. **Restore the database** from your latest encrypted backup:
    ```sh
-   openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \
-     -in fleet-backup-YYYYMMDD-HHMMSS.sql.enc \
+   openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PROV_BACKUP_PASSPHRASE" \
+     -in prov-backup-YYYYMMDD-HHMMSS.sql.enc \
    | docker compose -f deploy/compose/docker-compose.yml \
        -f deploy/compose/docker-compose.jumphost.yml exec -T postgres \
-       psql -U fleet -d fleet
+       psql -U prov -d prov
    ```
-   (Or pipe into `psql "$FLEET_DATABASE_URL"` from anywhere that can reach the DB.)
+   (Or pipe into `psql "$PROV_DATABASE_URL"` from anywhere that can reach the DB.)
 3. **Restart the backend** so it reloads the CA key from the restored DB:
    ```sh
    make down-single && make up-single
@@ -98,7 +98,7 @@ On a fresh host (or after wiping a broken one):
    the **same** one the hosts already trust, certificate login works immediately —
    no re-enrollment needed.
 
-If you could **not** preserve `FLEET_CA_PASSPHRASE`, the CA key can't be
+If you could **not** preserve `PROV_CA_PASSPHRASE`, the CA key can't be
 decrypted: generate a new CA and **re-enroll every host** (the hosts must be
 taught to trust the new CA). This is why the passphrase matters as much as the
 backup.
@@ -117,14 +117,14 @@ out-of-band you need a credential that does **not** depend on Provenance's CA.
    somewhere safe (password manager / hardware token) — it must **never** live on
    the Provenance server:
    ```sh
-   ssh-keygen -t ed25519 -f fleet-breakglass -C "fleet-breakglass"
+   ssh-keygen -t ed25519 -f prov-breakglass -C "prov-breakglass"
    ```
 2. Install the **public** key on each host, in the `fleet` account's
    `authorized_keys` (or a dedicated `breakglass` sudoer). During enrollment the
    host is reachable on the jump host's LAN; you can append it then, or push it
    later over an existing Provenance session:
    ```sh
-   echo "ssh-ed25519 AAAA… fleet-breakglass" >> ~fleet/.ssh/authorized_keys
+   echo "ssh-ed25519 AAAA… prov-breakglass" >> ~prov/.ssh/authorized_keys
    ```
 3. **Test it** from your workstation against one host (directly, or via the jump
    host's LAN address), then file the private key away.
@@ -132,7 +132,7 @@ out-of-band you need a credential that does **not** depend on Provenance's CA.
 When Provenance is down, SSH in with that key directly to the host's management
 address (or through the jump host if only the backend is down):
 ```sh
-ssh -i fleet-breakglass fleet@<host-management-ip>
+ssh -i prov-breakglass fleet@<host-management-ip>
 ```
 
 > **Trade-off.** A standing emergency key is a standing credential — keep it
@@ -201,7 +201,7 @@ Defaults:<fleet-ssh-user> !noexec
 place — recover with a normal sudo account, not root. Only revert them if a
 workflow genuinely needs direct root login.
 
-> **Prevention.** Add Provenance's own host to `FLEET_CONTROL_PLANE_HOSTS` (or tag it
+> **Prevention.** Add Provenance's own host to `PROV_CONTROL_PLANE_HOSTS` (or tag it
 > `control-plane`) so remediating it always demands the extra confirmation, and
 > prefer running host-hardening scans against managed hosts rather than the box
 > that runs Provenance.
@@ -213,8 +213,8 @@ workflow genuinely needs direct root login.
 1. Download the latest encrypted backup and **decrypt it** locally to confirm the
    passphrase works:
    ```sh
-   openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$FLEET_BACKUP_PASSPHRASE" \
-     -in fleet-backup-*.sql.enc | head
+   openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PROV_BACKUP_PASSPHRASE" \
+     -in prov-backup-*.sql.enc | head
    ```
 2. Restore it into a throwaway Postgres and confirm it loads.
 3. SSH to one host with the **break-glass key** to confirm it still works.

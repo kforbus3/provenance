@@ -31,7 +31,7 @@ func TestClassifyDestination(t *testing.T) {
 		// result depend on the DNS available to whoever runs the test. The
 		// resolution path is exercised in production by Status; what this test
 		// pins down is the classification, which is the part that decides
-		// whether Fleet claims the data stayed on the network.
+		// whether Provenance claims the data stayed on the network.
 	} {
 		got := classifyDestination(ctx, tc.url)
 		if got.External != tc.external {

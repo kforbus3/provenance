@@ -18,7 +18,7 @@ func TestValidateSecretsFailClosed(t *testing.T) {
 			// relying party, the OIDC redirect, the SAML URLs and the WebSocket
 			// origin -- so a wrong one boots cleanly and then breaks sign-on,
 			// passkeys and terminals separately, none of them saying why.
-			PublicURL:    "https://fleet.example.com",
+			PublicURL:    "https://provenance.example.com",
 			CookieSecure: true,
 		}
 	}
@@ -68,7 +68,7 @@ func TestProductionRefusesMisleadingPublicURLAndInsecureCookies(t *testing.T) {
 			CAKeyPassphrase:    []byte("0123456789012345"),
 			AuditHMACKey:       []byte("0123456789012345678901234567890123"),
 			AnsibleRunnerToken: "0123456789012345",
-			PublicURL:          "https://fleet.example.com",
+			PublicURL:          "https://provenance.example.com",
 			CookieSecure:       true,
 		}
 	}
@@ -79,7 +79,7 @@ func TestProductionRefusesMisleadingPublicURLAndInsecureCookies(t *testing.T) {
 		c := base()
 		c.PublicURL = u
 		if err := c.validate(); err == nil {
-			t.Errorf("production accepted FLEET_PUBLIC_URL=%q", u)
+			t.Errorf("production accepted PROV_PUBLIC_URL=%q", u)
 		}
 	}
 
@@ -89,7 +89,7 @@ func TestProductionRefusesMisleadingPublicURLAndInsecureCookies(t *testing.T) {
 	c := base()
 	c.CookieSecure = false
 	if err := c.validate(); err == nil {
-		t.Error("production accepted https with FLEET_COOKIE_SECURE=false")
+		t.Error("production accepted https with PROV_COOKIE_SECURE=false")
 	}
 
 	// Plain http on a private network genuinely cannot set Secure — nobody

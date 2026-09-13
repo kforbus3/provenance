@@ -557,7 +557,7 @@ export function MachinesTab({ fleet, canManage, onNudge, busy, onDone, setMsg }:
 function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
   machine: Machine | null; onClose: () => void; onDone: () => void; setMsg: (m: Note) => void;
 }) {
-  const [sshUser, setSshUser] = useState("fleet");
+  const [sshUser, setSshUser] = useState("prov");
   const [environment, setEnvironment] = useState("");
   const [owner, setOwner] = useState("");
   const [address, setAddress] = useState("");
@@ -568,7 +568,7 @@ function AddAsHostDialog({ machine, onClose, onDone, setMsg }: {
     if (!machine) return;
     setHostname(machine.hostname || machine.id);
     setAddress(machine.address || "");
-    setSshUser("fleet");
+    setSshUser("prov");
     setEnvironment("");
     setOwner("");
   }, [machine]);

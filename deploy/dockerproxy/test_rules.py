@@ -81,7 +81,7 @@ def renamed_to(name):
 # learn where the project lives, and the project root is what every bind-mount
 # check is measured against -- so a container able to claim that name could
 # move the goalposts for all of them.
-for protected in ("blackfriars-builder-runner", "fleet-terminal-dockerproxy-1"):
+for protected in ("provenance-builder-runner", "provenance-dockerproxy-1"):
     check(f"cannot rename INTO {protected}", renamed_to(protected))
     check(f"  ... nor with a leading slash", renamed_to("/" + protected))
 check("an ordinary name is still fine", not renamed_to("debian-ab-http"))
@@ -118,23 +118,23 @@ check("the builder itself is allowed", not denied({"Image": "debian-ab-builder:a
 
 # The rename regression. Host-NIC discovery runs a throwaway container from the
 # RUNNER'S OWN image in the host network namespace; when the compose images were
-# renamed to `blackfriars-` and this allowlist was not, that create was refused,
+# renamed to `provenance-` and this allowlist was not, that create was refused,
 # the orchestrator swallowed the error, and the Provisioning page showed an empty
 # interface list — no interface to PXE on, and nothing saying why.
 check("the runner's own image is allowed (host-NIC discovery runs it)",
-      not denied({"Image": "blackfriars-builder-runner"}))
+      not denied({"Image": "provenance-builder-runner"}))
 check("the runner's own image is allowed with a tag",
-      not denied({"Image": "blackfriars-builder-runner:latest"}))
+      not denied({"Image": "provenance-builder-runner:latest"}))
 check("the renamed proxy image is allowed",
-      not denied({"Image": "blackfriars-dockerproxy"}))
+      not denied({"Image": "provenance-dockerproxy"}))
 # Allowing it to RUN must not have allowed it to run as root on the host: only
 # the builder and imager genuinely need loop devices and mounts.
 check("the runner may NOT be privileged",
-      denied({"Image": "blackfriars-builder-runner", "HostConfig": {"Privileged": True}}))
+      denied({"Image": "provenance-builder-runner", "HostConfig": {"Privileged": True}}))
 check("a registry path merely containing the runner name is refused",
-      denied({"Image": "evil.example.com/blackfriars-builder-runner"}))
-check("a lookalike blackfriars image is refused",
-      denied({"Image": "blackfriars-backend"}))
+      denied({"Image": "evil.example.com/provenance-builder-runner"}))
+check("a lookalike provenance image is refused",
+      denied({"Image": "provenance-backend"}))
 
 check("mounting / is refused",
       denied({"Image": "debian-ab-builder", "HostConfig": {"Binds": ["/:/host"]}}))

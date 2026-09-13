@@ -63,7 +63,7 @@ func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
 
 // vaultKey resolves the vault encryption passphrase, or writes a 500 and returns
 // false if the deployment isn't configured for the vault (production without
-// FLEET_VAULT_PASSPHRASE, or it equals the CA passphrase).
+// PROV_VAULT_PASSPHRASE, or it equals the CA passphrase).
 func (h *handler) vaultKey(w http.ResponseWriter) ([]byte, bool) {
 	key, err := h.d.Cfg.VaultKey()
 	if err != nil {
@@ -232,7 +232,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !h.d.Cfg.ExtSecretEnabled() {
-			httpx.WriteError(w, http.StatusBadRequest, "no external secrets manager is configured (set FLEET_EXTSECRET_*)")
+			httpx.WriteError(w, http.StatusBadRequest, "no external secrets manager is configured (set PROV_EXTSECRET_*)")
 			return
 		}
 	} else {

@@ -55,7 +55,7 @@ func ValidateTOTP(secret, code string) bool {
 // turn so that adopting a dedicated key (or migrating FIPS derivations) never strands an
 // existing secret.
 //
-//   - If FLEET_MFA_ENCRYPTION_KEY is set, the primary is HKDF(that key) — decoupled from
+//   - If PROV_MFA_ENCRYPTION_KEY is set, the primary is HKDF(that key) — decoupled from
 //     JWTSecret, so the JWT secret can rotate without bricking stored MFA secrets. The
 //     JWT-derived key(s) are kept as fallbacks so pre-existing secrets still decrypt.
 //   - Otherwise the primary is the JWT-derived key (HKDF in FIPS, else legacy SHA-256),
@@ -66,14 +66,14 @@ func (s *Service) mfaKeys() [][32]byte {
 
 	// Dedicated key first, when configured.
 	if len(s.cfg.MFAEncryptionKey) > 0 {
-		if k, err := hkdf.Key(sha256.New, s.cfg.MFAEncryptionKey, []byte("fleet-mfa"), "totp-at-rest-v2", 32); err == nil {
+		if k, err := hkdf.Key(sha256.New, s.cfg.MFAEncryptionKey, []byte("prov-mfa"), "totp-at-rest-v2", 32); err == nil {
 			var out [32]byte
 			copy(out[:], k)
 			add(out)
 		}
 	}
 	// JWT-derived HKDF key (FIPS primary / non-FIPS fallback after a dedicated key).
-	if k, err := hkdf.Key(sha256.New, s.cfg.JWTSecret, []byte("fleet-mfa"), "totp-at-rest-v1", 32); err == nil {
+	if k, err := hkdf.Key(sha256.New, s.cfg.JWTSecret, []byte("prov-mfa"), "totp-at-rest-v1", 32); err == nil {
 		var out [32]byte
 		copy(out[:], k)
 		add(out)

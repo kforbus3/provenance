@@ -5,7 +5,7 @@ glass over many independent **site** instances, each a full Provenance stack on 
 own separated network. Operators log into the hub and manage every site from one
 place.
 
-Federation is **opt-in and off by default** (`FLEET_MODE=standalone`): a standalone
+Federation is **opt-in and off by default** (`PROV_MODE=standalone`): a standalone
 instance builds and mounts none of it and is unchanged. A hub can add/revoke sites,
 rotate its federation key, and watch live link state; via a global **site selector**
 in the top bar it operates *every* management page against a chosen site (host list,
@@ -15,12 +15,12 @@ changes, because the proxy forwards to the site's own unmodified API.
 
 ## Model
 
-- **Standalone (default).** `FLEET_MODE=standalone` — nothing federation-related
+- **Standalone (default).** `PROV_MODE=standalone` — nothing federation-related
   is built or mounted. Behavior is identical to a non-federated build.
-- **Hub.** `FLEET_MODE=hub`. Holds the site registry, accepts inbound links from
+- **Hub.** `PROV_MODE=hub`. Holds the site registry, accepts inbound links from
   sites, aggregates a read-model, and proxies actions to sites. The hub is the
   authorization authority.
-- **Site.** `FLEET_MODE=site`. A normal instance that additionally dials **out**
+- **Site.** `PROV_MODE=site`. A normal instance that additionally dials **out**
   to the hub and, in managed mode, executes hub-authorized, key-verified
   requests against its own unmodified `/api/v1`.
 
@@ -34,7 +34,7 @@ Federation uses **Ed25519 public keys only** — never the per-instance HS256
 session secret. Each side holds the other's public key:
 
 - The **hub** generates a federation identity keypair on first boot, private key
-  encrypted at rest with `FLEET_CA_PASSPHRASE` (same envelope as the SSH CA key).
+  encrypted at rest with `PROV_CA_PASSPHRASE` (same envelope as the SSH CA key).
 - Each **site** generates its own keypair at join; the private key never leaves
   the site.
 
@@ -68,9 +68,9 @@ Both identities can be rotated in place, with no re-enrollment and no link downt
 The federation application protocol is always **WSS** — a single outbound TLS
 connection on 443 from the site to the hub, authenticated by the Ed25519 tokens above.
 This is deliberate: a site needs **no inbound reachability**, so it works from behind
-NAT and restrictive egress firewalls. `FLEET_FEDERATION_TRANSPORT=wireguard` does not
+NAT and restrictive egress firewalls. `PROV_FEDERATION_TRANSPORT=wireguard` does not
 change the wire protocol; it documents that the WSS link rides an operator-provided
-WireGuard (or other VPN) underlay — point `FLEET_HUB_URL` at the hub's overlay address
+WireGuard (or other VPN) underlay — point `PROV_HUB_URL` at the hub's overlay address
 so the control plane never traverses the public internet. Both settings run identical
 code; the choice is purely which network the WSS link is carried over.
 
@@ -78,8 +78,8 @@ code; the choice is purely which network the WSS link is carried over.
 
 1. On the hub: **Sites → Add Site**, name it. The hub mints a one-time,
    self-gating join token (1h TTL) and shows a config blob.
-2. On the site host: set the blob (`FLEET_MODE=site`, `FLEET_HUB_URL`,
-   `FLEET_HUB_JOIN_TOKEN`, `FLEET_HUB_KEY_FINGERPRINT`) and start the stack.
+2. On the site host: set the blob (`PROV_MODE=site`, `PROV_HUB_URL`,
+   `PROV_HUB_JOIN_TOKEN`, `PROV_HUB_KEY_FINGERPRINT`) and start the stack.
 3. The site generates its keypair, `POST`s `/federation/join`, pins the hub key
    fingerprint (aborting on mismatch — MITM defense), persists trust, and opens
    the persistent `/federation/link` channel. It appears **active / up** on the
@@ -87,7 +87,7 @@ code; the choice is purely which network the WSS link is carried over.
 
 Revoke from the hub (**Sites → trash**) drops the link and purges the site's
 cached data. A site can leave via `POST /api/v1/federation/leave`
-(`System.Configure`) or by reverting to `FLEET_MODE=standalone`.
+(`System.Configure`) or by reverting to `PROV_MODE=standalone`.
 
 ## Central identity
 
@@ -120,7 +120,7 @@ a site rejects a hub that is too old for it), with a message telling you which s
 upgrade first. This build speaks protocol v1; a legacy pre-versioning site is treated as
 v1 for compatibility. Bumping the protocol is reserved for a real wire change.
 
-**Build-version visibility.** Every site reports its running `fleetd` version on its
+**Build-version visibility.** Every site reports its running `provd` version on its
 read-model heartbeat. The hub stores it and shows it on the **Sites** page (Version
 column) and on the hub's **Updates** panel, so you can see version skew across the
 federation at a glance.
@@ -144,8 +144,8 @@ below the hub's protocol.
 
 - Treat the hub federation key like the CA key: a compromise lets the hub assert
   any identity to every site. It is encrypted at rest and supports rotation.
-- Federation refuses to run on development defaults (`FLEET_MODE` in hub/site
-  mode requires `FLEET_ENV=production` with real secrets).
+- Federation refuses to run on development defaults (`PROV_MODE` in hub/site
+  mode requires `PROV_ENV=production` with real secrets).
 - Assertions are ≤60s, single-use (nonce), and request-bound, so a captured
   assertion can't be replayed against a different action, host, or body.
 
@@ -205,21 +205,21 @@ refuses dev defaults). Sketch:
 
 1. **Hub** — run the normal stack with:
    ```
-   FLEET_ENV=production
-   FLEET_MODE=hub
-   FLEET_PUBLIC_URL=https://<hub-host>     # sites dial this
-   FLEET_JWT_SECRET=... FLEET_CSRF_SECRET=... FLEET_CA_PASSPHRASE=...
+   PROV_ENV=production
+   PROV_MODE=hub
+   PROV_PUBLIC_URL=https://<hub-host>     # sites dial this
+   PROV_JWT_SECRET=... PROV_CSRF_SECRET=... PROV_CA_PASSPHRASE=...
    ```
    Log in, go to **Sites → Add Site**, name it, copy the config blob.
 
 2. **Site** — run a second stack (separate DB/volumes) with the blob appended:
    ```
-   FLEET_ENV=production
-   FLEET_MODE=site
-   FLEET_HUB_URL=wss://<hub-host>
-   FLEET_HUB_JOIN_TOKEN=<from the blob>
-   FLEET_HUB_KEY_FINGERPRINT=<from the blob>
-   FLEET_JWT_SECRET=... FLEET_CSRF_SECRET=... FLEET_CA_PASSPHRASE=...
+   PROV_ENV=production
+   PROV_MODE=site
+   PROV_HUB_URL=wss://<hub-host>
+   PROV_HUB_JOIN_TOKEN=<from the blob>
+   PROV_HUB_KEY_FINGERPRINT=<from the blob>
+   PROV_JWT_SECRET=... PROV_CSRF_SECRET=... PROV_CA_PASSPHRASE=...
    ```
    The site's own jump host + managed hosts are enrolled as usual (standalone
    behavior is intact on a site).

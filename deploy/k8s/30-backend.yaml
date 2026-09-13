@@ -1,11 +1,11 @@
-# Moorgate backend (Go API + SSH gateway).
+# Provenance backend (Go API + SSH gateway).
 apiVersion: v1
 kind: Service
 metadata:
-  name: fleet-backend
-  namespace: fleet-terminal
+  name: prov-backend
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: backend
   annotations:
     prometheus.io/scrape: "true"
@@ -13,7 +13,7 @@ metadata:
     prometheus.io/path: "/metrics"
 spec:
   selector:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: backend
   ports:
     - name: http
@@ -23,16 +23,16 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fleet-backend
-  namespace: fleet-terminal
+  name: prov-backend
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: backend
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app.kubernetes.io/name: fleet-terminal
+      app.kubernetes.io/name: provenance
       app.kubernetes.io/component: backend
   strategy:
     type: RollingUpdate
@@ -42,14 +42,14 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fleet-terminal
+        app.kubernetes.io/name: provenance
         app.kubernetes.io/component: backend
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
-      # Must exceed FLEET_SHUTDOWN_TIMEOUT (default 20s) so the backend can drain live
+      # Must exceed PROV_SHUTDOWN_TIMEOUT (default 20s) so the backend can drain live
       # SSH/terminal/RDP sessions on SIGTERM before the kubelet SIGKILLs it. The preStop
       # sleep below is included in this budget.
       terminationGracePeriodSeconds: 40
@@ -62,7 +62,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: ghcr.io/kforbus3/blackfriars-backend:latest
+          image: ghcr.io/kforbus3/provenance-backend:latest
           imagePullPolicy: IfNotPresent
           # Give kube-proxy/Ingress time to remove this pod from the Service endpoints
           # before the container receives SIGTERM, so no new request/session is routed
@@ -76,9 +76,9 @@ spec:
               containerPort: 8080
           envFrom:
             - configMapRef:
-                name: fleet-config
+                name: prov-config
             - secretRef:
-                name: fleet-secrets
+                name: prov-secrets
           readinessProbe:
             httpGet:
               path: /ready
@@ -120,24 +120,24 @@ spec:
             # with replicas>1 + the HPA, every replica sees the same files: recording
             # replay works from any pod, the leader's retention prune sees all pods'
             # recordings, and backups/updates are shared. RWO would break these.
-            - name: fleet-data
-              mountPath: /var/lib/fleet/recordings
+            - name: prov-data
+              mountPath: /var/lib/prov/recordings
               subPath: recordings
-            - name: fleet-data
-              mountPath: /var/lib/fleet/scans
+            - name: prov-data
+              mountPath: /var/lib/prov/scans
               subPath: scans
-            - name: fleet-data
-              mountPath: /var/lib/fleet/backups
+            - name: prov-data
+              mountPath: /var/lib/prov/backups
               subPath: backups
-            - name: fleet-data
-              mountPath: /var/lib/fleet/updates
+            - name: prov-data
+              mountPath: /var/lib/prov/updates
               subPath: updates
       volumes:
         - name: tmp
           emptyDir: {}
-        - name: fleet-data
+        - name: prov-data
           persistentVolumeClaim:
-            claimName: fleet-shared-data
+            claimName: prov-shared-data
 ---
 # Shared state for the backend replicas. REQUIRES a ReadWriteMany StorageClass
 # (NFS, CephFS, AWS EFS, Azure Files, GCP Filestore, …). ReadWriteOnce will NOT work
@@ -146,10 +146,10 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: fleet-shared-data
-  namespace: fleet-terminal
+  name: prov-shared-data
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: backend
 spec:
   accessModes: ["ReadWriteMany"]
@@ -161,16 +161,16 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: fleet-backend
-  namespace: fleet-terminal
+  name: prov-backend
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: backend
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: fleet-backend
+    name: prov-backend
   minReplicas: 2
   maxReplicas: 10
   metrics:

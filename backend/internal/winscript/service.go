@@ -1,6 +1,6 @@
 // Package winscript runs operator-authored PowerShell scripts on Windows (RDP)
 // hosts — the Windows counterpart to the Ansible playbook runner. Execution goes
-// over WinRM through the Fleet jump host (the same transport the monitor uses for
+// over WinRM through the Provenance jump host (the same transport the monitor uses for
 // facts), authenticated with each host's vaulted credential (honoring its check-out
 // policy). Multi-host runs use a bounded worker pool and a capped output buffer so a
 // large fan-out or a chatty/hostile host can't exhaust jump-host connections or memory.

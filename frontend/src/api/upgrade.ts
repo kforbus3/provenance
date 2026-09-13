@@ -20,7 +20,7 @@ export interface UpgradeStatus {
   updatedAt?: string;
 }
 
-// previewUpgrade uploads a .fleetup bundle, verifies it server-side, and returns its
+// previewUpgrade uploads a .provup bundle, verifies it server-side, and returns its
 // manifest WITHOUT applying — so the operator can review it before confirming.
 export async function previewUpgrade(file: File): Promise<UpgradeManifest> {
   const form = new FormData();

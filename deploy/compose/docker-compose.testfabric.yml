@@ -1,4 +1,4 @@
-# Fleet Terminal — local SSH test fabric override.
+# Provenance — local SSH test fabric override.
 #
 # Adds a jump host and two managed hosts (Ubuntu + Rocky) so the SSH path
 # (backend -> jumphost:22 -> WireGuard overlay -> managed host) is fully
@@ -12,16 +12,16 @@
 #   docker compose -f deploy/compose/docker-compose.yml \
 #                  -f deploy/compose/docker-compose.testfabric.yml up -d
 
-name: fleet-terminal
+name: provenance
 
 services:
   # The test-fabric jump host and managed hosts are ephemeral containers whose
   # SSH host keys can change on rebuild, so accept-any host keys here. Production
   # (docker-compose.jumphost.yml / real deployments) leaves this off and verifies
-  # host keys trust-on-first-use; the flag is refused when FLEET_ENV=production.
+  # host keys trust-on-first-use; the flag is refused when PROV_ENV=production.
   backend:
     environment:
-      FLEET_SSH_INSECURE_HOST_KEYS: "true"
+      PROV_SSH_INSECURE_HOST_KEYS: "true"
 
   jumphost:
     build:
@@ -30,7 +30,7 @@ services:
     hostname: jumphost
     environment:
       # Match production: managed hosts cannot reach each other over the overlay.
-      FLEET_OVERLAY_PEER_ISOLATION: ${FLEET_OVERLAY_PEER_ISOLATION:-1}
+      PROV_OVERLAY_PEER_ISOLATION: ${PROV_OVERLAY_PEER_ISOLATION:-1}
     # Userspace WireGuard needs to manage the tun interface.
     cap_add:
       - NET_ADMIN

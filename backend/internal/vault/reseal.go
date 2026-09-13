@@ -11,7 +11,7 @@ import (
 // (argon2id→PBKDF2 under FIPS), in place, using the vault passphrase — without ever
 // exposing plaintext beyond this process. A version already matching the active
 // profile is skipped. Returns the number of versions upgraded. Used by the FIPS
-// migration sweep (`fleetctl fips reseal-secrets`).
+// migration sweep (`provctl fips reseal-secrets`).
 //
 // Vault secrets are versioned; a KDF re-wrap is NOT a value change, so it updates the
 // existing row rather than adding a version (preserving history).

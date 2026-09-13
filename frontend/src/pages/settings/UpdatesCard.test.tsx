@@ -37,7 +37,7 @@ async function uploadAndInstall() {
 
   const { container } = render(<UpdatesCard />);
   const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-  const file = new File(["x"], "fleet-1.2.4.fleetup");
+  const file = new File(["x"], "fleet-1.2.4.provup");
   Object.defineProperty(input, "files", { value: [file] });
   fireEvent.change(input);
 
@@ -124,7 +124,7 @@ describe("UpdatesCard", () => {
 
     const { container } = render(<UpdatesCard />);
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    Object.defineProperty(input, "files", { value: [new File(["x"], "b.fleetup")] });
+    Object.defineProperty(input, "files", { value: [new File(["x"], "b.provup")] });
     fireEvent.change(input);
     fireEvent.click(await screen.findByText(/Install 1\.2\.4-DISPATCHED/));
 

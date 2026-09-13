@@ -1,17 +1,17 @@
 # Ansible runner sidecar — validates/lints (and runs) playbooks for the backend.
-# Internal only (ClusterIP): the backend reaches it at http://fleet-ansible-runner:8000
-# and authenticates every execute/check call with FLEET_ANSIBLE_RUNNER_TOKEN.
+# Internal only (ClusterIP): the backend reaches it at http://prov-ansible-runner:8000
+# and authenticates every execute/check call with PROV_ANSIBLE_RUNNER_TOKEN.
 apiVersion: v1
 kind: Service
 metadata:
-  name: fleet-ansible-runner
-  namespace: fleet-terminal
+  name: prov-ansible-runner
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: ansible-runner
 spec:
   selector:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: ansible-runner
   ports:
     - name: http
@@ -21,21 +21,21 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fleet-ansible-runner
-  namespace: fleet-terminal
+  name: prov-ansible-runner
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: ansible-runner
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: fleet-terminal
+      app.kubernetes.io/name: provenance
       app.kubernetes.io/component: ansible-runner
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fleet-terminal
+        app.kubernetes.io/name: provenance
         app.kubernetes.io/component: ansible-runner
     spec:
       securityContext:
@@ -48,24 +48,24 @@ spec:
       containers:
         - name: ansible-runner
           # Build/push from deploy/ansible-runner (no public image is published).
-          image: ghcr.io/kforbus3/blackfriars-ansible-runner:latest
+          image: ghcr.io/kforbus3/provenance-ansible-runner:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000
           env:
-            - name: FLEET_ANSIBLE_RUNNER_TOKEN
+            - name: PROV_ANSIBLE_RUNNER_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: fleet-secrets
-                  key: FLEET_ANSIBLE_RUNNER_TOKEN
+                  name: prov-secrets
+                  key: PROV_ANSIBLE_RUNNER_TOKEN
             # Point HOME at the writable emptyDir so Ansible's ~/.ansible tmp/collection
             # cache and ansible-lint's ~/.cache land on a writable mount (root fs is RO).
             - name: HOME
               value: /home/runner
             # Ansible connection/become-prompt timeout (seconds); 30 rides out a
             # momentary network blip on overlay-routed hosts.
-            - name: FLEET_ANSIBLE_TIMEOUT
+            - name: PROV_ANSIBLE_TIMEOUT
               value: "30"
           readinessProbe:
             httpGet:

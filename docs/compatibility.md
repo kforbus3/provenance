@@ -18,7 +18,7 @@ Provenance follows [Semantic Versioning](https://semver.org). Given
   covered** below.
 
 A release is what a version number refers to: the server, the frontend it
-serves, the `fleetctl` binary, the SDK and the Terraform provider are versioned
+serves, the `provctl` binary, the SDK and the Terraform provider are versioned
 and released together.
 
 ---
@@ -46,7 +46,7 @@ working for the remainder of the MAJOR series.
 **Database migrations.** Applied automatically on startup, forward-only, and
 safe to run against a database written by any release in the same MAJOR series.
 
-**Upgrade bundles.** A `.fleetup` bundle installs onto any earlier release in
+**Upgrade bundles.** A `.provup` bundle installs onto any earlier release in
 the same MAJOR series.
 
 **Host enrollment.** An enrolled host keeps working across upgrades of the
@@ -129,3 +129,65 @@ If a MINOR or PATCH release breaks something listed under **What is covered**,
 that is a bug, not a new behaviour to work around. Open an issue with the
 version you upgraded from and to, and what stopped working. Security issues go
 through [SECURITY.md](../SECURITY.md) instead.
+
+---
+
+## The `FLEET_` → `PROV_` settings rename
+
+Every setting moved from the `FLEET_` prefix to `PROV_`. Nothing else about any
+setting changed — not its meaning, not its default, not its accepted values. Only
+the prefix.
+
+**Nothing breaks on upgrade.** Both spellings are read, and the `PROV_` name wins
+whenever it is set:
+
+* The backend resolves every setting through one lookup that falls back to the
+  `FLEET_` name, and logs one warning at boot naming each old variable still in
+  use and what replaces it.
+* The Compose files forward the old names too
+  (`PROV_X: ${PROV_X:-${FLEET_X:-…}}`), so a stack started against an
+  un-migrated `.env` boots normally. This matters more than it looks: the in-UI
+  updater recreates containers from the compose files on the **on-disk
+  checkout**, so without this a release that renamed a required secret would
+  fail closed exactly the way the v2.0.0 upgrade did.
+
+The old prefix is deprecated, not removed, and will be dropped in a future major
+release. To migrate, rename the keys in your `.env` — the values are unchanged:
+
+```sh
+sed -i 's/^FLEET_/PROV_/' .env
+```
+
+## Managed hosts and the login account
+
+The default managed-host account moved from `fleet` to `prov`, along with the
+on-host artefacts that carried the old name (`/etc/ssh/fleet_ca.pub`,
+`/etc/sudoers.d/fleet`, `/etc/ssh/sshd_config.d/00-fleet.conf`, the
+`# Fleet Terminal` marker block, and the `fleet` / `fleet-h-<id>` SSH principals).
+
+**Already-enrolled hosts are not touched by upgrading.** `hosts.ssh_user` names
+the account that actually exists on that host, and rewriting it without reaching
+the host would point the backend at an account sshd has never heard of. So:
+
+* Certificates carry **both** spellings of every principal, and re-enrollment
+  writes both into each host's `AuthorizedPrincipalsFile`. A host works whether or
+  not it has been migrated, and whether the backend is the new release or a
+  rolled-back one.
+* Teardown and `scripts/prov-unenroll.sh` remove **both** generations. A teardown
+  that removed only the current spelling would leave a trusted CA and a NOPASSWD
+  sudoers entry on a host the operator believes is clean.
+
+Move hosts across from **Hosts → select → Bulk actions → Migrate login account**,
+or `POST /api/v1/hosts/{id}/login-account` (permission `Host.Enroll`). For each
+host the application creates and trusts the new account, **proves a certificate
+login as it works**, and only then removes the old account and its artefacts. A
+failure at any point leaves the host exactly as it was, still reachable on the
+account it has. A host that logs in as `root` is refused rather than having its
+root account deleted.
+
+## Machine endpoints are unchanged
+
+`/api/fleet/heartbeat` stays mounted, permanently, alongside the new
+`/api/prov/heartbeat`. It is compiled into every ab-agent on every image ever
+built, and reaching those machines is what the endpoint is *for*, so it is not a
+deprecated alias — it is the wire contract.

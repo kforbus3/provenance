@@ -13,8 +13,8 @@ import (
 // ChannelSchema is the current release-channel index schema version.
 const ChannelSchema = 1
 
-// ChannelIndex is the signed document a Fleet instance fetches from its configured
-// release channel (FLEET_UPDATE_CHANNEL_URL) to discover available upgrades. It is
+// ChannelIndex is the signed document a Provenance instance fetches from its configured
+// release channel (PROV_UPDATE_CHANNEL_URL) to discover available upgrades. It is
 // signed by the same release key as the bundles; a downloaded bundle is still
 // verified independently on apply, so the index signature only needs to authenticate
 // the release LIST (which versions exist and where) — defeating downgrade/redirect.

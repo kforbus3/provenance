@@ -12,7 +12,7 @@ func TestIsControlPlaneHost(t *testing.T) {
 		JumpHost:          "jumphost:22",
 		WGJumpIP:          "10.100.0.1",
 		WGJumpEndpoint:    "gw.example.com:51820",
-		ControlPlaneHosts: []string{"fleet-host", "10.0.0.5"},
+		ControlPlaneHosts: []string{"prov-host", "10.0.0.5"},
 	}
 
 	cases := []struct {
@@ -24,12 +24,12 @@ func TestIsControlPlaneHost(t *testing.T) {
 		{"plain managed host", &models.Host{Hostname: "web-01", Address: "10.0.9.9"}, false},
 		{"control-plane tag", &models.Host{Hostname: "web-01", Tags: []string{"prod", "Control-Plane"}}, true},
 		{"protected tag", &models.Host{Hostname: "web-01", Tags: []string{"protected"}}, true},
-		{"declared by hostname", &models.Host{Hostname: "fleet-host"}, true},
+		{"declared by hostname", &models.Host{Hostname: "prov-host"}, true},
 		{"declared by address", &models.Host{Hostname: "box", Address: "10.0.0.5"}, true},
 		{"jump host by name", &models.Host{Hostname: "jumphost"}, true},
 		{"jump host by wg ip", &models.Host{Hostname: "box", WGAddress: "10.100.0.1"}, true},
 		{"jump host by wg endpoint host", &models.Host{Address: "gw.example.com"}, true},
-		{"case-insensitive declared", &models.Host{Hostname: "FLEET-HOST"}, true},
+		{"case-insensitive declared", &models.Host{Hostname: "PROV-HOST"}, true},
 	}
 	for _, tc := range cases {
 		if got := isControlPlaneHost(tc.host, cfg); got != tc.want {

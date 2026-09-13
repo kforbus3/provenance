@@ -457,7 +457,7 @@ function ActionPolicyCard() {
 // hosts dial, so it doesn't have to be entered for every enrollment.
 // ScanCard sets the OpenSCAP scan/remediation time budget. Strict profiles
 // (ANSSI High) on hosts with many files can run for a long time; raise this to
-// avoid them being cut off. Overrides the FLEET_SCAN_TIMEOUT default.
+// avoid them being cut off. Overrides the PROV_SCAN_TIMEOUT default.
 function ScanCard({ current }: { current: unknown }) {
   const qc = useQueryClient();
   const cur = (current ?? {}) as { timeoutMinutes?: number };
@@ -473,7 +473,7 @@ function ScanCard({ current }: { current: unknown }) {
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
         Maximum time a scan or remediation may run before it's stopped. Strict profiles (e.g.
         ANSSI High) on hosts with very large filesystems can take a long time — raise this so they
-        aren't cut off. Range 5–480 minutes; overrides the <code>FLEET_SCAN_TIMEOUT</code> default.
+        aren't cut off. Range 5–480 minutes; overrides the <code>PROV_SCAN_TIMEOUT</code> default.
       </Typography>
       <Stack direction="row" spacing={2} alignItems="flex-start">
         <TextField
@@ -586,7 +586,7 @@ function SessionPolicyCard({ current }: { current: unknown }) {
           </Button>
         </Box>
         <Typography variant="caption" color="text.secondary">
-          Accurate client IPs behind a reverse proxy require FLEET_TRUSTED_PROXIES to be set
+          Accurate client IPs behind a reverse proxy require PROV_TRUSTED_PROXIES to be set
           (off by default) — otherwise the allowlist sees the proxy's address, not the user's.
         </Typography>
       </Stack>
@@ -597,7 +597,7 @@ function SessionPolicyCard({ current }: { current: unknown }) {
 // EncryptionCard reports the at-rest encryption posture: whether an external KMS/HSM
 // envelope-protects the master passphrases (CA signing key + credential vault) and
 // whether that backend is currently healthy. Read-only — KMS configuration is boot-
-// time environment (FLEET_KMS_*); this surfaces it in-product for operators/auditors.
+// time environment (PROV_KMS_*); this surfaces it in-product for operators/auditors.
 function EncryptionCard() {
   const { data, isLoading } = useQuery({ queryKey: ["kms-status"], queryFn: getKMSStatus, refetchInterval: 60_000 });
   const enabled = data?.enabled ?? false;
@@ -608,7 +608,7 @@ function EncryptionCard() {
         The CA signing key and every credential-vault secret are AES-256-GCM sealed. An external
         Key Management Service (KMS) or HSM can additionally protect the master passphrases: they are
         stored only in KMS-wrapped form and unsealed into memory at boot, so a stolen disk or database
-        backup cannot be decrypted without live access to the KMS. Configured via <code>FLEET_KMS_*</code>.
+        backup cannot be decrypted without live access to the KMS. Configured via <code>PROV_KMS_*</code>.
       </Typography>
       {isLoading ? (
         <CircularProgress size={22} />
@@ -650,8 +650,8 @@ function EncryptionCard() {
           {!enabled && (
             <Alert severity="info" sx={{ mt: 0.5 }}>
               No external KMS is configured. Master passphrases are read from the environment. To enable,
-              set <code>FLEET_KMS_PROVIDER</code> (vault-transit or aws-kms) and wrap your passphrases with
-              <code> fleetctl kms wrap</code>. See docs/kms.md.
+              set <code>PROV_KMS_PROVIDER</code> (vault-transit or aws-kms) and wrap your passphrases with
+              <code> provctl kms wrap</code>. See docs/kms.md.
             </Alert>
           )}
         </Stack>
@@ -795,7 +795,7 @@ function WGSettingsCard({ current }: { current: unknown }) {
           label="WireGuard port" type="number" value={jumpPort}
           onChange={(e) => { setJumpPort(e.target.value); setSaved(false); }}
           sx={{ width: 150 }}
-          helperText="OpenVPN's port is set by FLEET_OVPN_PORT"
+          helperText="OpenVPN's port is set by PROV_OVPN_PORT"
         />
         <Button variant="contained" sx={{ mt: 1 }} disabled={save.isPending || !jumpHost.trim()} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
@@ -944,9 +944,9 @@ function SSOCard() {
             control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
             label="Auto-provision new users on first sign-in"
           />
-          <TextField label="Group → role mappings (one per line: idpGroup=FleetRole)" size="small" multiline minRows={2}
+          <TextField label="Group → role mappings (one per line: idpGroup=ProvRole)" size="small" multiline minRows={2}
             value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
-            placeholder={"fleet-admins=Administrator\nops=Operator"} />
+            placeholder={"platform-admins=Administrator\nops=Operator"} />
         </Stack>
       )}
       <Box sx={{ mt: 1.5 }}>
@@ -959,7 +959,7 @@ function SSOCard() {
 }
 
 // SAMLCard configures SAML 2.0 single sign-on (SP side). The admin registers the
-// IdP's entity ID, SSO URL, and signing certificate; Fleet exposes the ACS,
+// IdP's entity ID, SSO URL, and signing certificate; Provenance exposes the ACS,
 // entity ID, and metadata URL the IdP needs in return.
 function SAMLCard() {
   const { data: loaded, isError, refetch } = useQuery({ queryKey: ["saml-config"], queryFn: getSamlConfig });
@@ -1050,9 +1050,9 @@ function SAMLCard() {
             control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
             label="Auto-provision new users on first sign-in (off = require SCIM/admin to create the account first)"
           />
-          <TextField label="Group → role mappings (one per line: idpGroup=FleetRole)" size="small" multiline minRows={2}
+          <TextField label="Group → role mappings (one per line: idpGroup=ProvRole)" size="small" multiline minRows={2}
             value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
-            placeholder={"fleet-admins=Administrator\nops=Operator"} />
+            placeholder={"platform-admins=Administrator\nops=Operator"} />
         </Stack>
       )}
       <Box sx={{ mt: 1.5 }}>
@@ -1065,7 +1065,7 @@ function SAMLCard() {
 }
 
 // SCIMCard manages SCIM 2.0 provisioning: issue/revoke the bearer token an IdP
-// uses to create, update, and deprovision Fleet accounts automatically.
+// uses to create, update, and deprovision Provenance accounts automatically.
 function SCIMCard() {
   const qc = useQueryClient();
   const { data: cfg } = useQuery({ queryKey: ["scim-config"], queryFn: getScimConfig });
@@ -1240,9 +1240,9 @@ function LDAPCard() {
             <FormControlLabel control={<Switch checked={cfg.autoProvision} onChange={(e) => set({ autoProvision: e.target.checked })} />}
               label="Auto-provision new users" />
           </Stack>
-          <TextField label="Group → role mappings (one per line: GroupCN=FleetRole)" size="small" multiline minRows={2}
+          <TextField label="Group → role mappings (one per line: GroupCN=ProvRole)" size="small" multiline minRows={2}
             value={groupMap} onChange={(e) => { setGroupMap(e.target.value); setSaved(false); }}
-            placeholder={"Domain Admins=Administrator\nFleet-Operators=Operator"} />
+            placeholder={"Domain Admins=Administrator\nProvenance-Operators=Operator"} />
         </Stack>
       )}
       <Box sx={{ mt: 1.5 }}>
@@ -1438,8 +1438,8 @@ function BackupCard() {
       <Alert severity="info" sx={{ mt: 1 }}>
         <Typography variant="body2">Restore an encrypted backup (offline):</Typography>
         <Box component="pre" sx={{ m: 0, mt: 0.5, fontSize: 12, whiteSpace: "pre-wrap" }}>
-          openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:$FLEET_BACKUP_PASSPHRASE \{"\n"}
-          {"  "}-in fleet-backup-*.sql.enc | psql "$FLEET_DATABASE_URL"
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:$PROV_BACKUP_PASSPHRASE \{"\n"}
+          {"  "}-in prov-backup-*.sql.enc | psql "$PROV_DATABASE_URL"
         </Box>
         See the break-glass / disaster-recovery guide for the full procedure.
       </Alert>
@@ -1481,7 +1481,7 @@ function DigestCard() {
   if (!p) {
     return (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-        <Typography variant="h6">Fleet-health digest</Typography>
+        <Typography variant="h6">Provenance-health digest</Typography>
         <Typography variant="body2" color="text.secondary">Loading…</Typography>
       </Paper>
     );
@@ -1491,7 +1491,7 @@ function DigestCard() {
 
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-      <Typography variant="h6">Fleet-health digest</Typography>
+      <Typography variant="h6">Provenance-health digest</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
         A recurring summary of what needs attention across the fleet — offline hosts, low disk,
         capacity runway, high load, pending security updates. It is delivered through the channels

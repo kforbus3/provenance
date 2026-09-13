@@ -48,7 +48,7 @@ type HostInput struct {
 	SSHPort      int
 	SSHUser      string
 	Tags         []string
-	AuthMethod   string             // fleet_cert (default) | vault_password | vault_ssh_key
+	AuthMethod   string             // prov_cert (default) | vault_password | vault_ssh_key
 	CredentialID *uuid.UUID         // vault secret when AuthMethod is vaulted
 	Protocol     string             // ssh (default) | rdp
 	RDPPort      int                // RDP port when Protocol is rdp (default 3389)
@@ -80,7 +80,7 @@ func (in HostInput) authMethod() string {
 	case "vault_password", "vault_ssh_key":
 		return in.AuthMethod
 	default:
-		return "fleet_cert"
+		return "prov_cert"
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 const awsKMSPrefix = "awskms:v1:"
 
 // awsKMS wraps/unwraps via AWS KMS Encrypt/Decrypt. Implemented against the KMS
-// JSON API with a hand-rolled SigV4 signer (see sigv4.go) so Fleet takes no
+// JSON API with a hand-rolled SigV4 signer (see sigv4.go) so Provenance takes no
 // dependency on the AWS SDK. An endpoint override supports KMS-compatible emulators
 // (e.g. LocalStack) for testing.
 type awsKMS struct {
@@ -34,13 +34,13 @@ type awsKMS struct {
 func newAWSKMS(cfg Config) (Provider, error) {
 	region := strings.TrimSpace(cfg.AWSRegion)
 	if region == "" {
-		return nil, fmt.Errorf("kms(aws-kms): FLEET_KMS_AWS_REGION is required")
+		return nil, fmt.Errorf("kms(aws-kms): PROV_KMS_AWS_REGION is required")
 	}
 	if strings.TrimSpace(cfg.KeyID) == "" {
-		return nil, fmt.Errorf("kms(aws-kms): FLEET_KMS_KEY_ID (key id / ARN / alias) is required")
+		return nil, fmt.Errorf("kms(aws-kms): PROV_KMS_KEY_ID (key id / ARN / alias) is required")
 	}
 	if strings.TrimSpace(cfg.AWSAccessKey) == "" || strings.TrimSpace(cfg.AWSSecretKey) == "" {
-		return nil, fmt.Errorf("kms(aws-kms): FLEET_KMS_AWS_ACCESS_KEY_ID and FLEET_KMS_AWS_SECRET_ACCESS_KEY are required")
+		return nil, fmt.Errorf("kms(aws-kms): PROV_KMS_AWS_ACCESS_KEY_ID and PROV_KMS_AWS_SECRET_ACCESS_KEY are required")
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(cfg.AWSEndpoint), "/")
 	if endpoint == "" {

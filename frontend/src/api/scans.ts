@@ -106,7 +106,7 @@ export interface HostRemediation {
 
 export interface FindingsResult {
   findings: ScanFinding[];
-  // controlPlane is true when this host is one of Fleet's own control-plane
+  // controlPlane is true when this host is one of Provenance's own control-plane
   // hosts (jump host, or tagged/declared), where remediation is extra-dangerous.
   controlPlane: boolean;
 }

@@ -59,7 +59,7 @@ export function TerminalPage() {
       ? `/api/v1/federation/sites/${siteId}/terminal/${hostId}`
       : `/api/v1/terminal/${hostId}`;
     const url = `${proto}://${window.location.host}${path}`;
-    const ws = new WebSocket(url, ["fleet-bearer", accessToken]);
+    const ws = new WebSocket(url, ["prov-bearer", accessToken]);
     ws.binaryType = "arraybuffer";
 
     const sendResize = () => {

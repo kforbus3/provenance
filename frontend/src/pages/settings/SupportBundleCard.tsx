@@ -123,7 +123,7 @@ export function SupportBundleCard() {
           If the interface itself is unavailable, the same bundle can be produced
           from the host with{" "}
           <Link component="span" sx={{ fontFamily: "monospace" }}>
-            fleetctl support-bundle
+            provctl support-bundle
           </Link>{" "}
           (add <code>--anonymise</code> for the same masking).
         </Typography>

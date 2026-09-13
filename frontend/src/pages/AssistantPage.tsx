@@ -41,7 +41,7 @@ function loadStored(): { turns: Turn[]; conversationId?: string } {
   return { turns: [] };
 }
 
-// Ask Fleet: read-only natural-language queries over fleet data, grounded in the
+// Ask Provenance: read-only natural-language queries over fleet data, grounded in the
 // real host rows returned by the backend (shown beneath each answer).
 export function AssistantPage() {
   const { data: status } = useQuery({ queryKey: ["assistant-status"], queryFn: assistantStatus });
@@ -167,7 +167,7 @@ export function AssistantPage() {
       </Paper>
       {status?.model && (
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-          Model: {status.model} · answers are generated from live Fleet data — verify before acting.
+          Model: {status.model} · answers are generated from live Provenance data — verify before acting.
         </Typography>
       )}
 

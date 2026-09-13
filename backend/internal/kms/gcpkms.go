@@ -48,7 +48,7 @@ type gcpServiceAccount struct {
 
 func newGCPKMS(cfg Config) (Provider, error) {
 	if strings.TrimSpace(cfg.KeyID) == "" {
-		return nil, fmt.Errorf("kms(gcp-kms): FLEET_KMS_KEY_ID (cryptoKey resource name) is required")
+		return nil, fmt.Errorf("kms(gcp-kms): PROV_KMS_KEY_ID (cryptoKey resource name) is required")
 	}
 	raw := []byte(cfg.GCPCredentialsJSON)
 	if len(raw) == 0 && cfg.GCPCredentialsFile != "" {
@@ -59,7 +59,7 @@ func newGCPKMS(cfg Config) (Provider, error) {
 		raw = b
 	}
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("kms(gcp-kms): FLEET_KMS_GCP_CREDENTIALS or FLEET_KMS_GCP_CREDENTIALS_FILE is required")
+		return nil, fmt.Errorf("kms(gcp-kms): PROV_KMS_GCP_CREDENTIALS or PROV_KMS_GCP_CREDENTIALS_FILE is required")
 	}
 	var sa gcpServiceAccount
 	if err := json.Unmarshal(raw, &sa); err != nil {

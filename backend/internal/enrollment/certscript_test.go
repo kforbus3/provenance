@@ -14,14 +14,14 @@ import (
 
 func certTestService() *Service {
 	return &Service{cfg: &config.Config{
-		WGSubnet: "10.9.0.0/24", WGJumpIP: "10.9.0.1", WGPort: 51820, WGInterface: "wgfleet",
+		WGSubnet: "10.9.0.0/24", WGJumpIP: "10.9.0.1", WGPort: 51820, WGInterface: "wgprov",
 	}}
 }
 
 func certTestScript(t *testing.T, retireWG bool) string {
 	t.Helper()
 	return certTestService().certBootstrapScript(
-		"fleet", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-ca fleet-ca",
+		"fleet", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-ca prov-ca",
 		"10.9.0.5", "", uuid.MustParse("abcdef01-2345-6789-abcd-ef0123456789"),
 		"openvpn",
 		overlay.HostBringup{Script: "set -e\necho OVPN_HOST_CONFIGURED", Marker: "OVPN_HOST_CONFIGURED"},
@@ -83,12 +83,12 @@ func TestCertBootstrapScriptNumbersEveryPhase(t *testing.T) {
 		krl      string
 		want     []string
 	}{
-		{"minimal", false, "", []string{"[fleet] 1/2", "[fleet] 2/2"}},
-		{"retire + revocation", true, "a2Vlbg==", []string{"[fleet] 1/4", "[fleet] 2/4", "[fleet] 3/4", "[fleet] 4/4"}},
+		{"minimal", false, "", []string{"[prov] 1/2", "[prov] 2/2"}},
+		{"retire + revocation", true, "a2Vlbg==", []string{"[prov] 1/4", "[prov] 2/4", "[prov] 3/4", "[prov] 4/4"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			script := certTestService().certBootstrapScript(
-				"fleet", "ssh-ed25519 AAAA-ca fleet-ca", "10.9.0.5", tc.krl,
+				"fleet", "ssh-ed25519 AAAA-ca prov-ca", "10.9.0.5", tc.krl,
 				uuid.New(), "openvpn",
 				overlay.HostBringup{Script: "echo OVPN_HOST_CONFIGURED", Marker: "OVPN_HOST_CONFIGURED"},
 				tc.retireWG,
@@ -98,7 +98,7 @@ func TestCertBootstrapScriptNumbersEveryPhase(t *testing.T) {
 					t.Errorf("missing phase %q in:\n%s", want, script)
 				}
 			}
-			if strings.Contains(script, "[fleet] 5/") {
+			if strings.Contains(script, "[prov] 5/") {
 				t.Error("emitted more phases than it counted")
 			}
 		})
@@ -162,7 +162,7 @@ func TestHadWireGuard(t *testing.T) {
 // what was retired.
 func TestWGTeardownPreservesTheOldConfig(t *testing.T) {
 	script := certTestService().wgTeardownScript()
-	if !strings.Contains(script, "/etc/wireguard/$IF.conf.fleet-disabled") {
+	if !strings.Contains(script, "/etc/wireguard/$IF.conf.prov-disabled") {
 		t.Error("teardown does not preserve the retired config")
 	}
 	if strings.Contains(script, "rm -f /etc/wireguard") {

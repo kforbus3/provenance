@@ -10,7 +10,7 @@ import (
 // ResealSecrets re-seals the auth subsystem's at-rest secrets (the LDAP bind password
 // and the OIDC client secret) to the active KDF profile, in place, without needing them
 // re-entered. It rewrites a setting only if its secret actually changed. Returns the
-// number of secrets upgraded. Used by the FIPS migration sweep (`fleetctl fips
+// number of secrets upgraded. Used by the FIPS migration sweep (`provctl fips
 // reseal-secrets`).
 func (s *Service) ResealSecrets(ctx context.Context) (int, error) {
 	n := 0

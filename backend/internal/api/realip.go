@@ -7,7 +7,7 @@ import (
 )
 
 // realIP rewrites r.RemoteAddr to the real client IP from X-Forwarded-For, but
-// ONLY when the direct peer is a trusted proxy (per FLEET_TRUSTED_PROXIES). XFF
+// ONLY when the direct peer is a trusted proxy (per PROV_TRUSTED_PROXIES). XFF
 // from an untrusted peer is ignored, so an attacker cannot spoof the header to
 // get a fresh rate-limit bucket per request (which previously defeated the auth
 // throttle and poisoned audit-log IPs) — chi's stock middleware.RealIP trusted
@@ -20,7 +20,7 @@ import (
 //
 // It counts hops rather than deciding which entries "look like" proxies, which
 // is what this used to do: it walked right and skipped every entry inside
-// FLEET_TRUSTED_PROXIES. That reads sensibly and is wrong, because the default
+// PROV_TRUSTED_PROXIES. That reads sensibly and is wrong, because the default
 // trusted list is the whole of RFC1918 — the proxy sits on a Docker bridge or
 // the LAN, so it must. Every private client was therefore classified as a proxy
 // and skipped, the walk ran out of entries, and the function returned nothing:

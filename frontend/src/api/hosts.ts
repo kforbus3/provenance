@@ -121,7 +121,7 @@ export interface Host {
   sshPort: number;
   sshUser: string;
   tags: string[];
-  authMethod: string; // fleet_cert | vault_password | vault_ssh_key
+  authMethod: string; // prov_cert | vault_password | vault_ssh_key
   credentialId?: string | null;
   protocol: string; // ssh | rdp
   rdpPort: number;
@@ -208,8 +208,8 @@ export async function updateHost(id: string, input: HostInput): Promise<Host> {
   return data;
 }
 
-// Teardown is opt-in: it removes Fleet's accounts and SSH trust from the machine,
-// which is a lockout where Fleet was the only administrative access. Omitting the
+// Teardown is opt-in: it removes Provenance's accounts and SSH trust from the machine,
+// which is a lockout where Provenance was the only administrative access. Omitting the
 // parameter leaves the host provisioned.
 export interface DeleteHostResult {
   teardownRequested: boolean;
@@ -249,7 +249,7 @@ export interface NextWG {
   nextWgAddress: string;
   subnet: string;
   jumpEndpoint: string;
-  // The deployment's default VPN overlay (FLEET_OVERLAY), already resolved —
+  // The deployment's default VPN overlay (PROV_OVERLAY), already resolved —
   // what "Deployment default" in the enroll dialog means for this install.
   overlay?: string;
   // Every transport this deployment can enroll a host onto, and what each pool
@@ -391,7 +391,7 @@ export interface EnrollParams {
   // WireGuard over an SSH password); "key" bootstraps using an existing SSH
   // private key already trusted in the host's authorized_keys (for hosts with
   // password auth disabled); "trusted" uses the session certificate on a host
-  // that already trusts the Fleet CA.
+  // that already trusts the Provenance CA.
   method: "password" | "key" | "agent" | "trusted";
   bootstrapUser?: string;
   password?: string;
@@ -406,7 +406,7 @@ export interface EnrollParams {
   // backend can't reach directly but the jump host can).
   viaJump?: boolean;
   // Skip WireGuard: the host is directly reachable from the jump host (same LAN,
-  // or the host that runs Fleet itself), so no overlay is set up.
+  // or the host that runs Provenance itself), so no overlay is set up.
   skipWireGuard?: boolean;
   // VPN overlay transport for this host: "" / undefined = deployment default,
   // otherwise wireguard | openvpn. openvpn is the FIPS (certificate-authenticated) overlay.
@@ -430,7 +430,7 @@ export async function finishEnroll(id: string, hostPublicKey: string): Promise<E
 
 // Vulnerability findings for one container image, keyed by digest.
 //
-// Fleet-global by nature: the same digest is the same bytes everywhere, so this
+// Provenance-global by nature: the same digest is the same bytes everywhere, so this
 // is fetched once and joined against whatever each host is running.
 export interface ContainerImageScan {
   digest: string;

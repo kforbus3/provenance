@@ -319,9 +319,9 @@ def _self_image() -> str:
         # The fallback is this stack's own runner image. It used to name the
         # Flipside web UI, which does not exist here at all — so on the one path
         # that reaches it, the helper `docker run` was guaranteed to fail.
-        return proc.stdout.strip() or "blackfriars-builder-runner"
+        return proc.stdout.strip() or "provenance-builder-runner"
     except (OSError, subprocess.SubprocessError):
-        return "blackfriars-builder-runner"
+        return "provenance-builder-runner"
 
 
 # --------------------------- host interfaces ---------------------------

@@ -1,8 +1,8 @@
-// Package ueba performs lightweight user-and-entity behavior analytics over Fleet's
+// Package ueba performs lightweight user-and-entity behavior analytics over Provenance's
 // own access records (SSH/RDP sessions). It flags access patterns that deviate from a
 // user's established baseline — off-hours access, first access to a host, a new source
 // IP, and activity spikes — using simple, explainable statistics (no ML, no external
-// dependency), matching Fleet's dependency-light, tamper-evident-audit ethos. The
+// dependency), matching Provenance's dependency-light, tamper-evident-audit ethos. The
 // analyzer here is pure and unit-tested; the store fetches the sessions and the API
 // surfaces the anomalies.
 package ueba

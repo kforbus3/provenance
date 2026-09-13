@@ -18,7 +18,7 @@ func Build(caAuthorizedKeys []string, serials []uint64) ([]byte, error) {
 	if len(caAuthorizedKeys) == 0 {
 		return nil, fmt.Errorf("no CA public keys")
 	}
-	dir, err := os.MkdirTemp("", "fleet-krl")
+	dir, err := os.MkdirTemp("", "prov-krl")
 	if err != nil {
 		return nil, err
 	}

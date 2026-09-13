@@ -35,8 +35,8 @@ Optional, enabled later:
 ## 2. Get the code
 
 ```bash
-git clone https://github.com/kforbus3/blackfriars.git
-cd blackfriars
+git clone https://github.com/kforbus3/provenance.git
+cd provenance
 ```
 
 ---
@@ -53,45 +53,45 @@ At minimum, set strong secrets. Generate each with `openssl rand`:
 
 ```bash
 # 32+ byte random secrets
-openssl rand -hex 32   # use for FLEET_JWT_SECRET
-openssl rand -hex 32   # use for FLEET_CSRF_SECRET
-openssl rand -hex 32   # use for FLEET_CA_PASSPHRASE   (encrypts the CA private key)
+openssl rand -hex 32   # use for PROV_JWT_SECRET
+openssl rand -hex 32   # use for PROV_CSRF_SECRET
+openssl rand -hex 32   # use for PROV_CA_PASSPHRASE   (encrypts the CA private key)
 openssl rand -hex 32   # use for POSTGRES_PASSWORD
-openssl rand -hex 32   # use for FLEET_BACKUP_PASSPHRASE (must differ from the CA passphrase)
+openssl rand -hex 32   # use for PROV_BACKUP_PASSPHRASE (must differ from the CA passphrase)
 ```
 
 Key settings in `.env`:
 
 | Setting | Set it to |
 |---|---|
-| `FLEET_ENV` | `production` (enables fail-closed validation of the secrets below) |
-| `FLEET_PUBLIC_URL` | The URL users will reach, e.g. `https://fleet.example.com` |
-| `FLEET_JWT_SECRET` | A generated secret (signs access tokens) |
-| `FLEET_CSRF_SECRET` | A generated secret |
-| `FLEET_CA_PASSPHRASE` | A generated secret (guard this — it encrypts the SSH CA key) |
+| `PROV_ENV` | `production` (enables fail-closed validation of the secrets below) |
+| `PROV_PUBLIC_URL` | The URL users will reach, e.g. `https://provenance.example.com` |
+| `PROV_JWT_SECRET` | A generated secret (signs access tokens) |
+| `PROV_CSRF_SECRET` | A generated secret |
+| `PROV_CA_PASSPHRASE` | A generated secret (guard this — it encrypts the SSH CA key) |
 | `POSTGRES_PASSWORD` | A generated secret |
-| `FLEET_BACKUP_PASSPHRASE` | A generated secret **distinct** from the CA passphrase (required in production; backups contain every at-rest secret) |
-| `FLEET_COOKIE_SECURE` | `true` in production (cookies only over HTTPS) |
-| `FLEET_WG_JUMP_ENDPOINT` | The address:port managed hosts will dial to reach the jump host (public/LAN IP or DNS + UDP port), if you use the WireGuard overlay |
+| `PROV_BACKUP_PASSPHRASE` | A generated secret **distinct** from the CA passphrase (required in production; backups contain every at-rest secret) |
+| `PROV_COOKIE_SECURE` | `true` in production (cookies only over HTTPS) |
+| `PROV_WG_JUMP_ENDPOINT` | The address:port managed hosts will dial to reach the jump host (public/LAN IP or DNS + UDP port), if you use the WireGuard overlay |
 
 > **In production the backend refuses to start on several checks.** Failing fast
 > here is deliberate: each of these is a setting that would otherwise let the
 > server run and break something later, somewhere else.
 >
-> - **Weak or missing secrets** — `FLEET_JWT_SECRET` (≥32 bytes),
->   `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE`, `FLEET_AUDIT_HMAC_KEY`,
->   `FLEET_ANSIBLE_RUNNER_TOKEN`.
-> - **`FLEET_PUBLIC_URL` still pointing at localhost.** This is the address
+> - **Weak or missing secrets** — `PROV_JWT_SECRET` (≥32 bytes),
+>   `PROV_CSRF_SECRET`, `PROV_CA_PASSPHRASE`, `PROV_AUDIT_HMAC_KEY`,
+>   `PROV_ANSIBLE_RUNNER_TOKEN`.
+> - **`PROV_PUBLIC_URL` still pointing at localhost.** This is the address
 >   browsers and identity providers are told to use, so a wrong one boots cleanly
 >   and then breaks single sign-on, passkeys and every terminal WebSocket
 >   separately, none of them saying why.
-> - **`FLEET_COOKIE_SECURE=false` while `FLEET_PUBLIC_URL` is `https://`.**
+> - **`PROV_COOKIE_SECURE=false` while `PROV_PUBLIC_URL` is `https://`.**
 >   Session cookies would be sent without the `Secure` flag and no HSTS header
 >   set. Plain `http://` is warned about rather than refused — a deployment on a
 >   trusted private network genuinely cannot set `Secure`, or nobody can log in.
 >
 > **`.env.example` trips two of these on purpose**: it ships
-> `FLEET_PUBLIC_URL=http://localhost:8080` and `FLEET_COOKIE_SECURE=false`, which
+> `PROV_PUBLIC_URL=http://localhost:8080` and `PROV_COOKIE_SECURE=false`, which
 > are right for a laptop and wrong for a server. For a production install start
 > from **`.env.production.example`** instead, which has the correct values.
 >
@@ -131,13 +131,13 @@ version stamped into the build is derived from the nearest git tag.
 > **The UI is on port 5173.** `make up-single` publishes the frontend there; the
 > backend listens on 8080 bound to loopback and is reached *through* it. So with
 > the example `.env` the browser wants `http://<host>:5173`, not
-> `FLEET_PUBLIC_URL`. For production, put your TLS reverse proxy in front of 5173
-> and set `FLEET_PUBLIC_URL` to the address that proxy serves — they must match,
+> `PROV_PUBLIC_URL`. For production, put your TLS reverse proxy in front of 5173
+> and set `PROV_PUBLIC_URL` to the address that proxy serves — they must match,
 > or sign-on and WebSockets break.
 
 ## 5. Create the first administrator (bootstrap)
 
-Open `FLEET_PUBLIC_URL` in a browser. On first run — while **no** user account exists
+Open `PROV_PUBLIC_URL` in a browser. On first run — while **no** user account exists
 — Provenance shows a one-time **bootstrap** page. Create your first account there;
 it becomes the super administrator.
 

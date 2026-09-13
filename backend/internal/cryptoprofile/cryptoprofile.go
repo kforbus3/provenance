@@ -1,11 +1,11 @@
 // Package cryptoprofile centralizes every FIPS-sensitive cryptographic choice
-// behind a single profile selected once at boot from FLEET_FIPS_MODE. The default
+// behind a single profile selected once at boot from PROV_FIPS_MODE. The default
 // profile is byte-for-byte today's behavior (Ed25519, SHA-1 TOTP, default SSH
 // negotiation, Argon2id KDF); the FIPS profile substitutes the FIPS 140-3 approved
 // set (ECDSA P-256, SHA-256 TOTP, pinned SSH suites, PBKDF2 KDF). Non-FIPS installs
 // are unaffected.
 //
-// Nothing here depends on Fleet's other packages, so any crypto call site can route
+// Nothing here depends on Provenance's other packages, so any crypto call site can route
 // through it without an import cycle.
 package cryptoprofile
 
@@ -98,7 +98,7 @@ func (p Profile) VerifyModuleActive() error {
 		return nil
 	}
 	if !fips140.Enabled() {
-		return fmt.Errorf("FLEET_FIPS_MODE is on but the Go FIPS 140-3 module is not active: " +
+		return fmt.Errorf("PROV_FIPS_MODE is on but the Go FIPS 140-3 module is not active: " +
 			"build with GOFIPS140 and run with GODEBUG=fips140=on (see docs/fips-mode-plan.md)")
 	}
 	return nil

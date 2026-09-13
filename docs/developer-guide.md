@@ -7,7 +7,7 @@ runs through Docker, so **no local Go, Node, or PostgreSQL toolchain is required
 
 ```
 backend/                Go service (chi, pgx)
-  cmd/fleetd/           main entrypoint
+  cmd/provd/           main entrypoint
   internal/
     api/                router wiring (server.go), helpers, system health (health.go)
     app/                Deps container (shared services)
@@ -127,24 +127,24 @@ full list):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `FLEET_ENV` | `development` | `development` relaxes secret validation |
-| `FLEET_HTTP_ADDR` | `:8080` | listen address |
-| `FLEET_PUBLIC_URL` | `https://localhost:8443` | external base URL (cookies/CORS). In dev you reach the Vite frontend at `http://localhost:5173`, which proxies to the backend. |
-| `FLEET_DATABASE_URL` | `postgres://fleet:fleet@postgres:5432/fleet?sslmode=disable` | DB DSN |
-| `FLEET_MIGRATE_ON_START` | `true` | run migrations at boot |
-| `FLEET_JWT_SECRET` | — | HMAC secret for access tokens (≥32 bytes in prod) |
-| `FLEET_CSRF_SECRET` | — | CSRF secret (≥16 bytes in prod) |
-| `FLEET_CA_PASSPHRASE` | — | encrypts the CA private key (≥16 bytes in prod) |
-| `FLEET_COOKIE_SECURE` | `true` | set `false` only for non-HTTPS local dev |
-| `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` | `jumphost:22` / `fleet` | SSH egress |
-| `FLEET_USER_CERT_TTL` | `12h` | ephemeral user cert lifetime |
-| `FLEET_CERT_RENEW_BEFORE` | `3h` | renew certs this far ahead of expiry |
-| `FLEET_RECORDING_DIR` | `/var/lib/fleet/recordings` | session recordings |
+| `PROV_ENV` | `development` | `development` relaxes secret validation |
+| `PROV_HTTP_ADDR` | `:8080` | listen address |
+| `PROV_PUBLIC_URL` | `https://localhost:8443` | external base URL (cookies/CORS). In dev you reach the Vite frontend at `http://localhost:5173`, which proxies to the backend. |
+| `PROV_DATABASE_URL` | `postgres://prov:prov@postgres:5432/prov?sslmode=disable` | DB DSN |
+| `PROV_MIGRATE_ON_START` | `true` | run migrations at boot |
+| `PROV_JWT_SECRET` | — | HMAC secret for access tokens (≥32 bytes in prod) |
+| `PROV_CSRF_SECRET` | — | CSRF secret (≥16 bytes in prod) |
+| `PROV_CA_PASSPHRASE` | — | encrypts the CA private key (≥16 bytes in prod) |
+| `PROV_COOKIE_SECURE` | `true` | set `false` only for non-HTTPS local dev |
+| `PROV_JUMP_HOST` / `PROV_JUMP_USER` | `jumphost:22` / `fleet` | SSH egress |
+| `PROV_USER_CERT_TTL` | `12h` | ephemeral user cert lifetime |
+| `PROV_CERT_RENEW_BEFORE` | `3h` | renew certs this far ahead of expiry |
+| `PROV_RECORDING_DIR` | `/var/lib/prov/recordings` | session recordings |
 
 In `development`, missing secrets fall back to **insecure deterministic
 defaults** so the stack boots — never run that way in production. In
-`production`, startup fails if `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, or
-`FLEET_CA_PASSPHRASE` are missing/too short.
+`production`, startup fails if `PROV_JWT_SECRET`, `PROV_CSRF_SECRET`, or
+`PROV_CA_PASSPHRASE` are missing/too short.
 
 ## Adding a backend HTTP module
 

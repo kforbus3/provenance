@@ -28,9 +28,9 @@ function FipsRow({ label, value, ok }: { label: string; value: ReactNode; ok?: b
   );
 }
 
-// FIPS 140-3 readiness — mirrors `fleetctl fips check`. Advisory: shows whether each
+// FIPS 140-3 readiness — mirrors `provctl fips check`. Advisory: shows whether each
 // FIPS-critical artifact is on an approved algorithm so an operator can tell when it
-// is safe to enable FLEET_FIPS_MODE. Hidden if the endpoint isn't available.
+// is safe to enable PROV_FIPS_MODE. Hidden if the endpoint isn't available.
 function FipsCard() {
   const { data, isError } = useQuery<FipsReadiness>({
     queryKey: ["system-fips"],
@@ -50,7 +50,7 @@ function FipsCard() {
           color={data.ready ? "success" : "warning"}
         />
       </Stack>
-      <FipsRow label="FLEET_FIPS_MODE" value={<FipsChip ok={data.configFips} okLabel="on" badLabel="off" />} />
+      <FipsRow label="PROV_FIPS_MODE" value={<FipsChip ok={data.configFips} okLabel="on" badLabel="off" />} />
       <FipsRow label="Go FIPS module active" value={""} ok={data.moduleActive} />
       <FipsRow label="Overlay transport" value={data.overlay || "(unset)"} ok={data.overlayOk} />
       <FipsRow label="Active user CA key" value={data.caKeyAlgo || "(none)"} ok={data.caKeyOk} />
@@ -74,14 +74,14 @@ function FipsCard() {
       {!data.ready && (
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
           Address the amber items above before enabling FIPS. See docs/fips-mode-plan.md for the
-          migration steps (CA rotation, overlay, <code>fleetctl fips reseal-secrets</code>).
+          migration steps (CA rotation, overlay, <code>provctl fips reseal-secrets</code>).
         </Typography>
       )}
     </Paper>
   );
 }
 
-// Admin System Health: a live status report of Fleet's subsystems. Auto-refreshes.
+// Admin System Health: a live status report of Provenance's subsystems. Auto-refreshes.
 export function HealthPage() {
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["system-health"],

@@ -12,7 +12,7 @@ func TestVaultKey(t *testing.T) {
 	// production without a vault passphrase: must fail closed.
 	prod := &Config{Environment: "production", CAKeyPassphrase: []byte("cakey-cakey-cakey")}
 	if _, err := prod.VaultKey(); err == nil {
-		t.Error("production without FLEET_VAULT_PASSPHRASE should error")
+		t.Error("production without PROV_VAULT_PASSPHRASE should error")
 	}
 
 	// production with a vault passphrase equal to the CA passphrase: must fail.

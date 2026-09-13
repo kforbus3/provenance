@@ -80,7 +80,7 @@ func (s *Store) CreateInitialSuperAdmin(ctx context.Context, p CreateUserParams)
 	p.IsSuperAdmin = true
 	var u *models.User
 	err := s.tx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('fleet_bootstrap'))`); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('prov_bootstrap'))`); err != nil {
 			return err
 		}
 		var n int

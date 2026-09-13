@@ -1,4 +1,4 @@
-# Trivy suppressions for Fleet Terminal.
+# Trivy suppressions for Provenance.
 # Each entry is a finding that is either template-inherent (the operator resolves it
 # at deploy time) or a base-image / transitive CVE with no actionable fix in this repo
 # yet. Reviewed 2026-08-16. Trivy auto-loads this file from the repo root for both the
@@ -14,17 +14,17 @@
 # ---------------------------------------------------------------------------
 
 # AVD-KSV-0013 (MEDIUM) "Image tag ':latest'".
-# The k8s manifests reference ghcr.io/fleet-terminal/*:latest as placeholders; there is
+# The k8s manifests reference ghcr.io/provenance/*:latest as placeholders; there is
 # no published image. Operators build these from deploy/*/Dockerfile and pin their own
 # immutable tag (the Helm chart already parameterises the tag via values). Accepted.
 AVD-KSV-0013
 
 # AVD-KSV-0125 (MEDIUM) "Image with untrusted registry".
-# ghcr.io is the Fleet Terminal project's own GitHub Container Registry. Accepted.
+# ghcr.io is the Provenance project's own GitHub Container Registry. Accepted.
 AVD-KSV-0125
 
 # AVD-KSV-0110 (LOW) "Default namespace should not be used".
-# The raw manifests set `namespace: fleet-terminal`; the Helm templates render into the
+# The raw manifests set `namespace: provenance`; the Helm templates render into the
 # release namespace supplied with `helm install -n`. Never actually the default ns.
 AVD-KSV-0110
 

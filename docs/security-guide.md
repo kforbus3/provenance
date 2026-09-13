@@ -18,19 +18,19 @@ and operational recommendations.
 
 - On login, the **Issuer** generates a fresh `ssh-ed25519` keypair in an
   in-process **Identity Vault** and signs a short-lived user certificate
-  (default TTL 12 hours, `FLEET_USER_CERT_TTL`), bound to the browser session with
+  (default TTL 12 hours, `PROV_USER_CERT_TTL`), bound to the browser session with
   principals `fleet` + username.
 - **Private keys never touch disk or the database.** Only certificate *metadata*
   is persisted in `ssh_certificates` (serial, principals, public key, validity,
   `key_id`). On logout the key is zeroized and its certificates revoked.
 - A background loop renews certificates ~24h before expiry
-  (`FLEET_CERT_RENEW_BEFORE`) so active sessions don't break.
+  (`PROV_CERT_RENEW_BEFORE`) so active sessions don't break.
 - **Unique per-host certificates.** Connecting to a host mints a credential scoped
   to that specific `(session, host)` pair — distinct key material and serial per
   host. The blast radius of any single credential is one host. The vault zeroizes a
   session's session-level **and** all per-host keys together on teardown.
 - **Host-scoped principals.** Each certificate is stamped with a principal unique
-  to its target host, `fleet-h-<hostID>` (or `fleet-login-h-<hostID>` for the
+  to its target host, `prov-h-<hostID>` (or `prov-login-h-<hostID>` for the
   login-only tier), alongside the fleet-wide `fleet` used only for the jump-host
   hop. Under lockdown each managed host trusts **only its own** scoped principal, so
   a certificate — even if its private key were somehow extracted — is **rejected by
@@ -38,13 +38,13 @@ and operational recommendations.
   host the user was never granted. This also bounds the Ansible playbook runner: its
   run credential carries only the scoped principals of that run's target hosts, so a
   playbook that reads the key off the runner still can't escape to the rest of the
-  fleet. Rollout is backwards compatible and gated by `FLEET_HOST_SCOPED_ONLY` —
+  fleet. Rollout is backwards compatible and gated by `PROV_HOST_SCOPED_ONLY` —
   see [§13](#13-migrating-to-host-scoped-principals).
 
 ## 2. Certificate authority hardening
 
 - The CA private key is stored **encrypted at rest** in `ca_keys.private_enc`,
-  encrypted with `FLEET_CA_PASSPHRASE` (≥16 bytes, required in production). It
+  encrypted with `PROV_CA_PASSPHRASE` (≥16 bytes, required in production). It
   never leaves the backend process. The CA **public** key is served unauthenticated
   at `GET /api/v1/certificates/ca/pub` — it is not secret (it is installed as
   `TrustedUserCAKeys` on every host); a co-located jump host uses it to self-trust.
@@ -59,11 +59,11 @@ and operational recommendations.
 ## 3. HMAC-keyed, tamper-evident audit
 
 - Every state change appends a row to `audit_events` where
-  `hash = HMAC(FLEET_AUDIT_HMAC_KEY, prev_hash || canonical(event))`, forming an
+  `hash = HMAC(PROV_AUDIT_HMAC_KEY, prev_hash || canonical(event))`, forming an
   append-only chain ordered by `seq`. The canonical event binds the row's
   **sequence, timestamp, and tenant** so none can be altered or reordered without
   breaking the chain.
-- **The chain is keyed.** `FLEET_AUDIT_HMAC_KEY` (≥32 bytes, **required in
+- **The chain is keyed.** `PROV_AUDIT_HMAC_KEY` (≥32 bytes, **required in
   production** — the backend fails closed at boot without it) is what makes the
   chain *tamper-evident* rather than merely tamper-detecting: an attacker with
   write access to the database cannot forge a self-consistent chain without the
@@ -93,12 +93,12 @@ and operational recommendations.
 - **Lockout:** `lockout_policy` (default 5 failed attempts → 15-minute lockout)
   via `failed_logins` / `locked_until`. Admins can unlock with
   `POST /users/{id}/unlock`.
-- **Tokens:** short-lived **access JWTs** (HMAC, `FLEET_JWT_SECRET`, default 15m)
+- **Tokens:** short-lived **access JWTs** (HMAC, `PROV_JWT_SECRET`, default 15m)
   carried as `Authorization: Bearer`. Rotating **refresh tokens** (default 30d)
   are stored only as hashes (`sessions.refresh_hash`).
-- **Cookies:** refresh (`fleet_refresh`) and session-id (`fleet_sid`) cookies are
-  HttpOnly, `Secure` (when `FLEET_COOKIE_SECURE=true`), and SameSite=Strict,
-  scoped to `/api/v1/auth`. The CSRF cookie (`fleet_csrf`) is JS-readable by
+- **Cookies:** refresh (`prov_refresh`) and session-id (`prov_sid`) cookies are
+  HttpOnly, `Secure` (when `PROV_COOKIE_SECURE=true`), and SameSite=Strict,
+  scoped to `/api/v1/auth`. The CSRF cookie (`prov_csrf`) is JS-readable by
   design (double-submit).
 - **MFA:** `mfa_methods` supports TOTP and WebAuthn (passkeys). MFA is optional by
   default and can be **enforced**: globally via the `require_mfa` setting (Users →
@@ -114,18 +114,18 @@ and operational recommendations.
   - **OIDC single sign-on** (Okta, Azure AD, Google, Keycloak, Authentik) over
     the authorization-code flow with **PKCE**. ID tokens are **JWKS-verified**
     (signature, issuer, audience, and nonce). The OIDC **client secret is sealed
-    at rest** (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`) and never returned by
+    at rest** (`secretbox`, keyed by `PROV_CA_PASSPHRASE`) and never returned by
     the API.
   - **LDAP / Active Directory** sign-on via a service-account lookup followed by a
     user-bind password verification, with group→role mapping by **CN**. Supports
     `ldap://` / `ldaps://` and **StartTLS**; the **bind password is sealed at
-    rest** (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`).
+    rest** (`secretbox`, keyed by `PROV_CA_PASSPHRASE`).
   - **Trade-off:** SSO **bypasses Provenance's local password and MFA** — the IdP is
     the authenticator, so enforce strong authentication (MFA, conditional access)
     at the IdP. Local-account controls (lockout, password policy, Provenance MFA) apply
     only to `auth_source=local` users.
-- **Session reaping:** a background loop enforces idle (`FLEET_SESSION_IDLE_TTL`)
-  and absolute (`FLEET_SESSION_ABSOLUTE_TTL`) limits even for connections that
+- **Session reaping:** a background loop enforces idle (`PROV_SESSION_IDLE_TTL`)
+  and absolute (`PROV_SESSION_ABSOLUTE_TTL`) limits even for connections that
   make no further HTTP requests. Logout, idle/absolute timeout, and account
   disable/terminate all **force-close live terminals and in-flight SFTP
   transfers** and revoke the session's certificates.
@@ -144,12 +144,12 @@ and operational recommendations.
   (`UserCanAccessHost`). Users have no host access by default.
 - **Root vs. login-only on the host** is gated by `Host.Sudo`. Each enrolled host
   has two shared accounts: a privileged one (`fleet`, NOPASSWD sudo) and a
-  login-only one (`fleet-login`, no sudo). The backend issues a certificate whose
+  login-only one (`prov-login`, no sudo). The backend issues a certificate whose
   principal maps to the privileged account only when the user has `Host.Sudo` (or
   is a super admin); otherwise it maps to the login-only account. The split is
   enforced by sshd via `AuthorizedPrincipalsFile` (distinct principals per
   account), so a login-only certificate cannot open the sudo account. The
-  principals are **host-scoped** (`fleet-h-<hostID>` / `fleet-login-h-<hostID>`),
+  principals are **host-scoped** (`prov-h-<hostID>` / `prov-login-h-<hostID>`),
   so the account split holds and the certificate is only valid on its own host.
   Both tiers still use unique per-user certs and are recorded and audited.
   - **What `Host.Sudo` covers.** The terminal, SFTP, and the **ad-hoc command
@@ -173,7 +173,7 @@ and operational recommendations.
     host that is genuinely leaving, tear it down — otherwise a machine Provenance no longer
     manages or audits keeps a standing root account. See
     [host-enrollment-guide.md](./host-enrollment-guide.md#removing-provenance-from-the-machine-opt-in),
-    and `scripts/fleet-unenroll.sh` for hosts Provenance can no longer reach.
+    and `scripts/prov-unenroll.sh` for hosts Provenance can no longer reach.
 
   > **Defaults are permissive.** `Host.Sudo` is seeded to **Administrator and
   > Operator**, so every builtin role that can open a terminal has root on hosts it
@@ -206,10 +206,10 @@ and operational recommendations.
 ## 6. CSRF & transport
 
 - State-changing, **cookie-authenticated** requests (`refresh`, `logout`) require
-  the double-submit header `X-CSRF-Token` to match the `fleet_csrf` cookie.
+  the double-submit header `X-CSRF-Token` to match the `prov_csrf` cookie.
   Bearer-only API calls don't rely on cookies and are exempt.
-- CORS is restricted to `FLEET_PUBLIC_URL` (plus localhost dev origins) with
-  credentials. Terminate TLS at the edge and set `FLEET_COOKIE_SECURE=true`.
+- CORS is restricted to `PROV_PUBLIC_URL` (plus localhost dev origins) with
+  credentials. Terminate TLS at the edge and set `PROV_COOKIE_SECURE=true`.
 
 ## 7. WebSocket terminal
 
@@ -231,7 +231,7 @@ and operational recommendations.
 - Managed hosts are reachable only through the **jump host** over a **WireGuard**
   overlay (OpenVPN in FIPS mode). The only inbound surface a managed host needs is
   the overlay endpoint; SSH is not exposed publicly.
-- **Peer isolation** (`FLEET_OVERLAY_PEER_ISOLATION`, on by default) makes that
+- **Peer isolation** (`PROV_OVERLAY_PEER_ISOLATION`, on by default) makes that
   overlay strict **hub-and-spoke, not a mesh**: the jump host refuses to forward
   overlay traffic between two managed hosts, so each host can reach the jump host
   and nothing else. Without it, a single compromised host has direct L3 reach to
@@ -258,7 +258,7 @@ and operational recommendations.
         jobs: the host cannot *address* a sibling, and it **drops a decrypted
         packet claiming to come from one**.
       - **OpenVPN** — the client protocol has no `AllowedIPs`, so enrollment
-        installs `/etc/openvpn/fleet/peer-isolation.sh` and hooks it as the
+        installs `/etc/openvpn/prov/peer-isolation.sh` and hooks it as the
         config's `up` script. It drops anything entering or leaving the tunnel
         that is not the jump host. Running on `up` is what makes it survive a
         reboot (a bare `iptables` rule does not) and what gives it the tun device
@@ -273,13 +273,13 @@ and operational recommendations.
   after the change; already-enrolled hosts keep the wide `AllowedIPs` they were
   given. A mixed fleet is fine — the two settings interoperate, and the jump-host
   deny covers everything meanwhile. To close the gap, either **re-enroll** each
-  host (as with `FLEET_HOST_SCOPED_ONLY`), or narrow it **in place with no tunnel
+  host (as with `PROV_HOST_SCOPED_ONLY`), or narrow it **in place with no tunnel
   downtime** — the live `wg set` takes effect without a new handshake, and the
   `sed` makes it survive a reboot:
 
   ```sh
-  IF=wgfleet                       # FLEET_WG_INTERFACE
-  JUMP=10.100.0.1                  # FLEET_WG_JUMP_IP
+  IF=wgprov                       # PROV_WG_INTERFACE
+  JUMP=10.100.0.1                  # PROV_WG_JUMP_IP
   CONF=/etc/wireguard/$IF.conf
   JPUB=$(awk '/^PublicKey/{print $3; exit}' "$CONF")
   wg set "$IF" peer "$JPUB" allowed-ips "$JUMP/32"
@@ -288,7 +288,7 @@ and operational recommendations.
 
   To do it fleet-wide, `deploy/playbooks/overlay-peer-isolation.yml` is the same
   change as a playbook — paste it into **Playbooks → New**, set
-  `fleet_wg_interface`/`fleet_wg_jump_ip` to match the deployment, and run it
+  `prov_wg_interface`/`prov_wg_jump_ip` to match the deployment, and run it
   against every enrolled host. It is idempotent (a host already narrowed reports
   "nothing to do"), it changes the live interface before it touches disk and
   reverts if the jump host stops answering, and it refuses any config that is not
@@ -300,18 +300,18 @@ and operational recommendations.
 ## 10. Secrets & configuration
 
 - In `production`, the backend **refuses to start** without strong
-  `FLEET_JWT_SECRET` (≥32B), `FLEET_CSRF_SECRET` (≥16B), and
-  `FLEET_CA_PASSPHRASE` (≥16B). In `development` it falls back to **insecure
+  `PROV_JWT_SECRET` (≥32B), `PROV_CSRF_SECRET` (≥16B), and
+  `PROV_CA_PASSPHRASE` (≥16B). In `development` it falls back to **insecure
   deterministic defaults** — never run production that way.
 - Generate secrets with `openssl rand -hex 32`. Inject via your secret manager
   (`deploy/k8s/11-secret.yaml` for Kubernetes), not committed files.
-- **`FLEET_BACKUP_PASSPHRASE`** encrypts database backups (`openssl` AES-256-CBC,
-  PBKDF2). If unset it **falls back to `FLEET_CA_PASSPHRASE`**. Like the CA
+- **`PROV_BACKUP_PASSPHRASE`** encrypts database backups (`openssl` AES-256-CBC,
+  PBKDF2). If unset it **falls back to `PROV_CA_PASSPHRASE`**. Like the CA
   passphrase it is deliberately **not** stored in any backup — keep an offline
   copy in a password manager. See [break-glass.md](./break-glass.md) and
   [disaster-recovery.md](./disaster-recovery.md).
 - **Other secrets encrypted at rest in the DB.** The SMTP / notification password
-  is sealed (`secretbox`, keyed by `FLEET_CA_PASSPHRASE`) and never returned by
+  is sealed (`secretbox`, keyed by `PROV_CA_PASSPHRASE`) and never returned by
   the API — like the CA private key, it is stored only as ciphertext.
 - **External KMS / HSM (optional).** The CA and credential-vault master passphrases can be
   wrapped by an external KMS (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, or GCP Cloud KMS)
@@ -326,7 +326,7 @@ and operational recommendations.
 
 - A per-IP **token-bucket rate limiter** throttles abusive clients, with a
   stricter budget on `/auth` and `/bootstrap` than the rest of the API
-  (`FLEET_AUTH_RATE_LIMIT_*` vs `FLEET_RATE_LIMIT_*`; `0` disables). Over-limit
+  (`PROV_AUTH_RATE_LIMIT_*` vs `PROV_RATE_LIMIT_*`; `0` disables). Over-limit
   requests get `429`. This complements — does not replace — per-account lockout.
 - The client IP is taken from `X-Forwarded-For`, so it is only trustworthy when
   the app sits **behind a reverse proxy** that sets it. Never expose the backend
@@ -352,12 +352,12 @@ and operational recommendations.
 
 ## 13. Migrating to host-scoped principals
 
-The model: **`fleet` is the jump-host principal; `fleet-h-<hostID>` is the
+The model: **`fleet` is the jump-host principal; `prov-h-<hostID>` is the
 managed-host principal.** Every SSH connection traverses the jump host, so every
 certificate keeps `fleet` (to authenticate that hop) and also carries its target's
-`fleet-h-<hostID>`. Locking down means a **managed host stops trusting `fleet`** and
+`prov-h-<hostID>`. Locking down means a **managed host stops trusting `fleet`** and
 accepts only its own scoped principal — so a certificate minted for host A, even
-though it carries `fleet`, is rejected by host B (which trusts only `fleet-h-B`).
+though it carries `fleet`, is rejected by host B (which trusts only `prov-h-B`).
 The jump host always keeps trusting `fleet` and is never locked down.
 
 Because certificates always carry `fleet`, **there is no lockout window and no
@@ -367,13 +367,13 @@ re-enrolled under lockdown.
 **Steps:**
 1. Deploy the release (`git pull` → rebuild/restart). Nothing changes yet — hosts
    still trust `fleet`.
-2. Set `FLEET_HOST_SCOPED_ONLY=true` in `.env` and restart the backend
+2. Set `PROV_HOST_SCOPED_ONLY=true` in `.env` and restart the backend
    (`make up-single`). Enrollment will now write scoped-only principal files, and
    system/playbook credentials include each target's scoped principal.
 3. **Re-enroll every managed host** (Hosts → the host → *Re-enroll*, or the
    pipe/"no-install" script — that path always reinstalls the principal files).
    Each re-enrolled host rewrites `/etc/ssh/auth_principals/*` to trust only its
-   `fleet-h-<hostID>`, immediately refusing any other host's certificate. Terminal,
+   `prov-h-<hostID>`, immediately refusing any other host's certificate. Terminal,
    SFTP, monitoring, scans, and playbook runs keep working throughout.
 4. **Do NOT re-enroll the jump host** under lockdown — it must keep trusting
    `fleet`, or the first hop of every connection fails.
@@ -456,7 +456,7 @@ control channel:
 ## 17. Session-recording encryption at rest
 
 Terminal and desktop sessions are recorded for after-the-fact replay. Set
-**`FLEET_RECORDING_KEY`** (≥32 bytes, `openssl rand -hex 32`) to encrypt those
+**`PROV_RECORDING_KEY`** (≥32 bytes, `openssl rand -hex 32`) to encrypt those
 recordings **at rest with AES-256-GCM**. One key covers **both** recording types:
 
 - **SSH sessions** — the asciicast stream the backend writes.
@@ -477,12 +477,12 @@ Notes:
 
 ## Security checklist (production)
 
-- [ ] Strong `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE` set.
-- [ ] `FLEET_AUDIT_HMAC_KEY` and `FLEET_ANSIBLE_RUNNER_TOKEN` set (both required in
-      production; backend fails closed without them). `FLEET_RECORDING_KEY` set to
+- [ ] Strong `PROV_JWT_SECRET`, `PROV_CSRF_SECRET`, `PROV_CA_PASSPHRASE` set.
+- [ ] `PROV_AUDIT_HMAC_KEY` and `PROV_ANSIBLE_RUNNER_TOKEN` set (both required in
+      production; backend fails closed without them). `PROV_RECORDING_KEY` set to
       encrypt session recordings at rest.
-- [ ] `FLEET_ENV=production`, `FLEET_COOKIE_SECURE=true`, TLS at the edge.
-- [ ] `FLEET_ALLOW_BOOTSTRAP=false` after initial setup.
+- [ ] `PROV_ENV=production`, `PROV_COOKIE_SECURE=true`, TLS at the edge.
+- [ ] `PROV_ALLOW_BOOTSTRAP=false` after initial setup.
 - [ ] **Require MFA** globally (or per user); prefer passkeys.
 - [ ] Per-IP rate limits set; app only reachable behind a reverse proxy.
 - [ ] Scheduled `audit/verify` with alerting; audit exports archived immutably.
@@ -490,7 +490,7 @@ Notes:
 - [ ] Service-account API tokens scoped tightly, given a bounded expiry, and rotated.
 - [ ] CA public key distributed; rotation and revocation procedures rehearsed.
 - [ ] Managed hosts reachable only via jump host + WireGuard.
-- [ ] Overlay peer isolation left on (`FLEET_OVERLAY_PEER_ISOLATION=1`); confirmed
+- [ ] Overlay peer isolation left on (`PROV_OVERLAY_PEER_ISOLATION=1`); confirmed
       with `overlay peer isolation ON` in the jump host's log.
-- [ ] `FLEET_HOST_SCOPED_ONLY=true`, then re-enroll each managed host (not the jump host).
+- [ ] `PROV_HOST_SCOPED_ONLY=true`, then re-enroll each managed host (not the jump host).
 - [ ] Database and recordings backed up and restore-tested.

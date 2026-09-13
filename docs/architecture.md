@@ -103,7 +103,7 @@ manage `authorized_keys` per user.
 
 ### 1. First run / bootstrap
 1. The SPA calls `GET /api/v1/bootstrap/status`. If `bootstrapAvailable` is true
-   (no users exist yet and `FLEET_ALLOW_BOOTSTRAP` is set), it renders the wizard.
+   (no users exist yet and `PROV_ALLOW_BOOTSTRAP` is set), it renders the wizard.
 2. `POST /api/v1/bootstrap/init` validates the password against the policy,
    Argon2id-hashes it, creates the first user with `is_super_admin = true`, and
    grants the built-in **Super Administrator** role.
@@ -228,7 +228,7 @@ The **`insights`** engine derives explainable, no-ML issues from host status +
 metric history — offline hosts, low/critical disk, high memory/load, pending
 security updates, and a disk-runway (days-to-full) projection with a confidence
 level. It backs a Dashboard "Needs attention" card, `GET /api/v1/insights` (scoped
-to accessible hosts), and a `fleet_insights` assistant tool. The **`digest`**
+to accessible hosts), and a `prov_insights` assistant tool. The **`digest`**
 scheduler builds a daily/weekly fleet-health digest from the same insights and
 delivers it via `notify` (a `fleet.digest` event).
 
@@ -238,7 +238,7 @@ demand or on a `vulnscan` schedule, **without installing anything on the managed
 host**. The backend dials the host through the Jump Host, tars its package
 databases (`/etc/os-release` + dpkg/rpm state) over SSH, and POSTs them to the
 **`grype-scanner` sidecar** (`deploy/grype-scanner`, reachable at
-`FLEET_GRYPE_SCANNER_URL`, default `http://grype-scanner:8000`). The sidecar runs
+`PROV_GRYPE_SCANNER_URL`, default `http://grype-scanner:8000`). The sidecar runs
 Anchore Grype against a locally persisted CVE database (`grype-db` volume, loaded
 via online Update or offline Import — never baked into the image) and returns
 findings; CVSS is enriched from related NVD records so distro advisories still get
@@ -263,7 +263,7 @@ responses, request decoding, ID parsing, and best-effort audit writes.
   the database and are zeroized on logout/expiry. The database stores only
   certificate metadata (`ssh_certificates`) — never private key material. The CA
   private key itself is stored encrypted at rest (`ca_keys.private_enc`,
-  encrypted with `FLEET_CA_PASSPHRASE`) and never leaves the backend.
+  encrypted with `PROV_CA_PASSPHRASE`) and never leaves the backend.
 
 - **Short-lived certificates + KRL.** User certificates are short-lived (default
   7d) and auto-renewed ~24h before expiry by a background loop. Every certificate
@@ -276,7 +276,7 @@ responses, request decoding, ID parsing, and best-effort audit writes.
   frontend permission checks are advisory. `Admin.All` is treated as a wildcard.
 
 - **HMAC-keyed, tamper-evident audit.** Every state change appends a row to
-  `audit_events` where `hash = HMAC(FLEET_AUDIT_HMAC_KEY, prev_hash ||
+  `audit_events` where `hash = HMAC(PROV_AUDIT_HMAC_KEY, prev_hash ||
   canonical(event))`, binding each event's sequence, timestamp, and tenant. Keying
   the chain (rather than a plain hash) makes it tamper-evident against an attacker
   who can write the table: without the key they cannot recompute a consistent
@@ -298,17 +298,17 @@ responses, request decoding, ID parsing, and best-effort audit writes.
 
 The design is single-app-stack by default and scales along two well-understood axes:
 
-- **Fleet size.** The default configuration comfortably manages **hundreds of
+- **Provenance size.** The default configuration comfortably manages **hundreds of
   hosts**. Reaching **thousands** requires a **wider WireGuard overlay subnet**
-  (`FLEET_WG_SUBNET`, e.g. a `/16` instead of the default) so the address pool
-  isn't exhausted, and a higher `FLEET_MONITOR_CONCURRENCY` so health checks keep
+  (`PROV_WG_SUBNET`, e.g. a `/16` instead of the default) so the address pool
+  isn't exhausted, and a higher `PROV_MONITOR_CONCURRENCY` so health checks keep
   pace — kept **below the jump host's sshd `MaxStartups`** so probes aren't
   throttled. Size the subnet before enrolling at scale; it is fixed once the pool
   exists. See [deployment.md](./deployment.md).
 - **Throughput / availability.** The backend is stateless apart from Postgres and
   the on-disk recording/scan/backup volume, so it scales horizontally behind a
   load balancer. See [high-availability.md](./high-availability.md) and the Helm
-  chart (`deploy/helm/blackfriars`) for a multi-replica reference.
+  chart (`deploy/helm/provenance`) for a multi-replica reference.
 
 See [database.md](./database.md) for the full schema and [api.md](./api.md) for
 the endpoint reference.

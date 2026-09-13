@@ -33,7 +33,7 @@ func readAgent(t *testing.T) string {
 
 // The header the agent puts its token in must be the header the server reads.
 //
-// Getting this wrong is silent and total. FLEET_AGENT_TOKEN is set exactly when
+// Getting this wrong is silent and total. PROV_AGENT_TOKEN is set exactly when
 // the control plane is reachable from a network that is not the provisioning
 // one, so a mismatch 401s every heartbeat from every machine at once and the
 // only symptom is a fleet that quietly stops reporting.
@@ -55,7 +55,7 @@ func TestTheServerReadsTheHeaderTheAgentSends(t *testing.T) {
 			req.Header.Set(header, "the-shared-secret")
 			if !agentTokenOK(req, "the-shared-secret") {
 				t.Fatalf("ab-agent.sh sends its token in %q and the server does not accept "+
-					"that header. Setting FLEET_AGENT_TOKEN would reject every machine in "+
+					"that header. Setting PROV_AGENT_TOKEN would reject every machine in "+
 					"the fleet, and they would simply stop checking in.", header)
 			}
 			// And the guard has to still be a guard.

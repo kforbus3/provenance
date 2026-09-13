@@ -17,7 +17,7 @@ func TestChainVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srvPEM, _, _, err := IssueFrom(caCert, caKey, "fleet-overlay-server", nil, []net.IP{net.ParseIP("127.0.0.1")}, time.Hour, x509.ExtKeyUsageServerAuth)
+	srvPEM, _, _, err := IssueFrom(caCert, caKey, "prov-overlay-server", nil, []net.IP{net.ParseIP("127.0.0.1")}, time.Hour, x509.ExtKeyUsageServerAuth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +43,13 @@ func TestChainVerifies(t *testing.T) {
 	}
 }
 
-// TestEmitOpenVPNCerts writes a full cert set to $FLEET_OVPN_TEST_OUT when set, so an
+// TestEmitOpenVPNCerts writes a full cert set to $PROV_OVPN_TEST_OUT when set, so an
 // integration harness can drive a real OpenVPN server/client with them. It's a no-op
 // (skipped) in normal test runs.
 func TestEmitOpenVPNCerts(t *testing.T) {
-	out := os.Getenv("FLEET_OVPN_TEST_OUT")
+	out := os.Getenv("PROV_OVPN_TEST_OUT")
 	if out == "" {
-		t.Skip("set FLEET_OVPN_TEST_OUT to emit OpenVPN cert files")
+		t.Skip("set PROV_OVPN_TEST_OUT to emit OpenVPN cert files")
 	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestEmitOpenVPNCerts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srvCert, srvKey, _, err := IssueFrom(caCert, caKey, "fleet-overlay-server", nil, []net.IP{net.ParseIP("172.30.0.2")}, 24*time.Hour, x509.ExtKeyUsageServerAuth)
+	srvCert, srvKey, _, err := IssueFrom(caCert, caKey, "prov-overlay-server", nil, []net.IP{net.ParseIP("172.30.0.2")}, 24*time.Hour, x509.ExtKeyUsageServerAuth)
 	if err != nil {
 		t.Fatal(err)
 	}

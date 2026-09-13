@@ -1,13 +1,13 @@
 // Package kms provides pluggable envelope-encryption backends that protect
-// Fleet's master secrets (the CA signing-key passphrase and the credential-vault
+// Provenance's master secrets (the CA signing-key passphrase and the credential-vault
 // passphrase) with a key held in an external Key Management Service or HSM.
 //
-// Design — "unseal via KMS". Fleet's at-rest sealing is unchanged: the CA key and
+// Design — "unseal via KMS". Provenance's at-rest sealing is unchanged: the CA key and
 // vault secrets are still AES-256-GCM sealed with a passphrase (see internal/secretbox).
 // What a KMS backend changes is where that passphrase lives. Instead of storing the
 // plaintext passphrase in the environment, an operator wraps it once with the
-// external KMS (`fleetctl kms wrap`) and stores only the opaque wrapped blob
-// (FLEET_CA_PASSPHRASE_WRAPPED / FLEET_VAULT_PASSPHRASE_WRAPPED). At boot Fleet makes
+// external KMS (`provctl kms wrap`) and stores only the opaque wrapped blob
+// (PROV_CA_PASSPHRASE_WRAPPED / PROV_VAULT_PASSPHRASE_WRAPPED). At boot Provenance makes
 // a single Unwrap call to recover the passphrase into memory. An attacker who steals
 // the disk and the database still cannot decrypt anything without live access to the
 // KMS — which answers the near-universal enterprise review question, "is the master
@@ -98,17 +98,17 @@ func New(cfg Config) (Provider, error) {
 
 // Local is the default no-op provider. No external key exists, so it cannot wrap or
 // unwrap; it exists so callers can construct a Provider unconditionally and so
-// `fleetctl kms` fails with a clear message when no backend is configured.
+// `provctl kms` fails with a clear message when no backend is configured.
 type Local struct{}
 
 func (Local) Name() string { return "local" }
 
 func (Local) Wrap(context.Context, []byte) (string, error) {
-	return "", fmt.Errorf("kms: no external provider configured (set FLEET_KMS_PROVIDER)")
+	return "", fmt.Errorf("kms: no external provider configured (set PROV_KMS_PROVIDER)")
 }
 
 func (Local) Unwrap(context.Context, string) ([]byte, error) {
-	return nil, fmt.Errorf("kms: no external provider configured (set FLEET_KMS_PROVIDER)")
+	return nil, fmt.Errorf("kms: no external provider configured (set PROV_KMS_PROVIDER)")
 }
 
 func (Local) Health(context.Context) error { return nil }

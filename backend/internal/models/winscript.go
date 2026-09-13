@@ -32,7 +32,7 @@ type WinScriptVersion struct {
 }
 
 // WinScriptRun is one execution of a PowerShell script against a target (one or
-// more Windows hosts, or a Fleet group). Output holds the combined per-host log.
+// more Windows hosts, or a Provenance group). Output holds the combined per-host log.
 type WinScriptRun struct {
 	ID            uuid.UUID  `json:"id"`
 	ScriptID      uuid.UUID  `json:"scriptId"`

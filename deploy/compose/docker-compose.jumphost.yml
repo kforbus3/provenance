@@ -1,4 +1,4 @@
-# Fleet Terminal — co-located jump host (single-server production).
+# Provenance — co-located jump host (single-server production).
 #
 # Overlay that adds the WireGuard "VPN server" / jump host to the app stack, so
 # one host runs everything: database, cache, backend, frontend, and the jump
@@ -9,15 +9,15 @@
 #
 # (or `make up-single`). The jump host:
 #   - publishes the WireGuard UDP port so remote managed hosts can reach it;
-#   - auto-trusts the Fleet CA by polling the backend (FLEET_BACKEND_URL) — no
+#   - auto-trusts the Provenance CA by polling the backend (PROV_BACKEND_URL) — no
 #     manual `make trust` step;
 #   - persists its WireGuard keypair + peers and SSH host key on volumes, so
 #     restarts/upgrades don't break enrolled hosts or known_hosts pinning.
 #
 # REQUIRED in .env for real (remote) managed hosts:
-#   FLEET_WG_JUMP_ENDPOINT=<public-host-or-ip>:51820   # what managed hosts dial
+#   PROV_WG_JUMP_ENDPOINT=<public-host-or-ip>:51820   # what managed hosts dial
 # Open that UDP port on the host firewall. The backend reaches the jump host
-# internally at jumphost:22 (its default FLEET_JUMP_HOST).
+# internally at jumphost:22 (its default PROV_JUMP_HOST).
 services:
   jumphost:
     build:
@@ -32,33 +32,33 @@ services:
       - net.ipv4.ip_forward=1
     environment:
       # Self-establish + maintain CA trust from the backend (internal network).
-      FLEET_BACKEND_URL: http://backend:8080
-      WG_INTERFACE: ${FLEET_WG_INTERFACE:-wg0}
-      WG_PORT: ${FLEET_WG_PORT:-51820}
-      WG_ADDRESS: ${FLEET_WG_JUMP_IP:-10.100.0.1}/24
+      PROV_BACKEND_URL: http://backend:8080
+      WG_INTERFACE: ${PROV_WG_INTERFACE:-${FLEET_WG_INTERFACE:-wg0}}
+      WG_PORT: ${PROV_WG_PORT:-${FLEET_WG_PORT:-51820}}
+      WG_ADDRESS: ${PROV_WG_JUMP_IP:-${FLEET_WG_JUMP_IP:-10.100.0.1}}/24
       # Strict hub-and-spoke: the jump host will not forward overlay traffic
       # between two managed hosts. On by default; see .env.example.
-      FLEET_OVERLAY_PEER_ISOLATION: ${FLEET_OVERLAY_PEER_ISOLATION:-1}
+      PROV_OVERLAY_PEER_ISOLATION: ${PROV_OVERLAY_PEER_ISOLATION:-${FLEET_OVERLAY_PEER_ISOLATION:-1}}
       # The OpenVPN overlay's own subnet, needed here for the cross-overlay
-      # forwarding deny. Must match the backend's FLEET_OVPN_SUBNET.
-      FLEET_OVPN_SUBNET: ${FLEET_OVPN_SUBNET:-10.101.0.0/24}
+      # forwarding deny. Must match the backend's PROV_OVPN_SUBNET.
+      PROV_OVPN_SUBNET: ${PROV_OVPN_SUBNET:-${FLEET_OVPN_SUBNET:-10.101.0.0/24}}
     ports:
       # Public WireGuard ingress: managed hosts dial this (UDP). Match the host
-      # part of FLEET_WG_JUMP_ENDPOINT and open it on the firewall.
-      - "${FLEET_WG_PORT:-51820}:51820/udp"
+      # part of PROV_WG_JUMP_ENDPOINT and open it on the firewall.
+      - "${PROV_WG_PORT:-${FLEET_WG_PORT:-51820}}:51820/udp"
       # Public OpenVPN ingress for the certificate (FIPS) overlay. Published
       # unconditionally because a host enrolled onto that overlay dials this port and
       # nothing else tells the operator it is closed: the enrollment succeeds, the
       # client retries forever, and the host simply never comes back. Harmless when
       # the overlay is unused — nothing listens inside the container.
-      - "${FLEET_OVPN_PORT:-1194}:1194/udp"
+      - "${PROV_OVPN_PORT:-${FLEET_OVPN_PORT:-1194}}:1194/udp"
     volumes:
       - jump_wg:/etc/wireguard      # WireGuard keypair + persisted peers
-      - jump_ovpn:/etc/openvpn/fleet # overlay CA/server certs + per-host ccd pins
+      - jump_ovpn:/etc/openvpn/prov # overlay CA/server certs + per-host ccd pins
       - jump_ssh:/etc/ssh/keys      # stable SSH host key (known_hosts pinning)
     depends_on:
       - backend
-    networks: [fleet]
+    networks: [prov]
     restart: unless-stopped
 
 volumes:

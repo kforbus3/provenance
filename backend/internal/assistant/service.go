@@ -40,7 +40,7 @@ const (
 type Service struct {
 	store           *store.Store
 	log             *slog.Logger
-	insights        *insights.Service  // grounds the fleet_insights tool (what's-wrong / capacity)
+	insights        *insights.Service  // grounds the prov_insights tool (what's-wrong / capacity)
 	metricRetention time.Duration      // caps the host_metric_history window (0 = history disabled)
 	actions         *aiaction.Registry // proposes guarded actions (propose_* tools); nil disables them
 	// findings reads a compliance scan's failed rules. Injected because the parsed
@@ -127,7 +127,7 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 		out["modelContextLimit"] = modelCtx
 		if modelCtx < window {
 			out["contextWarning"] = fmt.Sprintf(
-				"%s was trained for a %d-token context but Fleet requests %d. Ollama will not error — it will drop the oldest tokens, which are the assistant's instructions. Pick a longer-context model or expect degraded answers.",
+				"%s was trained for a %d-token context but Provenance requests %d. Ollama will not error — it will drop the oldest tokens, which are the assistant's instructions. Pick a longer-context model or expect degraded answers.",
 				cfg.Model, modelCtx, window)
 		}
 	}
@@ -478,7 +478,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			// left to the model it becomes a hedge or an invented list.
 			directAnswer = expiringDirectAnswer(payload)
 			result = payload
-		case "fleet_insights":
+		case "prov_insights":
 			tbl, payload := s.runFleetInsights(ctx, who)
 			if tbl != nil {
 				data.table = tbl
@@ -584,11 +584,11 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				// The model returned an empty message (observed with small models when
 				// they can't map a question to a tool). Give a useful fallback rather
 				// than a blank answer: if a tool did populate data, note it; otherwise
-				// say plainly that Fleet has no data for this.
+				// say plainly that Provenance has no data for this.
 				if data.table != nil || data.host != nil || data.history != nil || len(data.hosts) > 0 {
 					final = "Here is what I found for that (see the details below)."
 				} else {
-					final = "I couldn't find anything in Fleet that answers that. " + capabilityStatement()
+					final = "I couldn't find anything in Provenance that answers that. " + capabilityStatement()
 				}
 			}
 			s.remember(convoID, who.UserID, question, final)
@@ -680,7 +680,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					data.table = tbl
 				}
 				result = payload
-			case "fleet_insights":
+			case "prov_insights":
 				tbl, payload := s.runFleetInsights(ctx, who)
 				if tbl != nil {
 					data.table = tbl
@@ -1507,7 +1507,7 @@ func (s *Service) runRecentPlaybookRuns(ctx context.Context, who Caller) any {
 }
 
 // runRecentCommands returns ad-hoc Run-Command executions (gated by Command.Run) — the
-// authoritative "who ran which command" record for Fleet-issued commands. It excludes
+// authoritative "who ran which command" record for Provenance-issued commands. It excludes
 // the command output bodies (kept out of the model context) and optionally filters by a
 // command substring or target name.
 func (s *Service) runRecentCommands(ctx context.Context, raw json.RawMessage, who Caller) (*AssistantTable, any) {
@@ -2019,14 +2019,14 @@ func (s *Service) runFleetInsights(ctx context.Context, who Caller) (*AssistantT
 	}
 	items, err := s.insights.Compute(ctx, who.UserID, who.IsSuperAdmin)
 	if err != nil {
-		s.log.Warn("assistant fleet_insights", "err", err)
+		s.log.Warn("assistant prov_insights", "err", err)
 		return nil, map[string]any{"error": "could not compute insights"}
 	}
 	if len(items) == 0 {
 		return nil, map[string]any{"count": 0, "insights": []any{}, "note": "no issues detected across the accessible fleet"}
 	}
 	tbl := &AssistantTable{
-		Title:   "Fleet insights",
+		Title:   "Provenance insights",
 		Columns: []TableColumn{{Label: "Severity"}, {Label: "Host"}, {Label: "Issue"}, {Label: "Detail"}},
 	}
 	for _, it := range items {

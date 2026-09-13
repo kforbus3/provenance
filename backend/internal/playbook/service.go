@@ -25,7 +25,7 @@ import (
 
 // Service talks to the ansible-runner sidecar and orchestrates playbook runs.
 // The backend mints the ephemeral SSH credential; the sidecar performs the
-// actual SSH (through the Fleet jump host), keeping Python/Ansible out of the
+// actual SSH (through the Provenance jump host), keeping Python/Ansible out of the
 // backend.
 type Service struct {
 	store  *store.Store

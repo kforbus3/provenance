@@ -151,7 +151,7 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 	var out models.AuditEvent
 	err := s.tx(bctx, func(tx pgx.Tx) error {
 		// Serialize appends so prev_hash is read consistently.
-		if _, err := tx.Exec(bctx, `SELECT pg_advisory_xact_lock(hashtext('fleet_audit_chain'))`); err != nil {
+		if _, err := tx.Exec(bctx, `SELECT pg_advisory_xact_lock(hashtext('prov_audit_chain'))`); err != nil {
 			return err
 		}
 		var prev string

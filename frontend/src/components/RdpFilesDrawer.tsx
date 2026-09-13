@@ -152,7 +152,7 @@ export function RdpFilesDrawer({
         {!loading && entries.length === 0 && (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              This folder is empty. Files copied into the Fleet drive inside the desktop appear here.
+              This folder is empty. Files copied into the Provenance drive inside the desktop appear here.
             </Typography>
           </Box>
         )}

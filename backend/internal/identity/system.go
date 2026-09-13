@@ -86,7 +86,7 @@ func (i *Issuer) SystemHostPrincipals(hostID uuid.UUID) []string {
 //
 // Like sshgw.LoginTier, it deliberately omits the fleet-wide "fleet" principal:
 // carrying it would open the privileged account on any host that still trusts
-// "fleet" (i.e. not yet under FLEET_HOST_SCOPED_ONLY), leaving the account split
+// "fleet" (i.e. not yet under PROV_HOST_SCOPED_ONLY), leaving the account split
 // enforced only by the backend naming the right account. That means this set
 // authenticates the MANAGED-HOST hop only — pair it with SystemHostPrincipals for
 // the jump hop via Gateway.DialWithSigners.

@@ -92,7 +92,7 @@ func (s *Store) LiveInstanceIDs(ctx context.Context, lease time.Duration) (map[u
 // excluded outright rather than trusting its heartbeat row. (Without that guard,
 // a starved host that stalls the caller's heartbeat goroutine past the lease made
 // the caller declare its own in-flight work orphaned — seen in prod when the
-// hypervisor under the Fleet VM was itself mid-upgrade.) The table name qualifies
+// hypervisor under the Provenance VM was itself mid-upgrade.) The table name qualifies
 // instance_id in the correlated subquery.
 func deadOwnerPredicate(table string) string {
 	return "(" + table + ".instance_id IS NULL OR (" + table + ".instance_id <> $2 AND NOT EXISTS (" +

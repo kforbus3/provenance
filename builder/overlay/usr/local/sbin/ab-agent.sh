@@ -101,7 +101,7 @@ probe_server() {
     curl -fsS --max-time 10 ${a[@]+"${a[@]}"} \
         --data-urlencode "id=$id" \
         --data-urlencode "version=$(running_version)" \
-        "$base/api/fleet/heartbeat" >/dev/null 2>&1
+        "$base/api/prov/heartbeat" >/dev/null 2>&1
 }
 
 # ------------------------------------------------------------ what we report
@@ -191,7 +191,7 @@ beat() {
         UPDATE_STATE=idle; UPDATE_ROLLOUT=""; UPDATE_ERROR=""; save_state
     fi
 
-    url="${SERVER%/}/api/fleet/heartbeat"
+    url="${SERVER%/}/api/prov/heartbeat"
     # An array, not ${TOKEN:+-H "..."}: the quotes inside a parameter expansion
     # are not re-evaluated, so that form splits the header on its space and
     # curl is handed "X-Flipside-Agent-Token:" and the token as two arguments,
@@ -355,7 +355,7 @@ report_progress() {
          --data-urlencode "update_state=$UPDATE_STATE" \
          --data-urlencode "update_rollout=$UPDATE_ROLLOUT" \
          --data-urlencode "update_error=$UPDATE_ERROR" \
-         "${SERVER%/}/api/fleet/heartbeat" 2>/dev/null || true
+         "${SERVER%/}/api/prov/heartbeat" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------- main

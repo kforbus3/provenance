@@ -190,13 +190,13 @@ func (s *Service) build(ctx context.Context) (title, body string, sev notify.Sev
 
 	date := s.now().Format("Mon, Jan 2 2006")
 	var b strings.Builder
-	fmt.Fprintf(&b, "Fleet health digest — %s\n\n", date)
+	fmt.Fprintf(&b, "Provenance health digest — %s\n\n", date)
 	fmt.Fprintf(&b, "Hosts: %d total, %d online, %d offline.\n", len(hosts), online, offline)
 	fmt.Fprintf(&b, "Attention items: %d critical, %d warning.\n", len(crit), len(warn))
 
 	if len(crit) == 0 && len(warn) == 0 {
 		b.WriteString("\nNo issues detected — all monitored hosts look healthy.\n")
-		return "Fleet health digest — all clear", b.String(), notify.SeverityInfo, nil
+		return "Provenance health digest — all clear", b.String(), notify.SeverityInfo, nil
 	}
 	writeSection(&b, "CRITICAL", crit)
 	writeSection(&b, "WARNING", warn)
@@ -207,7 +207,7 @@ func (s *Service) build(ctx context.Context) (title, body string, sev notify.Sev
 		sev = notify.SeverityError
 		titleSuffix = fmt.Sprintf("%d critical", len(crit))
 	}
-	return "Fleet health digest — " + titleSuffix, b.String(), sev, nil
+	return "Provenance health digest — " + titleSuffix, b.String(), sev, nil
 }
 
 // writeSection appends a titled block, capped so a large fleet's digest stays

@@ -288,7 +288,7 @@ export interface ImageBuildRequest {
   tangUrl?: string;
   // Generate this build's recovery passphrase and file it before the build
   // starts, instead of typing one. It goes to the external secrets manager when
-  // one is connected, otherwise into Fleet's own credential vault; either way a
+  // one is connected, otherwise into Provenance's own credential vault; either way a
   // credential record is created so it is found the same way.
   //
   // The build is refused if the passphrase cannot be stored — an encrypted image

@@ -31,7 +31,7 @@ updates:
       prefix: "deps"
 
   - package-ecosystem: gomod
-    directory: /terraform-provider-fleet
+    directory: /terraform-provider-provenance
     schedule:
       interval: weekly
     commit-message:

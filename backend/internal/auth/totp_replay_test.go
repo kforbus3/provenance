@@ -12,7 +12,7 @@ import (
 // (must never reject a legitimate code) and returns the expected timestep, and
 // that a bogus code matches nothing.
 func TestMatchTOTPStep(t *testing.T) {
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Fleet", AccountName: "u@example.com"})
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Provenance", AccountName: "u@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}

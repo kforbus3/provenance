@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	// defaultRunTimeout bounds a run when FLEET_PLAYBOOK_TIMEOUT is unset or
+	// defaultRunTimeout bounds a run when PROV_PLAYBOOK_TIMEOUT is unset or
 	// unparseable. See config.PlaybookTimeout for why a large inventory outgrows it.
 	defaultRunTimeout = 30 * time.Minute
 	// runCertTTLMargin is how far the run credential outlives the run itself. The
@@ -100,11 +100,11 @@ func (s *Service) LiveOutput(id uuid.UUID) (string, bool) {
 }
 
 // runHost is one inventory entry sent to the sidecar. AuthMethod selects how the
-// FINAL hop to this host authenticates: "fleet_cert" (default — the run's ephemeral
-// Fleet certificate, for hosts that trust the Fleet CA) or a vaulted credential
+// FINAL hop to this host authenticates: "prov_cert" (default — the run's ephemeral
+// Provenance certificate, for hosts that trust the Provenance CA) or a vaulted credential
 // ("vault_ssh_key"/"vault_password") injected per-host, exactly as the terminal does,
 // so appliances that don't trust the CA (routers, switches) can still be targeted.
-// The jump-host hop always uses the Fleet certificate regardless.
+// The jump-host hop always uses the Provenance certificate regardless.
 type runHost struct {
 	Name       string `json:"name"`
 	Address    string `json:"address"`
@@ -115,7 +115,7 @@ type runHost struct {
 	Password   string `json:"password,omitempty"`   // vault_password: the host's vaulted password
 	// APITunnel asks the runner to open a local TCP port-forward to APIPort on this host
 	// through the jump host (for RouterOS API management, where SSH exec is unusable). The
-	// runner injects fleet_api_host/fleet_api_port so a community.routeros.api play reaches it.
+	// runner injects prov_api_host/prov_api_port so a community.routeros.api play reaches it.
 	APITunnel bool `json:"apiTunnel,omitempty"`
 	APIPort   int  `json:"apiPort,omitempty"`
 }
@@ -272,12 +272,12 @@ func (s *Service) Run(parent context.Context, runID uuid.UUID, content string, h
 
 	rhosts := make([]runHost, 0, len(hosts))
 	for _, h := range hosts {
-		rh := runHost{Name: h.Hostname, Address: hostAddress(h), User: h.SSHUser, Port: h.SSHPort, AuthMethod: "fleet_cert"}
+		rh := runHost{Name: h.Hostname, Address: hostAddress(h), User: h.SSHUser, Port: h.SSHPort, AuthMethod: "prov_cert"}
 		// RouterOS API device: have the runner tunnel its API port through the jump.
 		if p := h.RouterOSAPIPort(); p > 0 {
 			rh.APITunnel, rh.APIPort = true, p
 		}
-		// A vaulted host doesn't trust the Fleet CA, so authenticate its final hop with
+		// A vaulted host doesn't trust the Provenance CA, so authenticate its final hop with
 		// the same injected credential the terminal uses. Open-policy secrets only; the
 		// key/password is sent to the runner scoped to this run (see the security note
 		// on the run credential above — the same exfiltration caveat applies).

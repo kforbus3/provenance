@@ -7,7 +7,7 @@ import (
 )
 
 func TestAllowed(t *testing.T) {
-	const public = "https://fleet.example.com:8443"
+	const public = "https://provenance.example.com:8443"
 
 	req := func(origin string) *http.Request {
 		r := httptest.NewRequest("GET", "/ws", nil)
@@ -22,12 +22,12 @@ func TestAllowed(t *testing.T) {
 		want                 bool
 	}{
 		{"no origin (non-browser client) allowed", "", public, true},
-		{"matching origin allowed", "https://fleet.example.com:8443", public, true},
-		{"matching origin different case allowed", "https://Fleet.Example.com:8443", public, true},
+		{"matching origin allowed", "https://provenance.example.com:8443", public, true},
+		{"matching origin different case allowed", "https://Provenance.Example.com:8443", public, true},
 		{"different host rejected", "https://evil.example.com", public, false},
-		{"different scheme rejected", "http://fleet.example.com:8443", public, false},
-		{"different port rejected", "https://fleet.example.com:9999", public, false},
-		{"origin present but public URL empty fails closed", "https://fleet.example.com:8443", "", false},
+		{"different scheme rejected", "http://provenance.example.com:8443", public, false},
+		{"different port rejected", "https://provenance.example.com:9999", public, false},
+		{"origin present but public URL empty fails closed", "https://provenance.example.com:8443", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

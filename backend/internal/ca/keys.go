@@ -10,7 +10,7 @@ import (
 // pemPrivate serializes a signing key (Ed25519 or ECDSA) to OpenSSH PEM bytes,
 // which is what ssh.ParsePrivateKey reads back after decryption.
 func pemPrivate(priv crypto.PrivateKey) ([]byte, error) {
-	block, err := ssh.MarshalPrivateKey(priv, "fleet-ca")
+	block, err := ssh.MarshalPrivateKey(priv, "prov-ca")
 	if err != nil {
 		return nil, err
 	}

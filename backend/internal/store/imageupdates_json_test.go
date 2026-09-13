@@ -18,7 +18,7 @@ import (
 // every upgrade.
 func TestAnImageWithNoHostsMarshalsAsAnEmptyListNotNull(t *testing.T) {
 	row := ImageUpdateRow{
-		ImageUpdate: ImageUpdate{Repository: "fleet-terminal-backend", Tag: "1.2.3"},
+		ImageUpdate: ImageUpdate{Repository: "provenance-backend", Tag: "1.2.3"},
 		Hosts:       []ImageUpdateHost{}, // what the query must now produce
 	}
 	b, err := json.Marshal(row)

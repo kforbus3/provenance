@@ -8,11 +8,11 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 )
 
-// fipsReadiness is the web-UI view of `fleetctl fips check`: whether each
+// fipsReadiness is the web-UI view of `provctl fips check`: whether each
 // FIPS-critical artifact is on an approved algorithm, plus an overall verdict.
 type fipsReadiness struct {
 	ModuleActive bool           `json:"moduleActive"` // Go FIPS 140-3 module active in this process
-	ConfigFIPS   bool           `json:"configFips"`   // FLEET_FIPS_MODE
+	ConfigFIPS   bool           `json:"configFips"`   // PROV_FIPS_MODE
 	Overlay      string         `json:"overlay"`      // wireguard | openvpn
 	OverlayOK    bool           `json:"overlayOk"`    // overlay is a FIPS transport (not WireGuard)
 	CAKeyAlgo    string         `json:"caKeyAlgo"`    // active user CA key algorithm
@@ -29,7 +29,7 @@ type fipsAlgCount struct {
 	FIPS      bool   `json:"fips"`
 }
 
-// fips returns the FIPS readiness report — the same data as `fleetctl fips check`,
+// fips returns the FIPS readiness report — the same data as `provctl fips check`,
 // for the Settings → FIPS dashboard. Read-only; admin-gated.
 func (h *handler) fips(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

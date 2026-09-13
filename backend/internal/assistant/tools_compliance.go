@@ -11,7 +11,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
-// Compliance (OpenSCAP) coverage. Fleet runs two unrelated kinds of scan and an
+// Compliance (OpenSCAP) coverage. Provenance runs two unrelated kinds of scan and an
 // operator calls BOTH of them "the security scan":
 //
 //	compliance_scans  — OpenSCAP/SCAP benchmark evaluation (CIS/STIG): rules passed,
@@ -249,7 +249,7 @@ func (s *Service) runScanFindings(ctx context.Context, raw json.RawMessage, who 
 	for _, f := range kept {
 		risk := ""
 		if f.AccessImpacting {
-			risk = "may cut Fleet's access"
+			risk = "may cut Provenance's access"
 			impacting++
 		}
 		tbl.Rows = append(tbl.Rows, []string{f.Severity, f.Title, f.RuleID, risk})
@@ -258,7 +258,7 @@ func (s *Service) runScanFindings(ctx context.Context, raw json.RawMessage, who 
 		"kind": "compliance (OpenSCAP benchmark) failed rules",
 		"host": hostname, "count": len(kept), "severityFilter": sev,
 		"accessImpactingCount": impacting,
-		"accessImpactingNote": "rules flagged access-impacting could sever Fleet's own SSH/network path to the host if remediated; " +
+		"accessImpactingNote": "rules flagged access-impacting could sever Provenance's own SSH/network path to the host if remediated; " +
 			"report them as needing care, and never imply they have been or will be fixed automatically",
 		"findings": kept,
 	}

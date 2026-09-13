@@ -11,6 +11,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/app"
 	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // Mount attaches enrollment routes. Enrollment uses the caller's live session
@@ -27,6 +28,10 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		// their own ssh, then finish with the host public key they paste back.
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Get("/hosts/{id}/enroll/script", h.enrollScript)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts/{id}/enroll/finish", h.enrollFinish)
+		// Moving a host to a different Provenance login account. Gated on
+		// Host.Enroll because it is the enrollment machinery: it creates accounts
+		// and rewrites sshd trust on the managed host.
+		pr.With(d.Auth.RequirePermission("Host.Enroll")).Post("/hosts/{id}/login-account", h.migrateLoginAccount)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Get("/enrollment/jobs", h.listJobs)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Delete("/enrollment/jobs", h.clearJobs)
 		pr.With(d.Auth.RequirePermission("Host.Enroll")).Get("/enrollment/jobs/{id}", h.getJob)
@@ -201,4 +206,45 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, job)
+}
+
+// migrateLoginAccountReq names the account to move the host to. An empty user
+// means the current default, which is what the post-rename migration wants.
+type migrateLoginAccountReq struct {
+	User string `json:"user"`
+}
+
+// migrateLoginAccount moves one host onto a different Provenance login account,
+// verifying the new account works before the old one is removed.
+func (h *handler) migrateLoginAccount(w http.ResponseWriter, r *http.Request) {
+	p := auth.MustPrincipal(r)
+	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
+		return
+	}
+	host, err := h.d.Store.GetHost(r.Context(), hostID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "host not found")
+		return
+	}
+	var req migrateLoginAccountReq
+	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; defaults to the current default account
+
+	actor := p.UserID
+	res, err := h.svc.MigrateLoginAccount(r.Context(), host, req.User)
+	if err != nil {
+		_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+			ActorID: &actor, Action: "host.login_account_migrate_failed", TargetKind: "host",
+			TargetID: hostID.String(), Detail: map[string]any{"error": err.Error()},
+		})
+		httpx.WriteError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+		ActorID: &actor, Action: "host.login_account_migrated", TargetKind: "host",
+		TargetID: hostID.String(),
+		Detail:   map[string]any{"from": res.From, "to": res.To, "migrated": res.Migrated},
+	})
+	httpx.WriteJSON(w, http.StatusOK, res)
 }

@@ -48,7 +48,7 @@ func (s *Service) sendEmail(_ context.Context, cfg *Config, ev Event, toOverride
 	addr := net.JoinHostPort(e.Host, fmt.Sprintf("%d", port))
 
 	recipients := splitList(to)
-	subject := fmt.Sprintf("[Fleet] %s", ev.Title)
+	subject := fmt.Sprintf("[Provenance] %s", ev.Title)
 	msg := buildMessage(e.From, to, subject, ev.Body, ev.Attachments)
 
 	var auth smtp.Auth
@@ -253,7 +253,7 @@ func (s *Service) sendPagerDuty(ctx context.Context, cfg *Config, ev Event) erro
 		"event_action": "trigger",
 		"payload": map[string]any{
 			"summary":  truncate(ev.Title, 1024),
-			"source":   "fleet-terminal",
+			"source":   "provenance",
 			"severity": pagerdutySeverity(ev.Severity),
 			"custom_details": map[string]string{
 				"type": ev.Type, "body": ev.Body,

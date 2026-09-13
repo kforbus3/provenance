@@ -26,12 +26,12 @@ type Injection struct {
 }
 
 // For returns the injected SSH auth for a host, or (nil, nil) if the host uses
-// Fleet's ephemeral certificates (the caller then takes the normal cert path). The
+// Provenance's ephemeral certificates (the caller then takes the normal cert path). The
 // connecting userID is required so a credential with a check-out policy is only
 // injected while that user holds an active check-out.
 func For(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host, userID uuid.UUID) (*Injection, error) {
 	switch host.AuthMethod {
-	case "", "fleet_cert":
+	case "", "prov_cert":
 		return nil, nil
 	case "vault_password", "vault_ssh_key":
 		// handled below
@@ -77,14 +77,14 @@ func For(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret
 
 // ForSystem returns the injected SSH auth for a host in a SYSTEM context — the
 // unattended monitor probing a non-enrolled, vault-authenticated host — or
-// (nil, nil) when the host uses Fleet's ephemeral certificates. Like For, but with
+// (nil, nil) when the host uses Provenance's ephemeral certificates. Like For, but with
 // no connecting user: it only resolves credentials whose access policy is "open".
 // A check-out-gated secret is never used unattended, so the monitor simply cannot
 // probe such a host (it keeps its last-known status rather than being flapped
 // offline).
 func ForSystem(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host) (*Injection, error) {
 	switch host.AuthMethod {
-	case "", "fleet_cert":
+	case "", "prov_cert":
 		return nil, nil
 	case "vault_password", "vault_ssh_key":
 		// handled below
@@ -137,12 +137,12 @@ type SystemMaterial struct {
 }
 
 // MaterialForSystem resolves a host's vaulted credential into raw material for an
-// unattended run, or (nil, nil) when the host uses Fleet's ephemeral certificates (the
+// unattended run, or (nil, nil) when the host uses Provenance's ephemeral certificates (the
 // caller then takes the certificate path). Like ForSystem, it only resolves
 // open-policy secrets — a check-out-gated credential is never used unattended.
 func MaterialForSystem(ctx context.Context, st *store.Store, vaultKey []byte, extCfg extsecret.Config, host *models.Host) (*SystemMaterial, error) {
 	switch host.AuthMethod {
-	case "", "fleet_cert":
+	case "", "prov_cert":
 		return nil, nil
 	case "vault_password", "vault_ssh_key":
 		// handled below

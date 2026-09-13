@@ -10,14 +10,14 @@ import (
 )
 
 // TestCapabilityCatalogCoversEveryTool keeps the "I couldn't find anything" answer
-// honest. That sentence tells the user what Fleet DOES hold, and the previous
+// honest. That sentence tells the user what Provenance DOES hold, and the previous
 // hand-written version had already drifted out of date — it omitted compliance scans,
-// so the assistant told an operator Fleet could not retrieve OpenSCAP results while
+// so the assistant told an operator Provenance could not retrieve OpenSCAP results while
 // holding a table of them. A registered tool with no catalogue entry fails here.
 func TestCapabilityCatalogCoversEveryTool(t *testing.T) {
 	for _, tool := range tools {
 		if capabilityCatalog[tool.Function.Name] == "" {
-			t.Errorf("tool %q has no capabilityCatalog entry: the no-answer fallback would deny data Fleet actually has",
+			t.Errorf("tool %q has no capabilityCatalog entry: the no-answer fallback would deny data Provenance actually has",
 				tool.Function.Name)
 		}
 	}

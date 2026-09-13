@@ -1,5 +1,5 @@
 // Package uebaapi surfaces user-and-entity behavior analytics: access-pattern
-// anomalies computed on demand from Fleet's session records. Gated by Audit.View
+// anomalies computed on demand from Provenance's session records. Gated by Audit.View
 // (behavioral analytics is audit-adjacent). See internal/ueba.
 package uebaapi
 

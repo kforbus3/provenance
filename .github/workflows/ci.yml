@@ -29,7 +29,7 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "these files need gofmt:"; echo "$unformatted"; exit 1
           fi
-      # The race detector earns its minutes here: Fleet runs session brokering,
+      # The race detector earns its minutes here: Provenance runs session brokering,
       # monitoring, scans, playbook runs and the reconciler on background
       # goroutines, and a race between them is the kind of bug that surfaces
       # once in production and never locally.
@@ -62,11 +62,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build backend image
-        run: docker build -t fleet-backend:ci ./backend
+        run: docker build -t prov-backend:ci ./backend
       - name: Build frontend image
         # The frontend Dockerfile requires the repo root as build context
         # (it COPYs frontend/ and docs/ — see the note in frontend/Dockerfile).
-        run: docker build -t fleet-frontend:ci -f frontend/Dockerfile .
+        run: docker build -t prov-frontend:ci -f frontend/Dockerfile .
 
   go-lint:
     name: Go lint (golangci-lint)
@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [backend, sdk, terraform-provider-fleet]
+        module: [backend, sdk, terraform-provider-provenance]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [backend, sdk, terraform-provider-fleet]
+        module: [backend, sdk, terraform-provider-provenance]
     defaults:
       run:
         working-directory: ${{ matrix.module }}

@@ -18,11 +18,11 @@ import (
 // a terminate control, and the live-shadow subscribe + (chunked) frame relay. Two
 // real Backplane instances share one database; A publishes, B must receive.
 //
-// Requires a real Postgres — set FLEET_TEST_DB to its DSN; skipped otherwise.
+// Requires a real Postgres — set PROV_TEST_DB to its DSN; skipped otherwise.
 func TestBackplaneCrossInstance(t *testing.T) {
-	dsn := os.Getenv("FLEET_TEST_DB")
+	dsn := os.Getenv("PROV_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_TEST_DB to a Postgres DSN to run the backplane integration test")
+		t.Skip("set PROV_TEST_DB to a Postgres DSN to run the backplane integration test")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	pool, err := pgxpool.New(ctx, dsn)

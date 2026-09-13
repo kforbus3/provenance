@@ -58,7 +58,7 @@ PROJECT_DIR = os.environ.get("HOST_PROJECT_DIR", "")
 # a message about HOST_PROJECT_DIR rather than about a container name.
 PROJECT_CONTAINER = os.environ.get(
     "PROJECT_CONTAINER",
-    os.environ.get("WEBUI_CONTAINER", "blackfriars-builder-runner"))
+    os.environ.get("WEBUI_CONTAINER", "provenance-builder-runner"))
 # Image names a container may be created from. The builder and imager tags are
 # built locally by the UI itself; the compose stack's images are built from the
 # repo too. A container created from anything else is not a build.
@@ -66,16 +66,16 @@ PROJECT_CONTAINER = os.environ.get(
 # Both naming eras are listed on purpose. The build/imaging images are still
 # built under their `debian-ab-` names by builder/ and imager/ (the same reason
 # the on-disk paths in shipped images were never renamed), while the compose
-# stack's own containers were renamed to `blackfriars-`. Missing the second half
+# stack's own containers were renamed to `provenance-`. Missing the second half
 # is not a subtle failure but it IS a silent one: the runner enumerates host
 # NICs by running a throwaway container FROM ITS OWN IMAGE in the host network
-# namespace, so with `blackfriars-builder-runner` absent, `docker run` was
+# namespace, so with `provenance-builder-runner` absent, `docker run` was
 # refused, the exception was swallowed, and the Provisioning page offered an
 # empty interface list with nothing to explain why.
 IMAGE_ALLOW = re.compile(os.environ.get(
     "IMAGE_ALLOW",
     r"^(debian-ab-(builder|imager|webui|dnsmasq|http|dockerproxy)"
-    r"|blackfriars-(builder-runner|dockerproxy))(:[\w.\-]+)?$"))
+    r"|provenance-(builder-runner|dockerproxy))(:[\w.\-]+)?$"))
 # Only these images may be created with elevated privileges: the builder and the
 # imager genuinely need loop devices and mounts. Nothing else does, and a
 # privileged container is a host-root container.
@@ -234,7 +234,7 @@ def _binfmt_pull(method: str, path: str) -> bool:
 # lives -- and the project root is what bind-mount validation is measured
 # against. Renaming is otherwise harmless, so the rule is narrow: rename freely,
 # just never INTO one of these.
-PROTECTED_NAMES = {"blackfriars-builder-runner", "fleet-terminal-dockerproxy-1"}
+PROTECTED_NAMES = {"provenance-builder-runner", "provenance-dockerproxy-1"}
 
 _RENAME = re.compile(r"^/(v[\d.]+/)?containers/[\w.\-]+/rename$")
 

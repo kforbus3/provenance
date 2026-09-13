@@ -1,5 +1,5 @@
-// Package k8sbroker brokers access to registered Kubernetes clusters. Fleet acts as an
-// authenticating proxy: a user (or their kubectl) authenticates to Fleet, and Fleet
+// Package k8sbroker brokers access to registered Kubernetes clusters. Provenance acts as an
+// authenticating proxy: a user (or their kubectl) authenticates to Provenance, and Provenance
 // forwards the request to the cluster's API server with a vaulted bearer-token
 // credential injected — the operator never sees the token — auditing every call. A
 // small resource browser is layered on the same proxy. Mirrors internal/dbbroker.

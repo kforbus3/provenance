@@ -2,7 +2,7 @@
 // for this instance's database, peer-instance health, and administrator-triggered
 // failover / failback. Everything here is gated by DR.Manage.
 //
-// Scope boundary (important, and mirrored in docs/disaster-recovery.md): Fleet does
+// Scope boundary (important, and mirrored in docs/disaster-recovery.md): Provenance does
 // NOT replicate the database or move DNS itself. The failover/failback actions
 // record intent (audited), optionally promote THIS instance's PostgreSQL via
 // pg_promote(), and POST to an operator-configured webhook that wires the real

@@ -3,8 +3,8 @@ package assistant
 // Model routing benchmark for the Ask assistant. Disabled by default; it makes
 // live calls to a real Ollama instance. Run it explicitly against candidate models:
 //
-//	FLEET_BENCH_URL=http://10.10.0.162:11434 \
-//	FLEET_BENCH_MODELS='gemma4:26b,gpt-oss:20b,qwen2.5:14b-instruct,qwen3:14b,mistral-small' \
+//	PROV_BENCH_URL=http://10.10.0.162:11434 \
+//	PROV_BENCH_MODELS='gemma4:26b,gpt-oss:20b,qwen2.5:14b-instruct,qwen3:14b,mistral-small' \
 //	go test ./internal/assistant/ -run TestModelRoutingBenchmark -v -timeout 2h
 //
 // It measures RAW tool-routing accuracy (fast-path disabled): for each labelled
@@ -33,9 +33,9 @@ type benchCase struct {
 
 var benchCases = []benchCase{
 	// health / insights
-	{"any problems?", []string{"fleet_insights"}},
-	{"anything I should worry about this morning?", []string{"fleet_insights"}},
-	{"give me a fleet health summary", []string{"fleet_insights"}},
+	{"any problems?", []string{"prov_insights"}},
+	{"anything I should worry about this morning?", []string{"prov_insights"}},
+	{"give me a fleet health summary", []string{"prov_insights"}},
 	// updates
 	{"what security updates are pending?", []string{"host_updates"}},
 	{"which packages need updating on hypervisor?", []string{"host_updates"}},
@@ -46,10 +46,10 @@ var benchCases = []benchCase{
 	{"which hosts are offline right now?", []string{"query_hosts", "host_availability"}},
 	// capacity / runway. NB: capacity_outlook is a fast-path-only route (not in the
 	// model-facing `tools` surface), so the correct MODEL answer for these is
-	// fleet_insights, which carries the disk-runway projection. query_hosts is an
+	// prov_insights, which carries the disk-runway projection. query_hosts is an
 	// acceptable current-state fallback for the point-in-time "low on disk" phrasing.
-	{"are any hosts about to run out of disk space?", []string{"fleet_insights"}},
-	{"which hosts are low on disk?", []string{"fleet_insights", "query_hosts"}},
+	{"are any hosts about to run out of disk space?", []string{"prov_insights"}},
+	{"which hosts are low on disk?", []string{"prov_insights", "query_hosts"}},
 	// security events
 	{"have there been any failed logins?", []string{"security_events"}},
 	{"is anyone brute-forcing ssh?", []string{"security_events"}},
@@ -90,20 +90,20 @@ var benchCases = []benchCase{
 	{"what's the memory trend on hypervisor?", []string{"host_metric_history"}},
 	// docs / how-to
 	{"how do I enroll a new host?", []string{"search_docs"}},
-	{"how do I update Fleet?", []string{"search_docs"}},
+	{"how do I update Provenance?", []string{"search_docs"}},
 	// approvals
 	{"are there any pending access requests?", []string{"list_approvals"}},
 	// windows software
 	{"what software is installed on the windows box?", []string{"windows_software"}},
 	// platform
-	{"is the fleet backend healthy?", []string{"platform_status", "fleet_insights"}},
+	{"is the fleet backend healthy?", []string{"platform_status", "prov_insights"}},
 }
 
 func TestModelRoutingBenchmark(t *testing.T) {
-	url := os.Getenv("FLEET_BENCH_URL")
-	modelsEnv := os.Getenv("FLEET_BENCH_MODELS")
+	url := os.Getenv("PROV_BENCH_URL")
+	modelsEnv := os.Getenv("PROV_BENCH_MODELS")
 	if url == "" || modelsEnv == "" {
-		t.Skip("set FLEET_BENCH_URL and FLEET_BENCH_MODELS to run the routing benchmark")
+		t.Skip("set PROV_BENCH_URL and PROV_BENCH_MODELS to run the routing benchmark")
 	}
 	var models []string
 	for _, m := range strings.Split(modelsEnv, ",") {

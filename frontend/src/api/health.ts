@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-// System health: a live status report of Fleet's subsystems (admin only).
+// System health: a live status report of Provenance's subsystems (admin only).
 
 export interface HealthComponent {
   name: string;

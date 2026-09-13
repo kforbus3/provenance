@@ -1,4 +1,4 @@
-// Flat ESLint config (ESLint 9+) for the Fleet Terminal frontend.
+// Flat ESLint config (ESLint 9+) for the Provenance frontend.
 //
 // Philosophy: errors for things that are real bugs, warnings for style/quality
 // so the gate can pass on the existing tree without a large refactor. Tighten

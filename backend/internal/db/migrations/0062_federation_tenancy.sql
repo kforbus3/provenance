@@ -19,11 +19,11 @@ BEGIN
     -- Constant default first (fast, no table rewrite; backfills existing rows to the
     -- provider tenant), then switch the default to the request tenant for new rows.
     EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT ''00000000-0000-0000-0000-000000000001''::uuid', t);
-    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT fleet_current_tenant()', t);
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT prov_current_tenant()', t);
     EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%s_tenant ON %I (tenant_id)', t, t);
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
-    EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id))', t);
+    EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (prov_rls_visible(tenant_id)) WITH CHECK (prov_rls_visible(tenant_id))', t);
   END LOOP;
 END $$;

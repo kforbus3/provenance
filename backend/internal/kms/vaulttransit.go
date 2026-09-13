@@ -29,13 +29,13 @@ type vaultTransit struct {
 func newVaultTransit(cfg Config) (Provider, error) {
 	addr := strings.TrimRight(strings.TrimSpace(cfg.VaultAddr), "/")
 	if addr == "" {
-		return nil, fmt.Errorf("kms(vault-transit): FLEET_KMS_VAULT_ADDR is required")
+		return nil, fmt.Errorf("kms(vault-transit): PROV_KMS_VAULT_ADDR is required")
 	}
 	if strings.TrimSpace(cfg.VaultToken) == "" {
-		return nil, fmt.Errorf("kms(vault-transit): FLEET_KMS_VAULT_TOKEN is required")
+		return nil, fmt.Errorf("kms(vault-transit): PROV_KMS_VAULT_TOKEN is required")
 	}
 	if strings.TrimSpace(cfg.KeyID) == "" {
-		return nil, fmt.Errorf("kms(vault-transit): FLEET_KMS_KEY_ID (transit key name) is required")
+		return nil, fmt.Errorf("kms(vault-transit): PROV_KMS_KEY_ID (transit key name) is required")
 	}
 
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}

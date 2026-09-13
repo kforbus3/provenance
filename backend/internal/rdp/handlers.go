@@ -246,7 +246,7 @@ func setupDrive(baseDir string, o models.RDPOptions, cfg *guac.Config) string {
 	}
 	dir := filepath.Join(baseDir, uuid.New().String())
 	cfg.Parameters["enable-drive"] = "true"
-	cfg.Parameters["drive-name"] = "Fleet"
+	cfg.Parameters["drive-name"] = "Provenance"
 	cfg.Parameters["drive-path"] = dir
 	cfg.Parameters["create-drive-path"] = "true"
 	// Gate each transfer direction (default off = both disabled).
@@ -308,7 +308,7 @@ func (h *handler) startRecording(ctx context.Context, r *http.Request, p *auth.P
 	hostID := host.ID
 	_, err := h.d.Store.CreateRDPRecording(ctx, store.RDPRecordingInput{
 		ID: id, HostID: &hostID, UserID: &p.UserID, Hostname: host.Hostname,
-		FleetUser: p.Username, RDPUser: rdpUser, Path: path, ClientIP: httpx.ClientIP(r),
+		ProvUser: p.Username, RDPUser: rdpUser, Path: path, ClientIP: httpx.ClientIP(r),
 	})
 	if err != nil {
 		h.d.Log.Warn("rdp: could not create recording row", "err", err)

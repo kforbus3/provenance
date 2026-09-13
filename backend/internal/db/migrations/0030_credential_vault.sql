@@ -1,6 +1,6 @@
 -- Credential vault: store static credentials (passwords, SSH keys, API keys) that
--- systems unable to use Fleet's ephemeral certificates need. Secret material is
--- encrypted at rest with secretbox (a dedicated FLEET_VAULT_PASSPHRASE) and lives
+-- systems unable to use Provenance's ephemeral certificates need. Secret material is
+-- encrypted at rest with secretbox (a dedicated PROV_VAULT_PASSPHRASE) and lives
 -- only in the versions table; the vault_secrets row holds metadata only. Access is
 -- Credential.Manage for full control, plus per-secret grants that delegate reveal
 -- (view) / injection (use) / edit (manage) to specific users or groups.

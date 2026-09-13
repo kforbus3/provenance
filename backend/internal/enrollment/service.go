@@ -52,7 +52,7 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gatewa
 
 // effectiveOverlay resolves which transport to enroll a host onto: an explicit
 // per-enroll choice wins, then the host's previously-recorded overlay, then the
-// deployment default (FLEET_OVERLAY). Empty/"wireguard" both mean WireGuard.
+// deployment default (PROV_OVERLAY). Empty/"wireguard" both mean WireGuard.
 func (s *Service) effectiveOverlay(params EnrollParams, host *models.Host) string {
 	pick := strings.TrimSpace(params.Overlay)
 	if pick == "" {
@@ -85,7 +85,7 @@ type EnrollParams struct {
 	//   "agent"    — the operator's forwarded SSH agent (private key never leaves
 	//                their machine; only signatures cross the wire);
 	//   "trusted"  — the caller's session certificate (host already trusts the CA).
-	// All but "trusted" install the Fleet CA trust + login user; "trusted" assumes
+	// All but "trusted" install the Provenance CA trust + login user; "trusted" assumes
 	// it is already present.
 	Method        string
 	BootstrapUser string
@@ -104,18 +104,18 @@ type EnrollParams struct {
 	SudoPassword string
 	// WGEndpoint overrides the jump host's WireGuard endpoint (host:port) written
 	// into the managed host's config — i.e. the publicly-routable address the host
-	// uses to reach the VPN server. Defaults to FLEET_WG_JUMP_ENDPOINT.
+	// uses to reach the VPN server. Defaults to PROV_WG_JUMP_ENDPOINT.
 	WGEndpoint string
 	// ViaJump routes the bootstrap SSH connection through the jump host instead
 	// of connecting directly from the backend.
 	ViaJump bool
 	// SkipWireGuard enrolls a host that is directly reachable from the jump host
-	// (e.g. on the jump host's LAN, or the host that runs Fleet itself), so the
+	// (e.g. on the jump host's LAN, or the host that runs Provenance itself), so the
 	// WireGuard overlay is unnecessary. The host keeps no overlay address and the
 	// gateway reaches it through the jump host at its management address.
 	SkipWireGuard bool
 	// Overlay overrides the reachability transport for THIS host: "" (deployment
-	// default FLEET_OVERLAY), "wireguard" or "openvpn". Lets an operator
+	// default PROV_OVERLAY), "wireguard" or "openvpn". Lets an operator
 	// pick a per-host VPN at enrollment. Ignored when SkipWireGuard is set.
 	Overlay string
 }
@@ -152,7 +152,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 	}
 	loginUser := host.SSHUser
 	if loginUser == "" {
-		loginUser = "fleet"
+		loginUser = "prov"
 	}
 	job, err := s.store.CreateEnrollmentJob(ctx, host.ID, fmt.Sprintf("%s:%d", mgmtAddr, host.SSHPort), "", actor)
 	if err != nil {
@@ -411,7 +411,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		// enrollment rather than provision a host that isolation was supposed to protect.
 		if s.cfg.OverlayPeerIsolation && net.ParseIP(strings.TrimSpace(s.cfg.WGJumpIP)) == nil {
 			return fail("configure_host_wireguard", fmt.Errorf(
-				"overlay peer isolation is enabled but the jump host's overlay address (FLEET_WG_JUMP_IP=%q) is "+
+				"overlay peer isolation is enabled but the jump host's overlay address (PROV_WG_JUMP_IP=%q) is "+
 					"not a valid IP, so per-host isolation (AllowedIPs=<jump>/32) cannot be applied; refusing to "+
 					"enroll a host that would be reachable by every other host over the overlay", s.cfg.WGJumpIP))
 		}
@@ -427,7 +427,7 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		//    wireguard-go fallback). The private key is generated on the host.
 		// The endpoint the managed host uses to reach the jump host (VPN server). Must
 		// be routable FROM the host. Precedence: per-enroll override -> DB setting ->
-		// config default (FLEET_WG_JUMP_ENDPOINT).
+		// config default (PROV_WG_JUMP_ENDPOINT).
 		jumpEndpoint := strings.TrimSpace(params.WGEndpoint)
 		if jumpEndpoint == "" {
 			jumpEndpoint = s.store.WireGuardEndpoint(ctx)
@@ -668,7 +668,7 @@ func (s *Service) validateCertLogin(ctx context.Context, hostID uuid.UUID, wgIP,
 // end of the overlay hub-and-spoke in its own right: the host cannot address a
 // sibling, and — the part that matters — it drops a decrypted packet claiming to
 // come from one. The jump host's forwarding deny already stops sibling traffic,
-// but that rule lives on a machine whose iptables Fleet does not always control,
+// but that rule lives on a machine whose iptables Provenance does not always control,
 // and it fails open with a warning. This end does not depend on it.
 //
 // With isolation off it is the whole overlay subnet, the historical value, and
@@ -762,7 +762,7 @@ echo "HOSTPUB=$PUB"`,
 // the tunnel. This (a) brings the tunnel up if it is down (DNS wasn't ready at
 // boot), and (b) refreshes the peer endpoint when the handshake goes stale.
 const wgReresolveScript = `#!/bin/sh
-IF="${1:-wgfleet}"
+IF="${1:-wgprov}"
 CONF="/etc/wireguard/${IF}.conf"
 [ -f "$CONF" ] || exit 0
 
@@ -793,25 +793,25 @@ func (s *Service) wgPersistScript(iface string) string {
 	return fmt.Sprintf(`set +e
 if command -v systemctl >/dev/null 2>&1; then
   mkdir -p /etc/systemd/system/wg-quick@%s.service.d
-  cat > /etc/systemd/system/wg-quick@%s.service.d/fleet.conf <<'DROPIN'
+  cat > /etc/systemd/system/wg-quick@%s.service.d/prov.conf <<'DROPIN'
 [Service]
 Environment=WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go
 DROPIN
-  printf '%%s' '%s' | base64 -d > /usr/local/sbin/fleet-wg-reresolve
-  chmod 755 /usr/local/sbin/fleet-wg-reresolve
-  cat > /etc/systemd/system/fleet-wg-reresolve.service <<'UNIT'
+  printf '%%s' '%s' | base64 -d > /usr/local/sbin/prov-wg-reresolve
+  chmod 755 /usr/local/sbin/prov-wg-reresolve
+  cat > /etc/systemd/system/prov-wg-reresolve.service <<'UNIT'
 [Unit]
-Description=Fleet WireGuard boot-persistence and endpoint re-resolution
+Description=Provenance WireGuard boot-persistence and endpoint re-resolution
 After=network-online.target
 UNIT
-  cat >> /etc/systemd/system/fleet-wg-reresolve.service <<UNIT2
+  cat >> /etc/systemd/system/prov-wg-reresolve.service <<UNIT2
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/fleet-wg-reresolve %s
+ExecStart=/usr/local/sbin/prov-wg-reresolve %s
 UNIT2
-  cat > /etc/systemd/system/fleet-wg-reresolve.timer <<'TIMER'
+  cat > /etc/systemd/system/prov-wg-reresolve.timer <<'TIMER'
 [Unit]
-Description=Fleet WireGuard re-resolve timer
+Description=Provenance WireGuard re-resolve timer
 [Timer]
 OnBootSec=20
 OnUnitActiveSec=30
@@ -820,7 +820,7 @@ WantedBy=timers.target
 TIMER
   systemctl daemon-reload
   systemctl enable wg-quick@%s >/dev/null 2>&1
-  systemctl enable --now fleet-wg-reresolve.timer >/dev/null 2>&1
+  systemctl enable --now prov-wg-reresolve.timer >/dev/null 2>&1
 fi
 echo WG_PERSIST_OK`,
 		iface, iface, b64, iface, iface)
@@ -845,11 +845,11 @@ func (s *Service) wgTeardownScript() string {
 IF=%s
 if command -v systemctl >/dev/null 2>&1; then
   systemctl disable --now wg-quick@$IF >/dev/null 2>&1
-  systemctl disable --now fleet-wg-reresolve.timer >/dev/null 2>&1
+  systemctl disable --now prov-wg-reresolve.timer >/dev/null 2>&1
 fi
 if command -v wg-quick >/dev/null 2>&1; then wg-quick down $IF >/dev/null 2>&1; fi
 if ip link show $IF >/dev/null 2>&1; then ip link delete $IF >/dev/null 2>&1; fi
-if [ -f /etc/wireguard/$IF.conf ]; then mv -f /etc/wireguard/$IF.conf /etc/wireguard/$IF.conf.fleet-disabled; fi
+if [ -f /etc/wireguard/$IF.conf ]; then mv -f /etc/wireguard/$IF.conf /etc/wireguard/$IF.conf.prov-disabled; fi
 echo WG_RETIRED`, iface)
 }
 
@@ -861,13 +861,13 @@ echo WG_RETIRED`, iface)
 // definition and its key on a machine nothing manages any more. The hub no longer
 // lists the peer once CleanupHostOverlay has run — WireGuard is allowlist-based, so
 // that alone denies it — but leaving the key behind is still a credential sitting on
-// a box Fleet has walked away from.
+// a box Provenance has walked away from.
 func (s *Service) wgPurgeScript() string {
 	iface := s.cfg.WGInterface
 	return s.wgTeardownScript() + fmt.Sprintf(`
-rm -f /etc/wireguard/%[1]s.conf /etc/wireguard/%[1]s.conf.fleet-disabled
+rm -f /etc/wireguard/%[1]s.conf /etc/wireguard/%[1]s.conf.prov-disabled
 rm -f /etc/wireguard/%[1]s.privatekey /etc/wireguard/%[1]s.publickey
-rm -f /etc/systemd/system/fleet-wg-reresolve.service /etc/systemd/system/fleet-wg-reresolve.timer
+rm -f /etc/systemd/system/prov-wg-reresolve.service /etc/systemd/system/prov-wg-reresolve.timer
 command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1
 echo WG_PURGED`, iface)
 }
@@ -930,7 +930,7 @@ func hasOverlayState(host *models.Host) bool {
 func (s *Service) retireCertOverlay(ctx context.Context, name string, host *models.Host, priv func(string) (string, error), jumpClient *ssh.Client, step func(name, status, detail string)) {
 	ov := s.overlays[name]
 	if ov == nil {
-		// The transport is recorded but not built into this deployment, so Fleet cannot
+		// The transport is recorded but not built into this deployment, so Provenance cannot
 		// speak for it. Say so rather than reporting a clean retirement.
 		step("retire_"+name, "warning",
 			fmt.Sprintf("this host is recorded on the %s overlay, which is not available on this deployment — "+
@@ -1030,19 +1030,19 @@ func hadWireGuard(host *models.Host) bool {
 // back the directive if sshd rejects the resulting config.
 func (s *Service) krlInstallScript(b64 string) string {
 	return fmt.Sprintf(`set -e
-printf '%%s' '%s' | base64 -d > /etc/ssh/fleet_krl
-chmod 644 /etc/ssh/fleet_krl
-DROP=/etc/ssh/sshd_config.d/00-fleet.conf
+printf '%%s' '%s' | base64 -d > /etc/ssh/prov_krl
+chmod 644 /etc/ssh/prov_krl
+DROP=/etc/ssh/sshd_config.d/00-prov.conf
 if [ -f "$DROP" ]; then
-  grep -q '^RevokedKeys' "$DROP" || echo 'RevokedKeys /etc/ssh/fleet_krl' >> "$DROP"
+  grep -q '^RevokedKeys' "$DROP" || echo 'RevokedKeys /etc/ssh/prov_krl' >> "$DROP"
   TARGET="$DROP"
 else
-  grep -q '^RevokedKeys' /etc/ssh/sshd_config || echo 'RevokedKeys /etc/ssh/fleet_krl' >> /etc/ssh/sshd_config
+  grep -q '^RevokedKeys' /etc/ssh/sshd_config || echo 'RevokedKeys /etc/ssh/prov_krl' >> /etc/ssh/sshd_config
   TARGET=/etc/ssh/sshd_config
 fi
 if ! sshd -t 2>/dev/null; then
   # Roll back the directive so we never lock the host out.
-  sed -i '\#^RevokedKeys /etc/ssh/fleet_krl#d' "$TARGET"
+  sed -i '\#^RevokedKeys /etc/ssh/prov_krl#d' "$TARGET"
   echo "KRL_ROLLBACK sshd config rejected"; exit 1
 fi
 ( systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null ) || true
@@ -1127,7 +1127,7 @@ fi`, s.cfg.WGInterface, sanitize(hostname))
 // overlayRetire is the privileged script that takes this host's transport down —
 // wgTeardownScript for WireGuard, the overlay's RetireHostScript for a certificate
 // overlay. It is embedded rather than run separately because it must happen on the
-// detached side: the tunnel is how Fleet reached the host, so bringing it down in
+// detached side: the tunnel is how Provenance reached the host, so bringing it down in
 // the foreground would kill the session before it could finish. It runs LAST, after
 // the accounts are gone, so the privileged account is removed even if the transport
 // teardown stalls.
@@ -1137,11 +1137,11 @@ fi`, s.cfg.WGInterface, sanitize(hostname))
 // is alive — a foreground run would remove the config, fail on both accounts, and
 // leave the host half-torn-down with no login. So the outer command writes a script,
 // launches it with setsid, and returns; the script waits for the session to end,
-// then does the work and removes itself. Output goes to /var/log/fleet-unenroll.log
-// so an operator can see what happened on a host Fleet can no longer reach.
+// then does the work and removes itself. Output goes to /var/log/prov-unenroll.log
+// so an operator can see what happened on a host Provenance can no longer reach.
 //
-// Only paths Fleet created are touched. authorized_keys, other sudoers files, and
-// any sshd configuration Fleet did not write are left exactly as they are, and sshd
+// Only paths Provenance created are touched. authorized_keys, other sudoers files, and
+// any sshd configuration Provenance did not write are left exactly as they are, and sshd
 // is reloaded only if `sshd -t` still passes after the removal — a host whose
 // remaining config is broken keeps the running sshd it has rather than being cut off
 // by the cleanup.
@@ -1149,60 +1149,67 @@ func (s *Service) hostTeardownScript(loginUser, overlayRetire string) string {
 	return fmt.Sprintf(`set +e
 LOGIN='%s'
 NOSUDO="${LOGIN}-login"
-cat > /usr/local/sbin/fleet-unenroll.sh <<'FLEETEOF'
+cat > /usr/local/sbin/prov-unenroll.sh <<'PROVEOF'
 #!/bin/sh
 # Written by Provenance when the host was removed from its inventory.
-# Removes Fleet's accounts and SSH trust, then deletes itself.
+# Removes Provenance's accounts and SSH trust, then deletes itself.
 set +e
 LOGIN="$1"
 NOSUDO="${LOGIN}-login"
-echo "[fleet] unenroll started $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)"
+echo "[prov] unenroll started $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)"
 # Let the SSH session that launched this close, so userdel can take the account.
 sleep 8
-rm -f /etc/sudoers.d/fleet
-rm -f /etc/ssh/fleet_ca.pub /etc/ssh/fleet_krl
+# Both generations of on-host artefacts are removed. A host enrolled before the
+# product was renamed carries the fleet_* names, and leaving those behind would
+# leave a TRUSTED CA and a NOPASSWD sudoers entry on a host the operator believes
+# they have just unenrolled.
+rm -f /etc/sudoers.d/prov /etc/sudoers.d/fleet
+rm -f /etc/ssh/prov_ca.pub /etc/ssh/prov_krl /etc/ssh/fleet_ca.pub /etc/ssh/fleet_krl
 rm -f /etc/ssh/auth_principals/"$LOGIN" /etc/ssh/auth_principals/"$NOSUDO"
+rm -f /etc/ssh/auth_principals/fleet /etc/ssh/auth_principals/fleet-login
+rm -f /etc/ssh/auth_principals/prov /etc/ssh/auth_principals/prov-login
 rmdir /etc/ssh/auth_principals 2>/dev/null
-rm -f /etc/ssh/sshd_config.d/00-fleet.conf
+rm -f /etc/ssh/sshd_config.d/00-prov.conf /etc/ssh/sshd_config.d/00-fleet.conf
 # Hosts whose sshd_config has no Include got the directives appended under a
-# "# Fleet Terminal" marker. Drop exactly that block, nothing else.
-if grep -q '^# Fleet Terminal$' /etc/ssh/sshd_config 2>/dev/null; then
-  cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.fleet-backup
+# marker line. Drop exactly that block, nothing else. Match either marker: the
+# one on disk is whichever release enrolled the host.
+if grep -qE '^# (Provenance|Fleet Terminal)$' /etc/ssh/sshd_config 2>/dev/null; then
+  cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.prov-backup
   awk '
-    /^# Fleet Terminal$/ { skip=1; next }
+    /^# (Provenance|Fleet Terminal)$/ { skip=1; next }
     skip && /^(PubkeyAuthentication|TrustedUserCAKeys|AuthorizedPrincipalsFile) / { next }
     skip { skip=0 }
     { print }
-  ' /etc/ssh/sshd_config.fleet-backup > /etc/ssh/sshd_config.fleet-new &&
-    mv -f /etc/ssh/sshd_config.fleet-new /etc/ssh/sshd_config
+  ' /etc/ssh/sshd_config.prov-backup > /etc/ssh/sshd_config.prov-new &&
+    mv -f /etc/ssh/sshd_config.prov-new /etc/ssh/sshd_config
 fi
 # Reload only if the remaining config is valid; a broken one keeps the running sshd.
 if sshd -t 2>/dev/null; then
   systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || \
     service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null
-  echo "[fleet] sshd reloaded"
+  echo "[prov] sshd reloaded"
 else
-  echo "[fleet] WARNING: sshd -t failed after cleanup; sshd NOT reloaded, config left in place"
-  [ -f /etc/ssh/sshd_config.fleet-backup ] && mv -f /etc/ssh/sshd_config.fleet-backup /etc/ssh/sshd_config
+  echo "[prov] WARNING: sshd -t failed after cleanup; sshd NOT reloaded, config left in place"
+  [ -f /etc/ssh/sshd_config.prov-backup ] && mv -f /etc/ssh/sshd_config.prov-backup /etc/ssh/sshd_config
 fi
 for U in "$LOGIN" "$NOSUDO"; do
   id "$U" >/dev/null 2>&1 || continue
   pkill -KILL -u "$U" 2>/dev/null
   sleep 1
   userdel -r "$U" 2>/dev/null || deluser --remove-home "$U" 2>/dev/null || userdel "$U" 2>/dev/null
-  if id "$U" >/dev/null 2>&1; then echo "[fleet] WARNING: could not remove account $U"; else echo "[fleet] removed account $U"; fi
+  if id "$U" >/dev/null 2>&1; then echo "[prov] WARNING: could not remove account $U"; else echo "[prov] removed account $U"; fi
 done
-rm -f /etc/ssh/sshd_config.fleet-backup
-# The overlay LAST: it is the transport Fleet arrived over, and a host that keeps a
+rm -f /etc/ssh/sshd_config.prov-backup
+# The overlay LAST: it is the transport Provenance arrived over, and a host that keeps a
 # live tunnel to the jump host after being deleted is still on the fleet's network
 # with nothing left that manages or audits it.
-echo "[fleet] retiring the overlay transport"
+echo "[prov] retiring the overlay transport"
 %s
-echo "[fleet] unenroll finished"
-rm -f /usr/local/sbin/fleet-unenroll.sh
-FLEETEOF
-chmod 0700 /usr/local/sbin/fleet-unenroll.sh
-setsid nohup /usr/local/sbin/fleet-unenroll.sh "$LOGIN" >/var/log/fleet-unenroll.log 2>&1 < /dev/null &
+echo "[prov] unenroll finished"
+rm -f /usr/local/sbin/prov-unenroll.sh
+PROVEOF
+chmod 0700 /usr/local/sbin/prov-unenroll.sh
+setsid nohup /usr/local/sbin/prov-unenroll.sh "$LOGIN" >/var/log/prov-unenroll.log 2>&1 < /dev/null &
 echo TEARDOWN_STARTED`, loginUser, overlayRetire)
 }
 
@@ -1222,34 +1229,34 @@ func (s *Service) hostOverlayRetireScript(host *models.Host) string {
 	}
 	ov := s.overlays[name]
 	if ov == nil {
-		return "echo '[fleet] WARNING: overlay " + name + " is not available on this deployment; " +
+		return "echo '[prov] WARNING: overlay " + name + " is not available on this deployment; " +
 			"its client is STILL RUNNING and its key material is STILL PRESENT — " +
-			"stop it and remove /etc/openvpn/fleet on the host by hand'"
+			"stop it and remove /etc/openvpn/prov on the host by hand'"
 	}
 	return ov.PurgeHostScript().Script
 }
 
-// TeardownHost removes Fleet's footprint from a managed host: the NOPASSWD sudoers
+// TeardownHost removes Provenance's footprint from a managed host: the NOPASSWD sudoers
 // grant, the two shared accounts, the CA trust, the principal files, the sshd
-// drop-in, and the overlay client. Without it, deleting a host from Fleet leaves a
+// drop-in, and the overlay client. Without it, deleting a host from Provenance leaves a
 // standing root account, a trusted CA, and a live tunnel onto the fleet's network on
-// a machine Fleet no longer manages or audits.
+// a machine Provenance no longer manages or audits.
 //
 // It must run BEFORE the overlay membership is retired — that cleanup removes the
 // jump host's route to the host, and the teardown has to reach the host to run.
 //
 // The work itself is detached on the host (see hostTeardownScript), so a nil return
 // means the teardown was successfully STARTED, not that it finished; the host is
-// about to drop its Fleet accounts and will be unreachable from Fleet thereafter.
+// about to drop its Provenance accounts and will be unreachable from Provenance thereafter.
 // A host that is already unreachable returns an error and is left untouched — the
-// operator's recourse is scripts/fleet-unenroll.sh, run locally on the machine.
+// operator's recourse is scripts/prov-unenroll.sh, run locally on the machine.
 func (s *Service) TeardownHost(ctx context.Context, host *models.Host) error {
 	if host == nil {
 		return nil
 	}
 	loginUser := strings.TrimSpace(host.SSHUser)
 	if loginUser == "" {
-		loginUser = "fleet"
+		loginUser = "prov"
 	}
 	var lastErr error
 	for _, addr := range dedupeAddrs(host.WGAddress, host.Address, host.Hostname) {
@@ -1310,7 +1317,7 @@ func (s *Service) RevokeHostOverlayCerts(ctx context.Context, host *models.Host)
 	if s.pki == nil {
 		return 0, fmt.Errorf("overlay PKI unavailable")
 	}
-	n, err := s.pki.RevokeHostClients(ctx, host.ID, "host deleted from Fleet")
+	n, err := s.pki.RevokeHostClients(ctx, host.ID, "host deleted from Provenance")
 	if err != nil {
 		return 0, err
 	}
@@ -1370,21 +1377,27 @@ func (s *Service) CleanupHostOverlay(ctx context.Context, host *models.Host) err
 	return nil
 }
 
-// caTrustScript installs the Fleet user CA, creates the login user with sudo and
+// caTrustScript installs the Provenance user CA, creates the login user with sudo and
 // the principal mapping, configures sshd to trust certificates, and reloads sshd.
 //
-// The accepted principals are host-scoped: each account trusts "fleet-h-<hostID>"
-// (privileged) / "fleet-login-h-<hostID>" (login-only), which only this host's
+// The accepted principals are host-scoped: each account trusts "prov-h-<hostID>"
+// (privileged) / "prov-login-h-<hostID>" (login-only), which only this host's
 // certificates carry, so a certificate minted for another host is rejected here.
-// Unless lockdown (cfg.HostScopedOnly) is set, the fleet-wide "fleet"/"fleet-login"
+// Unless lockdown (cfg.HostScopedOnly) is set, the fleet-wide "fleet"/"prov-login"
 // principals are also trusted, keeping certs issued for not-yet-re-enrolled hosts
 // working during the migration.
 func (s *Service) caTrustScript(loginUser, caKeys string, hostID uuid.UUID) string {
-	sudoLine := princ.Host(hostID) + `\n`
-	loginLine := princ.HostLogin(hostID) + `\n`
+	// Each account accepts both the current principal names and their pre-rename
+	// spellings. Certificates carry both (principals.WithLegacy), so the new names
+	// alone would be enough going forward — but sshd reads this file, not the
+	// backend, so listing only the new names would lock out a rolled-back backend
+	// that still issues the old ones. Both directions have to hold while any host
+	// is on either side of the rename.
+	sudoLine := princ.Host(hostID) + `\n` + princ.LegacyHost(hostID) + `\n`
+	loginLine := princ.HostLogin(hostID) + `\n` + princ.LegacyHostLogin(hostID) + `\n`
 	if !s.cfg.HostScopedOnly {
-		sudoLine = princ.Global + `\n` + sudoLine
-		loginLine = princ.GlobalLogin + `\n` + loginLine
+		sudoLine = princ.Global + `\n` + princ.LegacyGlobal + `\n` + sudoLine
+		loginLine = princ.GlobalLogin + `\n` + princ.LegacyGlobalLogin + `\n` + loginLine
 	}
 	return fmt.Sprintf(`set -e
 LOGIN='%s'
@@ -1394,38 +1407,38 @@ NOSUDO="${LOGIN}-login"
 #   $NOSUDO -> login-only, NO sudo        (users without Host.Sudo)
 # Minimal hosts (Alpine, trimmed images) have no bash; an account pointed at a
 # missing shell can't take a session even once its certificate is accepted.
-FLEETSHELL=/bin/bash
-[ -x "$FLEETSHELL" ] || FLEETSHELL=/bin/sh
+PROVSHELL=/bin/bash
+[ -x "$PROVSHELL" ] || PROVSHELL=/bin/sh
 for U in "$LOGIN" "$NOSUDO"; do
   id "$U" >/dev/null 2>&1 && continue
   # useradd on glibc distros, adduser on busybox. Keep whichever error came out:
   # both failing must be fatal, not swallowed — a host that trusts the CA but has
   # no account to map principals onto accepts no one, and the failure would
   # otherwise surface much later as an unexplained login rejection.
-  useradd -m -s "$FLEETSHELL" "$U" 2>&1 || adduser -D -s "$FLEETSHELL" "$U" 2>&1 || true
-  id "$U" >/dev/null 2>&1 || { echo "[fleet] FAILED to create account $U"; exit 1; }
+  useradd -m -s "$PROVSHELL" "$U" 2>&1 || adduser -D -s "$PROVSHELL" "$U" 2>&1 || true
+  id "$U" >/dev/null 2>&1 || { echo "[prov] FAILED to create account $U"; exit 1; }
 done
-mkdir -p /etc/sudoers.d && printf '%%s ALL=(ALL) NOPASSWD:ALL\n' "$LOGIN" > /etc/sudoers.d/fleet && chmod 0440 /etc/sudoers.d/fleet
+mkdir -p /etc/sudoers.d && printf '%%s ALL=(ALL) NOPASSWD:ALL\n' "$LOGIN" > /etc/sudoers.d/prov && chmod 0440 /etc/sudoers.d/prov
 # $NOSUDO deliberately has no sudoers entry.
-# Trust the Fleet user CA.
-cat > /etc/ssh/fleet_ca.pub <<'CAEOF'
+# Trust the Provenance user CA.
+cat > /etc/ssh/prov_ca.pub <<'CAEOF'
 %s
 CAEOF
-chmod 644 /etc/ssh/fleet_ca.pub
+chmod 644 /etc/ssh/prov_ca.pub
 # Principal mapping: privileged cert principals -> $LOGIN account;
-# login-only cert principals -> $NOSUDO account. Host-scoped ("fleet-h-<id>") so a
+# login-only cert principals -> $NOSUDO account. Host-scoped ("prov-h-<id>") so a
 # certificate minted for another host is rejected here.
 mkdir -p /etc/ssh/auth_principals && printf '%s' > /etc/ssh/auth_principals/"$LOGIN"
 printf '%s' > /etc/ssh/auth_principals/"$NOSUDO"
 # sshd: prefer a drop-in; also append directly if the main config has no Include.
 mkdir -p /etc/ssh/sshd_config.d
-cat > /etc/ssh/sshd_config.d/00-fleet.conf <<'SSHEOF'
+cat > /etc/ssh/sshd_config.d/00-prov.conf <<'SSHEOF'
 PubkeyAuthentication yes
-TrustedUserCAKeys /etc/ssh/fleet_ca.pub
+TrustedUserCAKeys /etc/ssh/prov_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%%u
 SSHEOF
-if ! grep -q 'sshd_config.d' /etc/ssh/sshd_config 2>/dev/null && ! grep -q 'TrustedUserCAKeys /etc/ssh/fleet_ca.pub' /etc/ssh/sshd_config 2>/dev/null; then
-  { echo ''; echo '# Fleet Terminal'; echo 'PubkeyAuthentication yes'; echo 'TrustedUserCAKeys /etc/ssh/fleet_ca.pub'; echo 'AuthorizedPrincipalsFile /etc/ssh/auth_principals/%%u'; } >> /etc/ssh/sshd_config
+if ! grep -q 'sshd_config.d' /etc/ssh/sshd_config 2>/dev/null && ! grep -q 'TrustedUserCAKeys /etc/ssh/prov_ca.pub' /etc/ssh/sshd_config 2>/dev/null; then
+  { echo ''; echo '# Provenance'; echo 'PubkeyAuthentication yes'; echo 'TrustedUserCAKeys /etc/ssh/prov_ca.pub'; echo 'AuthorizedPrincipalsFile /etc/ssh/auth_principals/%%u'; } >> /etc/ssh/sshd_config
 fi
 mkdir -p /run/sshd
 sshd -t

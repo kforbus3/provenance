@@ -8,7 +8,7 @@ import (
 const drConfigKey = "dr"
 
 // DRConfig is the disaster-recovery configuration for THIS instance. It's advisory
-// metadata + orchestration hooks — Fleet does not itself replicate the database or
+// metadata + orchestration hooks — Provenance does not itself replicate the database or
 // move DNS; the webhooks let an operator wire those steps to the failover/failback
 // buttons. Stored under the "dr" settings key.
 type DRConfig struct {
@@ -17,7 +17,7 @@ type DRConfig struct {
 	Role string `json:"role"`
 	// PeerURL is the other instance's base URL, used only to show peer health.
 	PeerURL string `json:"peerUrl"`
-	// FailoverWebhook / FailbackWebhook are URLs Fleet POSTs to when an admin
+	// FailoverWebhook / FailbackWebhook are URLs Provenance POSTs to when an admin
 	// triggers the corresponding action — wire them to your promotion / DNS / WG
 	// automation. Empty = the action only records intent + (optionally) promotes
 	// the local database.

@@ -331,7 +331,7 @@ func TestALocallyBuiltImageIsNotAskedAboutAtAll(t *testing.T) {
 	defer srv.Close()
 
 	st := &fakeStore{tracked: []store.TrackedImage{
-		{Repository: repoAt(srv, "fleet-terminal-backend"), Tag: "1.2.3"}, // no digest
+		{Repository: repoAt(srv, "provenance-backend"), Tag: "1.2.3"}, // no digest
 	}}
 	checked, failed := newChecker(t, st, srv).Check(context.Background())
 

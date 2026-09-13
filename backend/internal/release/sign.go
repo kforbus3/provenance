@@ -16,7 +16,7 @@ func Sign(manifestJSON []byte, priv ed25519.PrivateKey) []byte {
 
 // Verify checks a detached signature over the manifest bytes against any of the
 // trusted public keys. It succeeds on the first key that verifies. An empty trust set
-// is a hard error — Fleet fails closed and applies nothing until a release key is
+// is a hard error — Provenance fails closed and applies nothing until a release key is
 // configured.
 func Verify(manifestJSON, sig []byte, trusted []ed25519.PublicKey) error {
 	if len(trusted) == 0 {

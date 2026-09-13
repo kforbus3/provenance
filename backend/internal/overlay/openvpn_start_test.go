@@ -80,7 +80,7 @@ func lineWith(t *testing.T, script, want string) string {
 }
 
 // This is the bug that let an OpenVPN overlay report itself healthy without ever
-// starting: the liveness guard was `pgrep -f 'openvpn .*server.conf'`, and Fleet runs
+// starting: the liveness guard was `pgrep -f 'openvpn .*server.conf'`, and Provenance runs
 // these scripts as `sh -c "<the whole script>"`, so the script's own shell has that
 // exact command line in its argv. pgrep -f matches command lines, so the guard always
 // answered "already running", the launch never happened, and every enrollment onto the
@@ -172,7 +172,7 @@ func stubBin(t *testing.T, ipOutput string) string {
 }
 
 // The host script used to print OVPN_HOST_CONFIGURED unconditionally after a fixed
-// sleep, and report the address Fleet MEANT to assign. So a host that never brought a
+// sleep, and report the address Provenance MEANT to assign. So a host that never brought a
 // tunnel up was indistinguishable from one that did — and on a switch from WireGuard,
 // that false success is what authorized tearing the working tunnel down.
 func TestHostScriptReportsTheObservedTunnelAddress(t *testing.T) {
@@ -226,7 +226,7 @@ func TestHostScriptReportsTheObservedTunnelAddress(t *testing.T) {
 	}
 
 	// A tunnel at some OTHER address is not success: it means the ccd pin did not
-	// apply and the server handed out a pool address, so Fleet would be dialing an
+	// apply and the server handed out a pool address, so Provenance would be dialing an
 	// address nothing answers on. The script reports what it saw and lets
 	// checkHostBringup call it — but it must not report the pinned address it wanted.
 	got = run("tun0             UNKNOWN        10.101.0.99/24")
@@ -238,7 +238,7 @@ func TestHostScriptReportsTheObservedTunnelAddress(t *testing.T) {
 	}
 }
 
-// A bring-up is only a success if the host came up at the address Fleet assigned it.
+// A bring-up is only a success if the host came up at the address Provenance assigned it.
 // "The script exited 0" is not that, and neither is "some tunnel exists".
 func TestCheckHostBringup(t *testing.T) {
 	for _, tc := range []struct {
@@ -272,7 +272,7 @@ func TestCheckHostBringup(t *testing.T) {
 // A tunnel that is up now and enabled by nothing is not an enrolled host.
 //
 // alma1 was enrolled, reachable for days, rebooted, and came back with no
-// overlay. The config had been written to /etc/openvpn/fleet-overlay.conf --
+// overlay. The config had been written to /etc/openvpn/prov-overlay.conf --
 // the path only the legacy openvpn@.service reads -- because the script tried
 // that location first and /etc/openvpn exists on RHEL as the parent of client/
 // and server/. RHEL 9 ships only openvpn-client@.service, which reads
@@ -284,20 +284,20 @@ func TestHostScriptWritesTheConfigWhereBothUnitTemplatesLook(t *testing.T) {
 		o.ClientConfig("vpn.example.com:1194"), "10.101.0.2")
 
 	for _, path := range []string{
-		"/etc/openvpn/client/fleet-overlay.conf", // openvpn-client@ (current)
-		"/etc/openvpn/fleet-overlay.conf",        // openvpn@ (legacy)
+		"/etc/openvpn/client/prov-overlay.conf", // openvpn-client@ (current)
+		"/etc/openvpn/prov-overlay.conf",        // openvpn@ (legacy)
 	} {
-		if !strings.Contains(got, "cp "+fleetDir+"/client.ovpn "+path) {
+		if !strings.Contains(got, "cp "+provDir+"/client.ovpn "+path) {
 			t.Errorf("config is never written to %s, so the unit that reads it cannot start", path)
 		}
 	}
 	// Unconditionally, not "A else B": the else branch never ran on the
 	// distribution that needed it.
-	if strings.Contains(got, "/etc/openvpn/fleet-overlay.conf 2>/dev/null || cp") {
+	if strings.Contains(got, "/etc/openvpn/prov-overlay.conf 2>/dev/null || cp") {
 		t.Error("still writes one location only if the other failed")
 	}
 	// The template that current distributions actually ship must be tried first.
-	if strings.Index(got, "enable --now openvpn-client@") > strings.Index(got, "enable --now openvpn@fleet") {
+	if strings.Index(got, "enable --now openvpn-client@") > strings.Index(got, "enable --now openvpn@prov-overlay") {
 		t.Error("tries the legacy openvpn@ template before openvpn-client@")
 	}
 }

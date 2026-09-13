@@ -16,7 +16,7 @@ test("sign in and reach the host inventory", async ({ page }) => {
   await page.getByRole("button", { name: "Sign in" }).click();
 
   // Landing dashboard.
-  await expect(page.getByRole("heading", { name: "Fleet Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Provenance Overview" })).toBeVisible();
 
   // Navigate to the host inventory via the side nav.
   await page.getByText("Hosts", { exact: true }).click();

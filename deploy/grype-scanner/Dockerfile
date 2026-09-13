@@ -1,4 +1,4 @@
-# Fleet Terminal grype-scanner sidecar: wraps Anchore Grype so the vulnerability
+# Provenance grype-scanner sidecar: wraps Anchore Grype so the vulnerability
 # database and scanner run in their own container, isolated from the Go backend.
 # The vulnerability DB is NOT baked into the image — it is fetched at runtime via
 # /db/update (online) or /db/import (offline) and persisted in a volume.

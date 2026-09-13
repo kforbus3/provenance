@@ -2,12 +2,12 @@ package assistant
 
 import "github.com/kforbus3/provenance/backend/internal/store"
 
-const systemPrompt = `You are Fleet Assistant, helping an experienced Linux system administrator
+const systemPrompt = `You are Provenance Assistant, helping an experienced Linux system administrator
 manage a fleet of hosts. You answer questions from read-only tools, and — only when
 explicitly asked — you may PROPOSE an action for the user to confirm (see TAKING ACTION).
 
 Ground every answer in tool results — never invent host names, counts, times, or metrics.
-If no tool covers the question, or the question is not about the fleet or the Fleet
+If no tool covers the question, or the question is not about the fleet or the Provenance
 Terminal product itself, say so.
 
 CRITICAL — the example names in these instructions (<host>, <host2>, and commands like
@@ -51,7 +51,7 @@ CHOOSING TOOLS
   anyone type/run <X>", "who executed <X> on <host>" about interactive terminal use. Pass
   the command as the 'query' argument. Best-effort — qualify the answer as "typed" (not guaranteed
   executed) and note only recorded sessions are covered. A "who ran X" question is NEVER
-  answered with fleet_insights, query_hosts, or host_detail.
+  answered with prov_insights, query_hosts, or host_detail.
 - compliance_scans: OpenSCAP COMPLIANCE posture — hardening/benchmark rules (CIS,
   STIG), scored per host. No hostname -> ONE row per host (its latest scan, or a
   neverScanned marker). With a hostname -> that host's scan history. scan_findings
@@ -69,12 +69,12 @@ CHOOSING TOOLS
   an action or a person.
 - recent_file_transfers: SFTP uploads/downloads — who moved which file to/from which
   host, size, and status.
-- recent_commands: who ran which ad-hoc command via Fleet's Run-Command feature (exact
+- recent_commands: who ran which ad-hoc command via Provenance's Run-Command feature (exact
   command text, requester, target, status, exit code). Also a "who ran <command>" answer,
-  but for Fleet-issued commands rather than interactive terminals. For a general "who ran
+  but for Provenance-issued commands rather than interactive terminals. For a general "who ran
   <command>" question, prefer search_commands (interactive terminals); use recent_commands
-  when the user specifically means Fleet's Run-Command feature, or in addition to it.
-- fleet_insights: the already-computed list of what needs attention across the fleet —
+  when the user specifically means Provenance's Run-Command feature, or in addition to it.
+- prov_insights: the already-computed list of what needs attention across the fleet —
   offline hosts, low/critically-low disk, disk-runway projections (days-to-full with a
   confidence label), high memory/load, pending security updates. Use it ONLY for
   open-ended HEALTH/CAPACITY questions ("anything wrong?", "morning report", "when will
@@ -83,7 +83,7 @@ CHOOSING TOOLS
 - host_availability: the host UP/DOWN history — recorded online<->offline transitions
   with per-host downtime totals. The ONLY tool that can answer about PAST reachability:
   "did any host go offline today", "was <host> down overnight", "any outages this week",
-  "<host> uptime/downtime". query_hosts / fleet_insights only know the CURRENT status and
+  "<host> uptime/downtime". query_hosts / prov_insights only know the CURRENT status and
   cannot see a host that already recovered — never answer a downtime/outage question from
   them, and NEVER from search_commands.
 - vulnerabilities: CVE / vulnerability scan results. With a hostname, that host's latest
@@ -107,13 +107,13 @@ CHOOSING TOOLS
 - windows_software: installed-software inventory for one Windows (RDP) host (name/version/
   publisher). Use for "what software is installed on <windows host>". Linux packages ->
   host_updates; CVEs -> vulnerabilities.
-- platform_status: Fleet's own control-plane health — the HA cluster roster + leader, and
+- platform_status: Provenance's own control-plane health — the HA cluster roster + leader, and
   recent host-enrollment jobs. Use for "is the cluster healthy", "who is the leader", "did
   <host> enroll". This is the platform, not the managed hosts.
-- security_events: failed logins, lockouts, and MFA failures for Fleet sign-ins, with a
+- security_events: failed logins, lockouts, and MFA failures for Provenance sign-ins, with a
   per-IP failure tally. Use for "any failed logins", "brute-force attempts", "account
   lockouts", "MFA failures". These are separate from audit_log — use this for login
-  security. (Fleet sign-ins only; it does not have host-level auth logs.)
+  security. (Provenance sign-ins only; it does not have host-level auth logs.)
 - search_docs: the Provenance product documentation. Use it for HOW-TO and
   conceptual questions about using or configuring the product (SSO/SAML/SCIM setup, host
   enrollment, certificates, backups, the API/SDK, access reviews, deployment, hardening).
@@ -139,14 +139,14 @@ WORKING METHOD
   per host to find which of a few hosts is filling up fastest).
 - "Who ran / who typed / did anyone run <command>" (e.g. "who ran df", "who ran rm -rf"):
   call search_commands with the command as the 'query' argument (and recent_commands if they mean
-  Fleet's Run-Command feature). Do this FIRST for such questions — never answer them from
-  fleet_insights or query_hosts. If the search returns nothing, say no recorded session
+  Provenance's Run-Command feature). Do this FIRST for such questions — never answer them from
+  prov_insights or query_hosts. If the search returns nothing, say no recorded session
   contained that command (and remember only recorded sessions are searchable).
-- Fleet health checks ("anything wrong?", "morning report"): start with fleet_insights;
+- Provenance health checks ("anything wrong?", "morning report"): start with prov_insights;
   it already aggregates offline hosts, low disk, capacity runway, high memory/load, and
   pending updates. Add recent_scans / recent_playbook_runs failures if relevant.
 - Capacity questions ("when will <host> run out of disk?", "will any host run out of disk
-  or memory this week?"): fleet_insights carries the disk-runway projection. Cite ONLY the
+  or memory this week?"): prov_insights carries the disk-runway projection. Cite ONLY the
   capacity categories (disk, disk-runway, memory) — if none are present, the correct answer
   is that NO host is projected to run out in that window; say so plainly and do NOT cite
   unrelated categories like pending updates. Only fall back to host_metric_history
@@ -159,12 +159,12 @@ WORKING METHOD
   size) and used% (used/size) do NOT sum to 100 — df Available excludes reserved blocks — so
   a root fs at 64% used can still report ~31% free; explain that rather than calling it an
   inconsistency.
-- "SECURITY SCAN" IS AMBIGUOUS — Fleet runs two unrelated kinds, and BOTH are covered:
+- "SECURITY SCAN" IS AMBIGUOUS — Provenance runs two unrelated kinds, and BOTH are covered:
   compliance_scans (OpenSCAP benchmark rules: pass/fail/score) and vulnerabilities (CVEs
   on installed packages). Unqualified ("the latest security scan result for each host"),
   use compliance_scans, and name which kind you reported so the user can ask for the
   other. "CVE / vulnerable / patch" -> vulnerabilities. "CIS / STIG / benchmark /
-  hardening / compliance / score / failed rules" -> compliance_scans. NEVER say Fleet
+  hardening / compliance / score / failed rules" -> compliance_scans. NEVER say Provenance
   cannot retrieve compliance or benchmark scan results — it can, via compliance_scans
   and scan_findings.
 - A "for each host" / "per host" / "across the fleet" question wants EVERY host covered.
@@ -172,12 +172,12 @@ WORKING METHOD
   hostname, query_hosts) over a recency log, and NEVER answer it by asking the user to
   name a single host — they explicitly asked for all of them.
 - Downtime / offline history / "did anything go down": ALWAYS use host_availability. Never
-  answer these from query_hosts, fleet_insights, or search_commands.
-- NEVER claim Fleet cannot retrieve something without CALLING a tool first. Saying "I do
+  answer these from query_hosts, prov_insights, or search_commands.
+- NEVER claim Provenance cannot retrieve something without CALLING a tool first. Saying "I do
   not have a tool for that" when a tool exists is worse than a wrong answer — it teaches
-  the operator that Fleet has no such data. If a question sounds like one of the tools
+  the operator that Provenance has no such data. If a question sounds like one of the tools
   above, CALL that tool and report what came back. Only after a tool returns nothing may
-  you say Fleet has no data for it, and then say which tool you checked. If the user
+  you say Provenance has no data for it, and then say which tool you checked. If the user
   CORRECTS you ("I meant the security scans, not the vulnerability scans"), immediately
   call the other tool — do not restate that you cannot.
 - All percentages are 0-100. Timestamps are RFC 3339. If a tool returns an error or an
@@ -276,7 +276,7 @@ var actionTools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "propose_delete_host",
-		Description: "PROPOSE deleting a host from Fleet (removes its enrollment, access grants, and history). This is a GUARDED action: it does NOT run on the user's confirm — a second person must APPROVE it. Use only when the user explicitly asks to delete/remove/decommission a named host.",
+		Description: "PROPOSE deleting a host from Provenance (removes its enrollment, access grants, and history). This is a GUARDED action: it does NOT run on the user's confirm — a second person must APPROVE it. Use only when the user explicitly asks to delete/remove/decommission a named host.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"hostname": map[string]any{"type": "string", "description": "exact hostname to delete"}},
@@ -374,7 +374,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "scan_findings",
-		Description: "The individual RULES that FAILED on one host's most recent completed OpenSCAP compliance scan: rule id, title, severity, and an access-impacting flag (true = remediating it could sever Fleet's own SSH/network path to that host). Use for 'what failed on <host>'s scan', 'which CIS/STIG rules is <host> failing', 'what are the high-severity compliance failures on <host>'. Requires an exact hostname and the Host.Scan permission; for the fleet-wide or per-host summary use compliance_scans. These are hardening rules, not CVEs — CVEs come from `vulnerabilities`.",
+		Description: "The individual RULES that FAILED on one host's most recent completed OpenSCAP compliance scan: rule id, title, severity, and an access-impacting flag (true = remediating it could sever Provenance's own SSH/network path to that host). Use for 'what failed on <host>'s scan', 'which CIS/STIG rules is <host> failing', 'what are the high-severity compliance failures on <host>'. Requires an exact hostname and the Host.Scan permission; for the fleet-wide or per-host summary use compliance_scans. These are hardening rules, not CVEs — CVEs come from `vulnerabilities`.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -389,7 +389,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_playbook_runs",
-		Description: "List recent Ansible playbook runs, most recent first. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), status (completed/failed/interrupted — interrupted means Fleet itself restarted mid-run and never collected the result, e.g. the playbook rebooted the machine hosting Fleet, so the target hosts may still have completed their tasks), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'; for 'scheduled' runs specifically, keep entries where scheduled is true.",
+		Description: "List recent Ansible playbook runs, most recent first. Each entry has the playbook name, target (a host or a group + host count), whether it was a dry run, a `scheduled` boolean (true = run automatically by a schedule, false = run manually), status (completed/failed/interrupted — interrupted means Provenance itself restarted mid-run and never collected the result, e.g. the playbook rebooted the machine hosting Provenance, so the target hosts may still have completed their tasks), who/what requested it, and when it ran. Use for questions like 'when did the apt-upgrade playbook last run' or 'what playbooks ran against my hosts recently'; for 'scheduled' runs specifically, keep entries where scheduled is true.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "max rows (default 50)"}},
@@ -468,7 +468,7 @@ var tools = []toolDef{{
 }, {
 	Type: "function",
 	Function: toolFunction{
-		Name:        "fleet_insights",
+		Name:        "prov_insights",
 		Description: "Return the current computed fleet-health issues across the hosts the user can access: offline hosts, low/critically-low disk, disk-runway projections (how many days until a filesystem fills, with a confidence label), high memory, high CPU load, and pending security updates. Each item has a severity (critical/warning), category, hostname, title, and a plain-English detail. This is the tool for TWO kinds of question: (1) open-ended health — 'what's wrong with the fleet', 'anything I should worry about this morning', 'any problems'; and (2) forward-looking CAPACITY / RUNWAY of disk or memory — 'which hosts are low on disk', 'is any host about to run out of disk space or memory', 'which hosts are running out of disk', 'when will <host> fill up', 'how much runway is left'. It ALREADY contains the disk-runway projection, so it is the correct and complete answer for capacity questions — never fall back to host_metric_history or query_hosts to estimate when something will fill up. Takes no arguments.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
@@ -476,7 +476,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "search_docs",
-		Description: "Search the Provenance product documentation (installation, administration, host enrollment, certificate lifecycle, API reference, automation SDK/CLI, single sign-on with SAML/OIDC/LDAP, SCIM provisioning, backups, security hardening, deployment, internet exposure). Use this for HOW-TO and conceptual questions about USING or CONFIGURING the product — e.g. 'how do I configure SAML', 'how does host enrollment work', 'how do I set up scheduled backups', 'what permission does the scan API need', 'how do access reviews work'. This is distinct from the live-state tools (query_hosts, fleet_insights, etc.), which answer about the current fleet rather than how the product works. Returns the most relevant documentation sections; ground your answer in them and cite the doc title and heading.",
+		Description: "Search the Provenance product documentation (installation, administration, host enrollment, certificate lifecycle, API reference, automation SDK/CLI, single sign-on with SAML/OIDC/LDAP, SCIM provisioning, backups, security hardening, deployment, internet exposure). Use this for HOW-TO and conceptual questions about USING or CONFIGURING the product — e.g. 'how do I configure SAML', 'how does host enrollment work', 'how do I set up scheduled backups', 'what permission does the scan API need', 'how do access reviews work'. This is distinct from the live-state tools (query_hosts, prov_insights, etc.), which answer about the current fleet rather than how the product works. Returns the most relevant documentation sections; ground your answer in them and cite the doc title and heading.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -489,7 +489,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "search_commands",
-		Description: "Search the commands users TYPED in recorded interactive SSH terminal sessions, reconstructed from the session recordings — the way to answer 'who ran <command> in a terminal', 'did anyone type rm -rf', 'who ran systemctl on <host>'. Each match returns the reconstructed command line, the user, the host, and when. IMPORTANT CAVEATS to convey: this is a BEST-EFFORT reconstruction from keystrokes (tab-completion and up-arrow history recall may be missing or partial), so present results as what was 'typed', not a guaranteed executed-command log; and it only covers sessions that were RECORDED. For commands run via Fleet's Run-Command feature (not a terminal), use recent_commands instead. Provide a `query` (a word or substring to search for); optionally narrow by hostname.",
+		Description: "Search the commands users TYPED in recorded interactive SSH terminal sessions, reconstructed from the session recordings — the way to answer 'who ran <command> in a terminal', 'did anyone type rm -rf', 'who ran systemctl on <host>'. Each match returns the reconstructed command line, the user, the host, and when. IMPORTANT CAVEATS to convey: this is a BEST-EFFORT reconstruction from keystrokes (tab-completion and up-arrow history recall may be missing or partial), so present results as what was 'typed', not a guaranteed executed-command log; and it only covers sessions that were RECORDED. For commands run via Provenance's Run-Command feature (not a terminal), use recent_commands instead. Provide a `query` (a word or substring to search for); optionally narrow by hostname.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -504,7 +504,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "recent_commands",
-		Description: "List ad-hoc commands run through Fleet's Run-Command feature, most recent first — the authoritative 'who ran which command' record. Each entry has the exact command text, who requested it, the target (a host or a group + host count), status (completed/failed), exit code, and when it ran. Use for questions like 'who ran systemctl restart on <host>', 'what commands were run today', or 'did anyone run a reboot recently'. NOTE: this covers commands issued via Fleet's Run-Command feature, NOT commands typed inside an interactive SSH terminal session (those live only in the session recordings). Optionally filter by a command substring (contains) or target hostname.",
+		Description: "List ad-hoc commands run through Provenance's Run-Command feature, most recent first — the authoritative 'who ran which command' record. Each entry has the exact command text, who requested it, the target (a host or a group + host count), status (completed/failed), exit code, and when it ran. Use for questions like 'who ran systemctl restart on <host>', 'what commands were run today', or 'did anyone run a reboot recently'. NOTE: this covers commands issued via Provenance's Run-Command feature, NOT commands typed inside an interactive SSH terminal session (those live only in the session recordings). Optionally filter by a command substring (contains) or target hostname.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -518,7 +518,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "host_availability",
-		Description: "The host UP/DOWN history — every recorded online<->offline transition, with per-host downtime totals. This is the ONLY way to answer questions about PAST reachability: 'did any host go offline today/overnight', 'was <host> down this morning', 'any outages this week', 'what is <host>'s uptime/downtime'. query_hosts and fleet_insights only know the CURRENT status and CANNOT see a host that already went down and recovered — always use host_availability for anything about downtime, outages, or reachability over a time range. Optionally narrow to one hostname; window defaults to the last 7 days.",
+		Description: "The host UP/DOWN history — every recorded online<->offline transition, with per-host downtime totals. This is the ONLY way to answer questions about PAST reachability: 'did any host go offline today/overnight', 'was <host> down this morning', 'any outages this week', 'what is <host>'s uptime/downtime'. query_hosts and prov_insights only know the CURRENT status and CANNOT see a host that already went down and recovered — always use host_availability for anything about downtime, outages, or reachability over a time range. Optionally narrow to one hostname; window defaults to the last 7 days.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -547,7 +547,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "list_users",
-		Description: "List Fleet user ACCOUNTS with their roles, authentication source (local/oidc/ldap/saml), whether Fleet MFA is enrolled, disabled state, super-admin flag, and last login. Use for account/identity questions: 'who are the administrators', 'what role does bob have', 'which accounts have no MFA', 'who is disabled', 'who hasn't logged in'. Filters: usernameContains, role (exact role name), withoutMfa (only local accounts missing a confirmed factor), disabledOnly. Requires the User.Edit permission. NOTE: for who can ACCESS a specific host, this is not it — that is host access, not an account list.",
+		Description: "List Provenance user ACCOUNTS with their roles, authentication source (local/oidc/ldap/saml), whether Provenance MFA is enrolled, disabled state, super-admin flag, and last login. Use for account/identity questions: 'who are the administrators', 'what role does bob have', 'which accounts have no MFA', 'who is disabled', 'who hasn't logged in'. Filters: usernameContains, role (exact role name), withoutMfa (only local accounts missing a confirmed factor), disabledOnly. Requires the User.Edit permission. NOTE: for who can ACCESS a specific host, this is not it — that is host access, not an account list.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -590,7 +590,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "security_events",
-		Description: "The authentication security event stream (Fleet sign-ins): failed logins, account lockouts, and MFA failures/successes, newest first, with a per-IP failure tally for spotting brute-force attempts. Use for 'any failed logins?', 'is someone brute-forcing the login?', 'any account lockouts?', 'any MFA failures?', 'authentication failures today'. These events live separately from the change/audit trail, so this — NOT audit_log — is the tool for login-security questions. Requires Audit.View. NOTE: these are sign-ins to Fleet itself, not host-level auth logs (Fleet does not collect logs from managed hosts).",
+		Description: "The authentication security event stream (Provenance sign-ins): failed logins, account lockouts, and MFA failures/successes, newest first, with a per-IP failure tally for spotting brute-force attempts. Use for 'any failed logins?', 'is someone brute-forcing the login?', 'any account lockouts?', 'any MFA failures?', 'authentication failures today'. These events live separately from the change/audit trail, so this — NOT audit_log — is the tool for login-security questions. Requires Audit.View. NOTE: these are sign-ins to Provenance itself, not host-level auth logs (Provenance does not collect logs from managed hosts).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -606,7 +606,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "access_control",
-		Description: "Fleet's access-governance records, selected by `topic`. groups = host groups with their host counts (pass `name` to list the hosts IN that group). roles = Fleet roles and the permissions each grants (pass `name` for one role's full permission list). service_accounts = machine accounts and their API tokens (how many are active, when last used, whether the account is disabled). access_reviews = access-certification campaigns with their status and kept/revoked/pending counts. Use for 'what groups are there', 'which hosts are in <group>', 'what can the Operator role do', 'what API tokens exist', 'is there an access review open'. Each topic is permission-gated separately. For USER accounts use list_users; for who is waiting on an approval use list_approvals.",
+		Description: "Provenance's access-governance records, selected by `topic`. groups = host groups with their host counts (pass `name` to list the hosts IN that group). roles = Provenance roles and the permissions each grants (pass `name` for one role's full permission list). service_accounts = machine accounts and their API tokens (how many are active, when last used, whether the account is disabled). access_reviews = access-certification campaigns with their status and kept/revoked/pending counts. Use for 'what groups are there', 'which hosts are in <group>', 'what can the Operator role do', 'what API tokens exist', 'is there an access review open'. Each topic is permission-gated separately. For USER accounts use list_users; for who is waiting on an approval use list_approvals.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -624,7 +624,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "expiring_credentials",
-		Description: "What is EXPIRED, expiring, stale or overdue for rotation across Fleet's own credentials: API tokens, vault credentials, user passwords, the SSH CA keys, and issued SSH certificates. Each item has a kind, a name, an owner, a status (expired / expiring / stale / aging) and a due date. Use for 'what is about to expire', 'any expired API tokens', 'which credentials need rotating', 'is the CA key old'. An empty result genuinely means nothing needs attention. Metadata only — no secret or key material. Requires System.Configure or Certificate.Manage.",
+		Description: "What is EXPIRED, expiring, stale or overdue for rotation across Provenance's own credentials: API tokens, vault credentials, user passwords, the SSH CA keys, and issued SSH certificates. Each item has a kind, a name, an owner, a status (expired / expiring / stale / aging) and a due date. Use for 'what is about to expire', 'any expired API tokens', 'which credentials need rotating', 'is the CA key old'. An empty result genuinely means nothing needs attention. Metadata only — no secret or key material. Requires System.Configure or Certificate.Manage.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -636,7 +636,7 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "platform_status",
-		Description: "Fleet control-plane health, NOT the managed hosts. Returns the high-availability CLUSTER roster (each backend instance, which one is the leader, and whether it is live), recent host ENROLLMENT jobs (target + status), the FEDERATION sites with each site's link state and replication lag, and the DATABASE REPLICATION role (primary vs standby, and how far behind). Use for 'is the cluster/HA healthy', 'who is the leader', 'how many backend instances are running', 'did the enrollment of <host> succeed', 'any failed enrollments', 'are all sites connected', 'is the standby database caught up'. Each section is permission-gated (System.Configure / Host.Enroll / Federation.Manage / DR.Manage) and omitted when the caller may not see it. Takes no arguments.",
+		Description: "Provenance control-plane health, NOT the managed hosts. Returns the high-availability CLUSTER roster (each backend instance, which one is the leader, and whether it is live), recent host ENROLLMENT jobs (target + status), the FEDERATION sites with each site's link state and replication lag, and the DATABASE REPLICATION role (primary vs standby, and how far behind). Use for 'is the cluster/HA healthy', 'who is the leader', 'how many backend instances are running', 'did the enrollment of <host> succeed', 'any failed enrollments', 'are all sites connected', 'is the standby database caught up'. Each section is permission-gated (System.Configure / Host.Enroll / Federation.Manage / DR.Manage) and omitted when the caller may not see it. Takes no arguments.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 }}

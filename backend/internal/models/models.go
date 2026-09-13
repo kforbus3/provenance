@@ -63,7 +63,7 @@ type VaultSecret struct {
 	Access string `json:"access,omitempty"`
 }
 
-// Database is a registered database target that Fleet brokers SQL access to: it is
+// Database is a registered database target that Provenance brokers SQL access to: it is
 // reached through the jump host and authenticated with a vaulted credential, so the
 // operator never sees the password and every query is audited.
 type Database struct {
@@ -230,19 +230,19 @@ type Host struct {
 	Address     string    `json:"address,omitempty"`
 	WGAddress   string    `json:"wgAddress,omitempty"`
 	// Overlay is the per-host reachability transport chosen at enrollment: "" (use the
-	// deployment default FLEET_OVERLAY), "wireguard" or "openvpn". The
+	// deployment default PROV_OVERLAY), "wireguard" or "openvpn". The
 	// assigned overlay address lives in WGAddress regardless of transport.
 	Overlay  string   `json:"overlay,omitempty"`
 	SSHPort  int      `json:"sshPort"`
 	SSHUser  string   `json:"sshUser"`
 	Tags     []string `json:"tags"`
 	Enrolled bool     `json:"enrolled"`
-	// AuthMethod is how the host authenticates: fleet_cert (default, ephemeral
+	// AuthMethod is how the host authenticates: prov_cert (default, ephemeral
 	// certificates) | vault_password | vault_ssh_key (a vaulted credential injected
 	// at connect time). CredentialID references the vault secret when vaulted.
 	AuthMethod   string     `json:"authMethod"`
 	CredentialID *uuid.UUID `json:"credentialId,omitempty"`
-	// Protocol is how Fleet reaches the host: ssh (default; terminal/SFTP) or rdp
+	// Protocol is how Provenance reaches the host: ssh (default; terminal/SFTP) or rdp
 	// (Windows desktop brokered through guacd, on RDPPort).
 	Protocol   string     `json:"protocol"`
 	RDPPort    int        `json:"rdpPort"`
@@ -578,7 +578,7 @@ type RDPRecording struct {
 	HostID     *uuid.UUID `json:"hostId,omitempty"`
 	UserID     *uuid.UUID `json:"userId,omitempty"`
 	Hostname   string     `json:"hostname"`
-	FleetUser  string     `json:"fleetUser"`
+	ProvUser   string     `json:"provUser"`
 	RDPUser    string     `json:"rdpUser"`
 	Format     string     `json:"format"`
 	Path       string     `json:"-"`

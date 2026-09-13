@@ -15,10 +15,10 @@ func TestScrubRemovesCredentialShapedText(t *testing.T) {
 	}{
 		{
 			"an env-style secret",
-			`FLEET_AUDIT_HMAC_KEY=9f8a7b6c5d4e3f2a1b0c`,
+			`PROV_AUDIT_HMAC_KEY=9f8a7b6c5d4e3f2a1b0c`,
 			"9f8a7b6c5d4e3f2a1b0c",
 			// The KEY survives: "which setting is set" is the diagnostic half.
-			"FLEET_AUDIT_HMAC_KEY",
+			"PROV_AUDIT_HMAC_KEY",
 		},
 		{
 			"a logged password field",
@@ -28,10 +28,10 @@ func TestScrubRemovesCredentialShapedText(t *testing.T) {
 		},
 		{
 			"a database URL with inline credentials",
-			`postgres://fleet:s3cr3t@db:5432/fleet`,
+			`postgres://prov:s3cr3t@db:5432/prov`,
 			"s3cr3t",
 			// Scheme, user and host survive — which database it is, is the point.
-			"postgres://fleet:",
+			"postgres://prov:",
 		},
 		{
 			"an updater token header",

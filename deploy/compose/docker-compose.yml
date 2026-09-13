@@ -1,30 +1,30 @@
-# Fleet Terminal — application stack.
+# Provenance — application stack.
 # Brings up Postgres, the Go backend, and the React frontend (plus the
-# ansible-runner, grype-scanner, guacd, and fleet-updater sidecars).
+# ansible-runner, grype-scanner, guacd, and prov-updater sidecars).
 # The local SSH test fabric (jump host + managed hosts) lives in the
 # docker-compose.testfabric.yml override.
 
-name: fleet-terminal
+name: provenance
 
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    # Connection sizing: each backend opens up to FLEET_DB_MAX_CONNS (default 20)
+    # Connection sizing: each backend opens up to PROV_DB_MAX_CONNS (default 20)
     # plus a couple for the HA leader lock / event backplane. One backend fits the
     # stock max_connections=100; if you run several backends (see
-    # docker-compose.ha.yml) or raise FLEET_DB_MAX_CONNS, raise max_connections to
-    # stay ahead of (backends × FLEET_DB_MAX_CONNS + headroom). 200 covers the
+    # docker-compose.ha.yml) or raise PROV_DB_MAX_CONNS, raise max_connections to
+    # stay ahead of (backends × PROV_DB_MAX_CONNS + headroom). 200 covers the
     # bundled HA stack (2 backends) with room to grow.
     command: ["postgres", "-c", "max_connections=200"]
     environment:
-      POSTGRES_USER: fleet
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
-      POSTGRES_DB: fleet
+      POSTGRES_USER: prov
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prov}
+      POSTGRES_DB: prov
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
+      test: ["CMD-SHELL", "pg_isready -U prov -d prov"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -36,17 +36,17 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
-    networks: [fleet]
+    networks: [prov]
 
   backend:
     build:
       context: ../../backend
       dockerfile: Dockerfile
       args:
-        VERSION: ${FLEET_VERSION:-dev}
+        VERSION: ${PROV_VERSION:-${FLEET_VERSION:-dev}}
     # Stable image name so the in-UI updater can pin/roll back versioned images
-    # (fleet-terminal-backend:<version>) with `docker compose up --no-build`.
-    image: fleet-terminal-backend
+    # (provenance-backend:<version>) with `docker compose up --no-build`.
+    image: provenance-backend
     restart: unless-stopped
     # Give the backend time to shut down gracefully on a deploy/restart so it
     # releases its Postgres leader advisory lock (and drains connections) before
@@ -55,182 +55,182 @@ services:
     # stranded lock, but a clean handoff is instant.
     stop_grace_period: 30s
     environment:
-      FLEET_ENV: ${FLEET_ENV:-development}
+      PROV_ENV: ${PROV_ENV:-${FLEET_ENV:-development}}
       # Server timezone — schedules compute their next run in this zone. Set TZ
       # in .env to your local zone (e.g. America/New_York) so "03:00" means your
       # 3 AM; defaults to UTC.
       TZ: ${TZ:-UTC}
-      FLEET_HTTP_ADDR: ":8080"
-      FLEET_PUBLIC_URL: ${FLEET_PUBLIC_URL:-http://localhost:8080}
-      FLEET_DATABASE_URL: ${FLEET_DATABASE_URL:-postgres://fleet:${POSTGRES_PASSWORD:-fleet}@postgres:5432/fleet?sslmode=disable}
-      FLEET_JWT_SECRET: ${FLEET_JWT_SECRET:-}
-      FLEET_CSRF_SECRET: ${FLEET_CSRF_SECRET:-}
-      FLEET_CA_PASSPHRASE: ${FLEET_CA_PASSPHRASE:-}
-      FLEET_VAULT_PASSPHRASE: ${FLEET_VAULT_PASSPHRASE:-}
-      FLEET_BACKUP_PASSPHRASE: ${FLEET_BACKUP_PASSPHRASE:-}
+      PROV_HTTP_ADDR: ":8080"
+      PROV_PUBLIC_URL: ${PROV_PUBLIC_URL:-${FLEET_PUBLIC_URL:-http://localhost:8080}}
+      PROV_DATABASE_URL: ${PROV_DATABASE_URL:-${FLEET_DATABASE_URL:-postgres://prov:${POSTGRES_PASSWORD:-prov}@postgres:5432/prov?sslmode=disable}}
+      PROV_JWT_SECRET: ${PROV_JWT_SECRET:-${FLEET_JWT_SECRET:-}}
+      PROV_CSRF_SECRET: ${PROV_CSRF_SECRET:-${FLEET_CSRF_SECRET:-}}
+      PROV_CA_PASSPHRASE: ${PROV_CA_PASSPHRASE:-${FLEET_CA_PASSPHRASE:-}}
+      PROV_VAULT_PASSPHRASE: ${PROV_VAULT_PASSPHRASE:-${FLEET_VAULT_PASSPHRASE:-}}
+      PROV_BACKUP_PASSPHRASE: ${PROV_BACKUP_PASSPHRASE:-${FLEET_BACKUP_PASSPHRASE:-}}
       # Audit-log integrity HMAC key. REQUIRED outside development (the backend
       # refuses to start without it): keys the tamper-evident audit chain, held
       # outside the DB so DB write access alone can't forge it. `openssl rand -hex 32`.
-      FLEET_AUDIT_HMAC_KEY: ${FLEET_AUDIT_HMAC_KEY:-}
+      PROV_AUDIT_HMAC_KEY: ${PROV_AUDIT_HMAC_KEY:-${FLEET_AUDIT_HMAC_KEY:-}}
       # Encrypts session recordings at rest. Optional but STRONGLY recommended in
       # production (unset = recordings stored unencrypted; the backend warns). Must be
       # >=32 bytes if set. `openssl rand -hex 32`.
-      FLEET_RECORDING_KEY: ${FLEET_RECORDING_KEY:-}
+      PROV_RECORDING_KEY: ${PROV_RECORDING_KEY:-${FLEET_RECORDING_KEY:-}}
       # External KMS/HSM for master-key protection (optional; default local). See docs/kms.md.
-      FLEET_KMS_PROVIDER: ${FLEET_KMS_PROVIDER:-local}
-      FLEET_KMS_KEY_ID: ${FLEET_KMS_KEY_ID:-}
-      FLEET_KMS_VAULT_ADDR: ${FLEET_KMS_VAULT_ADDR:-}
-      FLEET_KMS_VAULT_TOKEN: ${FLEET_KMS_VAULT_TOKEN:-}
-      FLEET_KMS_AWS_REGION: ${FLEET_KMS_AWS_REGION:-}
-      FLEET_KMS_AWS_ACCESS_KEY_ID: ${FLEET_KMS_AWS_ACCESS_KEY_ID:-}
-      FLEET_KMS_AWS_SECRET_ACCESS_KEY: ${FLEET_KMS_AWS_SECRET_ACCESS_KEY:-}
-      FLEET_KMS_AWS_ENDPOINT: ${FLEET_KMS_AWS_ENDPOINT:-}
-      FLEET_KMS_AZURE_VAULT_URL: ${FLEET_KMS_AZURE_VAULT_URL:-}
-      FLEET_KMS_AZURE_TENANT_ID: ${FLEET_KMS_AZURE_TENANT_ID:-}
-      FLEET_KMS_AZURE_CLIENT_ID: ${FLEET_KMS_AZURE_CLIENT_ID:-}
-      FLEET_KMS_AZURE_CLIENT_SECRET: ${FLEET_KMS_AZURE_CLIENT_SECRET:-}
-      FLEET_KMS_GCP_CREDENTIALS_FILE: ${FLEET_KMS_GCP_CREDENTIALS_FILE:-}
-      FLEET_CA_PASSPHRASE_WRAPPED: ${FLEET_CA_PASSPHRASE_WRAPPED:-}
-      FLEET_VAULT_PASSPHRASE_WRAPPED: ${FLEET_VAULT_PASSPHRASE_WRAPPED:-}
+      PROV_KMS_PROVIDER: ${PROV_KMS_PROVIDER:-${FLEET_KMS_PROVIDER:-local}}
+      PROV_KMS_KEY_ID: ${PROV_KMS_KEY_ID:-${FLEET_KMS_KEY_ID:-}}
+      PROV_KMS_VAULT_ADDR: ${PROV_KMS_VAULT_ADDR:-${FLEET_KMS_VAULT_ADDR:-}}
+      PROV_KMS_VAULT_TOKEN: ${PROV_KMS_VAULT_TOKEN:-${FLEET_KMS_VAULT_TOKEN:-}}
+      PROV_KMS_AWS_REGION: ${PROV_KMS_AWS_REGION:-${FLEET_KMS_AWS_REGION:-}}
+      PROV_KMS_AWS_ACCESS_KEY_ID: ${PROV_KMS_AWS_ACCESS_KEY_ID:-${FLEET_KMS_AWS_ACCESS_KEY_ID:-}}
+      PROV_KMS_AWS_SECRET_ACCESS_KEY: ${PROV_KMS_AWS_SECRET_ACCESS_KEY:-${FLEET_KMS_AWS_SECRET_ACCESS_KEY:-}}
+      PROV_KMS_AWS_ENDPOINT: ${PROV_KMS_AWS_ENDPOINT:-${FLEET_KMS_AWS_ENDPOINT:-}}
+      PROV_KMS_AZURE_VAULT_URL: ${PROV_KMS_AZURE_VAULT_URL:-${FLEET_KMS_AZURE_VAULT_URL:-}}
+      PROV_KMS_AZURE_TENANT_ID: ${PROV_KMS_AZURE_TENANT_ID:-${FLEET_KMS_AZURE_TENANT_ID:-}}
+      PROV_KMS_AZURE_CLIENT_ID: ${PROV_KMS_AZURE_CLIENT_ID:-${FLEET_KMS_AZURE_CLIENT_ID:-}}
+      PROV_KMS_AZURE_CLIENT_SECRET: ${PROV_KMS_AZURE_CLIENT_SECRET:-${FLEET_KMS_AZURE_CLIENT_SECRET:-}}
+      PROV_KMS_GCP_CREDENTIALS_FILE: ${PROV_KMS_GCP_CREDENTIALS_FILE:-${FLEET_KMS_GCP_CREDENTIALS_FILE:-}}
+      PROV_CA_PASSPHRASE_WRAPPED: ${PROV_CA_PASSPHRASE_WRAPPED:-${FLEET_CA_PASSPHRASE_WRAPPED:-}}
+      PROV_VAULT_PASSPHRASE_WRAPPED: ${PROV_VAULT_PASSPHRASE_WRAPPED:-${FLEET_VAULT_PASSPHRASE_WRAPPED:-}}
       # External secrets manager (vault-of-record; optional). See docs/external-secrets.md.
-      FLEET_EXTSECRET_VAULT_ADDR: ${FLEET_EXTSECRET_VAULT_ADDR:-}
-      FLEET_EXTSECRET_VAULT_TOKEN: ${FLEET_EXTSECRET_VAULT_TOKEN:-}
-      FLEET_EXTSECRET_VAULT_CACERT: ${FLEET_EXTSECRET_VAULT_CACERT:-}
-      FLEET_EXTSECRET_VAULT_SKIP_VERIFY: ${FLEET_EXTSECRET_VAULT_SKIP_VERIFY:-}
-      FLEET_EXTSECRET_AWS_REGION: ${FLEET_EXTSECRET_AWS_REGION:-}
-      FLEET_EXTSECRET_AWS_ACCESS_KEY_ID: ${FLEET_EXTSECRET_AWS_ACCESS_KEY_ID:-}
-      FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY: ${FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY:-}
-      FLEET_EXTSECRET_AWS_SESSION_TOKEN: ${FLEET_EXTSECRET_AWS_SESSION_TOKEN:-}
-      FLEET_EXTSECRET_AWS_ENDPOINT: ${FLEET_EXTSECRET_AWS_ENDPOINT:-}
+      PROV_EXTSECRET_VAULT_ADDR: ${PROV_EXTSECRET_VAULT_ADDR:-${FLEET_EXTSECRET_VAULT_ADDR:-}}
+      PROV_EXTSECRET_VAULT_TOKEN: ${PROV_EXTSECRET_VAULT_TOKEN:-${FLEET_EXTSECRET_VAULT_TOKEN:-}}
+      PROV_EXTSECRET_VAULT_CACERT: ${PROV_EXTSECRET_VAULT_CACERT:-${FLEET_EXTSECRET_VAULT_CACERT:-}}
+      PROV_EXTSECRET_VAULT_SKIP_VERIFY: ${PROV_EXTSECRET_VAULT_SKIP_VERIFY:-${FLEET_EXTSECRET_VAULT_SKIP_VERIFY:-}}
+      PROV_EXTSECRET_AWS_REGION: ${PROV_EXTSECRET_AWS_REGION:-${FLEET_EXTSECRET_AWS_REGION:-}}
+      PROV_EXTSECRET_AWS_ACCESS_KEY_ID: ${PROV_EXTSECRET_AWS_ACCESS_KEY_ID:-${FLEET_EXTSECRET_AWS_ACCESS_KEY_ID:-}}
+      PROV_EXTSECRET_AWS_SECRET_ACCESS_KEY: ${PROV_EXTSECRET_AWS_SECRET_ACCESS_KEY:-${FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY:-}}
+      PROV_EXTSECRET_AWS_SESSION_TOKEN: ${PROV_EXTSECRET_AWS_SESSION_TOKEN:-${FLEET_EXTSECRET_AWS_SESSION_TOKEN:-}}
+      PROV_EXTSECRET_AWS_ENDPOINT: ${PROV_EXTSECRET_AWS_ENDPOINT:-${FLEET_EXTSECRET_AWS_ENDPOINT:-}}
       # Multi-site federation (optional; default standalone). See docs/federation.md.
-      FLEET_MODE: ${FLEET_MODE:-standalone}
-      FLEET_HUB_URL: ${FLEET_HUB_URL:-}
-      FLEET_HUB_JOIN_TOKEN: ${FLEET_HUB_JOIN_TOKEN:-}
-      FLEET_HUB_KEY_FINGERPRINT: ${FLEET_HUB_KEY_FINGERPRINT:-}
-      FLEET_FEDERATION_TRANSPORT: ${FLEET_FEDERATION_TRANSPORT:-}
-      FLEET_COOKIE_SECURE: ${FLEET_COOKIE_SECURE:-false}
-      FLEET_JUMP_HOST: ${FLEET_JUMP_HOST:-jumphost:22}
-      FLEET_JUMP_USER: ${FLEET_JUMP_USER:-fleet}
-      FLEET_JUMP_KNOWN_HOSTS: ${FLEET_JUMP_KNOWN_HOSTS:-}
-      FLEET_SSH_INSECURE_HOST_KEYS: ${FLEET_SSH_INSECURE_HOST_KEYS:-}
-      FLEET_TRUSTED_PROXIES: ${FLEET_TRUSTED_PROXIES:-}
+      PROV_MODE: ${PROV_MODE:-${FLEET_MODE:-standalone}}
+      PROV_HUB_URL: ${PROV_HUB_URL:-${FLEET_HUB_URL:-}}
+      PROV_HUB_JOIN_TOKEN: ${PROV_HUB_JOIN_TOKEN:-${FLEET_HUB_JOIN_TOKEN:-}}
+      PROV_HUB_KEY_FINGERPRINT: ${PROV_HUB_KEY_FINGERPRINT:-${FLEET_HUB_KEY_FINGERPRINT:-}}
+      PROV_FEDERATION_TRANSPORT: ${PROV_FEDERATION_TRANSPORT:-${FLEET_FEDERATION_TRANSPORT:-}}
+      PROV_COOKIE_SECURE: ${PROV_COOKIE_SECURE:-${FLEET_COOKIE_SECURE:-false}}
+      PROV_JUMP_HOST: ${PROV_JUMP_HOST:-${FLEET_JUMP_HOST:-jumphost:22}}
+      PROV_JUMP_USER: ${PROV_JUMP_USER:-${FLEET_JUMP_USER:-fleet}}
+      PROV_JUMP_KNOWN_HOSTS: ${PROV_JUMP_KNOWN_HOSTS:-${FLEET_JUMP_KNOWN_HOSTS:-}}
+      PROV_SSH_INSECURE_HOST_KEYS: ${PROV_SSH_INSECURE_HOST_KEYS:-${FLEET_SSH_INSECURE_HOST_KEYS:-}}
+      PROV_TRUSTED_PROXIES: ${PROV_TRUSTED_PROXIES:-${FLEET_TRUSTED_PROXIES:-}}
       # How many reverse proxies sit in front of this server. The client is the
       # X-Forwarded-For entry that many places from the right, so a caller cannot
       # reach it by prepending entries of its own. Deployments that terminate TLS
       # on a separate box in front of the SPA nginx have two, not one.
-      FLEET_TRUSTED_PROXY_HOPS: ${FLEET_TRUSTED_PROXY_HOPS:-1}
-      FLEET_CONTROL_PLANE_HOSTS: ${FLEET_CONTROL_PLANE_HOSTS:-}
-      FLEET_REENCRYPT_SECRETS: ${FLEET_REENCRYPT_SECRETS:-}
-      FLEET_HOST_SCOPED_ONLY: ${FLEET_HOST_SCOPED_ONLY:-}
+      PROV_TRUSTED_PROXY_HOPS: ${PROV_TRUSTED_PROXY_HOPS:-${FLEET_TRUSTED_PROXY_HOPS:-1}}
+      PROV_CONTROL_PLANE_HOSTS: ${PROV_CONTROL_PLANE_HOSTS:-${FLEET_CONTROL_PLANE_HOSTS:-}}
+      PROV_REENCRYPT_SECRETS: ${PROV_REENCRYPT_SECRETS:-${FLEET_REENCRYPT_SECRETS:-}}
+      PROV_HOST_SCOPED_ONLY: ${PROV_HOST_SCOPED_ONLY:-${FLEET_HOST_SCOPED_ONLY:-}}
       # Multi-tenancy (MSP mode). Off = byte-for-byte single-tenant. When enabled,
       # the app DB role MUST be non-superuser (and lack BYPASSRLS) or row-level
       # isolation is silently ineffective — Postgres superusers bypass RLS.
-      FLEET_MULTI_TENANCY: ${FLEET_MULTI_TENANCY:-false}
-      FLEET_RDP_COLLECT_FACTS: ${FLEET_RDP_COLLECT_FACTS:-}
-      FLEET_RDP_WINRM_PORTS: ${FLEET_RDP_WINRM_PORTS:-}
-      FLEET_RECORDING_DIR: /var/lib/fleet/recordings
-      FLEET_ACTIVITY_RETENTION: ${FLEET_ACTIVITY_RETENTION:-}
-      FLEET_AUDIT_RETENTION: ${FLEET_AUDIT_RETENTION:-}
-      FLEET_MONITOR_CONCURRENCY: ${FLEET_MONITOR_CONCURRENCY:-}
-      FLEET_SCAN_DIR: /var/lib/fleet/scans
-      FLEET_SCAN_TIMEOUT: ${FLEET_SCAN_TIMEOUT:-60m}
-      FLEET_PLAYBOOK_TIMEOUT: ${FLEET_PLAYBOOK_TIMEOUT:-30m}
-      FLEET_VAULT_ROTATION_CHECK: ${FLEET_VAULT_ROTATION_CHECK:-30m}
-      FLEET_SCAP_CONTENT_DIR: /var/lib/fleet/scap-content
-      FLEET_SCAP_CONTENT_VERSION: ${FLEET_SCAP_CONTENT_VERSION:-}
-      FLEET_ANSIBLE_RUNNER_URL: ${FLEET_ANSIBLE_RUNNER_URL:-http://ansible-runner:8000}
+      PROV_MULTI_TENANCY: ${PROV_MULTI_TENANCY:-${FLEET_MULTI_TENANCY:-false}}
+      PROV_RDP_COLLECT_FACTS: ${PROV_RDP_COLLECT_FACTS:-${FLEET_RDP_COLLECT_FACTS:-}}
+      PROV_RDP_WINRM_PORTS: ${PROV_RDP_WINRM_PORTS:-${FLEET_RDP_WINRM_PORTS:-}}
+      PROV_RECORDING_DIR: /var/lib/prov/recordings
+      PROV_ACTIVITY_RETENTION: ${PROV_ACTIVITY_RETENTION:-${FLEET_ACTIVITY_RETENTION:-}}
+      PROV_AUDIT_RETENTION: ${PROV_AUDIT_RETENTION:-${FLEET_AUDIT_RETENTION:-}}
+      PROV_MONITOR_CONCURRENCY: ${PROV_MONITOR_CONCURRENCY:-${FLEET_MONITOR_CONCURRENCY:-}}
+      PROV_SCAN_DIR: /var/lib/prov/scans
+      PROV_SCAN_TIMEOUT: ${PROV_SCAN_TIMEOUT:-${FLEET_SCAN_TIMEOUT:-60m}}
+      PROV_PLAYBOOK_TIMEOUT: ${PROV_PLAYBOOK_TIMEOUT:-${FLEET_PLAYBOOK_TIMEOUT:-30m}}
+      PROV_VAULT_ROTATION_CHECK: ${PROV_VAULT_ROTATION_CHECK:-${FLEET_VAULT_ROTATION_CHECK:-30m}}
+      PROV_SCAP_CONTENT_DIR: /var/lib/prov/scap-content
+      PROV_SCAP_CONTENT_VERSION: ${PROV_SCAP_CONTENT_VERSION:-${FLEET_SCAP_CONTENT_VERSION:-}}
+      PROV_ANSIBLE_RUNNER_URL: ${PROV_ANSIBLE_RUNNER_URL:-${FLEET_ANSIBLE_RUNNER_URL:-http://ansible-runner:8000}}
       # Shared secret the backend sends (X-Runner-Token) to the ansible-runner sidecar.
       # REQUIRED outside development (the backend refuses to start without it): without
       # it, anything on the internal network could submit playbooks (RCE). The runner
       # sidecar reads the SAME value below. `openssl rand -hex 32`.
-      FLEET_ANSIBLE_RUNNER_TOKEN: ${FLEET_ANSIBLE_RUNNER_TOKEN:-}
-      FLEET_GRYPE_SCANNER_URL: ${FLEET_GRYPE_SCANNER_URL:-http://grype-scanner:8000}
+      PROV_ANSIBLE_RUNNER_TOKEN: ${PROV_ANSIBLE_RUNNER_TOKEN:-${FLEET_ANSIBLE_RUNNER_TOKEN:-}}
+      PROV_GRYPE_SCANNER_URL: ${PROV_GRYPE_SCANNER_URL:-${FLEET_GRYPE_SCANNER_URL:-http://grype-scanner:8000}}
       # Image building (docs/imaging.md). Empty by default and the whole build
       # path is simply absent: the sidecar needs the Docker socket and a lot of
       # disk, and a fleet that consumes images somebody else builds should not
       # have to run it. Bring it up with `--profile imaging` and set both.
-      FLEET_BUILDER_RUNNER_URL: ${FLEET_BUILDER_RUNNER_URL:-}
+      PROV_BUILDER_RUNNER_URL: ${PROV_BUILDER_RUNNER_URL:-${FLEET_BUILDER_RUNNER_URL:-}}
       # Shared secret the backend sends (X-Runner-Token) to the builder runner.
       # The runner can start PRIVILEGED containers, so anything on the internal
       # network that can reach it unauthenticated is root on the host. Required
       # outside development whenever a runner URL is set. `openssl rand -hex 32`.
-      FLEET_BUILDER_RUNNER_TOKEN: ${FLEET_BUILDER_RUNNER_TOKEN:-}
+      PROV_BUILDER_RUNNER_TOKEN: ${PROV_BUILDER_RUNNER_TOKEN:-${FLEET_BUILDER_RUNNER_TOKEN:-}}
       # Where built images and bundles live, and the address machines in the
       # FIELD reach this server on -- routinely not the address an operator's
       # browser uses. See docs/imaging.md.
-      FLEET_ARTIFACT_DIR: ${FLEET_ARTIFACT_DIR:-/output}
-      FLEET_CONTROL_URL: ${FLEET_CONTROL_URL:-}
+      PROV_ARTIFACT_DIR: ${PROV_ARTIFACT_DIR:-${FLEET_ARTIFACT_DIR:-/output}}
+      PROV_CONTROL_URL: ${PROV_CONTROL_URL:-${FLEET_CONTROL_URL:-}}
       # How often a machine's agent checks in. Sent in every reply, so changing
       # it re-paces the whole fleet without touching a machine.
-      FLEET_AGENT_INTERVAL: ${FLEET_AGENT_INTERVAL:-300}
+      PROV_AGENT_INTERVAL: ${PROV_AGENT_INTERVAL:-${FLEET_AGENT_INTERVAL:-300}}
       # Optional shared secret an agent must present to check in. Off by
       # default: the first heartbeat arrives from a machine that has just been
       # imaged and holds no credential. Set it when the control plane is
       # reachable from a network that is not the provisioning one -- and set the
       # SAME value in each machine's /etc/flipside/agent.conf, or they are
       # rejected and simply stop reporting.
-      FLEET_AGENT_TOKEN: ${FLEET_AGENT_TOKEN:-}
+      PROV_AGENT_TOKEN: ${PROV_AGENT_TOKEN:-${FLEET_AGENT_TOKEN:-}}
       # Whether machines a live rollout is waiting on are asked to check in now
       # rather than on their own timer. Off, rollouts still work, only slower.
-      FLEET_IMAGING_NUDGE: ${FLEET_IMAGING_NUDGE:-true}
-      FLEET_MAX_UPLOAD_BYTES: ${FLEET_MAX_UPLOAD_BYTES:-5368709120}
+      PROV_IMAGING_NUDGE: ${PROV_IMAGING_NUDGE:-${FLEET_IMAGING_NUDGE:-true}}
+      PROV_MAX_UPLOAD_BYTES: ${PROV_MAX_UPLOAD_BYTES:-${FLEET_MAX_UPLOAD_BYTES:-5368709120}}
       # WireGuard overlay — managed-host enrollment uses these. Empty falls back
-      # to the binary's defaults (see .env.example). FLEET_WG_JUMP_ENDPOINT MUST
-      # be set to a public/LAN address managed hosts can dial; FLEET_WG_INTERFACE
+      # to the binary's defaults (see .env.example). PROV_WG_JUMP_ENDPOINT MUST
+      # be set to a public/LAN address managed hosts can dial; PROV_WG_INTERFACE
       # lets you avoid colliding with an existing wg0 on managed hosts.
-      FLEET_WG_INTERFACE: ${FLEET_WG_INTERFACE:-}
-      FLEET_WG_SUBNET: ${FLEET_WG_SUBNET:-}
-      FLEET_WG_JUMP_IP: ${FLEET_WG_JUMP_IP:-}
-      FLEET_WG_JUMP_ENDPOINT: ${FLEET_WG_JUMP_ENDPOINT:-}
-      FLEET_WG_PORT: ${FLEET_WG_PORT:-}
+      PROV_WG_INTERFACE: ${PROV_WG_INTERFACE:-${FLEET_WG_INTERFACE:-}}
+      PROV_WG_SUBNET: ${PROV_WG_SUBNET:-${FLEET_WG_SUBNET:-}}
+      PROV_WG_JUMP_IP: ${PROV_WG_JUMP_IP:-${FLEET_WG_JUMP_IP:-}}
+      PROV_WG_JUMP_ENDPOINT: ${PROV_WG_JUMP_ENDPOINT:-${FLEET_WG_JUMP_ENDPOINT:-}}
+      PROV_WG_PORT: ${PROV_WG_PORT:-${FLEET_WG_PORT:-}}
       # OpenVPN overlay (the certificate/FIPS transport). It has its OWN subnet:
       # both overlays terminate on the same jump host, and one shared subnet gives
       # that host two routes for the same prefix. Empty falls back to the binary's
       # defaults (10.101.0.0/24, or the WireGuard subnet on an OpenVPN-only install).
-      FLEET_OVPN_SUBNET: ${FLEET_OVPN_SUBNET:-}
-      FLEET_OVPN_JUMP_IP: ${FLEET_OVPN_JUMP_IP:-}
-      FLEET_OVPN_PORT: ${FLEET_OVPN_PORT:-}
+      PROV_OVPN_SUBNET: ${PROV_OVPN_SUBNET:-${FLEET_OVPN_SUBNET:-}}
+      PROV_OVPN_JUMP_IP: ${PROV_OVPN_JUMP_IP:-${FLEET_OVPN_JUMP_IP:-}}
+      PROV_OVPN_PORT: ${PROV_OVPN_PORT:-${FLEET_OVPN_PORT:-}}
       # Sessions, tokens, certificate lifetimes.
-      FLEET_ACCESS_TOKEN_TTL: ${FLEET_ACCESS_TOKEN_TTL:-}
-      FLEET_REFRESH_TOKEN_TTL: ${FLEET_REFRESH_TOKEN_TTL:-}
-      FLEET_SESSION_IDLE_TTL: ${FLEET_SESSION_IDLE_TTL:-}
-      FLEET_SESSION_ABSOLUTE_TTL: ${FLEET_SESSION_ABSOLUTE_TTL:-}
-      FLEET_USER_CERT_TTL: ${FLEET_USER_CERT_TTL:-}
-      FLEET_CERT_RENEW_BEFORE: ${FLEET_CERT_RENEW_BEFORE:-}
-      FLEET_HOST_CERT_TTL: ${FLEET_HOST_CERT_TTL:-}
-      FLEET_COOKIE_DOMAIN: ${FLEET_COOKIE_DOMAIN:-}
+      PROV_ACCESS_TOKEN_TTL: ${PROV_ACCESS_TOKEN_TTL:-${FLEET_ACCESS_TOKEN_TTL:-}}
+      PROV_REFRESH_TOKEN_TTL: ${PROV_REFRESH_TOKEN_TTL:-${FLEET_REFRESH_TOKEN_TTL:-}}
+      PROV_SESSION_IDLE_TTL: ${PROV_SESSION_IDLE_TTL:-${FLEET_SESSION_IDLE_TTL:-}}
+      PROV_SESSION_ABSOLUTE_TTL: ${PROV_SESSION_ABSOLUTE_TTL:-${FLEET_SESSION_ABSOLUTE_TTL:-}}
+      PROV_USER_CERT_TTL: ${PROV_USER_CERT_TTL:-${FLEET_USER_CERT_TTL:-}}
+      PROV_CERT_RENEW_BEFORE: ${PROV_CERT_RENEW_BEFORE:-${FLEET_CERT_RENEW_BEFORE:-}}
+      PROV_HOST_CERT_TTL: ${PROV_HOST_CERT_TTL:-${FLEET_HOST_CERT_TTL:-}}
+      PROV_COOKIE_DOMAIN: ${PROV_COOKIE_DOMAIN:-${FLEET_COOKIE_DOMAIN:-}}
       # Per-IP rate limiting.
-      FLEET_RATE_LIMIT_PER_MIN: ${FLEET_RATE_LIMIT_PER_MIN:-}
-      FLEET_RATE_LIMIT_BURST: ${FLEET_RATE_LIMIT_BURST:-}
-      FLEET_AUTH_RATE_LIMIT_PER_MIN: ${FLEET_AUTH_RATE_LIMIT_PER_MIN:-}
-      FLEET_AUTH_RATE_LIMIT_BURST: ${FLEET_AUTH_RATE_LIMIT_BURST:-}
+      PROV_RATE_LIMIT_PER_MIN: ${PROV_RATE_LIMIT_PER_MIN:-${FLEET_RATE_LIMIT_PER_MIN:-}}
+      PROV_RATE_LIMIT_BURST: ${PROV_RATE_LIMIT_BURST:-${FLEET_RATE_LIMIT_BURST:-}}
+      PROV_AUTH_RATE_LIMIT_PER_MIN: ${PROV_AUTH_RATE_LIMIT_PER_MIN:-${FLEET_AUTH_RATE_LIMIT_PER_MIN:-}}
+      PROV_AUTH_RATE_LIMIT_BURST: ${PROV_AUTH_RATE_LIMIT_BURST:-${FLEET_AUTH_RATE_LIMIT_BURST:-}}
       # Bootstrap, MFA/WebAuthn (RPID/origins derive from PUBLIC_URL if empty).
-      FLEET_ALLOW_BOOTSTRAP: ${FLEET_ALLOW_BOOTSTRAP:-}
-      FLEET_WEBAUTHN_RPID: ${FLEET_WEBAUTHN_RPID:-}
-      FLEET_WEBAUTHN_RP_NAME: ${FLEET_WEBAUTHN_RP_NAME:-}
-      FLEET_WEBAUTHN_ORIGINS: ${FLEET_WEBAUTHN_ORIGINS:-}
+      PROV_ALLOW_BOOTSTRAP: ${PROV_ALLOW_BOOTSTRAP:-${FLEET_ALLOW_BOOTSTRAP:-}}
+      PROV_WEBAUTHN_RPID: ${PROV_WEBAUTHN_RPID:-${FLEET_WEBAUTHN_RPID:-}}
+      PROV_WEBAUTHN_RP_NAME: ${PROV_WEBAUTHN_RP_NAME:-${FLEET_WEBAUTHN_RP_NAME:-}}
+      PROV_WEBAUTHN_ORIGINS: ${PROV_WEBAUTHN_ORIGINS:-${FLEET_WEBAUTHN_ORIGINS:-}}
       # Observability / DB pool.
-      FLEET_LOG_LEVEL: ${FLEET_LOG_LEVEL:-}
-      FLEET_LOG_FORMAT: ${FLEET_LOG_FORMAT:-}
-      FLEET_TRACING: ${FLEET_TRACING:-}
-      FLEET_OTLP_ENDPOINT: ${FLEET_OTLP_ENDPOINT:-}
-      FLEET_DB_MAX_CONNS: ${FLEET_DB_MAX_CONNS:-}
-      FLEET_DB_MIN_CONNS: ${FLEET_DB_MIN_CONNS:-}
+      PROV_LOG_LEVEL: ${PROV_LOG_LEVEL:-${FLEET_LOG_LEVEL:-}}
+      PROV_LOG_FORMAT: ${PROV_LOG_FORMAT:-${FLEET_LOG_FORMAT:-}}
+      PROV_TRACING: ${PROV_TRACING:-${FLEET_TRACING:-}}
+      PROV_OTLP_ENDPOINT: ${PROV_OTLP_ENDPOINT:-${FLEET_OTLP_ENDPOINT:-}}
+      PROV_DB_MAX_CONNS: ${PROV_DB_MAX_CONNS:-${FLEET_DB_MAX_CONNS:-}}
+      PROV_DB_MIN_CONNS: ${PROV_DB_MIN_CONNS:-${FLEET_DB_MIN_CONNS:-}}
       # In-UI upgrade system: trusted release key(s), the updater sidecar address, a
       # shared secret only the backend knows, and the staging dir on the shared volume.
-      FLEET_RELEASE_TRUST_KEYS: ${FLEET_RELEASE_TRUST_KEYS:-}
-      FLEET_UPDATER_URL: ${FLEET_UPDATER_URL:-http://fleet-updater:9000}
-      FLEET_UPDATER_TOKEN: ${FLEET_UPDATER_TOKEN:-}
-      FLEET_UPDATES_DIR: /var/lib/fleet/updates
+      PROV_RELEASE_TRUST_KEYS: ${PROV_RELEASE_TRUST_KEYS:-${FLEET_RELEASE_TRUST_KEYS:-}}
+      PROV_UPDATER_URL: ${PROV_UPDATER_URL:-${FLEET_UPDATER_URL:-http://prov-updater:9000}}
+      PROV_UPDATER_TOKEN: ${PROV_UPDATER_TOKEN:-${FLEET_UPDATER_TOKEN:-}}
+      PROV_UPDATES_DIR: /var/lib/prov/updates
       # Optional signed release-channel index for the "check for updates" button.
-      FLEET_UPDATE_CHANNEL_URL: ${FLEET_UPDATE_CHANNEL_URL:-}
+      PROV_UPDATE_CHANNEL_URL: ${PROV_UPDATE_CHANNEL_URL:-${FLEET_UPDATE_CHANNEL_URL:-}}
     volumes:
-      - recordings:/var/lib/fleet/recordings
-      - scans:/var/lib/fleet/scans
-      - scap-content:/var/lib/fleet/scap-content
-      - backups:/var/lib/fleet/backups
-      - rdp-drive:/var/lib/fleet/rdp-drive
-      - updates:/var/lib/fleet/updates
+      - recordings:/var/lib/prov/recordings
+      - scans:/var/lib/prov/scans
+      - scap-content:/var/lib/prov/scap-content
+      - backups:/var/lib/prov/backups
+      - rdp-drive:/var/lib/prov/rdp-drive
+      - updates:/var/lib/prov/updates
       # The artefact library: built images and signed update bundles.
       #
       # A host bind, not a named volume, and the SAME directory the builder
@@ -264,9 +264,9 @@ services:
       # `fleet` network (proxy_pass http://backend:8080), so the published port is
       # only for local debugging. This keeps the unauthenticated /metrics, /health,
       # and /ready endpoints off any public interface. Front the API through nginx
-      # (set FLEET_PUBLIC_URL to your domain) rather than exposing 8080 directly.
+      # (set PROV_PUBLIC_URL to your domain) rather than exposing 8080 directly.
       - "127.0.0.1:8080:8080"
-    networks: [fleet]
+    networks: [prov]
 
   frontend:
     build:
@@ -274,10 +274,10 @@ services:
       # docs/, which the in-app help bundle is generated from at build time.
       context: ../..
       dockerfile: frontend/Dockerfile
-    image: fleet-terminal-frontend
+    image: provenance-frontend
     restart: unless-stopped
     environment:
-      VITE_API_BASE: ${FLEET_PUBLIC_URL:-http://localhost:8080}
+      VITE_API_BASE: ${PROV_PUBLIC_URL:-${FLEET_PUBLIC_URL:-http://localhost:8080}}
     depends_on:
       - backend
     deploy:
@@ -290,7 +290,7 @@ services:
           memory: 32M
     ports:
       - "5173:80"
-    networks: [fleet]
+    networks: [prov]
 
   # Sidecar that validates/lints (and, later, runs) Ansible playbooks for the
   # backend. Internal-only: not published on the host, reachable on the fleet
@@ -301,12 +301,12 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      # Must match the backend's FLEET_ANSIBLE_RUNNER_TOKEN; the runner rejects any
+      # Must match the backend's PROV_ANSIBLE_RUNNER_TOKEN; the runner rejects any
       # execute/check request whose X-Runner-Token doesn't match.
-      FLEET_ANSIBLE_RUNNER_TOKEN: ${FLEET_ANSIBLE_RUNNER_TOKEN:-}
+      PROV_ANSIBLE_RUNNER_TOKEN: ${PROV_ANSIBLE_RUNNER_TOKEN:-${FLEET_ANSIBLE_RUNNER_TOKEN:-}}
       # Ansible connection/become-prompt timeout (seconds). The runner defaults to 30
       # so a momentary overlay blip (TCP retransmission backoff) can't fail a host.
-      FLEET_ANSIBLE_TIMEOUT: ${FLEET_ANSIBLE_TIMEOUT:-30}
+      PROV_ANSIBLE_TIMEOUT: ${PROV_ANSIBLE_TIMEOUT:-${FLEET_ANSIBLE_TIMEOUT:-30}}
     deploy:
       resources:
         limits:
@@ -315,7 +315,7 @@ services:
         reservations:
           cpus: "0.1"
           memory: 64M
-    networks: [fleet]
+    networks: [prov]
 
   # The Docker socket, behind an allowlist.
   #
@@ -329,7 +329,7 @@ services:
     profiles: [imaging]
     build:
       context: ../dockerproxy
-    image: blackfriars-dockerproxy
+    image: provenance-dockerproxy
     restart: unless-stopped
     environment:
       # Where the project lives on the host, which bounds what may be
@@ -338,7 +338,7 @@ services:
       HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
       # Whose /project mount to read the host path from. Must match the builder
       # runner's container_name.
-      PROJECT_CONTAINER: blackfriars-builder-runner
+      PROJECT_CONTAINER: provenance-builder-runner
       LOG_LEVEL: ${PROXY_LOG_LEVEL:-INFO}
       # Cross-architecture builds (an arm64 image on an amd64 host) need a qemu
       # interpreter registered with binfmt_misc. Off by default: registering it
@@ -363,7 +363,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
-    networks: [fleet]
+    networks: [prov]
 
   # Sidecar that builds OS images and update bundles, and drives the PXE
   # provisioning stack. Internal only, reachable at http://builder-runner:8000.
@@ -382,18 +382,18 @@ services:
     build:
       context: ../builder-runner
       dockerfile: Dockerfile
-    image: blackfriars-builder-runner
+    image: provenance-builder-runner
     # A fixed name so dockerproxy can inspect this container's /project mount and
     # learn where the project lives on the host. Compose's generated name carries
     # the project prefix and a replica index; the proxy needs one stable string.
-    container_name: blackfriars-builder-runner
+    container_name: provenance-builder-runner
     restart: unless-stopped
     environment:
-      # Must match the backend's FLEET_BUILDER_RUNNER_TOKEN.
-      FLEET_BUILDER_RUNNER_TOKEN: ${FLEET_BUILDER_RUNNER_TOKEN:-}
+      # Must match the backend's PROV_BUILDER_RUNNER_TOKEN.
+      PROV_BUILDER_RUNNER_TOKEN: ${PROV_BUILDER_RUNNER_TOKEN:-${FLEET_BUILDER_RUNNER_TOKEN:-}}
       # The address machines in the field reach the control plane on. The
       # provisioning stack is rendered with it, so it has to be known here too.
-      CONTROL_URL: ${FLEET_CONTROL_URL:-}
+      CONTROL_URL: ${PROV_CONTROL_URL:-${FLEET_CONTROL_URL:-}}
       # Absolute path to the project ON THE HOST. Sibling containers are started
       # through the Docker socket, so the daemon resolves their bind mounts
       # against the host filesystem, not this container's. Left empty it is
@@ -437,7 +437,7 @@ services:
         reservations:
           cpus: "0.1"
           memory: 128M
-    networks: [fleet]
+    networks: [prov]
 
   # Sidecar that runs Anchore Grype vulnerability scans for the backend. Internal
   # only, reachable at http://grype-scanner:8000. The vulnerability database is
@@ -447,7 +447,7 @@ services:
     build:
       context: ../grype-scanner
       dockerfile: Dockerfile
-    image: fleet-terminal-grype-scanner
+    image: provenance-grype-scanner
     restart: unless-stopped
     environment:
       # How many grype scans run concurrently. grype is CPU/memory-heavy (it loads
@@ -457,7 +457,7 @@ services:
       # Per-scan wall-clock cap (seconds) before the scanner returns 504 "scan timed
       # out". Must be >= the time grype needs on your LARGEST host: a host with a big
       # package database (e.g. an ML/CUDA box with thousands of dpkg entries) can take
-      # several minutes. Default 20m to match the backend's FLEET_VULN_SCAN_TIMEOUT so
+      # several minutes. Default 20m to match the backend's PROV_VULN_SCAN_TIMEOUT so
       # the scanner never gives up before the backend would. Raise if a host still 504s.
       GRYPE_SCAN_TIMEOUT: ${GRYPE_SCAN_TIMEOUT:-1200}
       # Wall-clock cap (seconds) for a grype DB update/import (the ~1 GB vuln DB).
@@ -474,43 +474,43 @@ services:
         reservations:
           cpus: "0.1"
           memory: 128M
-    networks: [fleet]
+    networks: [prov]
 
   # Privileged upgrade sidecar (in-UI upgrade system). It holds the Docker socket so
-  # it can swap the app images when an operator applies a signed .fleetup bundle. It
+  # it can swap the app images when an operator applies a signed .provup bundle. It
   # independently re-verifies every bundle's signature, so it never trusts the
   # backend. Not published on any host port — reachable only on the internal network.
   # OMIT this service if you don't want in-UI upgrades (the Docker socket is a
   # host-root-equivalent grant); upgrades then remain a `make redeploy-single` step.
-  fleet-updater:
+  prov-updater:
     build:
       context: ../../backend
       dockerfile: Dockerfile.updater
-    image: fleet-terminal-fleet-updater
+    image: provenance-prov-updater
     restart: unless-stopped
     environment:
-      FLEET_UPDATER_TOKEN: ${FLEET_UPDATER_TOKEN:-}
-      FLEET_RELEASE_TRUST_KEYS: ${FLEET_RELEASE_TRUST_KEYS:-}
-      FLEET_UPDATES_DIR: /var/lib/fleet/updates
-      FLEET_UPDATER_PROJECT: fleet-terminal
-      FLEET_UPDATER_COMPOSE_FILES: /compose/docker-compose.yml:/compose/docker-compose.jumphost.yml
+      PROV_UPDATER_TOKEN: ${PROV_UPDATER_TOKEN:-${FLEET_UPDATER_TOKEN:-}}
+      PROV_RELEASE_TRUST_KEYS: ${PROV_RELEASE_TRUST_KEYS:-${FLEET_RELEASE_TRUST_KEYS:-}}
+      PROV_UPDATES_DIR: /var/lib/prov/updates
+      PROV_UPDATER_PROJECT: provenance
+      PROV_UPDATER_COMPOSE_FILES: /compose/docker-compose.yml:/compose/docker-compose.jumphost.yml
       # The root .env is mounted at its OWN path (not inside the read-only /compose
       # mount — you can't create a mount target file inside a read-only bind mount).
-      FLEET_UPDATER_ENV_FILE: /fleet.env
-      FLEET_UPDATER_BACKEND_URL: http://backend:8080
+      PROV_UPDATER_ENV_FILE: /prov.env
+      PROV_UPDATER_BACKEND_URL: http://backend:8080
     volumes:
       # The Docker socket is what makes this component privileged — it is the whole
       # reason the backend delegates the container swap here instead of doing it itself.
       - /var/run/docker.sock:/var/run/docker.sock
-      - updates:/var/lib/fleet/updates
+      - updates:/var/lib/prov/updates
       # The compose project files + root .env, so the updater runs compose against the
       # same project. Read-only; build contexts are unused (the updater passes --no-build).
       - ../compose:/compose:ro
       # Writable: the updater merges additive config keys (and generated secrets like
-      # FLEET_UPDATER_TOKEN) declared in a signed bundle's manifest into .env before it
+      # PROV_UPDATER_TOKEN) declared in a signed bundle's manifest into .env before it
       # recreates containers. Strictly additive — operator-set values are never touched.
-      - ../../.env:/fleet.env:rw
-    networks: [fleet]
+      - ../../.env:/prov.env:rw
+    networks: [prov]
 
   # Apache Guacamole daemon: brokers RDP (and VNC) desktop sessions for the
   # backend. Internal only, reachable at guacd:4822. The backend tunnels the
@@ -518,7 +518,7 @@ services:
   # back to the backend — it needs no direct route to managed hosts.
   #
   # guacd writes RDP session recordings into the shared `recordings` volume (under
-  # /var/lib/fleet/recordings/rdp), which the backend serves back for replay, and
+  # /var/lib/prov/recordings/rdp), which the backend serves back for replay, and
   # per-session redirected-drive files into the `rdp-drive` volume (for RDP file
   # transfer, cleaned up by the backend when the session ends). It runs as the
   # backend's `fleet` user (uid 100 / gid 101 from the backend image) so the backend
@@ -533,9 +533,9 @@ services:
       HOME: /tmp
     restart: unless-stopped
     volumes:
-      - recordings:/var/lib/fleet/recordings
-      - rdp-drive:/var/lib/fleet/rdp-drive
-    networks: [fleet]
+      - recordings:/var/lib/prov/recordings
+      - rdp-drive:/var/lib/prov/rdp-drive
+    networks: [prov]
 
 volumes:
   pgdata:
@@ -545,9 +545,9 @@ volumes:
   backups:
   grype-db:
   rdp-drive:
-  updates: # staged upgrade bundles, shared between backend and fleet-updater
+  updates: # staged upgrade bundles, shared between backend and prov-updater
   dockerproxy: # the allowlisted socket the builder runner talks to
 
 networks:
-  fleet:
+  prov:
     driver: bridge

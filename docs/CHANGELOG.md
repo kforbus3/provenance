@@ -471,7 +471,7 @@ which container to exec into and which table to query. Settings → Support bund
 gives one file: versions and cluster members, applied migrations, non-secret
 configuration, scheduled job results, dependency health, a fleet summary, and
 recent logs from every Provenance container. Nothing is stored on the server.
-`fleetctl support-bundle` produces the same thing without the backend, since a
+`provctl support-bundle` produces the same thing without the backend, since a
 diagnostic tool that needs the thing being diagnosed to be healthy is not much of
 one — and a source that cannot be reached is recorded in the manifest rather than
 losing the rest of the bundle.
@@ -979,7 +979,7 @@ so folding it into "broken" would park an unfixable failure at the head of the
 report and hide every genuine break behind it. `/audit/verify` returns
 `weakFromSeq`, `weakCount` and a reason alongside `intact`.
 
-**`fleetctl` now keys the chain it writes to.** It loaded the key and never
+**`provctl` now keys the chain it writes to.** It loaded the key and never
 installed it, so every row it wrote used the legacy keyless hash — and its
 commands are the most sensitive in the product: `create-admin`, `rotate-ca`,
 `reset-mfa`, `enable-user`. It surfaced only as a warning that read like a missing
@@ -1127,10 +1127,10 @@ of the SSH control plane this grew out of. That entry is still below, and the
 tag now points here.
 
 **The product is now Provenance.** Brand and Go module path only — every
-`FLEET_*` setting, binary name, `.fleetup` bundle, compose project, container
+`PROV_*` setting, binary name, `.provup` bundle, compose project, container
 name and database object is unchanged, so nothing on a deployed machine has to
 change because the product got a name. The container names in particular stay
-`blackfriars-`: the Docker socket proxy's allowlist keys off that prefix to
+`provenance-`: the Docker socket proxy's allowlist keys off that prefix to
 decide what may be created, and renaming it would turn a security control into a
 refusal to build anything.
 
@@ -1161,7 +1161,7 @@ nothing failed until the first update was attempted.
 
 ### Reaching machines that have moved
 
-A machine is imaged on a provisioning segment and then moved. `FLEET_CONTROL_URL`
+A machine is imaged on a provisioning segment and then moved. `PROV_CONTROL_URL`
 tells it where the server lives afterwards — but setting it does nothing unless
 something serves `/bundles/` at that address, and the provisioning listener is
 bound to the imaging segment on purpose. `UPDATE_IP` switches on a second
@@ -1198,15 +1198,15 @@ from — only for something to look.
   classified as a proxy and thrown away. One shared auth rate-limit bucket for an
   entire organisation, and an audit log recording where requests were relayed.
   It was also spoofable in the case it existed to prevent. Replaced with a hop
-  count, `FLEET_TRUSTED_PROXY_HOPS`.
+  count, `PROV_TRUSTED_PROXY_HOPS`.
 - **Audit IPs could be forged.** Four handlers read the left-most
   `X-Forwarded-For` entry — the one the caller writes — so any authenticated user
   could choose the address recorded against their Kubernetes exec, database query,
   SFTP transfer or ad-hoc command.
 - **Two imaging routes skipped the access check their siblings enforce**, letting
   a host-group-scoped operator hold or delete a machine they cannot see.
-- **Production refuses to boot misconfigured**: a localhost `FLEET_PUBLIC_URL`,
-  or `FLEET_COOKIE_SECURE=false` while serving https. Both booted cleanly before
+- **Production refuses to boot misconfigured**: a localhost `PROV_PUBLIC_URL`,
+  or `PROV_COOKIE_SECURE=false` while serving https. Both booted cleanly before
   and failed later, somewhere else.
 
 ### Performance and correctness
@@ -1233,12 +1233,12 @@ from — only for something to look.
 ### Known and deliberate
 
 - **Data retention ships off.** Turning it on would silently delete audit history,
-  which is not a default anybody should inherit. Set `FLEET_AUDIT_RETENTION` and
-  `FLEET_ACTIVITY_RETENTION` deliberately.
+  which is not a default anybody should inherit. Set `PROV_AUDIT_RETENTION` and
+  `PROV_ACTIVITY_RETENTION` deliberately.
 (The three performance limits listed here before release are now fixed in
 v1.0.1.)
 
-**Provenance is Moorgate and Flipside as one program.** Not one product driving
+**Provenance is Provenance and Flipside as one program.** Not one product driving
 the other over an API — one codebase, one database, one set of host groups, one
 permission model, one audit log. That distinction is the whole of this release.
 
@@ -1298,11 +1298,11 @@ own timer. One set of rules governs a rollout however it was started.
 - An observation read off a host no longer blanks an update state it never
   claimed.
 
-**Configuration.** `FLEET_CONTROL_URL` is the one to get right: the address
+**Configuration.** `PROV_CONTROL_URL` is the one to get right: the address
 machines **in the field** reach this server on, routinely not the address a
-browser uses. Also `FLEET_ARTIFACT_DIR`, `FLEET_AGENT_INTERVAL`,
-`FLEET_AGENT_TOKEN`, `FLEET_IMAGING_NUDGE`, and — only if you build here —
-`FLEET_BUILDER_RUNNER_URL` with a matching `FLEET_BUILDER_RUNNER_TOKEN`. All are
+browser uses. Also `PROV_ARTIFACT_DIR`, `PROV_AGENT_INTERVAL`,
+`PROV_AGENT_TOKEN`, `PROV_IMAGING_NUDGE`, and — only if you build here —
+`PROV_BUILDER_RUNNER_URL` with a matching `PROV_BUILDER_RUNNER_TOKEN`. All are
 in `.env.example`.
 
 **Not shipped:** there is no Kubernetes manifest for the builder, deliberately.
@@ -1317,7 +1317,7 @@ Storing afterwards would mean a failed write had already produced an encrypted
 image nobody holds the key for, which looks exactly like a success.
 
 - **External secrets manager when one is connected** (Vault KV v2 or AWS Secrets
-  Manager), under `FLEET_IMAGING_SECRET_PREFIX`; **Fleet's own credential vault
+  Manager), under `PROV_IMAGING_SECRET_PREFIX`; **Provenance's own credential vault
   otherwise**, sealed at rest. Either way a credential record is created, so it is
   found the same way in Credentials — an external-backed record carries a
   reference rather than a sealed blob.
@@ -1626,7 +1626,7 @@ permission that nothing in the interface could exercise.
 **Fixed: the socket proxy refused the runner its own image, and the symptom was an
 empty interface list.** Host NICs are enumerated by running a throwaway container
 from the runner's own image in the host network namespace. The compose images were
-renamed to `blackfriars-` and the proxy's allowlist was not, so that `docker run`
+renamed to `provenance-` and the proxy's allowlist was not, so that `docker run`
 was denied, the orchestrator swallowed the error, and Provisioning offered nothing
 to choose from and no reason why. The allowlist now covers both naming eras, and
 the runner's `_self_image()` fallback no longer names a Flipside container that
@@ -1634,13 +1634,13 @@ does not exist here. Allowing it to *run* did not allow it to run privileged —
 that stays confined to the builder and imager.
 
 Deploying any of this needs the `imaging` profile (`docker compose --profile
-imaging up -d`) plus `FLEET_BUILDER_RUNNER_URL`, `FLEET_BUILDER_RUNNER_TOKEN` and
+imaging up -d`) plus `PROV_BUILDER_RUNNER_URL`, `PROV_BUILDER_RUNNER_TOKEN` and
 `HOST_PROJECT_DIR`. Without them the build routes answer 501 and Provisioning has
 no server to start — the deployment being incomplete, not the page being broken.
 
 ### The Vulnerabilities page leads with what can actually be fixed
 
-Ported from Moorgate v2.1.0, which shipped it separately; it belongs here too and
+Ported from Provenance v2.1.0, which shipped it separately; it belongs here too and
 Provenance has not had a release of its own to carry it.
 
 The roll-up was answering the wrong question. A fully-patched fleet rendered as a
@@ -1682,17 +1682,17 @@ the fixable severity counts read 0 — which is also what a patched host reports
 the roll-up stays honest — and findings show no source package, falling back to
 the binary name for grouping. **Re-scan to populate them.**
 
-The `FLEET_*` names, the `fleetd`/`fleetctl`/`fleet` binaries, the `.fleetup`
+The `PROV_*` names, the `provd`/`provctl`/`fleet` binaries, the `.provup`
 bundle format and the container names are unchanged. The Go module path is now
-`github.com/kforbus3/blackfriars`.
+`github.com/kforbus3/provenance`.
 
 See [imaging.md](./imaging.md).
 
 ---
 
-## v2.0.0 — Blackfriars — 2026-08-16
+## v2.0.0 — Provenance — 2026-08-16
 
-The product is now **Blackfriars**. Alongside the rename, this release closes every
+The product is now **Provenance**. Alongside the rename, this release closes every
 blocker and security finding from the enterprise-readiness audit and adds the
 hardening an enterprise deployment expects. It is the first release verified by
 deploying the Helm chart to a real Kubernetes cluster, not just by rendering it.
@@ -1701,13 +1701,13 @@ deploying the Helm chart to a real Kubernetes cluster, not just by rendering it.
 **required** in production and the backend fails closed at boot without them. Set
 both before upgrading (generate each with `openssl rand -hex 32`):
 
-- `FLEET_AUDIT_HMAC_KEY` (≥32 bytes) — keys the tamper-evident audit chain.
-- `FLEET_ANSIBLE_RUNNER_TOKEN` (≥16 bytes) — authenticates the backend to the
+- `PROV_AUDIT_HMAC_KEY` (≥32 bytes) — keys the tamper-evident audit chain.
+- `PROV_ANSIBLE_RUNNER_TOKEN` (≥16 bytes) — authenticates the backend to the
   ansible-runner sidecar; set the same value on both.
 
-Optional but recommended: `FLEET_RECORDING_KEY` (≥32 bytes) encrypts session
-recordings at rest. The `FLEET_*` variable names, the `fleetd`/`fleetctl`/`fleet`
-binaries, and the `.fleetup` bundle format are unchanged, so nothing else about an
+Optional but recommended: `PROV_RECORDING_KEY` (≥32 bytes) encrypts session
+recordings at rest. The `PROV_*` variable names, the `provd`/`provctl`/`fleet`
+binaries, and the `.provup` bundle format are unchanged, so nothing else about an
 existing deployment moves.
 
 **Security.** Closed an LDAP account-takeover (a directory identity can no longer
@@ -1723,7 +1723,7 @@ IdP-initiated) with an SP signing-key surface; session recordings (SSH and RDP) 
 be encrypted at rest; SIEM forwarding gains TLS, auth, and a bounded retry queue.
 
 **Scale.** Overlay addressing follows the configured subnet — a `/16`
-(`FLEET_WG_SUBNET`) lifts the old ~240-host ceiling to tens of thousands — and
+(`PROV_WG_SUBNET`) lifts the old ~240-host ceiling to tens of thousands — and
 allocation is race-safe. The host-list query is no longer N+1 (401 → 5 queries per
 100 hosts), and the monitor sweep uses an adaptive cadence with configurable
 concurrency.
@@ -1755,16 +1755,16 @@ The bound was not raisable without editing the binary, which pushed operators to
 splitting a fleet into batches — trading one honest run for several that each hide a
 partial picture.
 
-- **`FLEET_PLAYBOOK_TIMEOUT`** (default `30m`, unchanged) now bounds a playbook run, matching
-  the existing `FLEET_SCAN_TIMEOUT` shape. Raise it rather than batching a large fleet.
+- **`PROV_PLAYBOOK_TIMEOUT`** (default `30m`, unchanged) now bounds a playbook run, matching
+  the existing `PROV_SCAN_TIMEOUT` shape. Raise it rather than batching a large fleet.
 - **The run's ephemeral SSH credential is derived from the bound** instead of being fixed at
   45m. Raising the timeout past 45m would previously have expired the certificate underneath
   a run that was still legitimately in flight, killing it on authentication somewhere in the
   middle of the fleet and leaving hosts half-upgraded. Tests pin both ends.
-- **Documented the hypervisor case** in `docs/operations.md`: rebooting a host Blackfriars runs on
+- **Documented the hypervisor case** in `docs/operations.md`: rebooting a host Provenance runs on
   top of kills the run that asked for it, and the run is later reconciled as `interrupted`
   even though the upgrade succeeded. Defer that reboot past the end of the play
-  (`shutdown -r +10`) and skip the wait — there is nothing left alive on Blackfriars's side to
+  (`shutdown -r +10`) and skip the wait — there is nothing left alive on Provenance's side to
   wait with.
 
 ## v1.6.0 — Ask was answering with no instructions at all — 2026-08-11
@@ -1781,11 +1781,11 @@ system prompt was thrown away before the model saw it: no tool-selection guidanc
 "answer only what was asked", no follow-up rules. Measured against the live model, the
 same question routes to the CVE tool at 4096 and to the scan tool at 32768.
 
-- **Blackfriars now always sends an explicit `num_ctx`** (default 32768, floored at 16384,
+- **Provenance now always sends an explicit `num_ctx`** (default 32768, floored at 16384,
   configurable as `numCtx` in the `assistant` setting and in **Settings → AI
   assistant**). `GET /assistant/status` reports the effective `contextWindow`, the
   `promptFloorTokens` the instructions cost, and warns when the selected model's
-  trained context is shorter than what Blackfriars requests. A test fails the build if the
+  trained context is shorter than what Provenance requests. A test fails the build if the
   prompt and tool schemas grow past half the default window.
 - **Tool results are capped before they reach the model** (~24 KB, largest list
   trimmed, with the true total and an explicit "N of M" note). `audit_log` alone asks
@@ -1801,7 +1801,7 @@ closed:
   has scanned is a finding, not an absence. The fleet-wide answer is built in code, so
   the list is never truncated or miscounted.
 - **`scan_findings`** — the individual benchmark rules a host is failing, worst first,
-  flagging rules whose remediation could sever Blackfriars's own access to that host.
+  flagging rules whose remediation could sever Provenance's own access to that host.
 - **"Security scan" is disambiguated deterministically.** It routes to compliance, says
   which kind it reported, and a correction ("not the vulnerability scans") now switches
   datasets instead of repeating the mistake.
@@ -1817,7 +1817,7 @@ closed:
   model without a dispatch case (which returned `unknown tool`).
 - **Fixed a latent host-extraction bug**: "results for **the** security scans" parsed
   `the` as a hostname, so the tool answered "nothing found for host 'the'" — a false
-  negative that reads exactly like a real empty result. Fleet-wide phrasings ("for each
+  negative that reads exactly like a real empty result. Provenance-wide phrasings ("for each
   host") no longer collapse to a single host.
 
 **Deploy note.** A 32k context window needs more VRAM for the KV cache than the 4096
@@ -1831,8 +1831,8 @@ alongside the tool schemas, which is why that is the floor.
 
 v1.5.1 brought the tunnel down but left a working way back onto it. On a certificate
 overlay the teardown reused the transport-switch retire, which renames `client.ovpn`
-to `.fleet-disabled` and **deliberately keeps** `ca.crt`, `client.crt` and
-`client.key` next to it — so what was left in `/etc/openvpn/fleet` was a complete,
+to `.prov-disabled` and **deliberately keeps** `ca.crt`, `client.crt` and
+`client.key` next to it — so what was left in `/etc/openvpn/prov` was a complete,
 valid config whose key material was intact. Pointing openvpn at it, or simply moving
 it back, rejoined the overlay.
 
@@ -1842,8 +1842,8 @@ overlay CA had ever signed. Retiring a host removed its *pinned address* and not
 more: it would have reconnected and been handed an address from the pool.
 
 - **Teardown now purges instead of retiring.** A new `PurgeHostScript` stops the
-  client and destroys the material it could reconnect with — everything Blackfriars wrote
-  under `/etc/openvpn/fleet`, including the renamed config — while `RetireHostScript`
+  client and destroys the material it could reconnect with — everything Provenance wrote
+  under `/etc/openvpn/prov`, including the renamed config — while `RetireHostScript`
   keeps its transport-switch behaviour, which is the case that legitimately wants the
   certificate kept. WireGuard is purged the same way: its config and private key are
   removed rather than set aside.
@@ -1857,10 +1857,10 @@ more: it would have reconnected and been handed an address from the pool.
   `cert_revocations` works for the SSH CA. The list is re-read per connection, so it
   takes effect without a server restart.
 
-- **`scripts/fleet-unenroll.sh` never touched `/etc/openvpn` at all**, so on an
+- **`scripts/prov-unenroll.sh` never touched `/etc/openvpn` at all**, so on an
   OpenVPN host neither path removed the credential. It now removes the client and its
   certificate material, and takes the WireGuard private key with it as well. It says
-  plainly that it cannot revoke — only Blackfriars can.
+  plainly that it cannot revoke — only Provenance can.
 
 **Deploy note.** The OpenVPN server config now carries `crl-verify`, and openvpn
 refuses to start when that file is missing, so the CRL is written to the jump host
@@ -1877,21 +1877,21 @@ different reasons.
 
 - **The teardown never touched the overlay.** It removed the sudoers grant, both
   accounts, the CA trust, the principal files and the sshd drop-in, and left the
-  WireGuard interface running and enabled at boot — so a host deleted from Blackfriars kept
-  a live tunnel onto the fleet's network with nothing on it that Blackfriars managed or
-  audited. `scripts/fleet-unenroll.sh` retired the transport from the start and the
+  WireGuard interface running and enabled at boot — so a host deleted from Provenance kept
+  a live tunnel onto the fleet's network with nothing on it that Provenance managed or
+  audited. `scripts/prov-unenroll.sh` retired the transport from the start and the
   documentation described that behaviour for both paths, so the gap was invisible
   unless you read the generated script. The teardown now retires the host's transport
   — WireGuard, or a certificate overlay's client via its own retire script — as its
   last step, after the accounts are gone. An overlay this deployment cannot provision
-  now says so loudly in `/var/log/fleet-unenroll.log` instead of being skipped.
+  now says so loudly in `/var/log/prov-unenroll.log` instead of being skipped.
 
 - **The jump-host half of the cleanup had never run at all.** `CleanupHostOverlay`
   dialed the jump host with a session id it generated on the spot
   (`uuid.New().String()`), which by construction has no credential in the identity
   vault — so every call failed the vault lookup before a packet was sent. It runs in a
   goroutine that only logs a warning, so nothing ever surfaced: **every host deleted
-  from Blackfriars, in any version with this code, kept its peer on the hub.** That is why
+  from Provenance, in any version with this code, kept its peer on the hub.** That is why
   the tunnel in the report was not merely up but still handshaking. It now dials with
   a short-lived system certificate, like every other background path.
 
@@ -1943,23 +1943,23 @@ was getting root against the operator's intent.
   the Certificates page shows it, and the background loop retries instead of
   short-circuiting on an unchanged KRL hash.
 
-- **Deleting a host can now remove Blackfriars from the machine.** Deletion took the host
+- **Deleting a host can now remove Provenance from the machine.** Deletion took the host
   out of the inventory and left everything enrollment installed in place: the `fleet`
   account with its `NOPASSWD` sudo grant, the login-only account, the trusted CA, the
-  principal files and the sshd drop-in, on a machine Blackfriars no longer manages or
-  audits. The delete dialog now offers **"Also remove Blackfriars's accounts and SSH
+  principal files and the sshd drop-in, on a machine Provenance no longer manages or
+  audits. The delete dialog now offers **"Also remove Provenance's accounts and SSH
   trust from the host"** (`?teardown=true` on the API), **unchecked by default** —
-  it is destructive, and on a host whose only administrative access was Blackfriars it is
+  it is destructive, and on a host whose only administrative access was Provenance it is
   a lockout, so it stays a deliberate choice rather than a side effect of tidying the
   inventory.
 
-  Only what Blackfriars wrote is removed; `authorized_keys`, other sudoers files, and any
-  sshd configuration Blackfriars did not write are untouched, and sshd is reloaded only if
+  Only what Provenance wrote is removed; `authorized_keys`, other sudoers files, and any
+  sshd configuration Provenance did not write are untouched, and sshd is reloaded only if
   `sshd -t` still passes — a host whose remaining config is broken keeps the sshd it
   is running. The work runs detached on the host, because it deletes the account its
-  own session is using, and the API reports that teardown *started*. A host Blackfriars
+  own session is using, and the API reports that teardown *started*. A host Provenance
   cannot reach is named in the UI rather than silently skipped, and
-  `scripts/fleet-unenroll.sh` does the same cleanup locally on the machine.
+  `scripts/prov-unenroll.sh` does the same cleanup locally on the machine.
 
 **Known gap, unchanged:** `Schedule.Manage` can schedule a playbook run without
 holding `Playbook.Run`. It is admin-only by default; treat it as equivalent when
@@ -1977,7 +1977,7 @@ No deploy note: this one is a plain bundle install.
   the peer-isolation chains on the host. They are scoped to the tunnel device, so once
   that device is gone they match nothing — but `tun0` is a name the kernel reuses, so
   the next VPN the host runs would inherit a DROP naming a jump host it has never heard
-  of, and an operator auditing the host finds Blackfriars rules for an overlay Blackfriars no longer
+  of, and an operator auditing the host finds Provenance rules for an overlay Provenance no longer
   uses. The retirement now removes the jumps out of INPUT/OUTPUT and deletes the chains.
 
 - **The enrollment progress dialog names the transport it is provisioning.** It said
@@ -1993,7 +1993,7 @@ No deploy note: this one is a plain bundle install.
 
 **Deploy note.** The jump host publishes a new UDP port and mounts a new volume for
 this release, and upgrade bundles do not manage the jump host. Run `make up-single`
-on the deployment host after installing, and open `FLEET_OVPN_PORT` (1194/udp) on the
+on the deployment host after installing, and open `PROV_OVPN_PORT` (1194/udp) on the
 firewall — otherwise the OpenVPN overlay runs on a port nothing reaches. Only needed
 if you use, or intend to use, the certificate overlay; a WireGuard-only deployment is
 unaffected.
@@ -2040,7 +2040,7 @@ unaffected.
   idempotent, but not self-cleaning. Moving the OpenVPN overlay onto its own subnet
   changes that address, and the rule left over from the old one matches everything
   from the new jump host — blackholing the tunnel with nothing logged anywhere. The
-  rules now live in Blackfriars's own `FLEET-OVPN-IN`/`FLEET-OVPN-OUT` chains, flushed and
+  rules now live in Provenance's own `PROV-OVPN-IN`/`PROV-OVPN-OUT` chains, flushed and
   refilled on every connect, so a stale address is retired as a side effect of writing
   the current one.
 
@@ -2060,7 +2060,7 @@ unaffected.
 - **The enroll dialog's endpoint port follows the VPN overlay you pick.** It was
   pre-filled from the WireGuard setting and stayed on `:51820` for an OpenVPN
   enrollment — while `ClientConfig` ignores that port entirely and always dials
-  `FLEET_OVPN_PORT`. So the field showed a port that was never used, and invited
+  `PROV_OVPN_PORT`. So the field showed a port that was never used, and invited
   operators to hand-edit it to no effect. Selecting an overlay now rewrites the port
   to that transport's, keeping the host part; a port typed by hand survives
   everything except changing transport.
@@ -2093,13 +2093,13 @@ unaffected.
   WireGuard. Picking OpenVPN got you a host that was renumbered nowhere, still
   running WireGuard, and permanently reported as degraded. This is the rest of it.
 
-  **Separate address plans.** `FLEET_OVPN_SUBNET` / `FLEET_OVPN_JUMP_IP` (default
+  **Separate address plans.** `PROV_OVPN_SUBNET` / `PROV_OVPN_JUMP_IP` (default
   `10.101.0.0/24`, jump `.1`) now number the cert overlay's hosts. Both overlays
   terminate on the same jump host and each claims its own address on its own
   interface, so one shared subnet gave that host two connected routes for a single
   prefix — resolved once by the kernel, for the whole prefix — and every host behind
   the losing interface went dark. An install whose *default* overlay is already
-  `openvpn` keeps `FLEET_WG_SUBNET`, so an existing FIPS fleet is not renumbered
+  `openvpn` keeps `PROV_WG_SUBNET`, so an existing FIPS fleet is not renumbered
   underneath itself. Overlapping (but unequal) subnets are refused at startup.
 
   **Switching renumbers the host**, because its address cannot follow it across
@@ -2113,7 +2113,7 @@ unaffected.
   units, or OpenVPN's client and its pinned address on the server — and it runs only
   after a dial to the host's new overlay address **from the jump host** succeeds.
   Every other check in enrollment can fall back to the management address and pass
-  over the LAN with no tunnel at all. Configs are renamed `*.fleet-disabled` rather
+  over the LAN with no tunnel at all. Configs are renamed `*.prov-disabled` rather
   than deleted, and issued key material is left in place, so moving a host back does
   not need new credentials. If the new tunnel does not answer, the old transport
   stays and the step says so.
@@ -2127,7 +2127,7 @@ unaffected.
   running `wg show` (which reported every one of them as permanently degraded); the
   offline/degraded alerts, the insight, the strict-overlay connection error, the
   status chips, the host-detail row and the enroll tooltips all name the transport
-  the host is on and point at the right daemon on each end. `fleetctl fips check`
+  the host is on and point at the right daemon on each end. `provctl fips check`
   prints both pools and counts the hosts still on the non-FIPS transport.
 
   **The UI shows the plan before you commit to it.** `/hosts/wg/next` reports both
@@ -2139,13 +2139,13 @@ unaffected.
   jump host denies forwarding from either subnet to the other, so a host on one
   transport cannot reach a host on the other.
 
-  Firewall: open **both** `FLEET_WG_PORT` (51820/udp) and `FLEET_OVPN_PORT`
+  Firewall: open **both** `PROV_WG_PORT` (51820/udp) and `PROV_OVPN_PORT`
   (1194/udp) on the jump host if any host uses either transport. Managed hosts always
-  dial `FLEET_OVPN_PORT` for OpenVPN, whatever port `FLEET_WG_JUMP_ENDPOINT` names.
+  dial `PROV_OVPN_PORT` for OpenVPN, whatever port `PROV_WG_JUMP_ENDPOINT` names.
 
 - **The OpenVPN overlay server was never started, and enrollment reported it
   healthy anyway.** `JumpServerScript` guarded the launch with `pgrep -f 'openvpn
-  .*server.conf'`. Blackfriars runs these scripts as `sh -c "<the whole script>"`, so the
+  .*server.conf'`. Provenance runs these scripts as `sh -c "<the whole script>"`, so the
   script's own shell carries that exact command line in its argv — and `pgrep -f`
   matches command lines. The guard therefore always answered "already running", the
   launch never ran, and `EnsureServer` reported `openvpn server ready on jump host`
@@ -2161,7 +2161,7 @@ unaffected.
 - **Enrollment onto a certificate overlay now has to prove the tunnel carries
   traffic.** Every check that should have caught the dead server passed:
   `configure_host_overlay` built its "OpenVPN tunnel up (addr …)" detail from the
-  address Blackfriars *meant* to assign, off a host script that printed
+  address Provenance *meant* to assign, off a host script that printed
   `OVPN_HOST_CONFIGURED` unconditionally after a fixed `sleep 2`; and
   `verify_certificate_login` falls back to the host's management address, so it
   passed over the LAN with no tunnel at all.
@@ -2186,15 +2186,15 @@ unaffected.
 
 - **Deployment fixes without which the overlay could not work at all.** The jump
   host published only WireGuard's UDP port, so a host enrolled onto OpenVPN dialed a
-  port nothing forwarded; `${FLEET_OVPN_PORT:-1194}:1194/udp` is now published
-  unconditionally (harmless when unused). `/etc/openvpn/fleet` lived on the
+  port nothing forwarded; `${PROV_OVPN_PORT:-1194}:1194/udp` is now published
+  unconditionally (harmless when unused). `/etc/openvpn/prov` lived on the
   container's writable layer, so the overlay CA, server certificate and every
   per-host ccd pin would be destroyed by any upgrade — it is now on the `jump_ovpn`
   volume, and the entrypoint restarts a provisioned server on boot the way persisted
   WireGuard peers are already restored.
 
   **Known limitation:** the cert overlay still derives its subnet from
-  `FLEET_WG_SUBNET` and draws from the same address pool, so its server takes the
+  `PROV_WG_SUBNET` and draws from the same address pool, so its server takes the
   address the WireGuard hub already holds on the same jump host. Running both
   overlays on one deployment is not supported; a mixed fleet needs a separate subnet
   for the cert overlay. With the verification above this now fails the enrollment
@@ -2212,13 +2212,13 @@ unaffected.
   request body; the no-install flow fetches its script by URL, and that URL carried
   the endpoint but not the overlay. The script generator had no OpenVPN path at all,
   so it could only have produced WireGuard. A deployment whose *default* was
-  `FLEET_OVERLAY=openvpn` was affected the same way: every no-install enrollment
+  `PROV_OVERLAY=openvpn` was affected the same way: every no-install enrollment
   came out on WireGuard.
 
   The overlay now rides the script URL (`?overlay=openvpn`), and the generator
-  builds for it: Blackfriars issues the host's client certificate and pins its address to
+  builds for it: Provenance issues the host's client certificate and pins its address to
   that certificate on the jump host while generating the script, then embeds the
-  host-side bring-up in it. Because the tunnel authenticates as the identity Blackfriars
+  host-side bring-up in it. Because the tunnel authenticates as the identity Provenance
   just issued, there is no public key printed and nothing to paste back — the Finish
   step verifies certificate login instead of adding a peer. **The script is
   therefore a credential**: it holds the host's overlay private key. The copy-paste
@@ -2233,7 +2233,7 @@ unaffected.
   up with two interfaces claiming one address — which answered came down to route
   metrics — while the jump host kept advertising the old peer for it. Re-enrolling
   onto a certificate overlay now brings the WireGuard interface down and disables its
-  boot units on the host (the config is renamed to `<iface>.conf.fleet-disabled`, not
+  boot units on the host (the config is renamed to `<iface>.conf.prov-disabled`, not
   deleted, and the private key is left in place), removes the peer from the jump
   host, and clears the stored public key — which is what a standby jump host rebuilds
   its peer list from, so leaving it would restore the retired peer on the next
@@ -2251,7 +2251,7 @@ unaffected.
   that left the most compliance-sensitive deployments with the weakest version.
 
   OpenVPN has no `AllowedIPs`, so enrollment now installs
-  `/etc/openvpn/fleet/peer-isolation.sh` and hooks it as the client config's `up`
+  `/etc/openvpn/prov/peer-isolation.sh` and hooks it as the client config's `up`
   script: anything entering or leaving the tunnel that is not the jump host is
   dropped. Running on `up` is what makes it survive a reboot — a bare `iptables`
   rule does not — and what hands it the tun device name, which OpenVPN assigns at
@@ -2266,7 +2266,7 @@ unaffected.
   `script-security 2` a failing `up` script aborts the tunnel, and failing open is
   the same choice made everywhere else in peer isolation.
 
-  Follows `FLEET_OVERLAY_PEER_ISOLATION`, and reaches hosts enrolled or re-enrolled
+  Follows `PROV_OVERLAY_PEER_ISOLATION`, and reaches hosts enrolled or re-enrolled
   after the upgrade.
 
 ---
@@ -2274,8 +2274,8 @@ unaffected.
 ## v1.3.0 — The overlay is a management network, not a flat one — 2026-08-08
 
 **Deploy note.** Peer isolation is on by default and takes effect on upgrade. Read
-the second entry before installing if anything outside Blackfriars relies on managed
-hosts reaching each other over the overlay — `FLEET_OVERLAY_PEER_ISOLATION=0`
+the second entry before installing if anything outside Provenance relies on managed
+hosts reaching each other over the overlay — `PROV_OVERLAY_PEER_ISOLATION=0`
 preserves the old behaviour. Two further notes for existing deployments:
 
 - The jump-host half lives in the **jump-host image**, which upgrade bundles do
@@ -2289,14 +2289,14 @@ preserves the old behaviour. Two further notes for existing deployments:
 
 - **Peer isolation is now enforced at the host end too.** The jump host's
   forwarding deny (below) is one machine's `iptables` — and it fails open with a
-  warning on a jump host whose filtering Blackfriars does not control. A managed host's
+  warning on a jump host whose filtering Provenance does not control. A managed host's
   own WireGuard config now lists only the jump host in `AllowedIPs`, instead of the
   whole overlay subnet. In WireGuard that one value does two jobs: the host cannot
   *address* a sibling, and it **drops a decrypted packet claiming to come from
   one** — so a host stays isolated even if the hub-side rule is gone.
 
   WireGuard only; the OpenVPN client has no equivalent and relies on the jump host.
-  Follows the same `FLEET_OVERLAY_PEER_ISOLATION` switch, and applies to Linux and
+  Follows the same `PROV_OVERLAY_PEER_ISOLATION` switch, and applies to Linux and
   Windows enrollment alike.
 
   **Reaches hosts enrolled after the upgrade.** Already-enrolled hosts keep the
@@ -2311,7 +2311,7 @@ preserves the old behaviour. Two further notes for existing deployments:
 
 - **The overlay is hub-and-spoke now, not a flat network.** Managed hosts could
   reach each other over the overlay — ping, and just as easily each other's
-  sshd/RDP/WinRM port. Every other control Blackfriars has exists so that reaching a host
+  sshd/RDP/WinRM port. Every other control Provenance has exists so that reaching a host
   is brokered, authorized and recorded; the overlay was an unmediated path around
   all of it, handing the least-trusted component in the deployment (a managed host,
   running whatever it runs) direct L3 reach to every other host. It also undid at
@@ -2320,15 +2320,15 @@ preserves the old behaviour. Two further notes for existing deployments:
   The jump host now refuses to forward overlay traffic between two managed hosts,
   so a host can reach the jump host and nothing else. Applied when the WireGuard
   hub comes up and when the OpenVPN server is provisioned (FIPS mode), so it holds
-  for both overlays. `FLEET_OVERLAY_PEER_ISOLATION=0` turns it off for a deployment
+  for both overlays. `PROV_OVERLAY_PEER_ISOLATION=0` turns it off for a deployment
   that genuinely needs hosts to talk to each other over the overlay.
 
-  **On by default, including for existing deployments** — nothing in Blackfriars uses
+  **On by default, including for existing deployments** — nothing in Provenance uses
   host-to-host reachability. Terminal sessions, SFTP, the health monitor, playbook
   runs (via `ProxyJump`), and the database and Kubernetes brokers all dial *from*
   the jump host, so none of them is a forwarded flow and none is affected. What
   changes is only what a host can do on its own behalf. If you have built something
-  outside Blackfriars on top of host-to-host overlay reachability, set the variable to
+  outside Provenance on top of host-to-host overlay reachability, set the variable to
   `0` before upgrading.
 
   A jump host with no usable `iptables` backend logs the failure and keeps serving
@@ -2423,7 +2423,7 @@ compatibility rather than a running count.
   two minor releases, and removed only in a major — with a runtime warning naming
   the replacement, so operators find out from their own logs.
 - **Twenty reachable vulnerabilities are closed.** Nothing had been scanning
-  dependencies. `govulncheck` reported sixteen reachable from Blackfriars's own code
+  dependencies. `govulncheck` reported sixteen reachable from Provenance's own code
   across ten modules, and four more in the Terraform provider that nothing had
   ever looked at. Among them: SQL injection via placeholder confusion in
   `jackc/pgx`, the driver every query and audit row goes through; acceptance of
@@ -2443,7 +2443,7 @@ compatibility rather than a running count.
   not be scoped.
 - **The assistant no longer claims your data stayed home when it did not.** The
   settings page stated flatly that data never leaves your network; the URL field
-  accepts any URL, so that held only by convention. Blackfriars now classifies where
+  accepts any URL, so that held only by convention. Provenance now classifies where
   the configured Ollama actually is and warns when it is a public address. It
   classifies rather than blocks — a model server one rack over is legitimate.
 - **CI enforces all of it**: `govulncheck` over every Go module, `staticcheck`,
@@ -2478,7 +2478,7 @@ No configuration change is required. Two things to know:
   Enrollment set each peer's endpoint at runtime, but only `PublicKey` and
   `AllowedIPs` were persisted, and the jump-host entrypoint stripped any
   `Endpoint` on restore. After a rebuild the hub could no longer initiate to any
-  peer and could only wait to be called. Hosts whose own `wgfleet.conf` carried a
+  peer and could only wait to be called. Hosts whose own `wgprov.conf` carried a
   reachable endpoint re-handshook within about two minutes, which hid the
   problem entirely; a host whose configured endpoint was *not* reachable had
   been carried by the hub calling it, and went dark indefinitely. Observed in
@@ -2511,15 +2511,15 @@ No configuration change is required. Two things to know:
   ownership reconciler (sessions, scans, playbook/script/command runs, enrollment
   jobs, dead-instance certificate revocation) now always excludes rows owned by
   the instance running the sweep — it is alive by definition. Previously a
-  host-level stall (observed in prod: the hypervisor under the Blackfriars VM was
+  host-level stall (observed in prod: the hypervisor under the Provenance VM was
   itself mid-upgrade, starving the VM for minutes) froze the heartbeat goroutine
   past its 30s lease, and the next reconcile sweep declared the instance's own
   running playbook "orphaned" and failed it — while ansible was still running and
   went on to finish the job.
-- **Runs cut off by a Blackfriars restart are now "interrupted" (amber), not "failed"
-  (red).** A playbook that reboots the machine hosting Blackfriars itself can never
+- **Runs cut off by a Provenance restart are now "interrupted" (amber), not "failed"
+  (red).** A playbook that reboots the machine hosting Provenance itself can never
   report completion — the ansible process dies with the host. Such runs now end
-  as `interrupted` with the explanation "Blackfriars restarted mid-run — the run was
+  as `interrupted` with the explanation "Provenance restarted mid-run — the run was
   cut off and its result was not collected; the target hosts may still have
   completed their tasks", and Ask explains the status the same way. Retention
   prunes interrupted runs like completed/failed ones.
@@ -2537,7 +2537,7 @@ No configuration change is required. Two things to know:
   ("anything wrong?"), and fires the new **Host overlay tunnel down / restored**
   notification events (enable routes for them under Settings → Notifications).
   Tunnel-down is confirmed with the same multi-probe logic as offline
-  (`FLEET_MONITOR_OFFLINE_CONFIRMATIONS` / `FLEET_MONITOR_CONFIRM_DELAY`), so one
+  (`PROV_MONITOR_OFFLINE_CONFIRMATIONS` / `PROV_MONITOR_CONFIRM_DELAY`), so one
   lost keepalive doesn't page. Offline hosts don't double-alert.
 - **Stale jump-host peers can no longer steal a reused overlay IP.** Deleting or
   re-enrolling a host never removed its WireGuard peer fragment from the jump
@@ -2564,8 +2564,8 @@ No configuration change is required. Two things to know:
   fired an offline alert, and immediately recovered. Only previously-online hosts
   get the confirming re-probes, so steady-state sweep cost is unchanged and hosts
   that are genuinely down aren't re-probed extra times every sweep.
-- Tunable via `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` (set `1` to restore the old
-  single-check behavior) and `FLEET_MONITOR_CONFIRM_DELAY`.
+- Tunable via `PROV_MONITOR_OFFLINE_CONFIRMATIONS` (set `1` to restore the old
+  single-check behavior) and `PROV_MONITOR_CONFIRM_DELAY`.
 - **Release policy from here on: every bundle is full-stack and installable from
   any older version** — no stepping-stone installs; the latest bundle always
   carries all previous fixes. `make bundle` now defaults `BUNDLE_FROM` to `0.0.0`
@@ -2576,7 +2576,7 @@ No configuration change is required. Two things to know:
 ## v0.70.2 — Full-stack upgrade bundle; bundles pin linux/amd64
 
 - **The release bundle now carries every app component** — backend, frontend,
-  grype-scanner, **ansible-runner**, and the **fleet-updater** itself (self-updated
+  grype-scanner, **ansible-runner**, and the **prov-updater** itself (self-updated
   last via its detached helper) — so one in-UI install brings the whole stack to the
   same version instead of leaving sidecars behind.
 - **`make bundle` pins images to `linux/amd64` by default** (`BUNDLE_PLATFORM`
@@ -2626,7 +2626,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.69.0 — Ask Blackfriars: calendar ranges, feedback, follow-up chips, and a regression harness
+## v0.69.0 — Ask Provenance: calendar ranges, feedback, follow-up chips, and a regression harness
 
 - **True calendar ranges for "yesterday", "this week", and "last week"** — "who connected
   yesterday?" now means midnight-to-midnight of the prior day (display timezone), "this
@@ -2653,7 +2653,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.23 — Ask Blackfriars: "today" is the calendar day; bare connection questions scope to a week
+## v0.68.23 — Ask Provenance: "today" is the calendar day; bare connection questions scope to a week
 
 - **"today" now means since local midnight for every time-windowed question**, not a
   rolling 24 hours — "which hosts were accessed today?", "who connected today?", "what
@@ -2667,7 +2667,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.22 — Ask Blackfriars: "recently" is a week, not a month
+## v0.68.22 — Ask Provenance: "recently" is a week, not a month
 
 - **"recently"/"lately" now scopes host-connection questions to the past week** (was 30
   days). "Has anyone connected to <host> recently?" no longer sweeps in a month of
@@ -2678,7 +2678,7 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.20–0.68.21 — Ask Blackfriars: calendar-day "today" + follow-up context
+## v0.68.20–0.68.21 — Ask Provenance: calendar-day "today" + follow-up context
 
 - **"today" now means the calendar day**, not a rolling 24 hours — "who connected today"
   no longer includes yesterday-evening sessions (window starts at local midnight).
@@ -2692,11 +2692,11 @@ No configuration change is required. Two things to know:
 
 ---
 
-## v0.68.19 — Ask Blackfriars: broaden session-history routing
+## v0.68.19 — Ask Provenance: broaden session-history routing
 
 Two "who connected" phrasings mis-routed: "has anyone connected to <host> recently?"
 fell to the model and used a too-narrow 24h window ("no one" when there were sessions
-2 days back), and "has anyone logged into <host>?" was answered from Blackfriars SIGN-IN auth
+2 days back), and "has anyone logged into <host>?" was answered from Provenance SIGN-IN auth
 events instead of SSH sessions to that host. The session-history fast path now recognizes
 "has anyone / did anyone / anyone connected/logged into/accessed <host>" (including
 "logged into"/"onto"), with "recently" mapping to a 30-day window. Guarded so "who has
@@ -2705,7 +2705,7 @@ access to <host>" (a permissions question) still defers to the model.
 
 ---
 
-## v0.68.18 — Ask Blackfriars: systematic reliability overhaul
+## v0.68.18 — Ask Provenance: systematic reliability overhaul
 
 A ground-up pass over the assistant, validated by an end-to-end harness that runs the
 full question battery through the live API against real fleet data (no more one-off
@@ -2747,7 +2747,7 @@ are covered by unit tests.
 Backend-only; the configured model (e.g. qwen2.5:14b-instruct) is unchanged.
 
 
-## v0.68.11 — Ask Blackfriars: deterministic disk + session-history routing
+## v0.68.11 — Ask Provenance: deterministic disk + session-history routing
 
 Two false negatives found in real-usage testing, both from time/threshold arguments the
 local model got wrong or a too-narrow default window:
@@ -2763,7 +2763,7 @@ local model got wrong or a too-narrow default window:
 
 ---
 
-## v0.68.10 — Ask Blackfriars: de-prioritize automated audit noise
+## v0.68.10 — Ask Provenance: de-prioritize automated audit noise
 
 "What changed in the audit log today?" led with automated background events (the
 assistant's own queries, per-session certificate issuance) that dominate the log by
@@ -2776,7 +2776,7 @@ changes, and logins, and drops the 30 assistant-query / 14 cert-issuance noise e
 
 ---
 
-## v0.68.9 — Ask Blackfriars: unified answer discipline across both paths
+## v0.68.9 — Ask Provenance: unified answer discipline across both paths
 
 The scope/summarize reminder from v0.68.8 (LLM-tool-loop path) is now also applied to
 the fast-path narration, so questions that route deterministically (schedules, pending
@@ -2790,7 +2790,7 @@ a schedule" -> the 8 schedules ordered by next fire.
 
 ---
 
-## v0.68.8 — Ask Blackfriars: focused final-answer pass
+## v0.68.8 — Ask Provenance: focused final-answer pass
 
 The scope/qualifier rules in the (long) system prompt were being ignored by the local
 model when a tool returned a large result — it would enumerate every row and append a
@@ -2804,7 +2804,7 @@ table beneath the answer.
 
 ---
 
-## v0.68.7 — Ask Blackfriars: time-window fix + qualifier discipline
+## v0.68.7 — Ask Provenance: time-window fix + qualifier discipline
 
 Follow-ups from real usage:
 
@@ -2821,7 +2821,7 @@ Builds on v0.68.6's deterministic sampling + answer-scope discipline.
 
 ---
 
-## v0.68.6 — Ask Blackfriars: consistent, scoped answers
+## v0.68.6 — Ask Provenance: consistent, scoped answers
 
 Two changes make the AI assistant behave like a precise sysadmin tool instead of a
 chatbot, addressing answers that varied by phrasing and volunteered unrequested detail.
@@ -2843,7 +2843,7 @@ qwen2.5:14b-instruct) is unchanged.
 
 ## v0.68.5 — Self-healing upgrade state
 
-Fixes a loop where, after an in-UI upgrade failed on the `fleet-updater` sidecar, the
+Fixes a loop where, after an in-UI upgrade failed on the `prov-updater` sidecar, the
 backend stayed wedged reporting "an upgrade is already in progress" while the UI showed
 "ready" — so every Install click silently reverted. The backend's busy-check now consults
 the updater's actual state and clears a stale dispatch, so upgrades recover on their own
@@ -2853,7 +2853,7 @@ instead of needing a backend restart.
 
 ## v0.68.4 — Fix updater compose path resolution
 
-Fixes an in-UI upgrade failing with `/fleet.env is a directory`. When the updater runs
+Fixes an in-UI upgrade failing with `/prov.env is a directory`. When the updater runs
 `docker compose -f /compose/docker-compose.yml`, Compose resolved the compose file's
 relative `../../.env` bind against `/compose` → a stray `/.env` directory that then got
 bound as the updater's env file. The updater now passes `--project-directory <real host
@@ -2887,9 +2887,9 @@ Migration 0068 is additive (a new table; no action required).
 The higher-effort fixes from the security audit — closing the key-rotation and
 tenant-isolation gaps.
 
-- **`fleetctl vault rekey --old … --new …`.** Rotates the vault master passphrase by
+- **`provctl vault rekey --old … --new …`.** Rotates the vault master passphrase by
   decrypting every locally-sealed vault secret under the old key and re-encrypting under
-  the new one (verify-before-write). Remediates a suspected `FLEET_VAULT_PASSPHRASE`
+  the new one (verify-before-write). Remediates a suspected `PROV_VAULT_PASSPHRASE`
   compromise — previously, changing the passphrase silently made every secret
   undecryptable. Resumable/idempotent per row; run offline, then update the env var.
 - **Authenticated backups (encrypt-then-MAC).** Each backup now ships a detached
@@ -2898,11 +2898,11 @@ tenant-isolation gaps.
   unauthenticated; the tag closes that. Stock-openssl decryption is unchanged, and the
   tag is reproducible with stock tools (disaster-recovery runbook updated with a verify
   step). Old backups without a sidecar still restore.
-- **Dedicated, rotatable MFA-at-rest key.** `FLEET_MFA_ENCRYPTION_KEY` (optional) now
-  encrypts TOTP secrets independently of `FLEET_JWT_SECRET`, so the JWT secret can rotate
+- **Dedicated, rotatable MFA-at-rest key.** `PROV_MFA_ENCRYPTION_KEY` (optional) now
+  encrypts TOTP secrets independently of `PROV_JWT_SECRET`, so the JWT secret can rotate
   without bricking stored MFA secrets. Decryption falls back to the legacy JWT-derived
   key, so adopting it never locks out enrolled users (covered by a migration test).
-- **Multi-tenancy fail-closed on a superuser DB role.** With `FLEET_MULTI_TENANCY=true`,
+- **Multi-tenancy fail-closed on a superuser DB role.** With `PROV_MULTI_TENANCY=true`,
   the app now refuses to start if the database role is a SUPERUSER or has BYPASSRLS —
   either silently bypasses row-level security and would break tenant isolation. The error
   tells you to connect as a `NOSUPERUSER NOBYPASSRLS` role.
@@ -2923,13 +2923,13 @@ surface. No behavior change for normal operation.
   logins for nonexistent vs. real users took measurably different time, reopening user
   enumeration in exactly the strict mode. The dummy verify now uses the active KDF.
 - **Unencrypted-Postgres boot warning + docs.** The backend now logs a warning when
-  `FLEET_DATABASE_URL` uses `sslmode=disable` (fine on a co-located DB, a cleartext-on-
+  `PROV_DATABASE_URL` uses `sslmode=disable` (fine on a co-located DB, a cleartext-on-
   the-wire risk for any networked/managed Postgres). The production env example documents
   `sslmode=verify-full` and now also reminds operators to `chmod 600 .env`.
 - **`.env` created 0600.** `make env` now creates (and re-tightens) `.env` as mode 0600
   so the file holding every master secret isn't readable by other local users.
 
-(Deferred to later batches with the operator: backup AEAD re-key, `fleetctl vault rekey`,
+(Deferred to later batches with the operator: backup AEAD re-key, `provctl vault rekey`,
 dedicated rotatable MFA key, multi-tenant superuser-role guard, persisted host-key pins,
 and CSRF double-submit enforcement — the last requires coordinated frontend changes.)
 
@@ -2938,9 +2938,9 @@ and CSRF double-submit enforcement — the last requires coordinated frontend ch
 ## v0.68.0 — Self-updating upgrades: the updater upgrades itself + config migration
 
 Closes the last gaps that made some releases need a host-side `make redeploy-single`, so
-**every** update can now install from a signed `.fleetup` bundle in the UI.
+**every** update can now install from a signed `.provup` bundle in the UI.
 
-- **The updater upgrades itself.** A bundle may now include the `fleet-updater`
+- **The updater upgrades itself.** A bundle may now include the `prov-updater`
   component. Since the updater cannot recreate its own container inline (that would kill
   the in-flight upgrade), it applies everything else first, persists `success` to disk,
   then hands its own replacement to a short-lived **detached helper** (watchtower-style)
@@ -2950,13 +2950,13 @@ Closes the last gaps that made some releases need a host-side `make redeploy-sin
   final result across the blip.
 - **Additive config migration.** A signed manifest can declare `configAdditions` — new
   env keys with defaults, or generated secrets (`generate: secret`, e.g.
-  `FLEET_UPDATER_TOKEN`). The updater merges any that are absent into `.env` before
+  `PROV_UPDATER_TOKEN`). The updater merges any that are absent into `.env` before
   recreating containers. Strictly additive: an operator-set key is never overwritten. The
   updater's `.env` mount is now read-write for this (it already holds the Docker socket,
   so this is no new trust boundary).
-- `fleetctl release build` gains `--config-add KEY=VALUE` and `--config-secret KEY`;
-  `make bundle` builds whatever `BUNDLE_COMPONENTS` lists (so `fleet-updater` can ride
-  along). Docs: new "Upgrading Blackfriars (in-UI)" section in operations.md.
+- `provctl release build` gains `--config-add KEY=VALUE` and `--config-secret KEY`;
+  `make bundle` builds whatever `BUNDLE_COMPONENTS` lists (so `prov-updater` can ride
+  along). Docs: new "Upgrading Provenance (in-UI)" section in operations.md.
 
 The only step still done by hand is the one-time bootstrap of a brand-new deployment.
 
@@ -2966,12 +2966,12 @@ The only step still done by hand is the one-time bootstrap of a brand-new deploy
 
 Two hardening items surfaced by the end-to-end upgrade smoke test:
 
-- **fleet-updater fails closed without a token in production.** The updater drives the
-  Docker socket, so an empty `FLEET_UPDATER_TOKEN` is an unauthenticated RCE surface for
-  anything on the internal network. It previously only warned; now, with `FLEET_ENV` set
+- **prov-updater fails closed without a token in production.** The updater drives the
+  Docker socket, so an empty `PROV_UPDATER_TOKEN` is an unauthenticated RCE surface for
+  anything on the internal network. It previously only warned; now, with `PROV_ENV` set
   to anything other than `development`, it refuses to start until the token is set. The
   backend already sends `X-Updater-Token`, and compose already wires the shared value to
-  both services — set `FLEET_UPDATER_TOKEN` (openssl rand -hex 32) in your `.env`.
+  both services — set `PROV_UPDATER_TOKEN` (openssl rand -hex 32) in your `.env`.
 - **index.html is served no-cache; hashed assets cache for a year.** After an in-UI
   upgrade the build emits new content-hashed asset names; a browser-cached `index.html`
   kept pointing at the old chunks, so users ran stale UI until a manual hard-refresh.
@@ -2979,7 +2979,7 @@ Two hardening items surfaced by the end-to-end upgrade smoke test:
   inherited security headers) and caches `/assets/*` immutably.
 
 (A third candidate — pinning the session secret — was already handled: production
-requires persistent `FLEET_JWT_SECRET` + `FLEET_CSRF_SECRET` and fails closed without
+requires persistent `PROV_JWT_SECRET` + `PROV_CSRF_SECRET` and fails closed without
 them, so auth sessions already survive the backend restart during an upgrade.)
 
 ---
@@ -2988,10 +2988,10 @@ them, so auth sessions already survive the backend restart during an upgrade.)
 
 The backend Dockerfile creates and chowns its data dirs (recordings, scans, backups,
 rdp-drive, scap-content) to the unprivileged `fleet` user in both the build step and
-the privilege-dropping entrypoint — but `/var/lib/fleet/updates` (added in v0.61.0 for
+the privilege-dropping entrypoint — but `/var/lib/prov/updates` (added in v0.61.0 for
 the in-UI upgrade staging area) was in neither list. A named volume mounted there comes
 up root-owned, so the `fleet` process cannot write the staged bundle:
-`could not stage the bundle: open /var/lib/fleet/updates/pending.fleetup: permission denied`.
+`could not stage the bundle: open /var/lib/prov/updates/pending.provup: permission denied`.
 Added `updates` to both mkdir/chown lists. Existing deployments: the entrypoint now
 chowns it on next start; or `chown` the volume once.
 
@@ -3047,7 +3047,7 @@ The in-UI upgrade system is now federation-aware, completing the upgrade epic:
   (and a site rejects a too-old hub), each with a message naming which side to upgrade
   first. This build speaks protocol v1; legacy pre-versioning sites are treated as v1, so
   existing federations keep working with no change.
-- **Site build-version visibility.** Each site reports its running `fleetd` version on
+- **Site build-version visibility.** Each site reports its running `provd` version on
   its read-model heartbeat. The hub stores it and surfaces it on the **Sites** page (new
   Version column) and the hub's **Updates** panel.
 - **Sites-first ordering guard.** The hub's Updates panel compares each site's version
@@ -3067,10 +3067,10 @@ Schema: migration `0067` adds `build_version` / `protocol_version` to `federatio
 In-UI upgrades are now cluster-aware:
 
 - **Rolling upgrade for additive releases.** On a multi-instance (HA) deployment, the
-  `fleet-updater` rolls the backend **one replica at a time**, health-gating each replica
+  `prov-updater` rolls the backend **one replica at a time**, health-gating each replica
   (`/ready` + `/version`) before moving to the next — the others keep serving, migrations
   apply once (Postgres advisory lock serializes them), and leadership handoff is automatic.
-  Configure the replica service names with `FLEET_UPDATER_BACKENDS` (e.g. `backend1,backend2`);
+  Configure the replica service names with `PROV_UPDATER_BACKENDS` (e.g. `backend1,backend2`);
   single-host is unchanged (one "backend").
 - **Breaking releases replace all replicas together** — a brief full-cluster outage — because a
   mixed-version cluster would break against the just-migrated schema. The manifest's
@@ -3116,7 +3116,7 @@ import its API client.)
 ## v0.64.0 — Manage & schedule MikroTik/RouterOS updates via the RouterOS API
 
 RouterOS 7's SSH doesn't cleanly close command sessions, so `raw`/`network_cli` playbooks hang
-(a long-standing Ansible↔RouterOS issue). Blackfriars now drives RouterOS over its **binary API**
+(a long-standing Ansible↔RouterOS issue). Provenance now drives RouterOS over its **binary API**
 (port 8728) instead, **tunneled through the jump host** — and you can **schedule** it with the
 existing playbook scheduler.
 
@@ -3124,7 +3124,7 @@ existing playbook scheduler.
   stored in a new generic `host_options` JSONB column. The host stays a normal SSH host (terminal
   still works); the flag just says "also reachable via its API".
 - **When a playbook runs against it**, the ansible-runner opens `ssh -L …:<device>:8728` through the
-  jump host and exposes it to the play as `fleet_api_host` / `fleet_api_port`, so a
+  jump host and exposes it to the play as `prov_api_host` / `prov_api_port`, so a
   `community.routeros.api` task (`connection: local`) reaches the device. Tunnels are set up before
   the play and torn down after.
 - **Credential:** the RouterOS API needs a username+password, so an API host uses a `vault_password`
@@ -3144,11 +3144,11 @@ runner image shipped with neither — so a network_cli play failed immediately w
 now initialize.
 
 Honest status on reaching a **jump-hosted** device via network_cli: paramiko doesn't
-read the ssh_config's ProxyJump, so a device only reachable through the Blackfriars jump host
+read the ssh_config's ProxyJump, so a device only reachable through the Provenance jump host
 may still not connect. The correct mechanism (a ProxyCommand in
 `ansible_ssh_common_args`) is shared with the proven `raw` connection path, so it isn't
 changed by default to avoid regressing working `raw` upgrades. **For upgrading RouterOS
-through Blackfriars, the `raw` + `until`-reconnect playbook remains the supported path**;
+through Provenance, the `raw` + `until`-reconnect playbook remains the supported path**;
 community.routeros/network_cli is best for directly-reachable network devices today.
 
 ## v0.63.3 — Network-device playbooks (MikroTik / community.routeros)
@@ -3160,10 +3160,10 @@ proper modules (`community.routeros.command`, `connection: network_cli`) instead
 
 Because `network_cli` uses paramiko/libssh (which don't read the ssh_config the way
 the default ssh connection does), the runner now also wires network_cli connections to
-**tunnel through the Blackfriars jump host** (a paramiko `ProxyCommand`) and to authenticate
+**tunnel through the Provenance jump host** (a paramiko `ProxyCommand`) and to authenticate
 vaulted hosts (a per-host key/password), so a jump-hosted network device is reachable.
 This path should be verified on real hardware; the `raw` + `until`-reconnect approach
-remains the proven way to reach RouterOS through Blackfriars. Requires rebuilding the
+remains the proven way to reach RouterOS through Provenance. Requires rebuilding the
 ansible-runner sidecar (`make redeploy-single`).
 
 ## v0.63.2 — Playbooks: don't force sudo on vaulted (appliance) hosts
@@ -3179,7 +3179,7 @@ host**: enrolled Linux hosts still run under sudo, but **vaulted hosts default t
 ## v0.63.0 — Check for updates (pull upgrades from a release channel)
 
 The Updates panel can now **pull** an upgrade instead of only accepting an upload. Set
-`FLEET_UPDATE_CHANNEL_URL` to a signed release-channel index and Settings → Maintenance
+`PROV_UPDATE_CHANNEL_URL` to a signed release-channel index and Settings → Maintenance
 → Updates gains a **Check for updates** button (and surfaces an available update on
 load). "Download & install" streams the bundle server-side straight into the same
 verified apply pipeline — no manual download.
@@ -3187,24 +3187,24 @@ verified apply pipeline — no manual download.
 - The channel index is Ed25519-signed by the **same release key** as the bundles, so
   there's no new trust root; the index signature is verified before it's read, and the
   downloaded bundle is still verified independently before it's applied.
-- Publish a channel with `fleetctl release channel --key <priv> --base-url
-  <https://…/> <bundle.fleetup>…` — it reads each bundle's manifest and writes a signed
+- Publish a channel with `provctl release channel --key <priv> --base-url
+  <https://…/> <bundle.provup>…` — it reads each bundle's manifest and writes a signed
   `channel.json` + `channel.json.sig` to host alongside the bundles.
-- Manual upload still works and needs no channel; leave `FLEET_UPDATE_CHANNEL_URL`
+- Manual upload still works and needs no channel; leave `PROV_UPDATE_CHANNEL_URL`
   empty to hide the check button.
 
 ## v0.62.0 — Playbooks work against vaulted-credential hosts
 
 Ansible playbooks can now target hosts that authenticate with a **vaulted SSH key or
-password** (routers, switches, appliances) — not just hosts that trust the Blackfriars CA.
+password** (routers, switches, appliances) — not just hosts that trust the Provenance CA.
 
-Previously the playbook runner always authenticated with the run's ephemeral Blackfriars
+Previously the playbook runner always authenticated with the run's ephemeral Provenance
 certificate. A host reached with a vaulted credential (e.g. a MikroTik switch you can
 open a terminal to) would fail every play with `Permission denied (publickey)`, even
 though the terminal logged in fine — because the terminal injects the vaulted
 credential and the runner didn't. Now the runner injects the **same per-host vaulted
 credential the terminal uses** for the final hop, while the jump-host hop still uses
-the Blackfriars certificate. Mixed target sets work: cert-trusting hosts and vaulted hosts
+the Provenance certificate. Mixed target sets work: cert-trusting hosts and vaulted hosts
 in one run each authenticate their own way.
 
 - Only **open-policy** vaulted credentials are used (a check-out-gated secret is never
@@ -3215,11 +3215,11 @@ in one run each authenticate their own way.
   not POSIX shells, so `become: sudo` and shell modules won't work — use the
   appropriate `ansible_network_os` collection or `raw:` commands in the playbook.
 
-## v0.61.0 — Upgrade Blackfriars from the UI (single-host)
+## v0.61.0 — Upgrade Provenance from the UI (single-host)
 
-You can now upgrade Blackfriars by uploading one signed file in the UI instead of
+You can now upgrade Provenance by uploading one signed file in the UI instead of
 running `make redeploy-single` on the host. **Settings → Maintenance → Updates**:
-choose a `.fleetup` bundle, review its manifest (version, release notes,
+choose a `.provup` bundle, review its manifest (version, release notes,
 additive/breaking migrations), and install it in place.
 
 - **Minimal interruption.** The frontend is swapped invisibly; the backend restarts
@@ -3228,18 +3228,18 @@ additive/breaking migrations), and install it in place.
   sessions are dropped by the restart, so upgrade during a quiet window.
 - **Signed, verified, reversible.** Bundles are Ed25519-signed; the backend verifies
   the signature against a trusted release key before staging, and the privileged
-  `fleet-updater` sidecar re-verifies it independently before touching Docker. A
+  `prov-updater` sidecar re-verifies it independently before touching Docker. A
   pre-upgrade database backup is taken automatically, the previous images are kept
   tagged `:rollback`, and a failed health check rolls the app back to the prior
   version. Gated by a new **System.Upgrade** permission (super-admins only) and fully
   audited.
-- **Publishing:** `fleetctl release keygen` makes your offline signing key; `make
-  bundle` builds + signs a `.fleetup`. See the operations guide.
+- **Publishing:** `provctl release keygen` makes your offline signing key; `make
+  bundle` builds + signs a `.provup`. See the operations guide.
 
-**Deploy notes:** a new `fleet-updater` sidecar (which mounts the Docker socket)
+**Deploy notes:** a new `prov-updater` sidecar (which mounts the Docker socket)
 and an `updates` volume are added to the single-host compose. Set
-`FLEET_RELEASE_TRUST_KEYS` (your release public key) and `FLEET_UPDATER_TOKEN` in
-`.env`; leave `FLEET_RELEASE_TRUST_KEYS` empty to disable in-UI upgrades entirely
+`PROV_RELEASE_TRUST_KEYS` (your release public key) and `PROV_UPDATER_TOKEN` in
+`.env`; leave `PROV_RELEASE_TRUST_KEYS` empty to disable in-UI upgrades entirely
 (they fail closed). The `System.Upgrade` permission is added automatically on startup.
 
 ## v0.60.0 — Vulnerabilities: "fixable" now says how to fix it
@@ -3285,12 +3285,12 @@ response carries a `remediation` field per finding. No configuration needed; the
 ## v0.58.3 — Ask: "any problems?" attaches the right data; insights fix
 
 - Open-ended health questions ("any problems?", "anything wrong?", "morning
-  report", "does anything need my attention?") now route to the fleet-insights
+  report", "does anything need my attention?") now route to the prov-insights
   summary as a single grounded call. Previously the model would answer correctly
   but sometimes tack on an unrelated tool call (e.g. the schedule list) whose table
   clobbered the insights table shown beneath the answer — so a health question
   could render an irrelevant grid.
-- **Blackfriars insights: report pending security updates even when a host has no
+- **Provenance insights: report pending security updates even when a host has no
   metrics yet.** Pending updates come from inventory, not metrics, but the insight
   loop skipped any host whose metrics hadn't been collected — so a freshly enrolled
   host (or one whose metric probe was lagging/failing) could hide pending security
@@ -3311,7 +3311,7 @@ response carries a `remediation` field per finding. No configuration needed; the
 
 ## v0.58.1 — Ask assistant works under multi-tenancy
 
-Fixed the Ask assistant returning nothing when `FLEET_MULTI_TENANCY` is enabled.
+Fixed the Ask assistant returning nothing when `PROV_MULTI_TENANCY` is enabled.
 The assistant answers in a background context (local-LLM inference outlives the
 HTTP request), which was unmarked by tenant — so the row-level-security hook
 denied every row (fail-closed) and answers came back empty. Ask now captures the
@@ -3469,11 +3469,11 @@ to land on the same instance as the session's PTY; otherwise the watcher saw not
   non-blocking path, so shadowing never slows the operator's terminal; under a burst a
   remote watcher drops frames rather than stalling the session (same policy as a local
   slow watcher).
-- No new infrastructure or configuration — it rides the backplane Blackfriars already uses, and
+- No new infrastructure or configuration — it rides the backplane Provenance already uses, and
   is inert in a single-instance deployment.
 - The HA test stack (`deploy/compose/docker-compose.ha.yml`) is now self-contained: it
   pins its two backends to its own Postgres single-tenant, so it runs as-shipped
-  regardless of the production `FLEET_DATABASE_URL` / multi-tenancy in your `.env`.
+  regardless of the production `PROV_DATABASE_URL` / multi-tenancy in your `.env`.
 
 Verified live: leader-kill failover, ownership reconciliation (dead-owner rows fail while
 live peers are spared), and — via two real backends over one Postgres — cross-instance
@@ -3513,10 +3513,10 @@ downtime.
   so a crash or drop mid-rotation never locks a site out.
 - **Prompt reconnect.** A site reacts to its link closing immediately (rather than at
   the next push tick), so a rotation promotes within seconds.
-- **Transport honesty.** `FLEET_FEDERATION_TRANSPORT=wireguard` no longer implies a
+- **Transport honesty.** `PROV_FEDERATION_TRANSPORT=wireguard` no longer implies a
   distinct wire protocol. The federation protocol is always WSS (outbound TLS 443 +
   Ed25519 auth); `wireguard` documents that the WSS link rides a WireGuard/VPN underlay
-  (point `FLEET_HUB_URL` at the overlay address). Both values run identical code.
+  (point `PROV_HUB_URL` at the overlay address). Both values run identical code.
 - Uses the pre-existing `pending_public_key` column (no new migration). See
   docs/federation.md ("Key rotation", "Transport").
 
@@ -3539,14 +3539,14 @@ hub serves many provider customers. Off by default and a no-op unless multi-tena
 
 ## v0.52.0 — Multi-site federation
 
-Turn one Blackfriars instance into a **hub** — a single pane of glass over many independent **site**
-instances, each a full autonomous Blackfriars stack on its own network. Opt-in and **off by default**
-(`FLEET_MODE=standalone`): a standalone instance builds and mounts none of it and is unchanged.
+Turn one Provenance instance into a **hub** — a single pane of glass over many independent **site**
+instances, each a full autonomous Provenance stack on its own network. Opt-in and **off by default**
+(`PROV_MODE=standalone`): a standalone instance builds and mounts none of it and is unchanged.
 
 - **Site-initiated tunnels.** Sites need no inbound reachability — each dials the hub over a single
   outbound WSS connection (yamux-multiplexed); the hub never routes back into a site.
 - **Ed25519 trust, no shared secrets.** The hub generates a federation identity on first boot
-  (encrypted at rest with `FLEET_CA_PASSPHRASE`); a site generates its own keypair at join and pins
+  (encrypted at rest with `PROV_CA_PASSPHRASE`); a site generates its own keypair at join and pins
   the hub's key fingerprint (MITM defense). Every hub→site action carries a short-lived, hub-signed
   **acting-user assertion** bound to one exact request (`sha256(method+path+body)` + single-use nonce).
 - **Single pane of glass.** On a hub, a top-bar **site selector** points the *entire* UI at a chosen
@@ -3563,7 +3563,7 @@ instances, each a full autonomous Blackfriars stack on its own network. Opt-in a
 ## v0.51.0 — ITSM two-way sync
 
 The ITSM integration (v0.48.0) now writes the **decision back** to the linked ticket: when an access
-request is approved or denied, Blackfriars posts a ServiceNow *work note* or a Jira *comment* recording the
+request is approved or denied, Provenance posts a ServiceNow *work note* or a Jira *comment* recording the
 outcome, who decided, and the granted duration (audited as `approval.ticket_update`). Best-effort, so
 a decision is never blocked on the ITSM. Closing/transitioning the ticket remains the ITSM workflow's
 job. Verified end-to-end (request → ticket opened → approval → comment written back). See docs/itsm.md.
@@ -3572,8 +3572,8 @@ job. Verified end-to-end (request → ticket opened → approval → comment wri
 
 The external secrets manager (vault-of-record, v0.47.0) now supports **AWS Secrets Manager**
 alongside HashiCorp Vault KV. Back a vault credential with an AWS secret (name or ARN, optionally
-`#field` to extract one key from a JSON secret); Blackfriars fetches it on demand via a SigV4-signed
-`GetSecretValue` — no AWS SDK, and no local copy is stored. Configure with `FLEET_EXTSECRET_AWS_*`
+`#field` to extract one key from a JSON secret); Provenance fetches it on demand via a SigV4-signed
+`GetSecretValue` — no AWS SDK, and no local copy is stored. Configure with `PROV_EXTSECRET_AWS_*`
 (an endpoint override supports emulators). The SigV4 signer is now shared (`internal/awssig`)
 between AWS KMS and Secrets Manager. Verified end-to-end against LocalStack. See
 docs/external-secrets.md.
@@ -3595,7 +3595,7 @@ vaulted-credential injection and `db.query` auditing as the SQL engines.
 
 ## v0.48.0 — ITSM integration (ServiceNow / Jira)
 
-Tie privileged access to change management. When enabled, Blackfriars opens a **change/incident ticket**
+Tie privileged access to change management. When enabled, Provenance opens a **change/incident ticket**
 in ServiceNow or Jira for each just-in-time access request and attaches the ticket reference to the
 approval, so every grant carries a change record.
 
@@ -3611,8 +3611,8 @@ approval, so every grant carries a change record.
 
 ## v0.47.0 — External secrets manager (vault-of-record)
 
-A vault credential can now be **external-backed**: instead of Blackfriars storing the secret material, the
-credential references it in an external secrets manager (**HashiCorp Vault KV v2**), and Blackfriars
+A vault credential can now be **external-backed**: instead of Provenance storing the secret material, the
+credential references it in an external secrets manager (**HashiCorp Vault KV v2**), and Provenance
 fetches the value **on demand** at point of use. Integrate with the secrets manager your
 organization already runs instead of keeping a second copy.
 
@@ -3621,18 +3621,18 @@ organization already runs instead of keeping a second copy.
   credential injection, the database broker, the Kubernetes broker — resolves the value live through
   one new central resolver (`internal/credresolve`), so it always reflects the manager's current
   contents and is never cached.
-- **Manager is source of record.** Blackfriars does not rotate or re-seal external-backed credentials
+- **Manager is source of record.** Provenance does not rotate or re-seal external-backed credentials
   (rotate them in the manager); local rotation is refused.
-- Locally-sealed credentials are byte-for-byte unchanged. Configure with `FLEET_EXTSECRET_VAULT_*`;
+- Locally-sealed credentials are byte-for-byte unchanged. Configure with `PROV_EXTSECRET_VAULT_*`;
   tick "Store in an external secrets manager" when creating a credential. Migration `0058`. Verified
   end-to-end against a live Vault KV. See docs/external-secrets.md.
 
-Also exposes the `FLEET_KMS_*` and `FLEET_EXTSECRET_*` settings in the reference compose file so the
+Also exposes the `PROV_KMS_*` and `PROV_EXTSECRET_*` settings in the reference compose file so the
 external-KMS and external-secrets features are configurable in the standard deployment.
 
 ## v0.46.0 — Behavior analytics (UEBA)
 
-Surface access patterns that deviate from a user's established baseline, computed from Blackfriars's own
+Surface access patterns that deviate from a user's established baseline, computed from Provenance's own
 session records — no ML, no external dependency, just explainable statistics over data you already
 have. Four detectors:
 
@@ -3649,15 +3649,15 @@ seeded sessions; normal activity produced none).
 
 ## v0.45.0 — Kubernetes access brokering
 
-Broker access to Kubernetes clusters the way Blackfriars brokers SSH/RDP/databases. Register a
-cluster (API server + a vaulted bearer-token credential), and Blackfriars becomes an **authenticating
-proxy**: a user — or their `kubectl` — authenticates to Blackfriars, and Blackfriars forwards to the cluster's
+Broker access to Kubernetes clusters the way Provenance brokers SSH/RDP/databases. Register a
+cluster (API server + a vaulted bearer-token credential), and Provenance becomes an **authenticating
+proxy**: a user — or their `kubectl` — authenticates to Provenance, and Provenance forwards to the cluster's
 API server with the vaulted token injected, **auditing every call**. The operator never sees the token.
 
 - **Resource browser** built in: list pods, deployments, services, namespaces, and nodes per
   cluster/namespace with no kubectl required.
-- **Raw authenticating proxy** at `/k8s/clusters/{id}/proxy/*` — point `kubectl` at Blackfriars with a
-  Blackfriars token and reach the cluster through the broker.
+- **Raw authenticating proxy** at `/k8s/clusters/{id}/proxy/*` — point `kubectl` at Provenance with a
+  Provenance token and reach the cluster through the broker.
 - Per-cluster TLS: verify the API server against a stored CA bundle, or skip verification for test
   clusters. New permissions `Kubernetes.Manage` / `Kubernetes.Access`; migration `0057`; new
   **Kubernetes** page. Every call audited (`k8s.proxy`, `k8s.list`).
@@ -3688,13 +3688,13 @@ they never grant it beyond RBAC — and **super administrators are always exempt
 Two more external KMS backends for master-key protection (v0.40.0), so the CA and vault
 passphrases can be wrapped by the KMS your organization already runs:
 
-- **Azure Key Vault** (`FLEET_KMS_PROVIDER=azure-keyvault`) — wrapKey/unwrapKey (RSA-OAEP-256);
+- **Azure Key Vault** (`PROV_KMS_PROVIDER=azure-keyvault`) — wrapKey/unwrapKey (RSA-OAEP-256);
   the key never leaves the vault. Azure AD client-credentials auth with token caching.
-- **GCP Cloud KMS** (`FLEET_KMS_PROVIDER=gcp-kms`) — encrypt/decrypt on a cryptoKey. Service-account
+- **GCP Cloud KMS** (`PROV_KMS_PROVIDER=gcp-kms`) — encrypt/decrypt on a cryptoKey. Service-account
   auth via an RS256-signed JWT exchanged for an access token.
 
 Both are implemented against the vendor REST APIs directly — **no cloud SDK** — joining the existing
-HashiCorp Vault Transit and AWS KMS backends behind the same `internal/kms` interface, `fleetctl kms`
+HashiCorp Vault Transit and AWS KMS backends behind the same `internal/kms` interface, `provctl kms`
 tooling, and the Settings "Encryption at rest" status card. See docs/kms.md.
 
 ## v0.42.0 — Customizable dashboard Quick Connect
@@ -3736,14 +3736,14 @@ auditing — the operator never sees the password.
 
 ## v0.40.0 — External KMS / HSM for master-key protection
 
-Blackfriars's at-rest secrets (the CA signing key and every credential-vault entry) were already
+Provenance's at-rest secrets (the CA signing key and every credential-vault entry) were already
 AES-256-GCM sealed with a passphrase. That passphrase can now be **protected by an external
 Key Management Service or HSM** instead of living in the environment as plaintext — the
 near-universal enterprise security-review requirement, *"is the master key in a KMS/HSM?"*
 
-- **Unseal-via-KMS.** Wrap your `FLEET_CA_PASSPHRASE` / `FLEET_VAULT_PASSPHRASE` once with the
-  external KMS (`fleetctl kms wrap`) and store only the opaque wrapped blob
-  (`FLEET_CA_PASSPHRASE_WRAPPED` / `FLEET_VAULT_PASSPHRASE_WRAPPED`). At boot Blackfriars makes a single
+- **Unseal-via-KMS.** Wrap your `PROV_CA_PASSPHRASE` / `PROV_VAULT_PASSPHRASE` once with the
+  external KMS (`provctl kms wrap`) and store only the opaque wrapped blob
+  (`PROV_CA_PASSPHRASE_WRAPPED` / `PROV_VAULT_PASSPHRASE_WRAPPED`). At boot Provenance makes a single
   Unwrap call to recover the passphrase into memory. A stolen disk or database backup is useless
   without live access to the KMS.
 - **No re-seal, no format change.** The on-disk sealed-data format is unchanged, so enabling (or
@@ -3754,17 +3754,17 @@ near-universal enterprise security-review requirement, *"is the master key in a 
   cloud SDK dependency** (SigV4 signing is validated against AWS's published test vector). An AWS
   endpoint override supports KMS-compatible emulators. Azure Key Vault / GCP KMS slot into the
   same `internal/kms` interface next.
-- **Tooling & visibility:** `fleetctl kms status | wrap | unwrap`, and a read-only **Encryption at
+- **Tooling & visibility:** `provctl kms status | wrap | unwrap`, and a read-only **Encryption at
   rest** card (Settings → Infrastructure) showing the provider, key ID, live backend health, and
   whether each passphrase is KMS-wrapped. New `GET /kms/status` (System.Configure).
-- Fail-closed: production refuses `FLEET_KMS_VAULT_SKIP_VERIFY`, and the CA/vault passphrase
+- Fail-closed: production refuses `PROV_KMS_VAULT_SKIP_VERIFY`, and the CA/vault passphrase
   distinctness and length invariants are re-checked after unwrapping. See docs/kms.md.
 
 ## v0.39.0 — Database access brokering (PostgreSQL)
 
-Blackfriars now brokers privileged access to **databases**, not just SSH/RDP hosts. Register a
+Provenance now brokers privileged access to **databases**, not just SSH/RDP hosts. Register a
 PostgreSQL target (address, port, database, and a vaulted credential), then run SQL from the
-new **Databases** page: Blackfriars reaches the database **through the jump host**, injects the
+new **Databases** page: Provenance reaches the database **through the jump host**, injects the
 vaulted credential (you never see the password), executes your statement, and **audits it**.
 
 - Zero-knowledge: the database password is decrypted in RAM at point of use and never returned
@@ -3794,7 +3794,7 @@ the new sealed version. No one ever sees the password.
   audited.
 - Leader-gated and RLS-bypassed so one instance rotates due credentials across all tenants,
   with each stored version tagged to the credential's own tenant.
-- New knob `FLEET_VAULT_ROTATION_CHECK` (default 30m) sets how often the leader scans for due
+- New knob `PROV_VAULT_ROTATION_CHECK` (default 30m) sets how often the leader scans for due
   credentials. Migration `0052_vault_rotation`.
 
 ## v0.37.1 — Multi-tenancy: keep the audit hash-chain global (append fix)
@@ -3819,7 +3819,7 @@ CSV exports. For a chosen date range it bundles:
 
 - an **audit-log integrity attestation** — a genesis-to-latest verification of the hash-chained
   audit log, stated as PASS (chain cryptographically intact) or FAIL with the broken sequence.
-  This is Blackfriars's tamper-evidence guarantee rendered as evidence auditors can file;
+  This is Provenance's tamper-evidence guarantee rendered as evidence auditors can file;
 - summary statistics for privileged access (sessions, distinct users/hosts), certificate
   issuance (and revocations), scan posture (pass/fail), vulnerabilities (with critical/high
   counts), and privileged-command activity (flagged/blocked).
@@ -3901,15 +3901,15 @@ fixed; this closes the few real remainders.
   bottom-right (always clear of the app bar) and padded the top of the overlay so the
   caption and first line of output are no longer hidden behind the bar. (The RDP replay's
   full-screen control was already correct — it renders at the page root, not in a drawer.)
-- **Compose:** `FLEET_MULTI_TENANCY` is now passed through to the backend and
-  `FLEET_DATABASE_URL` is overridable, so MSP mode can be enabled without editing the
+- **Compose:** `PROV_MULTI_TENANCY` is now passed through to the backend and
+  `PROV_DATABASE_URL` is overridable, so MSP mode can be enabled without editing the
   compose file. Note (documented inline): with multi-tenancy on, the app's DB role must be
   **non-superuser** and lack `BYPASSRLS`, or row-level isolation is silently ineffective.
 
 ## v0.36.0 — FIPS 140-3 mode (opt-in, default off)
 
 The FIPS 140-3 mode is available. Opt in with
-`FLEET_FIPS_MODE=true` (default off — non-FIPS deployments are unchanged: Ed25519,
+`PROV_FIPS_MODE=true` (default off — non-FIPS deployments are unchanged: Ed25519,
 WireGuard, Argon2id as before).
 
 - **FIPS 140-3 crypto profile** via Go 1.24's native module (`GODEBUG=fips140=on`,
@@ -3921,7 +3921,7 @@ WireGuard, Argon2id as before).
   **selectable per host** at enrollment (WireGuard remains the default). Its own X.509
   overlay PKI. (A strongSwan/IPsec variant was prototyped but removed until it can be
   validated on real IPsec-capable hosts.)
-- **Migration toolset** (`fleetctl fips check` / `reseal-secrets` / `flag-stale-passwords`,
+- **Migration toolset** (`provctl fips check` / `reseal-secrets` / `flag-stale-passwords`,
   verify-then-upgrade-on-login) + a FIPS readiness card in System Health.
 
 Validated in Docker: a FIPS deploy boots with the module active, ECDSA CA, and a green
@@ -3931,7 +3931,7 @@ readiness verdict; a default deploy is byte-for-byte unchanged. Migrations
 ## v0.35.0 — Multi-tenancy (MSP) — experimental, default off
 
 One deployment can now serve multiple **isolated customer tenants**, for MSPs. Opt in
-with `FLEET_MULTI_TENANCY=true` (default off — with it off, Blackfriars is unchanged).
+with `PROV_MULTI_TENANCY=true` (default off — with it off, Provenance is unchanged).
 
 - **Provider manages many customers.** Existing data lands in a seeded **Provider**
   tenant; its admins get a **Tenants** console to create customer tenants and **switch
@@ -4001,8 +4001,8 @@ filesystem/network deep-dives. Scoped to the caller's accessible hosts.
 
 Tightened the assistant's tool-selection guidance so questions like "who ran df" /
 "did anyone run rm -rf" go firmly to **search_commands** (interactive terminals) and
-**recent_commands** (Blackfriars Run-Command), instead of being answered by the fleet-health
-tool. `fleet_insights` is now scoped explicitly to health/capacity questions only.
+**recent_commands** (Provenance Run-Command), instead of being answered by the fleet-health
+tool. `prov_insights` is now scoped explicitly to health/capacity questions only.
 Helps smaller local models route these correctly. (Prompt-only; requires the assistant
 tools from v0.33.0 to be deployed — if your Sessions page has no "Commands" tab, deploy
 the newer build first.)
@@ -4029,7 +4029,7 @@ once the monitor has collected the list (frontend-only; no migration).
 Four enhancements, led by deepening the Ask AI assistant.
 
 - **Ask AI — "who ran command X".** Two new assistant tools:
-  - **`recent_commands`** — the authoritative record of commands run through Blackfriars's
+  - **`recent_commands`** — the authoritative record of commands run through Provenance's
     Run-Command feature (exact command, who ran it, target, status, exit code, when),
     gated by Command.Run.
   - **`search_commands`** — searches the commands users **typed** in recorded interactive
@@ -4053,7 +4053,7 @@ few minutes to backfill.
 
 The grype scanner sidecar capped each scan at **5 minutes** (`GRYPE_SCAN_TIMEOUT`,
 its built-in default) while the backend was willing to wait **20 minutes**
-(`FLEET_VULN_SCAN_TIMEOUT`) — and the bundled compose never overrode the scanner's
+(`PROV_VULN_SCAN_TIMEOUT`) — and the bundled compose never overrode the scanner's
 cap. A host with a large package database (e.g. an ML/CUDA box with thousands of
 installed packages) legitimately takes longer than 5 minutes to scan, so it always
 came back as `scanner error (504): scan timed out` even though the backend would have
@@ -4061,7 +4061,7 @@ waited.
 
 - The scanner's per-scan timeout now **defaults to 20 minutes**, matching the backend,
   and is exposed as `GRYPE_SCAN_TIMEOUT` (seconds) in the compose file and
-  `.env.example`. Raise both it and `FLEET_VULN_SCAN_TIMEOUT` further if a host still
+  `.env.example`. Raise both it and `PROV_VULN_SCAN_TIMEOUT` further if a host still
   times out.
 - **Deploy:** pull, then recreate the scanner: `docker compose up -d grype-scanner`
   (no rebuild needed unless you also want the updated in-image default). Existing
@@ -4104,7 +4104,7 @@ back of that serialized queue blew past the backend's timeout.
   requests queue with the worker responsive instead of freezing it.
 - **Backend scan timeout is now realistic + configurable.** A per-host request that
   legitimately waits behind others no longer fails at a hard 6 minutes; the bound is
-  `FLEET_VULN_SCAN_TIMEOUT` (default **20 minutes**), applied to both the HTTP client
+  `PROV_VULN_SCAN_TIMEOUT` (default **20 minutes**), applied to both the HTTP client
   and the per-scan context.
 
 **Deploy:** rebuild the scanner + backend — `make redeploy-single` (it rebuilds
@@ -4117,21 +4117,21 @@ it on a beefier host.
 ## v0.32.0 — Read-only DR standby mode (usable warm standby)
 
 Makes the two-site warm standby (v0.31.0) actually **runnable on the replica**.
-Previously, a standby Blackfriars pointed at a read-only replica couldn't serve requests
+Previously, a standby Provenance pointed at a read-only replica couldn't serve requests
 (login/audit/heartbeat all write), so the DR console could only *finish* a failover
-after the database was promoted by other means. Now Blackfriars detects the replica and
+after the database was promoted by other means. Now Provenance detects the replica and
 runs in a dedicated **standby mode**:
 
-- **Automatic detection.** On startup Blackfriars checks `pg_is_in_recovery()`. If its
+- **Automatic detection.** On startup Provenance checks `pg_is_in_recovery()`. If its
   database is a replica it boots read-only: **migrations are skipped**, **no
   background writers start** (cluster/monitor/scheduler/CA — none of which a replica
   can service), and the API surface is reduced to a health check plus the DR
   standby console. Migrations auto-skip on a replica, so the old
-  `FLEET_MIGRATE_ON_START=false` requirement is now just belt-and-suspenders.
+  `PROV_MIGRATE_ON_START=false` requirement is now just belt-and-suspenders.
 - **Break-glass standby console.** The web UI detects standby posture (unauthenticated
   `GET /dr/mode`) and replaces the whole app with a console showing **live replication
   lag** and a **Promote this instance to primary** action — authenticated by a static
-  **`FLEET_DR_STANDBY_TOKEN`** (a login can't be used: the replica can't write a
+  **`PROV_DR_STANDBY_TOKEN`** (a login can't be used: the replica can't write a
   session). Promotion runs `pg_promote()` and the instance **restarts into full normal
   mode** against the now-primary database (give the container a restart policy).
 - **Peer health still works:** a standby answers `/ready`, so the primary's DR page
@@ -4146,7 +4146,7 @@ actually pointed at a replica, so existing single-instance deployments are unaff
 ## v0.31.0 — Disaster Recovery console (two-site warm standby)
 
 A new **Disaster Recovery** page (nav; `DR.Manage` — Super Administrator +
-Administrator by default) for running Blackfriars as **two independent instances** — an
+Administrator by default) for running Provenance as **two independent instances** — an
 active primary and a warm standby at a second site — with administrator-triggered
 **failover / failback** from the UI.
 
@@ -4163,11 +4163,11 @@ active primary and a warm standby at a second site — with administrator-trigge
   failover/failback webhook URLs.
 
 **Scope boundary (by design):** the console is a **trigger + status surface**, not
-the orchestrator — Blackfriars does not replicate the database or move DNS itself.
+the orchestrator — Provenance does not replicate the database or move DNS itself.
 `pg_promote()` works only when this DB is actually a standby and the role may run it
 (superuser-only unless you `GRANT EXECUTE ON FUNCTION pg_promote`); the console
 surfaces the DB's error verbatim otherwise. Full runbook — replication setup, the
-mandatory secret-parity checklist (`FLEET_CA_PASSPHRASE` is the linchpin), host
+mandatory secret-parity checklist (`PROV_CA_PASSPHRASE` is the linchpin), host
 reachability options, and the failover/failback procedures — is in the new **Two-site
 warm standby** section of `docs/disaster-recovery.md`. Migration `0048` (the
 `DR.Manage` permission) applies automatically; no schema tables are added.
@@ -4227,7 +4227,7 @@ unaffected — the input path is an unchanged, zero-overhead passthrough. Migrat
 `0046` (rules + approvals + the `CommandPolicy.Manage` permission) applies
 automatically.
 
-## v0.28.0 — Fleet-wide session content search
+## v0.28.0 — Provenance-wide session content search
 
 Search across recorded terminal sessions for a string — "who ran `X`, where, and
 when" — instead of opening recordings one by one. A new **Content search** tab on
@@ -4246,7 +4246,7 @@ sessions with **context snippets**, each linking straight to its replay.
   with the query and match count). Endpoint: `GET /sessions/search?q=`.
 
 *Note:* this searches recorded **content**; there is no separate parsed
-command-history store (Blackfriars records full PTY sessions, not individual commands).
+command-history store (Provenance records full PTY sessions, not individual commands).
 
 ## v0.27.0 — In-browser config-file editor
 
@@ -4255,8 +4255,8 @@ the **Files** browser, without downloading, editing locally, and re-uploading. E
 file row now has an **Edit** (pencil) action that opens the contents in a monospace
 editor; **Save** writes it back over the same audited jump-host/SFTP path.
 
-- **Automatic on-host backup.** Before overwriting, Blackfriars copies the current file
-  to `<name>.fleetbak-<timestamp>` on the host (toggle off if you don't want it), so
+- **Automatic on-host backup.** Before overwriting, Provenance copies the current file
+  to `<name>.provbak-<timestamp>` on the host (toggle off if you don't want it), so
   a bad edit is always recoverable. The save reports where the backup went.
 - **Safe by construction.** The editor refuses files over 2 MiB or that look
   binary (contain NUL), and **preserves the file's existing permissions** on save.
@@ -4336,12 +4336,12 @@ login method (password, LDAP, OIDC, SAML) so there's no per-IdP bypass.
   admin from the office-network restriction, or give one user a tighter limit).
 - **On denial:** the login is refused with a clear message (SSO users land back on
   the login page with the reason), and a `login_blocked` auth event is recorded.
-  Idle/absolute session timeouts (already configurable via `FLEET_SESSION_IDLE_TTL`
-  / `FLEET_SESSION_ABSOLUTE_TTL`) are unchanged.
+  Idle/absolute session timeouts (already configurable via `PROV_SESSION_IDLE_TTL`
+  / `PROV_SESSION_ABSOLUTE_TTL`) are unchanged.
 - API: global policy via the existing `PUT /settings/session_policy`; per-user via
   `GET/PUT/DELETE /users/{id}/session-policy` (`User.Edit`, audited).
 
-**Client-IP note:** behind a reverse proxy, set `FLEET_TRUSTED_PROXIES` (off by
+**Client-IP note:** behind a reverse proxy, set `PROV_TRUSTED_PROXIES` (off by
 default) so the allowlist matches the *user's* IP and not the proxy's. Migration
 `0045` (per-user override table) applies automatically.
 
@@ -4453,7 +4453,7 @@ new CVE data source — it reuses grype's existing (online/offline) NVD database
 
 ## v0.23.0 — Windows software inventory (over WinRM)
 
-Blackfriars now inventories the **installed applications** on Windows hosts, read over
+Provenance now inventories the **installed applications** on Windows hosts, read over
 WinRM from the registry Uninstall keys (64- and 32-bit views; Windows/KB updates
 filtered out — those are the MSRC path). It's the foundation for third-party CVE
 coverage (next), and useful on its own:
@@ -4489,13 +4489,13 @@ Windows vulnerability scans now report **real CVE IDs, MSRC severity, and CVSS
 scores** — not just "N missing security updates." The Windows Update Agent reports
 which KBs a host is missing, but not (reliably) the CVEs/severity they remediate;
 that authoritative data lives in Microsoft's **Security Update Guide** (CVRF), keyed
-by KB. Blackfriars now caches that KB→CVE mapping and enriches each finding with it.
+by KB. Provenance now caches that KB→CVE mapping and enriches each finding with it.
 
 - **New `msrc` package** parses CVRF documents; migration `0041` adds
   `msrc_updates` (KB→CVE, severity, CVSS, vector, title, release).
 - **Two ways to load the data**, mirroring the grype DB, under **Vulnerabilities →
   Windows CVE data (MSRC)**:
-  - **Update online** — fetches the last `FLEET_MSRC_MONTHS` releases (default 12)
+  - **Update online** — fetches the last `PROV_MSRC_MONTHS` releases (default 12)
     from `api.msrc.microsoft.com` (only when you click it; no automatic egress).
   - **Import offline** — for air-gapped deployments: upload a **zip of CVRF JSON**,
     a JSON array of documents, or a single CVRF JSON document.
@@ -4650,7 +4650,7 @@ security subset, via the Windows Update Agent COM API with an OFFLINE search
 (local cache only — no round-trip to Microsoft, the scalable equivalent of
 reading cached apt/dnf metadata). The counts land in the same
 `updates_available` / `security_updates` inventory fields the Linux path fills,
-so the **assistant** (`query_hosts` with `securityUpdatesMin`, `fleet_issues`),
+so the **assistant** (`query_hosts` with `securityUpdatesMin`, `prov_issues`),
 the dashboard issues, and host details report Windows update posture with no
 further changes — ask "which Windows hosts have security updates" and it works.
 
@@ -4661,17 +4661,17 @@ per-sweep cost and doesn't affect monitoring scalability.
 ## v0.19.8 — Windows enrollment: persist the WireGuard config (survive reboots)
 
 Fixed a Windows tunnel that worked until the first reboot and then crash-looped.
-The enrollment script wrote the WireGuard config to `%TEMP%\fleet.conf`, installed
+The enrollment script wrote the WireGuard config to `%TEMP%\prov.conf`, installed
 the tunnel service from it, and then **deleted** the temp file. WireGuard for
 Windows' tunnel service reads its config from that path on every start (it does
 not copy it into a store), so after a reboot the service could not load its
-config — logging `Unable to load configuration from path: …\Temp\…\fleet.conf`
+config — logging `Unable to load configuration from path: …\Temp\…\prov.conf`
 and shutting down repeatedly — and nothing listened on the WireGuard port until
 someone reactivated it by hand. No amount of service auto-start/recovery can help
 a service whose config file is gone.
 
 The config is now written to a persistent, ACL-locked path
-(`%ProgramData%\Blackfriars\fleet.conf`, restricted to SYSTEM + Administrators since it
+(`%ProgramData%\Provenance\prov.conf`, restricted to SYSTEM + Administrators since it
 holds the private key) and is no longer deleted, so the tunnel reconnects on its
 own after a reboot with nobody logged in. Existing Windows hosts must **re-enroll**
 to pick up the persistent config (the old temp config is gone).
@@ -4701,7 +4701,7 @@ resource details as Linux hosts.
   fact collection works over TLS with no manual `Enable-PSRemoting` and no
   `AllowUnencrypted`. Each step is best-effort and prints a summary of what it
   configured. The one manual action remains pasting the printed public key back
-  into Blackfriars.
+  into Provenance.
 - **Richer Windows facts.** Fact collection over WinRM now also gathers **disk
   usage per drive, free/used memory, network interfaces, and the default
   gateway**, populated into the same `HostMetrics` the UI already renders — so the
@@ -4727,7 +4727,7 @@ the host. See the enrollment guide.)
 ## v0.19.4 — Windows enrollment: fixed ListenPort so the jump can reach the host
 
 Supersedes the v0.19.3 approach. A Windows host now enrolls with a fixed
-WireGuard `ListenPort` (the configured `FLEET_WG_PORT`, default 51820), exactly
+WireGuard `ListenPort` (the configured `PROV_WG_PORT`, default 51820), exactly
 like a Linux host, and the jump keeps a static endpoint to dial it. This is what
 lets a host that shares the jump's LAN come up: the jump reaches the host
 directly on the LAN, so the tunnel establishes even though the host's own
@@ -4783,7 +4783,7 @@ Windows/RDP hosts can now join the WireGuard overlay, so they're reachable from
 **anywhere** with internet — the same dial-out model as Linux, previously Linux-only.
 On an RDP host, **Enroll** offers a **PowerShell** script: run it elevated on the host
 and it installs WireGuard, brings up a persistent dial-out tunnel to the jump host (no
-inbound firewall rules), and prints its public key; paste that back and Blackfriars adds it as
+inbound firewall rules), and prints its public key; paste that back and Provenance adds it as
 an overlay peer. The RDP session and WinRM fact collection then ride the tunnel.
 Enrollment is protocol-aware (bash for SSH hosts, PowerShell for Windows) and, for
 Windows, verifies RDP reachability over the new tunnel instead of SSH-cert login.
@@ -4796,8 +4796,8 @@ because fact collection runs over SSH, which Windows lacks. The monitor now coll
 those facts over **WinRM (PowerShell remoting)**: it authenticates with the host's
 attached **open-policy** vault credential and tunnels to WinRM through the jump host
 (trying HTTPS `5986` then HTTP `5985`, NTLM), best-effort and refreshed like other
-inventory. Requires WinRM enabled on the host. Toggle with `FLEET_RDP_COLLECT_FACTS`
-(default on); ports via `FLEET_RDP_WINRM_PORTS`. The host-details dialog now hides
+inventory. Requires WinRM enabled on the host. Toggle with `PROV_RDP_COLLECT_FACTS`
+(default on); ports via `PROV_RDP_WINRM_PORTS`. The host-details dialog now hides
 fields that don't apply to Windows (kernel, SSH version, WireGuard, apt/dnf updates).
 
 ## v0.17.8 — Revert RDP download to raw recording (.guac)
@@ -4865,7 +4865,7 @@ tunnel (the reference-player approach) via a new token-authenticated endpoint
 
 ## v0.17.0 — High Availability (multi-instance)
 
-Blackfriars can now run as **multiple backend instances** behind a load balancer,
+Provenance can now run as **multiple backend instances** behind a load balancer,
 for redundancy and rolling upgrades. HA is **safe by default** — a single-instance
 deployment is unchanged (it is simply always the leader). See the new
 [High Availability guide](high-availability.md).
@@ -4888,7 +4888,7 @@ deployment is unchanged (it is simply always the leader). See the new
   instance's now-keyless certs are revoked by a leader sweep.
 - **Postgres-failover-ready pool** (idle-conn recycling + exponential-backoff
   reconnect) and a **standby jump-host path**: each host's WireGuard public key is now
-  persisted, and `fleetctl wg-peers` emits the overlay peer list so a standby jump
+  persisted, and `provctl wg-peers` emits the overlay peer list so a standby jump
   host can rebuild the hub from the database on failover.
 - **Cluster roster** on the Background Jobs page (instances, leader, liveness).
 
@@ -4932,7 +4932,7 @@ desktop) are independent and **off by default** (a data-transfer surface); guacd
 enforces each gate and enabled directions are audited. (Clipboard needs an HTTPS
 origin.) The live desktop also resizes to follow the browser window.
 
-**Drive redirection (file transfer).** Enabling **Enable drive** mounts a **Blackfriars**
+**Drive redirection (file transfer).** Enabling **Enable drive** mounts a **Provenance**
 drive in the session and adds a **Files** button to the viewer — browse, download, and
 upload. **Allow upload / Allow download** are independent and off by default. Each
 session gets an isolated exchange directory on the shared `rdp-drive` volume that the
@@ -4943,13 +4943,13 @@ displays.
 
 *Deploy:* pull the updated `deploy/compose/docker-compose.yml` — the **guacd** sidecar
 now runs as the backend's `fleet` user (uid 100 / gid 101) and mounts the shared
-`recordings` and `rdp-drive` volumes. Optional `FLEET_RDP_DRIVE_DIR` defaults to
-`/var/lib/fleet/rdp-drive`. Migrations `0034` (the `rdp_recordings` table) and `0035`
+`recordings` and `rdp-drive` volumes. Optional `PROV_RDP_DRIVE_DIR` defaults to
+`/var/lib/prov/rdp-drive`. Migrations `0034` (the `rdp_recordings` table) and `0035`
 (a JSONB `rdp_options` column on hosts) apply automatically.
 
 ## v0.15.0 — Windows desktops (RDP)
 
-Blackfriars brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
+Provenance brokers full **Windows desktop (RDP)** sessions to the browser, alongside SSH
 terminals and SFTP — no local RDP client, no direct route to the host.
 
 - **Live RDP in the browser.** Set a host's **Protocol** to **RDP** and pick its port
@@ -4967,7 +4967,7 @@ terminals and SFTP — no local RDP client, no direct route to the host.
   credential-access (and check-out policy) rules as SSH injection.
 
 *Deploy:* add the `guacd` service (bundled in `deploy/compose/docker-compose.yml`) to
-your stack. Optional `FLEET_GUACD_ADDR` / `FLEET_RDP_PROXY_HOST` default to the
+your stack. Optional `PROV_GUACD_ADDR` / `PROV_RDP_PROXY_HOST` default to the
 compose service names. Migration `0033` (host `protocol` + `rdp_port`) applies
 automatically. Clipboard, drive redirection, multi-monitor, and RDP session recording
 are not in this release.
@@ -4980,10 +4980,10 @@ them.
 
 - **Credential injection (connect without seeing the secret).** On a host's edit
   form, set **Authentication** to a vault credential (password or SSH key). When
-  anyone opens a terminal or SFTP to that host, Blackfriars decrypts the credential **in
+  anyone opens a terminal or SFTP to that host, Provenance decrypts the credential **in
   memory** and authenticates the connection with it — the operator never sees the
   secret, and it never reaches the browser. Use it for appliances, network gear, and
-  legacy systems that can't accept Blackfriars's ephemeral certificates. Attaching a
+  legacy systems that can't accept Provenance's ephemeral certificates. Attaching a
   credential requires `Host.Edit` plus access to it; injected sessions are audited.
 - **Check-out & approval.** Each credential has an **access policy**: *open* (reveal/
   inject per grants), *check-out required* (time-boxed, self-service), or *approval
@@ -5001,12 +5001,12 @@ them.
 
 ## v0.13.0 — Credential vault
 
-Blackfriars is now a secrets manager, not just an SSH-certificate broker.
+Provenance is now a secrets manager, not just an SSH-certificate broker.
 
 - **Credential vault.** A new **Credentials** page stores static credentials —
-  **passwords, SSH keys, API keys** — for systems that can't use Blackfriars's ephemeral
+  **passwords, SSH keys, API keys** — for systems that can't use Provenance's ephemeral
   certificates (network gear, appliances, databases, legacy hosts). Secret material
-  is **encrypted at rest** with secretbox under a dedicated **`FLEET_VAULT_PASSPHRASE`**
+  is **encrypted at rest** with secretbox under a dedicated **`PROV_VAULT_PASSPHRASE`**
   (required in production and enforced to differ from the CA passphrase; falls back
   to it in development).
 - **Audited reveal.** Revealing a credential's plaintext requires the `Credential.View`
@@ -5020,8 +5020,8 @@ Blackfriars is now a secrets manager, not just an SSH-certificate broker.
   history.
 
 *Deploy:* migration `0030` (vault tables + `Credential.*` permissions) applies
-automatically. To use the vault in production, set `FLEET_VAULT_PASSPHRASE` to a
-strong value distinct from `FLEET_CA_PASSPHRASE`.
+automatically. To use the vault in production, set `PROV_VAULT_PASSPHRASE` to a
+strong value distinct from `PROV_CA_PASSPHRASE`.
 
 ## v0.12.1 — Fix: ZFS ARC memory accounting
 
@@ -5037,12 +5037,12 @@ strong value distinct from `FLEET_CA_PASSPHRASE`.
 
 ## v0.12.0 — Terraform provider
 
-Manage Blackfriars as infrastructure-as-code.
+Manage Provenance as infrastructure-as-code.
 
-- **`terraform-provider-fleet`** — a Terraform provider (built on the modern plugin
+- **`terraform-provider-provenance`** — a Terraform provider (built on the modern plugin
   framework and the Go SDK) that manages **hosts**, **groups** (including dynamic
   membership rules), **service accounts**, and their **API tokens** declaratively,
-  plus a `fleet_role` data source to resolve role names to IDs. It authenticates with
+  plus a `prov_role` data source to resolve role names to IDs. It authenticates with
   the same service-account token as the SDK and CLI; hosts and groups support full
   CRUD and `terraform import`. See the provider's README and `examples/` for usage,
   installation via dev overrides, and current limitations.
@@ -5060,7 +5060,7 @@ require a second person to approve, and administrators can govern what it may do
   propose — **disable a user** and **delete a host** — never run on the requester's
   confirm. They show **Request approval** and wait for a different administrator (with
   the new `Assistant.Approve` permission) to approve or deny. Separation of duties is
-  enforced: the requester can never approve their own action. On approval, Blackfriars
+  enforced: the requester can never approve their own action. On approval, Provenance
   **re-checks that the original requester still holds the required permission and an
   active account** before running it — an approval is not a bypass. Approvers see an
   "Awaiting your approval" inbox on the Ask page and a badge in the sidebar; every
@@ -5076,7 +5076,7 @@ granted to Super Administrator and Administrator) applies automatically.
 
 ## v0.10.0 — Actionable AI assistant: docs answers + confirmed actions
 
-The "Ask Blackfriars" assistant gains two capabilities, built so it can never act without
+The "Ask Provenance" assistant gains two capabilities, built so it can never act without
 explicit human confirmation.
 
 - **Answers grounded in the documentation.** Ask how-to and conceptual questions —
@@ -5122,7 +5122,7 @@ the assistant under Settings → AI assistant as before.
 
 ## v0.9.0 — Access certification, automation SDK/CLI, and SAML + SCIM
 
-Three enterprise capabilities: certify access on a schedule, manage Blackfriars as code,
+Three enterprise capabilities: certify access on a schedule, manage Provenance as code,
 and federate identity with SAML SSO and SCIM provisioning.
 
 - **Access certification (access reviews).** Create recertification campaigns that
@@ -5133,11 +5133,11 @@ and federate identity with SAML SSO and SCIM provisioning.
   `AccessReview.Manage` permission (granted to Super Administrator, Administrator,
   and Auditor).
 - **Automation: Go SDK + `fleet` CLI.** A standalone, dependency-free Go module
-  (`github.com/kforbus3/blackfriars/sdk`) and a token-authenticated `fleet`
+  (`github.com/kforbus3/provenance/sdk`) and a token-authenticated `fleet`
   command-line tool for managing hosts, groups (incl. dynamic rules), users, roles,
   service accounts and tokens, vulnerability scans, and CSV reports — for CI/CD,
   scheduled jobs, and custom tooling. Authenticates with a service-account `flt_`
-  token; distinct from the on-host `fleetctl` recovery tool. See the new
+  token; distinct from the on-host `provctl` recovery tool. See the new
   **Automation** guide.
 - **SAML 2.0 single sign-on.** Authenticate users against a SAML identity provider
   (Okta, Azure AD / Entra ID, OneLogin, ADFS…), in addition to OIDC and LDAP. Both
@@ -5146,7 +5146,7 @@ and federate identity with SAML SSO and SCIM provisioning.
   gated by an auto-create toggle. The SP metadata, ACS, and entity-ID URLs are shown
   in the config UI.
 - **SCIM 2.0 provisioning.** Let your identity provider create, update, and
-  **deprovision** Blackfriars accounts automatically — disabling an account (and tearing
+  **deprovision** Provenance accounts automatically — disabling an account (and tearing
   down its live sessions and credentials) the moment a user is removed upstream.
   Users create/read/replace/PATCH/delete plus discovery endpoints, authenticated by a
   dedicated, revocable `scim_` bearer token. Pairs with SAML SSO.
@@ -5228,14 +5228,14 @@ Seven capabilities that close common enterprise/PAM gaps.
 
 - Fixed hosts intermittently showing offline after v0.6.0: the health-check sweep was
   parallelized too aggressively for the jump host's SSH limits. Sweep concurrency is now
-  bounded (configurable via `FLEET_MONITOR_CONCURRENCY`, default 6).
+  bounded (configurable via `PROV_MONITOR_CONCURRENCY`, default 6).
 
 ## v0.6.0 — Hardening and a deeper Ask AI
 
 A security/reliability hardening pass plus a much-expanded AI assistant.
 
 - **Ask AI upgraded** from a single-shot question box into a fleet-health assistant:
-  multi-turn conversation memory (follow-up questions), a **fleet-insights** engine
+  multi-turn conversation memory (follow-up questions), a **prov-insights** engine
   (offline hosts, low disk, capacity/disk-runway projection, high load, pending
   updates) surfaced on the dashboard and to the assistant, and opt-in **scheduled
   fleet-health digests**.

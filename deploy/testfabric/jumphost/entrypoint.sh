@@ -1,11 +1,11 @@
 #!/bin/sh
-# Fleet Terminal test fabric — jump host entrypoint.
+# Provenance test fabric — jump host entrypoint.
 #
 # Brings up the WireGuard hub (wg0) with a stable keypair, then starts sshd.
 # Prefers the kernel WireGuard module (faster) and falls back to userspace
 # wireguard-go when the module is unavailable (e.g. macOS Docker Desktop, or a
 # Linux host that has not loaded the wireguard module). Managed-host *peers are
-# NOT configured here* — the Fleet Terminal enrollment flow adds each peer
+# NOT configured here* — the Provenance enrollment flow adds each peer
 # dynamically (wg set) when a host is enrolled.
 set -e
 
@@ -49,9 +49,9 @@ ip link set "$WG_IFACE" up
 # SIBLING host are encrypted to the hub and would be forwarded straight back out
 # the same interface — giving any compromised host direct L3 reach to every other
 # host's sshd/RDP/WinRM port, bypassing the brokering, RBAC and session audit that
-# is the entire point of Fleet. Drop those forwards.
+# is the entire point of Provenance. Drop those forwards.
 #
-# This costs nothing operationally: every path Fleet uses (terminal, SFTP, the
+# This costs nothing operationally: every path Provenance uses (terminal, SFTP, the
 # monitor probes, ansible via ProxyJump, the DB/Kubernetes brokers) is dialed
 # FROM this jump host, so it leaves via OUTPUT and is never a forwarded flow.
 #
@@ -69,9 +69,9 @@ ip link set "$WG_IFACE" up
 #
 # Failure here is loud but non-fatal — some kernels/hosts give the container no
 # usable iptables backend, and a jump host that cannot filter is still a working
-# jump host. Set FLEET_OVERLAY_PEER_ISOLATION=0 for a deployment that genuinely
+# jump host. Set PROV_OVERLAY_PEER_ISOLATION=0 for a deployment that genuinely
 # needs managed hosts to reach each other over the overlay.
-if [ "${FLEET_OVERLAY_PEER_ISOLATION:-1}" = "1" ]; then
+if [ "${PROV_OVERLAY_PEER_ISOLATION:-1}" = "1" ]; then
   # The connected route the kernel installed for WG_ADDR is the overlay subnet,
   # already in network form (10.100.0.1/24 -> 10.100.0.0/24) — no CIDR maths.
   WG_SUBNET=$(ip -4 route show dev "$WG_IFACE" 2>/dev/null | awk '$1 ~ /\// {print $1; exit}')
@@ -95,7 +95,7 @@ if [ "${FLEET_OVERLAY_PEER_ISOLATION:-1}" = "1" ]; then
   # without this a two-transport deployment has a hole exactly where the fleet is
   # mixed. Skipped when the two subnets are the same (a single-overlay deployment),
   # where the intra-subnet rule above already covers it.
-  OVPN_SUBNET="${FLEET_OVPN_SUBNET:-10.101.0.0/24}"
+  OVPN_SUBNET="${PROV_OVPN_SUBNET:-10.101.0.0/24}"
   if [ -n "$WG_SUBNET" ] && [ "$OVPN_SUBNET" != "$WG_SUBNET" ]; then
     for pair in "$WG_SUBNET $OVPN_SUBNET" "$OVPN_SUBNET $WG_SUBNET"; do
       set -- $pair
@@ -114,7 +114,7 @@ if [ "${FLEET_OVERLAY_PEER_ISOLATION:-1}" = "1" ]; then
     echo "[jumphost] WARN could not apply overlay peer isolation (no usable iptables backend?); managed hosts CAN reach each other over the overlay"
   fi
 else
-  echo "[jumphost] WARN overlay peer isolation DISABLED by FLEET_OVERLAY_PEER_ISOLATION; managed hosts can reach each other over the overlay"
+  echo "[jumphost] WARN overlay peer isolation DISABLED by PROV_OVERLAY_PEER_ISOLATION; managed hosts can reach each other over the overlay"
 fi
 
 # Re-apply persisted peers. Enrollment writes each managed host to
@@ -183,49 +183,49 @@ echo "[jumphost] wg0 up at ${WG_ADDR}; peers added on demand by enrollment"
 # overlay needs the same treatment or every upgrade silently drops every host that
 # uses it, with the hosts' own clients retrying into a closed port.
 #
-# Requires /etc/openvpn/fleet to be on a volume (see docker-compose.jumphost.yml);
+# Requires /etc/openvpn/prov to be on a volume (see docker-compose.jumphost.yml);
 # without one the material is gone with the old container and this is a no-op.
-if [ -f /etc/openvpn/fleet/server.conf ] && command -v openvpn >/dev/null 2>&1; then
+if [ -f /etc/openvpn/prov/server.conf ] && command -v openvpn >/dev/null 2>&1; then
   # Match on process NAME, then confirm the config from /proc: `pgrep -f` would also
   # match this script, whose own text contains the command line below.
   ovpn_running() {
     for _p in $(pgrep -x openvpn 2>/dev/null); do
-      if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '/etc/openvpn/fleet/server.conf'; then return 0; fi
+      if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '/etc/openvpn/prov/server.conf'; then return 0; fi
     done
     return 1
   }
   if ovpn_running; then
     echo "[jumphost] openvpn overlay server already running"
-  elif openvpn --config /etc/openvpn/fleet/server.conf --daemon fleet-overlay \
-        --writepid /run/fleet-ovpn.pid --log-append /etc/openvpn/fleet/server.log; then
+  elif openvpn --config /etc/openvpn/prov/server.conf --daemon prov-overlay \
+        --writepid /run/prov-ovpn.pid --log-append /etc/openvpn/prov/server.log; then
     sleep 1
     if ovpn_running; then
       echo "[jumphost] openvpn overlay server restarted"
     else
-      echo "[jumphost] WARN openvpn overlay server failed to start; see /etc/openvpn/fleet/server.log"
+      echo "[jumphost] WARN openvpn overlay server failed to start; see /etc/openvpn/prov/server.log"
     fi
   else
     echo "[jumphost] WARN could not launch the openvpn overlay server"
   fi
 fi
 
-# Auto-trust the Fleet CA. When FLEET_BACKEND_URL is set (production single-server
+# Auto-trust the Provenance CA. When PROV_BACKEND_URL is set (production single-server
 # deployment), poll the backend's public CA endpoint and keep
-# /etc/ssh/fleet_ca.pub current — this self-establishes trust on first boot and
+# /etc/ssh/prov_ca.pub current — this self-establishes trust on first boot and
 # tracks CA rotation, with no manual `make trust` step. In the local test fabric
-# FLEET_BACKEND_URL is unset and trust is seeded by `make trust` instead.
-if [ -n "${FLEET_BACKEND_URL:-}" ]; then
-  echo "[jumphost] CA auto-sync enabled from ${FLEET_BACKEND_URL}"
+# PROV_BACKEND_URL is unset and trust is seeded by `make trust` instead.
+if [ -n "${PROV_BACKEND_URL:-}" ]; then
+  echo "[jumphost] CA auto-sync enabled from ${PROV_BACKEND_URL}"
   (
-    interval="${FLEET_CA_SYNC_INTERVAL:-300}"
+    interval="${PROV_CA_SYNC_INTERVAL:-300}"
     while true; do
-      if curl -fsS --max-time 10 "${FLEET_BACKEND_URL%/}/api/v1/certificates/ca/pub" -o /tmp/fleet_ca.new 2>/dev/null \
-         && [ -s /tmp/fleet_ca.new ]; then
-        if ! cmp -s /tmp/fleet_ca.new /etc/ssh/fleet_ca.pub; then
-          cp /tmp/fleet_ca.new /etc/ssh/fleet_ca.pub
-          chmod 644 /etc/ssh/fleet_ca.pub
+      if curl -fsS --max-time 10 "${PROV_BACKEND_URL%/}/api/v1/certificates/ca/pub" -o /tmp/prov_ca.new 2>/dev/null \
+         && [ -s /tmp/prov_ca.new ]; then
+        if ! cmp -s /tmp/prov_ca.new /etc/ssh/prov_ca.pub; then
+          cp /tmp/prov_ca.new /etc/ssh/prov_ca.pub
+          chmod 644 /etc/ssh/prov_ca.pub
           pkill -HUP sshd 2>/dev/null || true
-          echo "[jumphost] installed/updated Fleet CA trust"
+          echo "[jumphost] installed/updated Provenance CA trust"
         fi
       fi
       sleep "$interval"

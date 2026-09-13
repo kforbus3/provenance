@@ -1,6 +1,6 @@
-"""Fleet Terminal — grype-scanner sidecar.
+"""Provenance — grype-scanner sidecar.
 
-A small internal HTTP service the Fleet backend calls to run vulnerability scans.
+A small internal HTTP service the Provenance backend calls to run vulnerability scans.
 It wraps Anchore Grype so the (large) vulnerability database and the scanner live
 in their own container, out of the lean Go backend.
 
@@ -28,9 +28,9 @@ import tempfile
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-app = FastAPI(title="fleet-grype-scanner", version="1")
+app = FastAPI(title="prov-grype-scanner", version="1")
 
-# Per-scan wall-clock cap. Default aligns with the backend's FLEET_VULN_SCAN_TIMEOUT
+# Per-scan wall-clock cap. Default aligns with the backend's PROV_VULN_SCAN_TIMEOUT
 # (20m) so the scanner never 504s before the backend would wait — a host with a large
 # package database (e.g. an ML/CUDA box) can legitimately take several minutes.
 SCAN_TIMEOUT = int(os.environ.get("GRYPE_SCAN_TIMEOUT", "1200"))

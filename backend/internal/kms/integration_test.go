@@ -14,15 +14,15 @@ import (
 // and/or LocalStack (see the KMS verification steps in the release notes).
 
 func TestVaultTransitRoundTripLive(t *testing.T) {
-	addr := os.Getenv("FLEET_KMS_VAULT_ADDR")
+	addr := os.Getenv("PROV_KMS_VAULT_ADDR")
 	if addr == "" {
-		t.Skip("set FLEET_KMS_VAULT_ADDR to run the live Vault Transit test")
+		t.Skip("set PROV_KMS_VAULT_ADDR to run the live Vault Transit test")
 	}
 	p, err := New(Config{
 		Provider:           "vault-transit",
-		KeyID:              os.Getenv("FLEET_KMS_KEY_ID"),
+		KeyID:              os.Getenv("PROV_KMS_KEY_ID"),
 		VaultAddr:          addr,
-		VaultToken:         os.Getenv("FLEET_KMS_VAULT_TOKEN"),
+		VaultToken:         os.Getenv("PROV_KMS_VAULT_TOKEN"),
 		VaultTLSSkipVerify: true,
 	})
 	if err != nil {
@@ -32,16 +32,16 @@ func TestVaultTransitRoundTripLive(t *testing.T) {
 }
 
 func TestAWSKMSRoundTripLive(t *testing.T) {
-	endpoint := os.Getenv("FLEET_KMS_AWS_ENDPOINT")
+	endpoint := os.Getenv("PROV_KMS_AWS_ENDPOINT")
 	if endpoint == "" {
-		t.Skip("set FLEET_KMS_AWS_ENDPOINT (e.g. LocalStack) to run the live AWS KMS test")
+		t.Skip("set PROV_KMS_AWS_ENDPOINT (e.g. LocalStack) to run the live AWS KMS test")
 	}
 	p, err := New(Config{
 		Provider:     "aws-kms",
-		KeyID:        os.Getenv("FLEET_KMS_KEY_ID"),
-		AWSRegion:    os.Getenv("FLEET_KMS_AWS_REGION"),
-		AWSAccessKey: os.Getenv("FLEET_KMS_AWS_ACCESS_KEY_ID"),
-		AWSSecretKey: os.Getenv("FLEET_KMS_AWS_SECRET_ACCESS_KEY"),
+		KeyID:        os.Getenv("PROV_KMS_KEY_ID"),
+		AWSRegion:    os.Getenv("PROV_KMS_AWS_REGION"),
+		AWSAccessKey: os.Getenv("PROV_KMS_AWS_ACCESS_KEY_ID"),
+		AWSSecretKey: os.Getenv("PROV_KMS_AWS_SECRET_ACCESS_KEY"),
 		AWSEndpoint:  endpoint,
 	})
 	if err != nil {

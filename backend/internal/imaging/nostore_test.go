@@ -6,7 +6,7 @@ import "testing"
 //
 // The build dialog offers "Generate the recovery passphrase and store it", and
 // turning it off is how you build a laptop image: the operator types a
-// passphrase, the machine asks for it at every boot, and Fleet keeps no copy --
+// passphrase, the machine asks for it at every boot, and Provenance keeps no copy --
 // so a stolen laptop and a compromised control plane are each useless alone.
 //
 // That is a promise the UI makes in as many words, and it is enforced by exactly

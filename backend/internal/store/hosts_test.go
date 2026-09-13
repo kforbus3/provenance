@@ -22,11 +22,11 @@ func (q *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryE
 
 // TestListHostsQueryCountConstant proves the N+1 is gone: listing 3 hosts and
 // listing 30 hosts must issue the SAME number of queries (1 page query + 4 batched
-// detail queries), not a per-host multiple. Gated on FLEET_STORE_TEST_DB.
+// detail queries), not a per-host multiple. Gated on PROV_STORE_TEST_DB.
 func TestListHostsQueryCountConstant(t *testing.T) {
-	dsn := os.Getenv("FLEET_STORE_TEST_DB")
+	dsn := os.Getenv("PROV_STORE_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_STORE_TEST_DB to a Postgres DSN with the hosts schema")
+		t.Skip("set PROV_STORE_TEST_DB to a Postgres DSN with the hosts schema")
 	}
 	ctx := context.Background()
 

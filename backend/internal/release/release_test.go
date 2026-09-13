@@ -32,7 +32,7 @@ func buildTestBundle(t *testing.T, version, minFrom string, imgContent []byte) (
 		BuildDate:              "2026-07-25T00:00:00Z",
 		MinFromVersion:         minFrom,
 		Components:             []string{"backend"},
-		Images:                 []ImageRef{{Component: "backend", Image: "fleet-terminal-backend", Tag: version, File: "images/backend.tar", Digest: digest, Bytes: size}},
+		Images:                 []ImageRef{{Component: "backend", Image: "provenance-backend", Tag: version, File: "images/backend.tar", Digest: digest, Bytes: size}},
 		MigrationCompatibility: CompatAdditive,
 	}
 	mj, err := json.Marshal(m)
@@ -40,7 +40,7 @@ func buildTestBundle(t *testing.T, version, minFrom string, imgContent []byte) (
 		t.Fatal(err)
 	}
 	sig := Sign(mj, priv)
-	path = filepath.Join(dir, "bundle.fleetup")
+	path = filepath.Join(dir, "bundle.provup")
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func buildTestBundle(t *testing.T, version, minFrom string, imgContent []byte) (
 }
 
 func TestBundleRoundTrip(t *testing.T) {
-	content := bytes.Repeat([]byte("fleetd-image-bytes"), 100)
+	content := bytes.Repeat([]byte("provd-image-bytes"), 100)
 	path, pub, _ := buildTestBundle(t, "v0.61.0", "v0.55.0", content)
 
 	b, err := Open(path, []ed25519.PublicKey{pub})
@@ -116,7 +116,7 @@ func TestExtractDetectsDigestTamper(t *testing.T) {
 	digest, size, _ := HashFile(imgPath)
 	m := Manifest{SchemaVersion: ManifestSchema, Version: "v0.61.0", MigrationCompatibility: CompatAdditive,
 		Components: []string{"backend"},
-		Images:     []ImageRef{{Component: "backend", Image: "fleet-terminal-backend", Tag: "v0.61.0", File: "images/backend.tar", Digest: digest, Bytes: size}}}
+		Images:     []ImageRef{{Component: "backend", Image: "provenance-backend", Tag: "v0.61.0", File: "images/backend.tar", Digest: digest, Bytes: size}}}
 	mj, _ := json.Marshal(m)
 	sig := Sign(mj, priv)
 

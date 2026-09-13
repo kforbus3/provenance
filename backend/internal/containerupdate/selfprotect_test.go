@@ -18,9 +18,9 @@ import (
 // excluded, having no registry digest. It is the third-party containers the
 // application is MADE of. On a live instance:
 //
-//	fleet-terminal-postgres-1  postgres:16-alpine       project fleet-terminal
-//	fleet-terminal-redis-1     redis:7-alpine           project fleet-terminal
-//	fleet-terminal-guacd-1     guacamole/guacd:1.5.5    project fleet-terminal
+//	provenance-postgres-1  postgres:16-alpine       project provenance
+//	provenance-redis-1     redis:7-alpine           project provenance
+//	provenance-guacd-1     guacamole/guacd:1.5.5    project provenance
 //
 // The database this server talks to, the cache holding its sessions, and the
 // daemon carrying its remote-desktop connections. All ordinary registry images,
@@ -31,7 +31,7 @@ import (
 // rollout is what gets restarted, so the result is never written.
 
 func TestThisApplicationsOwnContainersAreRecognised(t *testing.T) {
-	const self = "fleet-terminal"
+	const self = "provenance"
 	cases := []struct {
 		name, project, image string
 		want                 bool
@@ -41,8 +41,8 @@ func TestThisApplicationsOwnContainersAreRecognised(t *testing.T) {
 			"a stock postgres image, but it is THIS instance's database"},
 		{"its session cache", self, "redis:7-alpine", true, ""},
 		{"its remote-desktop daemon", self, "guacamole/guacd:1.5.5", true, ""},
-		{"its own backend", self, "fleet-terminal-backend:1.2.8", true, ""},
-		{"an image named for the project but unlabelled", "", "fleet-terminal-jumphost", true,
+		{"its own backend", self, "provenance-backend:1.2.8", true, ""},
+		{"an image named for the project but unlabelled", "", "provenance-jumphost", true,
 			"labels may not have been collected; the image name still says what it is"},
 		{"somebody else's postgres", "nextcloud", "postgres:16-alpine", false,
 			"the same image in a different project is an ordinary container"},
@@ -93,9 +93,9 @@ func TestARolloutRefusesThisApplicationsOwnDatabase(t *testing.T) {
 		"postgres", "16-alpine", "17-alpine"
 	f.stacks[ids[0]] = nil
 	f.containers[ids[0]] = []models.Container{{
-		Name: "fleet-terminal-postgres-1", Image: "postgres:16-alpine",
+		Name: "provenance-postgres-1", Image: "postgres:16-alpine",
 		Repository: "postgres", Tag: "16-alpine",
-		ComposeProject: "fleet-terminal", ComposeService: "postgres",
+		ComposeProject: "provenance", ComposeService: "postgres",
 		ComposeDir: "/opt/fleet",
 	}}
 	d := &fakeDeployer{}
@@ -119,8 +119,8 @@ func TestAnOrdinaryContainerOnTheSameHostIsStillUpdatable(t *testing.T) {
 	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
 	f.stacks[ids[0]] = nil
 	f.containers[ids[0]] = []models.Container{
-		{Name: "fleet-terminal-postgres-1", Image: "postgres:16-alpine",
-			Repository: "postgres", Tag: "16-alpine", ComposeProject: "fleet-terminal"},
+		{Name: "provenance-postgres-1", Image: "postgres:16-alpine",
+			Repository: "postgres", Tag: "16-alpine", ComposeProject: "provenance"},
 		{Name: "web", Image: "nginx:1.24", Repository: "nginx", Tag: "1.24",
 			ComposeProject: "site", ComposeService: "web", ComposeDir: "/opt/site"},
 	}

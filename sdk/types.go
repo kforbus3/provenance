@@ -1,4 +1,4 @@
-package fleet
+package prov
 
 import "time"
 
@@ -35,7 +35,7 @@ type HostInput struct {
 	Tags        []string `json:"tags,omitempty"`
 }
 
-// User is a Fleet user account.
+// User is a Provenance user account.
 type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`

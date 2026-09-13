@@ -106,12 +106,12 @@ func itoa(n int) string {
 // TestReserveWGAddressConcurrent proves the race-safety guarantee against a real
 // Postgres: many goroutines (standing in for concurrent backend replicas) reserve
 // overlay addresses at once and every one is distinct — no double-assignment. Gated
-// on FLEET_STORE_TEST_DB (a DSN to a throwaway Postgres migrated with the hosts
+// on PROV_STORE_TEST_DB (a DSN to a throwaway Postgres migrated with the hosts
 // table and the 0075 unique index).
 func TestReserveWGAddressConcurrent(t *testing.T) {
-	dsn := os.Getenv("FLEET_STORE_TEST_DB")
+	dsn := os.Getenv("PROV_STORE_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_STORE_TEST_DB to a Postgres DSN with the hosts schema")
+		t.Skip("set PROV_STORE_TEST_DB to a Postgres DSN with the hosts schema")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)

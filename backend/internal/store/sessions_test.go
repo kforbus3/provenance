@@ -21,13 +21,13 @@ import (
 // invited to terminate a session that ended by itself days ago, then wonder why
 // nothing happened.
 //
-// Gated on FLEET_STORE_TEST_DB like the other store tests, because the thing
+// Gated on PROV_STORE_TEST_DB like the other store tests, because the thing
 // under test is a WHERE clause and asserting a WHERE clause without a database
 // asserts nothing.
 func TestListActiveSessionsExcludesEnded(t *testing.T) {
-	dsn := os.Getenv("FLEET_STORE_TEST_DB")
+	dsn := os.Getenv("PROV_STORE_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_STORE_TEST_DB to a Postgres DSN with the schema applied")
+		t.Skip("set PROV_STORE_TEST_DB to a Postgres DSN with the schema applied")
 	}
 	ctx := context.Background()
 

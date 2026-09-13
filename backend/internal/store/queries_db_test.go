@@ -60,7 +60,7 @@ func TestStoreQueriesParse(t *testing.T) {
 	}{
 		{"DiscoveredProjects", func() error { _, err := s.DiscoveredProjects(ctx); return err }},
 		{"ImageUpdates", func() error { _, err := s.ImageUpdates(ctx); return err }},
-		{"ImageUpdatesWithHosts", func() error { _, err := s.ImageUpdatesWithHosts(ctx, "fleet-terminal"); return err }},
+		{"ImageUpdatesWithHosts", func() error { _, err := s.ImageUpdatesWithHosts(ctx, "provenance"); return err }},
 		{"TrackedImages", func() error { _, err := s.TrackedImages(ctx); return err }},
 		{"EnabledStackComposes", func() error { _, err := s.EnabledStackComposes(ctx); return err }},
 		{"LastCheckedAt", func() error { _, err := s.LastCheckedAt(ctx); return err }},

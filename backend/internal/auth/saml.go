@@ -25,7 +25,7 @@ import (
 )
 
 // samlLogoutStatusSuccess is the SAML top-level status the SP returns to an
-// IdP-initiated LogoutRequest once the local Fleet session has been terminated.
+// IdP-initiated LogoutRequest once the local Provenance session has been terminated.
 const samlLogoutStatusSuccess = "urn:oasis:names:tc:SAML:2.0:status:Success"
 
 // samlNameIDFormatUnspecified is the NameID Format asserted on SP-built
@@ -305,7 +305,7 @@ func (h *Handler) samlLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // samlACS consumes the IdP's SAML Response (HTTP-POST binding). It validates the
-// signature, audience, and time bounds, provisions/finds the user, issues a Fleet
+// signature, audience, and time bounds, provisions/finds the user, issues a Provenance
 // session, and redirects into the app. Handles both SP- and IdP-initiated flows.
 func (h *Handler) samlACS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -375,7 +375,7 @@ func (h *Handler) samlACS(w http.ResponseWriter, r *http.Request) {
 	}
 	h.setAuthCookies(w, tokens)
 	// Remember the IdP's subject NameID + SessionIndex so an SP-initiated logout can
-	// build a matching LogoutRequest later (the Fleet session table doesn't carry
+	// build a matching LogoutRequest later (the Provenance session table doesn't carry
 	// SAML identifiers, and this stays entirely within the auth package).
 	h.setSAMLLogoutCookies(w, info.NameID, info.SessionIndex)
 	_ = h.svc.store.RecordAuthEvent(ctx, models.AuthEvent{
@@ -420,20 +420,20 @@ func (h *Handler) clearSAMLLogoutCookies(w http.ResponseWriter) {
 	}
 }
 
-// revokeLocalSession best-effort terminates the current Fleet session named by the
-// fleet_sid cookie. Shared by both SLO endpoints: local logout is guaranteed even
+// revokeLocalSession best-effort terminates the current Provenance session named by the
+// prov_sid cookie. Shared by both SLO endpoints: local logout is guaranteed even
 // when the IdP round-trip cannot be completed. Returns the session id string (for
 // audit) if one was present.
 func (h *Handler) revokeLocalSession(ctx context.Context, r *http.Request) {
-	if sc, err := r.Cookie("fleet_sid"); err == nil {
+	if sc, err := r.Cookie("prov_sid"); err == nil {
 		if sid, perr := uuid.Parse(sc.Value); perr == nil {
 			_ = h.svc.Logout(ctx, sid)
 		}
 	}
 }
 
-// samlLogout is SP-initiated Single Logout (public browser GET, no Fleet principal
-// in context). It ALWAYS revokes the local Fleet session first; then, when SLO is
+// samlLogout is SP-initiated Single Logout (public browser GET, no Provenance principal
+// in context). It ALWAYS revokes the local Provenance session first; then, when SLO is
 // fully configured (enabled, an IdP SLO endpoint, an SP signing key, and a
 // remembered subject NameID), it builds a signed LogoutRequest and redirects the
 // browser to the IdP's SLO endpoint. Otherwise it falls back to a plain local
@@ -474,13 +474,13 @@ func (h *Handler) samlLogout(w http.ResponseWriter, r *http.Request) {
 //
 //   - a LogoutResponse (the IdP's reply to our SP-initiated LogoutRequest): the
 //     local session was already ended in samlLogout, so it just lands on /login;
-//   - an IdP-initiated LogoutRequest: it terminates the local Fleet session and,
+//   - an IdP-initiated LogoutRequest: it terminates the local Provenance session and,
 //     when an SP signing key is configured, replies with a signed LogoutResponse
 //     redirected back to the IdP.
 //
 // Local logout is guaranteed regardless of the IdP message's validity. NOTE: the
 // session cookies are SameSite=Strict, so a front-channel IdP-initiated request
-// arriving cross-site may not carry fleet_sid; SP-initiated logout (the common
+// arriving cross-site may not carry prov_sid; SP-initiated logout (the common
 // path) revokes the session before leaving our origin, so this only affects pure
 // IdP-initiated SLO — a documented limitation of front-channel SLO under Strict.
 func (h *Handler) samlSLO(w http.ResponseWriter, r *http.Request) {

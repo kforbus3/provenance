@@ -26,18 +26,18 @@ Set the connection for whichever manager(s) you use (a credential picks its prov
 
 HashiCorp Vault KV:
 
-    FLEET_EXTSECRET_VAULT_ADDR=https://vault.internal:8200
-    FLEET_EXTSECRET_VAULT_TOKEN=<token with read on the KV paths you reference>
-    # FLEET_EXTSECRET_VAULT_CACERT=/etc/fleet/vault-ca.pem   # optional (private CA)
-    # FLEET_EXTSECRET_VAULT_SKIP_VERIFY=true                 # DEV ONLY
+    PROV_EXTSECRET_VAULT_ADDR=https://vault.internal:8200
+    PROV_EXTSECRET_VAULT_TOKEN=<token with read on the KV paths you reference>
+    # PROV_EXTSECRET_VAULT_CACERT=/etc/prov/vault-ca.pem   # optional (private CA)
+    # PROV_EXTSECRET_VAULT_SKIP_VERIFY=true                 # DEV ONLY
 
 AWS Secrets Manager:
 
-    FLEET_EXTSECRET_AWS_REGION=us-east-1
-    FLEET_EXTSECRET_AWS_ACCESS_KEY_ID=...
-    FLEET_EXTSECRET_AWS_SECRET_ACCESS_KEY=...
-    # FLEET_EXTSECRET_AWS_SESSION_TOKEN=...                  # optional (STS)
-    # FLEET_EXTSECRET_AWS_ENDPOINT=http://localstack:4566    # optional override (emulator/testing)
+    PROV_EXTSECRET_AWS_REGION=us-east-1
+    PROV_EXTSECRET_AWS_ACCESS_KEY_ID=...
+    PROV_EXTSECRET_AWS_SECRET_ACCESS_KEY=...
+    # PROV_EXTSECRET_AWS_SESSION_TOKEN=...                  # optional (STS)
+    # PROV_EXTSECRET_AWS_ENDPOINT=http://localstack:4566    # optional override (emulator/testing)
 
 ## Create an external-backed credential
 

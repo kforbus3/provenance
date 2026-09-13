@@ -118,8 +118,8 @@ func verifyRLSCapableRole(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 		return fmt.Errorf("multi-tenancy is enabled but the database role %s, which BYPASSES row-level security and would break tenant isolation. "+
 			"Connect as a non-superuser role created WITH NOBYPASSRLS — e.g. "+
-			"`CREATE ROLE fleet_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '…'; GRANT ALL ON ALL TABLES IN SCHEMA public TO fleet_app;` "+
-			"— and point FLEET_DATABASE_URL at it", why)
+			"`CREATE ROLE prov_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '…'; GRANT ALL ON ALL TABLES IN SCHEMA public TO prov_app;` "+
+			"— and point PROV_DATABASE_URL at it", why)
 	}
 	return nil
 }

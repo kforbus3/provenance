@@ -108,7 +108,7 @@ type joinReq struct {
 	SiteName        string `json:"siteName"`
 	APIVersion      string `json:"apiVersion"`
 	ProtocolVersion int    `json:"protocolVersion"`
-	BuildVersion    string `json:"buildVersion"` // the site's running fleetd version
+	BuildVersion    string `json:"buildVersion"` // the site's running provd version
 }
 
 type joinResp struct {
@@ -455,11 +455,11 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		"joinToken":      tok,
 		"hubFingerprint": s.hubFinger,
 		"env": map[string]string{
-			"FLEET_MODE":                 "site",
-			"FLEET_HUB_URL":              s.deps.Cfg.PublicURL,
-			"FLEET_HUB_JOIN_TOKEN":       tok,
-			"FLEET_HUB_KEY_FINGERPRINT":  s.hubFinger,
-			"FLEET_FEDERATION_TRANSPORT": "wss",
+			"PROV_MODE":                 "site",
+			"PROV_HUB_URL":              s.deps.Cfg.PublicURL,
+			"PROV_HUB_JOIN_TOKEN":       tok,
+			"PROV_HUB_KEY_FINGERPRINT":  s.hubFinger,
+			"PROV_FEDERATION_TRANSPORT": "wss",
 		},
 	})
 }

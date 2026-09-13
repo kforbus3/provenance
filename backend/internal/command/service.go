@@ -1,6 +1,6 @@
 // Package command runs ad-hoc shell commands on managed Linux (SSH) hosts — the
 // lightweight counterpart to Ansible playbooks and PowerShell scripts. Execution
-// goes over SSH through the Fleet jump host, as the host's system principal, with a
+// goes over SSH through the Provenance jump host, as the host's system principal, with a
 // bounded worker pool and a capped output buffer. Every command is evaluated
 // against the command-control policy (flag/block/approval) before it runs, so the
 // same governance that applies to an interactive session applies here.

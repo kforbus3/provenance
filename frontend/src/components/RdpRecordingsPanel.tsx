@@ -203,7 +203,7 @@ export function RdpRecordingsPanel() {
   const filtered = recordings.filter((r) =>
     !q ||
     r.hostname.toLowerCase().includes(q) ||
-    r.fleetUser.toLowerCase().includes(q) ||
+    r.provUser.toLowerCase().includes(q) ||
     r.rdpUser.toLowerCase().includes(q),
   );
 
@@ -235,7 +235,7 @@ export function RdpRecordingsPanel() {
           <TableHead>
             <TableRow>
               <TableCell>Started</TableCell>
-              <TableCell>Fleet user</TableCell>
+              <TableCell>Provenance user</TableCell>
               <TableCell>Windows user</TableCell>
               <TableCell>Host</TableCell>
               <TableCell>Status</TableCell>
@@ -254,7 +254,7 @@ export function RdpRecordingsPanel() {
                   onClick={() => replayable && setActive(r)}
                 >
                   <TableCell>{formatDateTime(r.startedAt)}</TableCell>
-                  <TableCell>{r.fleetUser}</TableCell>
+                  <TableCell>{r.provUser}</TableCell>
                   <TableCell>{r.rdpUser}</TableCell>
                   <TableCell>{r.hostname}</TableCell>
                   <TableCell><Chip label={r.status} size="small" color={r.status === "active" ? "info" : "default"} /></TableCell>
@@ -314,7 +314,7 @@ export function RdpRecordingsPanel() {
             </Stack>
             <Stack direction="row" spacing={2} sx={{ mb: 1 }}>
               <Typography variant="caption" color="text.secondary">
-                By {active.fleetUser} · started {formatDateTime(active.startedAt)}
+                By {active.provUser} · started {formatDateTime(active.startedAt)}
               </Typography>
               {active.endedAt && (
                 <Typography variant="caption" color="text.secondary">

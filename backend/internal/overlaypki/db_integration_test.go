@@ -20,11 +20,11 @@ import (
 // second PKI instance (a simulated process restart) reloads the SAME CA by
 // decrypting it — then issues a client cert that chains to the reloaded CA.
 //
-// Gated on FLEET_PKI_TEST_DB (a DSN to a throwaway Postgres with the overlay_ca table).
+// Gated on PROV_PKI_TEST_DB (a DSN to a throwaway Postgres with the overlay_ca table).
 func TestEnsureCAPersistsAndReloads(t *testing.T) {
-	dsn := os.Getenv("FLEET_PKI_TEST_DB")
+	dsn := os.Getenv("PROV_PKI_TEST_DB")
 	if dsn == "" {
-		t.Skip("set FLEET_PKI_TEST_DB to a Postgres DSN with the overlay_ca table")
+		t.Skip("set PROV_PKI_TEST_DB to a Postgres DSN with the overlay_ca table")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -61,7 +61,7 @@ func TestEnsureCAPersistsAndReloads(t *testing.T) {
 
 	// Issue a client cert off the RELOADED CA and confirm it chains — proves the
 	// sealed private key survived the DB round-trip and decrypts to a usable key.
-	certPEM, _, _, err := p2.IssueClient("fleet-h-smoke", time.Hour)
+	certPEM, _, _, err := p2.IssueClient("prov-h-smoke", time.Hour)
 	if err != nil {
 		t.Fatalf("IssueClient off reloaded CA: %v", err)
 	}

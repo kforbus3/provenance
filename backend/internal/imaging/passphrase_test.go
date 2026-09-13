@@ -105,7 +105,7 @@ func TestFreeImageNameCannotTraverse(t *testing.T) {
 		// The same name is one path component in the secrets manager. The property
 		// is that normalising the reference does not MOVE it — not that the name
 		// avoids the characters '.' and '.', which are legal in an image name.
-		const prefix = "secret/blackfriars/images/"
+		const prefix = "secret/provenance/images/"
 		ref := prefix + got
 		if cleaned := filepath.Clean(ref); cleaned != ref || !strings.HasPrefix(cleaned, prefix) {
 			t.Errorf("FreeImageName(%q) = %q: ref %q normalises to %q", in, got, ref, cleaned)

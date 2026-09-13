@@ -128,7 +128,7 @@ func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*
 	// Vaulted credential injection (mirrors the terminal path): resolve the host's
 	// vault credential to an SSH auth method; the plaintext never leaves the dial.
 	var injection *credinject.Injection
-	if host.AuthMethod != "" && host.AuthMethod != "fleet_cert" {
+	if host.AuthMethod != "" && host.AuthMethod != "prov_cert" {
 		key, err := h.d.Cfg.VaultKey()
 		if err != nil {
 			return nil, err
@@ -463,7 +463,7 @@ func (h *handler) readText(w http.ResponseWriter, r *http.Request) {
 
 // writeText overwrites a remote text file for the editor, taking an on-host backup
 // of the previous contents first (best-effort) and preserving the file's mode. The
-// backup is written alongside the file as <name>.fleetbak-<timestamp>.
+// backup is written alongside the file as <name>.provbak-<timestamp>.
 func (h *handler) writeText(w http.ResponseWriter, r *http.Request) {
 	client, p, host, cleanup, ok := h.connect(w, r)
 	if !ok {
@@ -537,7 +537,7 @@ func (h *handler) backupRemote(client *pkgsftp.Client, remote string) (string, e
 		return "", err
 	}
 	defer src.Close()
-	backup := remote + ".fleetbak-" + time.Now().Format("20060102-150405")
+	backup := remote + ".provbak-" + time.Now().Format("20060102-150405")
 	dst, err := client.Create(backup)
 	if err != nil {
 		return "", err

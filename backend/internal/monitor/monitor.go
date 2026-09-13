@@ -63,7 +63,7 @@ const (
 	defaultMonitorConcurrency = 6
 
 	// maxMonitorConcurrency is the documented safe ceiling for
-	// FLEET_MONITOR_CONCURRENCY. It sits just above the OpenSSH default
+	// PROV_MONITOR_CONCURRENCY. It sits just above the OpenSSH default
 	// MaxStartups hard limit so an operator can raise throughput for a large fleet
 	// WITHOUT silently exceeding what the jump host will accept — going higher only
 	// helps if sshd MaxStartups on the jump host is raised to match, otherwise a
@@ -78,7 +78,7 @@ func New(st *store.Store, cfg *config.Config, log *slog.Logger, gw *sshgw.Gatewa
 }
 
 // hasVaultedCredential reports whether a host authenticates with a vaulted
-// username/password or SSH key rather than Fleet's ephemeral certificates. Such
+// username/password or SSH key rather than Provenance's ephemeral certificates. Such
 // hosts (routers, switches, appliances) are directly reachable but never "enrolled"
 // — the monitor probes them with the credential injected in a system context.
 func hasVaultedCredential(h *models.Host) bool {
@@ -129,7 +129,7 @@ func (m *Monitor) notifyTransition(ctx context.Context, h models.Host, prev, now
 		m.nfy.Notify(ctx, notify.Event{
 			Type: notify.EventHostOffline, Severity: notify.SeverityError,
 			Title:     "Host offline: " + h.Hostname,
-			Body:      fmt.Sprintf("Fleet can no longer reach %s (%s). It was last seen online.", h.Hostname, h.Environment),
+			Body:      fmt.Sprintf("Provenance can no longer reach %s (%s). It was last seen online.", h.Hostname, h.Environment),
 			DedupeKey: h.ID.String(),
 		})
 	case prev != "online" && now == "online":
@@ -227,7 +227,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 		// can't run the enrollment script) but are still reachable through the jump
 		// host, so probe them via a TCP check on the RDP port. A host that
 		// authenticates with a vaulted credential is likewise never "enrolled" (no
-		// overlay, no Fleet CA trust) but is directly reachable and fully usable — an
+		// overlay, no Provenance CA trust) but is directly reachable and fully usable — an
 		// appliance like a router or switch — so probe it too, with that credential
 		// injected in a system context.
 		if !h.Enrolled && h.Protocol != "rdp" && !hasVaultedCredential(&h) {
@@ -296,7 +296,7 @@ func (m *Monitor) probeHost(ctx context.Context, h models.Host) {
 			return st, inv, metrics
 		}
 	} else {
-		// A vaulted host (no Fleet CA trust) is probed with its credential injected in a
+		// A vaulted host (no Provenance CA trust) is probed with its credential injected in a
 		// system context. If the credential can't be resolved unattended (missing, or
 		// check-out-gated), leave the host's status untouched rather than flapping it
 		// offline — mirrors the best-effort RDP/WinRM fact path.
@@ -399,7 +399,7 @@ func (m *Monitor) notifyOverlayTransition(ctx context.Context, h models.Host, pr
 		m.nfy.Notify(ctx, notify.Event{
 			Type: notify.EventHostOverlayDown, Severity: notify.SeverityWarning,
 			Title: "Overlay tunnel down: " + h.Hostname,
-			Body: fmt.Sprintf("%s (%s) is still reachable, but its %s tunnel (%s) is down — Fleet is falling back to the direct address. %s",
+			Body: fmt.Sprintf("%s (%s) is still reachable, but its %s tunnel (%s) is down — Provenance is falling back to the direct address. %s",
 				h.Hostname, h.Environment, overlayLabel(h.Overlay), h.WGAddress, overlayWhereToLook(h.Overlay)),
 			DedupeKey: h.ID.String() + ":overlay",
 		})

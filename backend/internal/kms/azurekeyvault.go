@@ -37,15 +37,15 @@ type azureKeyVault struct {
 func newAzureKeyVault(cfg Config) (Provider, error) {
 	vault := strings.TrimRight(strings.TrimSpace(cfg.AzureVaultURL), "/")
 	if vault == "" {
-		return nil, fmt.Errorf("kms(azure-keyvault): FLEET_KMS_AZURE_VAULT_URL is required")
+		return nil, fmt.Errorf("kms(azure-keyvault): PROV_KMS_AZURE_VAULT_URL is required")
 	}
 	if strings.TrimSpace(cfg.KeyID) == "" {
-		return nil, fmt.Errorf("kms(azure-keyvault): FLEET_KMS_KEY_ID (key name) is required")
+		return nil, fmt.Errorf("kms(azure-keyvault): PROV_KMS_KEY_ID (key name) is required")
 	}
 	for k, v := range map[string]string{
-		"FLEET_KMS_AZURE_TENANT_ID":     cfg.AzureTenantID,
-		"FLEET_KMS_AZURE_CLIENT_ID":     cfg.AzureClientID,
-		"FLEET_KMS_AZURE_CLIENT_SECRET": cfg.AzureClientSecret,
+		"PROV_KMS_AZURE_TENANT_ID":     cfg.AzureTenantID,
+		"PROV_KMS_AZURE_CLIENT_ID":     cfg.AzureClientID,
+		"PROV_KMS_AZURE_CLIENT_SECRET": cfg.AzureClientSecret,
 	} {
 		if strings.TrimSpace(v) == "" {
 			return nil, fmt.Errorf("kms(azure-keyvault): %s is required", k)

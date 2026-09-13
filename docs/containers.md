@@ -349,7 +349,7 @@ with those images, is exactly what an operator should be able to see — the
 vulnerability scanning of postgres or guacd is some of the most useful this does.
 Only *updating* them this way is refused.
 
-Recognised by compose project, defaulting to `fleet-terminal`. A deployment that
+Recognised by compose project, defaulting to `provenance`. A deployment that
 renamed its compose project should set `containers.selfProject` to match, or its
 own database would be offered for update.
 

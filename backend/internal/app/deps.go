@@ -23,7 +23,7 @@ type Deps struct {
 	Store   *store.Store
 	Cfg     *config.Config
 	Log     *slog.Logger
-	Version string // running fleetd build (for a federation site to report to its hub)
+	Version string // running provd build (for a federation site to report to its hub)
 	Auth    *auth.Service
 	Live    *livesessions.Registry
 	Watch   *livesessions.Broker // fans out live terminal output to read-only watchers
@@ -66,10 +66,10 @@ type Deps struct {
 	// claims inline when the address is reused.
 	CleanupHostOverlay func(ctx context.Context, host *models.Host) error
 
-	// TeardownHost removes Fleet's footprint from a managed host — the NOPASSWD
+	// TeardownHost removes Provenance's footprint from a managed host — the NOPASSWD
 	// sudoers grant, both shared accounts, the CA trust, the principal files and the
 	// sshd drop-in (set by the server; nil in tests). Opt-in per delete: it is
-	// destructive to the machine and, if Fleet was its only administrative access,
+	// destructive to the machine and, if Provenance was its only administrative access,
 	// locks the operator out.
 	//
 	// Must be called BEFORE CleanupHostOverlay, which removes the route the teardown

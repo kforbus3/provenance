@@ -22,7 +22,7 @@ const ENGINE_DEFAULT_PORT: Record<string, number> = { postgres: 5432, mysql: 330
 const ENGINE_DEFAULT_DB: Record<string, string> = { postgres: "postgres", mysql: "", mariadb: "", sqlserver: "master", mongodb: "admin" };
 const isDocEngine = (engine: string) => engine === "mongodb";
 
-// DatabasesPage: register database targets and run brokered SQL — Fleet reaches the
+// DatabasesPage: register database targets and run brokered SQL — Provenance reaches the
 // database through the jump host with a vaulted credential injected, and audits every
 // query, so the operator never sees the password.
 export function DatabasesPage() {

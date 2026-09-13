@@ -32,7 +32,7 @@ import (
 // ErrNoRunner is returned when no builder runner is configured. Building is
 // opt-in: a fleet that consumes images somebody else builds should not have to
 // run a privileged sidecar, and saying so plainly beats a connection refused.
-var ErrNoRunner = errors.New("no image builder is configured; set FLEET_BUILDER_RUNNER_URL " +
+var ErrNoRunner = errors.New("no image builder is configured; set PROV_BUILDER_RUNNER_URL " +
 	"to the builder-runner sidecar")
 
 // runnerTimeout bounds one call to the sidecar. Deliberately short: nothing here
@@ -106,7 +106,7 @@ func runnerError(resp *http.Response) error {
 		// Named specifically because the fix is a deployment change, not a
 		// retry, and "401" on its own sends people looking at their own login.
 		return errors.New("the image builder rejected our token; check that " +
-			"FLEET_BUILDER_RUNNER_TOKEN matches on both sides")
+			"PROV_BUILDER_RUNNER_TOKEN matches on both sides")
 	}
 	text := strings.TrimSpace(string(raw))
 	if len(text) > 300 {

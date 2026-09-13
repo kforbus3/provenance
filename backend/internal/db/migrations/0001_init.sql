@@ -1,4 +1,4 @@
--- Fleet Terminal core schema.
+-- Provenance core schema.
 -- Normalized PostgreSQL schema covering identity, RBAC, hosts, certificates,
 -- sessions, recordings, approvals, enrollment, and tamper-evident audit.
 

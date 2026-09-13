@@ -1,6 +1,6 @@
 // Package bootstrap implements the one-time first-run wizard that creates the
 // initial Super Administrator. Once any user exists the wizard is permanently
-// closed; it can only be reopened via an offline recovery process (fleetctl).
+// closed; it can only be reopened via an offline recovery process (provctl).
 package bootstrap
 
 import (

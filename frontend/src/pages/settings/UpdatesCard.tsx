@@ -13,7 +13,7 @@ import {
 } from "../../api/upgrade";
 
 // UpdatesCard is the Settings -> Maintenance panel for the in-UI upgrade system:
-// upload a signed .fleetup bundle, review its manifest, then apply it in place. It
+// upload a signed .provup bundle, review its manifest, then apply it in place. It
 // tolerates the backend restart mid-upgrade (the updater sidecar holds the status).
 export function UpdatesCard() {
   const [current, setCurrent] = useState<string>("");
@@ -187,7 +187,7 @@ export function UpdatesCard() {
         <Typography variant="h6" gutterBottom>Updates</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Running version <code>{current || "…"}</code>. Upload a signed{" "}
-          <code>.fleetup</code> bundle to upgrade in place. The frontend swaps invisibly; the
+          <code>.provup</code> bundle to upgrade in place. The frontend swaps invisibly; the
           backend restarts for a few seconds and this page reconnects automatically. Active
           terminal sessions are dropped, so upgrade during a quiet window.
         </Typography>
@@ -272,7 +272,7 @@ export function UpdatesCard() {
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
               <Button variant="outlined" component="label" startIcon={<UploadFileIcon />} disabled={busy}>
                 Choose bundle
-                <input ref={fileRef} type="file" accept=".fleetup" hidden onChange={onPreview} />
+                <input ref={fileRef} type="file" accept=".provup" hidden onChange={onPreview} />
               </Button>
               {busy && <CircularProgress size={18} />}
             </Stack>

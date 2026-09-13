@@ -21,7 +21,7 @@ type FederationSite struct {
 	Status           string     `json:"status"`
 	HubKeyID         *uuid.UUID `json:"-"`
 	APIVersion       string     `json:"apiVersion"`
-	// BuildVersion is the site's running fleetd version (refreshed on the heartbeat);
+	// BuildVersion is the site's running provd version (refreshed on the heartbeat);
 	// ProtocolVersion is the federation wire protocol it negotiated at join.
 	BuildVersion    string     `json:"buildVersion"`
 	ProtocolVersion int        `json:"protocolVersion"`

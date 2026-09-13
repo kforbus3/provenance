@@ -8,7 +8,7 @@ call it.
 
 From the outside that is indistinguishable from the feature not existing, and
 that is exactly how it was reported: "Flipside would show me connected machines,
-Blackfriars does not". The code was there the whole time.
+Provenance does not". The code was there the whole time.
 
 That failure mode is invisible to every other check in this repo. It is not a
 syntax error, not a broken guard, not a wrong family branch — it is working code

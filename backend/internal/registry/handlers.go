@@ -29,7 +29,7 @@ func (h *handler) selfProject(ctx context.Context) string {
 			return strings.TrimSpace(v)
 		}
 	}
-	return "fleet-terminal"
+	return "provenance"
 }
 
 // Mount attaches container-image update routes.

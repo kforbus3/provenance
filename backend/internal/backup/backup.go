@@ -2,13 +2,13 @@
 // through openssl AES-256-CBC/PBKDF2) to a destination directory, optionally on
 // a recurring schedule with retention. The standard openssl format means a
 // backup can be restored anywhere with a one-line command (see the break-glass /
-// disaster-recovery runbook) — no Fleet-specific tooling required.
+// disaster-recovery runbook) — no Provenance-specific tooling required.
 //
 // Because openssl's CBC mode is unauthenticated, each backup also gets a detached
 // HMAC-SHA256 tag (<file>.sql.enc.hmac) computed over the ciphertext as it streams —
 // an encrypt-then-MAC construction so a tampered or corrupted backup is detectable
 // before it is restored. The tag is reproducible with stock openssl (see the runbook),
-// preserving the "no Fleet-specific tooling" property.
+// preserving the "no Provenance-specific tooling" property.
 package backup
 
 import (
@@ -36,7 +36,7 @@ import (
 
 const (
 	settingKey = "backup_policy"
-	filePrefix = "fleet-backup-"
+	filePrefix = "prov-backup-"
 	fileSuffix = ".sql.enc"
 	hmacSuffix = ".hmac" // detached HMAC-SHA256 sidecar: <backup>.sql.enc.hmac
 )
@@ -145,7 +145,7 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	// distinct from the CA passphrase, so one leaked secret can't both decrypt the
 	// backup and unlock the CA key it carries.
 	if s.cfg.IsProduction() && (s.cfg.BackupPassphrase == "" || s.cfg.BackupPassphrase == string(s.cfg.CAKeyPassphrase)) {
-		return nil, fmt.Errorf("set a distinct FLEET_BACKUP_PASSPHRASE (must differ from the CA passphrase) to create backups in production")
+		return nil, fmt.Errorf("set a distinct PROV_BACKUP_PASSPHRASE (must differ from the CA passphrase) to create backups in production")
 	}
 	if err := os.MkdirAll(s.cfg.BackupDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create backup dir: %w", err)
@@ -164,8 +164,8 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	}
 	dump := exec.CommandContext(cctx, "pg_dump", "--no-owner", "--clean", "--if-exists")
 	dump.Env = append(os.Environ(), dumpEnv...)
-	enc := exec.CommandContext(cctx, "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-pass", "env:FLEET_BK_PASS")
-	enc.Env = append(os.Environ(), "FLEET_BK_PASS="+pass)
+	enc := exec.CommandContext(cctx, "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-pass", "env:PROV_BK_PASS")
+	enc.Env = append(os.Environ(), "PROV_BK_PASS="+pass)
 
 	pipe, err := dump.StdoutPipe()
 	if err != nil {
@@ -276,7 +276,7 @@ func (s *Service) applyRetention(ctx context.Context) {
 // proper encrypt-then-MAC construction. Reproducible with stock tools for an offline
 // verify (see the disaster-recovery runbook).
 func backupHMACKey(pass string) []byte {
-	sum := sha256.Sum256([]byte("fleet-backup-hmac:" + pass))
+	sum := sha256.Sum256([]byte("prov-backup-hmac:" + pass))
 	return sum[:]
 }
 

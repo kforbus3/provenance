@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Ask Fleet regression harness.
+"""Ask Provenance regression harness.
 
-Runs the standard question battery against a LIVE Fleet instance through the real
+Runs the standard question battery against a LIVE Provenance instance through the real
 API (login -> POST /assistant/ask -> poll) and prints every answer for review.
 This is the acceptance suite for the Ask feature: every change to the assistant
 (fast paths, deterministic answers, calendar windows, prompt text) should be
 validated by running this battery and reading the answers against known data.
 
 Usage:
-    FLEET_URL=http://127.0.0.1:8080 FLEET_USER=<admin> FLEET_PASS=<password> \
+    PROV_URL=http://127.0.0.1:8080 PROV_USER=<admin> PROV_PASS=<password> \
         python3 askharness.py [--only PATTERN] [--multi-turn]
 
 The user needs Assistant.Use plus broad view permissions (a test super-admin is
@@ -24,9 +24,9 @@ import sys
 import time
 import urllib.request
 
-BASE = os.environ.get("FLEET_URL", "http://127.0.0.1:8080")
-USER = os.environ.get("FLEET_USER", "")
-PASS = os.environ.get("FLEET_PASS", "")
+BASE = os.environ.get("PROV_URL", "http://127.0.0.1:8080")
+USER = os.environ.get("PROV_USER", "")
+PASS = os.environ.get("PROV_PASS", "")
 
 # The core battery: the 7 canonical questions plus the time-window, phrasing, and
 # calendar variants that have regressed before. Grouped for --only filtering.
@@ -93,7 +93,7 @@ MULTI_TURN = [
 
 # The exact exchange that motivated the compliance work: a fleet-wide question, then a
 # correction. Turn 1 must not ask which host; turn 2 must switch datasets rather than
-# claiming Fleet cannot retrieve compliance results.
+# claiming Provenance cannot retrieve compliance results.
 MULTI_TURN_COMPLIANCE = [
     "Give me the latest security scan result for each host",
     "I want the results for the security scans not for the vulnerability scans",
@@ -118,7 +118,7 @@ def api(path, token=None, body=None):
 
 def login():
     if not USER or not PASS:
-        sys.exit("set FLEET_USER and FLEET_PASS (and FLEET_URL if not localhost)")
+        sys.exit("set PROV_USER and PROV_PASS (and PROV_URL if not localhost)")
     return api("/api/v1/auth/login", body={"username": USER, "password": PASS})["accessToken"]
 
 

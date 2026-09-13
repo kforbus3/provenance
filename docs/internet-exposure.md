@@ -36,17 +36,17 @@ Start from [`.env.production.example`](../.env.production.example). The essentia
 
 | Variable | Why |
 |---|---|
-| `FLEET_ENV=production` | Production posture |
-| `FLEET_PUBLIC_URL=https://fleet.example.com` | Must match the public URL; drives CORS, cookies, WebAuthn RPID |
-| `FLEET_COOKIE_SECURE=true` | Auth cookies only sent over HTTPS |
-| `FLEET_ALLOW_BOOTSTRAP=false` | Belt-and-braces; the wizard also self-seals once a user exists |
-| `FLEET_REFRESH_TOKEN_TTL=168h` | Shorter refresh lifetime than the 30-day default |
-| `FLEET_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Tighten idle/absolute caps |
-| `FLEET_AUTH_RATE_LIMIT_PER_MIN` / `_BURST` | Per-IP throttle on auth endpoints |
-| `FLEET_WEBAUTHN_RPID` / `_ORIGINS` | Required for passkeys to work on the public domain |
+| `PROV_ENV=production` | Production posture |
+| `PROV_PUBLIC_URL=https://provenance.example.com` | Must match the public URL; drives CORS, cookies, WebAuthn RPID |
+| `PROV_COOKIE_SECURE=true` | Auth cookies only sent over HTTPS |
+| `PROV_ALLOW_BOOTSTRAP=false` | Belt-and-braces; the wizard also self-seals once a user exists |
+| `PROV_REFRESH_TOKEN_TTL=168h` | Shorter refresh lifetime than the 30-day default |
+| `PROV_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Tighten idle/absolute caps |
+| `PROV_AUTH_RATE_LIMIT_PER_MIN` / `_BURST` | Per-IP throttle on auth endpoints |
+| `PROV_WEBAUTHN_RPID` / `_ORIGINS` | Required for passkeys to work on the public domain |
 
-Generate strong secrets: `openssl rand -hex 32` for `FLEET_JWT_SECRET`,
-`FLEET_CSRF_SECRET`, and `FLEET_CA_PASSPHRASE`.
+Generate strong secrets: `openssl rand -hex 32` for `PROV_JWT_SECRET`,
+`PROV_CSRF_SECRET`, and `PROV_CA_PASSPHRASE`.
 
 ## MFA
 
@@ -70,7 +70,7 @@ access if their authenticator is lost.
 The backend enforces a per-IP token-bucket limit, keyed on the client IP from
 `X-Forwarded-For` (which NPM sets). A stricter budget guards `/api/v1/auth/*` and
 `/api/v1/bootstrap/*`; a looser one covers the rest. Over-limit requests get
-`429 Too Many Requests`. Tune via `FLEET_*RATE_LIMIT*`. This complements — does not
+`429 Too Many Requests`. Tune via `PROV_*RATE_LIMIT*`. This complements — does not
 replace — per-account lockout (`lockout_policy` setting: `max_failed`,
 `lockout_minutes`).
 
@@ -79,8 +79,8 @@ replace — per-account lockout (`lockout_policy` setting: `max_failed`,
 
 ## Nginx Proxy Manager setup
 
-1. **DNS:** point `fleet.example.com` at the NPM host.
-2. **Proxy Host:** Domain `fleet.example.com` → Forward to the frontend
+1. **DNS:** point `provenance.example.com` at the NPM host.
+2. **Proxy Host:** Domain `provenance.example.com` → Forward to the frontend
    container's port. Enable **Block Common Exploits** and **Websockets Support**
    (required for the terminal).
 3. **SSL tab:** request a Let's Encrypt cert, **Force SSL**, **HTTP/2**, and
@@ -89,12 +89,12 @@ replace — per-account lockout (`lockout_policy` setting: `max_failed`,
 
    ```nginx
    # in the http context (NPM: Settings or a custom snippet)
-   limit_req_zone $binary_remote_addr zone=fleet_login:10m rate=10r/m;
+   limit_req_zone $binary_remote_addr zone=prov_login:10m rate=10r/m;
 
    # in the proxy host Advanced box
-   client_max_body_size 5g;          # match FLEET_MAX_UPLOAD_BYTES if using SFTP
+   client_max_body_size 5g;          # match PROV_MAX_UPLOAD_BYTES if using SFTP
    location /api/v1/auth/ {
-       limit_req zone=fleet_login burst=10 nodelay;
+       limit_req zone=prov_login burst=10 nodelay;
        proxy_pass http://frontend;   # or backend upstream
    }
    ```
@@ -123,7 +123,7 @@ Let's Encrypt request:
 
 Requirements and caveats:
 
-- **The certificate's SAN (or CN) must match the hostname in `FLEET_PUBLIC_URL`.**
+- **The certificate's SAN (or CN) must match the hostname in `PROV_PUBLIC_URL`.**
   Provenance derives the cookie domain, CORS origin, and the **WebAuthn/passkey relying
   party ID** from that hostname, so a mismatched cert breaks login and passkeys, not
   just the TLS padlock.
@@ -146,9 +146,9 @@ cert via the `tls <cert> <key>` directive), **nginx** (`ssl_certificate` /
   feed are all WebSockets);
 - set `X-Forwarded-For` / `X-Forwarded-Proto`, and — so Provenance sees the real client
   IP for the audit log, rate limiter, and the conditional-access IP allowlist — add
-  the proxy's address to **`FLEET_TRUSTED_PROXIES`** (see the conditional-access
+  the proxy's address to **`PROV_TRUSTED_PROXIES`** (see the conditional-access
   notes); and
-- match **`FLEET_PUBLIC_URL`** to the external `https://…` hostname the cert covers.
+- match **`PROV_PUBLIC_URL`** to the external `https://…` hostname the cert covers.
 
 ## Defense-in-depth in front of NPM
 
@@ -171,14 +171,14 @@ can be enrolled three ways, all from the host's Enroll dialog:
   agent over a WebSocket; only signatures cross the wire. Build the bridges with
   `make enroll-agent-all` (cross-compiles macOS/Linux/Windows into
   `backend/bin/`) and hand each operator the binary for their OS — e.g.
-  `fleet-enroll-agent-darwin-arm64` (Apple Silicon),
-  `fleet-enroll-agent-windows-amd64.exe`. Then, with the key loaded (`ssh-add`):
+  `prov-enroll-agent-darwin-arm64` (Apple Silicon),
+  `prov-enroll-agent-windows-amd64.exe`. Then, with the key loaded (`ssh-add`):
 
   ```sh
-  fleet-enroll-agent \
-    -url https://fleet.example.com \
+  prov-enroll-agent \
+    -url https://provenance.example.com \
     -host web-01 \                 # hostname or id (register it in the UI first)
-    -token "$FLEET_TOKEN" \        # your access token (or -user/-password, non-MFA)
+    -token "$PROV_TOKEN" \        # your access token (or -user/-password, non-MFA)
     -bootstrap-user opsadmin \     # the user whose agent key is in authorized_keys
     [-via-jump] [-wg-endpoint vpn.example.com:51820] [-sudo-password ...]
   ```
@@ -195,11 +195,11 @@ own ephemeral per-host certificate; the operator's bootstrap key is no longer us
 ## Pre-flight checklist
 
 - [ ] Only proxy 443/80 are internet-reachable; everything else internal.
-- [ ] `FLEET_COOKIE_SECURE=true`, `FLEET_ENV=production`, HTTPS + HSTS forced.
-- [ ] Strong `FLEET_JWT_SECRET` / `FLEET_CSRF_SECRET` / `FLEET_CA_PASSPHRASE`.
-- [ ] `FLEET_ALLOW_BOOTSTRAP=false` after the first admin exists.
+- [ ] `PROV_COOKIE_SECURE=true`, `PROV_ENV=production`, HTTPS + HSTS forced.
+- [ ] Strong `PROV_JWT_SECRET` / `PROV_CSRF_SECRET` / `PROV_CA_PASSPHRASE`.
+- [ ] `PROV_ALLOW_BOOTSTRAP=false` after the first admin exists.
 - [ ] *Require MFA for all* enabled (or per-user for every account).
 - [ ] Per-IP rate limits set; `lockout_policy` tuned.
 - [ ] NPM Access List / Cloudflare WAF in front (if feasible).
 - [ ] WebAuthn RPID/origins set to the public domain so passkeys work.
-- [ ] `FLEET_JUMP_KNOWN_HOSTS` set so the gateway pins the jump host key.
+- [ ] `PROV_JUMP_KNOWN_HOSTS` set so the gateway pins the jump host key.

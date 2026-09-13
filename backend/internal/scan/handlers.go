@@ -354,12 +354,12 @@ func (h *handler) remediate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Remediating Fleet's own control-plane host can lock Fleet out of the whole
+	// Remediating Provenance's own control-plane host can lock Provenance out of the whole
 	// fleet (this is how the ip_forward sysctl took down the web UI). Require a
 	// distinct confirmation regardless of which rules are selected.
 	if isControlPlaneHost(host, h.d.Cfg) && !rq.ConfirmControlPlane {
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
-			"error":        "target is a Fleet control-plane host; remediating it can lock Fleet out of the fleet — explicit confirmation required",
+			"error":        "target is a Provenance control-plane host; remediating it can lock Provenance out of the fleet — explicit confirmation required",
 			"controlPlane": true,
 		})
 		return

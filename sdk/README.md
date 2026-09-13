@@ -1,6 +1,6 @@
-# Fleet Terminal Go SDK + `fleet` CLI
+# Provenance Go SDK + `fleet` CLI
 
-Official Go client and command-line tool for the Fleet Terminal API. Manage your
+Official Go client and command-line tool for the Provenance API. Manage your
 fleet as code — hosts, groups, users, roles, service accounts, tokens,
 vulnerability scans, and compliance reports — from CI/CD, cron jobs, and your own
 tooling.
@@ -9,8 +9,8 @@ tooling.
 - **Token-authenticated.** Authenticates with a service-account API token
   (`flt_…`), the same credential the web UI issues under **Settings → Service
   Accounts**. No database access, no interactive login.
-- **`fleet` vs `fleetctl`.** `fleet` (this tool) is the remote, token-authenticated
-  automation client. `fleetctl` is the separate on-host break-glass tool that talks
+- **`fleet` vs `provctl`.** `fleet` (this tool) is the remote, token-authenticated
+  automation client. `provctl` is the separate on-host break-glass tool that talks
   to the database directly for recovery. Use `fleet` for day-to-day automation.
 
 ## Install
@@ -18,13 +18,13 @@ tooling.
 ### SDK
 
 ```bash
-go get github.com/kforbus3/Fleet-Terminal/sdk@latest
+go get github.com/kforbus3/Provenance-Terminal/sdk@latest
 ```
 
 ### CLI
 
 ```bash
-go install github.com/kforbus3/Fleet-Terminal/sdk/cmd/fleet@latest
+go install github.com/kforbus3/Provenance-Terminal/sdk/cmd/fleet@latest
 ```
 
 This installs a `fleet` binary into `$(go env GOPATH)/bin`.
@@ -37,8 +37,8 @@ This installs a `fleet` binary into `$(go env GOPATH)/bin`.
 3. Provide it to the SDK/CLI:
 
 ```bash
-export FLEET_URL="https://fleet.example.com"
-export FLEET_API_TOKEN="flt_xxxxxxxxxxxxxxxxxxxx"
+export PROV_URL="https://provenance.example.com"
+export PROV_API_TOKEN="flt_xxxxxxxxxxxxxxxxxxxx"
 ```
 
 Verify:
@@ -109,17 +109,17 @@ import (
 	"log"
 	"os"
 
-	fleet "github.com/kforbus3/Fleet-Terminal/sdk"
+	fleet "github.com/kforbus3/Provenance-Terminal/sdk"
 )
 
 func main() {
-	c, err := fleet.New(os.Getenv("FLEET_URL"), fleet.WithToken(os.Getenv("FLEET_API_TOKEN")))
+	c, err := prov.New(os.Getenv("PROV_URL"), prov.WithToken(os.Getenv("PROV_API_TOKEN")))
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx := context.Background()
 
-	hosts, err := c.ListHosts(ctx, fleet.ListOptions{Limit: 100})
+	hosts, err := c.ListHosts(ctx, prov.ListOptions{Limit: 100})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -136,13 +136,13 @@ message. Helpers classify common cases:
 
 ```go
 _, err := c.GetHost(ctx, id)
-if fleet.IsNotFound(err) {
+if prov.IsNotFound(err) {
 	// 404
 }
-if fleet.IsUnauthorized(err) {
+if prov.IsUnauthorized(err) {
 	// 401/403 — missing, expired, or under-scoped token
 }
-var apiErr *fleet.APIError
+var apiErr *prov.APIError
 if errors.As(err, &apiErr) {
 	log.Printf("HTTP %d: %s", apiErr.StatusCode, apiErr.Message)
 }

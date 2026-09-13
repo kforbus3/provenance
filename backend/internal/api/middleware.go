@@ -24,7 +24,7 @@ import (
 //
 // What remains — a mutating request that carries the session refresh cookie but NO
 // bearer token — is exactly the cookie-authenticated surface (notably /auth/refresh).
-// For those, the JS-readable double-submit token (fleet_csrf cookie, set at login and
+// For those, the JS-readable double-submit token (prov_csrf cookie, set at login and
 // echoed to the SPA) must be reflected back in the X-CSRF-Token header and match the
 // cookie. A cross-site page can neither read the cookie (to copy it into the header)
 // nor is it sent the SameSite=Strict cookie on a cross-site request, so it cannot

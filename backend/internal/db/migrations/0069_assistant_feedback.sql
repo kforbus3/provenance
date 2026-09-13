@@ -1,4 +1,4 @@
--- Operator feedback on Ask Fleet answers (thumbs up/down + optional comment).
+-- Operator feedback on Ask Provenance answers (thumbs up/down + optional comment).
 -- Captures the question, the answer as shown, and which tool produced it, so
 -- misrouted or unhelpful answers can be found and fixed without live debugging.
 CREATE TABLE IF NOT EXISTS assistant_feedback (

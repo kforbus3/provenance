@@ -67,7 +67,7 @@ export interface FipsAlgCount {
   fips: boolean;
 }
 
-// FipsReadiness mirrors `fleetctl fips check`: whether each FIPS-critical artifact
+// FipsReadiness mirrors `provctl fips check`: whether each FIPS-critical artifact
 // is on an approved algorithm, plus an overall readiness verdict.
 export interface FipsReadiness {
   moduleActive: boolean;
@@ -90,5 +90,5 @@ export async function getFipsReadiness(): Promise<FipsReadiness> {
 // downloadBackup streams a pg_dump of the database and saves it locally.
 export async function downloadBackup(): Promise<void> {
   const res = await api.get("/api/v1/system/backup", { responseType: "blob" });
-  saveBlob(res.data as Blob, `fleet-backup-${Date.now()}.sql`);
+  saveBlob(res.data as Blob, `prov-backup-${Date.now()}.sql`);
 }

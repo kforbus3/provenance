@@ -11,7 +11,7 @@ func TestSlugifyHeadingMatchesFrontend(t *testing.T) {
 		"Single sign-on (SAML)":   "single-sign-on-saml",
 		"1. Prerequisites":        "1-prerequisites",
 		"SCIM 2.0 provisioning":   "scim-20-provisioning",
-		"`fleet` CLI":             "fleet-cli",
+		"`prov` CLI":              "prov-cli",
 		"Audit forwarding (SIEM)": "audit-forwarding-siem",
 	}
 	for in, want := range cases {

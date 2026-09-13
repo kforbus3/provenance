@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildMessagePlainNoAttachments(t *testing.T) {
-	msg := buildMessage("from@x.com", "to@y.com", "[Fleet] Hi", "hello", nil)
+	msg := buildMessage("from@x.com", "to@y.com", "[Provenance] Hi", "hello", nil)
 	m, err := mail.ReadMessage(strings.NewReader(string(msg)))
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func TestBuildMessagePlainNoAttachments(t *testing.T) {
 
 func TestBuildMessageWithAttachmentIsValidMIME(t *testing.T) {
 	csv := []byte("user,host\nalice,web-01\n")
-	msg := buildMessage("from@x.com", "to@y.com", "[Fleet] Report", "See attached.", []Attachment{
+	msg := buildMessage("from@x.com", "to@y.com", "[Provenance] Report", "See attached.", []Attachment{
 		{Filename: "access.csv", ContentType: "text/csv", Data: csv},
 	})
 	m, err := mail.ReadMessage(strings.NewReader(string(msg)))

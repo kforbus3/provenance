@@ -24,7 +24,7 @@ func TestFastPathDispatchCoverage(t *testing.T) {
 	handled := map[string]bool{
 		"host_updates": true, "search_commands": true, "host_availability": true,
 		"capacity_outlook": true, "security_events": true, "vulnerabilities": true, "list_users": true,
-		"query_hosts": true, "host_detail": true, "list_schedules": true, "fleet_insights": true,
+		"query_hosts": true, "host_detail": true, "list_schedules": true, "prov_insights": true,
 		"session_history": true, "recent_activity_failures": true, "audit_log": true, "host_metric_history": true,
 		"compliance_scans": true, "scan_findings": true,
 		"access_control": true, "expiring_credentials": true,

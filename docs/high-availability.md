@@ -79,11 +79,11 @@ shared storage, see §4).
                  └──────────────────┘   └──────────────────┘   └───────────────────┘
 ```
 
-- **Backends (2+):** identical config, same `FLEET_DATABASE_URL`, same secrets
-  (`FLEET_JWT_SECRET`, `FLEET_CA_PASSPHRASE`, `FLEET_VAULT_PASSPHRASE`, …). Stateless.
+- **Backends (2+):** identical config, same `PROV_DATABASE_URL`, same secrets
+  (`PROV_JWT_SECRET`, `PROV_CA_PASSPHRASE`, `PROV_VAULT_PASSPHRASE`, …). Stateless.
 - **Postgres:** a single connection URL that points at an HA Postgres (Patroni,
   Cloud SQL/RDS, or a pooler like PgBouncer in front of a primary+replica with
-  automatic failover). Size the pool: `FLEET_DB_MAX_CONNS` × number of instances must
+  automatic failover). Size the pool: `PROV_DB_MAX_CONNS` × number of instances must
   stay within Postgres `max_connections` (leave headroom — each instance also holds
   one connection for the leader lock and one for the event backplane).
 - **Shared storage:** see §4.
@@ -102,8 +102,8 @@ mounted at the same path on every backend (and on guacd), because:
 - A replay request may be served by any instance — it must be able to read a recording
   written by another.
 
-Point `FLEET_RECORDING_DIR` (default `/var/lib/fleet/recordings`) and
-`FLEET_RDP_DRIVE_DIR` (default `/var/lib/fleet/rdp-drive`) at shared mounts. In the
+Point `PROV_RECORDING_DIR` (default `/var/lib/prov/recordings`) and
+`PROV_RDP_DRIVE_DIR` (default `/var/lib/prov/rdp-drive`) at shared mounts. In the
 bundled single-host compose these are Docker named volumes (host-local) — replace them
 with a shared mount for multi-host HA. guacd must mount the same shared storage as the
 backends (it already runs as the backend's `fleet` uid so permissions line up).
@@ -137,15 +137,15 @@ standby jump host must therefore present:
 
    ```sh
    # on the standby jump host, bring up wg0 with the replicated private key, then:
-   wg addconf wg0 <(fleetctl wg-peers)     # fleetctl reachable to the DB, or pipe the output over
+   wg addconf wg0 <(provctl wg-peers)     # provctl reachable to the DB, or pipe the output over
    ```
 
-   `fleetctl wg-peers` emits endpoint-free `[Peer]` stanzas (peers roam and dial in, so
+   `provctl wg-peers` emits endpoint-free `[Peer]` stanzas (peers roam and dial in, so
    the hub never needs their `Endpoint`). This reconstructs the overlay without
    re-enrolling a single host.
 
 keepalived can automate step 3 in its `notify_master` script (bring up wg0, apply
-`fleetctl wg-peers`). Managed hosts reconnect to the VIP endpoint automatically
+`provctl wg-peers`). Managed hosts reconnect to the VIP endpoint automatically
 (WireGuard roaming).
 
 > The proxy edge itself (NPM) is a single point of failure until it too sits behind a
@@ -182,7 +182,7 @@ a time with no full outage:
    identity, and rejoins.
 4. Return backend1 to rotation. Repeat for each instance.
 
-Database migrations run on every instance at boot (`FLEET_MIGRATE_ON_START`). The HA
+Database migrations run on every instance at boot (`PROV_MIGRATE_ON_START`). The HA
 migrations are **additive** (new nullable columns / new tables), so a brief mixed-version
 window during a rolling upgrade is safe.
 
@@ -195,10 +195,10 @@ A ready-made 2-instance test stack ships in `deploy/compose/docker-compose.ha.ym
 alongside a normal stack):
 
 ```sh
-docker compose --env-file .env -f deploy/compose/docker-compose.ha.yml -p fleet-ha up -d --build
-docker compose -p fleet-ha logs -f backend1 backend2 | grep -i cluster   # watch leadership
+docker compose --env-file .env -f deploy/compose/docker-compose.ha.yml -p provenance-ha up -d --build
+docker compose -p provenance-ha logs -f backend1 backend2 | grep -i cluster   # watch leadership
 # API via the LB at http://localhost:8088 ; backends also on :8091 / :8092
-docker compose -p fleet-ha down -v                                        # tear down
+docker compose -p provenance-ha down -v                                        # tear down
 ```
 
 Then exercise:

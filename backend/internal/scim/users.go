@@ -32,7 +32,7 @@ type scimEmail struct {
 	Type    string `json:"type,omitempty"`
 }
 
-// scimUser is the SCIM 2.0 core User representation (the subset Fleet supports).
+// scimUser is the SCIM 2.0 core User representation (the subset Provenance supports).
 type scimUser struct {
 	Schemas     []string    `json:"schemas"`
 	ID          string      `json:"id,omitempty"`
@@ -83,7 +83,7 @@ func (u scimUser) displayName() string {
 	return ""
 }
 
-// toSCIM maps a Fleet user to a SCIM User resource.
+// toSCIM maps a Provenance user to a SCIM User resource.
 func (h *handler) toSCIM(u *models.User) scimUser {
 	su := scimUser{
 		Schemas:     []string{userSchema},

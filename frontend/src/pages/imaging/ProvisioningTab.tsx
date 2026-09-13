@@ -197,7 +197,7 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
         <Alert severity="warning" sx={{ mb: 2 }}>
           The builder-runner sidecar is not reachable, so nothing here can be started.
           Bring the stack up with the <code>imaging</code> profile and set
-          <code> FLEET_BUILDER_RUNNER_URL</code>.
+          <code> PROV_BUILDER_RUNNER_URL</code>.
         </Alert>
       )}
 
@@ -365,7 +365,7 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
                 fullWidth size="small" label="Control URL (where the fleet reaches this server)"
                 value={cfg.CONTROL_URL ?? ""} onChange={(e) => set("CONTROL_URL", e.target.value)}
                 disabled={!canProvision}
-                placeholder="https://blackfriars.example.com"
+                placeholder="https://provenance.example.com"
                 helperText={
                   "Written onto each machine while imaging and re-advertised on every check-in. " +
                   "Every other address here is on the provisioning segment — a network the machine " +

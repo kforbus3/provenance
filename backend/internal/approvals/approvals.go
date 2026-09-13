@@ -103,7 +103,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	ticketLink := ""
 	if ar.TicketRef == "" {
 		if cfg, cerr := itsm.LoadConfig(r.Context(), h.d.Store, h.d.Cfg.CAKeyPassphrase); cerr == nil && cfg.Configured() {
-			summary := fmt.Sprintf("Fleet access request: %s → %s %s", p.Username, ar.TargetKind, ar.TargetName)
+			summary := fmt.Sprintf("Provenance access request: %s → %s %s", p.Username, ar.TargetKind, ar.TargetName)
 			desc := fmt.Sprintf("%s requested %s of access to %s %q via Provenance.\nReason: %s",
 				p.Username, (time.Duration(ar.RequestedSecs) * time.Second).String(), ar.TargetKind, ar.TargetName, ar.Reason)
 			ictx, cancel := context.WithTimeout(r.Context(), 12*time.Second)

@@ -543,7 +543,7 @@ func (rq hostReq) toInput() store.HostInput {
 // couldn't otherwise use. Returns a client-facing error message, or "" if ok.
 func (h *handler) validateVaultAuth(r *http.Request, rq hostReq) string {
 	if rq.AuthMethod != "vault_password" && rq.AuthMethod != "vault_ssh_key" {
-		return "" // fleet_cert (or default) needs no credential
+		return "" // prov_cert (or default) needs no credential
 	}
 	if rq.CredentialID == nil {
 		return "select a credential for vault authentication"
@@ -713,8 +713,8 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid host id")
 		return
 	}
-	// Opt-in: removing Fleet's accounts and SSH trust from the machine is
-	// destructive and, where Fleet was the only administrative access, a lockout.
+	// Opt-in: removing Provenance's accounts and SSH trust from the machine is
+	// destructive and, where Provenance was the only administrative access, a lockout.
 	// Absent means false, so an existing client that never sends it keeps today's
 	// behaviour of leaving the host provisioned.
 	teardown := httpx.QueryBool(r, "teardown")
@@ -752,8 +752,8 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 	// Host-side teardown is opt-in and runs SYNCHRONOUSLY, unlike the overlay
 	// cleanup below. Two reasons: it must happen before the overlay membership is
 	// retired (that removes the route it travels over), and its outcome has to reach
-	// the operator — a teardown that could not run means Fleet's accounts and CA
-	// trust are still on a machine Fleet no longer manages, which is exactly the
+	// the operator — a teardown that could not run means Provenance's accounts and CA
+	// trust are still on a machine Provenance no longer manages, which is exactly the
 	// thing the operator asked to prevent. The host row is already gone either way;
 	// deletion is not rolled back on a teardown failure.
 	tornDown, teardownErr, overlayErr := false, "", ""

@@ -27,10 +27,10 @@ type vaultKV struct {
 func newVaultKV(cfg Config) (Provider, error) {
 	addr := strings.TrimRight(strings.TrimSpace(cfg.VaultAddr), "/")
 	if addr == "" {
-		return nil, fmt.Errorf("extsecret(vault-kv): FLEET_EXTSECRET_VAULT_ADDR is required")
+		return nil, fmt.Errorf("extsecret(vault-kv): PROV_EXTSECRET_VAULT_ADDR is required")
 	}
 	if strings.TrimSpace(cfg.VaultToken) == "" {
-		return nil, fmt.Errorf("extsecret(vault-kv): FLEET_EXTSECRET_VAULT_TOKEN is required")
+		return nil, fmt.Errorf("extsecret(vault-kv): PROV_EXTSECRET_VAULT_TOKEN is required")
 	}
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.VaultTLSSkipVerify {

@@ -29,19 +29,19 @@ curl -s http://localhost:8080/ready    # {"status":"ready"} once the DB is up
 ### Production secrets
 
 Set these in `.env` (generate with `openssl rand -hex 32`). In `production`
-(`FLEET_ENV=production`) the backend refuses to start without them:
+(`PROV_ENV=production`) the backend refuses to start without them:
 
 | Variable | Requirement |
 |----------|-------------|
-| `FLEET_JWT_SECRET` | ≥ 32 bytes — signs access tokens |
-| `FLEET_CSRF_SECRET` | ≥ 16 bytes — CSRF double-submit |
-| `FLEET_CA_PASSPHRASE` | ≥ 16 bytes — encrypts the CA private key at rest |
-| `FLEET_AUDIT_HMAC_KEY` | ≥ 32 bytes — keys the tamper-evident audit chain |
-| `FLEET_ANSIBLE_RUNNER_TOKEN` | ≥ 16 bytes — backend ⇄ `ansible-runner` shared secret (**must match** on the sidecar) |
-| `FLEET_COOKIE_SECURE` | `true` when served over HTTPS |
-| `FLEET_PUBLIC_URL` | your external base URL (cookies/CORS) |
+| `PROV_JWT_SECRET` | ≥ 32 bytes — signs access tokens |
+| `PROV_CSRF_SECRET` | ≥ 16 bytes — CSRF double-submit |
+| `PROV_CA_PASSPHRASE` | ≥ 16 bytes — encrypts the CA private key at rest |
+| `PROV_AUDIT_HMAC_KEY` | ≥ 32 bytes — keys the tamper-evident audit chain |
+| `PROV_ANSIBLE_RUNNER_TOKEN` | ≥ 16 bytes — backend ⇄ `ansible-runner` shared secret (**must match** on the sidecar) |
+| `PROV_COOKIE_SECURE` | `true` when served over HTTPS |
+| `PROV_PUBLIC_URL` | your external base URL (cookies/CORS) |
 
-`FLEET_RECORDING_KEY` (≥ 32 bytes, **optional**) additionally encrypts session
+`PROV_RECORDING_KEY` (≥ 32 bytes, **optional**) additionally encrypts session
 recordings at rest — see [§18c](#18c-windows-desktops-rdp) and the
 [Security Guide](./security-guide.md).
 
@@ -107,7 +107,7 @@ The wizard **permanently closes** as soon as any user exists — subsequent call
 to `/api/v1/bootstrap/init` return `409`. It can only be reopened through the
 offline recovery procedure (see [Disaster Recovery](./disaster-recovery.md)).
 
-> You can also disable bootstrap entirely with `FLEET_ALLOW_BOOTSTRAP=false`.
+> You can also disable bootstrap entirely with `PROV_ALLOW_BOOTSTRAP=false`.
 
 CLI equivalent (useful for headless setup):
 
@@ -155,7 +155,7 @@ can create custom roles and assign any subset of permissions.
 > confirmation, since they can sever Provenance's own access to — or automation of —
 > the host. Remediating a **control-plane
 > host** (the jump host, a host tagged `control-plane`/`protected`, or one listed
-> in `FLEET_CONTROL_PLANE_HOSTS`) requires a second, distinct confirmation because
+> in `PROV_CONTROL_PLANE_HOSTS`) requires a second, distinct confirmation because
 > hardening the box that runs Provenance can lock Provenance out of the entire fleet.
 
 Three permissions gate the automation features, all granted to **Administrator**
@@ -179,7 +179,7 @@ one of them based on the **`Host.Sudo`** permission:
 
 - **With `Host.Sudo`** (or a Super Administrator) → the privileged account
   (`fleet`) with **passwordless sudo** — full root.
-- **Without `Host.Sudo`** → the **login-only** account (`fleet-login`) — a normal
+- **Without `Host.Sudo`** → the **login-only** account (`prov-login`) — a normal
   shell with **no sudo**.
 
 This lets you grant a user terminal/SFTP access to a host **without** giving them
@@ -344,7 +344,7 @@ a host:
 - **Lint** — `ansible-lint`.
 
 Both run in a dedicated **`ansible-runner` sidecar** container, configured by
-`FLEET_ANSIBLE_RUNNER_URL` (default `http://ansible-runner:8000`). Each save keeps
+`PROV_ANSIBLE_RUNNER_URL` (default `http://ansible-runner:8000`). Each save keeps
 a version history.
 
 **Running** a playbook requires the separate **`Playbook.Run`** permission
@@ -404,7 +404,7 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `branding` | `{"app_name": "Provenance"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
 | `assistant` | `{"enabled": false, "ollamaUrl": "", "model": "", "numCtx": 0}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `ollamaUrl`, so run Ollama on your own network; a public URL raises a warning on the settings page. `numCtx` is the Ollama context window (0 = 32768, floored at 16384) — see below |
 | `assistant_actions` | `{"requireApprovalForAll": false, "disabledKinds": []}` | assistant-action policy: force approval for every action, or disable specific action kinds; edit via **Settings → Assistant actions** |
-| `scan_policy` | `{"timeoutMinutes": …}` | scan / remediation timeout budget (overrides `FLEET_SCAN_TIMEOUT`, clamped to a sane range) |
+| `scan_policy` | `{"timeoutMinutes": …}` | scan / remediation timeout budget (overrides `PROV_SCAN_TIMEOUT`, clamped to a sane range) |
 | `timezone` | browser-detected IANA zone | display zone for all timestamps + schedule clock-times (§9, Time zone) |
 | `notifications` | both channels off | outbound alert channels + event routing (§10) |
 | `backup_policy` | `{"enabled": false, "intervalHours": 24, "retentionCount": 7}` | scheduled encrypted backups (§11) |
@@ -434,7 +434,7 @@ takes effect immediately (no rebuild) and is served publicly so the login screen
 reflects it.
 
 Per-IP rate limits and session/cert TTLs are environment variables
-(`FLEET_RATE_LIMIT_*`, `FLEET_SESSION_*`, `FLEET_*_TTL`) — see
+(`PROV_RATE_LIMIT_*`, `PROV_SESSION_*`, `PROV_*_TTL`) — see
 [deployment.md](./deployment.md).
 
 ### Time zone
@@ -464,7 +464,7 @@ A per-event **routing matrix** decides which events go to which channel. Events:
 - Playbook run failed
 - Vulnerability (CVE) findings (§21)
 - Scheduled compliance report ready (`report.scheduled`, §20)
-- Fleet-health digest (`fleet.digest`, §22)
+- Provenance-health digest (`fleet.digest`, §22)
 - CA key due for rotation (§13)
 
 A **throttle** (minutes) suppresses repeats of the same event (e.g. a flapping
@@ -503,8 +503,8 @@ the backup directory.
 
 | Variable | Default / behavior |
 |----------|--------------------|
-| `FLEET_BACKUP_DIR` | `/var/lib/fleet/backups` — **map to off-host storage** |
-| `FLEET_BACKUP_PASSPHRASE` | encrypts backups; **falls back to `FLEET_CA_PASSPHRASE`**. Keep a copy **OFF the server** — without it, backups are unrecoverable |
+| `PROV_BACKUP_DIR` | `/var/lib/prov/backups` — **map to off-host storage** |
+| `PROV_BACKUP_PASSPHRASE` | encrypts backups; **falls back to `PROV_CA_PASSPHRASE`**. Keep a copy **OFF the server** — without it, backups are unrecoverable |
 
 > The authoritative recovery + break-glass runbook is
 > [break-glass.md](./break-glass.md). Read it before you need it.
@@ -528,11 +528,11 @@ fetch the KRL. Details in [certificate-lifecycle.md](./certificate-lifecycle.md)
 
 The SSH CA key never auto-expires. To nudge you to rotate it, the certificate
 renewal loop checks the active CA key's age **hourly**; once it exceeds
-`FLEET_CA_ROTATE_AFTER` (default **365 days**) it raises a **"CA key due for
+`PROV_CA_ROTATE_AFTER` (default **365 days**) it raises a **"CA key due for
 rotation"** notification — a routable event in **Settings → Notifications**
 (§10), throttled to roughly weekly so it nudges rather than spams. Rotate the CA
-with `fleetctl rotate-ca` or from the **Certificates** page. Set
-`FLEET_CA_ROTATE_AFTER=0` to disable the reminder. The CA key's age is also shown
+with `provctl rotate-ca` or from the **Certificates** page. Set
+`PROV_CA_ROTATE_AFTER=0` to disable the reminder. The CA key's age is also shown
 on the **System Health** page (§17).
 
 ## 14. Routine operations
@@ -569,7 +569,7 @@ configured by `System.Configure` holders.
 - **Username / email / groups claims** (defaults `preferred_username`, `email`,
   `groups`).
 - **Default role** for newly provisioned users, an **auto-provision** toggle,
-  **group → role mappings** (one per line, `idpGroup=FleetRole`), and the login
+  **group → role mappings** (one per line, `idpGroup=ProvRole`), and the login
   **button text**.
 
 Set your IdP's redirect / callback URL to **`<PublicURL>/api/v1/auth/oidc/callback`**.
@@ -695,7 +695,7 @@ SSH credentials**. All provisioning actions are **audited**.
   `(sAMAccountName=%s)`).
 - **Username / email / display-name / groups** attributes.
 - **Default role**, an **auto-provision** toggle, and **group → role mappings**
-  (`GroupCN=FleetRole`).
+  (`GroupCN=ProvRole`).
 
 Directory users sign in on the **normal sign-in form** with their directory
 credentials — the login flow **falls back to LDAP when local auth fails**. The
@@ -739,7 +739,7 @@ and the page rolls them up into an overall status. It covers:
 
 - **Database** connectivity.
 - **Certificate authority** — whether an active CA key is loaded, and its **age**
-  (flagged once past `FLEET_CA_ROTATE_AFTER`; see §13).
+  (flagged once past `PROV_CA_ROTATE_AFTER`; see §13).
 - **Jump host** reachability.
 - **Ansible runner** sidecar reachability (§7).
 - **Backups** — count stored and the **age of the latest** (§11).
@@ -801,7 +801,7 @@ The **Credentials** page (a `Credential.View` or `Credential.Manage` holder sees
 stores static credentials — **passwords, SSH keys, API keys** — for systems that
 can't use Provenance's ephemeral certificates (network gear, appliances, databases,
 legacy hosts). Secret material is **encrypted at rest** with secretbox under a
-dedicated **`FLEET_VAULT_PASSPHRASE`** (required in production, must differ from the
+dedicated **`PROV_VAULT_PASSPHRASE`** (required in production, must differ from the
 CA passphrase — see the Deployment guide).
 
 - **Store** a credential with a name, folder, type, username, and target; the secret
@@ -864,8 +864,8 @@ jump host** (the same path as SSH) and exposes it to guacd as an ephemeral local
 proxy. guacd therefore only ever connects back to the backend — it needs **no route to
 managed hosts**, and RDP traffic still rides the WireGuard overlay / jump hop. Two
 settings wire the pair (defaults match the bundled compose file):
-`FLEET_GUACD_ADDR` (where the backend reaches guacd, default `guacd:4822`) and
-`FLEET_RDP_PROXY_HOST` (how guacd reaches the backend, default `backend`). In the
+`PROV_GUACD_ADDR` (where the backend reaches guacd, default `guacd:4822`) and
+`PROV_RDP_PROXY_HOST` (how guacd reaches the backend, default `backend`). In the
 bundled compose file guacd also mounts the shared `recordings` volume and runs as the
 backend's `fleet` user so recordings it writes are readable by the backend (see below).
 
@@ -895,7 +895,7 @@ mounts a **Provenance** drive inside the RDP session and adds a **Files** button
 desktop viewer for browsing, downloading, and uploading files — each direction gated
 by **Allow upload** (browser → desktop) and **Allow download** (desktop → browser),
 both off by default. Each session gets its **own isolated exchange directory** on the
-shared `rdp-drive` volume (`FLEET_RDP_DRIVE_DIR`, default `/var/lib/fleet/rdp-drive`);
+shared `rdp-drive` volume (`PROV_RDP_DRIVE_DIR`, default `/var/lib/prov/rdp-drive`);
 the backend **removes it when the session ends**, so transferred files are scratch
 space, not durable storage. guacd runs as the backend's `fleet` user so the backend
 can clean up. `driveEnabled` is recorded in the session-start audit. *Multi-monitor
@@ -908,12 +908,12 @@ with its duration on close).
 
 **Recording & replay.** RDP sessions are recorded automatically. guacd writes a
 Guacamole recording to the shared `recordings` volume (under
-`<FLEET_RECORDING_DIR>/rdp`); the backend stores the metadata and serves the stream
+`<PROV_RECORDING_DIR>/rdp`); the backend stores the metadata and serves the stream
 back for replay. Watch recordings under **Session Replay → Desktop (RDP)** — a
 built-in player with play/pause and a seek bar, gated by `Session.Replay`. Deleting or
 pruning RDP recordings needs `System.Configure`; they share the same retention window
 as SSH recordings (Settings → retention, or the retention job). Like SSH recordings,
-RDP recordings are **encrypted at rest when `FLEET_RECORDING_KEY` is set** — because
+RDP recordings are **encrypted at rest when `PROV_RECORDING_KEY` is set** — because
 guacd owns the live write path, an RDP recording is **finalized-encrypted when the
 session ends** (SSH recordings are encrypted as they are written). See the
 [Security Guide](./security-guide.md).
@@ -923,8 +923,8 @@ collected over **WinRM (PowerShell remoting)** instead — the monitor authentic
 the host's attached **open-policy** vault credential and tunnels to WinRM through the
 jump host (best-effort, refreshed like other inventory). Requires WinRM enabled on the
 host (`Enable-PSRemoting`, firewall open to the jump host) and reachability on
-`FLEET_RDP_WINRM_PORTS` (default `5986` then `5985`). Toggle with
-`FLEET_RDP_COLLECT_FACTS` (default on). SSH-only fields (kernel, SSH version, WireGuard,
+`PROV_RDP_WINRM_PORTS` (default `5986` then `5985`). Toggle with
+`PROV_RDP_COLLECT_FACTS` (default on). SSH-only fields (kernel, SSH version, WireGuard,
 apt/dnf updates) are hidden for RDP hosts.
 
 **Remote Windows hosts (overlay enrollment).** By default a Windows host is only
@@ -995,7 +995,7 @@ CVE scanning is **distinct from OpenSCAP compliance scans**: it matches a host's
 scores**.
 
 **Architecture.** A **grype-scanner sidecar** (Anchore Grype + the CVE database, its
-own container — compose service `grype-scanner`, `FLEET_GRYPE_SCANNER_URL` default
+own container — compose service `grype-scanner`, `PROV_GRYPE_SCANNER_URL` default
 `http://grype-scanner:8000`) does the matching. The backend dials the host through
 the jump host, **tars its package databases** (`/etc/os-release` +
 `/var/lib/dpkg/status` or `/var/lib/rpm`) over SSH, and posts them to the sidecar —
@@ -1109,7 +1109,7 @@ admin-facing features:
   accessible hosts).
 - **Scheduled health digests** — a **daily or weekly** fleet-health digest built from
   the same insights and delivered via notifications (a `fleet.digest` event — route
-  it to a channel under §10). Configure it on the **Fleet-health digest** settings
+  it to a channel under §10). Configure it on the **Provenance-health digest** settings
   card.
 
 | Action | Endpoint |
@@ -1129,7 +1129,7 @@ in-flight interactive sessions on a failed instance drop and reconnect.
 Cluster membership is visible on **Background Jobs → Cluster** (instances, which one
 is the leader, liveness). For the model, deployment topology, shared-storage
 requirements, Postgres-HA and load-balancer notes, jump-host/WireGuard failover
-(`fleetctl wg-peers`), and the rolling-upgrade procedure, see the dedicated
+(`provctl wg-peers`), and the rolling-upgrade procedure, see the dedicated
 **[High Availability guide](high-availability.md)**.
 
 ## 24. Brokered access, access policies & encryption
@@ -1151,7 +1151,7 @@ Two more controls tighten the platform:
   interactive connect surface. See **[Access policies](./access-policies.md)**.
 - **Encryption at rest / KMS** — optionally wrap the CA and vault master passphrases with an
   external KMS/HSM (HashiCorp Vault Transit, AWS KMS, Azure Key Vault, GCP Cloud KMS) via
-  `FLEET_KMS_*` and `fleetctl kms`. Status is shown in Settings → Infrastructure → *Encryption at
+  `PROV_KMS_*` and `provctl kms`. Status is shown in Settings → Infrastructure → *Encryption at
   rest*. See **[Encryption at rest (KMS)](./kms.md)**.
 - **Behavior analytics (UEBA)** — advisory anomaly detection over session records on the Behavior
   page (`Audit.View`). See **[Behavior analytics](./behavior-analytics.md)**.
@@ -1163,7 +1163,7 @@ Two more controls tighten the platform:
   **[ITSM integration](./itsm.md)**.
 - **Multi-site federation** — turn one instance into a **hub** aggregating many autonomous
   **site** instances into a single pane of glass (site-initiated tunnels, Ed25519 acting-user
-  assertions, a global site selector). Opt-in via `FLEET_MODE=hub|site`; off by default. See
+  assertions, a global site selector). Opt-in via `PROV_MODE=hub|site`; off by default. See
   **[Multi-site federation](./federation.md)**.
 
 ## 25. Support bundles
@@ -1258,7 +1258,7 @@ A diagnostic tool that needs the thing being diagnosed to be healthy is not much
 of one. The same bundle can be produced from the host:
 
 ```
-fleetctl support-bundle --out provenance-support.tar.gz [--anonymise]
+provctl support-bundle --out provenance-support.tar.gz [--anonymise]
 ```
 
 It needs only the database and, if it is running, the updater — not the backend.

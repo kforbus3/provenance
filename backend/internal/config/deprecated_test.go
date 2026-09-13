@@ -14,8 +14,8 @@ func TestDeprecationsAreWellFormed(t *testing.T) {
 			t.Error("a deprecation with no setting name")
 			continue
 		}
-		if !strings.HasPrefix(d.Env, "FLEET_") {
-			t.Errorf("%s: not a Fleet setting", d.Env)
+		if !strings.HasPrefix(d.Env, "PROV_") {
+			t.Errorf("%s: not a Provenance setting", d.Env)
 		}
 		if d.Since == "" || d.RemoveIn == "" {
 			t.Errorf("%s: needs both the release that deprecated it and the one that removes it — "+
@@ -31,16 +31,16 @@ func TestDeprecationsAreWellFormed(t *testing.T) {
 }
 
 func TestDeprecationMessageNamesTheReplacement(t *testing.T) {
-	d := deprecation{Env: "FLEET_OLD", Replacement: "FLEET_NEW", Since: "1.1.0", RemoveIn: "2.0.0"}
+	d := deprecation{Env: "PROV_OLD", Replacement: "PROV_NEW", Since: "1.1.0", RemoveIn: "2.0.0"}
 	msg := d.message()
-	for _, want := range []string{"FLEET_OLD", "FLEET_NEW", "1.1.0", "2.0.0", "deprecated"} {
+	for _, want := range []string{"PROV_OLD", "PROV_NEW", "1.1.0", "2.0.0", "deprecated"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q does not mention %q", msg, want)
 		}
 	}
 
 	// A setting with nothing replacing it should say so rather than trail off.
-	bare := deprecation{Env: "FLEET_GONE", Since: "1.1.0", RemoveIn: "2.0.0"}
+	bare := deprecation{Env: "PROV_GONE", Since: "1.1.0", RemoveIn: "2.0.0"}
 	if !strings.Contains(bare.message(), "no replacement") {
 		t.Errorf("message %q should say there is no replacement", bare.message())
 	}

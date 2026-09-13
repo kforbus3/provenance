@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-// Brokered Kubernetes access: register clusters and reach them through Fleet, which
+// Brokered Kubernetes access: register clusters and reach them through Provenance, which
 // injects a vaulted bearer token and audits every call.
 export interface K8sCluster {
   id: string;

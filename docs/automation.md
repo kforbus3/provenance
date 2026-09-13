@@ -9,9 +9,9 @@ browser and without database access.
 - **Result:** scripted host registration, group and access management, scoped
   credential issuance, vulnerability scans, and evidence reports.
 
-> `fleet` (the automation CLI documented here) is distinct from `fleetctl`, the
+> `fleet` (the automation CLI documented here) is distinct from `provctl`, the
 > on-host break-glass tool that connects directly to the database for recovery.
-> Use `fleet` for day-to-day automation; see the Operations guide for `fleetctl`.
+> Use `fleet` for day-to-day automation; see the Operations guide for `provctl`.
 
 ---
 
@@ -27,8 +27,8 @@ login.
 3. Provide the deployment URL and token via environment variables:
 
 ```bash
-export FLEET_URL="https://fleet.example.com"
-export FLEET_API_TOKEN="flt_xxxxxxxxxxxxxxxxxxxx"
+export PROV_URL="https://provenance.example.com"
+export PROV_API_TOKEN="flt_xxxxxxxxxxxxxxxxxxxx"
 ```
 
 Every request is authorized server-side against the token's role, so a leaked or
@@ -94,15 +94,15 @@ go get github.com/kforbus3/provenance/sdk@latest
 ```
 
 ```go
-c, err := fleet.New(os.Getenv("FLEET_URL"), fleet.WithToken(os.Getenv("FLEET_API_TOKEN")))
+c, err := prov.New(os.Getenv("PROV_URL"), prov.WithToken(os.Getenv("PROV_API_TOKEN")))
 if err != nil {
     log.Fatal(err)
 }
-hosts, err := c.ListHosts(ctx, fleet.ListOptions{Limit: 100})
+hosts, err := c.ListHosts(ctx, prov.ListOptions{Limit: 100})
 ```
 
-Non-2xx responses return an `*fleet.APIError` with the status and server message;
-`fleet.IsNotFound` and `fleet.IsUnauthorized` classify the common cases. The SDK
+Non-2xx responses return an `*prov.APIError` with the status and server message;
+`prov.IsNotFound` and `prov.IsUnauthorized` classify the common cases. The SDK
 depends only on the Go standard library. Full reference and examples are in the
 [SDK README](https://github.com/kforbus3/provenance/tree/main/sdk).
 
@@ -125,22 +125,22 @@ For any endpoint not wrapped by the SDK, call it directly per the
 
 ## 5. Terraform
 
-A **Terraform provider** (`terraform-provider-fleet`, in the repository) manages
+A **Terraform provider** (`terraform-provider-provenance`, in the repository) manages
 Provenance as declarative infrastructure over the same API and token model. It exposes:
 
-- `fleet_host` — managed hosts (full CRUD + import)
-- `fleet_group` — groups, including dynamic membership rules
-- `fleet_service_account` and `fleet_service_account_token` — automation identities
+- `prov_host` — managed hosts (full CRUD + import)
+- `prov_group` — groups, including dynamic membership rules
+- `prov_service_account` and `prov_service_account_token` — automation identities
   and their API tokens
-- `fleet_role` (data source) — resolve a role name to its UUID
+- `prov_role` (data source) — resolve a role name to its UUID
 
 ```hcl
 provider "fleet" {
-  endpoint = "https://fleet.example.com" # or FLEET_URL
-  # token via FLEET_API_TOKEN
+  endpoint = "https://provenance.example.com" # or PROV_URL
+  # token via PROV_API_TOKEN
 }
 
-resource "fleet_host" "web" {
+resource "prov_host" "web" {
   hostname    = "web-01"
   environment = "production"
   tags        = ["web", "prod"]

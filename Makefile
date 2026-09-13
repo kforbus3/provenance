@@ -1,9 +1,9 @@
-# Fleet Terminal — developer entrypoints.
+# Provenance — developer entrypoints.
 # Everything runs through Docker so no local Go/Postgres toolchain is required.
 
 # NOTE: --env-file .env is REQUIRED. Compose otherwise loads .env from the
 # compose file's directory (deploy/compose/), not the repo root where our .env
-# lives — silently ignoring all FLEET_* settings and falling back to defaults.
+# lives — silently ignoring all PROV_* settings and falling back to defaults.
 COMPOSE        := docker compose --env-file .env -f deploy/compose/docker-compose.yml
 COMPOSE_FABRIC := $(COMPOSE) -f deploy/compose/docker-compose.testfabric.yml
 COMPOSE_SINGLE := $(COMPOSE) -f deploy/compose/docker-compose.jumphost.yml
@@ -11,15 +11,15 @@ COMPOSE_SINGLE := $(COMPOSE) -f deploy/compose/docker-compose.jumphost.yml
 # Version stamped into the binary (compose passes it as the VERSION build arg).
 # Derived from the nearest git tag so a tagged deploy shows e.g. "v0.6.1" instead
 # of "dev"; falls back to a short SHA, then "dev" outside a git checkout. Override
-# by setting FLEET_VERSION in the environment. Exported so the compose subprocess
+# by setting PROV_VERSION in the environment. Exported so the compose subprocess
 # sees it during --build.
-FLEET_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-export FLEET_VERSION
+PROV_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+export PROV_VERSION
 
 # State that the database backup does NOT capture: the jump host's WireGuard
 # keypair/peers + SSH host key, and on-disk session recordings & scan reports.
 # PROJECT matches `name:` in docker-compose.yml (the Docker volume-name prefix).
-PROJECT        := fleet-terminal
+PROJECT        := provenance
 STATE_VOLUMES  := jump_wg jump_ssh recordings scans
 VOL_BACKUP_DIR ?= ./volume-backups
 
@@ -50,27 +50,27 @@ up-imaging: env ## Start the app stack WITH the image builder (privileged; needs
 	@echo "Builder up. It holds the Docker socket so the backend does not, and it reaches"
 	@echo "that socket through the allowlisting proxy -- building an image means starting a"
 	@echo "PRIVILEGED container, so this is deliberately not part of the default stack."
-	@echo "Set FLEET_BUILDER_RUNNER_URL=http://builder-runner:8000 and a matching"
-	@echo "FLEET_BUILDER_RUNNER_TOKEN on both services, or the build routes answer 501."
+	@echo "Set PROV_BUILDER_RUNNER_URL=http://builder-runner:8000 and a matching"
+	@echo "PROV_BUILDER_RUNNER_TOKEN on both services, or the build routes answer 501."
 
 .PHONY: up-single
 up-single: env ## Single-server production: (re)build & start the WHOLE stack incl. the jump host
 	$(COMPOSE_SINGLE) up -d --build
-	@echo "Single-server stack up. Set FLEET_WG_JUMP_ENDPOINT to the host's address:port"
+	@echo "Single-server stack up. Set PROV_WG_JUMP_ENDPOINT to the host's address:port"
 	@echo "(public IP/DNS, or LAN IP if managed hosts are internal) and open that UDP port."
 	@echo "NOTE: this recreated the jump host, so the WireGuard overlay re-establishes and"
 	@echo "hosts may show offline for a minute or two. For code-only updates use 'make redeploy-single'."
 
 .PHONY: redeploy-single
 redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/updater) in place, leaving the jump host + overlay UP (no host-offline blip)
-	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner fleet-updater
+	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner prov-updater
 	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
 	@# This target deliberately does not touch the jump host — which means a release
 	@# that changes its ports, volumes or entrypoint (e.g. publishing the OpenVPN port)
 	@# is NOT applied here, and the symptom is a feature that silently does not work
 	@# rather than an error. Say so when the compose file is newer than the running
 	@# container. Best-effort: any tool missing (non-GNU date, no docker) just skips.
-	@started=$$(docker inspect -f '{{.State.StartedAt}}' fleet-terminal-jumphost-1 2>/dev/null); \
+	@started=$$(docker inspect -f '{{.State.StartedAt}}' provenance-jumphost-1 2>/dev/null); \
 	 if [ -n "$$started" ]; then \
 	   s=$$(date -u -d "$$started" +%s 2>/dev/null || echo 0); \
 	   f=$$(stat -c %Y deploy/compose/docker-compose.jumphost.yml 2>/dev/null || echo 0); \
@@ -84,30 +84,30 @@ redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/update
 	 fi
 
 # --- Release bundling (in-UI upgrade system) -------------------------------------
-# Produce a single signed .fleetup file that operators upload (or later pull) to
+# Produce a single signed .provup file that operators upload (or later pull) to
 # upgrade in place through the UI. Requires a release private key from
-# `fleetctl release keygen` — keep it OFFLINE. Override BUNDLE_VERSION/BUNDLE_FROM.
+# `provctl release keygen` — keep it OFFLINE. Override BUNDLE_VERSION/BUNDLE_FROM.
 # BUNDLE_FROM defaults to 0.0.0 — policy: every bundle is full-stack and
 # installable from ANY older version (no stepping-stone installs); downgrades are
 # still refused by the version check itself. Raise it only for a release that
 # genuinely cannot upgrade an old install in one hop (e.g. a destructive
 # migration that requires an intermediate version).
-BUNDLE_VERSION ?= $(FLEET_VERSION)
+BUNDLE_VERSION ?= $(PROV_VERSION)
 BUNDLE_FROM    ?= 0.0.0
 BUNDLE_KEY     ?= release.key
 # The signing step runs from backend/, so the key path has to be resolved before
 # the directory changes under it. abspath resolves a relative path against the
 # repo root and leaves an already-absolute one alone — the key normally lives
-# OUTSIDE the repo (~/fleet-release/release.key), which a bare ../ prefix
+# OUTSIDE the repo (~/prov-release/release.key), which a bare ../ prefix
 # silently turned into a nonexistent path.
 BUNDLE_KEY_ABS := $(abspath $(BUNDLE_KEY))
-BUNDLE_OUT     ?= fleet-$(BUNDLE_VERSION).fleetup
+BUNDLE_OUT     ?= provenance-$(BUNDLE_VERSION).provup
 # Same resolution as BUNDLE_KEY, and for the same reason: the build step runs from
 # backend/, so a bare ../ prefix turns an ABSOLUTE output path into ..//Users/... and
 # the whole build is thrown away at the final write. The signing key lives outside the
 # repo and so, usually, does the bundle.
 BUNDLE_OUT_ABS := $(abspath $(BUNDLE_OUT))
-BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,fleet-updater
+BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,prov-updater
 # Bundles deploy to servers, so pin the image platform regardless of the build
 # host's architecture (an Apple Silicon Mac otherwise emits arm64 images that
 # crash-loop with 'exec format error' on an amd64 host and get rolled back).
@@ -115,13 +115,13 @@ BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,fleet-updater
 BUNDLE_PLATFORM ?= linux/amd64
 
 .PHONY: bundle
-bundle: ## Build + sign a .fleetup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
-	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.26 go run ./cmd/fleetctl release keygen"; exit 1)
-	FLEET_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
+bundle: ## Build + sign a .provup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
+	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.26 go run ./cmd/provctl release keygen"; exit 1)
+	PROV_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
 	  docker tag $(PROJECT)-$$c $(PROJECT)-$$c:$(BUNDLE_VERSION); \
 	done
-	cd backend && go run ./cmd/fleetctl release build \
+	cd backend && go run ./cmd/provctl release build \
 	  --version $(BUNDLE_VERSION) --from $(BUNDLE_FROM) \
 	  --key $(BUNDLE_KEY_ABS) --out $(BUNDLE_OUT_ABS) --components $(BUNDLE_COMPONENTS)
 	@echo "Built $(BUNDLE_OUT_ABS). Upload it in the UI (Settings -> Updates) to upgrade in place."
@@ -197,8 +197,8 @@ backend-build: ## Compile the backend in a throwaway Go container
 .PHONY: enroll-agent
 enroll-agent: ## Build the SSH-agent enrollment bridge for this machine's platform
 	docker run --rm -v $(PWD)/backend:/src -w /src -e CGO_ENABLED=0 golang:1.26-alpine \
-	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go build -o /src/bin/fleet-enroll-agent ./cmd/fleet-enroll-agent"
-	@echo "Built backend/bin/fleet-enroll-agent — distribute to operators."
+	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go build -o /src/bin/prov-enroll-agent ./cmd/prov-enroll-agent"
+	@echo "Built backend/bin/prov-enroll-agent — distribute to operators."
 
 .PHONY: enroll-agent-all
 enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators' laptops)
@@ -207,16 +207,16 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	  set -e; \
 	  for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
 	    os=$${t%/*}; arch=$${t#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
-	    out=/src/bin/fleet-enroll-agent-$$os-$$arch$$ext; \
+	    out=/src/bin/prov-enroll-agent-$$os-$$arch$$ext; \
 	    echo "building $$out"; \
-	    GOOS=$$os GOARCH=$$arch GOFLAGS=-mod=mod go build -trimpath -ldflags "-s -w" -o $$out ./cmd/fleet-enroll-agent; \
+	    GOOS=$$os GOARCH=$$arch GOFLAGS=-mod=mod go build -trimpath -ldflags "-s -w" -o $$out ./cmd/prov-enroll-agent; \
 	  done'
-	@echo "Built backend/bin/fleet-enroll-agent-* — distribute the right one per operator:"
-	@echo "  macOS Apple Silicon: fleet-enroll-agent-darwin-arm64"
-	@echo "  macOS Intel:         fleet-enroll-agent-darwin-amd64"
-	@echo "  Linux x86_64:        fleet-enroll-agent-linux-amd64"
-	@echo "  Linux ARM64:         fleet-enroll-agent-linux-arm64"
-	@echo "  Windows x86_64:      fleet-enroll-agent-windows-amd64.exe"
+	@echo "Built backend/bin/prov-enroll-agent-* — distribute the right one per operator:"
+	@echo "  macOS Apple Silicon: prov-enroll-agent-darwin-arm64"
+	@echo "  macOS Intel:         prov-enroll-agent-darwin-amd64"
+	@echo "  Linux x86_64:        prov-enroll-agent-linux-amd64"
+	@echo "  Linux ARM64:         prov-enroll-agent-linux-arm64"
+	@echo "  Windows x86_64:      prov-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
 test: backend-test frontend-typecheck frontend-test scanner-test imaging-test container-e2e store-queries ## Run all tests
@@ -285,7 +285,7 @@ SMOKE_SUITE ?= 9
 backend-test: ## Run Go unit + integration tests
 	# Mount the REPO ROOT, not backend/. Several tests assert that committed
 	# artefacts outside the module have not drifted from the code (the enrollment
-	# teardown tests read ../../../scripts/fleet-unenroll.sh). With only backend/
+	# teardown tests read ../../../scripts/prov-unenroll.sh). With only backend/
 	# mounted those paths do not exist, so the tests failed here while passing under
 	# a native `go test` — a gate that fails for a reason unrelated to the change is
 	# a gate people learn to ignore.
@@ -401,7 +401,7 @@ tidy: ## Run go mod tidy and write go.sum back to the repo
 
 .PHONY: e2e
 e2e: ## Run Playwright end-to-end tests against the running stack
-	-$(COMPOSE_FABRIC) exec -T backend fleetctl create-admin e2euser 'E2e-Pass-12345!' 2>/dev/null
+	-$(COMPOSE_FABRIC) exec -T backend provctl create-admin e2euser 'E2e-Pass-12345!' 2>/dev/null
 	docker run --rm --network host -v $(PWD)/frontend:/app -w /app \
 	  -e E2E_BASE=$${E2E_BASE:-http://localhost:5173} \
 	  -e E2E_USER=e2euser -e E2E_PASS='E2e-Pass-12345!' \
@@ -412,8 +412,8 @@ e2e: ## Run Playwright end-to-end tests against the running stack
 load: ## Run the k6 load smoke test against the running stack (override USER/PASS)
 	docker run --rm --network host -v $(PWD)/deploy/load:/load \
 	  -e BASE=$${BASE:-http://localhost:8080} \
-	  -e USER=$${FLEET_LOAD_USER:-admin} \
-	  -e PASS=$${FLEET_LOAD_PASS:-Sup3r-Secret-Pass!} \
+	  -e USER=$${PROV_LOAD_USER:-admin} \
+	  -e PASS=$${PROV_LOAD_PASS:-Sup3r-Secret-Pass!} \
 	  grafana/k6 run /load/k6-smoke.js
 
 .PHONY: assistant-docs

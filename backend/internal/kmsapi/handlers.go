@@ -1,5 +1,5 @@
 // Package kmsapi exposes read-only status for the external KMS/HSM backend that
-// envelope-protects Fleet's master passphrases (see internal/kms). It surfaces the
+// envelope-protects Provenance's master passphrases (see internal/kms). It surfaces the
 // configured provider and a live health check in-product so an operator (or an
 // auditor) can confirm the CA and vault passphrases are protected by a KMS without
 // shell access. Configuration itself is boot-time environment only — there is no

@@ -173,7 +173,7 @@ func (s *Service) send(ctx context.Context, p Policy) error {
 	to := s.now()
 	from := to.AddDate(0, 0, -p.LookbackDays)
 	var body strings.Builder
-	fmt.Fprintf(&body, "Fleet compliance reports for %s to %s.\n\n",
+	fmt.Fprintf(&body, "Provenance compliance reports for %s to %s.\n\n",
 		from.Format("2006-01-02"), to.Format("2006-01-02"))
 	var attachments []notify.Attachment
 	for _, kind := range p.Reports {

@@ -1,0 +1,9 @@
+# Built provider binary
+terraform-provider-provenance
+
+# Terraform working files
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log

@@ -33,7 +33,7 @@ func (f *fakeSource) Migrations(context.Context) ([]string, error) {
 }
 func (f *fakeSource) Settings() []Setting {
 	return []Setting{
-		{Name: "FLEET_ENV", Value: "production"},
+		{Name: "PROV_ENV", Value: "production"},
 		{Name: "audit HMAC key", Value: Set("a-real-secret")},
 	}
 }
@@ -54,10 +54,10 @@ func (f *fakeSource) Diagnostics(context.Context) (Diagnostics, error) {
 		return Diagnostics{}, errors.New("the updater is not reachable")
 	}
 	return Diagnostics{
-		Containers: "fleet-terminal-backend-1\tbackend:1.2.15\tUp 2 hours",
+		Containers: "provenance-backend-1\tbackend:1.2.15\tUp 2 hours",
 		Logs: map[string]string{
-			"fleet-terminal-backend-1": `level=info msg="listening" addr=0.0.0.0:8080
-level=error msg="db" url=postgres://fleet:s3cr3t@10.10.0.9:5432/fleet
+			"provenance-backend-1": `level=info msg="listening" addr=0.0.0.0:8080
+level=error msg="db" url=postgres://prov:s3cr3t@10.10.0.9:5432/prov
 level=info peer=10.10.0.9 retried peer=10.10.0.9`,
 		},
 	}, nil
@@ -103,7 +103,7 @@ func TestABundleCarriesTheThingsYouWouldOtherwiseGoAndFetch(t *testing.T) {
 	for _, want := range []string{
 		"manifest.json", "instances.json", "migrations.txt", "settings.json",
 		"jobs.json", "health.json", "upgrade-status.json", "fleet-summary.json",
-		"containers.txt", "logs/fleet-terminal-backend-1.log",
+		"containers.txt", "logs/provenance-backend-1.log",
 	} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("missing %s — an operator would have to go and get it by hand", want)
@@ -121,7 +121,7 @@ func TestNoSecretSurvivesIntoTheBundle(t *testing.T) {
 		}
 	}
 	// And the diagnostic half survives: which database, and that the key is set.
-	if !strings.Contains(all, "postgres://fleet:") {
+	if !strings.Contains(all, "postgres://prov:") {
 		t.Error("scrubbing removed which database it was, which is the diagnostic part")
 	}
 	if !strings.Contains(files["settings.json"], `"set"`) {
@@ -173,7 +173,7 @@ func TestHostnamesStayAndAddressesAreConsistentlyReplaced(t *testing.T) {
 	}
 	// The two mentions of 10.10.0.9 in one log line must map to the same thing —
 	// otherwise "the same peer twice" is no longer visible.
-	logLines := files["logs/fleet-terminal-backend-1.log"]
+	logLines := files["logs/provenance-backend-1.log"]
 	last := logLines[strings.LastIndex(logLines, "peer="):]
 	first := logLines[strings.Index(logLines, "peer="):]
 	f := strings.Fields(first)[0]

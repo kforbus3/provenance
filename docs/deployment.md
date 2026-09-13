@@ -27,11 +27,11 @@ Operators ──HTTPS/WSS──> Reverse proxy ──> frontend (nginx) ──/a
 - The compose stack also starts an **`ansible-runner` sidecar** — an internal-only
   container (not published on the host) that validates/lints and runs Ansible
   playbooks so the lean Go backend never needs a Python toolchain. The backend
-  reaches it at `FLEET_ANSIBLE_RUNNER_URL` (default `http://ansible-runner:8000`).
+  reaches it at `PROV_ANSIBLE_RUNNER_URL` (default `http://ansible-runner:8000`).
 - It also starts a **`grype-scanner` sidecar** (built from `deploy/grype-scanner`)
   — another internal-only container that runs Anchore Grype for CVE vulnerability
   scanning. The backend posts each host's package databases to it and reaches it at
-  `FLEET_GRYPE_SCANNER_URL` (default `http://grype-scanner:8000`). Building the
+  `PROV_GRYPE_SCANNER_URL` (default `http://grype-scanner:8000`). Building the
   image needs **internet at build time** to install grype; the CVE database is
   **not** baked in — it is loaded at runtime via **Update online** or **Import
   offline** and persists in the `grype-db` volume.
@@ -72,17 +72,17 @@ settings and falling back to defaults.
 Generate strong secrets (required in production):
 
 ```sh
-openssl rand -hex 32   # FLEET_JWT_SECRET
-openssl rand -hex 32   # FLEET_CSRF_SECRET
-openssl rand -hex 32   # FLEET_CA_PASSPHRASE          (encrypts the SSH CA key at rest)
-openssl rand -hex 32   # FLEET_AUDIT_HMAC_KEY         (keys the tamper-evident audit chain)
-openssl rand -hex 32   # FLEET_ANSIBLE_RUNNER_TOKEN   (backend ⇄ ansible-runner shared secret; ≥16 bytes suffices)
-openssl rand -hex 32   # FLEET_RECORDING_KEY          (optional: encrypts session recordings at rest)
+openssl rand -hex 32   # PROV_JWT_SECRET
+openssl rand -hex 32   # PROV_CSRF_SECRET
+openssl rand -hex 32   # PROV_CA_PASSPHRASE          (encrypts the SSH CA key at rest)
+openssl rand -hex 32   # PROV_AUDIT_HMAC_KEY         (keys the tamper-evident audit chain)
+openssl rand -hex 32   # PROV_ANSIBLE_RUNNER_TOKEN   (backend ⇄ ansible-runner shared secret; ≥16 bytes suffices)
+openssl rand -hex 32   # PROV_RECORDING_KEY          (optional: encrypts session recordings at rest)
 ```
 
-> **Required in production.** In addition to `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`,
-> and `FLEET_CA_PASSPHRASE`, a production backend (`FLEET_ENV=production`) **fails
-> closed at boot** unless **`FLEET_AUDIT_HMAC_KEY`** and **`FLEET_ANSIBLE_RUNNER_TOKEN`**
+> **Required in production.** In addition to `PROV_JWT_SECRET`, `PROV_CSRF_SECRET`,
+> and `PROV_CA_PASSPHRASE`, a production backend (`PROV_ENV=production`) **fails
+> closed at boot** unless **`PROV_AUDIT_HMAC_KEY`** and **`PROV_ANSIBLE_RUNNER_TOKEN`**
 > are also set (see the table below). Set all of them before the first production
 > start.
 
@@ -90,40 +90,40 @@ Key variables (full list in `.env.example`):
 
 | Variable | Purpose |
 |---|---|
-| `FLEET_ENV` | `development` or `production` |
-| `FLEET_PUBLIC_URL` | Public HTTPS URL; drives CORS, cookies, WebAuthn |
-| `FLEET_JWT_SECRET` | Access-token signing (**≥32 bytes** — production refuses to start below this) |
-| `FLEET_CSRF_SECRET` | CSRF signing (≥16 bytes) |
-| `FLEET_CA_PASSPHRASE` | Encrypts the internal SSH CA private key at rest |
-| `FLEET_AUDIT_HMAC_KEY` | **Required in production** (≥32 bytes). Keys the HMAC that chains the tamper-evident audit log, binding each event's sequence, timestamp, and tenant. Without it the chain is unauthenticated (anyone who can write the table can forge a consistent chain). Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production. See [security-guide.md](./security-guide.md) |
-| `FLEET_ANSIBLE_RUNNER_TOKEN` | **Required in production** (≥16 bytes). Shared secret the backend presents to the `ansible-runner` sidecar; the sidecar rejects unauthenticated calls. **Must match on both** the backend and the `ansible-runner` container. Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production |
-| `FLEET_RECORDING_KEY` | *(optional, ≥32 bytes)* AES-256-GCM at-rest encryption of session recordings — **both** SSH (asciicast) **and** RDP/Guacamole streams. The backend **warns if unset** and stores recordings in plaintext. Generate with `openssl rand -hex 32`. Enabling it later encrypts only new recordings; existing plaintext recordings still play. Losing the key makes encrypted recordings unrecoverable — keep it off-host with the other secrets |
+| `PROV_ENV` | `development` or `production` |
+| `PROV_PUBLIC_URL` | Public HTTPS URL; drives CORS, cookies, WebAuthn |
+| `PROV_JWT_SECRET` | Access-token signing (**≥32 bytes** — production refuses to start below this) |
+| `PROV_CSRF_SECRET` | CSRF signing (≥16 bytes) |
+| `PROV_CA_PASSPHRASE` | Encrypts the internal SSH CA private key at rest |
+| `PROV_AUDIT_HMAC_KEY` | **Required in production** (≥32 bytes). Keys the HMAC that chains the tamper-evident audit log, binding each event's sequence, timestamp, and tenant. Without it the chain is unauthenticated (anyone who can write the table can forge a consistent chain). Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production. See [security-guide.md](./security-guide.md) |
+| `PROV_ANSIBLE_RUNNER_TOKEN` | **Required in production** (≥16 bytes). Shared secret the backend presents to the `ansible-runner` sidecar; the sidecar rejects unauthenticated calls. **Must match on both** the backend and the `ansible-runner` container. Generate with `openssl rand -hex 32`; the backend **fails closed at boot** if unset in production |
+| `PROV_RECORDING_KEY` | *(optional, ≥32 bytes)* AES-256-GCM at-rest encryption of session recordings — **both** SSH (asciicast) **and** RDP/Guacamole streams. The backend **warns if unset** and stores recordings in plaintext. Generate with `openssl rand -hex 32`. Enabling it later encrypts only new recordings; existing plaintext recordings still play. Losing the key makes encrypted recordings unrecoverable — keep it off-host with the other secrets |
 | `POSTGRES_PASSWORD` | Database password |
-| `FLEET_COOKIE_SECURE` | `true` whenever served over HTTPS |
-| `FLEET_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Session inactivity / hard-cap lifetimes |
-| `FLEET_REFRESH_TOKEN_TTL` | Refresh-cookie lifetime (shorten for internet exposure) |
-| `FLEET_USER_CERT_TTL` | Ephemeral user-cert lifetime (default 12h, auto-renewed) |
-| `FLEET_CA_ROTATE_AFTER` | Age at which the active SSH CA key triggers a rotation reminder (default `8760h` = 365d) |
-| `FLEET_RATE_LIMIT_*` / `FLEET_AUTH_RATE_LIMIT_*` | Per-IP rate limits (0 disables) |
-| `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` | Jump host `host:port` + login user |
-| `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` / `FLEET_WG_PORT` | WireGuard overlay |
-| `FLEET_WG_JUMP_ENDPOINT` | Public `host:port` managed hosts dial to reach the jump |
-| `FLEET_OVERLAY_PEER_ISOLATION` | Keep the overlay strict hub-and-spoke — a forwarding deny on the jump host, plus `AllowedIPs = <jump>/32` in each newly enrolled host's WireGuard config (default `1`; **leave it on** unless the deployment genuinely needs host-to-host overlay traffic). Set on the jump host as well as the backend, so the WireGuard hub applies it at start-up |
-| `FLEET_ALLOW_BOOTSTRAP` | `false` after the first admin exists (also self-seals) |
-| `FLEET_BACKUP_DIR` | Where encrypted DB backups are written (default `/var/lib/fleet/backups`, the `backups` volume) |
-| `FLEET_BACKUP_PASSPHRASE` | Encrypts DB backups (`openssl` AES-256); falls back to `FLEET_CA_PASSPHRASE` if empty — in **production set a distinct value** (must differ from `FLEET_CA_PASSPHRASE`) and keep it **off-host** |
-| `FLEET_VAULT_PASSPHRASE` | Encrypts stored credentials (the secrets vault) at rest (secretbox). **Required in production** to use the credential vault, and **must differ from `FLEET_CA_PASSPHRASE`**; falls back to it in development only. Losing it makes stored credentials unrecoverable |
-| `FLEET_ANSIBLE_RUNNER_URL` | Base URL of the `ansible-runner` sidecar (default `http://ansible-runner:8000`) |
-| `FLEET_GRYPE_SCANNER_URL` | Base URL of the `grype-scanner` sidecar for CVE scans (default `http://grype-scanner:8000`) |
-| `FLEET_ACTIVITY_RETENTION` / `FLEET_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
-| `FLEET_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
-| `FLEET_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted — also applies to marking an online host's overlay tunnel down (default `3`; `1` = flip on a single failure) |
-| `FLEET_MONITOR_CONFIRM_DELAY` | Wait between the confirming re-probes (default `10s`) |
-| `FLEET_METRIC_HISTORY_SAMPLE` / `FLEET_METRIC_HISTORY_RETENTION` | Host-metric time-series sample interval / retention (default `5m` / `720h`) |
+| `PROV_COOKIE_SECURE` | `true` whenever served over HTTPS |
+| `PROV_SESSION_IDLE_TTL` / `_ABSOLUTE_TTL` | Session inactivity / hard-cap lifetimes |
+| `PROV_REFRESH_TOKEN_TTL` | Refresh-cookie lifetime (shorten for internet exposure) |
+| `PROV_USER_CERT_TTL` | Ephemeral user-cert lifetime (default 12h, auto-renewed) |
+| `PROV_CA_ROTATE_AFTER` | Age at which the active SSH CA key triggers a rotation reminder (default `8760h` = 365d) |
+| `PROV_RATE_LIMIT_*` / `PROV_AUTH_RATE_LIMIT_*` | Per-IP rate limits (0 disables) |
+| `PROV_JUMP_HOST` / `PROV_JUMP_USER` | Jump host `host:port` + login user |
+| `PROV_WG_SUBNET` / `PROV_WG_JUMP_IP` / `PROV_WG_PORT` | WireGuard overlay |
+| `PROV_WG_JUMP_ENDPOINT` | Public `host:port` managed hosts dial to reach the jump |
+| `PROV_OVERLAY_PEER_ISOLATION` | Keep the overlay strict hub-and-spoke — a forwarding deny on the jump host, plus `AllowedIPs = <jump>/32` in each newly enrolled host's WireGuard config (default `1`; **leave it on** unless the deployment genuinely needs host-to-host overlay traffic). Set on the jump host as well as the backend, so the WireGuard hub applies it at start-up |
+| `PROV_ALLOW_BOOTSTRAP` | `false` after the first admin exists (also self-seals) |
+| `PROV_BACKUP_DIR` | Where encrypted DB backups are written (default `/var/lib/prov/backups`, the `backups` volume) |
+| `PROV_BACKUP_PASSPHRASE` | Encrypts DB backups (`openssl` AES-256); falls back to `PROV_CA_PASSPHRASE` if empty — in **production set a distinct value** (must differ from `PROV_CA_PASSPHRASE`) and keep it **off-host** |
+| `PROV_VAULT_PASSPHRASE` | Encrypts stored credentials (the secrets vault) at rest (secretbox). **Required in production** to use the credential vault, and **must differ from `PROV_CA_PASSPHRASE`**; falls back to it in development only. Losing it makes stored credentials unrecoverable |
+| `PROV_ANSIBLE_RUNNER_URL` | Base URL of the `ansible-runner` sidecar (default `http://ansible-runner:8000`) |
+| `PROV_GRYPE_SCANNER_URL` | Base URL of the `grype-scanner` sidecar for CVE scans (default `http://grype-scanner:8000`) |
+| `PROV_ACTIVITY_RETENTION` / `PROV_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
+| `PROV_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
+| `PROV_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted — also applies to marking an online host's overlay tunnel down (default `3`; `1` = flip on a single failure) |
+| `PROV_MONITOR_CONFIRM_DELAY` | Wait between the confirming re-probes (default `10s`) |
+| `PROV_METRIC_HISTORY_SAMPLE` / `PROV_METRIC_HISTORY_RETENTION` | Host-metric time-series sample interval / retention (default `5m` / `720h`) |
 | `TZ` | *(optional)* server timezone for the backend; schedules compute next-run in this zone (default `UTC`) |
 
 > **Backups** are produced under **Settings → Backup & Restore** (encrypted,
-> schedulable, with retention) and written to `FLEET_BACKUP_DIR`. See
+> schedulable, with retention) and written to `PROV_BACKUP_DIR`. See
 > [break-glass.md](./break-glass.md) and [disaster-recovery.md](./disaster-recovery.md).
 > The `TZ` env sets the server timezone, but the **in-app Time zone setting is
 > preferred** for schedule display/computation.
@@ -142,12 +142,12 @@ Key variables (full list in `.env.example`):
 The default configuration comfortably manages **hundreds of hosts** on a single
 app-stack server. Scaling to **thousands** requires two changes:
 
-- **A wider overlay subnet.** The default `FLEET_WG_SUBNET` sizes the WireGuard
+- **A wider overlay subnet.** The default `PROV_WG_SUBNET` sizes the WireGuard
   address pool; a few hundred hosts exhaust a `/24`. For thousands, use a larger
   block (e.g. a **`/16`**, giving ~65k addresses) *before* enrolling at scale —
   the subnet is fixed at the pool's creation. Set it consistently on the backend
   and the jump host.
-- **Tuned monitor concurrency.** Raise `FLEET_MONITOR_CONCURRENCY` (default `6`)
+- **Tuned monitor concurrency.** Raise `PROV_MONITOR_CONCURRENCY` (default `6`)
   so health checks keep up across a large fleet, but keep it **under the jump
   host's sshd `MaxStartups`** so probes aren't throttled or dropped.
 
@@ -176,21 +176,21 @@ first Super Administrator, then enroll a fabric host and connect a terminal. See
 Common to both layouts:
 
 1. **Configure** `.env` from `.env.production.example`: real secrets, your
-   `FLEET_PUBLIC_URL`, `FLEET_COOKIE_SECURE=true`, `FLEET_ALLOW_BOOTSTRAP=false`
-   (after first run), and `FLEET_WG_JUMP_ENDPOINT` set to the jump host's
+   `PROV_PUBLIC_URL`, `PROV_COOKIE_SECURE=true`, `PROV_ALLOW_BOOTSTRAP=false`
+   (after first run), and `PROV_WG_JUMP_ENDPOINT` set to the jump host's
    **publicly routable** `host:port` (not an internal name) — this is what your
    managed hosts dial over UDP.
 2. **Persist data.** PostgreSQL data, recordings, and encrypted backups live in
    named volumes (`pgdata`, `recordings`, `backups`); back them up and store the
    backup files off-host (see [disaster-recovery.md](./disaster-recovery.md) and
    [break-glass.md](./break-glass.md)). Point the DB at a managed Postgres in
-   production by overriding `FLEET_DATABASE_URL`.
+   production by overriding `PROV_DATABASE_URL`.
 3. **Front it with TLS.** Put a reverse proxy in front, terminate HTTPS, and
    forward to the `frontend` container (which proxies `/api` to the backend).
    Only the proxy should be internet-reachable. Reverse-proxy, rate-limit, and
    WAF guidance is in [internet-exposure.md](./internet-exposure.md).
 4. **Bootstrap.** Browse to the URL, create the Super Administrator, then set
-   `FLEET_ALLOW_BOOTSTRAP=false` and restart the backend.
+   `PROV_ALLOW_BOOTSTRAP=false` and restart the backend.
 5. **Load the CVE database.** The `grype-scanner` sidecar starts with an **empty**
    CVE DB. Before running vulnerability scans, load it once from **Vulnerabilities
    → CVE database → Update online** (needs the backend/sidecar to reach the
@@ -213,7 +213,7 @@ make up-single   # app stack + deploy/compose/docker-compose.jumphost.yml
 
 The bundled jump host:
 
-- **publishes** the WireGuard UDP port (`FLEET_WG_PORT`, default 51820) so remote
+- **publishes** the WireGuard UDP port (`PROV_WG_PORT`, default 51820) so remote
   managed hosts can reach it — **open that UDP port on the host firewall**;
 - **auto-trusts the Provenance CA** by polling the backend's public CA endpoint
   (`GET /api/v1/certificates/ca/pub`) — no manual trust step, and it tracks CA
@@ -222,7 +222,7 @@ The bundled jump host:
   (`jump_ssh`) on volumes, so restarts/upgrades don't break enrolled hosts or
   `known_hosts` pinning.
 
-Set `FLEET_WG_JUMP_ENDPOINT=<server-public-host>:51820` in `.env` so enrolled
+Set `PROV_WG_JUMP_ENDPOINT=<server-public-host>:51820` in `.env` so enrolled
 hosts dial the right address. The backend reaches the jump host internally at its
 default `jumphost:22`.
 
@@ -244,23 +244,23 @@ Run only the app stack and point it at a jump host you operate elsewhere:
 make up-app      # or: docker compose --env-file .env -f deploy/compose/docker-compose.yml up -d
 ```
 
-Set `FLEET_JUMP_HOST` / `FLEET_JUMP_USER` to your jump host, ensure it trusts the
+Set `PROV_JUMP_HOST` / `PROV_JUMP_USER` to your jump host, ensure it trusts the
 Provenance CA (`GET /api/v1/certificates/ca/pub`) and runs WireGuard on
-`FLEET_WG_JUMP_ENDPOINT`. See §6.
+`PROV_WG_JUMP_ENDPOINT`. See §6.
 
 ### Other deployment targets
 
 `deploy/` also contains Kubernetes manifests (`deploy/k8s`), a **Helm chart
-(`deploy/helm/blackfriars`)**, and systemd units (`deploy/systemd`) for non-Compose
+(`deploy/helm/provenance`)**, and systemd units (`deploy/systemd`) for non-Compose
 environments. They consume the same environment variables described above.
 
 #### Kubernetes / Helm
 
-Install the chart at **`deploy/helm/blackfriars`**:
+Install the chart at **`deploy/helm/provenance`**:
 
 ```sh
-helm install blackfriars deploy/helm/blackfriars \
-  --namespace moorgate --create-namespace \
+helm install provenance deploy/helm/provenance \
+  --namespace provenance --create-namespace \
   -f my-values.yaml
 ```
 
@@ -280,14 +280,14 @@ External Secret):
 
 | Value | Maps to | Required |
 |---|---|---|
-| `secrets.jwtSecret` | `FLEET_JWT_SECRET` | yes |
-| `secrets.csrfSecret` | `FLEET_CSRF_SECRET` | yes |
-| `secrets.caPassphrase` | `FLEET_CA_PASSPHRASE` | yes |
-| `secrets.auditHmacKey` | `FLEET_AUDIT_HMAC_KEY` | yes |
-| `secrets.ansibleRunnerToken` | `FLEET_ANSIBLE_RUNNER_TOKEN` (also read by the `ansible-runner` Deployment) | yes |
-| `secrets.vaultPassphrase` | `FLEET_VAULT_PASSPHRASE` (must **differ** from `caPassphrase`) | for the credential vault |
-| `secrets.backupPassphrase` | `FLEET_BACKUP_PASSPHRASE` (must **differ** from `caPassphrase`) | for encrypted backups |
-| `secrets.recordingKey` | `FLEET_RECORDING_KEY` | optional (recording encryption) |
+| `secrets.jwtSecret` | `PROV_JWT_SECRET` | yes |
+| `secrets.csrfSecret` | `PROV_CSRF_SECRET` | yes |
+| `secrets.caPassphrase` | `PROV_CA_PASSPHRASE` | yes |
+| `secrets.auditHmacKey` | `PROV_AUDIT_HMAC_KEY` | yes |
+| `secrets.ansibleRunnerToken` | `PROV_ANSIBLE_RUNNER_TOKEN` (also read by the `ansible-runner` Deployment) | yes |
+| `secrets.vaultPassphrase` | `PROV_VAULT_PASSPHRASE` (must **differ** from `caPassphrase`) | for the credential vault |
+| `secrets.backupPassphrase` | `PROV_BACKUP_PASSPHRASE` (must **differ** from `caPassphrase`) | for encrypted backups |
+| `secrets.recordingKey` | `PROV_RECORDING_KEY` | optional (recording encryption) |
 
 ##### The image builder is not in the chart, deliberately
 
@@ -302,7 +302,7 @@ translation of one would be offering an option that had not actually been
 thought through.
 
 Run the builder on a Docker host instead and point the cluster at what it
-produces. `FLEET_BUILDER_RUNNER_URL` is a URL precisely so the builder need not
+produces. `PROV_BUILDER_RUNNER_URL` is a URL precisely so the builder need not
 live where the backend does; leave it unset and the build routes answer `501`
 and say why. **The rest of imaging — rollouts, machines, heartbeats, the
 artefact library — runs on Kubernetes unchanged.** Only building is affected.
@@ -315,10 +315,10 @@ See [imaging.md](imaging.md).
 The jump host is the single egress point. It must:
 
 - run OpenSSH and **trust the Provenance CA** (so the backend can SSH in with its
-  system certificate) — `FLEET_JUMP_USER` maps to the `fleet` principal;
-- run WireGuard as the overlay server on `FLEET_WG_PORT`, with its public key
+  system certificate) — `PROV_JUMP_USER` maps to the `fleet` principal;
+- run WireGuard as the overlay server on `PROV_WG_PORT`, with its public key
   readable at `/etc/wireguard/publickey`;
-- be reachable from managed hosts at `FLEET_WG_JUMP_ENDPOINT` (UDP).
+- be reachable from managed hosts at `PROV_WG_JUMP_ENDPOINT` (UDP).
 
 Enrollment adds each managed host as a WireGuard **peer** on the jump host
 automatically, retiring any stale peer that still claims the same overlay
@@ -337,23 +337,23 @@ principal `fleet`) and run WireGuard yourself.
 
 ## 7. Post-deploy hardening checklist
 
-- [ ] `FLEET_ENV=production`, `FLEET_COOKIE_SECURE=true`, HTTPS + HSTS at the proxy.
-- [ ] Strong `FLEET_JWT_SECRET`, `FLEET_CSRF_SECRET`, `FLEET_CA_PASSPHRASE`.
-- [ ] `FLEET_AUDIT_HMAC_KEY` and `FLEET_ANSIBLE_RUNNER_TOKEN` set (both **required**;
-      backend fails closed without them). `FLEET_RECORDING_KEY` set to encrypt
+- [ ] `PROV_ENV=production`, `PROV_COOKIE_SECURE=true`, HTTPS + HSTS at the proxy.
+- [ ] Strong `PROV_JWT_SECRET`, `PROV_CSRF_SECRET`, `PROV_CA_PASSPHRASE`.
+- [ ] `PROV_AUDIT_HMAC_KEY` and `PROV_ANSIBLE_RUNNER_TOKEN` set (both **required**;
+      backend fails closed without them). `PROV_RECORDING_KEY` set to encrypt
       recordings at rest.
-- [ ] `FLEET_ALLOW_BOOTSTRAP=false` once the first admin exists.
+- [ ] `PROV_ALLOW_BOOTSTRAP=false` once the first admin exists.
 - [ ] **Require MFA** for all users (Users → *Require MFA for all*) or per user.
 - [ ] Per-IP rate limits set; `lockout_policy` tuned (Settings/Security).
 - [ ] Only the reverse proxy is internet-reachable; DB/Redis/jump/WireGuard stay
       internal.
-- [ ] `FLEET_JUMP_KNOWN_HOSTS` set so the gateway pins the jump host key.
+- [ ] `PROV_JUMP_KNOWN_HOSTS` set so the gateway pins the jump host key.
 - [ ] **Encrypted, scheduled backups** enabled (Settings → Backup & Restore) with
-      retention, written to `FLEET_BACKUP_DIR` and copied **off-host**; recordings
-      backed up; `FLEET_BACKUP_PASSPHRASE` (and `FLEET_CA_PASSPHRASE`) stored
+      retention, written to `PROV_BACKUP_DIR` and copied **off-host**; recordings
+      backed up; `PROV_BACKUP_PASSPHRASE` (and `PROV_CA_PASSPHRASE`) stored
       off-server. Restore-tested — see [break-glass.md](./break-glass.md).
 - [ ] Review the **System Health** admin page — it surfaces component status and
-      flags when the active SSH CA key exceeds `FLEET_CA_ROTATE_AFTER` (default
+      flags when the active SSH CA key exceeds `PROV_CA_ROTATE_AFTER` (default
       365d) so rotation can be scheduled. Use it to verify the stack after deploy
       and upgrades.
 
@@ -362,20 +362,20 @@ principal `fleet`) and run WireGuard yourself.
 ## 8. Upgrades
 
 > **Set the new required secrets before restarting.** The 2.0.0 release adds two
-> production-required variables — **`FLEET_AUDIT_HMAC_KEY`** and
-> **`FLEET_ANSIBLE_RUNNER_TOKEN`** (§3). An existing production deployment **must
+> production-required variables — **`PROV_AUDIT_HMAC_KEY`** and
+> **`PROV_ANSIBLE_RUNNER_TOKEN`** (§3). An existing production deployment **must
 > set both in `.env` before the next restart**, or the backend **fails closed at
 > boot** and will not come back up. Generate each with `openssl rand -hex 32`, and
-> make `FLEET_ANSIBLE_RUNNER_TOKEN` identical on the backend and the
-> `ansible-runner` container. Optionally set `FLEET_RECORDING_KEY` at the same time
+> make `PROV_ANSIBLE_RUNNER_TOKEN` identical on the backend and the
+> `ansible-runner` container. Optionally set `PROV_RECORDING_KEY` at the same time
 > to encrypt new recordings at rest.
 
 **Database migrations apply automatically on backend start**
-(`FLEET_MIGRATE_ON_START=true`), in order, and are logged (`migrations applied …
+(`PROV_MIGRATE_ON_START=true`), in order, and are logged (`migrations applied …
 versions=[…]`). Recordings and certificates survive restarts; ephemeral in-RAM keys
 are re-issued on the next authenticated request.
 
-### In-app (signed `.fleetup` bundle) upgrades — read this first
+### In-app (signed `.provup` bundle) upgrades — read this first
 
 The in-app updater (Settings → Maintenance → Updates → Install) loads the bundle's
 container images and then recreates the stack **using the compose files
@@ -402,10 +402,10 @@ sudo chown -R <owner>:<owner> .     # if git left root-owned files
 
 # 2. Set any newly-required secrets in .env (the updater's config migration will
 #    also generate absent ones, but setting them here removes any doubt):
-printf '\nFLEET_AUDIT_HMAC_KEY=%s\nFLEET_ANSIBLE_RUNNER_TOKEN=%s\nFLEET_RECORDING_KEY=%s\n' \
+printf '\nPROV_AUDIT_HMAC_KEY=%s\nPROV_ANSIBLE_RUNNER_TOKEN=%s\nPROV_RECORDING_KEY=%s\n' \
   "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
 
-# 3. Now upload the .fleetup bundle in the UI and Install. Verify afterwards:
+# 3. Now upload the .provup bundle in the UI and Install. Verify afterwards:
 curl -fsS http://localhost:8080/version   # -> the new version
 docker compose ps                         # all services healthy
 ```
@@ -427,7 +427,7 @@ offline). It persists in the `grype-db` volume across subsequent upgrades.
 ## 9. Recovery & operations
 
 - Out-of-band admin recovery (locked out, reset MFA, rotate CA) uses the
-  `fleetctl` CLI baked into the backend image — see
+  `provctl` CLI baked into the backend image — see
   [disaster-recovery.md](./disaster-recovery.md).
 - Day-to-day flows (enroll, connect, transfer, approvals, MFA) are in
   [operations.md](./operations.md); end-user usage in [user-guide.md](./user-guide.md).

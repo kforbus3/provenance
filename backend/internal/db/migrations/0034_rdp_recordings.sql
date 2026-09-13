@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS rdp_recordings (
     host_id     UUID REFERENCES hosts(id) ON DELETE SET NULL,
     user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
     hostname    TEXT NOT NULL,
-    fleet_user  TEXT NOT NULL DEFAULT '',
+    prov_user  TEXT NOT NULL DEFAULT '',
     rdp_user    TEXT NOT NULL DEFAULT '',
     format      TEXT NOT NULL DEFAULT 'guacamole',
     path        TEXT NOT NULL,

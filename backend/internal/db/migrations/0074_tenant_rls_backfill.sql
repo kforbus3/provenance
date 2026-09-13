@@ -1,22 +1,22 @@
 -- Multi-tenancy backfill: extend row-level security to tenant-scoped tables that were
 -- added AFTER the tenancy foundation (0051) / federation-tenancy (0062) and therefore
 -- shipped with NEITHER a tenant_id column NOR an RLS policy. Until this migration, in a
--- FLEET_MULTI_TENANCY deployment a customer-tenant admin could read/edit/delete EVERY
+-- PROV_MULTI_TENANCY deployment a customer-tenant admin could read/edit/delete EVERY
 -- tenant's rows in these tables (they were not filtered by app.tenant_id at all).
 --
 -- This mirrors 0051 exactly: add tenant_id with a CONSTANT default first (fast — no table
 -- rewrite in PG11+; existing rows backfill to the seeded provider tenant
--- 00000000-0000-0000-0000-000000000001), then swap the default to fleet_current_tenant()
+-- 00000000-0000-0000-0000-000000000001), then swap the default to prov_current_tenant()
 -- so future inserts pick up the connection's tenant from the app.tenant_id GUC, add a
 -- FK to tenants + a tenant_id index, and ENABLE + FORCE the same tenant_isolation policy
--- (USING and WITH CHECK against fleet_rls_visible()). The helper functions
--- fleet_current_tenant() / fleet_rls_visible() and the provider tenant come from 0051.
+-- (USING and WITH CHECK against prov_rls_visible()). The helper functions
+-- prov_current_tenant() / prov_rls_visible() and the provider tenant come from 0051.
 --
 -- With the flag OFF the app always sets app.tenant_id='bypass', so every policy below is
 -- satisfied and behavior is unchanged; RLS only bites when (a) the flag is on AND (b) the
 -- app connects as a NON-superuser, NOBYPASSRLS role (see db.verifyRLSCapableRole).
 --
--- PER-TABLE DECISIONS (tenant-scoped vs. fleet-global) --------------------------------
+-- PER-TABLE DECISIONS (tenant-scoped vs. prov-global) --------------------------------
 --   TENANT-SCOPED (get tenant_id + FORCE RLS below):
 --     * databases        (0053) — a registered SQL target belongs to one customer.
 --     * access_policies  (0056) — ABAC rules are authored per customer tenant.
@@ -36,7 +36,7 @@
 --                                 does grow a real external_secrets table, it is scoped
 --                                 rather than silently unprotected. Today the guard skips.
 --
---   INTENTIONALLY FLEET-GLOBAL (deliberately NOT scoped — documented so a future
+--   INTENTIONALLY PROV-GLOBAL (deliberately NOT scoped — documented so a future
 --   "every table must have RLS" CI check has an explicit, reasoned allowlist):
 --     * ssh_host_keys      (0068) — TOFU host-key pins are the cryptographic identity of a
 --                                 physical host (PRIMARY KEY host), shared infrastructure
@@ -78,7 +78,7 @@ BEGIN
     EXECUTE format(
       'ALTER TABLE %I ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT ''00000000-0000-0000-0000-000000000001''::uuid',
       t);
-    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT fleet_current_tenant()', t);
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT prov_current_tenant()', t);
     -- Add the FK to tenants (idempotently — ADD CONSTRAINT has no IF NOT EXISTS).
     IF NOT EXISTS (
       SELECT 1 FROM pg_constraint
@@ -93,7 +93,7 @@ BEGIN
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
     EXECUTE format(
-      'CREATE POLICY tenant_isolation ON %I USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id))',
+      'CREATE POLICY tenant_isolation ON %I USING (prov_rls_visible(tenant_id)) WITH CHECK (prov_rls_visible(tenant_id))',
       t);
   END LOOP;
 END $$;

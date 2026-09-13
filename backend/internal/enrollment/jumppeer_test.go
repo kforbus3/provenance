@@ -9,7 +9,7 @@ import (
 
 func peerScript(t *testing.T) string {
 	t.Helper()
-	s := &Service{cfg: &config.Config{WGInterface: "wgfleet"}}
+	s := &Service{cfg: &config.Config{WGInterface: "wgprov"}}
 	return s.jumpPeerScript("containers", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		"jumphost.example.com:51820", "10.100.0.24")
 }

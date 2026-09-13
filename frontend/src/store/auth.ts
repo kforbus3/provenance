@@ -49,7 +49,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   activeTenant: getActiveTenant(),
 
   // switchTenant sets (or clears) the customer tenant a provider admin is acting within.
-  // The X-Fleet-Tenant header follows; a reload keeps the selection.
+  // The X-Prov-Tenant header follows; a reload keeps the selection.
   switchTenant: (id) => {
     setActiveTenant(id);
     set({ activeTenant: id });

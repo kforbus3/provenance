@@ -1,8 +1,8 @@
 # FIPS Mode — Design & Migration Plan
 
 Status: **P0–P4 implemented and released** (opt-in, default-off, non-FIPS behavior
-unchanged). A fresh `FLEET_FIPS_MODE=true` deploy works end-to-end
-including the OpenVPN overlay, and the existing-install migration toolset (`fleetctl
+unchanged). A fresh `PROV_FIPS_MODE=true` deploy works end-to-end
+including the OpenVPN overlay, and the existing-install migration toolset (`provctl
 fips …`, verify-then-upgrade-on-login, secret re-seal sweep) and a UI readiness
 dashboard are in place. Both a FIPS boot and a default WireGuard boot are validated in
 Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images) — see
@@ -19,7 +19,7 @@ Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images
   authenticates peers with X.509 certs an SSH CA cannot issue). The CA key is
   `secretbox`-sealed at rest (v3/PBKDF2 under FIPS) in `overlay_ca`; generated once and
   **reloaded** (decrypted) on restart. Client certs are CN-bound to the host UUID
-  (`fleet-h-<id>`), recorded in `overlay_clients`.
+  (`prov-h-<id>`), recorded in `overlay_clients`.
 - **`internal/overlay`** — an `Overlay` interface (`EnsureServer` / `ProvisionHost`)
   implemented by **OpenVPN**: jump-host `server.conf`, per-host `client.ovpn`, `ccd`
   static-IP pins. Suite: TLS 1.2/1.3, AES-256-GCM, **ECDHE-P256** (pins
@@ -27,7 +27,7 @@ Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images
   would otherwise pick non-approved X25519), ECDSA-P256 mutual cert auth.
 - **Per-host selection.** The overlay is chosen **per host** at enrollment (`hosts.overlay`
   column; enroll dialog dropdown / `overlay` API field), resolved as per-enroll choice →
-  the host's recorded overlay → the deployment default `FLEET_OVERLAY`. Enrollment dispatches
+  the host's recorded overlay → the deployment default `PROV_OVERLAY`. Enrollment dispatches
   WireGuard vs. the cert overlay on that effective value and provisions via the overlay
   registry, storing the assigned address in the **same `wg_address` column** WireGuard uses —
   so the SSH gateway dials the host identically regardless of transport. The WireGuard path
@@ -43,10 +43,10 @@ Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images
 **Done (P0 — foundation, and P1 — in-process crypto):**
 - **Go 1.24 toolchain** with the native FIPS 140-3 module. It is compiled into every
   Go 1.24 binary, so FIPS is a **runtime toggle** — no separate artifact. The
-  entrypoint sets `GODEBUG=fips140=on` when `FLEET_FIPS_MODE=true`; the backend
+  entrypoint sets `GODEBUG=fips140=on` when `PROV_FIPS_MODE=true`; the backend
   **fails closed** at boot if the module isn't active in FIPS mode.
 - **`internal/cryptoprofile`** — the single policy hub. `Default` = today's behavior
-  verbatim; `FIPS` = the approved set. Selected once at boot from `FLEET_FIPS_MODE`.
+  verbatim; `FIPS` = the approved set. Selected once at boot from `PROV_FIPS_MODE`.
 - **ECDSA P-256** for the user CA and every per-session/host/system identity
   (`ca`, `identity/{issuer,system,material}`); the key type is derived from the
   signer, and the in-RAM key **zeroize** handles both Ed25519 and ECDSA.
@@ -58,42 +58,42 @@ Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images
   HMAC-SHA-256 across every gateway `ssh.ClientConfig` (never negotiates
   curve25519/chacha20).
 - **TOTP → HMAC-SHA256** and **WebAuthn → ES256/RS256 only** (no EdDSA) under FIPS.
-- **Boot self-check** (module active + active CA not Ed25519) and **`fleetctl fips
+- **Boot self-check** (module active + active CA not Ed25519) and **`provctl fips
   check`** readiness report.
 
-Validated end-to-end: a fresh `FLEET_FIPS_MODE=true` deploy activates the module,
+Validated end-to-end: a fresh `PROV_FIPS_MODE=true` deploy activates the module,
 generates an ECDSA CA, and passes the self-check; a non-FIPS deploy is byte-for-byte
 unchanged (Ed25519, module off); FIPS-without-module refuses to start.
 
 **Done (P1 TLS pins):**
 - **Outbound TLS pinned** to `MinVersion: TLS 1.2` on SMTP (`notify/senders.go`) and
   LDAP StartTLS (`auth/ldap.go`); the enroll-agent **fails closed** on `-insecure` when
-  `FLEET_FIPS_MODE` is set, and pins TLS 1.2 on its remaining paths.
+  `PROV_FIPS_MODE` is set, and pins TLS 1.2 on its remaining paths.
 
 **Done (P3 — existing-install migration toolset, M2–M6):**
-- **M2 (CA migration):** `fleetctl rotate-ca` in a FIPS-configured environment mints an
+- **M2 (CA migration):** `provctl rotate-ca` in a FIPS-configured environment mints an
   **ECDSA** CA (key type follows `cryptoprofile.For(FIPS)`); rotation keeps the prior CA
   trusted through the transition (dual-CA).
-- **M3 (secret re-seal):** the boot re-seal (`FLEET_REENCRYPT_SECRETS=true`) upgrades the
-  CA-key envelope on `secretbox.NeedsReseal`; and **`fleetctl fips reseal-secrets`** sweeps
+- **M3 (secret re-seal):** the boot re-seal (`PROV_REENCRYPT_SECRETS=true`) upgrades the
+  CA-key envelope on `secretbox.NeedsReseal`; and **`provctl fips reseal-secrets`** sweeps
   every at-rest secret to PBKDF2 in place — CA key, overlay CA key, notification secrets
   (SMTP/PagerDuty/Opsgenie), LDAP/OIDC secrets, and vault entries — each verify-before-
   overwrite via `secretbox.ResealBytes`. Targets v3 unconditionally (run before the flip).
 - **M5 (credential refresh):** login now **verify-then-upgrades** a matched Argon2id
-  password to PBKDF2 (best-effort, never blocks login); **`fleetctl fips
+  password to PBKDF2 (best-effort, never blocks login); **`provctl fips
   flag-stale-passwords`** forces `must_change_pw` on local accounts still on a non-FIPS
   hash (for accounts that never log in). WebAuthn EdDSA passkeys are surfaced for
   re-registration in the readiness report.
-- **M6 (attestation):** `fleetctl fips check` reports module status, overlay, CA key type,
+- **M6 (attestation):** `provctl fips check` reports module status, overlay, CA key type,
   password-hash algorithms, and MFA factors with a ready/not-ready verdict.
 
 **Done (P4 — docs + UI):**
 - This runbook (deploy config, jump-host requirements, migration steps).
 - A **FIPS 140-3 Readiness** card on the System Health page (`GET /api/v1/system/fips`),
-  mirroring `fleetctl fips check` with per-artifact OK / NOT-FIPS chips and an overall
+  mirroring `provctl fips check` with per-artifact OK / NOT-FIPS chips and an overall
   verdict. Hides itself on older backends.
 
-Validated end-to-end (Docker): a `FLEET_FIPS_MODE=true` backend boots with the module
+Validated end-to-end (Docker): a `PROV_FIPS_MODE=true` backend boots with the module
 active, applies all migrations, creates the overlay PKI CA, generates an **ECDSA** user
 CA, and `fips check` returns a green verdict; a default (non-FIPS) boot on a fresh DB is
 unchanged — Ed25519 CA, WireGuard overlay, module off, and the overlay PKI is never
@@ -114,12 +114,12 @@ created.
 
 Add an opt-in **FIPS mode** in which *all* cryptography Provenance performs uses FIPS 140-3
 approved algorithms running inside a validated cryptographic module. FIPS mode is a
-**policy profile**, selected by `FLEET_FIPS_MODE=true`. When off (the default),
+**policy profile**, selected by `PROV_FIPS_MODE=true`. When off (the default),
 nothing changes — Ed25519, WireGuard, and Argon2id remain for normal installs. We take
 nothing away from non-FIPS deployments.
 
 Two deployment stories, both required:
-1. **Fresh FIPS deploy** — easy: start with `FLEET_FIPS_MODE=true` and the approved
+1. **Fresh FIPS deploy** — easy: start with `PROV_FIPS_MODE=true` and the approved
    profile is used from first boot.
 2. **Existing install → FIPS** — the hard part: a migration that rotates the CA to an
    approved key type, replaces the WireGuard overlay with OpenVPN, re-encrypts secrets
@@ -144,7 +144,7 @@ host's OS crypto (OpenSSL) — not just the Go binary.
 | 7 | WebAuthn advertises EdDSA + ES256 | **restrict COSE algs to ES256 (P-256) / RS256** | `auth/webauthn.go:84` |
 | 8 | Go 1.23, no FIPS module, `CGO_ENABLED=0` alpine | **Go 1.24+ `GOFIPS140` module**, `GODEBUG=fips140=on` in FIPS mode | `go.mod`, `backend/Dockerfile` |
 | 9 | Outbound TLS clients: Go defaults | Pin `MinVersion: TLS1.2` + approved cipher suites (SMTP/LDAP/OIDC) | `notify/senders.go:69`, `auth/ldap.go:78`, http transports |
-| 10 | Enroll-agent `InsecureSkipVerify` | Verify certs (needed for FIPS *and* is a standing security gap) | `cmd/fleet-enroll-agent/main.go:64,98` |
+| 10 | Enroll-agent `InsecureSkipVerify` | Verify certs (needed for FIPS *and* is a standing security gap) | `cmd/prov-enroll-agent/main.go:64,98` |
 
 **Already FIPS-approved (keep):** AES-256-GCM (secretbox, MFA-at-rest), AES-256-CBC+PBKDF2
 (backup via openssl), HMAC-SHA256 (JWT/MFA tokens), SHA-256 (audit hash chain, token
@@ -175,13 +175,13 @@ consequences, both handled by the plan:
 
 Deliverable: bump to Go 1.24+, a `Dockerfile` build arg producing a `GOFIPS140`-built
 image, and a boot-time self-check that the validated module is active when
-`FLEET_FIPS_MODE=true` (fail closed otherwise).
+`PROV_FIPS_MODE=true` (fail closed otherwise).
 
 ---
 
 ## The crypto-profile abstraction (keeps non-FIPS untouched)
 
-Introduce a `cryptoprofile` selected once at boot from `FLEET_FIPS_MODE`:
+Introduce a `cryptoprofile` selected once at boot from `PROV_FIPS_MODE`:
 
 ```
 type Profile interface {
@@ -212,7 +212,7 @@ validated module isn't active — with a clear "run the FIPS migration" error.
 
 WireGuard has **no FIPS mode** (its primitives are all non-approved), so it is replaced,
 not reconfigured. **OpenVPN is the primary/default FIPS overlay**; **IPsec/IKEv2 via
-strongSwan is a supported alternative** (`FLEET_OVERLAY=openvpn|strongswan`) for
+strongSwan is a supported alternative** (`PROV_OVERLAY=openvpn|strongswan`) for
 operators who prefer kernel IPsec or already run strongSwan. Both authenticate hosts
 with certs from Provenance's ECDSA CA and use approved suites (AES-256-GCM, ECDH/ECDHE
 P-256). The overlay is pluggable behind the profile's `OverlayProvisioner`, so adding
@@ -233,14 +233,14 @@ Provenance changes:
   jump-peer step, address assignment).
 - The gateway's address resolution (`firstAddr`, overlay address) becomes overlay-aware
   (WG address vs OpenVPN-assigned address).
-- Config: `FLEET_OVERLAY=wireguard|openvpn` (derived from FIPS mode by default);
+- Config: `PROV_OVERLAY=wireguard|openvpn` (derived from FIPS mode by default);
   OpenVPN server params mirror the existing WG ones.
 
 ---
 
 ## Fresh FIPS deploy (the easy path)
 
-`FLEET_FIPS_MODE=true` + the FIPS image. First boot: CA generated ECDSA P-256, secrets
+`PROV_FIPS_MODE=true` + the FIPS image. First boot: CA generated ECDSA P-256, secrets
 PBKDF2-sealed, overlay = OpenVPN, TOTP SHA-256, WebAuthn ES256-only, SSH pinned. Boot
 self-check passes. Done — indistinguishable in workflow from a normal deploy.
 
@@ -248,14 +248,14 @@ self-check passes. Done — indistinguishable in workflow from a normal deploy.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `FLEET_FIPS_MODE` | `false` | `true` sets `GODEBUG=fips140=on` and derives the FIPS profile. |
-| `FLEET_OVERLAY` | derived | Deployment **default** overlay: `openvpn` under FIPS (else `wireguard`). Overridable per host at enrollment (`wireguard` \| `openvpn`). |
-| `FLEET_OVPN_PORT` | `1194` | UDP port the jump-host OpenVPN server listens on. |
-| `FLEET_WG_SUBNET` / `FLEET_WG_JUMP_IP` | — | Reused verbatim for the OpenVPN overlay's address plan (`server` + `ccd` static IPs). |
-| `FLEET_WG_JUMP_ENDPOINT` | — | Address managed hosts dial; OpenVPN applies `FLEET_OVPN_PORT`. |
+| `PROV_FIPS_MODE` | `false` | `true` sets `GODEBUG=fips140=on` and derives the FIPS profile. |
+| `PROV_OVERLAY` | derived | Deployment **default** overlay: `openvpn` under FIPS (else `wireguard`). Overridable per host at enrollment (`wireguard` \| `openvpn`). |
+| `PROV_OVPN_PORT` | `1194` | UDP port the jump-host OpenVPN server listens on. |
+| `PROV_WG_SUBNET` / `PROV_WG_JUMP_IP` | — | Reused verbatim for the OpenVPN overlay's address plan (`server` + `ccd` static IPs). |
+| `PROV_WG_JUMP_ENDPOINT` | — | Address managed hosts dial; OpenVPN applies `PROV_OVPN_PORT`. |
 
 Per host, the overlay is chosen in the **enroll dialog's "VPN overlay" dropdown** (or the
-`overlay` field of the enroll API) — "Deployment default" keeps `FLEET_OVERLAY`. The
+`overlay` field of the enroll API) — "Deployment default" keeps `PROV_OVERLAY`. The
 no-install (ssh-pipe) flow carries the same choice as `?overlay=` on
 `GET …/enroll/script`, which embeds the issued client certificate in the script; the
 Finish step then takes no host public key.
@@ -264,18 +264,18 @@ Finish step then takes no host public key.
 overlay selected — any method, including no-install. Both transports address the host at
 the *same* overlay address, so moving to OpenVPN retires the WireGuard side once the new
 tunnel is up: the interface and its boot units on the host (the config is renamed to
-`<iface>.conf.fleet-disabled`, not deleted), the peer on the jump host, and the stored
+`<iface>.conf.prov-disabled`, not deleted), the peer on the jump host, and the stored
 public key a standby jump host would rebuild that peer from. Moving the other way
 re-provisions WireGuard, but does not stop the OpenVPN client — take that down by hand.
 
 **Mixing transports per host is supported.** The two overlays are separate address
-plans — `FLEET_WG_SUBNET` and `FLEET_OVPN_SUBNET` — because both terminate on the same
+plans — `PROV_WG_SUBNET` and `PROV_OVPN_SUBNET` — because both terminate on the same
 jump host and each claims its own address on its own interface: one shared subnet
 gives that host two connected routes for a single prefix, the kernel resolves that
 once for the whole prefix, and every host behind the losing interface goes dark.
 
-Defaults: `FLEET_OVPN_SUBNET=10.101.0.0/24` (jump `.1`). An install whose *default*
-overlay is already `openvpn` keeps `FLEET_WG_SUBNET` instead, so an existing FIPS
+Defaults: `PROV_OVPN_SUBNET=10.101.0.0/24` (jump `.1`). An install whose *default*
+overlay is already `openvpn` keeps `PROV_WG_SUBNET` instead, so an existing FIPS
 fleet is not renumbered underneath itself; set the variable explicitly to move it.
 
 **Switching an enrolled host between transports is a re-enrollment** with the other
@@ -288,7 +288,7 @@ overlay selected — any method, including no-install. Provenance then:
   host** (`verify_overlay_tunnel`) — no management-address fallback, which every other
   check has and which is why a dead overlay once passed for a working one;
 - and only then retires the transport it left, on both ends: interface/client stopped
-  and disabled on the host with its config renamed `*.fleet-disabled`, peer or pinned
+  and disabled on the host with its config renamed `*.prov-disabled`, peer or pinned
   address removed on the jump host, stored WireGuard key cleared so a standby jump
   host does not restore the retired peer.
 
@@ -303,12 +303,12 @@ inside the container on a port nothing publishes — the client dials and gets n
 answer, and enrollment fails with `OVPN_HOST_NO_TUNNEL`.
 
 **Firewall:** open **both** UDP ports on the jump host if any host uses either
-transport: `FLEET_WG_PORT` (51820) and `FLEET_OVPN_PORT` (1194). Managed hosts always
-dial `FLEET_OVPN_PORT` for OpenVPN regardless of the port in
-`FLEET_WG_JUMP_ENDPOINT`. Peer isolation denies forwarding **within** each overlay and
+transport: `PROV_WG_PORT` (51820) and `PROV_OVPN_PORT` (1194). Managed hosts always
+dial `PROV_OVPN_PORT` for OpenVPN regardless of the port in
+`PROV_WG_JUMP_ENDPOINT`. Peer isolation denies forwarding **within** each overlay and
 **between** them, so a host on one transport cannot reach a host on the other.
 
-**Verify** with `fleetctl fips check` (module active, overlay, ECDSA CA) and, on the jump
+**Verify** with `provctl fips check` (module active, overlay, ECDSA CA) and, on the jump
 host, `pgrep -f 'openvpn .*server.conf'`. A managed host that enrolled over the cert
 overlay shows its assigned address (same column as WireGuard) and a `tun0` interface.
 
@@ -319,14 +319,14 @@ overlay shows its assigned address (same column as WireGuard) and a `tun0` inter
 An existing install has Ed25519 CA + certs, a WireGuard overlay, Argon2id-sealed secrets
 and passwords, SHA-1 TOTP, possibly EdDSA WebAuthn creds, and a non-FIPS binary. The
 migration is a **staged, reversible-until-cutover** procedure driven by a new
-`fleetctl fips ...` toolset and a readiness dashboard. Phases:
+`provctl fips ...` toolset and a readiness dashboard. Phases:
 
-**M0 — Readiness report.** `fleetctl fips check`: enumerate every non-compliant artifact
+**M0 — Readiness report.** `provctl fips check`: enumerate every non-compliant artifact
 (CA key type, overlay, each secret's KDF, password-hash algorithms in use, TOTP alg,
 EdDSA WebAuthn creds, binary/module status). Nothing changes; produces the work list.
 
 **M1 — Deploy the FIPS-capable binary.** Swap to the `GOFIPS140` image, still with
-`FLEET_FIPS_MODE=false`. The validated module is now present; behavior unchanged. This
+`PROV_FIPS_MODE=false`. The validated module is now present; behavior unchanged. This
 de-risks the runtime change from the crypto migration.
 
 **M2 — CA migration (Ed25519 → ECDSA), dual-CA.** Extend the existing additive CA
@@ -359,7 +359,7 @@ an admin "force password reset" for accounts that don't log in within a window. 
 moves to SHA-256, users **re-enroll TOTP** (guided prompt); EdDSA WebAuthn credentials
 are flagged and must be re-registered. Recovery codes re-generated.
 
-**M6 — Flip `FLEET_FIPS_MODE=true`.** The boot self-check now must pass: ECDSA CA,
+**M6 — Flip `PROV_FIPS_MODE=true`.** The boot self-check now must pass: ECDSA CA,
 OpenVPN overlay, all secrets PBKDF2, module active, SSH pinned. Enforcement is
 fail-closed — any residual non-FIPS artifact blocks startup with a pointer to the
 offending item. Emit a **FIPS attestation** record (module version, algorithm set, CA
@@ -373,10 +373,10 @@ gates M6.
 
 ## What stays unchanged for non-FIPS installs
 
-Everything. `FLEET_FIPS_MODE=false` (default) selects `DefaultProfile`: Ed25519, WG,
+Everything. `PROV_FIPS_MODE=false` (default) selects `DefaultProfile`: Ed25519, WG,
 Argon2id, SHA-1 TOTP, default SSH negotiation — byte-for-byte today's behavior. The
 FIPS-built image runs identically with `fips140=off`. The only visible additions are the
-config flag and the `fleetctl fips` subcommands (inert unless used).
+config flag and the `provctl fips` subcommands (inert unless used).
 
 ---
 
@@ -407,7 +407,7 @@ config flag and the `fleetctl fips` subcommands (inert unless used).
   end-to-end **except the overlay**.
 - **P2:** OpenVPN overlay (jump-host server + enrollment provisioning + gateway
   address-awareness). Fresh FIPS deploy fully works.
-- **P3:** the `fleetctl fips` migration toolset (M0–M6) for existing installs — CA
+- **P3:** the `provctl fips` migration toolset (M0–M6) for existing installs — CA
   dual-rotation sweep, dual-overlay re-enrollment, secret re-seal, credential upgrade,
   fail-closed flip + attestation.
 - **P4:** docs (a FIPS deployment + migration runbook, like the HA guide), the

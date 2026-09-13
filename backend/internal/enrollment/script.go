@@ -23,18 +23,18 @@ import (
 //
 //	curl -H 'Authorization: Bearer <token>' \
 //	  https://fleet/api/v1/hosts/<id>/enroll/script \
-//	  | ssh user@host 'cat > ~/fleet-enroll.sh' \
-//	  && ssh -t user@host 'sudo sh ~/fleet-enroll.sh; rm -f ~/fleet-enroll.sh'
+//	  | ssh user@host 'cat > ~/prov-enroll.sh' \
+//	  && ssh -t user@host 'sudo sh ~/prov-enroll.sh; rm -f ~/prov-enroll.sh'
 //
 // Piping straight into `ssh user@host sudo sh` occupies stdin with the script
 // and allocates no terminal, so sudo can't read a password ("a terminal is
 // required") on any host without NOPASSWD.
 //
-// The script installs the Fleet CA trust and joins the host to the overlay the host
+// The script installs the Provenance CA trust and joins the host to the overlay the host
 // is enrolling onto: WireGuard (the host generates a keypair and prints its public
 // key, which the operator pastes back into the UI) or a certificate overlay such as
 // OpenVPN (the client certificate is issued here and embedded in the script, so there
-// is nothing to paste back). Either way FinishScriptEnroll completes it. No Fleet
+// is nothing to paste back). Either way FinishScriptEnroll completes it. No Provenance
 // binary, password, or private key ever reaches the backend — the operator's existing
 // ssh handles host authentication.
 //
@@ -43,7 +43,7 @@ import (
 func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *models.Host, actor *uuid.UUID, wgEndpointOverride, overlayOverride string) (string, error) {
 	loginUser := host.SSHUser
 	if loginUser == "" {
-		loginUser = "fleet"
+		loginUser = "prov"
 	}
 	effOverlay := s.effectiveOverlay(EnrollParams{Overlay: overlayOverride}, host)
 
@@ -117,7 +117,7 @@ func (s *Service) EnrollScript(ctx context.Context, sessionID uuid.UUID, host *m
 // certOverlayScript builds the no-install bootstrap script for a certificate overlay.
 // The jump-side work — starting the VPN server, pinning this host's address to its
 // certificate identity, and retiring any WireGuard peer it is moving off — happens
-// here, over Fleet's own connection to the jump host. Only the host half travels in
+// here, over Provenance's own connection to the jump host. Only the host half travels in
 // the script, so the client certificate and key are issued now and embedded in it.
 //
 // That embedding is why the script is a credential: it carries the host's overlay
@@ -142,7 +142,7 @@ func (s *Service) certOverlayScript(
 		return "", err
 	}
 	// The host half of retiring a WireGuard tunnel is a phase of the script below —
-	// this is the one flow where Fleet can't run it itself. The hub half waits for the
+	// this is the one flow where Provenance can't run it itself. The hub half waits for the
 	// finish step: the operator may not run this script for a while, and pulling the
 	// jump host's peer now would take a still-working host offline until they did.
 	//
@@ -159,7 +159,7 @@ func (s *Service) certOverlayScript(
 // WireGuard overlay by dialing OUT to the jump host, so a remote Windows/RDP host is
 // reachable through the jump host from anywhere — the same overlay model as Linux, but
 // with no SSH/CA trust (Windows is reached over RDP/WinRM, not SSH). The operator runs
-// it elevated on the host and pastes the reported public key back into Fleet
+// it elevated on the host and pastes the reported public key back into Provenance
 // (FinishScriptEnroll).
 func (s *Service) EnrollScriptWindows(ctx context.Context, sessionID uuid.UUID, host *models.Host, actor *uuid.UUID, wgEndpointOverride string) (string, error) {
 	jumpAddr, jumpPort := splitHostPort(s.cfg.JumpHost, 22)
@@ -201,7 +201,7 @@ func (s *Service) EnrollScriptWindows(ctx context.Context, sessionID uuid.UUID, 
 
 // windowsWGScript builds the PowerShell that installs WireGuard for Windows, generates
 // a keypair, writes a dial-out tunnel config, installs it as a persistent tunnel
-// service, and prints the public key for the operator to hand back to Fleet.
+// service, and prints the public key for the operator to hand back to Provenance.
 //
 // allowed is the peer's AllowedIPs — the jump host alone under peer isolation, the
 // whole overlay subnet without it. See Service.hostAllowedIPs.
@@ -260,9 +260,9 @@ PersistentKeepalive = 25
 # %TEMP% file that gets cleaned up leaves the service unable to load its config after a
 # reboot (it crash-loops with "Unable to load configuration from path"). Store it under
 # ProgramData and lock the ACL to SYSTEM + Administrators, since it holds the private key.
-$confDir = Join-Path $env:ProgramData "Fleet"
+$confDir = Join-Path $env:ProgramData "Provenance"
 New-Item -ItemType Directory -Path $confDir -Force | Out-Null
-$confPath = Join-Path $confDir "fleet.conf"
+$confPath = Join-Path $confDir "prov.conf"
 Set-Content -Path $confPath -Value $conf -Encoding ascii
 # S-1-5-18 = SYSTEM (the tunnel service account), S-1-5-32-544 = Administrators. SIDs are
 # locale-independent (the account names differ on non-English Windows).
@@ -274,7 +274,7 @@ try { & $wgquick /uninstalltunnelservice fleet 2>$null | Out-Null } catch {}
 & $wgquick /installtunnelservice $confPath
 Start-Sleep -Seconds 2
 
-# 5. Enable Remote Desktop and open the RDP port in Windows Firewall so Fleet can
+# 5. Enable Remote Desktop and open the RDP port in Windows Firewall so Provenance can
 #    broker sessions over the overlay (traffic arrives on the WireGuard interface from
 #    the jump host). Best-effort; enrollment still succeeds if a step fails.
 try {
@@ -285,7 +285,7 @@ try {
   Write-Host "WARN: could not enable Remote Desktop: $($_.Exception.Message)"
 }
 
-# 6. Enable WinRM over HTTPS so Fleet can collect host facts (OS, CPU, memory, uptime)
+# 6. Enable WinRM over HTTPS so Provenance can collect host facts (OS, CPU, memory, uptime)
 #    securely. TLS on the 5986 listener means no plaintext and no AllowUnencrypted; the
 #    traffic also stays inside the WireGuard tunnel. Best-effort: enrollment still
 #    succeeds if this fails (facts just won't populate until WinRM is configured).
@@ -294,22 +294,22 @@ try {
   Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue | Where-Object { $_.Keys -contains "Transport=HTTPS" } | ForEach-Object { Remove-Item -Path ("WSMan:\localhost\Listener\" + $_.Name) -Recurse -Force -ErrorAction SilentlyContinue }
   $winrmCert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation "Cert:\LocalMachine\My" -NotAfter (Get-Date).AddYears(10)
   New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbPrint $winrmCert.Thumbprint -Force | Out-Null
-  New-NetFirewallRule -DisplayName "Fleet WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
-  Write-Host "WinRM HTTPS (5986) configured for Fleet fact collection."
+  New-NetFirewallRule -DisplayName "Provenance WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+  Write-Host "WinRM HTTPS (5986) configured for Provenance fact collection."
 } catch {
   Write-Host "WARN: could not configure WinRM HTTPS listener: $($_.Exception.Message)"
 }
 
-# 7. Print the public key to paste back into Fleet.
+# 7. Print the public key to paste back into Provenance.
 Write-Host ""
-Write-Host "================ Fleet enrollment ================"
+Write-Host "================ Provenance enrollment ================"
 Write-Host "Configured on this host:"
 Write-Host "  - WireGuard tunnel 'fleet' (UDP __LISTENPORT__, managed by WireGuard)"
 Write-Host "  - Remote Desktop + firewall (TCP 3389)"
 Write-Host "  - WinRM HTTPS listener + firewall (TCP 5986)"
-Write-Host "All Fleet traffic reaches this host over the WireGuard interface."
+Write-Host "All Provenance traffic reaches this host over the WireGuard interface."
 Write-Host ""
-Write-Host "Paste this WireGuard PUBLIC KEY back into Fleet:"
+Write-Host "Paste this WireGuard PUBLIC KEY back into Provenance:"
 Write-Host $pub
 Write-Host "=================================================="
 `
@@ -342,7 +342,7 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 	}
 	loginUser := host.SSHUser
 	if loginUser == "" {
-		loginUser = "fleet"
+		loginUser = "prov"
 	}
 
 	job, err := s.store.CreateEnrollmentJob(ctx, host.ID, fmt.Sprintf("%s:%d", mgmtAddr, host.SSHPort), "", actor)
@@ -390,7 +390,7 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 			"%s pins %s to this host's certificate — the jump host was configured when the script was generated",
 			strings.TrimSpace(host.Overlay), wgIP))
 		// Prove the tunnel before touching WireGuard. The operator says the script ran;
-		// this is Fleet checking, over the overlay address specifically, that it worked.
+		// this is Provenance checking, over the overlay address specifically, that it worked.
 		if verr := s.verifyOverlayReachable(ctx, jumpClient, wgIP, host.SSHPort); verr != nil {
 			return fail("verify_overlay_tunnel", fmt.Errorf(
 				"%s tunnel is not carrying traffic: %w — the host keeps its existing transport; "+
@@ -483,13 +483,13 @@ func (s *Service) FinishScriptEnroll(ctx context.Context, sessionID uuid.UUID, h
 func phase(num, label, body, marker, failMsg string) string {
 	check := ""
 	if marker != "" {
-		check = fmt.Sprintf("grep -q %s \"$F\" || { sed 's/^/  /' \"$F\"; echo '[fleet] FAILED: %s'; exit 1; }\n", marker, failMsg)
+		check = fmt.Sprintf("grep -q %s \"$F\" || { sed 's/^/  /' \"$F\"; echo '[prov] FAILED: %s'; exit 1; }\n", marker, failMsg)
 	}
-	return fmt.Sprintf(`echo '[fleet] %s %s'
+	return fmt.Sprintf(`echo '[prov] %s %s'
 F=$(mktemp)
 (
 %s
-) >"$F" 2>&1 || { sed 's/^/  /' "$F"; echo '[fleet] FAILED: %s'; exit 1; }
+) >"$F" 2>&1 || { sed 's/^/  /' "$F"; echo '[prov] FAILED: %s'; exit 1; }
 %s`, num, label, body, failMsg, check)
 }
 
@@ -501,9 +501,9 @@ func (s *Service) bootstrapScript(loginUser, caKeys, wgIP, jumpPub, jumpEndpoint
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Provenance — host bootstrap (no-install enrollment).\n")
-	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/fleet-enroll.sh'\n")
+	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/prov-enroll.sh'\n")
 	b.WriteString("set -e\n")
-	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (run: ssh -t USER@HOST "sudo sh ~/fleet-enroll.sh")'; exit 1; fi` + "\n\n")
+	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[prov] must run as root (run: ssh -t USER@HOST "sudo sh ~/prov-enroll.sh")'; exit 1; fi` + "\n\n")
 
 	b.WriteString(phase("1/4", "installing SSH certificate trust",
 		s.caTrustScript(loginUser, caKeys, hostID), "CA_OK", "CA trust") + "\n")
@@ -511,27 +511,27 @@ func (s *Service) bootstrapScript(loginUser, caKeys, wgIP, jumpPub, jumpEndpoint
 		wgInstallScript, "WG_INSTALLED", "WireGuard install") + "\n")
 
 	// Phase 3 captures the interface output to extract the host public key.
-	b.WriteString(fmt.Sprintf(`echo '[fleet] 3/4 configuring WireGuard interface'
+	b.WriteString(fmt.Sprintf(`echo '[prov] 3/4 configuring WireGuard interface'
 IFOUT=$(mktemp)
 (
 %s
-) >"$IFOUT" 2>&1 || { sed 's/^/  /' "$IFOUT"; echo '[fleet] FAILED: WireGuard interface'; exit 1; }
+) >"$IFOUT" 2>&1 || { sed 's/^/  /' "$IFOUT"; echo '[prov] FAILED: WireGuard interface'; exit 1; }
 HOSTPUB=$(sed -n 's/^HOSTPUB=//p' "$IFOUT")
 WGADDR=$(sed -n 's/^WGADDR=//p' "$IFOUT")
-[ -n "$HOSTPUB" ] || { sed 's/^/  /' "$IFOUT"; echo '[fleet] FAILED: no host public key produced'; exit 1; }
+[ -n "$HOSTPUB" ] || { sed 's/^/  /' "$IFOUT"; echo '[prov] FAILED: no host public key produced'; exit 1; }
 `, s.hostWGScript(wgIP, jumpPub, jumpEndpoint)))
 
 	if krlB64 != "" {
-		b.WriteString(fmt.Sprintf(`echo '[fleet] 4/4 enabling certificate revocation'
+		b.WriteString(fmt.Sprintf(`echo '[prov] 4/4 enabling certificate revocation'
 (
 %s
-) >/dev/null 2>&1 && echo '[fleet] revocation enforced' || echo '[fleet] WARN: revocation not enforced (continuing)'
+) >/dev/null 2>&1 && echo '[prov] revocation enforced' || echo '[prov] WARN: revocation not enforced (continuing)'
 `, s.krlInstallScript(krlB64)))
 	}
 
 	b.WriteString(`
 echo ''
-echo '==================== FLEET TERMINAL ===================='
+echo '==================== PROVENANCE ===================='
 echo "Bootstrap complete. Overlay address: $WGADDR"
 echo ''
 echo 'Paste this HOST PUBLIC KEY into the Finish step in the UI:'
@@ -547,7 +547,7 @@ echo '======================================================='
 // same — CA trust, join the overlay, enforce revocation — but the overlay phase runs a
 // script that already carries the host's client certificate, so nothing has to be read
 // back out of it and the operator has no key to paste: the tunnel authenticates as the
-// identity Fleet just issued. When the host is moving off WireGuard, its interface and
+// identity Provenance just issued. When the host is moving off WireGuard, its interface and
 // boot units are retired first, because both transports claim the same overlay address.
 func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 string, hostID uuid.UUID, overlayName string, hb overlay.HostBringup, retireWG bool) string {
 	steps := 2 // CA trust + overlay
@@ -567,9 +567,9 @@ func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 strin
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Provenance — host bootstrap (no-install enrollment, " + overlayName + " overlay).\n")
 	b.WriteString("# Holds this host's overlay client key: run it, then delete it.\n")
-	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/fleet-enroll.sh'\n")
+	b.WriteString("# Run as root, e.g.:  ssh -t USER@HOST 'sudo sh ~/prov-enroll.sh'\n")
 	b.WriteString("set -e\n")
-	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[fleet] must run as root (run: ssh -t USER@HOST "sudo sh ~/fleet-enroll.sh")'; exit 1; fi` + "\n\n")
+	b.WriteString(`if [ "$(id -u)" != 0 ]; then echo '[prov] must run as root (run: ssh -t USER@HOST "sudo sh ~/prov-enroll.sh")'; exit 1; fi` + "\n\n")
 
 	b.WriteString(phase(num(), "installing SSH certificate trust",
 		s.caTrustScript(loginUser, caKeys, hostID), "CA_OK", "CA trust") + "\n")
@@ -577,7 +577,7 @@ func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 strin
 	// script if the tunnel does not come up, so a failed join leaves WireGuard exactly
 	// as it was and the host stays reachable. The other order — which shipped first —
 	// hands the host's only working transport to a tunnel that may never arrive, with
-	// Fleet not in the loop to notice.
+	// Provenance not in the loop to notice.
 	b.WriteString(phase(num(), "joining the "+overlayName+" overlay",
 		hb.Script, hb.Marker, overlayName+" tunnel") + "\n")
 	if retireWG {
@@ -586,20 +586,20 @@ func (s *Service) certBootstrapScript(loginUser, caKeys, overlayIP, krlB64 strin
 	}
 
 	if krlB64 != "" {
-		b.WriteString(fmt.Sprintf(`echo '[fleet] %s enabling certificate revocation'
+		b.WriteString(fmt.Sprintf(`echo '[prov] %s enabling certificate revocation'
 (
 %s
-) >/dev/null 2>&1 && echo '[fleet] revocation enforced' || echo '[fleet] WARN: revocation not enforced (continuing)'
+) >/dev/null 2>&1 && echo '[prov] revocation enforced' || echo '[prov] WARN: revocation not enforced (continuing)'
 `, num(), s.krlInstallScript(krlB64)))
 	}
 
 	b.WriteString(fmt.Sprintf(`
 echo ''
-echo '==================== FLEET TERMINAL ===================='
+echo '==================== PROVENANCE ===================='
 echo 'Bootstrap complete. Overlay address: %s (%s)'
 echo ''
 echo 'Nothing to paste back — this tunnel authenticates with the'
-echo 'certificate Fleet issued. Click Finish in the UI to verify.'
+echo 'certificate Provenance issued. Click Finish in the UI to verify.'
 echo ''
 echo '======================================================='
 `, overlayIP, overlayName))

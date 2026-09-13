@@ -29,3 +29,19 @@ export async function clearEnrollmentJobs(): Promise<number> {
   const { data } = await api.delete<{ deleted: number }>("/api/v1/enrollment/jobs");
   return data.deleted ?? 0;
 }
+
+export interface LoginAccountMigration {
+  host: string;
+  from: string;
+  to: string;
+  migrated: boolean;
+  steps: string[];
+}
+
+// migrateLoginAccount moves one host onto a different Provenance login account.
+// The backend creates and verifies the new account before removing the old one,
+// so a failure here means the host is still reachable through the account it has.
+export async function migrateLoginAccount(hostId: string, user?: string): Promise<LoginAccountMigration> {
+  const { data } = await api.post<LoginAccountMigration>(`/api/v1/hosts/${hostId}/login-account`, { user: user ?? "" });
+  return data;
+}

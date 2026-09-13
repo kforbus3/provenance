@@ -3,7 +3,7 @@
 The schema is normalized PostgreSQL covering identity, RBAC, hosts, certificates,
 sessions, recordings, approvals, enrollment, and a tamper-evident audit log. It is
 defined by the migrations in `backend/internal/db/migrations/` and applied
-automatically on startup when `FLEET_MIGRATE_ON_START=true` (the default).
+automatically on startup when `PROV_MIGRATE_ON_START=true` (the default).
 
 | Migration | Purpose |
 |-----------|---------|
@@ -291,7 +291,7 @@ Live status, 1:1 with host, updated by the monitor.
 
 ### `host_metrics_history`
 Append-only time series of host metrics (added in `0021`), sampled every
-`FLEET_METRIC_HISTORY_SAMPLE` (5m) and retained `FLEET_METRIC_HISTORY_RETENTION`
+`PROV_METRIC_HISTORY_SAMPLE` (5m) and retained `PROV_METRIC_HISTORY_RETENTION`
 (720h). Powers trend analysis, the disk-runway projection, and the insights
 engine. Index on `(host_id, collected_at DESC)`.
 
@@ -316,7 +316,7 @@ backend. Index: `idx_ca_keys_active(kind, active)`.
 | `kind` | TEXT | CHECK in (`user`,`host`) |
 | `algo` | TEXT | default `ssh-ed25519` |
 | `public_key` | TEXT | authorized_keys form |
-| `private_enc` | BYTEA | encrypted private key (`FLEET_CA_PASSPHRASE`) |
+| `private_enc` | BYTEA | encrypted private key (`PROV_CA_PASSPHRASE`) |
 | `fingerprint` | TEXT | |
 | `active` | BOOLEAN | |
 | `created_at` / `retired_at` | TIMESTAMPTZ | |
@@ -381,7 +381,7 @@ asciicast recordings. Index: `idx_recordings_session`.
 | `id` | UUID PK | |
 | `ssh_session_id` | UUID | FK → ssh_sessions CASCADE |
 | `format` | TEXT | default `asciicast-v2` |
-| `path` | TEXT | on-disk/object-store location (relative paths resolve under `FLEET_RECORDING_DIR`) |
+| `path` | TEXT | on-disk/object-store location (relative paths resolve under `PROV_RECORDING_DIR`) |
 | `size_bytes` | BIGINT | |
 | `duration_ms` | BIGINT | |
 | `sha256` | TEXT | integrity hash |

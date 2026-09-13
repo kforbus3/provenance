@@ -30,7 +30,7 @@ func (s *Store) GetWireGuardSettings(ctx context.Context) (WireGuardSettings, bo
 }
 
 // WireGuardEndpoint returns the configured "host:port" jump endpoint, or "" if
-// unset. Callers fall back to the FLEET_WG_JUMP_ENDPOINT config default.
+// unset. Callers fall back to the PROV_WG_JUMP_ENDPOINT config default.
 func (s *Store) WireGuardEndpoint(ctx context.Context) string {
 	if v, ok := s.GetWireGuardSettings(ctx); ok {
 		return fmt.Sprintf("%s:%d", v.JumpHost, v.JumpPort)

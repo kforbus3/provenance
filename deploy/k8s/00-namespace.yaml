@@ -1,10 +1,10 @@
-# Moorgate — dedicated namespace for all platform resources.
+# Provenance — dedicated namespace for all platform resources.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: fleet-terminal
+  name: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
-    app.kubernetes.io/part-of: fleet-terminal
+    app.kubernetes.io/name: provenance
+    app.kubernetes.io/part-of: provenance
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/warn: restricted

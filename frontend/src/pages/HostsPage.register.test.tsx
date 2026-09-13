@@ -28,7 +28,7 @@ vi.mock("../api/imaging", async () => {
 function host() {
   return {
     id: "h1", hostname: "kiosk-04", description: "", environment: "lab", owner: "ops",
-    sshPort: 22, sshUser: "fleet", tags: [], authMethod: "fleet_cert", protocol: "ssh",
+    sshPort: 22, sshUser: "fleet", tags: [], authMethod: "prov_cert", protocol: "ssh",
     rdpPort: 3389, enrolled: true, createdAt: "", updatedAt: "", address: "10.0.4.21",
     status: { status: "online", sshOk: true, wgOk: true, lastError: "" },
   } as unknown as hostsApi.Host;

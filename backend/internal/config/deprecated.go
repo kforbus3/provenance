@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -42,6 +43,7 @@ var deprecations = []deprecation{}
 // It runs on every start rather than once, because a warning seen only at the
 // moment of upgrade is a warning seen by nobody.
 func warnDeprecated() {
+	warnLegacyEnvPrefix()
 	for _, d := range deprecations {
 		if _, ok := os.LookupEnv(d.Env); !ok {
 			continue
@@ -60,4 +62,30 @@ func (d deprecation) message() string {
 		b.WriteString("; it has no replacement and can be removed")
 	}
 	return b.String()
+}
+
+// warnLegacyEnvPrefix warns about settings still spelled with the pre-Provenance
+// FLEET_ prefix. It runs after the config has been read, so it reports the ones
+// that were actually consulted rather than everything in the environment — a
+// variable left in a .env that nothing reads any more is not the operator's
+// problem to fix.
+//
+// This is a whole-prefix deprecation rather than ~187 entries in `deprecations`,
+// because the mapping is mechanical: only the prefix moved.
+func warnLegacyEnvPrefix() {
+	used := LegacyEnvInUse()
+	if len(used) == 0 {
+		return
+	}
+	old := make([]string, 0, len(used))
+	for k := range used {
+		old = append(old, k)
+	}
+	sort.Strings(old)
+	pairs := make([]string, 0, len(old))
+	for _, k := range old {
+		pairs = append(pairs, k+" -> "+used[k])
+	}
+	slog.Warn("settings are using the pre-Provenance FLEET_ prefix and will stop being read in a future major; rename them to PROV_",
+		"count", len(old), "settings", strings.Join(pairs, ", "))
 }

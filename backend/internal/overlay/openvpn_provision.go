@@ -133,7 +133,7 @@ func hostIsolationError(out string, required bool) error {
 // checkHostBringup turns the host bring-up script's output into a step detail, or an
 // error. It reports the address the host ACTUALLY came up with rather than the one it
 // was meant to get: a mismatch means the ccd pin did not apply (the server handed out
-// a pool address instead), which leaves Fleet dialing an address nothing answers on,
+// a pool address instead), which leaves Provenance dialing an address nothing answers on,
 // and an empty one means there is no tunnel at all however cleanly the script exited.
 func checkHostBringup(out, overlayIP string) (string, error) {
 	got := hostIP(out)
@@ -159,7 +159,7 @@ func checkHostBringup(out, overlayIP string) (string, error) {
 	// enrollment reported success. Nothing said the tunnel was temporary.
 	if strings.Contains(out, "OVPN_HOST_NOT_PERSISTENT") {
 		detail += " — WARNING: the tunnel is running but is NOT enabled at boot " +
-			"(neither openvpn-client@fleet-overlay nor openvpn@fleet-overlay could be " +
+			"(neither openvpn-client@prov-overlay nor openvpn@prov-overlay could be " +
 			"enabled, so it is a bare daemon); this host will lose its overlay on the " +
 			"next reboot"
 	}

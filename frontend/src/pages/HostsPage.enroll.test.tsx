@@ -20,7 +20,7 @@ vi.mock("../api/hosts", async () => {
 const host = {
   id: "670a279b-0115-4c61-ae13-0bcee4efae6c", hostname: "web-01", description: "",
   environment: "production", owner: "ops", sshPort: 22, sshUser: "fleet", tags: [],
-  authMethod: "fleet_cert", protocol: "ssh", rdpPort: 3389, enrolled: false,
+  authMethod: "prov_cert", protocol: "ssh", rdpPort: 3389, enrolled: false,
   createdAt: "", updatedAt: "",
 } as unknown as hostsApi.Host;
 
@@ -45,7 +45,7 @@ describe("EnrollCredsDialog bootstrap commands", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("radio", { name: /SSH agent/ }));
 
-    const cmd = screen.getByText(/fleet-enroll-agent/).textContent ?? "";
+    const cmd = screen.getByText(/prov-enroll-agent/).textContent ?? "";
     expect(cmd).toContain("-token eyJ-session-token");
     expect(cmd).not.toContain("<YOUR_TOKEN>");
     // The host id and bootstrap user come from the dialog, not the operator.
@@ -61,7 +61,7 @@ describe("EnrollCredsDialog bootstrap commands", () => {
     });
     fireEvent.click(screen.getByRole("checkbox", { name: /through the jump host/ }));
 
-    const cmd = screen.getByText(/fleet-enroll-agent/).textContent ?? "";
+    const cmd = screen.getByText(/prov-enroll-agent/).textContent ?? "";
     expect(cmd).toContain("-bootstrap-user opsadmin");
     expect(cmd).toContain("-via-jump");
   });
@@ -97,8 +97,8 @@ describe("EnrollCredsDialog bootstrap commands", () => {
     // "sudo: a terminal is required to read the password" on hosts without
     // NOPASSWD, so the script must land first and run over a second `ssh -t`.
     expect(cmd).not.toMatch(/\|\s*ssh \S+ sudo/);
-    expect(cmd).toContain("| ssh opsadmin@web-01 'cat > ~/fleet-enroll.sh'");
-    expect(cmd).toContain("&& ssh -t opsadmin@web-01 'sudo sh ~/fleet-enroll.sh");
+    expect(cmd).toContain("| ssh opsadmin@web-01 'cat > ~/prov-enroll.sh'");
+    expect(cmd).toContain("&& ssh -t opsadmin@web-01 'sudo sh ~/prov-enroll.sh");
   });
 });
 

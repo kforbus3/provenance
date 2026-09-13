@@ -1,12 +1,12 @@
-// Package overlay provisions Fleet's host-reachability transports. WireGuard is
+// Package overlay provisions Provenance's host-reachability transports. WireGuard is
 // handled inline by the enrollment package; the certificate-authenticated overlays
 // (OpenVPN) implement the Overlay interface here so enrollment can treat them
 // uniformly and select one per host. All cert overlays share the X.509 overlay PKI.
 //
 // A host's assigned address lives in the one wg_address column whichever transport
 // assigned it, so the SSH gateway and every other consumer stay overlay-agnostic —
-// but the POOL it is drawn from is per-overlay (FLEET_OVPN_SUBNET vs
-// FLEET_WG_SUBNET). Both transports terminate on the same jump host and each claims
+// but the POOL it is drawn from is per-overlay (PROV_OVPN_SUBNET vs
+// PROV_WG_SUBNET). Both transports terminate on the same jump host and each claims
 // its own address on its own interface, so a shared subnet would give that host two
 // connected routes for one prefix and strand every host behind the losing one.
 // Switching a host between transports therefore renumbers it.
@@ -29,7 +29,7 @@ type RunFunc func(script string) (string, error)
 // scripts and issue certs from the shared overlay PKI; the enrollment layer runs the
 // scripts over SSH and owns address assignment.
 type Overlay interface {
-	// Name is the FLEET_OVERLAY value this overlay answers to ("openvpn").
+	// Name is the PROV_OVERLAY value this overlay answers to ("openvpn").
 	Name() string
 
 	// EnsureServer idempotently provisions and starts the VPN server on the jump host
@@ -49,7 +49,7 @@ type Overlay interface {
 	// PrepareHost is ProvisionHost without the host half: it issues the client
 	// certificate and pins the address on the jump server, then RETURNS the privileged
 	// script that brings the tunnel up on the host instead of running it. The
-	// no-install enrollment flow needs this, because there Fleet never connects to the
+	// no-install enrollment flow needs this, because there Provenance never connects to the
 	// host at all — the operator pipes the script over their own ssh and runs it.
 	// ProvisionHost is PrepareHost plus hostRun.
 	PrepareHost(ctx context.Context, hostID uuid.UUID, overlayIP, endpoint string, jumpRun RunFunc) (HostBringup, error)
@@ -70,7 +70,7 @@ type Overlay interface {
 	// a tunnel that quietly reconnects to an overlay the host has left.
 	//
 	// It deliberately KEEPS the client's key material, because a host switched to
-	// another transport and back re-uses the certificate Fleet already issued it. Use
+	// another transport and back re-uses the certificate Provenance already issued it. Use
 	// PurgeHostScript when the host is leaving the fleet.
 	RetireHostScript() HostBringup
 

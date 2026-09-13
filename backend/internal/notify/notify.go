@@ -1,5 +1,5 @@
 // Package notify delivers outbound alerts (email / webhook) for significant
-// Fleet events: host offline/recovered, pending approvals, scan findings, and
+// Provenance events: host offline/recovered, pending approvals, scan findings, and
 // failed playbook runs. It is configured entirely through the `notifications`
 // setting and is off until an operator enables a channel. Delivery is
 // best-effort: a failure is logged and never blocks the action that triggered

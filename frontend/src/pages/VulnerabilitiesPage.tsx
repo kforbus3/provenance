@@ -94,7 +94,7 @@ export function VulnerabilitiesPage() {
         </Alert>
       )}
 
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Fleet roll-up (latest scan per host)</Typography>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Provenance roll-up (latest scan per host)</Typography>
       <FleetHeadline scans={rollup} />
       <Paper variant="outlined" sx={{ overflowX: "auto" }}>
         <Table size="small">

@@ -23,7 +23,7 @@ func TestOverlayPlanDefaults(t *testing.T) {
 			wantSubnet: "10.101.0.0/24", wantJump: "10.101.0.1",
 		},
 		{
-			// An existing FIPS fleet already holds addresses out of FLEET_WG_SUBNET.
+			// An existing FIPS fleet already holds addresses out of PROV_WG_SUBNET.
 			// Moving the pool underneath it would invalidate every enrolled address at
 			// once, and there is no WireGuard hub for it to collide with.
 			name:    "openvpn-only deployment keeps its existing pool",
@@ -84,7 +84,7 @@ func TestOverlayPlanValidation(t *testing.T) {
 		{
 			name:    "jump address outside its own subnet is refused",
 			cfg:     Config{WGSubnet: "10.100.0.0/24", WGJumpIP: "10.100.0.1", OVPNSubnet: "10.101.0.0/24", OVPNJumpIP: "10.99.0.1"},
-			wantErr: "inside FLEET_OVPN_SUBNET",
+			wantErr: "inside PROV_OVPN_SUBNET",
 		},
 		{
 			name:    "unparseable subnet is refused",

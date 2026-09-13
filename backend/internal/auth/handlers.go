@@ -35,7 +35,7 @@ func (h *Handler) Mount(r chi.Router) {
 		gr.Get("/auth/oidc/status", h.oidcStatus)
 		gr.Get("/auth/oidc/login", h.oidcLogin)
 		gr.Get("/auth/oidc/callback", h.oidcCallback)
-		// RP-initiated logout: clears the Fleet session and, when the IdP advertises
+		// RP-initiated logout: clears the Provenance session and, when the IdP advertises
 		// an end_session_endpoint, bounces the browser through it.
 		gr.Get("/auth/oidc/logout", h.oidcLogout)
 		// SAML SSO (public: SP-initiated redirect, IdP-initiated ACS POST, SP metadata,
@@ -341,7 +341,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The session id is conveyed via a companion cookie set at login.
-	sc, err := r.Cookie("fleet_sid")
+	sc, err := r.Cookie("prov_sid")
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "no session")
 		return
@@ -543,7 +543,7 @@ func (h *Handler) setAuthCookies(w http.ResponseWriter, t *Tokens) {
 	})
 	//nolint:gosec // Secure is deployment-controlled (cfg.CookieSecure); disabled only for local HTTP dev. HttpOnly+SameSiteStrict are set.
 	http.SetCookie(w, &http.Cookie{
-		Name: "fleet_sid", Value: t.Session.ID.String(), Path: "/api/v1/auth", Domain: domain,
+		Name: "prov_sid", Value: t.Session.ID.String(), Path: "/api/v1/auth", Domain: domain,
 		HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
 		Expires: time.Now().Add(h.svc.cfg.RefreshTokenTTL),
 	})
@@ -560,7 +560,7 @@ func (h *Handler) clearAuthCookies(w http.ResponseWriter) {
 	secure := h.svc.cfg.CookieSecure
 	domain := h.svc.cfg.CookieDomain
 	for _, c := range []struct{ name, path string }{
-		{RefreshCookie, "/api/v1/auth"}, {"fleet_sid", "/api/v1/auth"}, {CSRFCookie, "/"},
+		{RefreshCookie, "/api/v1/auth"}, {"prov_sid", "/api/v1/auth"}, {CSRFCookie, "/"},
 	} {
 		//nolint:gosec // Secure is deployment-controlled (cfg.CookieSecure); this is a deletion cookie (MaxAge<0) carrying matching flags.
 		http.SetCookie(w, &http.Cookie{

@@ -53,6 +53,7 @@ import {
 } from "@mui/material";
 import { WgDownChip, WgOnChip, overlayLabel, wgDegraded, wgHealthy } from "../components/WgStatus";
 import { saveBlob } from "../lib/download";
+import { migrateLoginAccount } from "../api/enrollmentApi";
 
 const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> = {
   online: "success",
@@ -63,7 +64,7 @@ const STATUS_COLOR: Record<string, "success" | "error" | "warning" | "default"> 
 const EMPTY_FORM: HostInput = {
   hostname: "", description: "", environment: "", owner: "",
   address: "", wgAddress: "", sshPort: 22, sshUser: "", tags: [],
-  authMethod: "fleet_cert", credentialId: null,
+  authMethod: "prov_cert", credentialId: null,
   protocol: "ssh", rdpPort: 3389, rdpOptions: {}, options: {},
 };
 
@@ -110,7 +111,7 @@ function SupportBundleButton({ host }: { host: Host }) {
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
-type BulkAction = "scan" | "refresh" | "maintenance" | "tags";
+type BulkAction = "scan" | "refresh" | "maintenance" | "tags" | "migrateAccount";
 
 interface ToolbarProps {
   selectedCount: number;
@@ -142,6 +143,7 @@ function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh, onBulk }: Too
             <MenuItem onClick={() => pick("refresh")}>Refresh facts</MenuItem>
             <MenuItem onClick={() => pick("maintenance")}>Maintenance…</MenuItem>
             <MenuItem onClick={() => pick("tags")}>Edit tags…</MenuItem>
+            <MenuItem onClick={() => pick("migrateAccount")}>Migrate login account…</MenuItem>
           </Menu>
           <Button
             color="error"
@@ -170,7 +172,7 @@ const hostToForm = (h: Host): HostInput => ({
   hostname: h.hostname, description: h.description ?? "", environment: h.environment ?? "",
   owner: h.owner ?? "", address: h.address ?? "", wgAddress: h.wgAddress ?? "",
   sshPort: h.sshPort || 22, sshUser: h.sshUser ?? "", tags: h.tags ?? [],
-  authMethod: h.authMethod ?? "fleet_cert", credentialId: h.credentialId ?? null,
+  authMethod: h.authMethod ?? "prov_cert", credentialId: h.credentialId ?? null,
   protocol: h.protocol ?? "ssh", rdpPort: h.rdpPort || 3389, rdpOptions: h.rdpOptions ?? {},
   options: h.options ?? {},
 });
@@ -188,10 +190,10 @@ interface NewHostDialogProps {
 
 // DeleteHostsDialog confirms removal and offers the opt-in host teardown.
 //
-// Teardown is unchecked by default and deliberately so: it removes Fleet's two
-// accounts and its SSH trust from the machine, so on a host where Fleet was the only
+// Teardown is unchecked by default and deliberately so: it removes Provenance's two
+// accounts and its SSH trust from the machine, so on a host where Provenance was the only
 // administrative access it is a lockout. Deleting without it leaves the host exactly
-// as it is — which is the right default for taking a host out of Fleet's inventory,
+// as it is — which is the right default for taking a host out of Provenance's inventory,
 // and the wrong one for decommissioning it, hence the choice.
 function DeleteHostsDialog({
   hosts, onClose, onConfirm, submitting,
@@ -217,8 +219,8 @@ function DeleteHostsDialog({
       <DialogContent>
         <Typography variant="body2" sx={{ mb: 2 }}>
           {hosts.length === 1
-            ? "This removes the host from Fleet — its groups, grants, scans and history."
-            : `This removes ${names} from Fleet — their groups, grants, scans and history.`}
+            ? "This removes the host from Provenance — its groups, grants, scans and history."
+            : `This removes ${names} from Provenance — their groups, grants, scans and history.`}
         </Typography>
         {enrolled.length > 0 && (
           <>
@@ -230,25 +232,25 @@ function DeleteHostsDialog({
                   disabled={submitting}
                 />
               }
-              label="Also remove Fleet's accounts and SSH trust from the host"
+              label="Also remove Provenance's accounts and SSH trust from the host"
             />
             {teardown ? (
               <Alert severity="warning" sx={{ mt: 1 }}>
-                The host will lose the Fleet account with NOPASSWD sudo, the login-only
+                The host will lose the Provenance account with NOPASSWD sudo, the login-only
                 account, the trusted CA, the sshd drop-in, and its overlay client and key
                 material. On a certificate overlay the client certificate is also revoked, so
-                a copy taken off the host beforehand cannot reconnect. <strong>If Fleet is the
+                a copy taken off the host beforehand cannot reconnect. <strong>If Provenance is the
                 only administrative access to {enrolled.length === 1 ? "this host" : "these hosts"},
                 this locks you out.</strong> Your own <code>authorized_keys</code> and any sshd
-                configuration Fleet did not write are left alone. A host Fleet cannot reach
+                configuration Provenance did not write are left alone. A host Provenance cannot reach
                 right now is skipped and reported — clean it up with{" "}
-                <code>scripts/fleet-unenroll.sh</code> on the machine.
+                <code>scripts/prov-unenroll.sh</code> on the machine.
               </Alert>
             ) : (
               <Alert severity="info" sx={{ mt: 1 }}>
-                Leaving this unchecked keeps the host provisioned: Fleet's accounts, its
+                Leaving this unchecked keeps the host provisioned: Provenance's accounts, its
                 NOPASSWD sudo grant and the trusted CA stay on the machine after it is
-                removed from Fleet. Re-enrolling later reuses them.
+                removed from Provenance. Re-enrolling later reuses them.
               </Alert>
             )}
           </>
@@ -361,7 +363,7 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
                 ...f,
                 protocol: e.target.value,
                 // RDP requires a vaulted password credential.
-                authMethod: e.target.value === "rdp" && (f.authMethod ?? "fleet_cert") === "fleet_cert"
+                authMethod: e.target.value === "rdp" && (f.authMethod ?? "prov_cert") === "prov_cert"
                   ? "vault_password" : f.authMethod,
               }))}>
               <MenuItem value="ssh">SSH (terminal)</MenuItem>
@@ -374,16 +376,16 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
               />
             )}
           </Stack>
-          <TextField select label="Authentication" value={form.authMethod ?? "fleet_cert"} fullWidth
+          <TextField select label="Authentication" value={form.authMethod ?? "prov_cert"} fullWidth
             helperText={form.protocol === "rdp"
               ? "RDP is brokered with a vaulted password credential — the operator never sees it"
-              : "How Fleet authenticates to this host"}
-            onChange={(e) => setForm((f) => ({ ...f, authMethod: e.target.value, credentialId: e.target.value === "fleet_cert" ? null : f.credentialId }))}>
-            {form.protocol !== "rdp" && <MenuItem value="fleet_cert">Fleet certificate (default)</MenuItem>}
+              : "How Provenance authenticates to this host"}
+            onChange={(e) => setForm((f) => ({ ...f, authMethod: e.target.value, credentialId: e.target.value === "prov_cert" ? null : f.credentialId }))}>
+            {form.protocol !== "rdp" && <MenuItem value="prov_cert">Provenance certificate (default)</MenuItem>}
             <MenuItem value="vault_password">Vault credential — password</MenuItem>
             {form.protocol !== "rdp" && <MenuItem value="vault_ssh_key">Vault credential — SSH key</MenuItem>}
           </TextField>
-          {form.authMethod && form.authMethod !== "fleet_cert" && (
+          {form.authMethod && form.authMethod !== "prov_cert" && (
             <TextField select label="Credential" value={form.credentialId ?? ""} fullWidth
               helperText="Injected at connect time — the operator never sees it"
               onChange={(e) => setForm((f) => ({ ...f, credentialId: e.target.value }))}>
@@ -462,7 +464,7 @@ function NewHostDialog({ open, editHost, onClose, onSubmit, submitting }: NewHos
               <FormControlLabel
                 control={<Checkbox checked={form.rdpOptions?.enableDrive ?? false}
                   onChange={(e) => setForm((f) => ({ ...f, rdpOptions: { ...f.rdpOptions, enableDrive: e.target.checked } }))} />}
-                label="Enable drive (mounts a Fleet drive in the desktop)" />
+                label="Enable drive (mounts a Provenance drive in the desktop)" />
               {form.rdpOptions?.enableDrive && (
                 <Stack direction="row" spacing={2} sx={{ pl: 4 }}>
                   <FormControlLabel
@@ -564,11 +566,54 @@ export function HostsPage() {
     onSuccess: (n) => setBulkMsg(`Queued a facts refresh on ${n} host(s)`),
     onError: () => setBulkMsg("Bulk refresh failed"),
   });
+  // Moving hosts onto a different Provenance login account. Sequential, not
+  // parallel: each host's migration opens SSH sessions through the jump host and
+  // reloads sshd, and doing fifteen of those at once turns one bad host into a
+  // jump-host pile-up. Each host reports its own outcome, so one failure does not
+  // hide the others' results.
+  const bulkMigrateAccountMut = useMutation({
+    mutationFn: async () => {
+      const results: { host: string; ok: boolean; detail: string }[] = [];
+      for (const id of selectedIds) {
+        try {
+          const r = await migrateLoginAccount(id);
+          results.push({
+            host: r.host,
+            ok: true,
+            detail: r.migrated ? `${r.from} → ${r.to}` : "already migrated",
+          });
+        } catch (err) {
+          const e = err as { response?: { data?: { error?: string } } };
+          const host = data?.hosts?.find((h) => h.id === id)?.hostname ?? id;
+          results.push({ host, ok: false, detail: e.response?.data?.error ?? "failed" });
+        }
+      }
+      return results;
+    },
+    onSuccess: (results) => {
+      const failed = results.filter((r) => !r.ok);
+      void qc.invalidateQueries({ queryKey: ["hosts"] });
+      if (failed.length === 0) {
+        setBulkMsg(`Migrated ${results.length} host(s); each one still reachable`);
+        return;
+      }
+      // Name the hosts that did not move. They are unchanged and still reachable
+      // on their existing account — the migration removes nothing until the new
+      // account has been proven to work.
+      setBulkMsg(
+        `${results.length - failed.length} migrated, ${failed.length} unchanged: ` +
+          failed.map((r) => `${r.host} (${r.detail})`).join("; "),
+      );
+    },
+    onError: () => setBulkMsg("Login-account migration failed"),
+  });
+
   const onBulk = (action: BulkAction) => {
     if (action === "scan") bulkScanMut.mutate();
     else if (action === "refresh") bulkRefreshMut.mutate();
     else if (action === "maintenance") setBulkMaintOpen(true);
     else if (action === "tags") setBulkTagsOpen(true);
+    else if (action === "migrateAccount") bulkMigrateAccountMut.mutate();
   };
 
   const createMut = useMutation({
@@ -909,9 +954,9 @@ export function HostsPage() {
           <DialogTitle>Deleted, but teardown did not run everywhere</DialogTitle>
           <DialogContent>
             <Alert severity="warning" sx={{ mb: 2 }}>
-              These hosts were removed from Fleet, but part of the teardown did not complete.
-              A host Fleet could not reach still carries the Fleet account with NOPASSWD sudo —
-              run <code>scripts/fleet-unenroll.sh</code> on the machine. A host whose overlay
+              These hosts were removed from Provenance, but part of the teardown did not complete.
+              A host Provenance could not reach still carries the Provenance account with NOPASSWD sudo —
+              run <code>scripts/prov-unenroll.sh</code> on the machine. A host whose overlay
               peer could not be retired can still reach the jump host over its tunnel — remove
               the peer there, or re-run the delete once the jump host is reachable.
             </Alert>
@@ -1269,7 +1314,7 @@ function ScanRow({ scan, token, onView, onRemediate }: {
 
 // RemediateDialog lists a scan's failed rules, lets an admin select which to fix,
 // preview the exact bash, and apply (with an extra confirm for rules that could
-// cut off Fleet's own access). It then polls the run and shows the re-scan score.
+// cut off Provenance's own access). It then polls the run and shows the re-scan score.
 function RemediateDialog({ scan, onClose, onApplied }: {
   scan: HostScan | null; onClose: () => void; onApplied: () => void;
 }) {
@@ -1326,12 +1371,12 @@ function RemediateDialog({ scan, onClose, onApplied }: {
       <DialogContent dividers>
         <Alert severity="warning" sx={{ mb: 2 }}>
           Remediation <b>changes this host's configuration</b>. Rules marked <b>⚠ access-impacting</b>
-          (SSH, firewall, account lockout) can cut off Fleet's own access — review the preview and
+          (SSH, firewall, account lockout) can cut off Provenance's own access — review the preview and
           apply with care.
         </Alert>
         {controlPlane && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            This is a <b>Fleet control-plane host</b>. Hardening it can lock Fleet out of the entire
+            This is a <b>Provenance control-plane host</b>. Hardening it can lock Provenance out of the entire
             fleet — for example, an <code>ip_forward</code> or <code>rp_filter</code> sysctl can break
             the container/WireGuard networking that serves this UI. Only proceed if you have out-of-band
             (console) access to recover.
@@ -1354,13 +1399,13 @@ function RemediateDialog({ scan, onClose, onApplied }: {
         {anyImpacting && !run && (
           <FormControlLabel
             control={<Checkbox checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />}
-            label="I understand the selected access-impacting rules may cut off Fleet's access to this host."
+            label="I understand the selected access-impacting rules may cut off Provenance's access to this host."
           />
         )}
         {controlPlane && !run && (
           <FormControlLabel
             control={<Checkbox checked={confirmCP} onChange={(e) => setConfirmCP(e.target.checked)} />}
-            label="I understand this is a Fleet control-plane host and remediating it may lock Fleet out of the fleet."
+            label="I understand this is a Provenance control-plane host and remediating it may lock Provenance out of the fleet."
           />
         )}
 
@@ -1418,7 +1463,7 @@ function FindingRow({ f, checked, onToggle }: { f: ScanFinding; checked: boolean
     <Stack direction="row" alignItems="center" spacing={1}>
       <Checkbox size="small" checked={checked} onChange={onToggle} sx={{ p: 0.5 }} />
       {f.severity && <Chip size="small" label={f.severity} color={sevColor as "error" | "warning" | "default"} variant="outlined" />}
-      {f.accessImpacting && <Tooltip title="May cut off Fleet's access (SSH/firewall/lockout)"><Chip size="small" color="warning" label="⚠ access" /></Tooltip>}
+      {f.accessImpacting && <Tooltip title="May cut off Provenance's access (SSH/firewall/lockout)"><Chip size="small" color="warning" label="⚠ access" /></Tooltip>}
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="body2" noWrap>{f.title}</Typography>
         <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>{f.ruleId}</Typography>
@@ -2061,7 +2106,7 @@ function HostAccessDialog({ host, onClose }: { host: Host | null; onClose: () =>
 
 // EnrollCredsDialog collects how to reach the host for the initial bootstrap:
 // an SSH password (installs CA trust + WireGuard on a brand-new host), or the
-// session certificate when the host already trusts the Fleet CA.
+// session certificate when the host already trusts the Provenance CA.
 export function EnrollCredsDialog({
   host, onClose, onSubmit, onPipeFinish,
 }: {
@@ -2148,13 +2193,13 @@ export function EnrollCredsDialog({
   const pipeCommand =
     `curl -fsSL -H "Authorization: Bearer ${token ?? "<YOUR_TOKEN>"}" \\\n` +
     `  "${scriptUrl}" \\\n` +
-    `  | ssh ${sshTarget || "<user@host>"} 'cat > ~/fleet-enroll.sh' \\\n` +
-    `  && ssh -t ${sshTarget || "<user@host>"} 'sudo sh ~/fleet-enroll.sh; rm -f ~/fleet-enroll.sh'`;
+    `  | ssh ${sshTarget || "<user@host>"} 'cat > ~/prov-enroll.sh' \\\n` +
+    `  && ssh -t ${sshTarget || "<user@host>"} 'sudo sh ~/prov-enroll.sh; rm -f ~/prov-enroll.sh'`;
   // SSH-agent bridge command, filled in so it's copy-paste runnable. The bridge
   // authenticates the WebSocket with the live *session* token — a flt_
   // service-account token can't open that socket (it isn't a JWT).
   const agentCommand =
-    `fleet-enroll-agent \\\n` +
+    `prov-enroll-agent \\\n` +
     `  -url ${window.location.origin} \\\n` +
     `  -host ${host?.id ?? "<host-id>"} \\\n` +
     `  -token ${token ?? "<YOUR_TOKEN>"} \\\n` +
@@ -2166,7 +2211,7 @@ export function EnrollCredsDialog({
     const res = await fetch(scriptUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
     const text = await res.text();
     saveBlob(new Blob([text], { type: "text/plain" }),
-      `fleet-enroll-${host?.hostname ?? "host"}.${ext}`);
+      `prov-enroll-${host?.hostname ?? "host"}.${ext}`);
   };
 
   // Windows/RDP hosts join the overlay via a PowerShell WireGuard script (dial-out),
@@ -2193,7 +2238,7 @@ export function EnrollCredsDialog({
               </Button>
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
                 On {host.hostname}: open an <b>elevated PowerShell</b> and run the downloaded
-                <code> fleet-enroll-{host.hostname}.ps1</code> (you may need
+                <code> prov-enroll-{host.hostname}.ps1</code> (you may need
                 <code> Set-ExecutionPolicy -Scope Process Bypass</code> first). It installs
                 WireGuard, brings up the tunnel, and prints a public key.
               </Typography>
@@ -2245,7 +2290,7 @@ export function EnrollCredsDialog({
             />
             <FormControlLabel
               value="trusted" control={<Radio />}
-              label="Host already trusts the Fleet CA (re-provision only)"
+              label="Host already trusts the Provenance CA (re-provision only)"
             />
           </RadioGroup>
         </FormControl>
@@ -2343,8 +2388,8 @@ export function EnrollCredsDialog({
                 </Alert>
                 <Typography variant="body2" color="text.secondary">
                   <b>Step 2:</b> nothing to paste back — the tunnel authenticates with
-                  the certificate Fleet issued, and the jump host was configured when
-                  you fetched the script. Once it has run, finish here and Fleet
+                  the certificate Provenance issued, and the jump host was configured when
+                  you fetched the script. Once it has run, finish here and Provenance
                   verifies certificate login over the new tunnel.
                 </Typography>
               </>
@@ -2352,7 +2397,7 @@ export function EnrollCredsDialog({
               <>
                 <Typography variant="body2" color="text.secondary">
                   <b>Step 2:</b> the script prints a <b>host public key</b> at the end.
-                  Paste it here and finish — Fleet adds the jump-host peer and verifies
+                  Paste it here and finish — Provenance adds the jump-host peer and verifies
                   certificate login.
                 </Typography>
                 <TextField
@@ -2400,7 +2445,7 @@ export function EnrollCredsDialog({
         />
         {skipWireGuard && (
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4, mb: 1 }}>
-            For hosts on the jump host's LAN (or the host running Fleet itself). No overlay is set up;
+            For hosts on the jump host's LAN (or the host running Provenance itself). No overlay is set up;
             the host is reached at its management address through the jump host.
           </Typography>
         )}
@@ -2409,7 +2454,7 @@ export function EnrollCredsDialog({
           label="VPN overlay" value={overlay}
           onChange={(e) => setOverlay(e.target.value as "" | "wireguard" | "openvpn")}
           disabled={skipWireGuard}
-          helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Switching an enrolled host between them is just a re-enrollment — Fleet renumbers it and retires the transport it leaves."
+          helperText="Transport the host uses to reach the jump host. OpenVPN is the FIPS-approved (certificate-authenticated) overlay; WireGuard is the default. Switching an enrolled host between them is just a re-enrollment — Provenance renumbers it and retires the transport it leaves."
         >
           <MenuItem value="">
             Deployment default ({host?.overlay || nextWG?.overlay || "wireguard"})

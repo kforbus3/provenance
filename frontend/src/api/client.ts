@@ -34,17 +34,17 @@ export function setAccessToken(token: string | null) {
 }
 
 // Multi-tenancy: the tenant a provider admin has switched INTO. When set, it is sent as
-// X-Fleet-Tenant so the backend scopes the request to that customer tenant. null = the
+// X-Prov-Tenant so the backend scopes the request to that customer tenant. null = the
 // caller's own tenant. Persisted so the selection survives a reload.
 let activeTenant: string | null = (() => {
-  try { return localStorage.getItem("fleet.activeTenant"); } catch { return null; }
+  try { return localStorage.getItem("prov.activeTenant"); } catch { return null; }
 })();
 
 export function setActiveTenant(id: string | null) {
   activeTenant = id;
   try {
-    if (id) localStorage.setItem("fleet.activeTenant", id);
-    else localStorage.removeItem("fleet.activeTenant");
+    if (id) localStorage.setItem("prov.activeTenant", id);
+    else localStorage.removeItem("prov.activeTenant");
   } catch { /* storage unavailable */ }
 }
 
@@ -63,7 +63,7 @@ export function getAccessToken(): string | null {
 }
 
 // readCookie returns a non-HttpOnly cookie value, or null. Used for the CSRF
-// double-submit token, which the backend sets as a JS-readable `fleet_csrf`
+// double-submit token, which the backend sets as a JS-readable `prov_csrf`
 // cookie alongside the HttpOnly session cookie.
 function readCookie(name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -77,14 +77,14 @@ api.interceptors.request.use((cfg) => {
   } else {
     // Cookie-authenticated requests (e.g. /auth/refresh) carry no bearer token, so
     // the backend's CSRF middleware requires the double-submit token: echo the
-    // fleet_csrf cookie back in the X-CSRF-Token header.
-    const csrf = readCookie("fleet_csrf");
+    // prov_csrf cookie back in the X-CSRF-Token header.
+    const csrf = readCookie("prov_csrf");
     if (csrf) {
       cfg.headers["X-CSRF-Token"] = csrf;
     }
   }
   if (activeTenant) {
-    cfg.headers["X-Fleet-Tenant"] = activeTenant;
+    cfg.headers["X-Prov-Tenant"] = activeTenant;
   }
   // When a federation site is selected, transparently route API calls to it.
   if (cfg.url) {

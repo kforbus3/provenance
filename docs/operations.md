@@ -44,7 +44,7 @@ SELECT k.host, k.first_seen::date
  ORDER BY k.host;
 ```
 
-`jumphost` is excluded deliberately: it is dialled by `FLEET_JUMP_HOST` on every
+`jumphost` is excluded deliberately: it is dialled by `PROV_JUMP_HOST` on every
 connection and is not a managed host, so it has no row in `hosts` and its pin is
 live.
 
@@ -56,11 +56,11 @@ answers. Delete with the same `WHERE` clause once you are satisfied.
 
 ## Upgrading Provenance (in-UI)
 
-Provenance upgrades itself from a single signed **`.fleetup`** bundle — no SSH, no
+Provenance upgrades itself from a single signed **`.provup`** bundle — no SSH, no
 `docker compose` — under **Settings → Maintenance → Updates**. Upload a bundle (or, with a
 release channel configured, click **Check for updates**), review its manifest (version,
 additive vs. breaking migrations, components), and **Install**. A privileged
-`fleet-updater` sidecar — the only component with Docker-socket access — independently
+`prov-updater` sidecar — the only component with Docker-socket access — independently
 re-verifies the bundle's Ed25519 signature against the trusted release key, snapshots the
 DB, loads the images, recreates each component, health-gates the backend, and **rolls back
 automatically** if the new version doesn't come up. On a cluster, an additive release rolls
@@ -69,14 +69,14 @@ one replica at a time; a breaking one replaces them together (a brief window).
 A bundle can update **every** component, including the two that used to need a host-side
 redeploy:
 
-- **The updater itself.** A bundle may include the `fleet-updater` component. Because the
+- **The updater itself.** A bundle may include the `prov-updater` component. Because the
   updater can't recreate its own container inline (that would kill the in-flight upgrade),
   it applies everything else first, records success, then hands its own replacement to a
   short-lived detached helper. The upgrade is already "done" from your side; the updater
   refreshes in the background.
 - **Config / `.env`.** A signed manifest can declare **additive** environment keys
   (`configAdditions`) — new settings with defaults, or generated secrets like
-  `FLEET_UPDATER_TOKEN`. The updater merges them into your `.env` before recreating
+  `PROV_UPDATER_TOKEN`. The updater merges them into your `.env` before recreating
   containers. It is strictly additive: a key you already set is never overwritten.
 
 So in practice every release installs from a package. The only thing still done by hand is
@@ -87,13 +87,13 @@ trust key). See [CHANGELOG](CHANGELOG.md) for the in-UI upgrade epic (v0.61.0–
 
 ```
 # one-time: generate an offline signing keypair; keep the private key secret
-fleetctl release keygen                     # prints the PUBLIC key -> FLEET_RELEASE_TRUST_KEYS
+provctl release keygen                     # prints the PUBLIC key -> PROV_RELEASE_TRUST_KEYS
 
-# per release: build + sign. Include fleet-updater only when it changed; declare any new config.
+# per release: build + sign. Include prov-updater only when it changed; declare any new config.
 make bundle BUNDLE_VERSION=0.68.0 BUNDLE_FROM=0.67.0 \
-  BUNDLE_COMPONENTS=backend,frontend,fleet-updater \
-  BUNDLE_KEY=~/fleet-release/release.key
-# fleetctl release build … --config-secret FLEET_UPDATER_TOKEN --config-add FLEET_X=default
+  BUNDLE_COMPONENTS=backend,frontend,prov-updater \
+  BUNDLE_KEY=~/prov-release/release.key
+# provctl release build … --config-secret PROV_UPDATER_TOKEN --config-add PROV_X=default
 ```
 
 `BUNDLE_FROM` sets the minimum running version the bundle may upgrade from; migration
@@ -113,7 +113,7 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
    [Host Enrollment Guide](./host-enrollment-guide.md)):
    - **SSH password** — brand-new/existing host with no prior setup (root or a sudoer + password).
    - **SSH private key** — host with password auth disabled; paste a key already in `authorized_keys`.
-   - **SSH agent** — run the `fleet-enroll-agent` bridge from your laptop; the key never leaves it.
+   - **SSH agent** — run the `prov-enroll-agent` bridge from your laptop; the key never leaves it.
    - **No install (ssh-pipe)** — run a copyable command in your own terminal (it sends the script
      over your ssh, then runs it with `ssh -t … sudo sh` so sudo can prompt), then paste the printed
      host public key into the Finish step. No install, no key upload. Under a certificate overlay
@@ -122,7 +122,7 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
    The password / pasted key is used once and never stored.
 3. Enrollment, over SSH:
    - reads the jump host's WireGuard key,
-   - (password bootstrap) installs `/etc/ssh/fleet_ca.pub`, the login user + sudo + principal
+   - (password bootstrap) installs `/etc/ssh/prov_ca.pub`, the login user + sudo + principal
      mapping, and the sshd drop-in, then reloads sshd,
    - installs WireGuard tooling if missing (apt/dnf/yum/apk),
    - generates the host's WireGuard keypair **on the host** (private key never leaves it),
@@ -132,8 +132,8 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
    - **verifies per-user certificate login** through the jump host.
    A dialog streams each step and shows the assigned overlay address.
 
-> WireGuard address pool and endpoints are configured via `FLEET_WG_SUBNET`,
-> `FLEET_WG_JUMP_IP`, `FLEET_WG_JUMP_ENDPOINT`, and `FLEET_WG_PORT`.
+> WireGuard address pool and endpoints are configured via `PROV_WG_SUBNET`,
+> `PROV_WG_JUMP_IP`, `PROV_WG_JUMP_ENDPOINT`, and `PROV_WG_PORT`.
 
 ## Granting host access
 
@@ -307,7 +307,7 @@ secret** (stored encrypted), and — usually leaving the defaults — the scopes
 (`openid`/`profile`/`email`) and username/email/groups claims
 (`preferred_username`/`email`/`groups`). Set a **default role** for new users,
 optionally turn on **auto-provision**, add **group → role mappings** (one
-`idpGroup=FleetRole` per line), and set the **button text**. In your IdP, set the
+`idpGroup=ProvRole` per line), and set the **button text**. In your IdP, set the
 redirect/callback URL to **`<PublicURL>/api/v1/auth/oidc/callback`**. Once enabled,
 the login page shows a **"Sign in with SSO"** button; clicking it runs the
 auth-code + PKCE flow, and first-time users are matched by username then email (and
@@ -319,7 +319,7 @@ role.
 **bind password** for a read-only service account (stored encrypted), the **base
 DN**, and a **user filter** (`%s` = username, e.g. `(sAMAccountName=%s)`). Map the
 **username/email/display-name/groups** attributes, pick a **default role**, and
-add **group → role mappings** (`GroupCN=FleetRole`). Directory users sign in on the
+add **group → role mappings** (`GroupCN=ProvRole`). Directory users sign in on the
 **normal sign-in form** — Provenance **falls back to LDAP when local auth fails**,
 looks the user up with the service account, then verifies the password by binding
 as the user's own DN, provisioning the account (and applying group mappings by CN)
@@ -360,7 +360,7 @@ host (CIS, STIG, PCI-DSS, …) and defaults to the standard baseline — then **
 - Strict profiles (e.g. **ANSSI High**) run many filesystem-walking checks and can take **tens of
   minutes** on a busy host (the cost is the number of files in users' home directories, not bytes).
   Provenance caps a scan at the **scan timeout** — adjust it in **Settings → Security scans** (5–480 min;
-  overrides the `FLEET_SCAN_TIMEOUT` default of 60m). Raise it for hosts with very large
+  overrides the `PROV_SCAN_TIMEOUT` default of 60m). Raise it for hosts with very large
   filesystems, or use a lighter profile for routine checks.
 - Alternatively, tick **"Skip slow filesystem rules"** in the scan dialog to exclude the
   filesystem-walking rules (home-dir ownership/permissions, world-writable/SUID/SGID/unowned-file
@@ -369,7 +369,7 @@ host (CIS, STIG, PCI-DSS, …) and defaults to the standard baseline — then **
 - Scans run in the background; the history list updates as they finish, showing the **score**
   and pass/fail counts.
 - **View** opens the full HTML report in a sandboxed in-app viewer; **Download** saves it for
-  offline viewing. Reports are stored under `FLEET_SCAN_DIR` (`/var/lib/fleet/scans`).
+  offline viewing. Reports are stored under `PROV_SCAN_DIR` (`/var/lib/prov/scans`).
 
 ### Remediating failures
 
@@ -388,16 +388,16 @@ lists the failed rules so you can **select which to fix**:
   breaks. Applying any of them requires an explicit extra confirmation. **Remediation changes host
   configuration and is not automatically reversible — test on non-critical hosts first.**
 - Remediating a **control-plane host** — the jump host, a host tagged `control-plane`/`protected`, or
-  one listed in `FLEET_CONTROL_PLANE_HOSTS` — requires a second, distinct confirmation. Hardening the
+  one listed in `PROV_CONTROL_PLANE_HOSTS` — requires a second, distinct confirmation. Hardening the
   box that runs Provenance (e.g. an `ip_forward=0` sysctl that breaks Docker's bridge networking) can lock
   Provenance out of the entire fleet; only proceed with out-of-band console access to recover. If it does
   get locked out, see the recovery runbook: [break-glass §5](break-glass.md#5-recovering-after-hardening-locked-provenance-out-of-its-own-host).
 - The scan needs SCAP content matching the host's **OS version** (e.g. `ssg-debian13-ds.xml`
   for Debian 13). If a host's distro is newer than its packaged `scap-security-guide`, Provenance
   **auto-provisions** the right datastream: the backend downloads the ComplianceAsCode release
-  **once** (cached under `FLEET_SCAP_CONTENT_DIR`) and pushes the matching `ssg-*-ds.xml` to the
+  **once** (cached under `PROV_SCAP_CONTENT_DIR`) and pushes the matching `ssg-*-ds.xml` to the
   host over SSH during prepare/scan — so hosts never need internet access to GitHub. Pin a
-  release with `FLEET_SCAP_CONTENT_VERSION` (default: latest); set `FLEET_SCAP_CONTENT_DIR=`
+  release with `PROV_SCAP_CONTENT_VERSION` (default: latest); set `PROV_SCAP_CONTENT_DIR=`
   empty to disable auto-provisioning. The scan row shows which `ssg-*-ds.xml` was used.
 - Debian/Ubuntu have **no DISA STIG** profile; the closest hardening baseline is
   **ANSSI-BP-028 (High / Enforced)**.
@@ -447,7 +447,7 @@ Write a YAML playbook in the editor, then:
 - **Validate** — syntax-check (`ansible-playbook --syntax-check`).
 - **Lint** — `ansible-lint` style/correctness checks.
 
-Both run in the **ansible-runner sidecar** (a separate container, `FLEET_ANSIBLE_RUNNER_URL`);
+Both run in the **ansible-runner sidecar** (a separate container, `PROV_ANSIBLE_RUNNER_URL`);
 if it's unreachable the dialog says so and Validate/Lint are unavailable. Every save keeps a
 **version** history.
 
@@ -460,7 +460,7 @@ Runs go through the jump host over certificate auth (the same path as scans) and
 sudo, so your plays should target **`hosts: all`** — Provenance supplies the inventory and limits it
 to the hosts/group you selected. The default new-playbook template is already set up this way.
 
-A run is bounded end to end by `FLEET_PLAYBOOK_TIMEOUT` (default **30m**). The run is
+A run is bounded end to end by `PROV_PLAYBOOK_TIMEOUT` (default **30m**). The run is
 **sequential across its inventory**, and every host that takes a new kernel adds a reboot and a
 `wait_for_connection` on top of its own upgrade — so the budget scales with host **count**, not
 with per-host work. A fleet-wide `apt dist-upgrade` outgrows 30m well before any individual host
@@ -501,7 +501,7 @@ Setup:
    (Schedules → Kind: Playbook) targeting the host — updates now run on your cadence.
 
 When a playbook runs against a RouterOS-API host, the runner opens a port-forward to the device's
-API through the jump host and exposes it to the play as `fleet_api_host` / `fleet_api_port`. A
+API through the jump host and exposes it to the play as `prov_api_host` / `prov_api_port`. A
 `community.routeros.api` task (`connection: local`) points at those:
 
 ```yaml
@@ -513,8 +513,8 @@ API through the jump host and exposes it to the play as `fleet_api_host` / `flee
   tasks:
     - name: Check for updates
       community.routeros.api:
-        hostname: "{{ fleet_api_host }}"
-        port: "{{ fleet_api_port | int }}"
+        hostname: "{{ prov_api_host }}"
+        port: "{{ prov_api_port | int }}"
         username: "{{ ansible_user }}"
         password: "{{ ansible_password }}"
         path: system package update
@@ -523,8 +523,8 @@ API through the jump host and exposes it to the play as `fleet_api_host` / `flee
     - debug: { var: upd }
     - name: Install if a new version is available
       community.routeros.api:
-        hostname: "{{ fleet_api_host }}"
-        port: "{{ fleet_api_port | int }}"
+        hostname: "{{ prov_api_host }}"
+        port: "{{ prov_api_port | int }}"
         username: "{{ ansible_user }}"
         password: "{{ ansible_password }}"
         path: system package update
@@ -569,7 +569,7 @@ choose which events go to it:
 - **Failed playbook run**
 - **Vulnerability (CVE) findings**
 - **Scheduled compliance report** (`report.scheduled`) — deliver to **Email** for the CSV
-- **Fleet-health digest** (`fleet.digest`)
+- **Provenance-health digest** (`fleet.digest`)
 
 Set a **throttle** (minutes) to dedupe repeats, and use **Send test** to confirm delivery.
 Notifications are **off by default** — nothing is sent until you enable a channel.
@@ -589,8 +589,8 @@ have none. The Email route is the single gate: disabling it silences both the ad
 the requester's, so enable Email for these events if you want requesters to get closure.
 
 There is also a **CA key due for rotation** event: the renewal loop checks the active
-SSH CA key's age hourly and, once it passes `FLEET_CA_ROTATE_AFTER` (default 365 days),
-raises this notification (throttled ~weekly). Rotate with `fleetctl rotate-ca` or from the
+SSH CA key's age hourly and, once it passes `PROV_CA_ROTATE_AFTER` (default 365 days),
+raises this notification (throttled ~weekly). Rotate with `provctl rotate-ca` or from the
 **Certificates** page.
 
 ## Compliance reports
@@ -615,13 +615,13 @@ To have reports arrive automatically:
    drops attachments.
 3. Use **Send now** to test delivery without waiting for the schedule.
 
-## Fleet-health digest
+## Provenance-health digest
 
 Get a recurring summary of what needs attention across the fleet — offline hosts, low disk (with
 a **days-to-full** projection), high memory/load, and pending security updates:
 
-1. **Settings → Fleet-health digest**. Choose **daily** or **weekly** and save.
-2. Route the **Fleet-health digest** (`fleet.digest`) event to a channel under **Notifications**.
+1. **Settings → Provenance-health digest**. Choose **daily** or **weekly** and save.
+2. Route the **Provenance-health digest** (`fleet.digest`) event to a channel under **Notifications**.
 3. **Preview** shows the current digest; **Send now** delivers one immediately.
 
 The same signals power the Dashboard **"Needs attention"** card and the Ask AI assistant's
@@ -648,7 +648,7 @@ run and any last error. Check it first when something looks wrong fleet-wide.
 ## Backup & Restore
 
 **Settings → Backup & Restore** (admin) takes **encrypted database backups**: `pg_dump` piped
-through `openssl` **AES-256**, written as `fleet-backup-<ts>.sql.enc`. **Back up now** runs one
+through `openssl` **AES-256**, written as `prov-backup-<ts>.sql.enc`. **Back up now** runs one
 immediately; an optional **schedule** (interval) plus **retention** (keep last N) automates it;
 **Download** saves a backup file.
 
@@ -656,14 +656,14 @@ Restore is an **offline** operation — decrypt and load straight into Postgres,
 `openssl enc -d -aes-256-cbc -pbkdf2 -in <file>.sql.enc | psql …`. The full, tested procedure is
 the [Break-Glass & Recovery Runbook](./break-glass.md).
 
-> Map **`FLEET_BACKUP_DIR`** (default `/var/lib/fleet/backups`) to **off-host** storage, and keep
-> **`FLEET_BACKUP_PASSPHRASE`** **off the server** (password manager / sealed envelope). It is
+> Map **`PROV_BACKUP_DIR`** (default `/var/lib/prov/backups`) to **off-host** storage, and keep
+> **`PROV_BACKUP_PASSPHRASE`** **off the server** (password manager / sealed envelope). It is
 > deliberately *not* in the backup, so a stolen backup can't be decrypted.
 
 ## Upgrades (in-UI)
 
 **Settings → Maintenance → Updates** (needs the **System.Upgrade** permission — super-admins
-only) upgrades Provenance in place from a single signed file. Choose a **`.fleetup`** bundle, review
+only) upgrades Provenance in place from a single signed file. Choose a **`.provup`** bundle, review
 its manifest (target version, release notes, and whether its database migrations are *additive*
 or *breaking*), and **Install**. The frontend is swapped invisibly; the backend restarts for a
 few seconds and the page reconnects on its own. **The jump host and WireGuard overlay are never
@@ -671,24 +671,24 @@ touched, so managed hosts stay online** — but active terminal/RDP sessions are
 restart, so upgrade during a quiet window.
 
 **Safety.** Bundles are Ed25519-signed. The backend verifies the signature against a trusted
-release key (`FLEET_RELEASE_TRUST_KEYS`) before staging, and the privileged **`fleet-updater`**
+release key (`PROV_RELEASE_TRUST_KEYS`) before staging, and the privileged **`prov-updater`**
 sidecar — the only component with Docker-socket access — re-verifies it independently before
 touching anything. A **pre-upgrade database backup** is taken automatically, the previous images
 are kept tagged `:rollback`, and a failed post-upgrade health check **rolls the app back**. Every
-step is audited. Leaving `FLEET_RELEASE_TRUST_KEYS` empty disables in-UI upgrades (fails closed);
-you can also omit the `fleet-updater` service if you'd rather not grant the Docker socket.
+step is audited. Leaving `PROV_RELEASE_TRUST_KEYS` empty disables in-UI upgrades (fails closed);
+you can also omit the `prov-updater` service if you'd rather not grant the Docker socket.
 
-**Publishing a bundle.** Generate an offline signing keypair once with `fleetctl release keygen`
-and put the printed **public** key in `FLEET_RELEASE_TRUST_KEYS`. After a code change, build and
+**Publishing a bundle.** Generate an offline signing keypair once with `provctl release keygen`
+and put the printed **public** key in `PROV_RELEASE_TRUST_KEYS`. After a code change, build and
 sign a bundle with `make bundle BUNDLE_VERSION=vX.Y.Z BUNDLE_FROM=<min-upgradable-from>` (it
 builds+tags the images, `docker save`s them, and signs the manifest). Verify any bundle with
-`fleetctl release verify --bundle <file> --keys <pubkey>`.
+`provctl release verify --bundle <file> --keys <pubkey>`.
 
 **Check for updates (pull).** Instead of uploading, you can point Provenance at a signed release
-channel: set **`FLEET_UPDATE_CHANNEL_URL`** to a hosted `channel.json`, and the Updates panel
+channel: set **`PROV_UPDATE_CHANNEL_URL`** to a hosted `channel.json`, and the Updates panel
 gains a **Check for updates** button that downloads + installs straight into the same verified
-pipeline. Publish the channel with `fleetctl release channel --key <priv> --base-url
-<https://your-host/> <bundle.fleetup>…` — it reads each bundle's manifest and writes a signed
+pipeline. Publish the channel with `provctl release channel --key <priv> --base-url
+<https://your-host/> <bundle.provup>…` — it reads each bundle's manifest and writes a signed
 `channel.json` + `channel.json.sig` to host alongside the bundles. The index is signed by the
 same release key (no new trust root); each downloaded bundle is still verified independently
 before it's applied.
@@ -699,7 +699,7 @@ the release's migration compatibility:
 - **Additive** (new tables / nullable columns): the updater rolls **one replica at a time**,
   health-gating each before the next — the others keep serving, and migrations apply once (the
   Postgres advisory lock serializes them; peers' migrate-on-boot no-ops). Leadership handoff is
-  automatic. Set **`FLEET_UPDATER_BACKENDS`** to your backend service names (e.g.
+  automatic. Set **`PROV_UPDATER_BACKENDS`** to your backend service names (e.g.
   `backend1,backend2`) so the updater knows the replicas.
 - **Breaking** (column drop/rename, NOT-NULL add): the updater replaces **all** replicas together
   — a brief full-cluster outage — because a mixed-version cluster would break against the migrated
@@ -770,7 +770,7 @@ makes verification fail and reports the first broken sequence number.
 
 Revocation is enforced end-to-end via OpenSSH KRLs:
 
-- Enrollment installs `/etc/ssh/fleet_krl` and adds `RevokedKeys /etc/ssh/fleet_krl` to the
+- Enrollment installs `/etc/ssh/prov_krl` and adds `RevokedKeys /etc/ssh/prov_krl` to the
   host's sshd config (rolled back automatically if sshd would reject it — hosts are never
   locked out).
 - Logout, idle/absolute timeout, and account disable/delete revoke the session's certificate

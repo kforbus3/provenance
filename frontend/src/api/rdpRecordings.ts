@@ -9,7 +9,7 @@ export interface RDPRecording {
   hostId?: string;
   userId?: string;
   hostname: string;
-  fleetUser: string;
+  provUser: string;
   rdpUser: string;
   format: string;
   sizeBytes: number;

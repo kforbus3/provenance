@@ -18,7 +18,7 @@ import { listVaultSecrets } from "../api/vault";
 
 const KINDS = ["pods", "deployments", "services", "namespaces", "nodes"];
 
-// KubernetesPage: register clusters and browse resources through Fleet, which injects a
+// KubernetesPage: register clusters and browse resources through Provenance, which injects a
 // vaulted bearer token and audits every call. Advanced users point kubectl at the proxy.
 export function KubernetesPage() {
   const qc = useQueryClient();
@@ -37,7 +37,7 @@ export function KubernetesPage() {
         <Box>
           <Typography variant="h5">Kubernetes</Typography>
           <Typography variant="body2" color="text.secondary">
-            Reach registered clusters through Fleet with a vaulted credential injected — you never see
+            Reach registered clusters through Provenance with a vaulted credential injected — you never see
             the token, and every call is audited. Browse resources here, or point kubectl at the proxy.
           </Typography>
         </Box>

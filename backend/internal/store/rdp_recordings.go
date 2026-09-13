@@ -10,12 +10,12 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
-const rdpRecordingCols = `id, host_id, user_id, hostname, fleet_user, rdp_user, format, path,
+const rdpRecordingCols = `id, host_id, user_id, hostname, prov_user, rdp_user, format, path,
 	size_bytes, duration_ms, status, client_ip, started_at, ended_at`
 
 func scanRDPRecording(row pgx.Row) (*models.RDPRecording, error) {
 	var r models.RDPRecording
-	err := row.Scan(&r.ID, &r.HostID, &r.UserID, &r.Hostname, &r.FleetUser, &r.RDPUser,
+	err := row.Scan(&r.ID, &r.HostID, &r.UserID, &r.Hostname, &r.ProvUser, &r.RDPUser,
 		&r.Format, &r.Path, &r.SizeBytes, &r.DurationMS, &r.Status, &r.ClientIP,
 		&r.StartedAt, &r.EndedAt)
 	if err != nil {
@@ -27,23 +27,23 @@ func scanRDPRecording(row pgx.Row) (*models.RDPRecording, error) {
 // RDPRecordingInput carries the fields captured when an RDP session begins. The id
 // is supplied by the caller because it is also the guacd recording file name.
 type RDPRecordingInput struct {
-	ID        uuid.UUID
-	HostID    *uuid.UUID
-	UserID    *uuid.UUID
-	Hostname  string
-	FleetUser string
-	RDPUser   string
-	Path      string
-	ClientIP  string
+	ID       uuid.UUID
+	HostID   *uuid.UUID
+	UserID   *uuid.UUID
+	Hostname string
+	ProvUser string
+	RDPUser  string
+	Path     string
+	ClientIP string
 }
 
 // CreateRDPRecording inserts an "active" RDP recording row at session start.
 func (s *Store) CreateRDPRecording(ctx context.Context, in RDPRecordingInput) (*models.RDPRecording, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO rdp_recordings (id, host_id, user_id, hostname, fleet_user, rdp_user, path, client_ip, instance_id)
+		INSERT INTO rdp_recordings (id, host_id, user_id, hostname, prov_user, rdp_user, path, client_ip, instance_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		RETURNING `+rdpRecordingCols,
-		in.ID, in.HostID, in.UserID, in.Hostname, in.FleetUser, in.RDPUser, in.Path, in.ClientIP, s.ownerArg())
+		in.ID, in.HostID, in.UserID, in.Hostname, in.ProvUser, in.RDPUser, in.Path, in.ClientIP, s.ownerArg())
 	return scanRDPRecording(row)
 }
 

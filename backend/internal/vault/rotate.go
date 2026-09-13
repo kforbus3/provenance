@@ -75,7 +75,7 @@ func (h *handler) rotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if secret.ExternalProvider != "" {
-		httpx.WriteError(w, http.StatusBadRequest, "external-backed credentials are rotated in the external secrets manager, not by Fleet")
+		httpx.WriteError(w, http.StatusBadRequest, "external-backed credentials are rotated in the external secrets manager, not by Provenance")
 		return
 	}
 	hosts, err := h.d.Store.HostsUsingCredential(r.Context(), id)

@@ -9,7 +9,7 @@ import (
 // The jump-server provisioning script must install the forwarding deny that keeps
 // the overlay hub-and-spoke, and must do it idempotently and non-fatally — this
 // script runs on every re-enrollment, under `set -e`, on jump hosts whose iptables
-// backend Fleet does not control.
+// backend Provenance does not control.
 func TestJumpServerScriptInstallsPeerIsolation(t *testing.T) {
 	o := New(testCfg(), nil)
 	srv, err := o.ServerConfig()
@@ -84,7 +84,7 @@ func TestOpenVPNClientConfigHooksHostIsolation(t *testing.T) {
 	if !strings.Contains(cli, "script-security 2") {
 		t.Error("client config lacks script-security 2; the up script would never run")
 	}
-	if !strings.Contains(cli, "up /etc/openvpn/fleet/peer-isolation.sh") {
+	if !strings.Contains(cli, "up /etc/openvpn/prov/peer-isolation.sh") {
 		t.Errorf("client config does not reference the isolation script:\n%s", cli)
 	}
 }
@@ -95,10 +95,10 @@ func TestOpenVPNHostIsolationScript(t *testing.T) {
 	// Scoped to the tunnel device, NOT the overlay subnet: a subnet-scoped rule also
 	// matches the host reaching its own overlay address over loopback.
 	for _, want := range []string{
-		`iptables -I INPUT  1 -i "$dev" -j FLEET-OVPN-IN`,
-		`iptables -I OUTPUT 1 -o "$dev" -j FLEET-OVPN-OUT`,
-		`iptables -A FLEET-OVPN-IN  ! -s "$JUMP"/32 -j DROP`,
-		`iptables -A FLEET-OVPN-OUT ! -d "$JUMP"/32 -j DROP`,
+		`iptables -I INPUT  1 -i "$dev" -j PROV-OVPN-IN`,
+		`iptables -I OUTPUT 1 -o "$dev" -j PROV-OVPN-OUT`,
+		`iptables -A PROV-OVPN-IN  ! -s "$JUMP"/32 -j DROP`,
+		`iptables -A PROV-OVPN-OUT ! -d "$JUMP"/32 -j DROP`,
 		`JUMP=10.100.0.1`,
 	} {
 		if !strings.Contains(script, want) {
@@ -111,7 +111,7 @@ func TestOpenVPNHostIsolationScript(t *testing.T) {
 	// The rules name the jump host by ADDRESS, so they have to be self-correcting:
 	// moving the overlay to its own subnet changed that address, and a rule left over
 	// from the old one matches everything from the new jump host — blackholing the
-	// tunnel with no error anywhere. Flushing Fleet's own chains is what retires it.
+	// tunnel with no error anywhere. Flushing Provenance's own chains is what retires it.
 	if !strings.Contains(script, `iptables -F "$_c"`) {
 		t.Error("chains are not flushed; a changed jump address would leave a DROP that blackholes the overlay")
 	}
@@ -138,7 +138,7 @@ func TestOpenVPNHostInstallWritesIsolationBeforeStart(t *testing.T) {
 	if started >= 0 && wrote > started {
 		t.Error("isolation script is written after the tunnel starts; first connect would be unfiltered")
 	}
-	if !strings.Contains(install, "chmod 0700 /etc/openvpn/fleet/peer-isolation.sh") {
+	if !strings.Contains(install, "chmod 0700 /etc/openvpn/prov/peer-isolation.sh") {
 		t.Error("isolation script is not mode 0700 (it runs as root)")
 	}
 }
@@ -247,7 +247,7 @@ func TestHostInstallProvidesIptablesForIsolation(t *testing.T) {
 	}
 	// It must be in place BEFORE the tunnel starts, like the up script itself: the
 	// first connect is otherwise unfiltered.
-	if strings.Index(script, "iptables") > strings.Index(script, "systemctl enable --now openvpn@fleet-overlay") {
+	if strings.Index(script, "iptables") > strings.Index(script, "systemctl enable --now openvpn@prov-overlay") {
 		t.Error("iptables is installed after the tunnel is started; the first connect would be unisolated")
 	}
 
@@ -321,12 +321,12 @@ func TestHostInstallAppliesIsolationRatherThanOnlyWritingIt(t *testing.T) {
 
 	// Run the up script directly, with $dev set to the device that actually holds the
 	// assigned address — openvpn's own contract for that variable.
-	if !strings.Contains(script, `dev="$OVPN_DEV" /etc/openvpn/fleet/peer-isolation.sh`) {
+	if !strings.Contains(script, `dev="$OVPN_DEV" /etc/openvpn/prov/peer-isolation.sh`) {
 		t.Errorf("install script never runs the isolation script itself:\n%s", script)
 	}
 	// And report what is in place afterwards, since the script fails open: a clean run
 	// and an unisolated host are otherwise indistinguishable.
-	for _, want := range []string{"OVPN_ISOLATION_OK", "OVPN_ISOLATION_MISSING", "iptables -S FLEET-OVPN-IN"} {
+	for _, want := range []string{"OVPN_ISOLATION_OK", "OVPN_ISOLATION_MISSING", "iptables -S PROV-OVPN-IN"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("install script does not verify isolation (%q missing)", want)
 		}

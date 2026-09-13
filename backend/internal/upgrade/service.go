@@ -1,7 +1,7 @@
 // Package upgrade drives the in-UI upgrade flow from the backend's side: it accepts a
-// signed .fleetup bundle, verifies it against the trusted release keys, takes a
+// signed .provup bundle, verifies it against the trusted release keys, takes a
 // pre-upgrade database backup, then hands the staged bundle to the privileged
-// fleet-updater sidecar (which owns the Docker socket) to perform the container swap.
+// prov-updater sidecar (which owns the Docker socket) to perform the container swap.
 // The backend never touches Docker itself. It also owns "drain" — a per-instance flag
 // that makes /ready fail so a load balancer ejects the instance and new sessions are
 // refused ahead of a restart.
@@ -60,13 +60,13 @@ type Status struct {
 }
 
 // New builds the service. Trusted release keys come from the binary-embedded key(s)
-// plus cfg.ReleaseTrustKeys; a malformed FLEET_RELEASE_TRUST_KEYS is logged and
+// plus cfg.ReleaseTrustKeys; a malformed PROV_RELEASE_TRUST_KEYS is logged and
 // ignored (embedded keys still apply) rather than failing startup. With no valid keys
 // at all, verification fails closed and no upgrade can be applied.
 func New(st *store.Store, cfg *config.Config, log *slog.Logger, hub *ws.Hub, bk *backup.Service, version string) *Service {
 	trusted, err := release.TrustedKeys(cfg.ReleaseTrustKeys)
 	if err != nil {
-		log.Warn("upgrade: FLEET_RELEASE_TRUST_KEYS is malformed; using only embedded release keys", "err", err)
+		log.Warn("upgrade: PROV_RELEASE_TRUST_KEYS is malformed; using only embedded release keys", "err", err)
 		trusted, _ = release.TrustedKeys("")
 	}
 	return &Service{
@@ -99,7 +99,7 @@ func (s *Service) SetDrain(on bool, message string) {
 // stagedPath is where an uploaded bundle is written for the updater to read (shared
 // volume, same path in both containers).
 func (s *Service) stagedPath() string {
-	return filepath.Join(s.cfg.UpdatesDir, "pending.fleetup")
+	return filepath.Join(s.cfg.UpdatesDir, "pending.provup")
 }
 
 // Stage streams an uploaded bundle to the updates volume, returns the on-disk path.

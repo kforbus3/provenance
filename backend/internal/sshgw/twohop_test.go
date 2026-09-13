@@ -21,7 +21,7 @@ import (
 
 // These tests stand up the real two-hop arrangement in process: a jump host that
 // trusts ONLY the fleet-wide "fleet" principal (what deploy/testfabric/jumphost
-// writes into /etc/ssh/auth_principals/fleet, and what
+// writes into /etc/ssh/auth_principals/prov, and what
 // deploy/compose/docker-compose.jumphost.yml builds for single-server production),
 // and a managed host that maps principals to two accounts the way caTrustScript
 // provisions them.
@@ -32,7 +32,7 @@ import (
 // certificates. Using one credential for both (what dialWithCred does) leaves a
 // user without Host.Sudo unable to connect at all.
 
-// testCA signs user certificates the way the Fleet CA does.
+// testCA signs user certificates the way the Provenance CA does.
 type testCA struct{ signer ssh.Signer }
 
 func newTestCA(t *testing.T) *testCA {
@@ -166,7 +166,7 @@ func (s *sshdStub) authenticate(checker *ssh.CertChecker, meta ssh.ConnMetadata,
 	if matched == "" {
 		return nil, fmt.Errorf("no principal in %v is trusted by account %q (trusts %v)", cert.ValidPrincipals, meta.User(), allowed)
 	}
-	// CertChecker matches a principal against the login user, which Fleet's model
+	// CertChecker matches a principal against the login user, which Provenance's model
 	// does not do — the account is named by the sshd config, not by the principal.
 	// Validate the certificate itself against a login name it will accept.
 	if _, err := checker.Authenticate(certMeta{meta, matched}, key); err != nil {
@@ -266,10 +266,10 @@ func TestLoginOnlyTierReachesHostThroughJump(t *testing.T) {
 	hostID := uuid.New()
 
 	// Managed host, provisioned the way caTrustScript does: the privileged account
-	// trusts fleet/fleet-h-<id>, the login-only account fleet-login/fleet-login-h-<id>.
+	// trusts fleet/prov-h-<id>, the login-only account prov-login/prov-login-h-<id>.
 	managed := startSSHD(t, ca, map[string][]string{
-		"fleet":       {princ.Global, princ.Host(hostID)},
-		"fleet-login": {princ.GlobalLogin, princ.HostLogin(hostID)},
+		"fleet":      {princ.Global, princ.Host(hostID)},
+		"prov-login": {princ.GlobalLogin, princ.HostLogin(hostID)},
 	}, false)
 
 	// Jump host: one account, trusting only the fleet-wide principal.
@@ -287,7 +287,7 @@ func TestLoginOnlyTierReachesHostThroughJump(t *testing.T) {
 	hostCert := ca.sign(t, "alice/host", append(loginTierPrincipals, princ.HostLogin(hostID)))
 
 	// The bug: one credential for both hops. The jump host refuses it.
-	if _, err := g.dialWithSigners(context.Background(), hostCert, hostCert, managedHost, managedPort, "fleet-login"); err == nil {
+	if _, err := g.dialWithSigners(context.Background(), hostCert, hostCert, managedHost, managedPort, "prov-login"); err == nil {
 		t.Fatal("expected the jump host to refuse a login-only certificate; if this now passes, the jump host's trusted principals changed and this test no longer covers the regression")
 	} else if !strings.Contains(err.Error(), "dial jump host") {
 		t.Fatalf("expected failure at the jump hop, got %v", err)
@@ -305,7 +305,7 @@ func TestLoginOnlyTierReachesHostThroughJump(t *testing.T) {
 	}
 
 	// The fix: session cert for the jump hop, per-host cert for the managed host.
-	conn, err := g.dialWithSigners(context.Background(), sessionCert, hostCert, managedHost, managedPort, "fleet-login")
+	conn, err := g.dialWithSigners(context.Background(), sessionCert, hostCert, managedHost, managedPort, "prov-login")
 	if err != nil {
 		t.Fatalf("login-only tier must reach the host through the jump hop: %v", err)
 	}
@@ -314,15 +314,15 @@ func TestLoginOnlyTierReachesHostThroughJump(t *testing.T) {
 
 // The account split is the reason the login tier's certificate omits "fleet", so
 // that omission has to keep costing the login tier the sudo account — including on
-// a host not yet under FLEET_HOST_SCOPED_ONLY, which still trusts bare "fleet".
+// a host not yet under PROV_HOST_SCOPED_ONLY, which still trusts bare "fleet".
 // This is what a fix that simply added "fleet" to the login cert would break.
 func TestLoginOnlyCertCannotOpenTheSudoAccount(t *testing.T) {
 	ca := newTestCA(t)
 	hostID := uuid.New()
 
 	managed := startSSHD(t, ca, map[string][]string{
-		"fleet":       {princ.Global, princ.Host(hostID)}, // not locked down: still trusts "fleet"
-		"fleet-login": {princ.GlobalLogin, princ.HostLogin(hostID)},
+		"fleet":      {princ.Global, princ.Host(hostID)}, // not locked down: still trusts "fleet"
+		"prov-login": {princ.GlobalLogin, princ.HostLogin(hostID)},
 	}, false)
 	jump := startSSHD(t, ca, map[string][]string{"fleet": {princ.Global}}, true)
 

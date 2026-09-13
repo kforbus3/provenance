@@ -1,4 +1,4 @@
-// Fleet Terminal load smoke test.
+// Provenance load smoke test.
 //
 // Exercises the hot read paths (auth + inventory + audit) under modest
 // concurrency. Run against a stack seeded with a known user:

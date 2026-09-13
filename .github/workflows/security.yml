@@ -29,7 +29,7 @@ jobs:
         # Every Go module in the repository, not just the server: the Terraform
         # provider had four reachable vulnerabilities of its own, and nothing
         # would have looked at them.
-        module: [backend, sdk, terraform-provider-fleet]
+        module: [backend, sdk, terraform-provider-provenance]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -43,7 +43,7 @@ jobs:
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       # govulncheck reports only vulnerabilities in code paths the binary
-      # actually reaches, so a finding is about Fleet rather than about
+      # actually reaches, so a finding is about Provenance rather than about
       # something a dependency merely contains.
       - name: govulncheck
         run: |
@@ -106,12 +106,12 @@ jobs:
       matrix:
         include:
           - name: backend
-            build: docker build -t fleet-scan:backend ./backend
-            image: fleet-scan:backend
+            build: docker build -t provenance-scan:backend ./backend
+            image: provenance-scan:backend
           - name: frontend
             # The frontend Dockerfile needs the repository root as context.
-            build: docker build -t fleet-scan:frontend -f frontend/Dockerfile .
-            image: fleet-scan:frontend
+            build: docker build -t provenance-scan:frontend -f frontend/Dockerfile .
+            image: provenance-scan:frontend
     steps:
       - uses: actions/checkout@v7
 

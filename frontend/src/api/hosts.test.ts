@@ -50,7 +50,7 @@ describe("host user grants", () => {
   });
 });
 
-// Teardown removes Fleet's accounts and SSH trust from the machine, so the
+// Teardown removes Provenance's accounts and SSH trust from the machine, so the
 // parameter has to be sent only when the operator asked for it. A default that
 // leaked "true" would decommission hosts an operator only meant to un-inventory.
 describe("deleteHost", () => {

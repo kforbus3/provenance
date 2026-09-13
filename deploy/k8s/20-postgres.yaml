@@ -1,18 +1,18 @@
-# PostgreSQL — stateful primary for Moorgate.
+# PostgreSQL — stateful primary for Provenance.
 # Single-replica StatefulSet with a PVC template; for HA swap in an operator
 # (CloudNativePG / Zalando) but the app only needs one writable endpoint.
 apiVersion: v1
 kind: Service
 metadata:
-  name: fleet-postgres
-  namespace: fleet-terminal
+  name: prov-postgres
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: postgres
 spec:
   clusterIP: None
   selector:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: postgres
   ports:
     - name: postgres
@@ -22,22 +22,22 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: fleet-postgres
-  namespace: fleet-terminal
+  name: prov-postgres
+  namespace: provenance
   labels:
-    app.kubernetes.io/name: fleet-terminal
+    app.kubernetes.io/name: provenance
     app.kubernetes.io/component: postgres
 spec:
-  serviceName: fleet-postgres
+  serviceName: prov-postgres
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: fleet-terminal
+      app.kubernetes.io/name: provenance
       app.kubernetes.io/component: postgres
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fleet-terminal
+        app.kubernetes.io/name: provenance
         app.kubernetes.io/component: postgres
     spec:
       securityContext:
@@ -50,10 +50,10 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          # The backend HPA scales to 10 replicas × FLEET_DB_MAX_CONNS (20) = 200
+          # The backend HPA scales to 10 replicas × PROV_DB_MAX_CONNS (20) = 200
           # connections, plus a couple per replica for the HA leader lock / event
           # backplane — far past the stock max_connections=100. Raise it (300 leaves
-          # headroom for fleetctl/psql). Each connection also costs RAM, so keep the
+          # headroom for provctl/psql). Each connection also costs RAM, so keep the
           # memory limit below in step. For real HA, point the backend at an external
           # pooled Postgres (PgBouncer/Patroni/CloudNativePG) instead of this single pod.
           args: ["postgres", "-c", "max_connections=300"]
@@ -68,7 +68,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: fleet-secrets
+                  name: prov-secrets
                   key: POSTGRES_PASSWORD
             # alpine image needs a writable data subdir under the mount.
             - name: PGDATA

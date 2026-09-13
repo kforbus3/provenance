@@ -9,7 +9,7 @@ import (
 // tools cover, keyed by the tool that covers it.
 //
 // It exists because the assistant's most damaging failure mode is not a wrong answer
-// but a confidently WRONG "I do not have a tool for that" — the user is told Fleet
+// but a confidently WRONG "I do not have a tool for that" — the user is told Provenance
 // cannot see something it has been recording all along, and stops asking. That
 // sentence is only safe if it is generated from the tool set rather than written by
 // hand (the previous hardcoded list had already drifted: it omitted compliance scans,
@@ -26,7 +26,7 @@ var capabilityCatalog = map[string]string{
 	"list_sessions":         "SSH sessions active right now",
 	"session_history":       "past SSH sessions and how they ended",
 	"search_commands":       "commands typed inside recorded terminal sessions",
-	"recent_commands":       "ad-hoc commands run through Fleet",
+	"recent_commands":       "ad-hoc commands run through Provenance",
 	"recent_file_transfers": "SFTP file transfers",
 	"compliance_scans":      "OpenSCAP compliance/benchmark scan results per host (CIS/STIG scores, pass/fail counts)",
 	"scan_findings":         "the individual benchmark rules a host is failing",
@@ -41,8 +41,8 @@ var capabilityCatalog = map[string]string{
 	"list_approvals":        "pending access approvals and active temporary grants",
 	"access_control":        "groups, roles and their permissions, service accounts and API tokens, and access reviews",
 	"expiring_credentials":  "credentials, certificates and keys that are expiring or overdue for rotation",
-	"fleet_insights":        "what currently needs attention across the fleet",
-	"platform_status":       "Fleet's own cluster, enrollment jobs, federation sites and database replication",
+	"prov_insights":         "what currently needs attention across the fleet",
+	"platform_status":       "Provenance's own cluster, enrollment jobs, federation sites and database replication",
 	"search_docs":           "the Provenance product documentation",
 }
 
@@ -59,6 +59,6 @@ func capabilityStatement() string {
 		subjects = append(subjects, subject)
 	}
 	sort.Strings(subjects)
-	return "Fleet does hold: " + strings.Join(subjects, "; ") +
+	return "Provenance does hold: " + strings.Join(subjects, "; ") +
 		". If your question is about one of those, ask again naming it and I will look it up."
 }

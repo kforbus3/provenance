@@ -27,7 +27,7 @@ Write-Output "Hostname: $env:COMPUTERNAME"
 Get-Service -Name Spooler | Select-Object Name, Status
 `;
 
-// Authoring surface for PowerShell scripts. Scripts are stored in Fleet, edited
+// Authoring surface for PowerShell scripts. Scripts are stored in Provenance, edited
 // here, and run on Windows hosts over WinRM as the host's credentialed user.
 export function ScriptsPage() {
   const qc = useQueryClient();
@@ -188,7 +188,7 @@ function ScriptRunDialog({ script, onClose }: { script: Script; onClose: () => v
         {!runId ? (
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Alert severity="info">
-              The script runs on each target over WinRM (through the Fleet jump host) as the host's
+              The script runs on each target over WinRM (through the Provenance jump host) as the host's
               vaulted credential. Only Windows hosts are listed.
             </Alert>
             <ToggleButtonGroup

@@ -9,7 +9,7 @@ import (
 
 func isolationCfg(on bool) *config.Config {
 	return &config.Config{
-		WGInterface:          "wgfleet",
+		WGInterface:          "wgprov",
 		WGSubnet:             "10.100.0.0/24",
 		WGJumpIP:             "10.100.0.1",
 		WGPort:               51820,

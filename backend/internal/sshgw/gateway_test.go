@@ -12,15 +12,15 @@ func TestLoginTier(t *testing.T) {
 		t.Fatalf("sudo principals = %v, want nil (issuer default)", principals)
 	}
 
-	// Login-only tier: distinct account + the "fleet-login" principal that maps
+	// Login-only tier: distinct account + the "prov-login" principal that maps
 	// to it; the username is informational only and namespaced ("user:alice") so it
 	// can't collide with a fleet principal. It must NOT carry the "fleet"
 	// principal, or it could open the sudo account.
-	user, principals = LoginTier(false, "fleet", "alice")
-	if user != "fleet-login" {
-		t.Fatalf("login-only user = %q, want %q", user, "fleet-login")
+	user, principals = LoginTier(false, "prov", "alice")
+	if user != "prov-login" {
+		t.Fatalf("login-only user = %q, want %q", user, "prov-login")
 	}
-	want := []string{"fleet-login", "user:alice"}
+	want := []string{"prov-login", "user:alice"}
 	if len(principals) != len(want) {
 		t.Fatalf("login-only principals = %v, want %v", principals, want)
 	}

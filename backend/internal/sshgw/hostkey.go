@@ -169,11 +169,11 @@ func (g *Gateway) ForgetHostKeys(ids ...string) {
 }
 
 // hostKeyCallback is used for every gateway dial. Verification is on by default;
-// FLEET_SSH_INSECURE_HOST_KEYS=true (local test fabric only; refused in
+// PROV_SSH_INSECURE_HOST_KEYS=true (local test fabric only; refused in
 // production) restores the previous accept-any behavior.
 func (g *Gateway) hostKeyCallback() ssh.HostKeyCallback {
 	if g.cfg.SSHInsecureHostKeys {
-		//nolint:gosec // opt-in FLEET_SSH_INSECURE_HOST_KEYS dev path only; config.go refuses it outside development
+		//nolint:gosec // opt-in PROV_SSH_INSECURE_HOST_KEYS dev path only; config.go refuses it outside development
 		return ssh.InsecureIgnoreHostKey()
 	}
 	return g.hostKeys.check

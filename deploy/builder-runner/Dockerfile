@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Blackfriars builder-runner: the only container that touches the Docker socket.
+# Provenance builder-runner: the only container that touches the Docker socket.
 #
 # It carries no auth stack, no database driver and no web assets, because it is
 # not a control plane -- it is the privileged half of the build path, kept in

@@ -1,4 +1,4 @@
-// Package auditfwd forwards Fleet's audit events to an external collector —
+// Package auditfwd forwards Provenance's audit events to an external collector —
 // syslog (RFC 5424 over UDP/TCP) or a generic HTTP JSON endpoint — so they can
 // land in a SIEM. It is best-effort and never blocks the audit write: the store
 // calls Forward in a goroutine for each appended event. The hash-chained copy
@@ -80,7 +80,7 @@ type Forwarder struct {
 func New(st *store.Store, log *slog.Logger) *Forwarder {
 	host, _ := os.Hostname()
 	if host == "" {
-		host = "fleet-terminal"
+		host = "provenance"
 	}
 	f := &Forwarder{
 		store: st, log: log, hostname: host,
@@ -207,7 +207,7 @@ func (f *Forwarder) SendTest(cfg Config) error {
 	}
 	return f.send(cfg, models.AuditEvent{
 		Action: "audit.forward_test", ActorName: "system", TargetKind: "system",
-		Detail: map[string]any{"message": "Fleet audit forwarding test"}, CreatedAt: time.Now(),
+		Detail: map[string]any{"message": "Provenance audit forwarding test"}, CreatedAt: time.Now(),
 	})
 }
 
@@ -257,7 +257,7 @@ func (f *Forwarder) sendSyslog(cfg Config, e models.AuditEvent, payload []byte) 
 	if msgid == "" {
 		msgid = "-"
 	}
-	msg := fmt.Sprintf("<%d>1 %s %s fleet-terminal - %s - %s",
+	msg := fmt.Sprintf("<%d>1 %s %s provenance - %s - %s",
 		pri, ts.Format(time.RFC3339), f.hostname, msgid, payload)
 
 	conn, err := f.dialSyslog(cfg)

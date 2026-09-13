@@ -32,7 +32,7 @@ func Mount(r chi.Router, d *app.Deps, svc *Service, msrcSvc *msrc.Service) {
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Delete("/vuln-scans/failed", h.clearFailed)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/latest", h.latest)
 		pr.With(d.Auth.RequirePermission("Host.Scan")).Get("/vuln-scans/db", h.dbStatus)
-		// Container image findings, keyed by digest. Fleet-global by nature: the
+		// Container image findings, keyed by digest. Provenance-global by nature: the
 		// same digest is the same bytes everywhere, so this is one table the UI
 		// joins against rather than a per-host payload repeated for every host
 		// running a popular base image.

@@ -12,18 +12,18 @@ import (
 // blob in the environment is unwrapped by ResolveSecrets into the plaintext field the
 // CA and vault seal with. Skipped unless a live Vault Transit backend is configured.
 func TestResolveSecretsUnwrapsViaKMS(t *testing.T) {
-	addr := os.Getenv("FLEET_KMS_VAULT_ADDR")
+	addr := os.Getenv("PROV_KMS_VAULT_ADDR")
 	if addr == "" {
-		t.Skip("set FLEET_KMS_VAULT_ADDR to run the live KMS resolve test")
+		t.Skip("set PROV_KMS_VAULT_ADDR to run the live KMS resolve test")
 	}
 	const caSecret = "a-real-ca-passphrase-1234567890"
 	const vaultSecret = "a-distinct-vault-passphrase-0987"
 
 	kcfg := kms.Config{
 		Provider:           "vault-transit",
-		KeyID:              os.Getenv("FLEET_KMS_KEY_ID"),
+		KeyID:              os.Getenv("PROV_KMS_KEY_ID"),
 		VaultAddr:          addr,
-		VaultToken:         os.Getenv("FLEET_KMS_VAULT_TOKEN"),
+		VaultToken:         os.Getenv("PROV_KMS_VAULT_TOKEN"),
 		VaultTLSSkipVerify: true,
 	}
 	prov, err := kms.New(kcfg)

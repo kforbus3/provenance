@@ -34,7 +34,7 @@ func TestMFASecretEncryptionRoundTrip(t *testing.T) {
 }
 
 // TestMFAKeyMigration proves the backward-compat path that prevents an MFA lockout when
-// a deployment adopts a dedicated FLEET_MFA_ENCRYPTION_KEY: a secret encrypted with only
+// a deployment adopts a dedicated PROV_MFA_ENCRYPTION_KEY: a secret encrypted with only
 // the JWT-derived key must still decrypt after the dedicated key is added, and new
 // secrets must then use (and round-trip under) the dedicated key.
 func TestMFAKeyMigration(t *testing.T) {

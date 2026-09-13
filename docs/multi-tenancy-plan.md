@@ -1,7 +1,7 @@
 # Multi-Tenancy (MSP) — Design & Phased Plan
 
 Status: **P0 (RLS foundation) + P1 (tenant management, auth scoping, provider console)
-shipped.** Opt-in via `FLEET_MULTI_TENANCY` (default **off**); with the flag off, Provenance
+shipped.** Opt-in via `PROV_MULTI_TENANCY` (default **off**); with the flag off, Provenance
 is byte-for-byte single-tenant as today. Built incrementally on `main`.
 
 **Proven end-to-end** (real API, non-superuser DB role): a provider admin creates a
@@ -11,15 +11,15 @@ nothing (fail closed).
 
 ## Enabling it
 
-1. Set `FLEET_MULTI_TENANCY=true`.
+1. Set `PROV_MULTI_TENANCY=true`.
 2. **The app's database role MUST be a non-superuser** (Postgres superusers and
    `BYPASSRLS` roles ignore row-level security even when it is FORCEd, so isolation would
    silently not apply). Create a dedicated non-superuser role with `USAGE` on the schema
    and privileges on the tables, run migrations as the owner, and point
-   `FLEET_DATABASE_URL` at the non-superuser role for serving.
+   `PROV_DATABASE_URL` at the non-superuser role for serving.
 3. Existing data lands in the seeded **Provider** tenant; its admins get a **Tenants**
    console (provider console) to create customer tenants and switch into them. A provider
-   admin acting inside a customer sends `X-Fleet-Tenant: <id>` (the UI's tenant switcher).
+   admin acting inside a customer sends `X-Prov-Tenant: <id>` (the UI's tenant switcher).
 
 Until every subsystem is covered (see phases), treat the flag as **experimental** and do
 not enable it against real multi-customer data.
@@ -48,7 +48,7 @@ never be visible to another.
 
 ## The flag-off guarantee
 
-`FLEET_MULTI_TENANCY=false` (default): all rows belong to a single seeded **default
+`PROV_MULTI_TENANCY=false` (default): all rows belong to a single seeded **default
 tenant**, and **no query applies tenant scoping** — the code paths added for tenancy are
 inert. A non-multi-tenant deployment is unchanged. Every phase must preserve this.
 
@@ -78,7 +78,7 @@ enforceable rather than hopeful:
   scoping is achieved by RLS at P0, the whole table set is covered now, not incrementally.**
 - **P1 — Tenant management + auth scoping + provider console (DONE).** `Principal.TenantID`;
   RequireAuth resolves the principal cross-tenant (bypass) then scopes the request to the
-  caller's tenant; provider admins switch into a customer via `X-Fleet-Tenant`; pre-auth
+  caller's tenant; provider admins switch into a customer via `X-Prov-Tenant`; pre-auth
   routes (login/SSO/bootstrap) bypass; tenant CRUD API (provider-admin gated, audited) +
   a **Tenants** console UI with a context switcher.
 - **P2/P3 — Table coverage (DONE at P0 via RLS).** The ~50 tenant-scoped tables listed in

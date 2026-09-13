@@ -13,7 +13,7 @@
 -- on the deploy target was quietly providing.
 CREATE TABLE IF NOT EXISTS container_stacks (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID NOT NULL DEFAULT fleet_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id   UUID NOT NULL DEFAULT prov_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
     host_id     UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     -- The stack's name, which is also its directory on the host.
     name        TEXT NOT NULL,
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS container_stacks (
 -- rather than a reconstruction.
 CREATE TABLE IF NOT EXISTS container_stack_revisions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID NOT NULL DEFAULT fleet_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id   UUID NOT NULL DEFAULT prov_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
     stack_id    UUID NOT NULL REFERENCES container_stacks(id) ON DELETE CASCADE,
     revision    INT NOT NULL,
     compose     TEXT NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS container_stack_revisions (
 -- makes a deploy tool lie about its own state.
 CREATE TABLE IF NOT EXISTS container_stack_deployments (
     stack_id     UUID PRIMARY KEY REFERENCES container_stacks(id) ON DELETE CASCADE,
-    tenant_id    UUID NOT NULL DEFAULT fleet_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id    UUID NOT NULL DEFAULT prov_current_tenant() REFERENCES tenants(id) ON DELETE CASCADE,
     revision     INT NOT NULL,
     state        TEXT NOT NULL DEFAULT 'pending',
     detail       TEXT NOT NULL DEFAULT '',
@@ -78,6 +78,6 @@ BEGIN
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
-    EXECUTE format($p$CREATE POLICY tenant_isolation ON %I USING (fleet_rls_visible(tenant_id)) WITH CHECK (fleet_rls_visible(tenant_id))$p$, t);
+    EXECUTE format($p$CREATE POLICY tenant_isolation ON %I USING (prov_rls_visible(tenant_id)) WITH CHECK (prov_rls_visible(tenant_id))$p$, t);
   END LOOP;
 END $$;
