@@ -5,6 +5,38 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.31 — 2026-09-13
+
+**A check that found nothing newer no longer reads as a check that failed.**
+Thirty rows on the Containers screen said "cannot compare"; twenty-two of them
+were up to date. The verdict was being inferred from the explanation — and
+"nothing newer with the same shape as 10.11.11; the repository carries other
+version tags that cannot be ordered against it" means the image is current,
+while rendering identically to a registry that would not answer. A check now
+records what it concluded as a value, and the screen reads that; the sentence
+stays as the explanation a person reads. Rows checked before this arrived fall
+back to the old reading, so an upgrade does not empty the page while it waits.
+
+**A tag listing is reused instead of fetched again.** Reading a repository's
+tags in full made the answer correct and made it cost up to thirty-two requests
+instead of one. A sweep of the fleet is then several hundred requests to a single
+registry, and pressing the button a few times within an hour is enough to be rate
+limited — which was reported as "could not list tags" against eight images that
+were perfectly fine. Listings are now kept for an hour: long enough that pressing
+the button repeatedly costs one listing rather than one each, short enough that a
+check made because something was just published still sees it. A registry that
+refuses falls back to the last listing it gave, at whatever age — what was
+published this morning is a better answer than none.
+
+**A rate-limited registry no longer says a host pulled something it did not.**
+The digest held against a tag a compose file names is the running container's,
+because it is the only one there is, so "this host is running an older build"
+cannot be said about a tag the host has never pulled. That was guarded on the
+ordinary path and unguarded when a listing failed, so a single rate limit put the
+sentence on every such row at once.
+
+---
+
 ## v1.2.30 — 2026-09-13
 
 **A deploy is narrowed using the compose file it is about to apply, and no longer
