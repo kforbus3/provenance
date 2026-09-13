@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.28 — 2026-09-13
+
+**A container recreated onto the version its compose file names is reported as
+updated, not skipped.** Rolling out a rebuild of `wyoming-piper:latest` against a
+host whose compose pins `2.2.2` pulled the image, recreated the container on
+`2.2.2`, and left it healthy — the drift between the running tag and the file
+resolved, which is the whole point. It was then reported as "this host was
+already past every image in this rollout that it runs", which says nothing
+happened and sends an operator looking for the change somewhere else.
+
+An update applied without a managed stack runs the host's OWN compose file, so
+the tag it lands on is that file's choice and landing there is the job done. An
+update applied through a managed stack is the opposite case: the rollout wrote
+the tag itself, so coming back on a different one means somebody re-pinned the
+service underneath, and reporting it as superseded is right. The two are now told
+apart rather than judged by the same rule.
+
+Coming back on the tag it was moving away from is still a failure either way — a
+deploy that reports success and changes nothing is what this feature exists to
+catch.
+
+---
+
 ## v1.2.27 — 2026-09-13
 
 **The row that can actually be applied is now the one you are shown.** A
