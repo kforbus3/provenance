@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.27 — 2026-09-13
+
+**The row that can actually be applied is now the one you are shown.** A
+container running `:latest` whose compose file names `v1.6.0-ls356` produces two
+entries, and they behave in opposite ways. Rolling out the `:latest` one can only
+skip — the host's compose has already moved past `:latest`, so the image is
+superseded, the container is never recreated, and the next check reports the same
+rebuild again. Rolling out the one the compose file names rewrites that file,
+recreates the container, and is what finally moves it off `:latest`.
+
+Only the first was ever listed, because the screen is built from what the fleet
+runs and nothing was running the pinned tag yet. Six services were in that state.
+The rebuild row was the only thing on offer for each of them, it was rolled out,
+it completed, and nothing changed.
+
+Both rows appear now. The one a compose file names is offered against the hosts
+running that repository — the same rule the rollout engine applies, so what is
+offered and what a rollout will do cannot disagree. The one still running the old
+tag reads "superseded by v1.6.0-ls356" rather than "rebuilt", drops out of the
+actionable count, and says which row to use instead.
+
+---
+
 ## v1.2.26 — 2026-09-12
 
 **Check now checks everything.** A pass was capped at forty images, so a fleet of
