@@ -276,9 +276,13 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	runs := map[string]bool{}
 	protected := map[string]string{}
 	runsRepo := map[string]bool{}
+	// What is actually RUNNING, kept separate from what `runs` grows to mean once
+	// compose files widen it. See applies.
+	containerRuns := map[string]bool{}
 	for _, c := range containers {
 		key := c.Repository + ":" + c.Tag
 		runs[key] = true
+		containerRuns[key] = true
 		runsRepo[c.Repository] = true
 		if isSelfContainer(self, c.ComposeProject, c.Image) {
 			protected[key] = c.Name
@@ -298,6 +302,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	// Restricted to repositories this host actually runs: a compose file may name
 	// a service that is not up, and deploying one because a rollout mentioned it
 	// would start something nobody asked to start.
+	declared := map[string]bool{}
 	for i := range stacks {
 		st := &stacks[i]
 		if !st.Enabled {
@@ -306,8 +311,29 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		for _, ref := range composefile.Images(st.Compose) {
 			if runsRepo[ref.Repository] {
 				runs[ref.Repository+":"+ref.Tag] = true
+				declared[ref.Repository+":"+ref.Tag] = true
 			}
 		}
+	}
+
+	// applies reports whether this rollout still has work to do on this host.
+	//
+	// The from-tag is the ordinary answer. The second case is a rollout whose own
+	// first half already landed: it rewrote the compose file to the target and
+	// then failed before deploying, so the file names the TARGET, no container
+	// runs either tag, and the from-tag it is looking for exists nowhere. Seven
+	// rollouts resumed into that state and reported "this host was not running
+	// any of the images by the time its turn came" — about a host where every one
+	// of them still had a container to recreate.
+	//
+	// Only while no container is running the target yet: once one is, the work is
+	// genuinely done and re-deploying would restart a service for nothing.
+	applies := func(im store.RolloutImage) bool {
+		if runs[im.Repository+":"+im.FromTag] {
+			return true
+		}
+		to := im.Repository + ":" + im.ToTag
+		return declared[to] && !containerRuns[to]
 	}
 
 	applied, ran, past := 0, 0, 0
@@ -316,7 +342,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 			return
 		}
 		key := im.Repository + ":" + im.FromTag
-		if !runs[key] {
+		if !applies(im) {
 			continue
 		}
 		ran++

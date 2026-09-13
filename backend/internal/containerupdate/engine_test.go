@@ -1333,3 +1333,54 @@ func TestAStackDeployLandingOnAnotherTagIsStillASupersession(t *testing.T) {
 	}
 	_ = ids
 }
+
+// A rollout whose own first half already landed.
+//
+// It rewrote the compose file to the target, then failed before deploying. The
+// file now names the TARGET, no container runs either tag, and the from-tag it
+// is looking for exists nowhere — so resuming it found nothing to do and
+// reported "this host was not running any of the images by the time its turn
+// came", about a host where every service still had a container to recreate.
+func TestARolloutWhoseFileHalfLandedStillDeploys(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	// The file is already at the target; the container never caught up.
+	f.stacks[ids[0]][0].Compose = "services:\n  web:\n    image: nginx:1.27\n"
+	f.containers[ids[0]][0].Tag = "latest"
+	f.containers[ids[0]][0].Image = "nginx:latest"
+
+	d := &fakeDeployer{}
+	newEngine(f, d, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State == store.UpdateHostSkipped {
+		t.Fatalf("skipped a host whose container still has to be recreated: %q", h.Error)
+	}
+	if d.calls != 1 {
+		t.Fatalf("deployed %d times, want 1", d.calls)
+	}
+	if len(d.services) != 1 || d.services[0] != "web" {
+		t.Errorf("services = %v, want [web] — narrowed, not the whole project", d.services)
+	}
+	if h.State != store.UpdateHostVerified {
+		t.Errorf("state = %q (%q)", h.State, h.Error)
+	}
+}
+
+func TestAContainerAlreadyOnTheTargetIsNotRedeployed(t *testing.T) {
+	// The other side of it. Once a container IS running the target, the work is
+	// done and re-deploying would restart a service for nothing.
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.stacks[ids[0]][0].Compose = "services:\n  web:\n    image: nginx:1.27\n"
+	f.containers[ids[0]][0].Tag = "1.27"
+	f.containers[ids[0]][0].Image = "nginx:1.27"
+
+	d := &fakeDeployer{}
+	newEngine(f, d, &fakeRunner{out: runningNew}).Tick(context.Background())
+
+	if d.calls != 0 {
+		t.Errorf("deployed %d times to a host already on the target", d.calls)
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostSkipped {
+		t.Errorf("state = %q, want skipped", got)
+	}
+}
