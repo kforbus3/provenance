@@ -226,17 +226,39 @@ for d in /etc/ssh/sshd_config.d/*.conf; do
   [ -e "$d" ] || continue
   sed -i '\#^RevokedKeys /etc/ssh/fleet_krl#d' "$d" 2>/dev/null || true
 done
-if grep -qE '^# (Provenance|Fleet Terminal)$' /etc/ssh/sshd_config 2>/dev/null; then
-  if grep -q 'TrustedUserCAKeys /etc/ssh/fleet_ca.pub' /etc/ssh/sshd_config 2>/dev/null; then
-    cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.provbak-$(date +%%s)
-    awk '
-      /^# (Provenance|Fleet Terminal)$/ { skip=1; next }
-      skip && /^(PubkeyAuthentication|TrustedUserCAKeys|AuthorizedPrincipalsFile) / { next }
-      skip { skip=0 }
-      { print }
-    ' /etc/ssh/sshd_config > /etc/ssh/sshd_config.prov-new &&
-      mv -f /etc/ssh/sshd_config.prov-new /etc/ssh/sshd_config
-  fi
+
+# Remove ONLY the directives naming the OLD CA -- never a whole marker block.
+#
+# A host with no sshd_config.d Include has its directives appended to the main
+# sshd_config under a marker, and enrollment appended a SECOND block for the new
+# CA. Stripping "the marker block" matched both and took the new trust with the
+# old, leaving a host that trusts no CA at all. sshd -t cannot catch that: a
+# config that trusts nothing is perfectly valid. So this edits by CA path, and the
+# check below is a positive assertion rather than a syntax check.
+sed -i '\#^TrustedUserCAKeys /etc/ssh/fleet_ca.pub#d' /etc/ssh/sshd_config 2>/dev/null || true
+# A marker left with no directives under it is noise; drop it only if the block it
+# introduced is now empty.
+awk '
+  /^# (Provenance|Fleet Terminal)$/ { marker=$0; next }
+  marker != "" {
+    if ($0 ~ /^(PubkeyAuthentication|TrustedUserCAKeys|AuthorizedPrincipalsFile|RevokedKeys) /) {
+      print marker; marker=""; print; next
+    }
+    print marker; marker=""
+  }
+  { print }
+  END { }
+' /etc/ssh/sshd_config > /etc/ssh/sshd_config.prov-new 2>/dev/null &&
+  mv -f /etc/ssh/sshd_config.prov-new /etc/ssh/sshd_config
+
+# POSITIVE assertion: the host must still trust the current CA. Checked across the
+# main config AND the drop-ins, because either may carry it.
+if ! { grep -qs "^TrustedUserCAKeys /etc/ssh/prov_ca.pub" /etc/ssh/sshd_config ||
+       grep -qsr "^TrustedUserCAKeys /etc/ssh/prov_ca.pub" /etc/ssh/sshd_config.d/ ; }; then
+  echo "[prov] CA trust for /etc/ssh/prov_ca.pub is missing after cleanup; restoring it"
+  { echo ''; echo '# Provenance'; echo 'PubkeyAuthentication yes';
+    echo 'TrustedUserCAKeys /etc/ssh/prov_ca.pub';
+    echo 'AuthorizedPrincipalsFile /etc/ssh/auth_principals/%%u'; } >> /etc/ssh/sshd_config
 fi
 
 # Validate before reloading. A config that does not parse must not be activated.

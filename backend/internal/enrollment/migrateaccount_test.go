@@ -198,3 +198,34 @@ func TestTheRowIsRecordedBeforeTheOldAccountIsRemoved(t *testing.T) {
 		t.Error("removes the old account before recording the new one, so a failed write strands the host")
 	}
 }
+
+// A host with no /etc/ssh/sshd_config.d Include has its directives appended to the
+// MAIN sshd_config under a marker, and the migration appends a SECOND block for the
+// new CA. Stripping "the marker block" matched both and removed the new trust with
+// the old, leaving a host that trusts no CA — offline, unreachable, and with a
+// config that `sshd -t` is perfectly happy with, because trusting nothing is valid.
+//
+// This is what took the Proxmox host down. The retire step must edit by CA path and
+// must assert the current trust survives, not merely that the config parses.
+func TestRetireKeepsTheCurrentCATrustOnAHostWithNoDropInInclude(t *testing.T) {
+	s := retireAccountScript("fleet")
+
+	// It must target the OLD CA path specifically...
+	if !strings.Contains(s, "TrustedUserCAKeys /etc/ssh/fleet_ca.pub#d") {
+		t.Error("does not remove the old CA directive by path")
+	}
+	// ...and never blanket-strip directives under any marker, which is what took
+	// the new trust with it.
+	if strings.Contains(s, `skip && /^(PubkeyAuthentication|TrustedUserCAKeys|AuthorizedPrincipalsFile) /`) {
+		t.Error("still strips every directive under a marker block, which removes the CURRENT CA trust too")
+	}
+	// The positive assertion: sshd -t cannot tell "trusts nothing" from "correct".
+	if !strings.Contains(s, "TrustedUserCAKeys /etc/ssh/prov_ca.pub") {
+		t.Error("never checks that trust for the current CA survived")
+	}
+	assertIdx := strings.Index(s, "is missing after cleanup")
+	validate := strings.Index(s, "if ! sshd -t")
+	if assertIdx < 0 || validate < 0 || assertIdx > validate {
+		t.Error("checks CA trust after validating/reloading rather than before")
+	}
+}
