@@ -2117,7 +2117,15 @@ No deploy note: this one is a plain bundle install.
 
 ---
 
-## v1.4.0 — One fleet, two VPNs, switchable per host — 2026-08-09
+## v1.4.0 (2026-08-09) — One fleet, two VPNs, switchable per host
+
+> **Note.** The `v1.4.0` git tag was later reused for the Provenance release of
+> the same number (top of this file), under the same policy as `v1.0.0`, `v1.1.0`
+> and `v1.3.0`: no inherited tag of this repository has ever been pushed — the
+> remote carries only the Provenance line — so moving it breaks nothing outside a
+> working copy. Verified with `git ls-remote --tags` before doing it rather than
+> assumed. This entry is the release that originally carried the number and stays
+> here as the record of it; its commit is `ead1030`.
 
 **Deploy note.** The jump host publishes a new UDP port and mounts a new volume for
 this release, and upgrade bundles do not manage the jump host. Run `make up-single`
