@@ -1,6 +1,7 @@
 package stacks
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -178,21 +179,41 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	st, out, err := h.svc.Deploy(r.Context(), id)
-	if err != nil {
-		detail := map[string]any{"output": out}
-		if st != nil {
-			detail["host"] = st.Hostname
-			detail["name"] = st.Name
+	// Detached from the request, and answered immediately.
+	//
+	// A deploy pulls images, and eight of them takes minutes. Every route is
+	// behind middleware.Timeout(60s), so this ran on the request context, was
+	// cancelled mid-pull, and then could not even record what had happened --
+	// "recording stack deployment: context canceled". The screen went on showing
+	// the previous outcome, so pressing Deploy looked like it had done nothing,
+	// which is exactly what it had done.
+	//
+	// Same treatment as the registry check, for the same reason: work that
+	// outlasts a request must not be tied to one.
+	ctx := context.WithoutCancel(r.Context())
+	// Captured here, not in the goroutine: the actor belongs to the request, and
+	// reading it after the handler has returned is a race waiting to be found.
+	actor := auth.MustPrincipal(r)
+	go func() {
+		st, out, err := h.svc.Deploy(ctx, id)
+		if err != nil {
+			detail := map[string]any{"output": out}
+			if st != nil {
+				detail["host"] = st.Hostname
+				detail["name"] = st.Name
+			}
+			h.d.Log.Warn("stack deploy failed", "stack", id, "err", err)
+			h.auditAs(ctx, actor, "stack.deploy_failed", id.String(), detail)
+			return
 		}
-		h.audit(r, "stack.deploy_failed", id.String(), detail)
-		httpx.WriteError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	h.audit(r, "stack.deploy", id.String(), map[string]any{
-		"host": st.Hostname, "name": st.Name, "revision": st.Revision})
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"status": "deployed", "revision": st.Revision, "output": out})
+		h.auditAs(ctx, actor, "stack.deploy", id.String(), map[string]any{
+			"host": st.Hostname, "name": st.Name, "revision": st.Revision})
+	}()
+
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{
+		"status": "deploying",
+		"note":   "pulling and recreating; the stack row shows the outcome when it finishes",
+	})
 }
 
 func (h *handler) rollback(w http.ResponseWriter, r *http.Request) {
@@ -220,11 +241,16 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 }
 
 func (h *handler) audit(r *http.Request, action, target string, detail map[string]any) {
-	p := auth.MustPrincipal(r)
+	h.auditAs(r.Context(), auth.MustPrincipal(r), action, target, detail)
+}
+
+// auditAs records an event for work that outlives its request. The actor is
+// passed in rather than read from the request, which by then may be over.
+func (h *handler) auditAs(ctx context.Context, p *auth.Principal, action, target string, detail map[string]any) {
 	if detail == nil {
 		detail = map[string]any{}
 	}
-	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: action,
 		TargetKind: "stack", TargetID: target, Detail: detail,
 	})

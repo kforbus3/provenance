@@ -34,6 +34,15 @@ const errMsg = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 
 function DeployState({ s }: { s: ContainerStack }) {
+  // In flight. Shown before anything else, because until this existed a deploy
+  // that was still pulling looked exactly like one that had never started.
+  if (s.deployState === "deploying") {
+    return (
+      <Tooltip title="Pulling images and recreating containers. This can take several minutes; the row updates when it finishes.">
+        <Chip label={`deploying r${s.revision}…`} size="small" color="info" />
+      </Tooltip>
+    );
+  }
   if (s.deployedRevision == null) {
     return <Chip label="never deployed" size="small" variant="outlined" />;
   }
@@ -72,6 +81,10 @@ export function StacksPage() {
     queryKey: ["stacks"],
     queryFn: () => listStacks(),
     placeholderData: keepPreviousData,
+    // A deploy in flight finishes on its own schedule, so the page follows it
+    // rather than making the operator guess when to reload.
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((st) => st.deployState === "deploying") ? 5000 : false,
   });
   const { data: hostList } = useQuery({ queryKey: ["hosts"], queryFn: () => listHosts() });
   const hosts = hostList?.hosts ?? [];
@@ -80,8 +93,9 @@ export function StacksPage() {
 
   const deploy = useMutation({
     mutationFn: deployStack,
-    onSuccess: (r) => { setOutput({ title: `Deployed r${r.revision}`, body: r.output }); refresh(); },
-    onError: (e) => setSnack(errMsg(e, "The deploy failed.")),
+    // Accepted, not finished. The row reports the outcome when there is one.
+    onSuccess: (r) => { setSnack(r.note ?? "Deploying — the row updates when it finishes."); refresh(); },
+    onError: (e) => setSnack(errMsg(e, "The deploy could not be started.")),
   });
   const rollback = useMutation({
     mutationFn: rollbackStack,

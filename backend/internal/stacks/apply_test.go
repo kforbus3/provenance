@@ -3,6 +3,8 @@ package stacks
 import (
 	"strings"
 	"testing"
+
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // A compose file is full of shell metacharacters and must survive verbatim.
@@ -195,5 +197,42 @@ func TestANarrowedPullNamesTheServiceAndNothingElse(t *testing.T) {
 	if strings.Contains(script, "--remove-orphans") {
 		t.Error("a narrowed deploy must not remove orphans — it would delete the " +
 			"services it was told not to touch")
+	}
+}
+
+// A deploy that is still pulling must not read as drift.
+//
+// Drift means "the host is not running what it should be", which is an
+// invitation to act. A deploy in flight IS that action, happening now, and
+// flagging it would put every stack into the needs-attention list for the
+// minutes it takes to pull eight images.
+func TestADeployInFlightIsNotDrift(t *testing.T) {
+	// The host is still on r11 while r12 is being pulled -- MarkStackDeploying
+	// deliberately leaves the recorded revision alone, because claiming r12
+	// before it is running would be a success reported minutes early.
+	//
+	// So the revisions DISAGREE for the whole deploy, which is drift by every
+	// other measure. It is not: drift means "the host is not running what it
+	// should be", which is an invitation to act, and this IS that action
+	// happening now. Without this, every stack joins the needs-attention list for
+	// the minutes it takes to pull.
+	prev := 11
+	in := store.ContainerStack{
+		Enabled: true, Revision: 12, Deployed: &prev, DeployState: DeployStateDeploying,
+	}
+	if driftsFrom(in) {
+		t.Error("a deploy in progress was reported as drift")
+	}
+}
+
+func TestAFailedDeployIsStillDriftEvenAtTheRightRevision(t *testing.T) {
+	// The host confirmed an ATTEMPT at that revision, not a success. Treating
+	// those as the same is how a tool ends up reporting that everything is fine.
+	rev := 12
+	in := store.ContainerStack{
+		Enabled: true, Revision: 12, Deployed: &rev, DeployState: DeployStateFailed,
+	}
+	if !driftsFrom(in) {
+		t.Error("a failed deploy at the right revision must still count as drift")
 	}
 }

@@ -18,6 +18,7 @@ export interface ContainerStack {
   // What the host last confirmed it applied. Separate from `revision` so
   // "should be running" and "is running" cannot be read as the same thing.
   deployedRevision?: number;
+  // "deploying" while a deploy is in flight, then "deployed" / "failed".
   deployState?: string;
   deployDetail?: string;
   deployedAt?: string;
@@ -75,9 +76,16 @@ export async function deleteStack(id: string): Promise<void> {
   await api.delete(`/api/v1/stacks/${id}`);
 }
 
-export async function deployStack(id: string): Promise<{ revision: number; output: string }> {
-  const { data } = await api.post<{ revision: number; output: string }>(
-    `/api/v1/stacks/${id}/deploy`);
+// Starts a deploy. It does NOT wait for one.
+//
+// A deploy pulls images, and eight of them takes minutes — far longer than the
+// 60s request timeout every route sits behind. It used to run on the request,
+// get cancelled mid-pull, and fail even to record what had happened, so the
+// screen went on showing the previous outcome and pressing Deploy looked like it
+// had done nothing. The stack row carries the state from here on: "deploying"
+// while it runs, then deployed or failed.
+export async function deployStack(id: string): Promise<{ status: string; note?: string }> {
+  const { data } = await api.post<{ status: string; note?: string }>(`/api/v1/stacks/${id}/deploy`);
   return data;
 }
 

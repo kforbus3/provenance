@@ -265,6 +265,28 @@ func (s *Store) RecordStackDeployment(ctx context.Context, stackID uuid.UUID, re
 	return err
 }
 
+// MarkStackDeploying records that a deploy has started, WITHOUT touching the
+// revision the host is known to be running.
+//
+// That distinction is the whole point. RecordStackDeployment overwrites the
+// revision, so using it to mark a start would record the host as running the
+// target before it is -- and a deploy that pulls eight images takes minutes, all
+// of which would be spent claiming a success that had not happened. The host is
+// still on whatever it was on until the deploy says otherwise.
+//
+// On a stack that has never deployed there is no prior revision, so 0 stands for
+// "none": the state says deploying, and if it fails the row reads "failed at r0",
+// which is true -- nothing has ever been deployed.
+func (s *Store) MarkStackDeploying(ctx context.Context, stackID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO container_stack_deployments (stack_id, revision, state, detail, applied_at)
+		VALUES ($1, 0, 'deploying', '', now())
+		ON CONFLICT (stack_id) DO UPDATE SET
+			state='deploying', detail='', applied_at=now()`,
+		stackID)
+	return err
+}
+
 // DeleteStack removes a definition. It does NOT stop what is running: taking a
 // stack out of the inventory and tearing it down on the host are different
 // intentions, and conflating them would make forgetting to record something a

@@ -38,6 +38,13 @@ var ErrNoCompose = errors.New("this stack has no compose file to deploy")
 // The result is recorded either way. A deployment that failed is not the absence
 // of a deployment: leaving the previous success in place would say the host is
 // running a revision it is not, and that lie is worse than the failure.
+// Deployment states recorded against a stack.
+const (
+	DeployStateDeploying = "deploying"
+	DeployStateDeployed  = "deployed"
+	DeployStateFailed    = "failed"
+)
+
 func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
 	return s.deploy(ctx, stackID, false, "")
 }
@@ -70,6 +77,14 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 	if err != nil {
 		return nil, "", fmt.Errorf("host: %w", err)
 	}
+
+	// In progress, recorded before it starts.
+	//
+	// A deploy that pulls eight images takes minutes, and until it finishes there
+	// was nothing anywhere saying so: the screen kept showing the PREVIOUS
+	// outcome, so an operator who pressed Deploy and looked had no way to tell a
+	// run in flight from one that never started. See DeployStateDeploying.
+	_ = s.store.MarkStackDeploying(ctx, st.ID)
 
 	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(RenderScript(st.Path, st.Compose, st.Revision, pull, service)), h)
 	state := "deployed"
@@ -146,5 +161,11 @@ func driftsFrom(st store.ContainerStack) bool {
 	if !st.Enabled {
 		return false
 	}
-	return st.Deployed == nil || *st.Deployed != st.Revision || st.DeployState == "failed"
+	// A deploy in flight is not drift. It is the answer to drift, happening now,
+	// and flagging it would put every stack into the needs-attention list for the
+	// minutes it takes to pull.
+	if st.DeployState == DeployStateDeploying {
+		return false
+	}
+	return st.Deployed == nil || *st.Deployed != st.Revision || st.DeployState == DeployStateFailed
 }
