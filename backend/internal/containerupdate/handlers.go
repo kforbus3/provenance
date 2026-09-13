@@ -3,6 +3,7 @@ package containerupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -44,6 +45,8 @@ func Mount(r chi.Router, d *app.Deps, st *store.Store, e *Engine) {
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/container-update-rollouts/{id}/pause", h.pause)
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/container-update-rollouts/{id}/resume", h.resume)
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/container-update-rollouts/{id}/cancel", h.cancel)
+		pr.With(d.Auth.RequirePermission("Command.Run")).Delete("/container-update-rollouts/{id}", h.del)
+		pr.With(d.Auth.RequirePermission("Command.Run")).Delete("/container-update-rollouts", h.clearFinished)
 	})
 }
 
@@ -277,6 +280,46 @@ func (h *handler) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"state": store.UpdateRolloutRunning})
+}
+
+// del removes one finished rollout from the history.
+//
+// The containers it updated are untouched; this clears the record, not the
+// state. A rollout still running is refused rather than deleted -- see
+// DeleteUpdateRollout.
+func (h *handler) del(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := h.st.DeleteUpdateRollout(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrRolloutNotFinished) {
+			httpx.WriteError(w, http.StatusConflict,
+				"only a finished rollout can be cleared — cancel it first")
+			return
+		}
+		h.d.Log.Warn("deleting update rollout", "id", id, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "could not clear the rollout")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": 1})
+}
+
+// clearFinished removes every finished rollout in one call.
+//
+// One statement rather than a delete per id from the client: clearing thirty
+// rollouts should not be thirty requests that can half-fail and leave the list
+// in a state nobody asked for.
+func (h *handler) clearFinished(w http.ResponseWriter, r *http.Request) {
+	n, err := h.st.DeleteFinishedUpdateRollouts(r.Context())
+	if err != nil {
+		h.d.Log.Warn("clearing finished update rollouts", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "could not clear the rollouts")
+		return
+	}
+	h.d.Log.Info("cleared finished container update rollouts", "count", n)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": n})
 }
 
 // resolveTargets fills in what each image's TARGET tag points at, in place.

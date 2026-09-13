@@ -2,9 +2,14 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/kforbus3/provenance/backend/internal/composefile"
 )
 
 // UpdateRollout is a staged rollout of one container image update.
@@ -491,5 +496,189 @@ func (s *Store) HostsRunningAnyImage(ctx context.Context, images []RolloutImage)
 		}
 		out = append(out, id)
 	}
+	seen := map[uuid.UUID]bool{}
+	for _, id := range out {
+		seen[id] = true
+	}
+
+	// A host also counts when its own compose file NAMES the tag, even though no
+	// container is running it yet.
+	//
+	// Pinning a compose file to the version a container is already on recreates
+	// nothing, so between the pin and the next deploy the file says
+	// bazarr:v1.6.0-ls356 while the container is still on :latest. The registry
+	// check follows the file -- that is the version an operator chose, and the
+	// only one a newer version can be found against -- so the update they are
+	// offered names a from-tag no container has. Matching only the running tag
+	// answered "no host is running lscr.io/linuxserver/bazarr:v1.6.0-ls356" and
+	// refused to create the rollout, for an update the screen had just offered.
+	//
+	// This is the same rule the ENGINE applies when deciding whether a declared
+	// tag counts as one a host runs. The two have to agree, or a rollout is
+	// either refused at creation or created and then skipped on every host.
+	declared, err := s.hostsDeclaringAnyImage(ctx, images)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range declared {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
 	return out, rows.Err()
+}
+
+// hostsDeclaringAnyImage returns hosts whose enabled stacks name one of these
+// repository:tag pairs, restricted to hosts actually running the repository.
+//
+// The restriction matters: a compose file may name a service that is scaled to
+// zero or commented out of the running project, and a rollout must not start
+// something nobody asked to start.
+func (s *Store) hostsDeclaringAnyImage(ctx context.Context, images []RolloutImage) ([]uuid.UUID, error) {
+	// Which repositories each host actually runs.
+	runs := map[uuid.UUID]map[string]bool{}
+	rows, err := s.pool.Query(ctx, `
+		SELECT hi.host_id, c->>'repository'
+		FROM host_inventory hi,
+		     LATERAL jsonb_array_elements(COALESCE(hi.containers, jsonb_build_array())) AS c
+		WHERE COALESCE(c->>'repository','') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		var repo string
+		if err := rows.Scan(&id, &repo); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if runs[id] == nil {
+			runs[id] = map[string]bool{}
+		}
+		runs[id][repo] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	srows, err := s.pool.Query(ctx, `
+		SELECT host_id, compose FROM container_stacks
+		WHERE enabled AND COALESCE(compose,'') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer srows.Close()
+	var stacks []hostCompose
+	for srows.Next() {
+		var hc hostCompose
+		if err := srows.Scan(&hc.HostID, &hc.Compose); err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, hc)
+	}
+	if err := srows.Err(); err != nil {
+		return nil, err
+	}
+	return matchDeclaringHosts(runs, stacks, images), nil
+}
+
+// hostCompose is one enabled stack's text and the host it belongs to.
+type hostCompose struct {
+	HostID  uuid.UUID
+	Compose string
+}
+
+// matchDeclaringHosts is the decision, separated from the queries so it can be
+// tested without a database: which hosts a rollout applies to when its from-tag
+// is one a compose file NAMES rather than one a container is running.
+func matchDeclaringHosts(runs map[uuid.UUID]map[string]bool, stacks []hostCompose,
+	images []RolloutImage) []uuid.UUID {
+	want := map[string]bool{}
+	for _, im := range images {
+		want[im.Repository+":"+im.FromTag] = true
+	}
+	out := []uuid.UUID{}
+	seen := map[uuid.UUID]bool{}
+	for _, st := range stacks {
+		if seen[st.HostID] {
+			continue
+		}
+		for _, ref := range composefile.Images(st.Compose) {
+			// Restricted to a repository the host actually runs: a compose file
+			// may name a service that is scaled to zero or commented out of the
+			// running project, and a rollout must not start something nobody
+			// asked to start.
+			if want[ref.Repository+":"+ref.Tag] && runs[st.HostID][ref.Repository] {
+				seen[st.HostID] = true
+				out = append(out, st.HostID)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// ErrRolloutNotFinished is returned when a delete is attempted on a rollout that
+// is still running or paused.
+var ErrRolloutNotFinished = errors.New("this rollout has not finished")
+
+// FinishedUpdateRolloutStates are the states a rollout stops in.
+//
+// Paused is deliberately absent. It looks inert and is not: the hosts it has
+// already claimed are mid-update, and resume is a button somebody may still be
+// intending to press.
+var FinishedUpdateRolloutStates = []string{
+	UpdateRolloutCompleted, UpdateRolloutCancelled, UpdateRolloutHalted,
+}
+
+// DeleteUpdateRollout removes a finished rollout and everything recorded under
+// it.
+//
+// The containers it updated are untouched -- this clears history, not state.
+// Which is exactly why it refuses a rollout that has NOT finished: deleting one
+// mid-flight would strand hosts the engine has already claimed, with nothing
+// left to record what happened to them or to report that anything went wrong.
+//
+// The per-host rows and the image list go with it by ON DELETE CASCADE.
+func (s *Store) DeleteUpdateRollout(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM container_update_rollouts WHERE id = $1 AND state = ANY($2)`,
+		id, FinishedUpdateRolloutStates)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// Either it is gone already or it is still running. Tell those apart, so
+		// "already cleared" does not surface as a refusal an operator has to
+		// think about.
+		var state string
+		err := s.pool.QueryRow(ctx,
+			`SELECT state FROM container_update_rollouts WHERE id = $1`, id).Scan(&state)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // nothing to remove; the caller wanted it gone and it is
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: it is %s", ErrRolloutNotFinished, state)
+	}
+	return nil
+}
+
+// DeleteFinishedUpdateRollouts clears every finished rollout at once, and
+// reports how many it removed.
+//
+// One statement rather than a delete per id from the client: clearing thirty
+// rollouts should not be thirty requests that can half-fail and leave the list
+// in a state nobody asked for.
+func (s *Store) DeleteFinishedUpdateRollouts(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM container_update_rollouts WHERE state = ANY($1)`,
+		FinishedUpdateRolloutStates)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

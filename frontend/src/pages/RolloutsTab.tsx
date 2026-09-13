@@ -1,9 +1,10 @@
 import { useState } from "react";
 import {
-  Alert, Box, Chip, Collapse, IconButton, LinearProgress, Paper, Snackbar,
+  Alert, Box, Button, Chip, Collapse, IconButton, LinearProgress, Paper, Snackbar,
   Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip,
   Typography,
 } from "@mui/material";
+import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
@@ -11,7 +12,7 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listRollouts, getRollout, rolloutAction, type UpdateRollout,
+  listRollouts, clearFinishedRollouts, getRollout, rolloutAction, type UpdateRollout,
 } from "../api/containerUpdates";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
@@ -213,6 +214,7 @@ function RolloutRow({ r, canRun, onMessage }: {
 export function RolloutsTab() {
   const canRun = useAuthStore((s) => s.has("Command.Run"));
   const [snack, setSnack] = useState("");
+  const qc = useQueryClient();
 
   const { data: rollouts = [], isLoading } = useQuery({
     queryKey: ["rollouts"],
@@ -224,6 +226,23 @@ export function RolloutsTab() {
 
   const running = rollouts.filter((r) => r.state === "running").length;
   const halted = rollouts.filter((r) => r.state === "halted").length;
+
+  // A rollout that is over is history, not state. Leaving every one of them on
+  // the page for ever buries the one that is actually running — an evening of
+  // one-image rollouts puts thirty finished rows above it.
+  //
+  // Paused is deliberately not "finished": it looks inert and is not, because
+  // resume is a button somebody may still be intending to press.
+  const FINISHED = ["completed", "cancelled", "halted"];
+  const finished = rollouts.filter((r) => FINISHED.includes(r.state));
+  const clear = useMutation({
+    mutationFn: clearFinishedRollouts,
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["rollouts"] });
+      setSnack(`Cleared ${res.deleted} finished rollout${res.deleted === 1 ? "" : "s"}`);
+    },
+    onError: () => setSnack("Could not clear the finished rollouts"),
+  });
 
   return (
     <Box>
@@ -243,6 +262,23 @@ export function RolloutsTab() {
         <Alert severity="info" sx={{ mb: 2 }}>
           {running} rollout{running > 1 ? "s are" : " is"} in progress.
         </Alert>
+      )}
+
+      {canRun && finished.length > 0 && (
+        <Stack direction="row" sx={{ mb: 2 }}>
+          <Button size="small" startIcon={<DeleteSweepIcon />} disabled={clear.isPending}
+                  onClick={() => {
+                    if (window.confirm(
+                      `Clear ${finished.length} finished rollout`
+                      + `${finished.length === 1 ? "" : "s"} from this list? The containers `
+                      + `they updated are unaffected — this removes the history, not the state. `
+                      + `Anything still running or paused is kept.`)) {
+                      clear.mutate();
+                    }
+                  }}>
+            {clear.isPending ? "Clearing…" : `Clear finished (${finished.length})`}
+          </Button>
+        </Stack>
       )}
 
       {isLoading && <Typography variant="body2">Loading…</Typography>}

@@ -155,6 +155,22 @@ export async function createRollout(req: CreateRolloutRequest): Promise<UpdateRo
   return data;
 }
 
+// Clears finished rollouts from the history. The containers they updated are
+// unaffected — this removes the record, not the state.
+//
+// One request rather than a delete per id: clearing thirty rollouts should not
+// be thirty requests that can half-fail and leave the list in a state nobody
+// asked for.
+export async function clearFinishedRollouts(): Promise<{ deleted: number }> {
+  const { data } = await api.delete<{ deleted: number }>(
+    "/api/v1/container-update-rollouts");
+  return data;
+}
+
+export async function deleteRollout(id: string): Promise<void> {
+  await api.delete(`/api/v1/container-update-rollouts/${id}`);
+}
+
 export async function rolloutAction(
   id: string, action: "pause" | "resume" | "cancel",
 ): Promise<{ state: string }> {
