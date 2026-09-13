@@ -29,7 +29,9 @@ const errMsg = (e: unknown, fallback: string) =>
 // What this row is telling the operator, as one of four states. Kept in one
 // place because the states overlap: an image can have a newer tag AND a moved
 // digest, and showing both as separate badges reads as two problems.
-type Verdict = "error" | "newer" | "moved" | "current" | "unknown" | "local" | "gone" | "self" | "unchecked";
+type Verdict =
+  | "error" | "newer" | "moved" | "current" | "unknown"
+  | "local" | "gone" | "self" | "unchecked" | "superseded";
 
 // hostsOf normalises the hosts list.
 //
@@ -43,7 +45,16 @@ function hostsOf(u: ImageUpdate): ImageUpdateHost[] {
   return u.hosts ?? [];
 }
 
-function verdictOf(u: ImageUpdate): Verdict {
+// A row whose repository also has a compose-declared row is not actionable: the
+// host's compose has moved past the tag this row names, so a rollout of it is
+// skipped as superseded and the container is never recreated. Acting on the
+// declared row is what moves it.
+export function supersededBy(u: ImageUpdate, all: ImageUpdate[]): ImageUpdate | undefined {
+  if (u.declared) return undefined;
+  return all.find((o) => o.declared && o.repository === u.repository && o.tag !== u.tag);
+}
+
+export function verdictOf(u: ImageUpdate, all: ImageUpdate[] = []): Verdict {
   // Nothing runs this any more. Says so rather than "up to date", which is a
   // claim about something you are running — and this is the row an operator
   // sees immediately after an upgrade, for the tags the upgrade just replaced.
@@ -61,6 +72,7 @@ function verdictOf(u: ImageUpdate): Verdict {
   // there is simply nothing to compare against, and showing it as either would
   // put this product's own containers permanently in the needs-attention list.
   if (u.note?.startsWith("built locally")) return "local";
+  if (supersededBy(u, all)) return "superseded";
   if (u.latestTag) return "newer";
   if (hostsOf(u).some((h) => h.stale)) return "moved";
   // A note with no newer tag means the registry answered but its tags could not
@@ -70,8 +82,15 @@ function verdictOf(u: ImageUpdate): Verdict {
   return "current";
 }
 
-function VerdictChip({ u }: { u: ImageUpdate }) {
-  switch (verdictOf(u)) {
+function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
+  const superseded = supersededBy(u, all);
+  switch (verdictOf(u, all)) {
+    case "superseded":
+      return (
+        <Tooltip title={`These hosts still run ${u.tag}, but their compose file names ${superseded?.tag}. Updating this row would be skipped — the compose has already moved past it. Update the ${superseded?.tag} row instead; that rewrites the file and recreates the container.`}>
+          <Chip label={`superseded by ${superseded?.tag}`} size="small" variant="outlined" />
+        </Tooltip>
+      );
     case "error":
       return (
         <Tooltip title={u.error ?? ""}>
@@ -121,13 +140,13 @@ function VerdictChip({ u }: { u: ImageUpdate }) {
   }
 }
 
-function UpdateRow({ u, canRun, onRollOut }: {
-  u: ImageUpdate; canRun: boolean; onRollOut: (u: ImageUpdate) => void;
+function UpdateRow({ u, all, canRun, onRollOut }: {
+  u: ImageUpdate; all: ImageUpdate[]; canRun: boolean; onRollOut: (u: ImageUpdate) => void;
 }) {
   const [open, setOpen] = useState(false);
   const hosts = hostsOf(u);
   const stale = hosts.filter((h) => h.stale).length;
-  const verdict = verdictOf(u);
+  const verdict = verdictOf(u, all);
   // Only something actionable can be rolled out. Offering the button on a row
   // that says "up to date" would invite a rollout that deploys the same bytes
   // to every host and reports success for a change nobody made.
@@ -144,7 +163,7 @@ function UpdateRow({ u, canRun, onRollOut }: {
         <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>
           {u.repository}:{u.tag}
         </TableCell>
-        <TableCell><VerdictChip u={u} /></TableCell>
+        <TableCell><VerdictChip u={u} all={all} /></TableCell>
         <TableCell>
           {hosts.length}
           {stale > 0 && (
@@ -262,9 +281,15 @@ export function ContainerUpdatesTab() {
     }
     // Actionable first. An operator opening this screen wants the images that
     // need a decision, not an alphabetical list with three of them buried in it.
-    const rank: Record<Verdict, number> = { newer: 0, moved: 1, unknown: 2, error: 3, unchecked: 4, current: 5, local: 6, self: 7, gone: 8 };
+    // Superseded sits below the actionable rows and above the quiet ones: it is
+    // not a decision, but it is the row an operator will look for after
+    // wondering why a rollout of the tag above it changed nothing.
+    const rank: Record<Verdict, number> = {
+      newer: 0, moved: 1, superseded: 2, unknown: 3, error: 4,
+      unchecked: 5, current: 6, local: 7, self: 8, gone: 9,
+    };
     return [...rows].sort((a, b) =>
-      rank[verdictOf(a)] - rank[verdictOf(b)] ||
+      rank[verdictOf(a, updates)] - rank[verdictOf(b, updates)] ||
       a.repository.localeCompare(b.repository));
   }, [updates, filter, hostFilter]);
 
@@ -277,8 +302,8 @@ export function ContainerUpdatesTab() {
   // is built around, so the summary should not be the one place that flattens it.
   const canAct = (u: ImageUpdate) =>
     hostsOf(u).length > 0 && !hostsOf(u).some((h) => h.protected);
-  const newerUpdates = updates.filter((u) => verdictOf(u) === "newer" && canAct(u));
-  const rebuiltUpdates = updates.filter((u) => verdictOf(u) === "moved" && canAct(u));
+  const newerUpdates = updates.filter((u) => verdictOf(u, updates) === "newer" && canAct(u));
+  const rebuiltUpdates = updates.filter((u) => verdictOf(u, updates) === "moved" && canAct(u));
   const actionableUpdates = [...newerUpdates, ...rebuiltUpdates];
   const actionable = actionableUpdates.length;
 
@@ -382,7 +407,7 @@ export function ContainerUpdatesTab() {
             </TableHead>
             <TableBody>
               {shown.map((u) => (
-                <UpdateRow key={`${u.repository}:${u.tag}`} u={u} canRun={canRun}
+                <UpdateRow key={`${u.repository}:${u.tag}`} u={u} all={updates} canRun={canRun}
                            onRollOut={setRollingOut} />
               ))}
             </TableBody>

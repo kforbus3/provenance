@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 )
@@ -75,22 +74,29 @@ func TestAnUncheckedImageIsStillARowWithNoTimestamp(t *testing.T) {
 	}
 }
 
-// The query is driven by TrackedImages (what the fleet runs), not by the checked
-// rows. Reversing that is the bug above, and it is invisible until a host's
-// containers first appear.
+// The rows are driven by what the fleet RUNS, not by what has been checked.
+//
+// Reversing that is the bug above, and it is invisible until a host's containers
+// first appear: an image nobody has asked a registry about yet gets no row, so a
+// freshly swept host shows nothing at all with nothing saying why.
+//
+// This used to inspect the source for the loop, because the assembly was buried
+// in a method that needed a database. It is a plain function now, so the
+// property can simply be asserted.
 func TestTheUpdatesQueryIsDrivenByWhatTheFleetRuns(t *testing.T) {
-	src, err := os.ReadFile("imageupdates.go")
-	if err != nil {
-		t.Fatal(err)
+	tracked := []TrackedImage{{Repository: "team/app", Tag: "1.0.0", Digest: "sha256:a"}}
+	byImage := map[string][]ImageUpdateHost{
+		"team/app:1.0.0": {{HostID: "h1", Hostname: "docker", Digest: "sha256:a"}},
 	}
-	body := funcBody(string(src), "func (s *Store) ImageUpdatesWithHosts")
-	if body == "" {
-		t.Fatal("ImageUpdatesWithHosts not found")
+	// Nothing checked at all.
+	rows := assembleImageRows(tracked, nil, byImage)
+	if len(rows) != 1 {
+		t.Fatalf("an image the fleet runs but has never been checked has no row: %+v", rows)
 	}
-	trackedAt := strings.Index(body, "s.TrackedImages(ctx)")
-	loopAt := strings.Index(body, "for _, t := range tracked")
-	if trackedAt < 0 || loopAt < 0 {
-		t.Fatal("the rows are no longer built from the tracked images, so an image " +
-			"the fleet runs but has never been checked has no row at all")
+	if !rows[0].CheckedAt.IsZero() {
+		t.Error("an unchecked row must carry a zero timestamp the client can detect")
+	}
+	if len(rows[0].Hosts) != 1 || rows[0].Hosts[0].Hostname != "docker" {
+		t.Errorf("the hosts running it must still be listed: %+v", rows[0].Hosts)
 	}
 }

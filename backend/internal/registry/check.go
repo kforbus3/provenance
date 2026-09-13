@@ -177,7 +177,8 @@ func (c *Checker) check(ctx context.Context, force bool, batches int) (checked, 
 
 // checkOne asks about a single repository:tag.
 func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.ImageUpdate {
-	rec := store.ImageUpdate{Repository: img.Repository, Tag: img.Tag}
+	rec := store.ImageUpdate{
+		Repository: img.Repository, Tag: img.Tag, Declared: img.Declared}
 
 	// An image with no repository digest was never pulled from a registry. Docker
 	// records RepoDigests only for images it fetched, so a locally built one --

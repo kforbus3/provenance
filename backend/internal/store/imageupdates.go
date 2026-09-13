@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,13 +14,17 @@ import (
 
 // ImageUpdate is what a registry last said about one repository:tag pair.
 type ImageUpdate struct {
-	Repository string    `json:"repository"`
-	Tag        string    `json:"tag"`
-	Digest     string    `json:"digest,omitempty"`
-	LatestTag  string    `json:"latestTag,omitempty"`
-	Note       string    `json:"note,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	CheckedAt  time.Time `json:"checkedAt"`
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	// Declared marks a tag that came from a compose file rather than a running
+	// container. The two need different treatment: only the declared row can be
+	// applied when a host's compose has moved past what it is running.
+	Declared  bool      `json:"declared"`
+	Digest    string    `json:"digest,omitempty"`
+	LatestTag string    `json:"latestTag,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CheckedAt time.Time `json:"checkedAt"`
 }
 
 // TrackedImage is one repository:tag a host is running, and the digest it is
@@ -85,22 +90,23 @@ func (s *Store) TrackedImages(ctx context.Context) ([]TrackedImage, error) {
 func (s *Store) UpsertImageUpdate(ctx context.Context, in ImageUpdate) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO container_image_updates
-		    (repository, tag, current_digest, latest_tag, note, error, checked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now())
+		    (repository, tag, current_digest, latest_tag, note, error, declared, checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 		ON CONFLICT (repository, tag) DO UPDATE SET
 		    current_digest = EXCLUDED.current_digest,
 		    latest_tag     = EXCLUDED.latest_tag,
 		    note           = EXCLUDED.note,
 		    error          = EXCLUDED.error,
+		    declared       = EXCLUDED.declared,
 		    checked_at     = now()`,
-		in.Repository, in.Tag, in.Digest, in.LatestTag, in.Note, in.Error)
+		in.Repository, in.Tag, in.Digest, in.LatestTag, in.Note, in.Error, in.Declared)
 	return err
 }
 
 // ImageUpdates returns every recorded check.
 func (s *Store) ImageUpdates(ctx context.Context) ([]ImageUpdate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT repository, tag, current_digest, latest_tag, note, error, checked_at
+		SELECT repository, tag, current_digest, latest_tag, note, error, declared, checked_at
 		FROM container_image_updates
 		ORDER BY repository, tag`)
 	if err != nil {
@@ -111,7 +117,7 @@ func (s *Store) ImageUpdates(ctx context.Context) ([]ImageUpdate, error) {
 	for rows.Next() {
 		var u ImageUpdate
 		if err := rows.Scan(&u.Repository, &u.Tag, &u.Digest, &u.LatestTag,
-			&u.Note, &u.Error, &u.CheckedAt); err != nil {
+			&u.Note, &u.Error, &u.Declared, &u.CheckedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -244,11 +250,6 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) (
 	if err != nil {
 		return nil, err
 	}
-	byKey := make(map[string]ImageUpdate, len(checked))
-	for _, u := range checked {
-		byKey[u.Repository+":"+u.Tag] = u
-	}
-
 	rows, err := s.pool.Query(ctx, `
 		SELECT c->>'repository', COALESCE(c->>'tag',''), h.id::text, h.hostname,
 		       COALESCE(c->>'digest',''), COALESCE(c->>'name',''),
@@ -279,6 +280,23 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) (
 		return nil, err
 	}
 
+	return assembleImageRows(tracked, checked, byImage), nil
+}
+
+// assembleImageRows decides which rows an operator is shown, and therefore which
+// ones they can act on.
+//
+// Separated from the queries because it is the decision rather than the
+// plumbing, and it got that decision wrong in a way no query test would have
+// caught: the list was built only from what the fleet RUNS, which silently
+// dropped every row that could be applied.
+func assembleImageRows(tracked []TrackedImage, checked []ImageUpdate,
+	byImage map[string][]ImageUpdateHost) []ImageUpdateRow {
+	byKey := make(map[string]ImageUpdate, len(checked))
+	for _, u := range checked {
+		byKey[u.Repository+":"+u.Tag] = u
+	}
+
 	out := make([]ImageUpdateRow, 0, len(tracked))
 	for _, t := range tracked {
 		key := t.Repository + ":" + t.Tag
@@ -301,7 +319,62 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) (
 		}
 		out = append(out, ImageUpdateRow{ImageUpdate: u, Hosts: hosts})
 	}
-	return out, nil
+
+	// Then the rows for tags a compose file NAMES but nothing is running yet.
+	//
+	// A container on :latest whose compose names v1.6.0-ls356 produces two rows,
+	// and they behave in opposite ways. Rolling out the :latest one can only
+	// skip: the host's compose has moved past :latest, so the image is
+	// superseded and the container is never recreated, and the row reports
+	// "rebuilt" again on the next check, forever. Rolling out the declared one
+	// rewrites the file, recreates the container, and is what finally moves it
+	// off :latest.
+	//
+	// Six services were in that state and the actionable row for every one of
+	// them was invisible here -- so the rebuild row was the only thing on offer,
+	// was rolled out, completed successfully, and changed nothing.
+	//
+	// The hosts are those running the REPOSITORY at any tag, which is the same
+	// rule the rollout engine applies when deciding whether a declared tag counts
+	// as one a host runs. What this screen offers and what a rollout will do
+	// cannot disagree.
+	byRepo := map[string][]ImageUpdateHost{}
+	for key, hosts := range byImage {
+		colon := strings.LastIndex(key, ":")
+		if colon < 0 {
+			continue
+		}
+		byRepo[key[:colon]] = append(byRepo[key[:colon]], hosts...)
+	}
+	for _, u := range checked {
+		if !u.Declared {
+			continue
+		}
+		if _, running := byImage[u.Repository+":"+u.Tag]; running {
+			continue // already emitted above, from the running list
+		}
+		hosts := byRepo[u.Repository]
+		if len(hosts) == 0 {
+			continue // nothing runs this repository; the next check prunes it
+		}
+		// Deliberately NOT marked stale. Stale compares the digest a host is
+		// running against the one behind THIS tag, and a host that is not running
+		// this tag has no answer to that -- calling it old would invent one.
+		copied := make([]ImageUpdateHost, len(hosts))
+		copy(copied, hosts)
+		for i := range copied {
+			copied[i].Stale = false
+		}
+		out = append(out, ImageUpdateRow{ImageUpdate: u, Hosts: copied})
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Repository != out[j].Repository {
+			return out[i].Repository < out[j].Repository
+		}
+		return out[i].Tag < out[j].Tag
+	})
+	return out
 }
 
 // HostContainers returns what one host reported running.

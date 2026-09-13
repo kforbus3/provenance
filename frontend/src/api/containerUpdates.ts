@@ -29,6 +29,11 @@ export interface ImageUpdateHost {
 export interface ImageUpdate {
   repository: string;
   tag: string;
+  // True when this tag comes from a compose file rather than a running
+  // container. The two behave in opposite ways: a rollout of a running :latest
+  // whose compose names a version can only skip, while a rollout of the declared
+  // row rewrites the file and recreates the container.
+  declared?: boolean;
   // What the tag points at in the registry now.
   digest?: string;
   // A newer tag, when one was found AND could be ordered confidently. Empty is a
