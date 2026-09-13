@@ -99,6 +99,19 @@ if [ -d /etc/ssh/auth_principals ]; then
 	do_ rmdir /etc/ssh/auth_principals 2>/dev/null && say "removed empty /etc/ssh/auth_principals"
 fi
 
+# 1b. The KRL directive. It is appended separately from the marker block, and on a
+#    host with no /etc/ssh/sshd_config.d it lands in the main sshd_config. Removing
+#    the KRL file above while a directive still names it leaves an sshd that fails
+#    its next reload -- long after this script ran.
+if grep -qE '^RevokedKeys /etc/ssh/(prov|fleet)_krl' /etc/ssh/sshd_config 2>/dev/null; then
+	if [ "$DRY" -eq 1 ]; then
+		echo "[dry-run] would remove the RevokedKeys directive from /etc/ssh/sshd_config"
+	else
+		sed -i -E '\#^RevokedKeys /etc/ssh/(prov|fleet)_krl#d' /etc/ssh/sshd_config &&
+			say "removed the RevokedKeys directive from /etc/ssh/sshd_config"
+	fi
+fi
+
 # 2. Hosts whose sshd_config has no Include got the directives appended under a
 #    marker. Drop exactly that block and nothing else. Either marker: the one on
 #    disk is whichever release enrolled this host ("# Fleet Terminal" before the

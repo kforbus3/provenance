@@ -1170,6 +1170,11 @@ rm -f /etc/ssh/auth_principals/fleet /etc/ssh/auth_principals/fleet-login
 rm -f /etc/ssh/auth_principals/prov /etc/ssh/auth_principals/prov-login
 rmdir /etc/ssh/auth_principals 2>/dev/null
 rm -f /etc/ssh/sshd_config.d/00-prov.conf /etc/ssh/sshd_config.d/00-fleet.conf
+# The KRL directive is appended on its own, and on a host with no
+# /etc/ssh/sshd_config.d it goes into the MAIN sshd_config rather than a drop-in.
+# Removing the KRL file while a directive still names it leaves an sshd that fails
+# to start on its next reload.
+sed -i '\#^RevokedKeys /etc/ssh/\(prov\|fleet\)_krl#d' /etc/ssh/sshd_config 2>/dev/null
 # Hosts whose sshd_config has no Include got the directives appended under a
 # marker line. Drop exactly that block, nothing else. Match either marker: the
 # one on disk is whichever release enrolled the host.

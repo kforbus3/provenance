@@ -157,6 +157,16 @@ NOSUDO="${OLD}-login"
 
 # sshd config first: it references the CA file removed further down.
 rm -f /etc/ssh/sshd_config.d/00-fleet.conf
+# The KRL directive is appended separately from the marker block, and on a host
+# with no /etc/ssh/sshd_config.d it lands in the MAIN sshd_config, nowhere near
+# that block. Leaving it while deleting the file it names passes sshd -t now and
+# fails on the host's NEXT reload or reboot -- i.e. the host locks itself out long
+# after this ran, with nothing to connect the two events.
+sed -i '\#^RevokedKeys /etc/ssh/fleet_krl#d' /etc/ssh/sshd_config 2>/dev/null || true
+for d in /etc/ssh/sshd_config.d/*.conf; do
+  [ -e "$d" ] || continue
+  sed -i '\#^RevokedKeys /etc/ssh/fleet_krl#d' "$d" 2>/dev/null || true
+done
 if grep -qE '^# (Provenance|Fleet Terminal)$' /etc/ssh/sshd_config 2>/dev/null; then
   if grep -q 'TrustedUserCAKeys /etc/ssh/fleet_ca.pub' /etc/ssh/sshd_config 2>/dev/null; then
     cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.provbak-$(date +%%s)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kforbus3/provenance/backend/internal/config"
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
@@ -100,5 +101,48 @@ func TestRetireTargetsTheAccountItWasGiven(t *testing.T) {
 	s := retireAccountScript("legacyuser")
 	if !strings.Contains(s, "OLD='legacyuser'") {
 		t.Fatalf("retire script does not target the account it was given:\n%s", s)
+	}
+}
+
+// The KRL directive is appended on its own, and on a host with no
+// /etc/ssh/sshd_config.d the old installer put it in the MAIN sshd_config —
+// nowhere near the marker block the teardown strips. Deleting fleet_krl while a
+// RevokedKeys line still names it passes `sshd -t` at migration time and fails on
+// the host's NEXT reload or reboot, which is the worst shape a failure can have:
+// the host locks itself out long after anything connects it to this change.
+func TestRetireStripsTheKRLDirectiveBeforeDeletingTheKRL(t *testing.T) {
+	s := retireAccountScript("fleet")
+
+	strip := strings.Index(s, "RevokedKeys /etc/ssh/fleet_krl#d")
+	if strip < 0 {
+		t.Fatalf("retire script never removes the RevokedKeys directive:\n%s", s)
+	}
+	// Anchor on the command, not the phrase: the surrounding comments mention
+	// "sshd -t" too, and matching those would compare the wrong positions.
+	validate := strings.Index(s, "if ! sshd -t")
+	remove := strings.Index(s, "rm -f /etc/ssh/fleet_ca.pub /etc/ssh/fleet_krl")
+	if validate < 0 || remove < 0 {
+		t.Fatalf("retire script is missing the validate/remove steps:\n%s", s)
+	}
+	if strip > validate {
+		t.Error("strips the RevokedKeys directive after validating, so the check passes on a config that is about to dangle")
+	}
+	if strip > remove {
+		t.Error("deletes the KRL before removing the directive that names it")
+	}
+	// The main config is where the old installer put it when the host had no
+	// drop-in directory; checking only the drop-ins would miss exactly those hosts.
+	if !strings.Contains(s, "/etc/ssh/sshd_config 2>/dev/null") {
+		t.Error("only strips the directive from drop-ins, not the main sshd_config")
+	}
+}
+
+// The same dangling reference in the teardown path: it removes both KRLs, so both
+// spellings of the directive have to go with them.
+func TestTeardownStripsBothKRLDirectives(t *testing.T) {
+	svc := &Service{cfg: &config.Config{WGInterface: "wgprov"}}
+	s := svc.hostTeardownScript("fleet", "")
+	if !strings.Contains(s, `RevokedKeys /etc/ssh/\(prov\|fleet\)_krl`) {
+		t.Errorf("teardown removes the KRL files but leaves the directive naming them:\n%s", s)
 	}
 }
