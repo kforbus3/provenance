@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.35 — 2026-09-13
+
+**An update that has just been applied stops saying it is available.** Running
+containers are collected on a ten-minute cadence, which suits a sweep and does
+not suit the moment immediately after something has deliberately changed them.
+For up to ten minutes after a rollout, every screen built on that inventory
+described what the host was running BEFORE — so an update that had just
+succeeded went on reading "update available", which looks exactly like one that
+failed.
+
+A host's containers are now re-read as soon as they are changed, by both routes
+that change them: deploying a stack, and updating an image in place. It uses the
+same script and the same reader the monitor uses rather than a second copy, since
+two of those would eventually disagree about what a host is running — the one
+question this feature rests on.
+
+Only a reading that actually reached the host replaces the list. A script that
+died, or a container runtime that could not be reached, produces an empty list
+with a reason attached; recording that would blank the host's containers and turn
+a momentary hiccup into "this host runs nothing" everywhere. Those cases stay
+with the sweep, which records them deliberately.
+
+---
+
 ## v1.2.34 — 2026-09-13
 
 **The Discovered tab works.** It has been empty since the release that added it,
