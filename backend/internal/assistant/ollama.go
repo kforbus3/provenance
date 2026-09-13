@@ -107,12 +107,21 @@ type chatMessage struct {
 	Role      string     `json:"role"` // system|user|assistant|tool
 	Content   string     `json:"content"`
 	ToolCalls []toolCall `json:"tool_calls,omitempty"`
+	// ToolCallID ties a tool result back to the call that asked for it. Required by
+	// the OpenAI protocol and ignored by Ollama, so it is carried on the shared type
+	// rather than forking the conversation representation per provider.
+	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 type toolCall struct {
+	// ID is assigned by the server on the OpenAI protocol and quoted back in the
+	// tool result. Ollama does not use it and leaves it empty.
+	ID       string `json:"id,omitempty"`
 	Function struct {
 		Name string `json:"name"`
-		// Ollama returns arguments as a JSON object (not a string).
+		// Ollama returns arguments as a JSON object (not a string). The OpenAI
+		// client translates its string form into this shape, so everything above
+		// the client sees one representation.
 		Arguments json.RawMessage `json:"arguments"`
 	} `json:"function"`
 }

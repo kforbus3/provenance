@@ -297,15 +297,24 @@ function BrandingCard({ current }: { current: unknown }) {
 }
 
 // AssistantCard configures the local Ollama instance powering the read-only AI
-// assistant: enable, endpoint URL, and model (listed live from Ollama).
+// assistant: enable, protocol, endpoint URL, and model (listed live from the server).
 function AssistantCard({ current }: { current: unknown }) {
   const qc = useQueryClient();
   // Reports where the configured URL actually points, so the card can say
   // whether the data stays on this network rather than assuming it does.
   const { data: status } = useQuery({ queryKey: ["assistant-status"], queryFn: assistantStatus });
-  const cur = (current ?? {}) as { enabled?: boolean; ollamaUrl?: string; model?: string; numCtx?: number };
+  const cur = (current ?? {}) as {
+    enabled?: boolean; provider?: string; baseUrl?: string; ollamaUrl?: string;
+    apiKey?: string; model?: string; numCtx?: number;
+  };
   const [enabled, setEnabled] = useState(Boolean(cur.enabled));
-  const [url, setUrl] = useState(cur.ollamaUrl ?? "");
+  // A stored setting with no provider predates the field — it is not a choice, and
+  // the backend resolves it to Ollama for exactly that reason. Mirror that here so
+  // the screen shows what is actually in effect rather than an empty select.
+  const [provider, setProvider] = useState(cur.provider === "openai" ? "openai" : "ollama");
+  // baseUrl is the field going forward; ollamaUrl is what existing installs stored.
+  const [url, setUrl] = useState(cur.baseUrl ?? cur.ollamaUrl ?? "");
+  const [apiKey, setApiKey] = useState(cur.apiKey ?? "");
   const [model, setModel] = useState(cur.model ?? "");
   const [numCtx, setNumCtx] = useState(cur.numCtx ? String(cur.numCtx) : "");
   const [models, setModels] = useState<string[]>(cur.model ? [cur.model] : []);
@@ -315,12 +324,20 @@ function AssistantCard({ current }: { current: unknown }) {
   const loadModels = useMutation({
     mutationFn: () => assistantModels(url.trim()),
     onSuccess: (list) => { setModels(list); setError(list.length ? null : "No models found at that URL."); },
-    onError: () => setError("Could not reach Ollama at that URL."),
+    onError: () => setError(
+      provider === "openai"
+        ? "Could not reach an OpenAI-compatible server at that URL. It must serve /v1/models."
+        : "Could not reach Ollama at that URL."),
   });
 
   const save = useMutation({
     mutationFn: () => setSetting("assistant", {
-      enabled, ollamaUrl: url.trim(), model,
+      enabled, provider, model,
+      baseUrl: url.trim(),
+      // Still written so a rollback to a release that only reads ollamaUrl finds
+      // the server it needs, rather than an assistant that silently disables itself.
+      ollamaUrl: url.trim(),
+      apiKey: apiKey.trim(),
       // Blank = let the backend use its default. The backend also floors whatever is
       // sent, because a window too small to hold the prompt is not a slower assistant
       // — it is one running with its instructions silently deleted.
@@ -335,12 +352,12 @@ function AssistantCard({ current }: { current: unknown }) {
 
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-      <Typography variant="h6">AI assistant (local Ollama)</Typography>
+      <Typography variant="h6">AI assistant (local model)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        Point Provenance at a local Ollama instance to enable read-only natural-language queries over
+        Point Provenance at a local model server to enable read-only natural-language queries over
         your fleet (e.g. “hosts with less than 20% disk free”). Queries are RBAC-scoped and
         audited, and answering one sends the data it reads — host inventory, sessions, audit
-        entries — to whichever Ollama instance you configure below.
+        entries — to whichever server you configure below.
       </Typography>
       {/* The card used to state flatly that data never leaves your network. That
           holds only for a local URL, and the field takes any URL at all, so the
@@ -362,9 +379,30 @@ function AssistantCard({ current }: { current: unknown }) {
           control={<Checkbox checked={enabled} onChange={(e) => { setEnabled(e.target.checked); setSaved(false); }} />}
           label="Enable the assistant"
         />
+        <TextField
+          select size="small" label="Server protocol" value={provider} sx={{ maxWidth: 360 }}
+          onChange={(e) => { setProvider(e.target.value); setModels([]); setSaved(false); }}
+          helperText={
+            provider === "openai"
+              ? "OpenAI-compatible /v1 API — llama.cpp, vLLM, LocalAI. llama.cpp serves no /api routes, so this is the only option there."
+              : "Ollama's native /api routes."
+          }
+        >
+          <MenuItem value="ollama">Ollama (/api)</MenuItem>
+          <MenuItem value="openai">OpenAI-compatible (/v1)</MenuItem>
+        </TextField>
+        {provider === "openai" && (
+          <TextField
+            size="small" label="API key (optional)" value={apiKey} type="password"
+            sx={{ maxWidth: 360 }} autoComplete="off"
+            onChange={(e) => { setApiKey(e.target.value); setSaved(false); }}
+            helperText="Sent as a bearer token. A local llama.cpp needs none."
+          />
+        )}
         <Stack direction="row" spacing={2} alignItems="flex-start">
           <TextField
-            label="Ollama URL" value={url} placeholder="http://10.10.0.x:11434"
+            label={provider === "openai" ? "Server URL" : "Ollama URL"} value={url}
+            placeholder={provider === "openai" ? "http://10.10.0.x:8080" : "http://10.10.0.x:11434"}
             onChange={(e) => { setUrl(e.target.value); setSaved(false); }}
             sx={{ flexGrow: 1 }} size="small"
           />
@@ -383,11 +421,18 @@ function AssistantCard({ current }: { current: unknown }) {
           size="small" type="number" label="Context window (tokens)" value={numCtx} sx={{ maxWidth: 360 }}
           placeholder={String(status?.contextWindow ?? 32768)}
           onChange={(e) => { setNumCtx(e.target.value); setSaved(false); }}
+          disabled={provider === "openai"}
           helperText={
-            `Leave blank for the default (${status?.contextWindow ?? 32768}). The assistant's instructions and tool ` +
-            `definitions alone cost about ${status?.promptFloorTokens ?? "9,000"} tokens; Ollama does not error when a ` +
-            `prompt exceeds the window — it drops the oldest tokens, i.e. the instructions. Raise this only if you have ` +
-            `the VRAM for it.`
+            provider === "openai"
+              ? `Set by the server, not here — an OpenAI-compatible server fixes its window at startup ` +
+                `(llama.cpp: --ctx-size) and no request can ask for more. The assistant's instructions and tool ` +
+                `definitions alone cost about ${status?.promptFloorTokens ?? 10000} tokens, so the server must be ` +
+                `serving at least that much` +
+                (status?.modelContextLimit ? `; this model is served with ${status.modelContextLimit}.` : ".")
+              : `Leave blank for the default (${status?.contextWindow ?? 32768}). The assistant's instructions and tool ` +
+                `definitions alone cost about ${status?.promptFloorTokens ?? 10000} tokens; Ollama does not error when a ` +
+                `prompt exceeds the window — it drops the oldest tokens, i.e. the instructions. Raise this only if you have ` +
+                `the VRAM for it.`
           }
         />
         <Box>

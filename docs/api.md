@@ -745,16 +745,17 @@ SSH — its machine id, running slot and version — and records it as a machine
 rollouts can reach it. It refuses a host with no `/usr/local/sbin/ab-update`
 rather than creating a record that could only ever fail.
 
-## AI assistant (Ollama)
+## AI assistant (Ollama or OpenAI-compatible)
 
-Read-only natural-language queries over fleet data via a local Ollama instance.
+Read-only natural-language queries over fleet data via a local model server — Ollama
+(`/api`) or any OpenAI-compatible server (`/v1`), selected by the `provider` setting.
 The model only calls a curated set of read-only tools (no SQL, no actions); all
 results are scoped to what the caller can access and every question is audited.
 
 | Method | Path | Gate |
 |--------|------|------|
 | GET | `/api/v1/assistant/status` | `Assistant.Use` — `{enabled, model, reachable, ready, contextWindow, promptFloorTokens, modelContextLimit?, contextWarning?}` |
-| GET | `/api/v1/assistant/models?url=` | `System.Configure` — list Ollama models (for setup) |
+| GET | `/api/v1/assistant/models?url=` | `System.Configure` — list the server's models (for setup) |
 | POST | `/api/v1/assistant/ask` | `Assistant.Use` — `{question, conversationId?}` → `202 {id}` (async) |
 | GET | `/api/v1/assistant/ask/{id}` | `Assistant.Use` — poll → `{status, answer, hosts[]}` |
 | GET | `/api/v1/insights` | `Assistant.Use` — fleet insights scoped to accessible hosts |

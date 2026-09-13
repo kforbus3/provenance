@@ -402,7 +402,7 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `session_policy` | idle 30 min, absolute 12 h | session lifetime |
 | `require_mfa` | `{"enabled": false}` | when on, **all** users must enroll a second factor (Users → *Require MFA for all*) |
 | `branding` | `{"app_name": "Provenance"}` | application name shown on the login screen, top bar, dashboard, and browser tab |
-| `assistant` | `{"enabled": false, "ollamaUrl": "", "model": "", "numCtx": 0}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `ollamaUrl`, so run Ollama on your own network; a public URL raises a warning on the settings page. `numCtx` is the Ollama context window (0 = 32768, floored at 16384) — see below |
+| `assistant` | `{"enabled": false, "provider": "ollama", "baseUrl": "", "model": "", "numCtx": 0}` | AI assistant — natural-language queries over fleet data + product docs, and (with `Assistant.Act`) actions the user confirms; edit via **Settings → AI assistant**. Off by default. Answering a question sends the data it reads to `baseUrl`, so run the model on your own network; a public URL raises a warning on the settings page. `provider` selects the wire protocol (see below); `apiKey` is sent as a bearer token by the OpenAI provider; `numCtx` applies to Ollama only (0 = 32768, floored at 16384) |
 | `assistant_actions` | `{"requireApprovalForAll": false, "disabledKinds": []}` | assistant-action policy: force approval for every action, or disable specific action kinds; edit via **Settings → Assistant actions** |
 | `scan_policy` | `{"timeoutMinutes": …}` | scan / remediation timeout budget (overrides `PROV_SCAN_TIMEOUT`, clamped to a sane range) |
 | `timezone` | browser-detected IANA zone | display zone for all timestamps + schedule clock-times (§9, Time zone) |
@@ -411,6 +411,32 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `oidc` | disabled | OIDC single sign-on — issuer, client, claims, role mapping (§15); secret encrypted at rest |
 | `ldap` | disabled | LDAP / Active Directory sign-in — server, bind account, filter, role mapping (§15); bind password encrypted at rest |
 | `audit_forward` | disabled | forward audit events to a syslog or HTTP SIEM endpoint (§16) |
+
+### AI assistant — which server, and which protocol
+
+The assistant talks to a local model server over one of two protocols, and they are
+not interchangeable:
+
+| `provider` | Endpoints | Servers |
+|---|---|---|
+| `ollama` (default) | `/api/tags`, `/api/chat` | Ollama |
+| `openai` | `/v1/models`, `/v1/chat/completions` | llama.cpp, vLLM, LocalAI, and hosted OpenAI-compatible endpoints |
+
+**llama.cpp serves no `/api/*` routes at all**, so a deployment moving from Ollama
+to llama.cpp cannot be repointed by changing the URL — the protocol has to change
+with it. Select **OpenAI-compatible (/v1)** in **Settings → AI assistant**.
+
+A setting saved before `provider` existed has no value for it. That is not a choice
+to run OpenAI, so it resolves to `ollama` — which is necessarily what such a
+deployment was talking to. The protocol is never guessed from the URL or the port:
+an OpenAI-compatible server on `:11434` is perfectly legal, and guessing wrong fails
+as a connection error that names the wrong cause. **Settings → AI assistant** shows
+the protocol actually in effect.
+
+`baseUrl` replaces `ollamaUrl`. Both are read and `baseUrl` wins, so an existing
+install keeps working untouched; the settings page writes both, so rolling back to a
+release that only knows `ollamaUrl` still finds its server. A `/v1` suffix on the URL
+is optional — both spellings are accepted.
 
 ### AI assistant — the context window
 
@@ -422,7 +448,15 @@ tool-selection guidance and no answer rules at all, which shows up as wrong tool
 choices ("security scan" answered with CVEs), chatty preambles, and confident
 "I do not have a tool for that" replies about data Provenance actually holds.
 
-Provenance therefore always sends an explicit `num_ctx`. Leave **Context window** blank to
+**On an OpenAI-compatible server this is not Provenance's to set.** The window is
+fixed when the server starts — llama.cpp's `--ctx-size`, or `ctx-size` in the model's
+preset — and no request can ask for more, so the **Context window** field does not
+apply and is disabled. What matters instead is that the server is serving *at least*
+the prompt floor: if it is not, the assistant cannot work at all, and the settings
+page says so with the number the server reported and the number required. Raise
+`ctx-size` for that model, or serve a model that already has room.
+
+On Ollama, Provenance therefore always sends an explicit `num_ctx`. Leave **Context window** blank to
 use the default (32768); any value you set is floored at 16384. Check
 `GET /api/v1/assistant/status` for the effective `contextWindow`, the
 `promptFloorTokens` the instructions cost, and a `contextWarning` when the chosen

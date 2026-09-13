@@ -23,9 +23,14 @@ export interface AssistantStatus {
    *  silently drops the OLDEST tokens when the prompt overflows the window, so a
    *  window near this floor means the assistant runs with no instructions. */
   promptFloorTokens?: number;
-  /** The model's own trained context length, when Ollama reports it. */
+  /** The wire protocol in effect: "ollama" or "openai". Resolved by the backend,
+   *  so a setting stored before the field existed reports what it actually uses. */
+  provider?: string;
+  /** Ollama: the model's trained context length. OpenAI-compatible: the window the
+   *  server will actually serve, which is fixed at startup and cannot be raised
+   *  per request. 0/absent means unknown (e.g. a model not loaded yet). */
   modelContextLimit?: number;
-  /** Set when contextWindow exceeds what the model was trained for. */
+  /** Set when the window cannot hold what the assistant needs. */
   contextWarning?: string;
 }
 

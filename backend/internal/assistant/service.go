@@ -70,9 +70,21 @@ func New(st *store.Store, log *slog.Logger, ins *insights.Service, metricRetenti
 
 // Settings is the persisted assistant configuration.
 type Settings struct {
-	Enabled   bool   `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Provider selects the wire protocol: "ollama" (the native /api routes) or
+	// "openai" (/v1/chat/completions, which llama.cpp, vLLM and LocalAI serve).
+	// Empty means the setting predates this field and resolves to Ollama — see
+	// resolveProvider, which never guesses from the URL or the port.
+	Provider string `json:"provider,omitempty"`
+	// BaseURL is the model server. OllamaURL is the same thing under its original
+	// name and is still read, because every deployment that predates this field has
+	// its URL stored there; BaseURL wins when both are set.
+	BaseURL   string `json:"baseUrl,omitempty"`
 	OllamaURL string `json:"ollamaUrl"`
-	Model     string `json:"model"`
+	// APIKey is sent as a bearer token by the OpenAI provider. A local llama.cpp
+	// needs none; a hosted endpoint rejects the request without one.
+	APIKey string `json:"apiKey,omitempty"`
+	Model  string `json:"model"`
 	// NumCtx is the context window requested from Ollama. 0 = defaultNumCtx. It is
 	// exposed because the window has to fit the whole system prompt + tool schemas
 	// + tool results, and the safe size depends on the model and available VRAM —
@@ -94,18 +106,21 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 	cfg := s.settings(ctx)
 	reachable := false
 	modelCtx := 0
-	if cfg.OllamaURL != "" {
+	baseURL := resolveBaseURL(cfg)
+	provider := resolveProvider(cfg)
+	if baseURL != "" {
 		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
-		client := newOllama(cfg.OllamaURL)
-		if _, err := client.listModels(cctx); err == nil {
-			reachable = true
-			if cfg.Model != "" {
-				modelCtx = client.modelContextLength(cctx, cfg.Model)
+		if client, err := newLLMClient(cfg); err == nil {
+			if _, err := client.listModels(cctx); err == nil {
+				reachable = true
+				if cfg.Model != "" {
+					modelCtx = client.modelContextLength(cctx, cfg.Model)
+				}
 			}
 		}
 	}
-	dest := classifyDestination(ctx, cfg.OllamaURL)
+	dest := classifyDestination(ctx, baseURL)
 	window := numCtx(cfg.NumCtx)
 	// The prompt floor is the system prompt + every tool schema — what must fit before
 	// a single row of data is added. Reported so a too-small window is visible in the
@@ -114,6 +129,7 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 	out := map[string]any{
 		"enabled":   cfg.Enabled,
 		"model":     cfg.Model,
+		"provider":  provider,
 		"reachable": reachable,
 		"ready":     cfg.Enabled && cfg.Model != "" && reachable,
 		// Where the model runs, so the UI can stop claiming the data stayed on
@@ -125,10 +141,29 @@ func (s *Service) Status(ctx context.Context) map[string]any {
 	}
 	if modelCtx > 0 {
 		out["modelContextLimit"] = modelCtx
-		if modelCtx < window {
-			out["contextWarning"] = fmt.Sprintf(
-				"%s was trained for a %d-token context but Provenance requests %d. Ollama will not error — it will drop the oldest tokens, which are the assistant's instructions. Pick a longer-context model or expect degraded answers.",
-				cfg.Model, modelCtx, window)
+		switch provider {
+		case ProviderOpenAI:
+			// On an OpenAI-compatible server the window is fixed when the server
+			// starts (llama.cpp's --ctx-size) and no request can ask for more, so the
+			// number to compare against is the PROMPT FLOOR, not the window this
+			// deployment would like. Below the floor the assistant cannot work at
+			// all: the instructions and tool schemas do not fit before a single row
+			// of data is added.
+			if modelCtx < floor {
+				out["contextWarning"] = fmt.Sprintf(
+					"%s is served with a %d-token context, but the assistant's instructions and tool definitions need about %d before any data. The server fixes this window at startup — raise it there (llama.cpp: --ctx-size / ctx-size in the model preset) or use a model served with a larger one. Answers will be wrong or empty until then.",
+					cfg.Model, modelCtx, floor)
+			} else if modelCtx < window {
+				out["contextWarning"] = fmt.Sprintf(
+					"%s is served with a %d-token context; Provenance is configured for %d. The server's value is the one that applies — it cannot be raised per request. Lower the configured window to match, or serve the model with a larger one.",
+					cfg.Model, modelCtx, window)
+			}
+		default:
+			if modelCtx < window {
+				out["contextWarning"] = fmt.Sprintf(
+					"%s was trained for a %d-token context but Provenance requests %d. Ollama will not error — it will drop the oldest tokens, which are the assistant's instructions. Pick a longer-context model or expect degraded answers.",
+					cfg.Model, modelCtx, window)
+			}
 		}
 	}
 	return out
@@ -150,14 +185,20 @@ func promptFloorTokens() int {
 
 // Models lists models from the configured (or overridden) Ollama URL.
 func (s *Service) Models(ctx context.Context, urlOverride string) ([]string, error) {
-	url := urlOverride
-	if url == "" {
-		url = s.settings(ctx).OllamaURL
+	cfg := s.settings(ctx)
+	if urlOverride != "" {
+		// An override is what the settings screen probes with before saving, so it
+		// must be spoken to with the provider the operator has selected there.
+		cfg.BaseURL, cfg.OllamaURL = urlOverride, urlOverride
 	}
-	if url == "" {
+	if resolveBaseURL(cfg) == "" {
 		return []string{}, nil
 	}
-	return newOllama(url).listModels(ctx)
+	client, err := newLLMClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return client.listModels(ctx)
 }
 
 // SessionRow is one active SSH session for the list_sessions panel.
@@ -266,7 +307,7 @@ func (c Caller) Can(perm string) bool {
 // request timeout.
 func (s *Service) Ask(ctx context.Context, question, conversationID string, who Caller) (askID, convoID string, ok bool) {
 	cfg := s.settings(ctx)
-	if !cfg.Enabled || cfg.OllamaURL == "" || cfg.Model == "" {
+	if !cfg.Enabled || resolveBaseURL(cfg) == "" || cfg.Model == "" {
 		return "", "", false
 	}
 	convoID = conversationID
@@ -333,7 +374,10 @@ func (s *Service) run(parent context.Context, id, convoID, question string, who 
 // converse runs the tool-calling loop: the model picks query_hosts + filters, we
 // run the RBAC-scoped query, feed results back, and the model narrates.
 func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question string, who Caller) (string, answerData, error) {
-	client := newOllama(cfg.OllamaURL)
+	client, err := newLLMClient(cfg)
+	if err != nil {
+		return "", answerData{}, err
+	}
 	prior := s.priorMessages(convoID, who.UserID)
 	messages := make([]chatMessage, 0, len(prior)+2)
 	sysPrompt := systemPrompt
@@ -753,7 +797,13 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					result = map[string]any{"error": "unknown tool"}
 				}
 			}
-			messages = append(messages, chatMessage{Role: "tool", Content: encodeToolResult(result)})
+			// Quote the call's id back. The OpenAI protocol requires it to match a
+			// tool result to its call, and a result sent without one is rejected or
+			// silently ignored depending on the server. Ollama leaves the id empty
+			// and ignores the field, so this is correct for both.
+			messages = append(messages, chatMessage{
+				Role: "tool", Content: encodeToolResult(result), ToolCallID: tc.ID,
+			})
 		}
 	}
 	// Ran out of tool iterations. The tool results are already in `messages`, so make
@@ -776,7 +826,7 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 // narrateFromData asks the model to write the answer from a fast-path tool's result,
 // with tools DISABLED so it can't mis-route to another tool. base is the built-up
 // message history (system prompt + prior turns + the user question).
-func (s *Service) narrateFromData(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage, toolName string, result any) (string, error) {
+func (s *Service) narrateFromData(ctx context.Context, client llmClient, cfg Settings, base []chatMessage, toolName string, result any) (string, error) {
 	msgs := append(append([]chatMessage(nil), base...), chatMessage{
 		Role: "system",
 		Content: fmt.Sprintf("The %s tool was already run for this question and returned this data:\n%s",
@@ -815,7 +865,7 @@ const scopeReminder = "Now write the final answer to the user's question using O
 // the scopeReminder appended as the LAST message. base already contains the system
 // prompt, the question, and every tool result; tools are disabled so the model must WRITE
 // an answer. Returns "" on failure so the caller keeps the model's original answer.
-func (s *Service) refineFinalAnswer(ctx context.Context, client *ollamaClient, cfg Settings, base []chatMessage) string {
+func (s *Service) refineFinalAnswer(ctx context.Context, client llmClient, cfg Settings, base []chatMessage) string {
 	msgs := append(append([]chatMessage(nil), base...), chatMessage{Role: "system", Content: scopeReminder})
 	resp, err := client.chat(ctx, chatRequest{Model: cfg.Model, Messages: msgs, Options: deterministicOptions(cfg.NumCtx)})
 	if err != nil {
