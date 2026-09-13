@@ -453,7 +453,7 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 			if ierr != nil {
 				return ierr
 			}
-			return e.verify(ctx, r, hostID)
+			return e.verifyInPlace(ctx, r, hostID)
 		}
 
 		// A version bump. The new version has to be written into the compose file,
@@ -718,6 +718,18 @@ func shellCase(repo string) string {
 
 // verify reads back what the host is actually running.
 func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) error {
+	return e.verifyRunning(ctx, r, hostID, false)
+}
+
+// verifyInPlace is the same check for a deploy that honoured the HOST's compose
+// file rather than one this rollout wrote.
+//
+// The distinction matters at exactly one point; see verifyRunning.
+func (e *Engine) verifyInPlace(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) error {
+	return e.verifyRunning(ctx, r, hostID, true)
+}
+
+func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID, inPlace bool) error {
 	h, err := e.store.GetHost(ctx, hostID)
 	if err != nil {
 		return fmt.Errorf("could not read the host back: %w", err)
@@ -762,6 +774,21 @@ func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.
 		// nothing, which is the exact failure this whole feature exists to catch.
 		if ref == from {
 			continue
+		}
+		// An in-place deploy applies the HOST's compose file, so landing on a tag
+		// that file names is the job done, not the rollout arriving too late.
+		//
+		// Rolling out a rebuild of wyoming-piper:latest against a host whose
+		// compose pins 2.2.2 recreated the container onto 2.2.2 -- pulled,
+		// restarted, healthy, drift resolved, which is the outcome that was
+		// wanted. It was then reported as "this host was already past every image
+		// in this rollout that it runs", which says nothing happened. An action
+		// reported as inaction is as misleading as the reverse, and it sends an
+		// operator to look for the change somewhere else.
+		if inPlace {
+			e.log.Info("container updated in place to the tag its compose file names",
+				"host", hostID, "repository", r.Repository, "ran", ref)
+			return nil
 		}
 		return fmt.Errorf("%w: %s", errSuperseded, ref)
 	}

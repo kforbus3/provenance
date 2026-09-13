@@ -1258,3 +1258,57 @@ func TestAComposeFileCannotStartSomethingTheHostIsNotRunning(t *testing.T) {
 		t.Errorf("state = %q, want skipped", got)
 	}
 }
+
+// An in-place deploy applies the HOST's compose file, so landing on a tag that
+// file names is the job done — not the rollout arriving too late.
+//
+// Rolling out a rebuild of wyoming-piper:latest against a host whose compose
+// pins 2.2.2 recreated the container onto 2.2.2: pulled, restarted, healthy,
+// drift resolved, which is exactly the outcome wanted. It was reported as "this
+// host was already past every image in this rollout that it runs" — which says
+// nothing happened, and sends an operator to look for the change somewhere else.
+func TestAnInPlaceDeployLandingOnTheComposeTagIsASuccess(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	// A rebuild of :latest, and no managed stack — the state a host is in after
+	// its stack is deleted, which is what forces the in-place path.
+	f.rollouts[0].FromTag, f.rollouts[0].ToTag = "latest", "latest"
+	f.stacks[ids[0]] = nil
+	f.containers[ids[0]][0].Tag = "latest"
+	f.containers[ids[0]][0].Image = "nginx:latest"
+	f.containers[ids[0]][0].ComposeDir = "/home/keith/test2"
+	f.containers[ids[0]][0].ComposeService = "web"
+
+	// The compose file pins 1.24, so the deploy recreates the container there.
+	run := &fakeRunner{respond: func(script string) (string, int, bool) {
+		if strings.Contains(script, "::OK::") || strings.Contains(script, "ps --no-trunc") {
+			return "::OK::\nnginx:1.24\tnginx@sha256:pinned\n", 0, false
+		}
+		return "", 0, false
+	}}
+	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State == store.UpdateHostSkipped {
+		t.Errorf("the container was recreated onto the tag its compose file names, "+
+			"and this reports that nothing happened: %q", h.Error)
+	}
+	if h.State != store.UpdateHostVerified {
+		t.Errorf("state = %q (%q), want verified", h.State, h.Error)
+	}
+}
+
+func TestAStackDeployLandingOnAnotherTagIsStillASupersession(t *testing.T) {
+	// The other half of the distinction. When the rollout WROTE the tag into a
+	// managed compose file and the host comes back on something else, nobody
+	// asked for that tag — it means the host was re-pinned underneath, which is
+	// a supersession and not a success.
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	run := &fakeRunner{out: "::OK::\nnginx:1.99\tnginx@sha256:elsewhere\n"}
+	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
+
+	if got := f.hosts[rid][0].State; got != store.UpdateHostSkipped {
+		t.Errorf("state = %q (%q), want skipped — the host is on a tag this "+
+			"rollout never wrote", got, f.hosts[rid][0].Error)
+	}
+	_ = ids
+}
