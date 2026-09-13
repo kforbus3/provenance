@@ -42,7 +42,7 @@ services:
       # Shared volume used to exchange WireGuard public keys between peers.
       - wgkeys:/wgkeys
     networks:
-      fleet:
+      prov:
         ipv4_address: 172.30.0.10
     restart: unless-stopped
 
@@ -67,7 +67,7 @@ services:
     depends_on:
       - jumphost
     networks:
-      fleet:
+      prov:
         ipv4_address: 172.30.0.21
     restart: unless-stopped
 
@@ -92,7 +92,7 @@ services:
     depends_on:
       - jumphost
     networks:
-      fleet:
+      prov:
         ipv4_address: 172.30.0.22
     restart: unless-stopped
 
@@ -101,9 +101,9 @@ volumes:
   wgkeys:
 
 networks:
-  # Pin the existing 'fleet' bridge to a known subnet so the test fabric
+  # Pin the existing 'prov' bridge to a known subnet so the test fabric
   # nodes can use static-ish addressing on the Docker network.
-  fleet:
+  prov:
     ipam:
       config:
         - subnet: 172.30.0.0/16

@@ -5,7 +5,7 @@
 # the host was already unreachable when it was deleted, it was removed from the
 # database directly, or it was enrolled by a Provenance deployment that no longer exists.
 #
-#   sudo sh prov-unenroll.sh              # default account name ("fleet")
+#   sudo sh prov-unenroll.sh              # default account name ("prov")
 #   sudo sh prov-unenroll.sh -u ops       # host was enrolled with a different SSH user
 #   sudo sh prov-unenroll.sh --dry-run    # print what would be removed, change nothing
 #
@@ -34,7 +34,7 @@ set -u
 LC_ALL=C
 export LC_ALL
 
-LOGIN=fleet
+LOGIN=prov
 DRY=0
 WG_IF="${PROV_WG_INTERFACE:-wgprov}"
 

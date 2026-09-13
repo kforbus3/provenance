@@ -62,9 +62,9 @@ spec:
               containerPort: 5432
           env:
             - name: POSTGRES_USER
-              value: "fleet"
+              value: "prov"
             - name: POSTGRES_DB
-              value: "fleet"
+              value: "prov"
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -75,13 +75,13 @@ spec:
               value: "/var/lib/postgresql/data/pgdata"
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "fleet", "-d", "fleet"]
+              command: ["pg_isready", "-U", "prov", "-d", "prov"]
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "fleet", "-d", "fleet"]
+              command: ["pg_isready", "-U", "prov", "-d", "prov"]
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 3

@@ -110,7 +110,7 @@ services:
       PROV_FEDERATION_TRANSPORT: ${PROV_FEDERATION_TRANSPORT:-${FLEET_FEDERATION_TRANSPORT:-}}
       PROV_COOKIE_SECURE: ${PROV_COOKIE_SECURE:-${FLEET_COOKIE_SECURE:-false}}
       PROV_JUMP_HOST: ${PROV_JUMP_HOST:-${FLEET_JUMP_HOST:-jumphost:22}}
-      PROV_JUMP_USER: ${PROV_JUMP_USER:-${FLEET_JUMP_USER:-fleet}}
+      PROV_JUMP_USER: ${PROV_JUMP_USER:-${FLEET_JUMP_USER:-prov}}
       PROV_JUMP_KNOWN_HOSTS: ${PROV_JUMP_KNOWN_HOSTS:-${FLEET_JUMP_KNOWN_HOSTS:-}}
       PROV_SSH_INSECURE_HOST_KEYS: ${PROV_SSH_INSECURE_HOST_KEYS:-${FLEET_SSH_INSECURE_HOST_KEYS:-}}
       PROV_TRUSTED_PROXIES: ${PROV_TRUSTED_PROXIES:-${FLEET_TRUSTED_PROXIES:-}}
@@ -261,7 +261,7 @@ services:
           memory: 256M
     ports:
       # Bound to loopback: the frontend nginx reaches the backend over the internal
-      # `fleet` network (proxy_pass http://backend:8080), so the published port is
+      # `prov` network (proxy_pass http://backend:8080), so the published port is
       # only for local debugging. This keeps the unauthenticated /metrics, /health,
       # and /ready endpoints off any public interface. Front the API through nginx
       # (set PROV_PUBLIC_URL to your domain) rather than exposing 8080 directly.
@@ -521,7 +521,7 @@ services:
   # /var/lib/prov/recordings/rdp), which the backend serves back for replay, and
   # per-session redirected-drive files into the `rdp-drive` volume (for RDP file
   # transfer, cleaned up by the backend when the session ends). It runs as the
-  # backend's `fleet` user (uid 100 / gid 101 from the backend image) so the backend
+  # backend's `prov` user (uid 100 / gid 101 from the backend image) so the backend
   # can read/remove the files guacd creates on those shared volumes.
   guacd:
     image: guacamole/guacd:1.5.5

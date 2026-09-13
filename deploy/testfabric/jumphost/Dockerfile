@@ -27,16 +27,19 @@ RUN apt-get update \
 
 COPY --from=wgbuild /src/wireguard-go /usr/local/bin/wireguard-go
 
-# Login user that the fleet CA-signed certificates map to. Passwordless sudo so
-# the enrollment flow can add WireGuard peers (wg set) on the jump host.
-RUN useradd -m -s /bin/bash fleet \
- && echo 'fleet ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/prov \
+# Login user that the Provenance CA-signed certificates map to. Passwordless sudo
+# so the enrollment flow can add WireGuard peers (wg set) on the jump host.
+RUN useradd -m -s /bin/bash prov \
+ && echo 'prov ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/prov \
  && chmod 0440 /etc/sudoers.d/prov
 
 # sshd privilege-separation dir, principals mapping, and the fleet CA
 # placeholder that the enrollment flow replaces with the real CA pubkey.
+# The file name must match the ACCOUNT name: sshd resolves
+# AuthorizedPrincipalsFile through %u. Both principal spellings are listed because
+# certificates carry both while any host is still on the pre-rename names.
 RUN mkdir -p /run/sshd /etc/ssh/auth_principals \
- && printf 'fleet\n' > /etc/ssh/auth_principals/prov \
+ && printf 'prov\nfleet\n' > /etc/ssh/auth_principals/prov \
  && printf '# Placeholder for the Provenance user CA public key.\n# The enrollment flow overwrites this file with the real CA key.\n' \
       > /etc/ssh/prov_ca.pub
 

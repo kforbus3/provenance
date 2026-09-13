@@ -2,7 +2,7 @@
 #
 # Parameterized base image (ubuntu:22.04 or rockylinux:9). Runs OpenSSH
 # trusting the fleet user CA, plus userspace WireGuard (wireguard-go) peered
-# with the jump host. The 'fleet' user has passwordless sudo.
+# with the jump host. The 'prov' user has passwordless sudo.
 
 ARG BASE_IMAGE=ubuntu:22.04
 
@@ -33,17 +33,17 @@ RUN if command -v apt-get >/dev/null 2>&1; then \
 
 COPY --from=wgbuild /src/wireguard-go /usr/local/bin/wireguard-go
 
-# Two login accounts (matching enrollment): 'fleet' has passwordless sudo;
+# Two login accounts (matching enrollment): 'prov' has passwordless sudo;
 # 'prov-login' is login-only (no sudo). Provenance CA-signed certs map to each by
-# principal (fleet / prov-login).
-RUN useradd -m -s /bin/bash fleet \
+# principal (prov / prov-login).
+RUN useradd -m -s /bin/bash prov \
  && useradd -m -s /bin/bash prov-login \
- && echo 'fleet ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/prov \
+ && echo 'prov ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/prov \
  && chmod 0440 /etc/sudoers.d/prov
 
-# sshd privilege-separation dir, principals mapping, and fleet CA placeholder.
+# sshd privilege-separation dir, principals mapping, and Provenance CA placeholder.
 RUN mkdir -p /run/sshd /etc/ssh/auth_principals \
- && printf 'fleet\n' > /etc/ssh/auth_principals/prov \
+ && printf 'prov\nfleet\n' > /etc/ssh/auth_principals/prov \
  && printf 'prov-login\n' > /etc/ssh/auth_principals/prov-login \
  && printf '# Placeholder for the Provenance user CA public key.\n# The enrollment flow overwrites this file with the real CA key.\n' \
       > /etc/ssh/prov_ca.pub

@@ -21,7 +21,7 @@ data:
   PROV_DB_MIN_CONNS: "2"
   PROV_REDIS_URL: "redis://prov-redis:6379/0"
   PROV_JUMP_HOST: "jumphost:22"
-  PROV_JUMP_USER: "fleet"
+  PROV_JUMP_USER: "prov"
   # On-disk paths — all live on the shared RWX volume (see 30-backend.yaml) so every
   # replica reads/writes the same files (recording replay, retention pruning, backups).
   PROV_RECORDING_DIR: "/var/lib/prov/recordings"
