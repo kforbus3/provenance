@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.33 — 2026-09-13
+
+**Deploying a stack now survives long enough to finish, and says so while it
+runs.** A deploy that pulls images takes minutes, and it was running inside the
+HTTP request that asked for it — behind a sixty-second timeout. Past that the
+deploy was killed mid-pull and the attempt to record what had happened was
+cancelled with it, so the screen went on showing the previous outcome. Pressing
+Deploy looked like it had done nothing, which is precisely what it had done. It
+runs detached now, the way the registry sweep already did, and answers straight
+away.
+
+A deploy in flight is recorded as such before it starts, so there is something to
+look at while it runs — and recorded WITHOUT changing the revision the host is
+known to be running, because claiming the target before it is running would be a
+success reported minutes early. The screen shows "deploying r12…" and follows it
+to the outcome rather than leaving anyone to guess when to reload.
+
+One consequence worth stating: while a deploy runs, the recorded revision and the
+wanted revision disagree, which is what drift normally means. A deploy in
+progress is not drift — it is the answer to drift, happening — so it no longer
+puts a stack into the needs-attention list for the minutes it takes to pull.
+
+---
+
 ## v1.2.32 — 2026-09-13
 
 **A rollout that wrote the compose file but never deployed it can now finish the
