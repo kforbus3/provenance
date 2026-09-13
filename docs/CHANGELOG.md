@@ -5,6 +5,73 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.3.0 — 2026-09-13
+
+**Every Fleet identifier is now a Provenance one.** The product has been called
+Provenance since v1.0.0, but the identifiers still said Fleet: 187 `FLEET_`
+settings, the `fleetctl`/`fleetd` binaries, the `fleet-terminal` compose project,
+the managed-host `fleet` account and its SSH principals, two row-level-security
+helper functions, and the brand text throughout the docs and UI. Earlier rebrands
+left all of it deliberately, on the grounds that renaming breaks running
+deployments. This release renames it and carries the running deployment across.
+
+Settings are `PROV_`, the binaries are `provd`/`provctl`/`prov`, bundles are
+`.provup`, the compose project is `provenance`, and the managed-host account is
+`prov`.
+
+**Nothing that outlives a deploy answers to one name only.** Settings resolve
+through a single lookup that falls back to the `FLEET_` name and warns once at
+boot naming what to rename; the Compose files forward the old names too, so a
+stack started against an un-migrated `.env` boots normally. Certificates carry
+both spellings of every principal and enrollment writes both into each host's
+`AuthorizedPrincipalsFile`, so **an enrolled host keeps working without
+re-enrollment**, in either direction, including against a rolled-back server.
+Teardown removes both generations, because removing only the current spelling
+would leave a trusted CA and a NOPASSWD sudoers entry on a host an operator
+believes is clean. `/api/fleet/heartbeat` stays mounted permanently beside
+`/api/prov/heartbeat`: it is compiled into every agent image ever built, and
+reaching those machines is what it is for.
+
+**Moving a managed host to the new account is a two-pass operation in the UI**
+(Hosts → Bulk actions), and the passes are separate because one of them is
+irreversible. The first creates the new account, **proves a certificate login as
+it works**, and records it against the host — deleting nothing. The second,
+confirmed separately, retires the superseded account. A failure at any point
+leaves the host exactly as it was, still reachable on the account it has. Hosts
+whose login account Provenance did not create (`root`, or an operator-nominated
+account such as `admin`) are refused rather than having that account deleted, and
+so is any host Provenance's own access depends on — the jump host, the machine the
+stack runs on, anything tagged `control-plane` — unless confirmed for that host
+alone. That last check is the same one scan remediation uses, not a second copy.
+
+Three failure modes found by running it on a real fleet, each of which could
+strand a host long after the change that caused it:
+
+- Removing a host's KRL while `sshd_config` still carried
+  `RevokedKeys /etc/ssh/<name>_krl` passed `sshd -t` — the file was still there —
+  and failed on the host's *next* reboot. On a host with no
+  `/etc/ssh/sshd_config.d`, that directive lives in the main config, nowhere near
+  the block a teardown strips.
+- On those same hosts, the old and new CA blocks both sit in the main config under
+  a marker, and stripping "the marker block" took the **current** CA trust with the
+  old one. `sshd -t` passes on a config that trusts no CA at all, so the reload
+  went ahead. The cleanup now edits by CA path and makes a positive assertion that
+  the current trust survived, rather than trusting a syntax check.
+- Recording the new account used a store helper that only ever fills a blank, so
+  it matched no rows, reported success, and left every migrated host's row naming
+  the account that had just been removed. The row is now written *before* anything
+  is removed, by a function that fails if it changed nothing.
+
+**Deploy note — this release cannot be applied as a `.provup` bundle.** It renames
+the Postgres role and database and the Docker Compose project, and a bundle
+installs images into the project that is already running. Upgrading is a
+deployment swap: stop the old project, copy its volumes to the new prefix, rename
+the role and database, rename the `FLEET_` keys in `.env` (the values are
+unchanged), and start the new project. `docs/compatibility.md` has the full
+procedure, including what keeps working untouched and what does not.
+
+---
+
 ## v1.2.35 — 2026-09-13
 
 **An update that has just been applied stops saying it is available.** Running
@@ -2271,7 +2338,15 @@ unaffected.
 
 ---
 
-## v1.3.0 — The overlay is a management network, not a flat one — 2026-08-08
+## v1.3.0 (2026-08-08) — The overlay is a management network, not a flat one
+
+> **Note.** The `v1.3.0` git tag was later reused for the Provenance release of
+> the same number (top of this file), under the same policy as `v1.0.0` and
+> `v1.1.0`: no inherited tag of this repository has ever been pushed — the remote
+> carries only `v1.0.0` through `v1.2.35` — so moving it breaks nothing outside a
+> working copy. Verified with `git ls-remote --tags` before doing it rather than
+> assumed. This entry is the release that originally carried the number and stays
+> here as the record of it; its commit is `a8e516e`.
 
 **Deploy note.** Peer isolation is on by default and takes effect on upgrade. Read
 the second entry before installing if anything outside Provenance relies on managed
