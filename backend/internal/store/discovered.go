@@ -35,6 +35,18 @@ type DiscoveredProject struct {
 }
 
 // DiscoveredProjects lists every compose project the fleet reports.
+// CROSS JOIN LATERAL below, not a comma.
+//
+// A comma starts a new FROM item, and a LEFT JOIN written after one can only see
+// that item -- so hi was out of scope and this did not parse AT ALL: "invalid
+// reference to FROM-clause entry for table hi" (SQLSTATE 42P01), on every call,
+// from the release that introduced the screen it feeds. The tab showed "no
+// compose projects found yet" the whole time, which reads as a fact about the
+// fleet rather than a query that could not run.
+//
+// Nothing caught it because no store query is executed anywhere in the tests:
+// the package has no database, and the panel's test mocks this call. A query
+// that cannot parse passed the entire gate. See TestStoreQueriesParse.
 func (s *Store) DiscoveredProjects(ctx context.Context) ([]DiscoveredProject, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT hi.host_id, h.hostname,
@@ -44,8 +56,8 @@ func (s *Store) DiscoveredProjects(ctx context.Context) ([]DiscoveredProject, er
 		       count(*) AS images,
 		       st.id
 		FROM host_inventory hi
-		JOIN hosts h ON h.id = hi.host_id,
-		     LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
+		JOIN hosts h ON h.id = hi.host_id
+		CROSS JOIN LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
 		LEFT JOIN container_stacks st
 		       ON st.host_id = hi.host_id AND st.path = COALESCE(c->>'composeDir','')
 		WHERE COALESCE(c->>'composeProject','') <> ''

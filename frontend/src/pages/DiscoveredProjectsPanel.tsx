@@ -18,12 +18,26 @@ import { listDiscoveredProjects } from "../api/stacks";
 // Provenance.
 
 export function DiscoveredProjectsPanel() {
-  const { data: projects = [], isLoading } = useQuery({
+  const { data: projects = [], isLoading, isError, error } = useQuery({
     queryKey: ["discovered-projects"],
     queryFn: listDiscoveredProjects,
   });
 
   if (isLoading) return <Typography variant="body2">Loading…</Typography>;
+
+  // A failed request is not an empty fleet.
+  //
+  // This rendered "no compose projects found yet" — which reads as a fact about
+  // the hosts — while the server was returning 500 on every call because the
+  // query could not parse. The tab looked like a feature waiting for a sweep
+  // that had already happened, for as long as the bug existed.
+  if (isError) {
+    return (
+      <Alert severity="error">
+        Could not list compose projects. {error instanceof Error ? error.message : ""}
+      </Alert>
+    );
+  }
 
   if (projects.length === 0) {
     return (

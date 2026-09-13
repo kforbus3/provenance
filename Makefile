@@ -219,7 +219,7 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	@echo "  Windows x86_64:      fleet-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
-test: backend-test frontend-typecheck frontend-test scanner-test imaging-test container-e2e ## Run all tests
+test: backend-test frontend-typecheck frontend-test scanner-test imaging-test container-e2e store-queries ## Run all tests
 
 .PHONY: smoke
 smoke: ## Build a real initramfs + bootloader and check what is actually in them (rpm, ~8 min)
@@ -333,6 +333,26 @@ imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runne
 	docker run --rm -v $(PWD):/src -w /src/deploy/builder-runner python:3.13-alpine \
 	  sh -c "pip install -q pydantic pydantic-settings fastapi httpx >/dev/null 2>&1 && \
 	         python test_auth.py && python test_preflight.py && python test_binfmt.py && python test_overlay.py && python test_builder_image.py && python test_keybackup.py && python test_nofile.py && python test_family_guards.py && python test_reachable.py && python test_initramfs_deps.py && python test_playbook_template.py && python test_nav_routes.py && python test_compose_env.py && python test_rauc_runtime.py && python test_docs_lists.py && python test_documented_settings.py && python test_spelling.py && python test_state_model_guards.py && python test_slot_reset.py && python test_route_collisions.py"
+
+.PHONY: store-queries
+store-queries: ## Execute every store read query against a real PostgreSQL
+	# The gate the unit tests cannot be, for SQL.
+	#
+	# A Go compile error is caught in milliseconds. SQL lives in a string and
+	# gets none of that: DiscoveredProjects shipped with a comma where it needed
+	# CROSS JOIN LATERAL, could not parse AT ALL, and failed on every call from
+	# the release that introduced the screen it feeds -- while that screen said
+	# "no compose projects found yet", which reads as a fact about the fleet.
+	# The package has no database in its tests and the panel's test mocks the
+	# API, so it passed the whole gate twice over.
+	#
+	# This runs each query against a real server. Nothing asserts what comes
+	# back; an empty database is the point.
+	@if docker version >/dev/null 2>&1; then 	  $(MAKE) -s store-queries-run; 	else 	  echo "SKIPPED store-queries: docker is not usable here"; 	fi
+
+.PHONY: store-queries-run
+store-queries-run:
+	@name=provenance-store-queries-$$$$; 	docker run -d --rm --name $$name -e POSTGRES_PASSWORD=test -e POSTGRES_USER=test 	  -e POSTGRES_DB=test -p 0:5432 postgres:16-alpine >/dev/null; 	trap "docker rm -f $$name >/dev/null 2>&1 || true" EXIT; 	port=$$(docker port $$name 5432/tcp | head -1 | sed 's/.*://'); 	for i in $$(seq 1 60); do 	  docker exec $$name pg_isready -U test -d test >/dev/null 2>&1 && break; sleep 1; 	done; 	cd backend && PROVENANCE_TEST_DB_URL="postgres://test:test@127.0.0.1:$$port/test?sslmode=disable" 	  go test ./internal/store/ -run TestStoreQueriesParse -count=1
 
 .PHONY: container-e2e
 container-e2e: ## Run the container-update end-to-end tests against the local Docker
