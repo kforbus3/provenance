@@ -5,6 +5,28 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.2.34 — 2026-09-13
+
+**The Discovered tab works.** It has been empty since the release that added it,
+because the query behind it could not be parsed: a comma where it needed CROSS
+JOIN LATERAL put one table out of scope for the join that referenced it, and the
+server rejected it on every single call. The screen reported that as "no compose
+projects found yet… they are discovered by the monitor sweep as it reaches each
+host", which reads as a fact about the fleet and describes a sweep that had
+already happened. It now lists what is actually there — sixteen projects across
+seven hosts on this deployment — and a request that fails says so instead of
+showing an empty list.
+
+**Every read query in the store package is now executed against a real database
+as part of the tests.** Nothing had ever run them. A Go compile error is caught in
+milliseconds; SQL sits in a string and gets none of that, and the screen's own
+test mocked the call, so a query that could not run passed the whole gate twice
+over. The new check applies the migrations to an empty PostgreSQL and runs each
+query, failing only on the class of error that means the query itself is wrong —
+missing rows prove nothing either way.
+
+---
+
 ## v1.2.33 — 2026-09-13
 
 **Deploying a stack now survives long enough to finish, and says so while it
