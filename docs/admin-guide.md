@@ -411,6 +411,7 @@ interpreted in the time zone set under **Settings → Time zone** (§9).
 | `oidc` | disabled | OIDC single sign-on — issuer, client, claims, role mapping (§15); secret encrypted at rest |
 | `ldap` | disabled | LDAP / Active Directory sign-in — server, bind account, filter, role mapping (§15); bind password encrypted at rest |
 | `audit_forward` | disabled | forward audit events to a syslog or HTTP SIEM endpoint (§16) |
+| `extsecret` | unset | external secrets-manager connection — HashiCorp Vault, OpenBao or AWS Secrets Manager; edit via **Settings → Infrastructure → External secrets manager**. Token and AWS secret key encrypted at rest and never returned to the browser. Layered **over** `PROV_EXTSECRET_*` field by field, so an environment-configured deployment keeps working with no row at all |
 
 ### AI assistant — which server, and which protocol
 

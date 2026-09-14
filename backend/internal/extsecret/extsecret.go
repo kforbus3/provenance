@@ -58,10 +58,15 @@ func StoreIfWritable(ctx context.Context, p Provider, ref string, fields map[str
 // Config selects and configures the external secrets-manager provider. Populated from
 // the environment by internal/config.
 type Config struct {
-	// HashiCorp Vault KV (v2)
-	VaultAddr          string
-	VaultToken         string
-	VaultCACertFile    string
+	// HashiCorp Vault KV (v2), and OpenBao, which serves the same API.
+	VaultAddr       string
+	VaultToken      string
+	VaultCACertFile string
+	// VaultCACertPEM is the CA bundle inline. It exists because this connection is
+	// configurable from the UI, where a path to a file on the server's filesystem is
+	// not something an operator can supply. When both are set the inline one wins,
+	// since it is the one the operator can see.
+	VaultCACertPEM     string
 	VaultTLSSkipVerify bool
 
 	// AWS Secrets Manager
@@ -76,8 +81,21 @@ type Config struct {
 // vault secret's external_provider column must be one of these.
 const (
 	ProviderVaultKV    = "vault-kv"
+	ProviderOpenBao    = "openbao"
 	ProviderAWSSecrets = "aws-secrets"
 )
+
+// kvProviders are the providers that speak HashiCorp's KV v2 HTTP API. OpenBao is
+// a fork of Vault 1.14 and serves the same routes, so it shares the client and the
+// connection settings rather than duplicating both.
+//
+// It is still a DISTINCT provider name, not an alias: the name is persisted on every
+// external-backed credential and shown in the UI, so an operator who selected OpenBao
+// should see OpenBao — and if the two ever diverge, existing credentials already say
+// which server they were created against.
+func isKV(provider string) bool {
+	return provider == ProviderVaultKV || provider == ProviderOpenBao
+}
 
 // Configured reports whether any external secrets-manager connection is set up.
 func (c Config) Configured() bool {
@@ -87,17 +105,19 @@ func (c Config) Configured() bool {
 
 // New constructs the provider for the given name using cfg.
 func New(provider string, cfg Config) (Provider, error) {
-	switch strings.TrimSpace(provider) {
-	case ProviderVaultKV:
-		return newVaultKV(cfg)
-	case ProviderAWSSecrets:
+	name := strings.TrimSpace(provider)
+	switch {
+	case isKV(name):
+		return newVaultKV(cfg, name)
+	case name == ProviderAWSSecrets:
 		return newAWSSecrets(cfg)
 	default:
-		return nil, fmt.Errorf("extsecret: unknown provider %q (want %s or %s)", provider, ProviderVaultKV, ProviderAWSSecrets)
+		return nil, fmt.Errorf("extsecret: unknown provider %q (want %s, %s or %s)",
+			provider, ProviderVaultKV, ProviderOpenBao, ProviderAWSSecrets)
 	}
 }
 
 // Supported reports whether a provider name is one Provenance can resolve.
 func Supported(provider string) bool {
-	return provider == ProviderVaultKV || provider == ProviderAWSSecrets
+	return isKV(provider) || provider == ProviderAWSSecrets
 }

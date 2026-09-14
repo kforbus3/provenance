@@ -963,9 +963,26 @@ func (c *Config) KMS() kms.Config {
 // KMSEnabled reports whether an external KMS/HSM backend is configured.
 func (c *Config) KMSEnabled() bool { return c.KMS().ProviderConfigured() }
 
-// ExtSecret builds the external secrets-manager configuration from the environment.
+// extSecretOverlay supplies the operator-configured connection from the settings
+// table, when one has been saved. It is a hook rather than a direct store read
+// because Config is constructed before the database exists, and because every caller
+// of ExtSecret() -- the monitor, the terminal, SFTP, playbooks, winscripts, imaging --
+// already has a *Config and none of them should have to learn about settings.
+var extSecretOverlay func() extsecret.Config
+
+// SetExtSecretOverlay installs the settings-backed source of the external
+// secrets-manager connection. Called once, after the store exists.
+func SetExtSecretOverlay(f func() extsecret.Config) { extSecretOverlay = f }
+
+// ExtSecret builds the external secrets-manager configuration.
+//
+// The environment is the baseline and the saved settings are layered over it FIELD BY
+// FIELD, with a non-empty saved value winning. Per-field rather than
+// whole-object, because an operator who sets only the address in the UI has not
+// thereby unset the token their .env supplies -- and a deployment that predates the
+// settings screen has no row at all, which must keep working exactly as it did.
 func (c *Config) ExtSecret() extsecret.Config {
-	return extsecret.Config{
+	base := extsecret.Config{
 		VaultAddr:          c.ExtSecretVaultAddr,
 		VaultToken:         c.ExtSecretVaultToken,
 		VaultCACertFile:    c.ExtSecretVaultCACertFile,
@@ -975,6 +992,38 @@ func (c *Config) ExtSecret() extsecret.Config {
 		AWSSecretKey:       c.ExtSecretAWSSecretKey,
 		AWSSessionToken:    c.ExtSecretAWSSessionToken,
 		AWSEndpoint:        c.ExtSecretAWSEndpoint,
+	}
+	if extSecretOverlay == nil {
+		return base
+	}
+	return MergeExtSecret(base, extSecretOverlay())
+}
+
+// MergeExtSecret layers `over` on top of `base`, field by field. Exported so the
+// precedence can be tested without a database.
+//
+// TLSSkipVerify is deliberately OR-ed rather than overwritten: it is a bool, so
+// "false" is indistinguishable from "not set", and silently turning OFF a
+// verification bypass that the environment asked for would change how a connection is
+// authenticated without anyone saying so. Turning it on is explicit either way.
+func MergeExtSecret(base, over extsecret.Config) extsecret.Config {
+	pick := func(a, b string) string {
+		if strings.TrimSpace(b) != "" {
+			return b
+		}
+		return a
+	}
+	return extsecret.Config{
+		VaultAddr:          pick(base.VaultAddr, over.VaultAddr),
+		VaultToken:         pick(base.VaultToken, over.VaultToken),
+		VaultCACertFile:    pick(base.VaultCACertFile, over.VaultCACertFile),
+		VaultCACertPEM:     pick(base.VaultCACertPEM, over.VaultCACertPEM),
+		VaultTLSSkipVerify: base.VaultTLSSkipVerify || over.VaultTLSSkipVerify,
+		AWSRegion:          pick(base.AWSRegion, over.AWSRegion),
+		AWSAccessKey:       pick(base.AWSAccessKey, over.AWSAccessKey),
+		AWSSecretKey:       pick(base.AWSSecretKey, over.AWSSecretKey),
+		AWSSessionToken:    pick(base.AWSSessionToken, over.AWSSessionToken),
+		AWSEndpoint:        pick(base.AWSEndpoint, over.AWSEndpoint),
 	}
 }
 

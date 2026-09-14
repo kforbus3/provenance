@@ -329,7 +329,8 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
             <>
               <TextField select label="Manager" size="small" value={form.externalProvider} disabled={editing}
                 onChange={(e) => set({ externalProvider: e.target.value })} sx={{ width: 260 }}>
-                <MenuItem value="vault-kv">HashiCorp Vault KV</MenuItem>
+                <MenuItem value="vault-kv">HashiCorp Vault KV (v2)</MenuItem>
+                <MenuItem value="openbao">OpenBao KV (v2)</MenuItem>
                 <MenuItem value="aws-secrets">AWS Secrets Manager</MenuItem>
               </TextField>
               <TextField label="External reference" size="small" value={form.externalRef}
@@ -337,7 +338,14 @@ function SecretDialog({ secret, onClose, onSaved }: { secret?: VaultSecret; onCl
                 placeholder={form.externalProvider === "aws-secrets" ? "prod/db#password" : "secret/db/prod#password"}
                 helperText={form.externalProvider === "aws-secrets"
                   ? "Secrets Manager name/ARN, optionally #field for a JSON key. Fetched on demand — never stored here."
-                  : "Vault KV path and field. Fetched on demand — never stored here."} />
+                  : "KV v2 path and field (mount/path#field). Fetched on demand — never stored here."} />
+              {/* Vault and OpenBao share one connection — OpenBao is a fork of Vault
+                  1.14 and serves the same KV v2 API — so the choice here records which
+                  server the credential was created against, and is fixed once saved. */}
+              <Typography variant="caption" color="text.secondary">
+                Configure the connection in <strong>Settings → External secrets</strong>. Vault and OpenBao
+                share one connection; this choice is recorded on the credential and cannot be changed later.
+              </Typography>
             </>
           ) : (
             <TextField label={editing ? "New secret value (leave blank to keep current)" : "Secret value"} size="small" multiline minRows={form.type === "ssh_key" ? 4 : 1}

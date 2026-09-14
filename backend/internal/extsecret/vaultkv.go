@@ -19,42 +19,56 @@ import (
 // KV secret has exactly one field, that field is returned. Implemented against the
 // Vault HTTP API directly — no Vault SDK.
 type vaultKV struct {
+	// name is the provider this was built as: "vault-kv" or "openbao". OpenBao is a
+	// fork of Vault 1.14 and serves the same KV v2 routes, so one client covers both.
+	name   string
 	addr   string
 	token  string
 	client *http.Client
 }
 
-func newVaultKV(cfg Config) (Provider, error) {
+func newVaultKV(cfg Config, name string) (Provider, error) {
 	addr := strings.TrimRight(strings.TrimSpace(cfg.VaultAddr), "/")
 	if addr == "" {
-		return nil, fmt.Errorf("extsecret(vault-kv): PROV_EXTSECRET_VAULT_ADDR is required")
+		return nil, fmt.Errorf("extsecret(%s): no server address configured (Settings -> External secrets, or PROV_EXTSECRET_VAULT_ADDR)", name)
 	}
 	if strings.TrimSpace(cfg.VaultToken) == "" {
-		return nil, fmt.Errorf("extsecret(vault-kv): PROV_EXTSECRET_VAULT_TOKEN is required")
+		return nil, fmt.Errorf("extsecret(%s): no token configured (Settings -> External secrets, or PROV_EXTSECRET_VAULT_TOKEN)", name)
 	}
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.VaultTLSSkipVerify {
 		tlsCfg.InsecureSkipVerify = true
 	}
-	if cfg.VaultCACertFile != "" {
-		pem, err := os.ReadFile(cfg.VaultCACertFile)
+	// Inline PEM wins over a file path: it is the one an operator can supply and see
+	// from the settings screen, and a stale path on the server would otherwise
+	// silently override what they just typed.
+	caPEM, caFrom := []byte(strings.TrimSpace(cfg.VaultCACertPEM)), "the configured CA certificate"
+	if len(caPEM) == 0 && cfg.VaultCACertFile != "" {
+		b, err := os.ReadFile(cfg.VaultCACertFile)
 		if err != nil {
-			return nil, fmt.Errorf("extsecret(vault-kv): read CA cert: %w", err)
+			return nil, fmt.Errorf("extsecret(%s): read CA cert: %w", name, err)
 		}
+		caPEM, caFrom = b, cfg.VaultCACertFile
+	}
+	if len(caPEM) > 0 {
 		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("extsecret(vault-kv): no certificates parsed from %s", cfg.VaultCACertFile)
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("extsecret(%s): no certificates parsed from %s", name, caFrom)
 		}
 		tlsCfg.RootCAs = pool
 	}
 	return &vaultKV{
+		name:   name,
 		addr:   addr,
 		token:  cfg.VaultToken,
 		client: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg}},
 	}, nil
 }
 
-func (v *vaultKV) Name() string { return ProviderVaultKV }
+// Name returns the provider this client was constructed as, not a constant: the KV
+// client serves both Vault and OpenBao, and the name is persisted on every
+// external-backed credential, so it has to round-trip what the operator chose.
+func (v *vaultKV) Name() string { return v.name }
 
 func (v *vaultKV) Fetch(ctx context.Context, ref string) (string, error) {
 	mountPath, field := splitRef(ref)
@@ -71,12 +85,12 @@ func (v *vaultKV) Fetch(ctx context.Context, ref string) (string, error) {
 	req.Header.Set("X-Vault-Token", v.token)
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("extsecret(vault-kv): request failed: %w", err)
+		return "", fmt.Errorf("extsecret(%s): request failed: %w", v.name, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("extsecret(vault-kv): %s -> HTTP %d: %s", ref, resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("extsecret(%s): %s -> HTTP %d: %s", v.name, ref, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var out struct {
 		Data struct {
@@ -84,15 +98,15 @@ func (v *vaultKV) Fetch(ctx context.Context, ref string) (string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("extsecret(vault-kv): decode response: %w", err)
+		return "", fmt.Errorf("extsecret(%s): decode response: %w", v.name, err)
 	}
 	data := out.Data.Data
 	if len(data) == 0 {
-		return "", fmt.Errorf("extsecret(vault-kv): no data at %s", mountPath)
+		return "", fmt.Errorf("extsecret(%s): no data at %s", v.name, mountPath)
 	}
 	if field == "" {
 		if len(data) != 1 {
-			return "", fmt.Errorf("extsecret(vault-kv): %s has multiple fields; specify one as path#field", mountPath)
+			return "", fmt.Errorf("extsecret(%s): %s has multiple fields; specify one as path#field", v.name, mountPath)
 		}
 		for _, v := range data {
 			return toString(v), nil
@@ -100,7 +114,7 @@ func (v *vaultKV) Fetch(ctx context.Context, ref string) (string, error) {
 	}
 	val, ok := data[field]
 	if !ok {
-		return "", fmt.Errorf("extsecret(vault-kv): field %q not found at %s", field, mountPath)
+		return "", fmt.Errorf("extsecret(%s): field %q not found at %s", v.name, field, mountPath)
 	}
 	return toString(val), nil
 }
@@ -113,14 +127,14 @@ func (v *vaultKV) Health(ctx context.Context) error {
 	req.Header.Set("X-Vault-Token", v.token)
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("extsecret(vault-kv): unreachable: %w", err)
+		return fmt.Errorf("extsecret(%s): unreachable: %w", v.name, err)
 	}
 	defer resp.Body.Close()
 	// 200 (active) or 429/473 (standby/perf-standby) all mean "reachable & unsealed".
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == 429 || resp.StatusCode == 473 {
 		return nil
 	}
-	return fmt.Errorf("extsecret(vault-kv): health HTTP %d", resp.StatusCode)
+	return fmt.Errorf("extsecret(%s): health HTTP %d", v.name, resp.StatusCode)
 }
 
 // splitRef separates a "path#field" reference.
@@ -136,7 +150,7 @@ func splitMountPath(mp string) (mount, path string, err error) {
 	mp = strings.Trim(mp, "/")
 	i := strings.IndexByte(mp, '/')
 	if i <= 0 || i == len(mp)-1 {
-		return "", "", fmt.Errorf("extsecret(vault-kv): reference must be mount/path[#field], got %q", mp)
+		return "", "", fmt.Errorf("extsecret: reference must be mount/path[#field], got %q", mp)
 	}
 	return mp[:i], mp[i+1:], nil
 }
@@ -191,7 +205,7 @@ func (v *vaultKV) Store(ctx context.Context, ref string, fields map[string]strin
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("extsecret(vault-kv): write failed: %w", err)
+		return fmt.Errorf("extsecret(%s): write failed: %w", v.name, err)
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -199,9 +213,9 @@ func (v *vaultKV) Store(ctx context.Context, ref string, fields map[string]strin
 	case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent:
 		return nil
 	case resp.StatusCode == http.StatusBadRequest && strings.Contains(string(rb), "check-and-set"):
-		return fmt.Errorf("extsecret(vault-kv): %s already exists; refusing to overwrite it", mountPath)
+		return fmt.Errorf("extsecret(%s): %s already exists; refusing to overwrite it", v.name, mountPath)
 	default:
-		return fmt.Errorf("extsecret(vault-kv): write %s -> HTTP %d: %s",
+		return fmt.Errorf("extsecret(%s): write %s -> HTTP %d: %s", v.name,
 			mountPath, resp.StatusCode, strings.TrimSpace(string(rb)))
 	}
 }

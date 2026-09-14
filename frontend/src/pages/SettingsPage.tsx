@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getExtSecretConfig, saveExtSecretConfig, testExtSecret, type ExtSecretTestResult } from "../api/extsecret";
 import {
   Alert, Autocomplete, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, MenuItem, Paper, Stack,
@@ -132,6 +133,7 @@ export function SettingsPage() {
           {tab === 3 && (
             <>
               <EncryptionCard />
+              <ExternalSecretsCard />
               <WGSettingsCard current={settings["wireguard"]} />
               <ScanCard current={settings["scan_policy"]} />
               <ScriptCard current={settings["scripts"]} />
@@ -1955,6 +1957,153 @@ function NotificationsCard() {
         <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
           {saved ? "Saved" : "Save"}
         </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+// ExternalSecretsCard configures the connection to an external secrets manager —
+// HashiCorp Vault, OpenBao, or AWS Secrets Manager — which individual vault
+// credentials can then reference instead of Provenance storing the material.
+//
+// This was environment-only, so changing it meant a redeploy and seeing it meant
+// reading someone's .env. The environment is still the baseline and stays in effect
+// for anything left blank here, which is what keeps an existing deployment working
+// untouched after an upgrade.
+function ExternalSecretsCard() {
+  const qc = useQueryClient();
+  const { data: cfg } = useQuery({ queryKey: ["extsecret-config"], queryFn: getExtSecretConfig });
+
+  const [addr, setAddr] = useState("");
+  const [token, setToken] = useState("");
+  const [caPem, setCaPem] = useState("");
+  const [skipVerify, setSkipVerify] = useState(false);
+  const [awsRegion, setAwsRegion] = useState("");
+  const [awsKey, setAwsKey] = useState("");
+  const [awsSecret, setAwsSecret] = useState("");
+  const [awsEndpoint, setAwsEndpoint] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [test, setTest] = useState<ExtSecretTestResult | null>(null);
+  const [testRef, setTestRef] = useState("");
+  const [testProvider, setTestProvider] = useState("vault-kv");
+
+  // Seed from the server once it arrives. Credentials are never sent to us, so their
+  // inputs stay blank and blank means "keep the stored one".
+  useEffect(() => {
+    if (!cfg) return;
+    setAddr(cfg.vaultAddr ?? "");
+    setCaPem(cfg.vaultCaCertPem ?? "");
+    setSkipVerify(Boolean(cfg.vaultSkipVerify));
+    setAwsRegion(cfg.awsRegion ?? "");
+    setAwsKey(cfg.awsAccessKey ?? "");
+    setAwsEndpoint(cfg.awsEndpoint ?? "");
+  }, [cfg]);
+
+  const save = useMutation({
+    mutationFn: () => saveExtSecretConfig({
+      vaultAddr: addr.trim(), vaultToken: token, vaultCaCertPem: caPem, vaultSkipVerify: skipVerify,
+      awsRegion: awsRegion.trim(), awsAccessKey: awsKey.trim(), awsSecretKey: awsSecret,
+      awsEndpoint: awsEndpoint.trim(),
+    }),
+    onSuccess: () => {
+      setSaved(true);
+      setToken(""); setAwsSecret("");
+      void qc.invalidateQueries({ queryKey: ["extsecret-config"] });
+    },
+  });
+
+  const runTest = useMutation({
+    mutationFn: () => testExtSecret(testProvider, testRef.trim()),
+    onSuccess: (r) => setTest(r),
+    onError: () => setTest({ ok: false, error: "The test request itself failed." }),
+  });
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Typography variant="h6">External secrets manager</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+        A vault credential can hold a <em>reference</em> into a manager you already run instead of
+        Provenance storing the secret itself — the value is fetched on demand and never cached, so
+        the manager stays the record. Set the connection here, then tick “Store in an external
+        secrets manager” when creating a credential.
+      </Typography>
+      {/* An environment-configured deployment must not look unconfigured here, or the
+          natural reaction is to fill this in again and end up with two sources. */}
+      {cfg?.effectiveConfigured && !cfg?.vaultAddr && !cfg?.awsRegion && (
+        <Alert severity="info" sx={{ mb: 1.5 }}>
+          A connection is already configured by environment variables. Anything you leave blank
+          below keeps using it; anything you fill in overrides it.
+        </Alert>
+      )}
+      {test && (
+        <Alert severity={test.ok ? "success" : "warning"} sx={{ mb: 1.5 }} onClose={() => setTest(null)}>
+          {test.ok
+            ? `Connected to ${test.provider}${test.fetched ? ` and read ${test.fetched}` : ""}.`
+            : test.error}
+        </Alert>
+      )}
+      <Stack spacing={2}>
+        <Typography variant="subtitle2">HashiCorp Vault / OpenBao (KV v2)</Typography>
+        {/* One connection serves both: OpenBao is a fork of Vault 1.14 and speaks the
+            same KV v2 API. Which one a credential used is recorded per credential. */}
+        <TextField size="small" label="Server URL" value={addr} sx={{ maxWidth: 520 }}
+          placeholder="https://vault.internal:8200 or https://openbao.internal:8200"
+          onChange={(e) => { setAddr(e.target.value); setSaved(false); }}
+          helperText="Vault and OpenBao share this connection; pick which one a credential uses when you create it." />
+        <TextField size="small" label="Token" value={token} type="password" sx={{ maxWidth: 520 }}
+          autoComplete="new-password"
+          onChange={(e) => { setToken(e.target.value); setSaved(false); }}
+          helperText={cfg?.vaultTokenSet
+            ? "A token is stored. Leave blank to keep it; type a new one to replace it."
+            : "Needs read on the paths your credentials reference. Sealed at rest, never shown again."} />
+        <TextField size="small" label="CA certificate (PEM, optional)" value={caPem} multiline minRows={2}
+          sx={{ maxWidth: 520 }} onChange={(e) => { setCaPem(e.target.value); setSaved(false); }}
+          helperText="For a private CA. Paste the bundle — a file path on the server works too, but only from the environment." />
+        <FormControlLabel
+          control={<Checkbox size="small" checked={skipVerify}
+            onChange={(e) => { setSkipVerify(e.target.checked); setSaved(false); }} />}
+          label="Skip TLS verification (development only)" />
+
+        <Typography variant="subtitle2" sx={{ pt: 1 }}>AWS Secrets Manager</Typography>
+        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap", gap: 2 }}>
+          <TextField size="small" label="Region" value={awsRegion} sx={{ width: 200 }}
+            onChange={(e) => { setAwsRegion(e.target.value); setSaved(false); }} placeholder="eu-west-2" />
+          <TextField size="small" label="Access key ID" value={awsKey} sx={{ width: 240 }}
+            onChange={(e) => { setAwsKey(e.target.value); setSaved(false); }} />
+          <TextField size="small" label="Secret access key" value={awsSecret} type="password" sx={{ width: 240 }}
+            autoComplete="new-password"
+            onChange={(e) => { setAwsSecret(e.target.value); setSaved(false); }}
+            helperText={cfg?.awsSecretKeySet ? "Stored — blank keeps it." : undefined} />
+        </Stack>
+        <TextField size="small" label="Endpoint override (optional)" value={awsEndpoint} sx={{ maxWidth: 520 }}
+          onChange={(e) => { setAwsEndpoint(e.target.value); setSaved(false); }}
+          placeholder="https://localstack:4566" />
+
+        <Divider />
+        {/* The test runs against the connection as the SERVER resolves it — saved
+            settings layered over the environment — so it has to be saved first. A
+            check that passed for a config the resolver would not assemble would be
+            worse than no check. */}
+        <Typography variant="subtitle2">Test the saved connection</Typography>
+        <Stack direction="row" spacing={2} alignItems="flex-start" sx={{ flexWrap: "wrap", gap: 2 }}>
+          <TextField select size="small" label="Manager" value={testProvider} sx={{ width: 220 }}
+            onChange={(e) => setTestProvider(e.target.value)}>
+            <MenuItem value="vault-kv">HashiCorp Vault KV</MenuItem>
+            <MenuItem value="openbao">OpenBao KV</MenuItem>
+            <MenuItem value="aws-secrets">AWS Secrets Manager</MenuItem>
+          </TextField>
+          <TextField size="small" label="Reference to read (optional)" value={testRef} sx={{ width: 320 }}
+            onChange={(e) => setTestRef(e.target.value)} placeholder="secret/db/prod#password"
+            helperText="Blank checks reachability only; a reference proves it can actually read." />
+          <Button sx={{ mt: 0.5 }} disabled={runTest.isPending} onClick={() => runTest.mutate()}>
+            {runTest.isPending ? "Testing…" : "Test"}
+          </Button>
+        </Stack>
+        <Box>
+          <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+            {saved ? "Saved" : "Save"}
+          </Button>
+        </Box>
       </Stack>
     </Paper>
   );

@@ -1304,6 +1304,10 @@ func (s *Server) registerRoutes(r chi.Router) {
 	accessreview.Mount(r, deps)
 	scim.Mount(r, deps)
 	credvault.Mount(r, deps, s.Gateway)
+	// The saved external secrets-manager connection has to be resolvable by every
+	// consumer of cfg.ExtSecret() -- the monitor, terminal, SFTP, playbooks, imaging --
+	// and none of them has a store. Install it once, here, where both exist.
+	credvault.InstallExtSecretOverlay(s.Store, s.Cfg)
 	dbbroker.Mount(r, deps, s.Gateway)
 	rdp.Mount(r, deps, s.Gateway)
 	rdp.MountAPI(r, deps)

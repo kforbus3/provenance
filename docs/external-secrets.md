@@ -5,7 +5,13 @@ A vault credential can be **external-backed**: instead of Provenance storing the
 Provenance fetches the value **on demand** at the point of use. This lets Provenance broker secrets from the
 manager your organization already runs, without becoming a second copy of record.
 
-Supported backends: **HashiCorp Vault KV (v2)** and **AWS Secrets Manager**.
+Supported backends: **HashiCorp Vault KV (v2)**, **OpenBao KV (v2)** and **AWS Secrets Manager**.
+
+OpenBao is a fork of Vault 1.14 and serves the same KV v2 API, so it shares the client and the
+connection settings. It is still a distinct provider *name* rather than an alias: the name is
+stored on every external-backed credential and shown in the UI, so an operator who chose OpenBao
+sees OpenBao, errors name the server they actually configured, and existing credentials keep
+saying which one they were created against if the two ever diverge.
 
 ## How it works
 
@@ -21,6 +27,20 @@ Supported backends: **HashiCorp Vault KV (v2)** and **AWS Secrets Manager**.
 - Everything else is unchanged: locally-sealed credentials continue to work exactly as before.
 
 ## Configure the connection
+
+**In the UI:** Settings → Infrastructure → **External secrets manager**. The token and AWS secret
+key are sealed at rest with the same key as the OIDC and LDAP secrets and are never returned to
+the browser — the screen is told only *whether* each is set, so leaving a credential field blank
+means "keep the stored one". Clearing a connection is done by clearing its address, which is
+visible and therefore deliberate. **Test the saved connection** checks reachability, and reads a
+reference you give it to prove the token actually has access.
+
+**Or by environment.** The environment is the baseline and saved settings are layered over it
+**field by field**: a deployment that predates this screen has no saved row and keeps working
+untouched, and an operator who fills in only the address has not thereby unset the token their
+`.env` supplies. One exception: skip-TLS-verify is OR-ed rather than overwritten, because `false`
+is indistinguishable from "not set" for a bool and silently turning off a verification bypass the
+environment asked for would change how the connection is authenticated with nobody saying so.
 
 Set the connection for whichever manager(s) you use (a credential picks its provider):
 

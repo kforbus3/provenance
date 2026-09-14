@@ -41,6 +41,14 @@ func Mount(r chi.Router, d *app.Deps, gw *sshgw.Gateway) {
 		pr.Get("/vault/secrets/{id}", h.get)
 		pr.Post("/vault/secrets/{id}/reveal", h.reveal)
 
+		// The external secrets-manager CONNECTION is deployment configuration, not a
+		// credential, so it is gated on System.Configure like OIDC and LDAP — a
+		// Credential.Manage holder curates secrets, they do not repoint the manager
+		// every secret is read from.
+		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/settings/extsecret", h.extSecretGet)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Put("/settings/extsecret", h.extSecretPut)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/settings/extsecret/test", h.extSecretTest)
+
 		// Management: Credential.Manage.
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Post("/vault/secrets", h.create)
 		pr.With(d.Auth.RequirePermission("Credential.Manage")).Put("/vault/secrets/{id}", h.update)
