@@ -5,6 +5,45 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.5.0 — 2026-09-14
+
+**OpenBao is a supported external secrets manager.** It is a fork of Vault 1.14 and
+serves the same KV v2 routes, so it shares the client and the connection settings —
+but it is a distinct provider *name* rather than an alias. That name is stored on
+every external-backed credential and shown in the UI: an operator who chose OpenBao
+should see OpenBao, an error should name the server they actually run rather than
+sending them to look at a Vault they do not have, and if the two ever diverge every
+existing credential already records which one it was created against.
+
+**The connection to that manager is now configurable in the UI** — Settings →
+Infrastructure → *External secrets manager*. It was environment-only, which meant
+changing it was a redeploy and seeing it was reading somebody's `.env`. It is stored
+like the OIDC and LDAP connections: one settings row, with the token and the AWS
+secret key sealed at rest and never returned to the browser. The screen is told only
+*whether* each credential is set, so a blank field unambiguously means "keep the
+stored one"; clearing a connection is done by clearing its address, which is visible
+and therefore deliberate. A **Test** button checks reachability and, given a
+reference, reads it — proving the token has access rather than only that the server
+answers.
+
+The environment stays the baseline and saved values are layered over it **field by
+field**, so a deployment that predates this screen has no row at all and keeps working
+untouched, and filling in only the address does not unset the token `.env` supplies.
+Skip-TLS-verify is the exception: it is OR-ed rather than overwritten, because `false`
+is indistinguishable from "not set" for a boolean, and silently turning off a
+verification bypass the environment asked for would change how the connection is
+authenticated with nobody saying so.
+
+Every existing consumer — the monitor, terminal, SFTP, playbooks, Windows scripts and
+imaging — resolves through the saved connection unchanged, via one overlay installed
+where the store and the configuration both exist, rather than each of them learning
+that settings exist. A credential that cannot be unsealed (a rotated CA passphrase, a
+corrupt row) resolves to *empty* rather than to garbage: empty falls back to the
+environment, which is a connection an operator can reason about, where a wrong value
+would authenticate as somebody else.
+
+---
+
 ## v1.4.0 — 2026-09-13
 
 **Ask can talk to an OpenAI-compatible model server.** It spoke only Ollama's native
@@ -2035,7 +2074,15 @@ different reasons.
 
 ---
 
-## v1.5.0 — Host.Sudo means what it says — 2026-08-10
+## v1.5.0 (2026-08-10) — Host.Sudo means what it says
+
+> **Note.** The `v1.5.0` git tag was later reused for the Provenance release of the
+> same number (top of this file), under the same policy as `v1.0.0`, `v1.1.0`,
+> `v1.3.0` and `v1.4.0`: no inherited tag of this repository has ever been pushed —
+> the remote carries only the Provenance line — so moving it breaks nothing outside a
+> working copy. Verified with `git ls-remote --tags` before doing it rather than
+> assumed. This entry is the release that originally carried the number and stays here
+> as the record of it; its commit is `3aa91e4`.
 
 **Behavior change.** Running an Ansible playbook, applying OpenSCAP remediation, or
 collecting a support bundle now requires `Host.Sudo` in addition to the permission
