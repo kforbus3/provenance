@@ -126,7 +126,7 @@ func TestAnOrdinaryContainerOnTheSameHostIsStillUpdatable(t *testing.T) {
 	}
 	f.rollouts[0].ToTag = "1.24" // a rebuild, so no adoption needed
 	f.rollouts[0].TargetDigest = "sha256:new"
-	newEngine(f, &fakeDeployer{}, scripted("::OK::\nnginx:1.24\tnginx@sha256:new\n", "")).
+	newEngine(f, &fakeDeployer{}, scripted("::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:new\n", "")).
 		Tick(context.Background())
 
 	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {

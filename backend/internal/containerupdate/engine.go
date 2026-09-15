@@ -34,6 +34,7 @@ type Store interface {
 	HostContainers(ctx context.Context, hostID uuid.UUID) ([]models.Container, error)
 	UpdateHostContainers(ctx context.Context, hostID uuid.UUID, inv models.HostInventory) error
 	RolloutImages(ctx context.Context, id uuid.UUID) ([]store.RolloutImage, error)
+	InvalidateImageCheck(ctx context.Context, repository, tag string) error
 	GetSetting(ctx context.Context, key string) (json.RawMessage, error)
 }
 
@@ -362,6 +363,18 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 					"containers underneath it.", name, key))
 			return
 		}
+		// Refused here as well as when the rollout is created, for the same reason
+		// the rule above is: a rollout created before this existed must not be
+		// applied by a later tick.
+		if how, yes := isStatefulMajorBump(im.Repository, im.FromTag, im.ToTag); yes {
+			e.fail(ctx, r.ID, hostID, fmt.Sprintf(
+				"%s %s → %s crosses a major version. This image owns its on-disk format: "+
+					"the new version refuses the existing data directory and the container "+
+					"restarts forever with the service down. It needs %s first, with both "+
+					"versions available — which a container rollout cannot do.",
+				im.Repository, im.FromTag, im.ToTag, how))
+			return
+		}
 		// Each image is applied as its own single-image operation, so one code
 		// path serves both a one-image rollout and a fleet-wide one.
 		one := r
@@ -406,6 +419,14 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	}
 	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, ""); err != nil {
 		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
+	}
+	// The cached registry answers now describe what this host was running BEFORE
+	// the rollout. Dropped here, where every path that succeeds converges, rather
+	// than beside one of the deploys.
+	for _, im := range images {
+		one := r
+		one.Repository, one.FromTag, one.ToTag = im.Repository, im.FromTag, im.ToTag
+		e.invalidateChecks(ctx, one)
 	}
 }
 
@@ -723,8 +744,24 @@ func (e *Engine) targetStack(ctx context.Context, r store.UpdateRollout, hostID 
 		r.Repository, r.FromTag)
 }
 
-// verifyScript reports the digest each running container is using for one
-// repository. Same technique as the monitor's collection, narrowed to one image.
+// verifyScript reports, for one repository, every container using it: its image
+// reference, its name, whether it is actually RUNNING, and the image's digest.
+//
+// `ps` is listed per CONTAINER rather than deduplicated per image, and carries
+// the container's state, because two things a rollout must catch are invisible
+// otherwise:
+//
+//   - `docker ps` lists a container that is crash-looping (state "restarting")
+//     exactly like a healthy one. A postgres image bumped across a major version
+//     never starts -- it exits on the old data directory and is restarted
+//     forever -- yet it reports the new image and the new digest, so a check
+//     that only reads the image passes on a container that has never once come
+//     up. That is not a hypothetical: it left a Keycloak database down for
+//     twenty hours while the rollout recorded the host as verified.
+//
+//   - a repository can be running in SEVERAL containers on one host. Reading a
+//     deduplicated image list cannot tell "every container moved" from "one of
+//     them moved and the others are untouched".
 func verifyScript(repo string) string {
 	return `
 _rt=""
@@ -733,13 +770,13 @@ elif command -v podman >/dev/null 2>&1; then _rt=podman
 fi
 if [ -z "$_rt" ]; then echo "::NORUNTIME::"; exit 0; fi
 echo "::OK::"
-$_rt ps --no-trunc --format '{{.Image}}' 2>/dev/null | sort -u | while read -r _i; do
+$_rt ps --no-trunc --format '{{.Image}}	{{.Names}}	{{.State}}' 2>/dev/null | while IFS="	" read -r _i _n _s; do
   case "$_i" in
     ` + shellCase(repo) + `) ;;
     *) continue ;;
   esac
   _d=$($_rt image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null)
-  echo "$_i	$_d"
+  echo "$_i	$_n	$_s	$_d"
 done
 `
 }
@@ -757,6 +794,60 @@ func shellCase(repo string) string {
 		return r
 	}, repo)
 	return "'" + clean + ":'*"
+}
+
+// runningContainer is one line of verifyScript's output: a container using the
+// repository under test.
+type runningContainer struct {
+	ref    string // repository:tag
+	name   string // container name
+	state  string // docker/podman container state, e.g. "running", "restarting"
+	digest string // "repo@sha256:..." as RepoDigests reports it
+}
+
+// isRunning reports whether the container is actually up.
+//
+// Anything that is not "running" is treated as not running, rather than listing
+// the states that are bad. A state this does not recognise -- a newer runtime, a
+// podman-only value -- must not read as success: the whole point of this check
+// is that a container which is not up cannot count as a completed update.
+//
+// An empty state is the exception. A runtime whose `ps` does not carry the field
+// leaves it blank, and refusing every host there would turn "we cannot tell"
+// into "the rollout failed" on runtimes where nothing is actually wrong.
+func (c runningContainer) isRunning() bool {
+	return c.state == "" || c.state == "running"
+}
+
+// parseVerifyOutput reads verifyScript's tab-separated lines.
+//
+// Lines that do not carry the expected field count are skipped rather than
+// guessed at: the marker line and any runtime chatter share this stream.
+func parseVerifyOutput(out string) []runningContainer {
+	var got []runningContainer
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "::") {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+		c := runningContainer{
+			ref:   strings.TrimSpace(parts[0]),
+			name:  strings.TrimSpace(parts[1]),
+			state: strings.ToLower(strings.TrimSpace(parts[2])),
+		}
+		if len(parts) > 3 {
+			c.digest = strings.TrimSpace(parts[3])
+		}
+		if c.ref == "" {
+			continue
+		}
+		got = append(got, c)
+	}
+	return got
 }
 
 // verify reads back what the host is actually running.
@@ -783,20 +874,49 @@ func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostI
 			trimOutput(out))
 	}
 	want := r.Repository + ":" + r.ToTag
-	for _, line := range strings.Split(out, "\n") {
-		ref, digest, _ := strings.Cut(strings.TrimSpace(line), "\t")
-		if ref != want {
+	from := r.Repository + ":" + r.FromTag
+	seen := parseVerifyOutput(out)
+
+	// A container still on the tag we are moving AWAY from means this host did
+	// not take the update, whatever else on it did. Checked BEFORE looking for a
+	// success, because a repository can run in several containers: on one host
+	// `llamacpp-embed` was already on the target tag while `llamacpp` sat on the
+	// old one, and a check satisfied by the first match called that verified and
+	// left the container the rollout existed to move completely untouched.
+	//
+	// Only when the tags actually differ. A rebuild republishes the SAME tag, so
+	// from == want and every container legitimately sits on it; there the digest
+	// comparison below is what separates old bytes from new.
+	if r.FromTag != r.ToTag {
+		for _, c := range seen {
+			if c.ref == from {
+				return fmt.Errorf("deployed, but %s is still running %s, the tag this rollout moves away from",
+					c.name, from)
+			}
+		}
+	}
+
+	for _, c := range seen {
+		if c.ref != want {
 			continue
+		}
+		// Running the right image is not the same as running. A container that
+		// cannot start reports its new image and its new digest from `ps` while
+		// restarting forever, so without this a rollout that BREAKS a service
+		// records the host as verified.
+		if !c.isRunning() {
+			return fmt.Errorf("deployed %s, but the container %s is %s rather than running — the update did not come up",
+				want, c.name, c.state)
 		}
 		if r.TargetDigest == "" {
 			return nil // nothing to compare against; running the tag is the answer
 		}
 		// RepoDigests is "repo@sha256:...", so compare the digest part only.
-		if _, d, ok := strings.Cut(digest, "@"); ok && d == r.TargetDigest {
+		if _, d, ok := strings.Cut(c.digest, "@"); ok && d == r.TargetDigest {
 			return nil
 		}
 		return fmt.Errorf("deployed, but %s is running %s rather than the %s this rollout targets",
-			want, shortDigest(digest), shortDigest(r.TargetDigest))
+			want, shortDigest(c.digest), shortDigest(r.TargetDigest))
 	}
 	// Nothing running the tag we wanted. If the repository is running at some
 	// OTHER tag, the host has moved past this image rather than failed to take it
@@ -806,9 +926,8 @@ func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostI
 	// Checked HERE, from what is actually running, rather than only from an
 	// adopted stack: a host with no stack has no copy for the engine to compare
 	// against, and that is exactly the host this kept failing on.
-	from := r.Repository + ":" + r.FromTag
-	for _, line := range strings.Split(out, "\n") {
-		ref, _, _ := strings.Cut(strings.TrimSpace(line), "\t")
+	for _, c := range seen {
+		ref := c.ref
 		if !strings.HasPrefix(ref, r.Repository+":") || ref == want {
 			continue
 		}
@@ -864,6 +983,28 @@ func shortDigest(d string) string {
 		return "(unknown)"
 	}
 	return d
+}
+
+// invalidateChecks drops the cached registry answers for an image a rollout has
+// just changed, so a successful update stops reading as still pending.
+//
+// Both tags: the one moved away from carried the "update available" row, and the
+// one moved to carries a rebuild's "rebuilt" row -- for a rebuild they are the
+// same tag, which is the case that could not clear itself.
+//
+// Best effort, like the container refresh beside it: the deploy has happened and
+// been recorded, so a failure here costs freshness and nothing else.
+func (e *Engine) invalidateChecks(ctx context.Context, r store.UpdateRollout) {
+	for _, tag := range []string{r.FromTag, r.ToTag} {
+		if tag == "" {
+			continue
+		}
+		if err := e.store.InvalidateImageCheck(ctx, r.Repository, tag); err != nil {
+			e.log.Warn("update rollout: could not invalidate the image check",
+				"repository", r.Repository, "tag", tag, "err", err)
+			return
+		}
+	}
 }
 
 // refreshContainers re-reads what a host is running, right after changing it.

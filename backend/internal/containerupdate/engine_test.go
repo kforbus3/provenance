@@ -22,6 +22,7 @@ import (
 // --- fakes -------------------------------------------------------------------
 
 type fakeStore struct {
+	invalidated []string
 	// A real store is a connection pool, safe for concurrent use; a batch of
 	// hosts is applied concurrently, so the fake has to be safe too or -race
 	// reports the fake rather than the engine.
@@ -172,6 +173,15 @@ func (f *fakeStore) GetHost(_ context.Context, id uuid.UUID) (*models.Host, erro
 	return &models.Host{ID: id, Hostname: "h-" + id.String()[:4]}, nil
 }
 
+// invalidated records the image checks a rollout dropped, so a test can assert
+// that a successful update stops the screen reporting it as still pending.
+func (f *fakeStore) InvalidateImageCheck(_ context.Context, repository, tag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invalidated = append(f.invalidated, repository+":"+tag)
+	return nil
+}
+
 type fakeDeployer struct {
 	mu       sync.Mutex
 	calls    int
@@ -294,7 +304,7 @@ func fixture(n int, strategy store.UpdateRollout) (*fakeStore, uuid.UUID, []uuid
 
 // runningNew is what the verification read-back looks like on a host that took
 // the update.
-const runningNew = "::OK::\nnginx:1.27\tnginx@sha256:new\n"
+const runningNew = "::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n"
 
 // --- tests -------------------------------------------------------------------
 
@@ -412,15 +422,19 @@ func TestADeployThatLeavesTheOldImageRunningIsAFailure(t *testing.T) {
 	f, rid, _ := fixture(3, store.UpdateRollout{Canary: 1, BatchSize: 3})
 	d := &fakeDeployer{}
 	// The host still reports the OLD tag.
-	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx@sha256:old\n"}).
+	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:old\n"}).
 		Tick(context.Background())
 
 	h := f.hosts[rid][0]
 	if h.State != store.UpdateHostFailed {
 		t.Fatalf("host state = %q, want failed", h.State)
 	}
-	if !strings.Contains(h.Error, "no container on this host is running nginx:1.27") {
-		t.Errorf("the error should say what was expected, got %q", h.Error)
+	// The old-tag check now names the container that did not move, which is more
+	// actionable than naming only the tag that is absent — on a host running a
+	// repository several times, "no container is running 1.27" does not say which
+	// one was supposed to.
+	if !strings.Contains(h.Error, "still running nginx:1.24") {
+		t.Errorf("the error should name the tag that did not move, got %q", h.Error)
 	}
 }
 
@@ -430,7 +444,7 @@ func TestARebuildAtTheWrongDigestIsAFailure(t *testing.T) {
 	// the rollout reports success for the thing it was meant to change.
 	f, rid, _ := fixture(2, store.UpdateRollout{Canary: 1, BatchSize: 2})
 	f.rollouts[0].TargetDigest = "sha256:wanted"
-	newEngine(f, &fakeDeployer{}, &fakeRunner{out: "::OK::\nnginx:1.27\tnginx@sha256:other\n"}).
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: "::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:other\n"}).
 		Tick(context.Background())
 
 	h := f.hosts[rid][0]
@@ -445,7 +459,7 @@ func TestARebuildAtTheWrongDigestIsAFailure(t *testing.T) {
 func TestTheRightDigestVerifies(t *testing.T) {
 	f, rid, _ := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
 	f.rollouts[0].TargetDigest = "sha256:wanted"
-	newEngine(f, &fakeDeployer{}, &fakeRunner{out: "::OK::\nnginx:1.27\tnginx@sha256:wanted\n"}).
+	newEngine(f, &fakeDeployer{}, &fakeRunner{out: "::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:wanted\n"}).
 		Tick(context.Background())
 	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
 		t.Errorf("state = %q, want verified (error: %q)", got, f.hosts[rid][0].Error)
@@ -487,7 +501,7 @@ func TestADigestOnlyUpdateWritesNoNewRevision(t *testing.T) {
 	f.rollouts[0].ToTag = "1.24" // same as from
 	f.rollouts[0].TargetDigest = "sha256:rebuilt"
 	d := &fakeDeployer{}
-	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx@sha256:rebuilt\n"}).
+	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:rebuilt\n"}).
 		Tick(context.Background())
 
 	if len(f.saved) != 0 {
@@ -636,7 +650,7 @@ func inPlaceFixture(from, to string) (*fakeStore, uuid.UUID, uuid.UUID) {
 func TestARebuildIsAppliedThroughTheHostsOwnComposeProject(t *testing.T) {
 	f, rid, _ := inPlaceFixture("1.24", "1.24") // same tag: a rebuild
 	f.rollouts[0].TargetDigest = "sha256:new"
-	r := &fakeRunner{out: "::OK::\nnginx:1.24\tnginx@sha256:new\n"}
+	r := &fakeRunner{out: "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:new\n"}
 	d := &fakeDeployer{}
 	newEngine(f, d, r).Tick(context.Background())
 
@@ -685,7 +699,7 @@ func TestAVersionBumpAdoptsTheHostsComposeFileAndApplies(t *testing.T) {
 	// request arrangement this replaces came to be ignored.
 	f, rid, _ := inPlaceFixture("1.24", "1.27")
 	d := &fakeDeployer{}
-	r := scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)
+	r := scripted("::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n", composeNginx)
 	newEngine(f, d, r).Tick(context.Background())
 
 	if len(f.saved) == 0 {
@@ -709,7 +723,7 @@ func TestAdoptionRefusesAComposeFileThatDoesNotNameTheImage(t *testing.T) {
 	// The project at that path is not the one this container came from, and
 	// rewriting it would edit somebody else's stack.
 	f, rid, _ := inPlaceFixture("1.24", "1.27")
-	r := scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n",
+	r := scripted("::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n",
 		"services:\n  other:\n    image: caddy:2\n")
 	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
 
@@ -782,7 +796,7 @@ func TestAnAdoptedStackStillWinsOverInPlace(t *testing.T) {
 	f.stacks[ids] = []store.ContainerStack{{
 		ID: uuid.New(), HostID: ids, Enabled: true, Compose: composeNginx}}
 	d := &fakeDeployer{}
-	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx@sha256:new\n"}).
+	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:new\n"}).
 		Tick(context.Background())
 
 	if d.calls != 1 {
@@ -822,7 +836,7 @@ func multiFixture() (*fakeStore, uuid.UUID, []uuid.UUID) {
 }
 
 // verifyAll answers the read-back for every image in multiFixture.
-const verifyAll = "::OK::\nnginx:1.24\tnginx@sha256:n\nredis:7\tredis@sha256:r\n"
+const verifyAll = "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:n\nredis:7\tredis\trunning\tredis@sha256:r\n"
 
 func TestAHostTakesEveryImageInTheRolloutThatItRuns(t *testing.T) {
 	f, rid, _ := multiFixture()
@@ -943,7 +957,7 @@ func TestTheRolloutDeploysOnlyTheServiceRunningTheImage(t *testing.T) {
 			ComposeProject: "site", ComposeService: "db", ComposeDir: "/opt/site"},
 	}
 	d := &fakeDeployer{}
-	r := scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)
+	r := scripted("::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n", composeNginx)
 	newEngine(f, d, r).Tick(context.Background())
 
 	if len(d.services) != 1 {
@@ -969,7 +983,7 @@ func TestTheServiceIsReadFromTheComposeFileWhenTheContainerCannotSayIt(t *testin
 		{Name: "web", Repository: "nginx", Tag: "1.24", ComposeDir: "/opt/site"}, // no service
 	}
 	d := &fakeDeployer{}
-	newEngine(f, d, scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)).
+	newEngine(f, d, scripted("::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n", composeNginx)).
 		Tick(context.Background())
 
 	if len(d.services) != 1 {
@@ -1063,7 +1077,7 @@ func TestTruncatedAdoptOutputIsRefused(t *testing.T) {
 func TestVerifyComparesAgainstTheTargetTagNotTheOldOne(t *testing.T) {
 	f, rid, _ := inPlaceFixture("1.24", "1.24") // a rebuild
 	f.rollouts[0].TargetDigest = "sha256:new"
-	newEngine(f, &fakeDeployer{}, scripted("::OK::\nnginx:1.24\tnginx@sha256:new\n", composeNginx)).
+	newEngine(f, &fakeDeployer{}, scripted("::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:new\n", composeNginx)).
 		Tick(context.Background())
 	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
 		t.Fatalf("a rebuild landing on its target digest should verify: %q (%q)",
@@ -1077,7 +1091,7 @@ func TestVerifyComparesAgainstTheTargetTagNotTheOldOne(t *testing.T) {
 	// the failure rather than the fix.
 	g, gid, _ := inPlaceFixture("1.24", "1.27")
 	g.rollouts[0].TargetDigest = "sha256:old" // what the client used to send
-	newEngine(g, &fakeDeployer{}, scripted("::OK::\nnginx:1.27\tnginx@sha256:new\n", composeNginx)).
+	newEngine(g, &fakeDeployer{}, scripted("::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n", composeNginx)).
 		Tick(context.Background())
 	h := g.hosts[gid][0]
 	if h.State != store.UpdateHostFailed {
@@ -1174,7 +1188,7 @@ func TestSupersessionIsDetectedFromWhatIsRunningNotOnlyFromAStack(t *testing.T) 
 	}}
 
 	// The host is in fact running a pinned version, not :latest.
-	r := scripted("::OK::\nmetube:2026.07.24\tmetube@sha256:aaa\n", "")
+	r := scripted("::OK::\nmetube:2026.07.24\tmetube\trunning\tmetube@sha256:aaa\n", "")
 	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
 
 	h := f.hosts[rid][0]
@@ -1194,7 +1208,7 @@ func TestStillOnTheOldTagIsAFailureNotASupersession(t *testing.T) {
 	// the exact failure this feature exists to catch. Only some THIRD tag means
 	// the host moved past the image.
 	f, rid, _ := inPlaceFixture("1.24", "1.27")
-	r := scripted("::OK::\nnginx:1.24\tnginx@sha256:old\n", composeNginx)
+	r := scripted("::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:old\n", composeNginx)
 	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
 
 	if got := f.hosts[rid][0].State; got != store.UpdateHostFailed {
@@ -1330,7 +1344,7 @@ func TestAnInPlaceDeployLandingOnTheComposeTagIsASuccess(t *testing.T) {
 	// The compose file pins 1.24, so the deploy recreates the container there.
 	run := &fakeRunner{respond: func(script string) (string, int, bool) {
 		if strings.Contains(script, "::OK::") || strings.Contains(script, "ps --no-trunc") {
-			return "::OK::\nnginx:1.24\tnginx@sha256:pinned\n", 0, false
+			return "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:pinned\n", 0, false
 		}
 		return "", 0, false
 	}}
@@ -1352,7 +1366,7 @@ func TestAStackDeployLandingOnAnotherTagIsStillASupersession(t *testing.T) {
 	// asked for that tag — it means the host was re-pinned underneath, which is
 	// a supersession and not a success.
 	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
-	run := &fakeRunner{out: "::OK::\nnginx:1.99\tnginx@sha256:elsewhere\n"}
+	run := &fakeRunner{out: "::OK::\nnginx:1.99\tnginx\trunning\tnginx@sha256:elsewhere\n"}
 	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
 
 	if got := f.hosts[rid][0].State; got != store.UpdateHostSkipped {
@@ -1430,10 +1444,10 @@ func TestAnAppliedUpdateRefreshesWhatTheHostIsRunning(t *testing.T) {
 	f.containers[ids[0]][0].ComposeService = "web"
 
 	run := &fakeRunner{
-		out: "::OK::\nnginx:1.27\tnginx@sha256:new\n",
+		out: "::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n",
 		// What the host reports once the update has landed.
 		containersOut: "::OK::\nweb\tnginx:1.27\trunning\tabc123\tsite\tweb\t/opt/site\n" +
-			"::IMAGES::\nnginx:1.27\tnginx@sha256:new\n",
+			"::IMAGES::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n",
 	}
 	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
 
@@ -1458,7 +1472,7 @@ func TestAnUnreadableRefreshLeavesThePreviousListAlone(t *testing.T) {
 	f.containers[ids[0]][0].ComposeService = "web"
 
 	run := &fakeRunner{
-		out:           "::OK::\nnginx:1.27\tnginx@sha256:new\n",
+		out:           "::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n",
 		containersOut: "::NOACCESS::the monitor account cannot reach the socket",
 	}
 	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())

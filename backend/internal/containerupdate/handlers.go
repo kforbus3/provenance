@@ -209,6 +209,21 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Refuse a major-version bump of a stateful image, for the same reason and at
+	// the same moment: the operator asked for something a rollout cannot do, and
+	// should be told now rather than discover it as a crash-looping database.
+	for _, im := range images {
+		if how, yes := isStatefulMajorBump(im.Repository, im.FromTag, im.ToTag); yes {
+			httpx.WriteError(w, http.StatusBadRequest, im.Repository+" "+im.FromTag+" → "+
+				im.ToTag+" crosses a major version. This image owns its on-disk format: the "+
+				"new version will refuse the existing data directory and the container will "+
+				"restart forever with the service down. It needs "+how+" first, with both "+
+				"versions available — which a container rollout cannot do. Migrate the data, "+
+				"then pin the new tag in the stack.")
+			return
+		}
+	}
+
 	// The server decides what each target points at.
 	//
 	// The client was sending the digest from the updates row, which is what the

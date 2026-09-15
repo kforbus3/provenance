@@ -505,3 +505,25 @@ func (s *Store) PutCachedTags(ctx context.Context, repo string, tags []string, c
 		repo, raw, complete)
 	return err
 }
+
+// InvalidateImageCheck drops the cached registry answer for one image.
+//
+// A rollout changes the very thing this cache describes, so leaving the old
+// answer in place makes a SUCCESSFUL update keep reading as pending. For a
+// version bump that hides itself -- the row is keyed by the tag that is no
+// longer running, so it falls out of the screen on its own -- but a REBUILD
+// republishes the same tag, so the stale row keeps matching the container it
+// describes and goes on saying "rebuilt" for as long as twelve hours after the
+// rebuild was applied. That is indistinguishable, to an operator, from a rollout
+// that silently did nothing.
+//
+// The row is deleted rather than rewritten with a guess. The next check pass
+// re-asks the registry and writes the truth; until then the screen reads "not
+// checked yet", which is what is actually the case and is a state this page
+// already renders distinctly from "up to date".
+func (s *Store) InvalidateImageCheck(ctx context.Context, repository, tag string) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM container_image_updates WHERE repository=$1 AND tag=$2`,
+		repository, tag)
+	return err
+}
