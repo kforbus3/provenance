@@ -20,6 +20,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/sshgw"
 	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/topology"
 )
 
 // Mount attaches host routes to r, gated by authentication and permissions.
@@ -37,6 +38,11 @@ func Mount(r chi.Router, d *app.Deps) {
 		// Bulk actions over an ad-hoc host selection. Each mirrors its single-host
 		// counterpart's permission, applied to every host in the list.
 		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/bulk/refresh", h.bulkRefresh)
+		// What a bulk action over this selection would actually reach. Host.View,
+		// not the permission of the action being previewed: it reads topology and
+		// changes nothing, and an operator who can see these hosts should be able
+		// to see what standing on them means before asking anyone to run it.
+		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/bulk/blast-radius", h.bulkBlastRadius)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/maintenance", h.bulkMaintenance)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/tags", h.bulkTags)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
@@ -295,6 +301,44 @@ func (h *handler) bulkRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "host.bulk_refresh", "", map[string]any{"requested": len(ids), "applied": done})
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"applied": done})
+}
+
+// bulkBlastRadius reports what a bulk action over this selection would reach
+// beyond the selection itself.
+//
+// Read-only and deliberately separate from the actions it describes, so it can
+// be shown while an operator is still deciding rather than after they commit.
+// Every bulk action on this page answers to it.
+//
+// The selection is narrowed to what this caller may see FIRST, so the preview
+// cannot become a way to learn that hosts exist: an operator previewing a
+// selection they partly cannot access is told about the part they can.
+func (h *handler) bulkBlastRadius(w http.ResponseWriter, r *http.Request) {
+	var rq struct {
+		HostIDs []string `json:"hostIds"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&rq)
+	ids, ok := parseHostIDs(w, rq.HostIDs)
+	if !ok {
+		return
+	}
+	ids = h.accessibleIDs(r, ids)
+	edges, err := h.d.Store.DependentsOf(r.Context(), ids)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read host topology")
+		return
+	}
+	findings := topology.Analyze(ids, edges)
+	// An explicit empty list, never null: the screen distinguishes "nothing to
+	// warn about" from "the preview did not run", and a null would render as the
+	// second while meaning the first.
+	if findings == nil {
+		findings = []topology.Finding{}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"hosts":    len(ids),
+		"findings": findings,
+	})
 }
 
 // bulkMaintenance sets (minutes > 0) or clears (minutes <= 0) a maintenance

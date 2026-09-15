@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import BlastRadiusWarning from "../components/BlastRadiusWarning";
 import { formatDateTime } from "../lib/datetime";
 import {
   Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -223,6 +224,9 @@ function DeleteHostsDialog({
             ? "This removes the host from Provenance — its groups, grants, scans and history."
             : `This removes ${names} from Provenance — their groups, grants, scans and history.`}
         </Typography>
+        {/* What else stands on these hosts. Above the teardown opt-in, because it
+            changes whether the delete should happen at all rather than how. */}
+        <BlastRadiusWarning hostIds={hosts.map((h) => h.id)} />
         {enrolled.length > 0 && (
           <>
             <FormControlLabel

@@ -460,3 +460,27 @@ export async function scanContainerImages(): Promise<{ scanned: number; failed: 
     `/api/v1/container-images/scan`);
   return data;
 }
+
+// What a bulk action over this selection would reach beyond the selection.
+//
+// Read-only, and asked while the operator is still deciding rather than after
+// they commit — the whole value is in being shown before the confirm button.
+export type BlastRadiusFinding = {
+  severity: "critical" | "warning";
+  kind: string;
+  hostId: string;
+  hostname: string;
+  dependents: string[];
+  inSelection: number;
+  outside: number;
+  message: string;
+};
+
+export async function hostBlastRadius(
+  hostIds: string[],
+): Promise<{ hosts: number; findings: BlastRadiusFinding[] }> {
+  const { data } = await api.post<{ hosts: number; findings: BlastRadiusFinding[] }>(
+    "/api/v1/hosts/bulk/blast-radius", { hostIds },
+  );
+  return data;
+}
