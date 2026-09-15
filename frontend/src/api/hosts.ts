@@ -484,3 +484,34 @@ export async function hostBlastRadius(
   );
   return data;
 }
+
+// Host topology: what this host stands on, and what stands on it.
+export type HostDependencyKind = "hypervisor" | "storage" | "network" | "other";
+
+export type HostDependencyEdge = {
+  hostId: string;
+  hostname: string;
+  dependsOnId: string;
+  dependsOn: string;
+  kind: HostDependencyKind;
+  note: string;
+};
+
+export async function listHostDependencies(
+  hostId: string,
+): Promise<{ dependsOn: HostDependencyEdge[]; dependents: HostDependencyEdge[] }> {
+  const { data } = await api.get(`/api/v1/hosts/${hostId}/dependencies`);
+  return data;
+}
+
+export async function addHostDependency(
+  hostId: string, dependsOnId: string, kind: HostDependencyKind, note: string,
+): Promise<void> {
+  await api.post(`/api/v1/hosts/${hostId}/dependencies`, { dependsOnId, kind, note });
+}
+
+export async function removeHostDependency(
+  hostId: string, dependsOnId: string, kind: string,
+): Promise<void> {
+  await api.delete(`/api/v1/hosts/${hostId}/dependencies`, { params: { dependsOnId, kind } });
+}

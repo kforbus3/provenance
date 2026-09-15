@@ -76,9 +76,43 @@ that can be poisoned across a tenant boundary would let one customer's topology
 withhold another customer's rollout. It carries its own `tenant_id` and the
 standard isolation policy.
 
+## Recording an edge
+
+Topology is **asserted, not collected**. A host cannot report that it is a guest
+of a particular hypervisor, or that its disks arrive over NFS from a particular
+NAS — those are facts about the estate, not about the machine.
+
+So it is entered by hand, on the host's detail dialog under **Dependencies**,
+which shows both directions: what this host *stands on*, and what it *carries*.
+The empty state says the consequence rather than just "none", because a host with
+nothing recorded is not a host with no dependencies — it is one nothing can warn
+about yet.
+
+`GET`, `POST` and `DELETE` on `/api/v1/hosts/{id}/dependencies`. Reading is
+`Host.View`; writing is `Host.Edit`, because an edge changes what a bulk action
+warns about and what an ordered schedule does. It is a property of the host, not
+a note about it.
+
 ## Cycles
 
-A host cannot depend on itself; that is a `CHECK` constraint. Longer cycles are
-refused in code, where the rejection can name the path it found. A constraint
-cannot express reachability, and a trigger that tried would be a recursive query
-on every insert to prevent something an operator does by mistake roughly never.
+A host cannot depend on itself; that is a `CHECK` constraint.
+
+Longer cycles are refused in code, and the rejection **names the path it found**:
+
+```
+that would make a loop: nas → hypervisor → guest-a → nas
+```
+
+Saying only "that would create a cycle" sends an operator looking for it by hand
+across a graph they cannot see.
+
+The check is a recursive walk from the proposed target, asking whether it can
+already reach the dependent — run **inside the same transaction as the insert**,
+so two operators adding opposite halves of a loop at the same moment cannot both
+pass their check and both commit. Depth is bounded at 32: a malformed graph, one
+predating this check or written directly to the table, must not turn an insert
+into a runaway query.
+
+A constraint cannot express reachability, and a trigger that tried would run that
+walk on every insert to prevent something an operator does by mistake roughly
+never.

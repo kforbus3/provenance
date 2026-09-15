@@ -6,6 +6,7 @@ package hosts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +44,12 @@ func Mount(r chi.Router, d *app.Deps) {
 		// changes nothing, and an operator who can see these hosts should be able
 		// to see what standing on them means before asking anyone to run it.
 		pr.With(d.Auth.RequirePermission("Host.View")).Post("/hosts/bulk/blast-radius", h.bulkBlastRadius)
+		// What this host stands on, and what stands on it. Editing is Host.Edit:
+		// an edge changes what a bulk action warns about and what an ordered
+		// schedule does, so it is a property of the host, not a note about it.
+		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/{id}/dependencies", h.listDependencies)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/{id}/dependencies", h.addDependency)
+		pr.With(d.Auth.RequirePermission("Host.Edit")).Delete("/hosts/{id}/dependencies", h.deleteDependency)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/maintenance", h.bulkMaintenance)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/hosts/bulk/tags", h.bulkTags)
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/hosts/stats/status", h.statusStats)
@@ -301,6 +308,126 @@ func (h *handler) bulkRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "host.bulk_refresh", "", map[string]any{"requested": len(ids), "applied": done})
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"applied": done})
+}
+
+// listDependencies returns both directions for one host.
+//
+// Both, because they answer different questions and an operator needs each:
+// "what does this host stand on" is what to check before rebooting IT, and
+// "what stands on this host" is what to check before rebooting it for anyone
+// else's sake.
+func (h *handler) listDependencies(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad host id")
+		return
+	}
+	dependsOn, err := h.d.Store.DependsOn(r.Context(), id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read dependencies")
+		return
+	}
+	dependents, err := h.d.Store.DependentsOf(r.Context(), []uuid.UUID{id})
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read dependents")
+		return
+	}
+	if dependsOn == nil {
+		dependsOn = []store.HostDependencyEdge{}
+	}
+	if dependents == nil {
+		dependents = []store.HostDependencyEdge{}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"dependsOn": dependsOn, "dependents": dependents,
+	})
+}
+
+// addDependency records that this host stands on another.
+func (h *handler) addDependency(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad host id")
+		return
+	}
+	var rq struct {
+		DependsOnID string `json:"dependsOnId"`
+		Kind        string `json:"kind"`
+		Note        string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	on, err := uuid.Parse(strings.TrimSpace(rq.DependsOnID))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad dependsOnId")
+		return
+	}
+	if on == id {
+		httpx.WriteError(w, http.StatusBadRequest, "a host cannot stand on itself")
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(rq.Kind))
+	switch kind {
+	case "hypervisor", "storage", "network", "other":
+	default:
+		httpx.WriteError(w, http.StatusBadRequest,
+			"kind must be hypervisor, storage, network or other")
+		return
+	}
+	var by *uuid.UUID
+	if p := auth.MustPrincipal(r); p != nil && p.UserID != uuid.Nil {
+		uid := p.UserID
+		by = &uid
+	}
+	err = h.d.Store.AddHostDependency(r.Context(), store.HostDependencyInput{
+		HostID: id, DependsOnID: on, Kind: kind,
+		Note: strings.TrimSpace(rq.Note), CreatedBy: by,
+	})
+	var cyc *store.ErrDependencyCycle
+	if errors.As(err, &cyc) {
+		// 409, not 500: the request was understood and refused because of the
+		// state of the graph, and the message names the path so an operator does
+		// not have to find it by hand.
+		httpx.WriteError(w, http.StatusConflict, cyc.Error())
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not record the dependency")
+		return
+	}
+	h.audit(r, "host.dependency_add", id.String(), map[string]any{
+		"dependsOn": on.String(), "kind": kind,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteDependency removes one edge.
+func (h *handler) deleteDependency(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad host id")
+		return
+	}
+	on, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("dependsOnId")))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad dependsOnId")
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("kind")))
+	if err := h.d.Store.DeleteHostDependency(r.Context(), id, on, kind); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "no such dependency")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "could not remove the dependency")
+		return
+	}
+	h.audit(r, "host.dependency_remove", id.String(), map[string]any{
+		"dependsOn": on.String(), "kind": kind,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // bulkBlastRadius reports what a bulk action over this selection would reach

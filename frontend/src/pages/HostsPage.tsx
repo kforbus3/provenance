@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import BlastRadiusWarning from "../components/BlastRadiusWarning";
+import HostDependencies from "../components/HostDependencies";
 import { formatDateTime } from "../lib/datetime";
 import {
   Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -1986,6 +1987,16 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             No facts collected yet — they're gathered at enrollment and refreshed periodically by the monitor.
           </Typography>
+        )}
+        {/* Topology is asserted, not collected: a hypervisor or a NAS is not
+            something a host can report about itself. Shown last because it is
+            the one section here an operator WRITES. */}
+        {h && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>Dependencies</Typography>
+            <HostDependencies hostId={h.id} />
+          </>
         )}
       </DialogContent>
       <DialogActions>
