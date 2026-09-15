@@ -1,0 +1,84 @@
+# Host topology
+
+Provenance models hosts as a flat set. On a real estate they stand on each
+other, and the gap between those two facts has broken this fleet twice.
+
+## The failure this exists to prevent
+
+An "Update apt packages" run covered a host group that contained both a set of
+guests and the NAS serving their root filesystems over NFS. The NAS rebooted
+mid-run. Four guests failed with:
+
+```
+Timeout (12s) waiting for privilege escalation prompt
+```
+
+That is `sudo` hanging, because the filesystem it needed had gone away. The
+guests answered SSH throughout — the network was fine, only I/O was stalled — so
+the run recorded `unreachable=0` and the failure presented as a sudo problem on
+four unrelated machines. Nothing in the output pointed at storage, because
+nothing in the system knew storage was involved.
+
+The workaround is a hand-tuned clock: guests at 03:00, NAS at 03:45, jump host
+at 04:00, hypervisor at 04:30, with a ten-minute deferred reboot buying margin.
+It works. It also contains a race that was accepted deliberately — the guest run
+is bounded by a ninety-minute timeout, so it *can* still be running when the NAS
+window opens. Ordering by arithmetic on wall-clock times is the only tool
+available when the system cannot be told what depends on what.
+
+## What is being added
+
+One fact: **which hosts stand on which**, as a typed edge.
+
+`host_dependencies` records that `host_id` depends on `depends_on_host_id`, with
+a `kind`:
+
+| kind | meaning | what happens when it goes down |
+|---|---|---|
+| `hypervisor` | runs this host as a guest | the host stops entirely; no degraded mode |
+| `storage` | serves this host's disks | the host keeps answering the network while every write blocks |
+| `network` | routes or resolves for this host | varies; usually looks like unreachability |
+| `other` | an application-level dependency | recorded for humans |
+
+The `storage` case earns its own kind precisely because it is the one that does
+not look like what it is.
+
+Direction is "dependent first" because that is how every question is asked. *What
+does this host stand on* is the primary key; *what stands on this host* is the
+reverse index.
+
+## What is deliberately not here yet
+
+The table is the foundation, not the feature. Two things will read it, and
+neither can be built on a schema that cannot express the relationship:
+
+**Schedule ordering.** Today schedules have no dependency or ordering primitive
+at all — there is no `depends_on`, no `run_after`, no predecessor. Ordering a
+fleet upgrade means choosing clock times and hoping the earlier run finishes.
+With this edge, a schedule can be ordered by the graph instead, which turns an
+accepted race into an impossibility rather than an unlikelihood.
+
+**Blast-radius preview.** Before a bulk action, say what it will actually reach:
+
+> This targets 15 hosts. 13 of them have their disks served by `nas`, which is
+> also in this batch.
+
+That is the shape of an outage that already happened here, where the control
+plane was inside the batch it was operating on.
+
+## Why it is tenant-scoped rather than allowlisted
+
+Child tables reachable only through an RLS-scoped parent are allowlisted out of
+row-level security, because a second `tenant_id` would be a second place for two
+copies to disagree. This table is not one of those. A row names **two** hosts, so
+it is the one place a cross-tenant edge could be written, and a dependency graph
+that can be poisoned across a tenant boundary would let one customer's topology
+withhold another customer's rollout. It carries its own `tenant_id` and the
+standard isolation policy.
+
+## Cycles
+
+A host cannot depend on itself; that is a `CHECK` constraint. Longer cycles are
+refused in code, where the rejection can name the path it found. A constraint
+cannot express reachability, and a trigger that tried would be a recursive query
+on every insert to prevent something an operator does by mistake roughly never.
