@@ -139,12 +139,19 @@ func (s *Store) replaceMemberships(ctx context.Context, id uuid.UUID, table, col
 
 // CreateAPIToken stores a token's hash + metadata for a service account.
 func (s *Store) CreateAPIToken(ctx context.Context, saID uuid.UUID, name, hash, prefix string, createdBy uuid.UUID, expiresAt *time.Time) (*models.APIToken, error) {
+	return s.CreateScopedAPIToken(ctx, saID, name, hash, prefix, createdBy, expiresAt, "")
+}
+
+// CreateScopedAPIToken mints a token confined to an API path prefix. An empty
+// scope is unscoped, which is what CreateAPIToken produces and what every
+// service-account token is.
+func (s *Store) CreateScopedAPIToken(ctx context.Context, saID uuid.UUID, name, hash, prefix string, createdBy uuid.UUID, expiresAt *time.Time, scope string) (*models.APIToken, error) {
 	var t models.APIToken
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO api_tokens (service_account_id, name, token_hash, prefix, created_by, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO api_tokens (service_account_id, name, token_hash, prefix, created_by, expires_at, scope)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, name, prefix, created_at, expires_at, last_used_at, revoked_at`,
-		saID, name, hash, prefix, createdBy, expiresAt).
+		saID, name, hash, prefix, createdBy, expiresAt, scope).
 		Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt, &t.RevokedAt)
 	if err != nil {
 		return nil, err
@@ -190,12 +197,18 @@ func (s *Store) RevokeAPIToken(ctx context.Context, saID, tokenID uuid.UUID) err
 // APITokenAuth is the minimal data to authenticate an API token.
 type APITokenAuth struct {
 	TokenID          uuid.UUID
-	ServiceAccountID uuid.UUID
+	ServiceAccountID uuid.UUID // the OWNER: a users(id) row, service account or person
 	Username         string
 	Disabled         bool
 	ExpiresAt        *time.Time
 	RevokedAt        *time.Time
 	TenantID         uuid.UUID
+	// Scope confines the token to an API path prefix. Empty means unscoped,
+	// which is every pre-existing token and every service-account token.
+	Scope string
+	// ServiceAccount distinguishes automation from a person, so a personal
+	// token can be held to stricter rules than a service account's.
+	ServiceAccount bool
 }
 
 // GetAPITokenByHash looks up a token by its SHA-256 hash, joining its service
@@ -204,10 +217,12 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*APITokenAu
 	var a APITokenAuth
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.id, t.service_account_id, u.username, u.is_disabled, t.expires_at, t.revoked_at,
-			COALESCE(u.tenant_id,'00000000-0000-0000-0000-000000000001'::uuid)
+			COALESCE(u.tenant_id,'00000000-0000-0000-0000-000000000001'::uuid),
+			t.scope, u.is_service_account
 		FROM api_tokens t JOIN users u ON u.id = t.service_account_id
-		WHERE t.token_hash=$1 AND u.is_service_account`, hash).
-		Scan(&a.TokenID, &a.ServiceAccountID, &a.Username, &a.Disabled, &a.ExpiresAt, &a.RevokedAt, &a.TenantID)
+		WHERE t.token_hash=$1`, hash).
+		Scan(&a.TokenID, &a.ServiceAccountID, &a.Username, &a.Disabled, &a.ExpiresAt, &a.RevokedAt,
+			&a.TenantID, &a.Scope, &a.ServiceAccount)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}

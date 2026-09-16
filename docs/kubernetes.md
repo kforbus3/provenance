@@ -39,6 +39,54 @@ permission governs whether someone may reach a cluster at all; the ServiceAccoun
 what they can do once there. A read-only credential makes the whole path read-only, and no setting
 in Provenance can widen it.
 
+## Connect a tool: kubeconfig
+
+**Kubernetes → Download kubeconfig** mints a token for you and returns a config
+that reaches every cluster you can see, through the broker. One action rather
+than two, because a token with nothing to point at is useless and so is a config
+with no credential.
+
+What you get:
+
+- **One context per registered cluster**, each `server:` pointing at
+  `/api/v1/k8s/clusters/<id>/proxy` — never at the cluster directly. The
+  cluster's own credential stays vaulted and never enters the file.
+- **A token scoped to `/api/v1/k8s`.** It can reach the Kubernetes broker and
+  nothing else in Provenance: not a host, not a credential, not a playbook. A
+  leaked kubeconfig is bounded by what its owner could already do to the
+  clusters.
+- **An expiry.** A credential that lives in a file and never expires is one
+  nobody revokes, because nobody remembers it exists.
+
+The token is shown once, inside the file — Provenance stores only its hash, so a
+lost kubeconfig is regenerated rather than recovered. Revoke one like any other
+token.
+
+A scoped token cannot mint another; downloading a kubeconfig requires a signed-in
+session. Otherwise a leaked file could renew itself forever and escape its own
+expiry.
+
+This is what makes **any** Kubernetes tool work through Provenance — `kubectl`,
+`k9s`, Lens, or a desktop Headlamp — with the credential brokered, the calls
+audited, and the audit naming the person rather than a shared account.
+
+## Headlamp
+
+The stack ships [Headlamp](https://github.com/kubernetes-sigs/headlamp)
+(Apache-2.0, a Kubernetes SIG project) behind an opt-in profile:
+
+    docker compose --profile kubernetes up -d
+
+It is deliberately **not** given a kubeconfig containing a token. A kubeconfig
+carries one credential, so a shared one would make every operator reach
+Provenance as the same identity and collapse the audit log to a single actor —
+which is the whole reason to embed a UI rather than link out to one. Each
+operator supplies their own scoped token instead.
+
+Headlamp is not run with `-in-cluster`: it must not pick up an ambient
+ServiceAccount. Every cluster it can see arrives through Provenance's proxy or
+not at all.
+
 ## Use kubectl through the broker
 
 Point `kubectl` at Provenance's proxy for a cluster and authenticate with a Provenance token:

@@ -5,6 +5,8 @@ import {
   TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import OpenInFullIcon from "@mui/icons-material/OpenInFull";
+import DownloadIcon from "@mui/icons-material/Download";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ViewListIcon from "@mui/icons-material/ViewList";
@@ -12,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import {
   listClusters, createCluster, updateCluster, deleteCluster, listResources,
+  downloadKubeconfig,
   type K8sCluster, type K8sClusterInput,
 } from "../api/kubernetes";
 import { listVaultSecrets } from "../api/vault";
@@ -28,6 +31,15 @@ export function KubernetesPage() {
   const [editing, setEditing] = useState<K8sCluster | null>(null);
   const [creating, setCreating] = useState(false);
   const [browsing, setBrowsing] = useState<K8sCluster | null>(null);
+  const [managing, setManaging] = useState<K8sCluster | null>(null);
+  const [kubeErr, setKubeErr] = useState<string | null>(null);
+  const kube = useMutation({
+    mutationFn: downloadKubeconfig,
+    onSuccess: () => setKubeErr(null),
+    onError: (e: unknown) => setKubeErr(
+      (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? "Could not generate a kubeconfig."),
+  });
   const invalidate = () => qc.invalidateQueries({ queryKey: ["k8s-clusters"] });
   const del = useMutation({ mutationFn: (id: string) => deleteCluster(id), onSuccess: invalidate });
 
@@ -38,10 +50,17 @@ export function KubernetesPage() {
           <Typography variant="h5">Kubernetes</Typography>
           <Typography variant="body2" color="text.secondary">
             Reach registered clusters through Provenance with a vaulted credential injected — you never see
-            the token, and every call is audited. Browse resources here, or point kubectl at the proxy.
+            the token, and every call is audited. Open the embedded console, browse resources here, or download a kubeconfig for kubectl, k9s or Headlamp.
           </Typography>
         </Box>
-        {canManage && <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreating(true)}>Register cluster</Button>}
+        <Stack direction="row" spacing={1}>
+          <Button startIcon={<DownloadIcon />} disabled={kube.isPending}
+            onClick={() => kube.mutate()}
+            title="Mint a token limited to Kubernetes and download a kubeconfig for kubectl, k9s or Headlamp">
+            {kube.isPending ? "Generating…" : "Download kubeconfig"}
+          </Button>
+          {canManage && <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreating(true)}>Register cluster</Button>}
+        </Stack>
       </Stack>
 
       <Paper variant="outlined" sx={{ mb: 2 }}>
@@ -61,6 +80,10 @@ export function KubernetesPage() {
                 <TableCell>{c.credentialName || <Typography variant="caption" color="warning.main">none</Typography>}</TableCell>
                 <TableCell>{c.namespace}</TableCell>
                 <TableCell align="right">
+                  <Tooltip title="Open the full Kubernetes UI, embedded"><span>
+                    <IconButton size="small" color="primary" aria-label="Open cluster UI"
+                      disabled={!c.credentialId} onClick={() => setManaging(c)}>
+                      <OpenInFullIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="Browse resources"><span><IconButton size="small" color="primary"
                     aria-label="Browse resources"
                     disabled={!c.credentialId} onClick={() => setBrowsing(c)}><ViewListIcon fontSize="small" /></IconButton></span></Tooltip>
@@ -84,6 +107,8 @@ export function KubernetesPage() {
         </Table>
       </Paper>
 
+      {kubeErr && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setKubeErr(null)}>{kubeErr}</Alert>}
+      {managing && <ClusterConsole cluster={managing} onClose={() => setManaging(null)} />}
       {browsing && <ResourceBrowser cluster={browsing} onClose={() => setBrowsing(null)} />}
       {creating && <ClusterDialog onClose={() => setCreating(false)} onSaved={() => { setCreating(false); invalidate(); }} />}
       {editing && <ClusterDialog cluster={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); invalidate(); }} />}
@@ -181,5 +206,42 @@ function ClusterDialog({ cluster, onClose, onSaved }: { cluster?: K8sCluster; on
           onClick={() => save.mutate()}>Save</Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+
+// ClusterConsole embeds Headlamp, scoped to one cluster.
+//
+// Headlamp renders; Provenance owns identity, the credential and the audit
+// trail. It is framed rather than linked so the operator stays inside
+// Provenance — a link to a separate origin with a separate login is the thing
+// this exists instead of.
+//
+// The operator supplies their own token on first use, from Download kubeconfig.
+// A shared token in a mounted kubeconfig would be less friction and would
+// collapse the audit log to one actor for the whole team, which is the reason
+// to embed a UI rather than link out to one.
+function ClusterConsole({ cluster, onClose }: { cluster: K8sCluster; onClose: () => void }) {
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+          {cluster.name}
+        </Typography>
+        <Button size="small" onClick={onClose}>Close</Button>
+      </Stack>
+      <Alert severity="info" sx={{ mb: 1.5 }}>
+        Every call below is brokered: the cluster credential stays vaulted and each
+        request is recorded against you. On first use Headlamp asks for a token —
+        use <strong>Download kubeconfig</strong>, which mints one limited to
+        Kubernetes and nothing else in Provenance.
+      </Alert>
+      <Box
+        component="iframe"
+        title={`Kubernetes console for ${cluster.name}`}
+        src={`/headlamp/c/${encodeURIComponent(cluster.name)}/`}
+        sx={{ width: "100%", height: "70vh", border: 0, borderRadius: 1, bgcolor: "background.paper" }}
+      />
+    </Paper>
   );
 }

@@ -59,3 +59,22 @@ export async function listResources(id: string, kind: string, namespace?: string
   );
   return data.items ?? [];
 }
+
+// Mint a scoped token and download a kubeconfig that reaches every cluster you
+// can see, through the broker. One call: a token with nothing to point at is
+// useless, and so is a config with no credential.
+//
+// The token appears exactly once, inside the file — Provenance keeps only its
+// hash — so this triggers a download rather than returning a string something
+// might log.
+export async function downloadKubeconfig(): Promise<void> {
+  const { data } = await api.post("/api/v1/k8s/kubeconfig", {}, { responseType: "blob" });
+  const url = URL.createObjectURL(new Blob([data], { type: "application/yaml" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "provenance-kubeconfig.yaml";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

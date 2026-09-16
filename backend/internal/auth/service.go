@@ -445,6 +445,11 @@ func (s *Service) authenticateAPIToken(ctx context.Context, tokenStr string) (*P
 		IsSuperAdmin: false,
 		Permissions:  perms,
 		TenantID:     rec.TenantID,
+		// Carried so the middleware can confine a scoped token to the job it was
+		// minted for. A token owned by a PERSON has that person's whole permission
+		// set behind it with no MFA and no session, so the scope is the only thing
+		// standing between "kubectl works" and "this file is the account".
+		TokenScope: rec.Scope,
 	}, nil
 }
 

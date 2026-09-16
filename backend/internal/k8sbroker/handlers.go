@@ -34,6 +34,9 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Kubernetes.Manage")).Delete("/k8s/clusters/{id}", h.del)
 
 		// Brokered access.
+		// Mint-and-download in one call: a token with nothing to point at is
+		// useless, and so is a config with no credential.
+		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Post("/k8s/kubeconfig", h.kubeconfig)
 		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Get("/k8s/clusters/{id}", h.get)
 		// The resource browser makes specific, safe read calls through the proxy.
 		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Get("/k8s/clusters/{id}/resources", h.resources)

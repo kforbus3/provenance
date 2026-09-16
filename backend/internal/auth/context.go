@@ -24,6 +24,9 @@ type Principal struct {
 	// MustChangePw is set when the account is flagged to change its password
 	// before it may use the rest of the API (enforced in RequireAuth).
 	MustChangePw bool
+	// TokenScope confines an API-token caller to one API path prefix. Empty means
+	// unscoped: a session, or a token minted without a scope.
+	TokenScope string
 	// TenantID is the account's home tenant (multi-tenancy). All of the account's
 	// requests are scoped to it, except a provider admin who has switched into a
 	// customer tenant's context (see RequireAuth). Zero value = the provider tenant.

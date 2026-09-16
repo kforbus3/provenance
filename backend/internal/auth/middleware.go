@@ -53,6 +53,17 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 				return
 			}
 		}
+		// A scoped token may only reach the prefix it was minted for.
+		//
+		// Enforced here rather than per-handler: a scope that has to be checked in
+		// each handler is one that will be missing from the next handler somebody
+		// adds, and the failure is silent — the token simply works where it should
+		// not. Checked before the permission middleware, so a scoped token cannot
+		// reach an endpoint at all, whatever its owner is allowed to do there.
+		if !scopeAllows(p.TokenScope, r.URL.Path) {
+			forbidden(w, "this token is limited to "+p.TokenScope)
+			return
+		}
 		// An account flagged to change its password may only reach the auth
 		// endpoints (change-password, logout, profile, MFA) until it does so —
 		// server-side enforcement so the flag can't be bypassed by ignoring the UI.
@@ -233,4 +244,24 @@ func unauthorized(w http.ResponseWriter, msg string) {
 
 func forbidden(w http.ResponseWriter, msg string) {
 	writeError(w, http.StatusForbidden, msg)
+}
+
+// scopeAllows reports whether a scoped token may reach this path.
+//
+// The obvious implementation is strings.HasPrefix, and it is wrong: a token
+// scoped to "/api/v1/k8s" would then also reach "/api/v1/k8sanything" — any
+// endpoint whose path merely STARTS with the scope. A scope has to match on a
+// path-segment boundary, so the character after it must be "/" or nothing.
+//
+// An empty scope is unscoped and allows everything: that is every session and
+// every token minted before scopes existed.
+func scopeAllows(scope, path string) bool {
+	if scope == "" {
+		return true
+	}
+	scope = strings.TrimSuffix(scope, "/")
+	if path == scope {
+		return true
+	}
+	return strings.HasPrefix(path, scope+"/")
 }

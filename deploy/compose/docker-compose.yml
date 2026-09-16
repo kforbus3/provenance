@@ -277,6 +277,9 @@ services:
     image: provenance-frontend
     restart: unless-stopped
     environment:
+      # Resolved per request, so a stack without the kubernetes profile still boots.
+      HEADLAMP_HOST: ${HEADLAMP_HOST:-headlamp:4466}
+      DNS_RESOLVER: ${DNS_RESOLVER:-127.0.0.11}
       VITE_API_BASE: ${PROV_PUBLIC_URL:-${FLEET_PUBLIC_URL:-http://localhost:8080}}
     depends_on:
       - backend
@@ -535,6 +538,35 @@ services:
     volumes:
       - recordings:/var/lib/prov/recordings
       - rdp-drive:/var/lib/prov/rdp-drive
+    networks: [prov]
+
+  # Headlamp renders the Kubernetes UI; Provenance owns identity, the credential
+  # and the audit trail.
+  #
+  # It is deliberately NOT given a kubeconfig containing a token. A kubeconfig
+  # carries ONE credential, so a shared one would make every operator reach
+  # Provenance as the same identity and collapse the audit log to a single
+  # actor -- which is the whole reason to embed a UI rather than link out to one.
+  # Instead each operator supplies their own token, minted by
+  # POST /api/v1/k8s/kubeconfig and scoped so it can reach nothing in Provenance
+  # but the Kubernetes broker.
+  #
+  # Opt-in: `docker compose --profile kubernetes up -d`. A deployment that has
+  # joined no clusters should not run a Kubernetes UI.
+  headlamp:
+    image: ghcr.io/headlamp-k8s/headlamp:v0.43.0
+    profiles: [kubernetes]
+    restart: unless-stopped
+    # -in-cluster is off: Headlamp is not running inside a cluster, and must not
+    # pick up an ambient ServiceAccount. Every cluster it sees arrives through
+    # Provenance's proxy or not at all.
+    command:
+      - "-plugins-dir=/headlamp/plugins"
+      - "-base-url=/headlamp"
+    environment:
+      # Headlamp serves under a sub-path so it can be embedded rather than
+      # occupying its own hostname.
+      HEADLAMP_CONFIG_BASE_URL: /headlamp
     networks: [prov]
 
 volumes:
