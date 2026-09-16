@@ -78,3 +78,22 @@ export async function downloadKubeconfig(): Promise<void> {
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// The RBAC a cluster needs before Provenance can broker it. Downloaded rather
+// than shown, because it is applied with kubectl, not read.
+export async function downloadOnboardingManifest(
+  access: "read" | "operate", namespace: string,
+): Promise<void> {
+  const { data } = await api.get("/api/v1/k8s/onboarding-manifest", {
+    params: { access, namespace: namespace || undefined },
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(new Blob([data], { type: "application/yaml" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "provenance-rbac.yaml";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

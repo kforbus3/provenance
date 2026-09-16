@@ -37,6 +37,9 @@ func Mount(r chi.Router, d *app.Deps) {
 		// Mint-and-download in one call: a token with nothing to point at is
 		// useless, and so is a config with no credential.
 		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Post("/k8s/kubeconfig", h.kubeconfig)
+		// The RBAC a cluster needs before it can be joined. Manage, not Access:
+		// it is part of registering a cluster.
+		pr.With(d.Auth.RequirePermission("Kubernetes.Manage")).Get("/k8s/onboarding-manifest", h.onboarding)
 		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Get("/k8s/clusters/{id}", h.get)
 		// The resource browser makes specific, safe read calls through the proxy.
 		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Get("/k8s/clusters/{id}/resources", h.resources)

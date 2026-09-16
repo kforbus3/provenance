@@ -14,7 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import {
   listClusters, createCluster, updateCluster, deleteCluster, listResources,
-  downloadKubeconfig,
+  downloadKubeconfig, downloadOnboardingManifest,
   type K8sCluster, type K8sClusterInput,
 } from "../api/kubernetes";
 import { listVaultSecrets } from "../api/vault";
@@ -54,6 +54,13 @@ export function KubernetesPage() {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
+          {canManage && (
+            <Button startIcon={<DownloadIcon />}
+              onClick={() => void downloadOnboardingManifest("operate", "")}
+              title="The ServiceAccount, RBAC and token a cluster needs before it can be joined. Never cluster-admin, never Secrets.">
+              Cluster RBAC
+            </Button>
+          )}
           <Button startIcon={<DownloadIcon />} disabled={kube.isPending}
             onClick={() => kube.mutate()}
             title="Mint a token limited to Kubernetes and download a kubeconfig for kubectl, k9s or Headlamp">

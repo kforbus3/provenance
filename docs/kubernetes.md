@@ -10,6 +10,32 @@ cluster needs `Kubernetes.Access`).
 
 ## Register a cluster
 
+**Kubernetes → Cluster RBAC** generates the manifest a cluster needs first: a
+ServiceAccount, the roles, the bindings, and a long-lived token Secret. Apply it
+with `kubectl`, then paste the token and CA it prints.
+
+It is generated rather than documented because a step that is documented is a
+step somebody shortcuts — and the shortcut is `cluster-admin`, which is one line
+and works. What the manifest grants instead:
+
+- **read** — browse and diagnose. No writes, no Secrets.
+- **operate** — the above plus workload lifecycle. Still **no Secrets, no
+  ServiceAccounts, no RBAC**.
+
+Neither is `cluster-admin`, and neither is the built-in `edit` role — `edit`
+grants Secrets read *and* write, which is rarely what somebody wants from a
+management UI and never what they expect. Being able to create a ServiceAccount
+is excluded for the same reason: it is a route to a token, and a token is a route
+back to everything the role withholds.
+
+Reading is always cluster-wide, because `view` alone does **not** cover
+cluster-scoped nodes and every cluster UI lists them. Writes can be confined to
+one namespace, and that confinement matters: anything able to create workloads in
+a namespace can mount that namespace's Secrets into a pod and read them. No RBAC
+rule prevents that; scoping the write binding does.
+
+
+
 1. **Store the credential in the vault.** Create a vault secret whose value is a Kubernetes bearer
    token — typically a ServiceAccount token bound to a role with the access you want to broker.
 2. **Register the cluster** with its API server URL (`https://…:6443`), the vault credential, a
