@@ -9,6 +9,7 @@ import { formatDateTime } from "../lib/datetime";
 import { listHosts, type Host } from "../api/hosts";
 import { listGroups } from "../api/admin";
 import { runCommand, listCommandRuns, getCommandRun, type CommandRun } from "../api/commands";
+import BlastRadiusWarning from "../components/BlastRadiusWarning";
 
 const STATUS_COLOR: Record<string, "default" | "success" | "error" | "info"> = {
   pending: "info", running: "info", completed: "success", failed: "error",
@@ -45,6 +46,18 @@ export function AdhocCommandPage() {
   });
 
   const targetReady = mode === "host" ? selHosts.length > 0 : groupId !== "";
+
+  // The hosts this command will actually reach. A group is resolved from the
+  // already-loaded host list, which carries its own membership — a command
+  // aimed at a group is the shape a fleet-wide action takes, and leaving it
+  // unpreviewed would miss the case the preview exists for.
+  const groupName = groups.find((g) => g.id === groupId)?.name;
+  const targetHostIds =
+    mode === "host"
+      ? selHosts.map((h) => h.id)
+      : groupName
+        ? linuxHosts.filter((h) => (h.groups ?? []).includes(groupName)).map((h) => h.id)
+        : [];
 
   return (
     <Box>
@@ -87,6 +100,10 @@ export function AdhocCommandPage() {
               {run.isPending ? "Starting…" : "Run"}
             </Button>
           </Stack>
+          {/* A shell command on many hosts is the bluntest bulk action here —
+              it can reboot, unmount or stop a service — so what else stands on
+              those hosts belongs in front of the Run button. */}
+          <BlastRadiusWarning hostIds={targetHostIds} />
           {run.isError && <Alert severity="error">{(run.error as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Run failed"}</Alert>}
         </Stack>
       </Paper>

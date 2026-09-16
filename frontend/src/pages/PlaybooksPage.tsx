@@ -20,6 +20,7 @@ import {
   lintPlaybook, runPlaybook, runnerStatus, updatePlaybook, validatePlaybook,
   type CheckResult, type Playbook,
 } from "../api/playbooks";
+import BlastRadiusWarning from "../components/BlastRadiusWarning";
 import { listHosts, type Host } from "../api/hosts";
 import { listGroups, type Group } from "../api/admin";
 import { useUIStore } from "../store/ui";
@@ -161,6 +162,19 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
   const [runId, setRunId] = useState<string | null>(null);
 
   const targetReady = mode === "host" ? selectedHosts.length > 0 : !!group;
+
+  // The hosts this run will actually touch, for the dependency preview.
+  //
+  // A group is resolved here rather than server-side because the host list is
+  // already loaded for the picker and carries its own group membership. A run
+  // targeting a group is the shape a fleet upgrade actually takes, so leaving
+  // group mode unpreviewed would miss the case the preview exists for.
+  const targetHostIds =
+    mode === "host"
+      ? selectedHosts.map((h) => h.id)
+      : group
+        ? hosts.filter((h) => (h.groups ?? []).includes(group.name)).map((h) => h.id)
+        : [];
   const targetLabel =
     mode === "host"
       ? selectedHosts.length === 1 ? selectedHosts[0].hostname : `${selectedHosts.length} hosts`
@@ -255,6 +269,10 @@ function PlaybookRunDialog({ playbook, onClose }: { playbook: Playbook; onClose:
                 This will apply changes on <strong>{targetLabel}</strong>.
               </Alert>
             )}
+            {/* Only for a real run. A dry run changes nothing, so a warning that
+                this reaches other hosts would be false there — and a warning
+                shown when it does not apply is how people learn to skip it. */}
+            {!checkMode && <BlastRadiusWarning hostIds={targetHostIds} />}
             {startMut.error != null && <Alert severity="error">{(startMut.error as Error).message}</Alert>}
           </Stack>
         ) : (

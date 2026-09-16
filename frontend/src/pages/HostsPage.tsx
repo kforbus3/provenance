@@ -566,6 +566,7 @@ export function HostsPage() {
   // mutation reads it when it runs and must not need a re-render first.
   const bulkRemoveOldRef = useRef(false);
   const [bulkMaintOpen, setBulkMaintOpen] = useState(false);
+  const [retireOpen, setRetireOpen] = useState(false);
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
 
   const selectedIds = selection.map(String);
@@ -652,19 +653,7 @@ export function HostsPage() {
     else if (action === "maintenance") setBulkMaintOpen(true);
     else if (action === "tags") setBulkTagsOpen(true);
     else if (action === "migrateAccount") { bulkRemoveOldRef.current = false; bulkMigrateAccountMut.mutate(); }
-    else if (action === "retireOldAccount") {
-      // Deleting an account is the irreversible half, so it is confirmed rather
-      // than just clicked — and it is only safe once the fleet is verified healthy
-      // on the new account.
-      if (window.confirm(
-        `Delete the superseded login account on ${selectedIds.length} host(s)?\n\n` +
-        "Only do this once those hosts show online on their new account. " +
-        "This cannot be undone, and on a host you reach by that same account it " +
-        "removes your own access.")) {
-        bulkRemoveOldRef.current = true;
-        bulkMigrateAccountMut.mutate();
-      }
-    }
+    else if (action === "retireOldAccount") setRetireOpen(true);
   };
 
   const createMut = useMutation({
@@ -1080,6 +1069,34 @@ export function HostsPage() {
           setBulkMaintOpen(false);
         }}
       />
+      {/* Deleting an account is the irreversible half, so it is confirmed rather
+          than just clicked. A real dialog rather than window.confirm, because
+          what else stands on these hosts belongs in the decision: losing access
+          to a host that carries fourteen others is not the same as losing access
+          to a leaf. */}
+      <Dialog open={retireOpen} onClose={() => setRetireOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Retire the superseded account on {selectedIds.length} host(s)?</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Only do this once those hosts show online on their new account. This cannot be
+            undone, and on a host you reach by that same account it removes your own access.
+          </Alert>
+          <BlastRadiusWarning hostIds={selectedIds} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRetireOpen(false)}>Cancel</Button>
+          <Button
+            color="error"
+            onClick={() => {
+              setRetireOpen(false);
+              bulkRemoveOldRef.current = true;
+              bulkMigrateAccountMut.mutate();
+            }}
+          >
+            Retire account
+          </Button>
+        </DialogActions>
+      </Dialog>
       <BulkTagsDialog
         open={bulkTagsOpen} count={selectedIds.length}
         onClose={() => setBulkTagsOpen(false)}

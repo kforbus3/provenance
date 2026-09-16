@@ -70,7 +70,8 @@ This replaces ordering by clock arithmetic. Hand-timing means choosing a gap and
 hoping the earlier run fits inside it, which is a race: a guest run bounded by a
 ninety-minute timeout can still be going when the storage window opens.
 
-**Blast-radius preview.** Before a bulk action, say what it will actually reach:
+**Blast-radius preview.** Before an action that disrupts a host, say what it will
+actually reach:
 
 > This targets 15 hosts. 13 of them have their disks served by `nas`, which is
 > also in this batch.
@@ -128,3 +129,23 @@ into a runaway query.
 A constraint cannot express reachability, and a trigger that tried would run that
 walk on every insert to prevent something an operator does by mistake roughly
 never.
+
+## Where the preview appears, and where it deliberately does not
+
+It is shown before anything that can **disrupt** a host, because that is what
+propagates along an edge:
+
+- deleting hosts (especially with teardown)
+- running a playbook for real — not a dry run, which changes nothing
+- running an ad-hoc shell command, the bluntest bulk action there is
+- retiring a superseded login account, where losing access to a host that carries
+  fourteen others is not the same as losing access to a leaf
+
+It is **not** shown for refreshing facts, editing tags, or setting a maintenance
+window. Those change nothing on the host, so nothing propagates, and a warning
+that appears when it does not apply is how people learn to skip the one that
+does.
+
+A run targeting a **group** is previewed too, resolved from group membership. A
+fleet upgrade is aimed at a group, so leaving that unpreviewed would miss the
+case the preview exists for.
