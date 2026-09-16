@@ -23,6 +23,26 @@ The token is decrypted only in memory at the point of use and is never returned 
 The built-in browser lists common resource kinds — pods, deployments, services, namespaces, nodes —
 per namespace, with no `kubectl` required. Every listing is audited (`k8s.list`).
 
+## Act on resources
+
+Deployments can be **restarted** and **scaled**, and pods can be **deleted**, from the browser.
+These go through the same audited proxy as `kubectl` (`k8s.proxy`) rather than a separate
+endpoint, so there is one path to the cluster and one thing to audit.
+
+Restart stamps the pod template the way `kubectl rollout restart` does, so the controller replaces
+pods in whatever order its rollout strategy says — rather than deleting them and hoping. Deleting a
+pod is a restart when something owns it and a removal when nothing does, and the confirmation says
+which.
+
+Other kinds get no actions. The useful operations on a node are cordon and drain, and on a service
+or configmap it is editing a manifest; none of those are one-click operations and presenting them
+as though they were would be worse than leaving them out.
+
+**A refusal here is usually the cluster's, not Provenance's.** An action the credential's RBAC does
+not allow comes back as HTTP 403, and the message says so explicitly — sending an operator to look
+at Provenance's permissions for a decision made on the cluster wastes the one useful piece of
+information the error carried.
+
 ## Use kubectl through the broker
 
 Point `kubectl` at Provenance's proxy for a cluster and authenticate with a Provenance token:
