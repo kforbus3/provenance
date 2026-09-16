@@ -5,6 +5,83 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.6.0 — 2026-09-16
+
+**Provenance can be told which hosts stand on which, and act on it.** Hosts were
+modelled as a flat set. On a real estate they stand on each other — seventeen guests
+on one hypervisor, every root disk served over NFS by a single NAS — and nothing in
+the schema could say so, so nothing could act on it.
+
+What that cost, concretely: an apt run covered a group holding both a set of guests
+*and* the NAS serving their root filesystems. The NAS rebooted mid-run and four guests
+failed on `Timeout waiting for privilege escalation prompt` — `sudo` hanging because
+its filesystem had gone away. They answered SSH throughout, so the run recorded
+`unreachable=0` and it presented as a sudo problem on four unrelated machines.
+**Storage is the one dependency whose failure does not look like itself.**
+
+A host's detail dialog now has a **Dependencies** section showing both directions —
+what it *stands on* and what it *carries*. Topology is asserted rather than collected:
+a host cannot report that it is a guest of a particular hypervisor. Cycles are refused
+and the rejection names the path it found (`nas → hypervisor → guest-a → nas`), checked
+inside the same transaction as the insert so two operators adding opposite halves of a
+loop cannot both commit.
+
+**A blast-radius preview appears before anything that can disrupt a host** — deleting
+hosts, running a playbook for real, running an ad-hoc command, retiring a superseded
+account — including runs aimed at a *group*, which is the shape a fleet upgrade takes:
+
+> `nas` is in this action, and 14 hosts have their disks served by it — they keep
+> answering the network while every write blocks, so this does not present as a storage
+> failure. 11 of them are not in this selection.
+
+Dependents *outside* the selection are collateral and read as critical; dependents
+*inside* it are an ordering hazard and read as a warning. It is deliberately absent
+from refreshing facts, editing tags and setting a maintenance window: those change
+nothing on the host, and a warning shown where it does not apply is how the one that
+matters gets skimmed past.
+
+**A playbook schedule can now run in dependency order.** Its hosts go in waves —
+dependents first, whatever carries them last — so storage is never rebooted out from
+under guests still patching. This replaces ordering by clock arithmetic, which is a
+race rather than an order: a guest run bounded by a ninety-minute timeout can still be
+going when the storage window opens. Each wave is its own run, and **a wave that does
+not complete stops the rest**. Off by default, and a selection yielding a single wave
+falls through to an ordinary run.
+
+**Container update rollouts no longer report a broken container as verified.** Three
+defects, all found after an "update all" reported success on every host while two of
+them had not taken the update and one had been broken by it:
+
+- `docker ps` lists a container in `restarting` exactly like a healthy one, carrying
+  the new image and the new digest. A `postgres` image bumped across a major version
+  never starts — it exits on the old data directory and restarts forever — yet
+  verification read the image, saw what it wanted, and recorded the host as verified.
+  Verification now reads each container's **state**, and one that is not running fails
+  the host.
+- A repository can run in several containers on one host. The check stopped at the
+  first container matching the target tag, so a host where one had moved and another
+  had not was recorded as verified. A container still on the tag being moved away from
+  now fails the host.
+- A rebuild republishes the *same* tag, so the cached registry answer kept matching the
+  container it described and went on reading "rebuilt" for up to twelve hours after the
+  rebuild was applied — indistinguishable from a rollout that silently did nothing. A
+  host reaching verified now drops the cached answers for both tags.
+
+**A major-version bump of a stateful image is refused.** `postgres`, `mysql`,
+`mariadb`, `mongo`, `elasticsearch` and friends own their on-disk format: pulling the
+next major does not migrate it, it takes the service down until someone runs
+`pg_upgrade` by hand with both versions present, which a rollout cannot do. Refused at
+rollout creation *and* per host, so a rollout created before this rule cannot still be
+applied by a later tick. Minor and patch moves are untouched — those carry the security
+fixes — and an unorderable tag is never guessed at. Like this application's own
+containers, these updates stay **visible**; only applying them this way is refused.
+
+MINOR: new table, new endpoints, new surfaces; nothing removed. A deployment that
+records no topology behaves exactly as before — every preview renders nothing and every
+ordered schedule collapses to a single wave.
+
+---
+
 ## v1.5.0 — 2026-09-14
 
 **OpenBao is a supported external secrets manager.** It is a fork of Vault 1.14 and
