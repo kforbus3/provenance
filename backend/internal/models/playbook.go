@@ -34,6 +34,19 @@ type PlaybookVersion struct {
 // PlaybookRun is one execution of a playbook against a target (a single host or
 // a Provenance group). Execution wiring lands in Phase 2; the record exists now so
 // the model and the startup reconciler are in place.
+// The statuses a playbook run reports. Named so that code DECIDING on a run's
+// outcome links to the same value the run engine writes.
+//
+// A scheduler gating its next wave on the plausible-looking "success" would have
+// stopped every sequence after its first wave, silently, and looked exactly like
+// a fleet that stopped early on purpose. String literals on both sides of that
+// decision cannot be checked by anything.
+const (
+	PlaybookRunCompleted   = "completed"
+	PlaybookRunFailed      = "failed"
+	PlaybookRunInterrupted = "interrupted"
+)
+
 type PlaybookRun struct {
 	ID              uuid.UUID  `json:"id"`
 	PlaybookID      uuid.UUID  `json:"playbookId"`

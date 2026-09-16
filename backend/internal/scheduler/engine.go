@@ -7,6 +7,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/playbook"
 	"github.com/kforbus3/provenance/backend/internal/scan"
 	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/topology"
 	"github.com/kforbus3/provenance/backend/internal/vulnscan"
 	"github.com/kforbus3/provenance/backend/internal/winscript"
 )
@@ -217,6 +219,9 @@ func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []
 	} else if len(hosts) == 1 {
 		targetID = &hosts[0].ID
 	}
+	if p.OrderByTopology {
+		return e.firePlaybookInWaves(ctx, sc, pb, hosts, p, targetID, targetName)
+	}
 	rec, err := e.store.CreatePlaybookRun(ctx, models.PlaybookRun{
 		PlaybookID:      pb.ID,
 		PlaybookVersion: pb.Version,
@@ -233,6 +238,117 @@ func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []
 	}
 	go e.playbook.Run(context.WithoutCancel(ctx), rec.ID, pb.Content, hosts, p.CheckMode)
 	return "started", []uuid.UUID{rec.ID}
+}
+
+// firePlaybookInWaves runs the schedule's hosts in dependency order: dependents
+// first, whatever carries them last.
+//
+// This is the ordering an operator otherwise writes as clock times -- guests at
+// 03:00, storage at 03:45, the hypervisor at 04:30 -- with a gap chosen by
+// guessing how long the earlier run takes. That is a race, not an order: a guest
+// run bounded by a ninety-minute timeout can still be going when the storage
+// window opens, and when it is, storage reboots out from under it.
+//
+// Each wave is its own run, so the history shows what actually happened at each
+// stage rather than one row that hides the sequence.
+//
+// A failed wave STOPS the rest. That is the whole point: if patching the guests
+// went wrong, rebooting the NAS underneath them is the last thing that should
+// happen next. Cautious rather than fast, like the rollout pacing defaults.
+func (e *Engine) firePlaybookInWaves(
+	ctx context.Context, sc *models.Schedule, pb *models.Playbook,
+	hosts []*models.Host, p models.PlaybookSchedulePayload,
+	targetID *uuid.UUID, targetName string,
+) (string, []uuid.UUID) {
+	ids := make([]uuid.UUID, 0, len(hosts))
+	byID := make(map[uuid.UUID]*models.Host, len(hosts))
+	for _, h := range hosts {
+		ids = append(ids, h.ID)
+		byID[h.ID] = h
+	}
+	edges, err := e.store.DependentsOf(ctx, ids)
+	if err != nil {
+		// Ordering is the reason this schedule exists, so guessing an order is
+		// worse than not starting: running unordered is the failure it was set up
+		// to prevent.
+		e.log.Error("scheduled playbook: could not read topology; not starting",
+			"schedule", sc.ID, "err", err)
+		return "error: topology unavailable", nil
+	}
+	waves := topology.Waves(ids, edges)
+	if len(waves) <= 1 {
+		// Nothing to order. Fall through to the ordinary single run rather than
+		// creating a one-wave sequence that reads differently for no reason.
+		p.OrderByTopology = false
+		one := *sc
+		payload, merr := json.Marshal(p)
+		if merr == nil {
+			one.Payload = payload
+			return e.firePlaybook(ctx, &one, hosts)
+		}
+	}
+
+	runIDs := make([]uuid.UUID, 0, len(waves))
+	type stage struct {
+		id    uuid.UUID
+		hosts []*models.Host
+	}
+	stages := make([]stage, 0, len(waves))
+	for i, wave := range waves {
+		wh := make([]*models.Host, 0, len(wave))
+		for _, id := range wave {
+			if h := byID[id]; h != nil {
+				wh = append(wh, h)
+			}
+		}
+		if len(wh) == 0 {
+			continue
+		}
+		name := fmt.Sprintf("%s (wave %d of %d)", targetName, i+1, len(waves))
+		rec, cerr := e.store.CreatePlaybookRun(ctx, models.PlaybookRun{
+			PlaybookID:      pb.ID,
+			PlaybookVersion: pb.Version,
+			Requester:       sc.Requester,
+			TargetKind:      sc.TargetKind,
+			TargetID:        targetID,
+			TargetName:      name,
+			HostCount:       len(wh),
+			CheckMode:       p.CheckMode,
+			Scheduled:       true,
+		}, nil)
+		if cerr != nil {
+			e.log.Error("scheduled playbook: create wave run", "schedule", sc.ID, "err", cerr)
+			return "error: create run", runIDs
+		}
+		stages = append(stages, stage{id: rec.ID, hosts: wh})
+		runIDs = append(runIDs, rec.ID)
+	}
+
+	go func() {
+		bg := context.WithoutCancel(ctx)
+		for i, st := range stages {
+			e.playbook.Run(bg, st.id, pb.Content, st.hosts, p.CheckMode)
+			run, gerr := e.store.GetPlaybookRun(bg, st.id)
+			if gerr != nil {
+				e.log.Error("scheduled playbook: reading wave result; stopping",
+					"schedule", sc.ID, "wave", i+1, "err", gerr)
+				return
+			}
+			// "completed" is the only status a run reports on success; the others
+			// are "failed" and "interrupted". Checked against what the engine
+			// actually writes rather than a plausible-looking word -- comparing to
+			// "success" here would have stopped every sequence after its first
+			// wave, silently, and looked exactly like a fleet that stopped early
+			// on purpose.
+			if run.Status != models.PlaybookRunCompleted {
+				// Do not proceed to the hosts this wave stands on.
+				e.log.Warn("scheduled playbook: wave did not succeed; later waves skipped",
+					"schedule", sc.ID, "wave", i+1, "of", len(stages), "status", run.Status)
+				return
+			}
+		}
+	}()
+	return "started", runIDs
 }
 
 // fireScript runs a PowerShell script on the schedule's Windows hosts. Non-Windows

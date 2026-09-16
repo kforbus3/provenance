@@ -52,11 +52,23 @@ reverse index.
 The table is the foundation, not the feature. Two things will read it, and
 neither can be built on a schema that cannot express the relationship:
 
-**Schedule ordering.** Today schedules have no dependency or ordering primitive
-at all — there is no `depends_on`, no `run_after`, no predecessor. Ordering a
-fleet upgrade means choosing clock times and hoping the earlier run finishes.
-With this edge, a schedule can be ordered by the graph instead, which turns an
-accepted race into an impossibility rather than an unlikelihood.
+**Schedule ordering** — now built. A playbook schedule can be set to *Order by
+dependencies*, which runs its hosts in waves instead of all at once: dependents
+first, whatever carries them last. Storage is never rebooted out from under
+guests that are still patching, because the guests' wave has to finish first.
+
+Each wave is its own run, so the history shows what happened at each stage rather
+than one row that hides the sequence. **A wave that does not complete stops the
+rest** — if patching the guests went wrong, rebooting the NAS underneath them is
+the last thing that should happen next.
+
+Off by default. It turns one run into several, and on a fleet that has recorded
+no topology that is identical behaviour with more rows — so a selection that
+produces a single wave falls through to an ordinary run.
+
+This replaces ordering by clock arithmetic. Hand-timing means choosing a gap and
+hoping the earlier run fits inside it, which is a race: a guest run bounded by a
+ninety-minute timeout can still be going when the storage window opens.
 
 **Blast-radius preview.** Before a bulk action, say what it will actually reach:
 

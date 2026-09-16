@@ -384,10 +384,10 @@ func (s *Service) Run(parent context.Context, runID uuid.UUID, content string, h
 		live.append(fmt.Sprintf("\n[stream error: %v]\n", err))
 	}
 
-	status := "completed"
+	status := models.PlaybookRunCompleted
 	errMsg := ""
 	if exitCode == nil {
-		status = "failed"
+		status = models.PlaybookRunFailed
 		errMsg = "run did not report completion"
 		if ctx.Err() != nil {
 			errMsg = fmt.Sprintf("run exceeded the %s timeout", timeout)

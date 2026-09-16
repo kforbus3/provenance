@@ -51,6 +51,11 @@ type ScanSchedulePayload struct {
 type PlaybookSchedulePayload struct {
 	PlaybookID uuid.UUID `json:"playbookId"`
 	CheckMode  bool      `json:"checkMode"`
+	// OrderByTopology runs the schedule's hosts in dependency order -- dependents
+	// first, the things carrying them last -- as a sequence of runs rather than
+	// one. Off by default: it changes a single run into several, and a fleet that
+	// has recorded no topology would get the same behaviour with more rows.
+	OrderByTopology bool `json:"orderByTopology"`
 }
 
 // ScriptSchedulePayload is the Payload for a PowerShell script schedule.

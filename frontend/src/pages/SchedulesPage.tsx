@@ -206,6 +206,9 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
   const [skipFs, setSkipFs] = useState(Boolean(initPayload.skipExpensiveFsRules));
   const [playbook, setPlaybook] = useState<Playbook | null>(null);
   const [checkMode, setCheckMode] = useState(initPayload.checkMode !== false);
+  // Off by default: it turns one run into several, and on a fleet that has
+  // recorded no topology that is the same behaviour with more rows.
+  const [orderByTopology, setOrderByTopology] = useState(initPayload.orderByTopology === true);
   const [script, setScript] = useState<Script | null>(null);
 
   // hydrate target/playbook/script selections once data arrives
@@ -251,7 +254,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
       : kind === "script"
         ? { scriptId: script?.id ?? "" }
         : kind === "playbook"
-          ? { playbookId: playbook?.id ?? "", checkMode }
+          ? { playbookId: playbook?.id ?? "", checkMode, orderByTopology }
           : {}; // vulnscan / vulndb carry no payload
 
   const targetId = targetKind === "host" ? host?.id : group?.id;
@@ -320,6 +323,15 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
                 renderInput={(params) => <TextField {...params} label="Playbook" size="small" />} />
               <FormControlLabel control={<Switch checked={checkMode} onChange={(e) => setCheckMode(e.target.checked)} />}
                 label="Dry run" />
+              <Tooltip title={"Runs the hosts in dependency order instead of all at once: anything that "
+                + "carries other hosts goes last, so storage is never rebooted out from under guests "
+                + "still patching. Each wave is its own run, and a wave that does not complete stops "
+                + "the rest. Needs dependencies recorded on the hosts."}>
+                <FormControlLabel
+                  control={<Switch checked={orderByTopology}
+                    onChange={(e) => setOrderByTopology(e.target.checked)} />}
+                  label="Order by dependencies" />
+              </Tooltip>
             </Stack>
           )}
           {kind === "script" && (
