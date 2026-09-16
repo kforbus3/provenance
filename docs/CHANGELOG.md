@@ -2013,6 +2013,14 @@ partial picture.
 
 ## v1.6.0 — Ask was answering with no instructions at all — 2026-08-11
 
+> **Note.** The `v1.6.0` git tag was later reused for the Provenance release of the
+> same number (top of this file), under the same policy as `v1.0.0`, `v1.1.0`,
+> `v1.3.0`, `v1.4.0` and `v1.5.0`: no inherited tag of this repository has ever been
+> pushed — the remote carries only the Provenance line — so moving it breaks nothing
+> outside a working copy. Verified with `git ls-remote --tags` before doing it rather
+> than assumed. This entry is the release that originally carried the number and stays
+> here as the record of it; its commit is `660432d`.
+
 Asked for "the latest security scan result for each host", Ask replied with a chatty
 preamble, asked which host, and then produced *vulnerability* counts. Told "I want the
 security scans, not the vulnerability scans", it answered that it had no tool for
