@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
@@ -22,56 +23,77 @@ import (
 
 const proxyTimeout = 30 * time.Second
 
-// proxy forwards a request under /k8s/clusters/{id}/proxy/* to the cluster's API server
-// with the vaulted bearer token injected. This is what a user's kubectl targets.
+// proxy forwards a request under /k8s/clusters/{id}/proxy/* to the cluster's API
+// server with the vaulted bearer token injected. This is what a user's kubectl
+// targets, and what the cluster UI's live screens are built on.
+//
+// Implemented with httputil.ReverseProxy rather than client.Do + io.Copy,
+// because three things a Kubernetes client does every day are impossible by
+// hand:
+//
+//   - WATCHES. A watch is one long-lived response that trickles events. Copying
+//     a body without flushing leaves those events in Go's write buffer until it
+//     fills, so a UI built on watches shows nothing and then shows everything.
+//     FlushInterval -1 flushes each write straight through.
+//
+//   - EXEC, ATTACH and PORT-FORWARD. These are not ordinary HTTP: the client
+//     sends Upgrade and then speaks SPDY or WebSocket over the raw connection.
+//     There is no body to copy. ReverseProxy detects the upgrade and hands the
+//     hijacked connection over.
+//
+//   - LOGS -f. A follow is the same shape as a watch and fails the same way.
+//
+// The old 30s client timeout is deliberately not applied here either: every one
+// of the above is *supposed* to stay open. A timeout belongs on getting the
+// response headers back, not on how long the response may last.
 func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
 		return
 	}
-	cluster, token, client, err := h.dialCluster(r.Context(), id)
+	cluster, token, err := h.dialClusterStreaming(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	base, err := url.Parse(cluster.APIServer)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadGateway, "cluster API server URL is invalid")
+		return
+	}
 
 	// Everything after ".../proxy" is the upstream path (chi wildcard).
-	rest := chi.URLParam(r, "*")
-	upstream := cluster.APIServer + "/" + strings.TrimPrefix(rest, "/")
-	if r.URL.RawQuery != "" {
-		upstream += "?" + r.URL.RawQuery
-	}
+	rest := "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, r.Body)
-	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, "bad upstream request")
-		return
-	}
-	// Forward content headers, then inject auth (never forward the caller's Provenance auth).
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		req.Header.Set("Content-Type", ct)
-	}
-	if acc := r.Header.Get("Accept"); acc != "" {
-		req.Header.Set("Accept", acc)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	rp := newClusterProxy(cluster, token, base, rest,
+		func(status int, err error) {
+			d := map[string]any{"cluster": cluster.Name, "method": r.Method, "path": rest}
+			if err != nil {
+				d["error"] = err.Error()
+			} else {
+				d["status"] = status
+			}
+			h.audit(r, "k8s.proxy", id, d)
+		})
+	rp.ServeHTTP(w, r)
+}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		httpx.WriteError(w, http.StatusBadGateway, "cluster unreachable: "+err.Error())
-		return
+// streamingTransport dials the cluster with its TLS settings and NO overall
+// request deadline.
+//
+// ResponseHeaderTimeout bounds the part that should be quick -- getting a reply
+// at all -- while leaving the body open indefinitely, which is the whole point
+// for a watch, a log follow or a shell.
+func streamingTransport(cluster *store.K8sCluster) *http.Transport {
+	return &http.Transport{
+		TLSClientConfig:       clusterTLS(cluster),
+		ResponseHeaderTimeout: proxyTimeout,
+		// Proxied streams are long-lived and few; idle pooling across them buys
+		// nothing and holds sockets open against the API server.
+		IdleConnTimeout:     30 * time.Second,
+		MaxIdleConnsPerHost: 4,
+		ForceAttemptHTTP2:   false, // upgrade (SPDY/WebSocket) needs HTTP/1.1
 	}
-	defer resp.Body.Close()
-
-	h.audit(r, "k8s.proxy", id, map[string]any{
-		"cluster": cluster.Name, "method": r.Method, "path": "/" + strings.TrimPrefix(rest, "/"), "status": resp.StatusCode,
-	})
-
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
 }
 
 // resource kinds the browser can list, mapped to their API list path (%s = namespace).
@@ -174,18 +196,43 @@ func (h *handler) dialCluster(ctx context.Context, id uuid.UUID) (*store.K8sClus
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("credential unavailable: %w", err)
 	}
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if cluster.InsecureTLS {
-		tlsCfg.InsecureSkipVerify = true
-	} else if cluster.CACert != "" {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(cluster.CACert)) {
+	if !cluster.InsecureTLS && cluster.CACert != "" {
+		if p := x509.NewCertPool(); !p.AppendCertsFromPEM([]byte(cluster.CACert)) {
 			return nil, "", nil, fmt.Errorf("cluster CA certificate is invalid")
 		}
-		tlsCfg.RootCAs = pool
 	}
-	client := &http.Client{Timeout: proxyTimeout, Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	client := &http.Client{Timeout: proxyTimeout, Transport: &http.Transport{
+		TLSClientConfig: clusterTLS(cluster),
+	}}
 	return cluster, token, client, nil
+}
+
+// clusterTLS builds the TLS config for reaching one cluster's API server.
+//
+// One definition, shared by the timeout-bounded client the resource browser uses
+// and the streaming transport the proxy uses -- so "verify against this CA" and
+// "skip verification" cannot come to mean different things on the two paths.
+func clusterTLS(cluster *store.K8sCluster) *tls.Config {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if cluster.InsecureTLS {
+		cfg.InsecureSkipVerify = true
+		return cfg
+	}
+	if cluster.CACert != "" {
+		pool := x509.NewCertPool()
+		if pool.AppendCertsFromPEM([]byte(cluster.CACert)) {
+			cfg.RootCAs = pool
+		}
+	}
+	return cfg
+}
+
+// dialClusterStreaming resolves a cluster and its credential without building a
+// client: the proxy supplies its own transport, because a shared one would carry
+// the request timeout that must not apply to streams.
+func (h *handler) dialClusterStreaming(ctx context.Context, id uuid.UUID) (*store.K8sCluster, string, error) {
+	cluster, token, _, err := h.dialCluster(ctx, id)
+	return cluster, token, err
 }
 
 // credentialToken decrypts the vaulted secret and returns its value as the bearer
@@ -197,4 +244,52 @@ func (h *handler) credentialToken(ctx context.Context, credID uuid.UUID) (string
 		return "", fmt.Errorf("could not resolve credential")
 	}
 	return strings.TrimSpace(string(pt)), nil
+}
+
+// newClusterProxy builds the reverse proxy for one upstream request.
+//
+// Separated from the handler so the three things that are easy to get silently
+// wrong -- credential swapping, upgrade passthrough and flushing -- can be
+// tested against a real upstream without a database.
+func newClusterProxy(
+	cluster *store.K8sCluster, token string, base *url.URL, rest string,
+	audited func(status int, err error),
+) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		FlushInterval: -1, // flush every write: watches and log follows are useless batched
+		Rewrite:       clusterRewrite(base, rest, token),
+		Transport:     streamingTransport(cluster),
+		ModifyResponse: func(resp *http.Response) error {
+			audited(resp.StatusCode, nil)
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			audited(0, err)
+			httpx.WriteError(w, http.StatusBadGateway, "cluster unreachable: "+err.Error())
+		},
+	}
+}
+
+// clusterRewrite retargets the request at the cluster and swaps the credential.
+func clusterRewrite(base *url.URL, rest, token string) func(*httputil.ProxyRequest) {
+	return func(pr *httputil.ProxyRequest) {
+		pr.Out.URL.Scheme = base.Scheme
+		pr.Out.URL.Host = base.Host
+		pr.Out.URL.Path = strings.TrimSuffix(base.Path, "/") + rest
+		pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+		pr.Out.Host = base.Host
+
+		// The caller authenticated to Provenance. That credential must never
+		// reach the cluster, and the cluster's must never reach the caller.
+		pr.Out.Header.Del("Authorization")
+		pr.Out.Header.Del("Cookie")
+		pr.Out.Header.Del("X-Csrf-Token")
+		pr.Out.Header.Set("Authorization", "Bearer "+token)
+
+		// k8s selects its exec/attach protocol from this header; dropping it
+		// makes a shell negotiate down or fail outright.
+		if v, ok := pr.In.Header["X-Stream-Protocol-Version"]; ok {
+			pr.Out.Header["X-Stream-Protocol-Version"] = v
+		}
+	}
 }
