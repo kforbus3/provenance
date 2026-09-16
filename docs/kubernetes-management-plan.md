@@ -69,6 +69,39 @@ Also in Phase 0, because they change what everything else can assume:
 
 ## Phase 1 — embed Headlamp
 
+> **Dependency found while scoping this, and it reorders the phase.** Headlamp
+> can be pointed at an arbitrary API server by mounting a kubeconfig
+> (`-kubeconfig`, or `KUBECONFIG`, supported for the in-cluster deployment), so
+> routing it through Provenance's proxy works. But a kubeconfig carries **one**
+> bearer token, so every Headlamp user would reach Provenance as the same
+> identity and the audit log would record one actor for the whole team — which
+> defeats the reason for embedding it rather than linking out.
+>
+> Provenance's durable tokens live in `api_tokens`, whose `service_account_id` is
+> `NOT NULL`: tokens belong to service accounts, not people. **Per-user tokens are
+> a schema and auth change, not a detail**, and they gate the rest of the phase.
+> Shipping the embed first would mean launching with attribution that is wrong,
+> and retrofitting it later.
+>
+> Headlamp's own OIDC support (Keycloak is a documented provider) identifies the
+> human *to Headlamp*, which is what makes single sign-on possible — but it does
+> not change which token reaches Provenance. Two separate problems, and only the
+> second one touches the audit trail.
+
+**1a. Per-user access tokens** — a durable token ownable by a user, not only by a
+service account. This is the gate.
+
+**1b. Ship Headlamp** as a container, with a kubeconfig pointing at
+`/api/v1/k8s/clusters/<id>/proxy`.
+
+**1c. Embed it** in the Kubernetes page, scoped to the selected cluster, single
+sign-on, no second login.
+
+**1d. Download a kubeconfig** for `kubectl`, `k9s` or desktop Headlamp — same
+proxy, same audit, same attribution. Falls out of 1a almost for free.
+
+### As originally sketched
+
 - **Ship Headlamp** as a container in the stack (Apache-2.0, SIG-maintained).
 - **Point it at the broker** with a per-user kubeconfig, so calls carry the
   operator's identity into the audit log rather than a shared one.
