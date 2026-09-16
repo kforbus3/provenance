@@ -23,25 +23,21 @@ The token is decrypted only in memory at the point of use and is never returned 
 The built-in browser lists common resource kinds — pods, deployments, services, namespaces, nodes —
 per namespace, with no `kubectl` required. Every listing is audited (`k8s.list`).
 
-## Act on resources
+## Changing things: kubectl, not buttons
 
-Deployments can be **restarted** and **scaled**, and pods can be **deleted**, from the browser.
-These go through the same audited proxy as `kubectl` (`k8s.proxy`) rather than a separate
-endpoint, so there is one path to the cluster and one thing to audit.
+The built-in browser is **read-only on purpose**. Provenance is not trying to be a Kubernetes
+dashboard: the upstream Kubernetes Dashboard is archived and unmaintained, and its successor
+[Headlamp](https://headlamp.dev) is a Kubernetes SIG project that does that job far better than a
+re-implementation here would.
 
-Restart stamps the pod template the way `kubectl rollout restart` does, so the controller replaces
-pods in whatever order its rollout strategy says — rather than deleting them and hoping. Deleting a
-pod is a restart when something owns it and a removal when nothing does, and the confirmation says
-which.
+What Provenance does that a dashboard does not is hold the credential. So changing a cluster goes
+through `kubectl` pointed at the broker, below — the operator authenticates to Provenance, the
+cluster credential never reaches them, and every call is recorded.
 
-Other kinds get no actions. The useful operations on a node are cordon and drain, and on a service
-or configmap it is editing a manifest; none of those are one-click operations and presenting them
-as though they were would be worse than leaving them out.
-
-**A refusal here is usually the cluster's, not Provenance's.** An action the credential's RBAC does
-not allow comes back as HTTP 403, and the message says so explicitly — sending an operator to look
-at Provenance's permissions for a decision made on the cluster wastes the one useful piece of
-information the error carried.
+**What a caller may do is decided on the cluster, not here.** Provenance's `Kubernetes.Access`
+permission governs whether someone may reach a cluster at all; the ServiceAccount's RBAC governs
+what they can do once there. A read-only credential makes the whole path read-only, and no setting
+in Provenance can widen it.
 
 ## Use kubectl through the broker
 

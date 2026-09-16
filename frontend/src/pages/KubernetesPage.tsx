@@ -12,8 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import {
   listClusters, createCluster, updateCluster, deleteCluster, listResources,
-  restartDeployment, scaleDeployment, deletePod,
-  type K8sCluster, type K8sClusterInput, type K8sResourceRow,
+  type K8sCluster, type K8sClusterInput,
 } from "../api/kubernetes";
 import { listVaultSecrets } from "../api/vault";
 
@@ -102,42 +101,6 @@ function ResourceBrowser({ cluster, onClose }: { cluster: K8sCluster; onClose: (
   });
   const clusterWide = kind === "namespaces" || kind === "nodes";
   const err = (q.error as { response?: { data?: { error?: string } } })?.response?.data?.error;
-
-  // Write actions exist only for the kinds where there is an obvious, reversible
-  // one. Nodes, namespaces, services and configmaps get none: the useful actions
-  // on those are cordon/drain and editing a manifest, which are not one-click
-  // operations and should not be made to look like they are.
-  const qc = useQueryClient();
-  const [actionErr, setActionErr] = useState<string | null>(null);
-  const [scaling, setScaling] = useState<{ name: string; namespace: string; replicas: string } | null>(null);
-  const refresh = () => qc.invalidateQueries({ queryKey: ["k8s-res", cluster.id] });
-  const onActionError = (e: unknown) => {
-    // A 403 here is the cluster's RBAC refusing, not Provenance. Say which, or
-    // the operator goes looking in the wrong system.
-    const r = (e as { response?: { status?: number; data?: { error?: string } } })?.response;
-    if (r?.status === 403) {
-      setActionErr("The cluster refused this (HTTP 403). The credential's RBAC does not allow it "
-        + "in this namespace — that is a decision on the cluster, not in Provenance.");
-    } else {
-      setActionErr(r?.data?.error || "The action failed.");
-    }
-  };
-  const act = {
-    restart: useMutation({
-      mutationFn: (r: K8sResourceRow) => restartDeployment(cluster.id, r.namespace || namespace, r.name),
-      onSuccess: () => { setActionErr(null); refresh(); }, onError: onActionError,
-    }),
-    del: useMutation({
-      mutationFn: (r: K8sResourceRow) => deletePod(cluster.id, r.namespace || namespace, r.name),
-      onSuccess: () => { setActionErr(null); refresh(); }, onError: onActionError,
-    }),
-    scale: useMutation({
-      mutationFn: (v: { namespace: string; name: string; replicas: number }) =>
-        scaleDeployment(cluster.id, v.namespace, v.name, v.replicas),
-      onSuccess: () => { setActionErr(null); setScaling(null); refresh(); }, onError: onActionError,
-    }),
-  };
-  const hasActions = kind === "pods" || kind === "deployments";
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
@@ -152,10 +115,9 @@ function ResourceBrowser({ cluster, onClose }: { cluster: K8sCluster; onClose: (
           onChange={(e) => setNamespace(e.target.value)} sx={{ width: 200 }} />
       </Stack>
       {q.isError && <Alert severity="error" sx={{ mb: 1 }}>{err || "Could not list resources."}</Alert>}
-      {actionErr && <Alert severity="warning" sx={{ mb: 1 }} onClose={() => setActionErr(null)}>{actionErr}</Alert>}
       <Table size="small">
         <TableHead>
-          <TableRow><TableCell>Name</TableCell>{!clusterWide && <TableCell>Namespace</TableCell>}<TableCell>Status</TableCell><TableCell>Created</TableCell>{hasActions && <TableCell align="right">Actions</TableCell>}</TableRow>
+          <TableRow><TableCell>Name</TableCell>{!clusterWide && <TableCell>Namespace</TableCell>}<TableCell>Status</TableCell><TableCell>Created</TableCell></TableRow>
         </TableHead>
         <TableBody>
           {(q.data ?? []).map((row, i) => (
@@ -164,60 +126,13 @@ function ResourceBrowser({ cluster, onClose }: { cluster: K8sCluster; onClose: (
               {!clusterWide && <TableCell>{row.namespace}</TableCell>}
               <TableCell>{row.status ? <Chip size="small" variant="outlined" label={row.status} /> : "—"}</TableCell>
               <TableCell>{row.created}</TableCell>
-              {hasActions && (
-                <TableCell align="right">
-                  {kind === "deployments" && (
-                    <>
-                      <Button size="small" disabled={act.restart.isPending}
-                        onClick={() => act.restart.mutate(row)}>Restart</Button>
-                      <Button size="small"
-                        onClick={() => setScaling({
-                          name: row.name, namespace: row.namespace || namespace, replicas: "",
-                        })}>Scale</Button>
-                    </>
-                  )}
-                  {kind === "pods" && (
-                    <Button size="small" color="error" disabled={act.del.isPending}
-                      onClick={() => {
-                        // A pod is replaced by its controller, so this is a restart
-                        // rather than a removal — but a bare pod is simply gone.
-                        if (window.confirm(`Delete pod "${row.name}"?\n\nIf it is managed by a `
-                          + `Deployment or StatefulSet its controller will replace it. If it is a `
-                          + `bare pod, it will not come back.`)) act.del.mutate(row);
-                      }}>Delete</Button>
-                  )}
-                </TableCell>
-              )}
             </TableRow>
           ))}
           {!q.isLoading && (q.data ?? []).length === 0 && !q.isError && (
-            <TableRow><TableCell colSpan={hasActions ? 5 : 4}><Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>No resources.</Typography></TableCell></TableRow>
+            <TableRow><TableCell colSpan={4}><Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>No resources.</Typography></TableCell></TableRow>
           )}
         </TableBody>
       </Table>
-      <Dialog open={scaling !== null} onClose={() => setScaling(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>Scale {scaling?.name}</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus fullWidth size="small" type="number" label="Replicas" sx={{ mt: 1 }}
-            value={scaling?.replicas ?? ""}
-            onChange={(e) => setScaling((v) => (v ? { ...v, replicas: e.target.value } : v))}
-            helperText="0 stops the workload without deleting it."
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setScaling(null)}>Cancel</Button>
-          <Button
-            disabled={!scaling || scaling.replicas === "" || Number.isNaN(Number(scaling.replicas))
-              || Number(scaling.replicas) < 0 || act.scale.isPending}
-            onClick={() => scaling && act.scale.mutate({
-              namespace: scaling.namespace, name: scaling.name, replicas: Number(scaling.replicas),
-            })}
-          >
-            Scale
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Paper>
   );
 }
