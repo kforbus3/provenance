@@ -155,19 +155,15 @@ func (h *handler) resources(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"kind": kind, "namespace": ns, "items": simplifyList(body)})
 }
 
-// simplifyList reduces a K8s list response to name/namespace/status/ready/age rows.
+// simplifyList reduces a K8s list response to name/namespace/status/age rows.
+//
+// Status is derived per KIND rather than read from one field, because there is
+// no single field that carries it. Reading only `status.phase` -- which is what
+// this did -- worked for pods and namespaces and left NODES and DEPLOYMENTS
+// blank, which reads as "no status" rather than "this view cannot tell you".
 func simplifyList(body []byte) []map[string]any {
 	var parsed struct {
-		Items []struct {
-			Metadata struct {
-				Name              string `json:"name"`
-				Namespace         string `json:"namespace"`
-				CreationTimestamp string `json:"creationTimestamp"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		} `json:"items"`
+		Items []listItem `json:"items"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return []map[string]any{}
@@ -176,10 +172,68 @@ func simplifyList(body []byte) []map[string]any {
 	for _, it := range parsed.Items {
 		out = append(out, map[string]any{
 			"name": it.Metadata.Name, "namespace": it.Metadata.Namespace,
-			"status": it.Status.Phase, "created": it.Metadata.CreationTimestamp,
+			"status": statusOf(it), "created": it.Metadata.CreationTimestamp,
 		})
 	}
 	return out
+}
+
+// listItem is the union of the fields the supported kinds carry a status in.
+type listItem struct {
+	Metadata struct {
+		Name              string `json:"name"`
+		Namespace         string `json:"namespace"`
+		CreationTimestamp string `json:"creationTimestamp"`
+	} `json:"metadata"`
+	Spec struct {
+		// Nodes: cordoned. A Ready node that takes no work is not simply "Ready",
+		// and that distinction is the whole reason somebody looks at this column.
+		Unschedulable bool `json:"unschedulable"`
+	} `json:"spec"`
+	Status struct {
+		// Pods and namespaces.
+		Phase string `json:"phase"`
+		// Nodes: readiness lives in a condition, not a phase.
+		Conditions []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
+		// Deployments, statefulsets, daemonsets: a count, not a word.
+		Replicas      *int `json:"replicas"`
+		ReadyReplicas *int `json:"readyReplicas"`
+	} `json:"status"`
+}
+
+// statusOf picks the most specific status the object actually carries.
+func statusOf(it listItem) string {
+	if it.Status.Phase != "" {
+		return it.Status.Phase // pods, namespaces
+	}
+	if it.Status.Replicas != nil {
+		ready := 0
+		if it.Status.ReadyReplicas != nil {
+			ready = *it.Status.ReadyReplicas
+		}
+		return fmt.Sprintf("%d/%d", ready, *it.Status.Replicas) // workloads
+	}
+	for _, c := range it.Status.Conditions {
+		if c.Type != "Ready" {
+			continue
+		}
+		s := "NotReady"
+		if c.Status == "True" {
+			s = "Ready"
+		}
+		if it.Spec.Unschedulable {
+			// Matches what kubectl prints, and it matters: a cordoned node looks
+			// healthy by every other measure while running nothing new.
+			s += ",SchedulingDisabled"
+		}
+		return s // nodes
+	}
+	// Genuinely statusless (a Service, a ConfigMap). Left empty so the UI can say
+	// so, rather than inventing a word for it.
+	return ""
 }
 
 // dialCluster resolves the cluster, its vaulted bearer token, and an HTTP client
