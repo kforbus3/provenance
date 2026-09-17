@@ -25,14 +25,15 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/provctl ./cmd/prov
 FROM alpine:3.24 AS runtime
 RUN apk add --no-cache ca-certificates openssh-client tzdata postgresql16-client openssl su-exec && \
     addgroup -S prov && adduser -S -G prov prov && \
-    mkdir -p /var/lib/prov/recordings /var/lib/prov/scans /var/lib/prov/scap-content /var/lib/prov/backups /var/lib/prov/rdp-drive /var/lib/prov/updates && chown -R prov:prov /var/lib/prov
+    mkdir -p /var/lib/prov/recordings /var/lib/prov/scans /var/lib/prov/scap-content /var/lib/prov/backups /var/lib/prov/rdp-drive /var/lib/prov/updates && chown -R prov:prov /var/lib/prov && \
+    mkdir -p /headlamp/clusters && chown -R prov:prov /headlamp
 COPY --from=build /out/provd /usr/local/bin/provd
 COPY --from=build /out/provctl /usr/local/bin/provctl
 # Entrypoint: when started as root (Docker Compose with root-owned named volumes),
 # make the data dirs writable and drop to the unprivileged prov user via su-exec.
 # When already started as a non-root user (Kubernetes runAsNonRoot, where su-exec's
 # setuid/setgid would fail with all capabilities dropped), just exec provd directly.
-RUN printf '#!/bin/sh\nmkdir -p /var/lib/prov/recordings /var/lib/prov/scans /var/lib/prov/scap-content /var/lib/prov/backups /var/lib/prov/rdp-drive /var/lib/prov/updates 2>/dev/null || true\nif [ "$PROV_FIPS_MODE" = "true" ]; then export GODEBUG="fips140=on${GODEBUG:+,$GODEBUG}"; fi\nif [ "$(id -u)" = "0" ]; then chown prov:prov /var/lib/prov/recordings /var/lib/prov/scans /var/lib/prov/scap-content /var/lib/prov/backups /var/lib/prov/rdp-drive /var/lib/prov/updates 2>/dev/null || true; exec su-exec prov:prov env GODEBUG="$GODEBUG" /usr/local/bin/provd "$@"; fi\nexec env GODEBUG="$GODEBUG" /usr/local/bin/provd "$@"\n' > /usr/local/bin/entrypoint.sh \
+RUN printf '#!/bin/sh\nmkdir -p /var/lib/prov/recordings /var/lib/prov/scans /var/lib/prov/scap-content /var/lib/prov/backups /var/lib/prov/rdp-drive /var/lib/prov/updates /headlamp/clusters 2>/dev/null || true\nif [ "$PROV_FIPS_MODE" = "true" ]; then export GODEBUG="fips140=on${GODEBUG:+,$GODEBUG}"; fi\nif [ "$(id -u)" = "0" ]; then chown prov:prov /var/lib/prov/recordings /var/lib/prov/scans /var/lib/prov/scap-content /var/lib/prov/backups /var/lib/prov/rdp-drive /var/lib/prov/updates /headlamp/clusters 2>/dev/null || true; exec su-exec prov:prov env GODEBUG="$GODEBUG" /usr/local/bin/provd "$@"; fi\nexec env GODEBUG="$GODEBUG" /usr/local/bin/provd "$@"\n' > /usr/local/bin/entrypoint.sh \
     && chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
