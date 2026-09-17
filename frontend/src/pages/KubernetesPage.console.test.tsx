@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { MockInstance } from "vitest";
 
 import { KubernetesPage } from "./KubernetesPage";
 import { useAuthStore } from "../store/auth";
@@ -46,7 +47,7 @@ const openConsole = async () =>
 
 const iframe = () => document.querySelector('iframe[title="Kubernetes console for k3s-homelab"]');
 
-let openSpy: ReturnType<typeof vi.spyOn>;
+let openSpy: MockInstance<(url?: string | URL, target?: string, features?: string) => Window | null>;
 
 beforeEach(() => {
   vi.clearAllMocks();
