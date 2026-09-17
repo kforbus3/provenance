@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.6.1 — 2026-09-17
 
 **Kubernetes management, end to end.** Provenance brokered access to clusters but
 could only list five resource kinds. It is now somewhere a cluster is operated,
@@ -2062,6 +2062,14 @@ rename, the new configuration, and the new features.
 ---
 
 ## v1.6.1 — A fleet-wide upgrade could not finish inside its own budget — 2026-08-15
+
+> **Note.** The `v1.6.1` git tag was later reused for the Provenance release of the
+> same number (top of this file), under the same policy as `v1.0.0`, `v1.1.0`,
+> `v1.3.0`, `v1.4.0`, `v1.5.0` and `v1.6.0`: no inherited tag of this repository has
+> ever been pushed — the remote carries only the Provenance line — so moving it breaks
+> nothing outside a working copy. Verified with `git ls-remote --tags` before doing it
+> rather than assumed. This entry is the release that originally carried the number and
+> stays here as the record of it; its commit is `70e3b7e`.
 
 A weekly "apt dist-upgrade" across a 14-host group failed with **exit 124** and a recap
 showing **zero failed and zero unreachable hosts**. Nothing was wrong with the fleet. A
