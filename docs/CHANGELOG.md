@@ -22,9 +22,22 @@ re-implemented.
   the deadline moved to the response headers.
 - **The console is embedded, not linked.** Framed under Provenance's own origin
   from the cluster row. Provenance tells Headlamp which clusters exist — names
-  and server URLs pointing at the broker — and deliberately gives it **no
-  credential**, so each operator pastes their own token and the audit log names a
-  person rather than a shared account.
+  and server URLs pointing at the broker — and deliberately gives it **no cluster
+  credential**; the operator's own identity is what reaches the broker, so the
+  audit log names a person rather than a shared account. Newly registered
+  clusters appear within seconds: Headlamp watches the cluster list, so there is
+  nothing to restart.
+- **The console signs itself in, and opens in a tab.** There is no token to paste.
+  Provenance mints a per-user token scoped to `/api/v1/k8s`, valid 12 hours, and
+  hands it to Headlamp's own `set-token` endpoint, which stores it in an HttpOnly
+  cookie. Because that cookie belongs to the origin rather than to the frame,
+  **Open in new tab** gives a full window that is already signed in, with nothing
+  secret in the URL. Access is governed by `Kubernetes.Access` — the permission
+  that gates minting — so Provenance's roles control the console with nothing
+  separate to keep in sync, and **signing out revokes the console token** so a
+  shared browser leaves no working cluster access behind. Minting supersedes the
+  operator's previous console token, so each person has at most one live at a
+  time. Where minting is refused, Headlamp's own token prompt still works.
 - **Download kubeconfig** mints a token and returns a working config in one
   action, for `kubectl`, `k9s`, Lens or a desktop Headlamp. The token is
   **scoped to `/api/v1/k8s`** — it can reach the Kubernetes broker and nothing

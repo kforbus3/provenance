@@ -234,3 +234,23 @@ func (s *Store) TouchAPIToken(ctx context.Context, id uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at=now() WHERE id=$1`, id)
 	return err
 }
+
+// RevokeAPITokensByNamePrefix revokes every live token an owner holds whose name
+// starts with prefix, and reports how many it revoked.
+//
+// Used for tokens Provenance minted on a user's behalf rather than tokens they
+// asked for: those have to be revocable as a GROUP, because the caller doing the
+// revoking (a sign-out, a superseding mint) knows the purpose but not the ids.
+//
+// Zero revoked is a normal outcome -- a user who never opened the console holds
+// none -- so unlike RevokeAPIToken this does not treat it as ErrNotFound.
+func (s *Store) RevokeAPITokensByNamePrefix(ctx context.Context, ownerID uuid.UUID, prefix string) (int, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE api_tokens SET revoked_at=now()
+		WHERE service_account_id=$1 AND revoked_at IS NULL AND name LIKE $2 || '%'`,
+		ownerID, prefix)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}

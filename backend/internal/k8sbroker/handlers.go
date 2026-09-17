@@ -46,6 +46,11 @@ func Mount(r chi.Router, d *app.Deps) {
 		// Mint-and-download in one call: a token with nothing to point at is
 		// useless, and so is a config with no credential.
 		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Post("/k8s/kubeconfig", h.kubeconfig)
+		// The credential the embedded console runs as. Same permission as the
+		// kubeconfig because it is the same access by a different route: a
+		// scoped token for this user, which the SPA hands to Headlamp so the
+		// operator never meets its auth screen.
+		pr.With(d.Auth.RequirePermission("Kubernetes.Access")).Post("/k8s/console-token", h.consoleToken)
 		// The RBAC a cluster needs before it can be joined. Manage, not Access:
 		// it is part of registering a cluster.
 		pr.With(d.Auth.RequirePermission("Kubernetes.Manage")).Get("/k8s/onboarding-manifest", h.onboarding)

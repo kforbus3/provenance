@@ -106,33 +106,74 @@ deployment that has joined no clusters should not run a Kubernetes UI:
 
 Open it from the cluster row (**Open cluster UI**). It is framed inside
 Provenance rather than linked to, so the operator does not leave the pane or log
-in a second time.
+in a second time — and **Open in new tab** gives the same console a full window
+when a frame is too small for the job.
+
+There is no login and no token to paste. Provenance signs the console in for you.
+
+### Who can open it
+
+Exactly whoever holds **`Kubernetes.Access`**. That permission gates the route
+that mints the console's credential, so the console is governed by Provenance's
+roles and there is nothing separate to keep in sync. `Kubernetes.Manage` is a
+different and stronger thing: it covers registering and removing clusters.
+
+Two consequences worth knowing:
+
+- Taking `Kubernetes.Access` away stops an operator opening the console, but a
+  console they already have open keeps working until its token expires (12 hours
+  at most). To cut it immediately, revoke their `Headlamp console for <user>`
+  token from their API tokens, or disable the account.
+- **Signing out of Provenance revokes the console token**, so a shared browser
+  does not leave working cluster access behind for whoever sits down next.
 
 ### How it is wired
 
 **Provenance tells Headlamp which clusters exist; Headlamp never learns a
-credential.** The backend writes a kubeconfig containing cluster names and
-server URLs — each pointing at `/api/v1/k8s/clusters/<id>/proxy`, never at a
-cluster directly — with a user entry carrying an **empty** credential block.
-Headlamp then shows its own *"Please paste your authentication token"* prompt,
-and each operator pastes the token from **Download kubeconfig**.
+cluster credential.** The backend writes a kubeconfig containing cluster names
+and server URLs — each pointing at `/api/v1/k8s/clusters/<id>/proxy`, never at a
+cluster directly — with a user entry carrying an **empty** credential block. The
+cluster's own credential stays vaulted and is injected by the broker.
 
-That asymmetry is the point. A kubeconfig carries one credential, so a shared
-token would make every operator reach Provenance as the same identity and
+The console's *operator* credential is supplied separately, and per person:
+
+1. The SPA asks `POST /api/v1/k8s/console-token` for a token scoped to
+   `/api/v1/k8s` and valid 12 hours, named `Headlamp console for <user>`.
+2. It posts that token to Headlamp's own
+   `POST /headlamp/clusters/<name>/set-token`, which stores it in an **HttpOnly
+   cookie** — Headlamp's normal mechanism, not something bolted on.
+3. Only then is the console rendered. Headlamp reads its token when it boots, so
+   a console mounted before the cookie exists would sit on its auth screen and
+   stay there.
+
+Because the cookie belongs to the **origin** rather than to the frame, the same
+console is already signed in when opened in a new tab. Nothing secret travels in
+the URL.
+
+It is a per-user token rather than one shared console credential on purpose: a
+shared one would make every operator reach Provenance as the same identity and
 collapse the audit log to a single actor — which is the whole reason to embed a
-UI rather than link out to one.
+console rather than link out to one. Minting **supersedes** the operator's
+previous console token, so each person has at most one live at a time; a second
+browser tab is unaffected (it sends the same cookie), a second *device* mints its
+own and takes over.
 
-Two details that matter if you are debugging it:
+Three details that matter if you are debugging it:
 
-- The file is written to `PROV_HEADLAMP_KUBECONFIG` (default
+- The cluster-list file is written to `PROV_HEADLAMP_KUBECONFIG` (default
   `/headlamp/clusters/kubeconfig`), on a volume the backend writes and Headlamp
   reads read-only. **Unset disables the whole mechanism**, which is the case for
   any deployment not running the profile.
 - It is rewritten at backend startup and whenever a cluster is registered,
-  edited or removed. **Headlamp reads it at its own startup**, so a newly
-  registered cluster appears in the console after
-  `docker restart provenance-headlamp-1`. The built-in browser and `kubectl`
-  need no restart.
+  edited or removed. Headlamp **watches** the file, so a newly registered cluster
+  appears in the console within about ten seconds — no restart. (The write is an
+  atomic rename, which is deliberate: Headlamp reads this file at arbitrary
+  moments and logs a parse error on a half-written one.)
+- If Provenance cannot mint a token — no `Kubernetes.Access`, or the caller is
+  itself using a scoped token — the console falls back to Headlamp's own
+  *"paste your authentication token"* prompt, and the token from **Download
+  kubeconfig** works there. A scoped token cannot mint another, or a leaked one
+  would renew itself forever and its expiry would mean nothing.
 
 Headlamp is deliberately **not** run with `-in-cluster`: it must not pick up an
 ambient ServiceAccount. Every cluster it can see arrives through the broker or

@@ -370,8 +370,25 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	p := MustPrincipal(r)
 	if p != nil {
 		_ = h.svc.Logout(r.Context(), p.SessionID)
+		// Tokens Provenance minted to drive a UI on this user's behalf die with
+		// the session that caused them. The embedded Kubernetes console is one:
+		// it runs as a scoped token held in a browser cookie, and left alive it
+		// would give whoever sits down at this browser next working cluster
+		// access long after the session they inherited it from ended.
+		//
+		// Best effort, and after Logout: failing to retire a token must not
+		// leave the caller signed in.
+		consoles, err := h.svc.store.RevokeAPITokensByNamePrefix(r.Context(), p.UserID,
+			models.ConsoleTokenNamePrefix)
+		if err != nil {
+			consoles = 0
+		}
+		detail := map[string]any{}
+		if consoles > 0 {
+			detail["consoleTokensRevoked"] = consoles
+		}
 		_, _ = h.svc.store.AppendAudit(r.Context(), models.AuditEvent{
-			ActorID: &p.UserID, ActorName: p.Username, Action: "auth.logout",
+			ActorID: &p.UserID, ActorName: p.Username, Action: "auth.logout", Detail: detail,
 		})
 	}
 	h.clearAuthCookies(w)

@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableHead,
+  CircularProgress, FormControlLabel, IconButton, MenuItem, Paper, Stack, Table, TableBody,
+  TableCell, TableHead,
   TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import DownloadIcon from "@mui/icons-material/Download";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -14,7 +16,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth";
 import {
   listClusters, createCluster, updateCluster, deleteCluster, listResources,
-  downloadKubeconfig, downloadOnboardingManifest,
+  downloadKubeconfig, downloadOnboardingManifest, authorizeConsole, consoleAuthorized, consoleUrl,
   type K8sCluster, type K8sClusterInput,
 } from "../api/kubernetes";
 import { listVaultSecrets } from "../api/vault";
@@ -224,31 +226,90 @@ function ClusterDialog({ cluster, onClose, onSaved }: { cluster?: K8sCluster; on
 // Provenance — a link to a separate origin with a separate login is the thing
 // this exists instead of.
 //
-// The operator supplies their own token on first use, from Download kubeconfig.
-// A shared token in a mounted kubeconfig would be less friction and would
-// collapse the audit log to one actor for the whole team, which is the reason
-// to embed a UI rather than link out to one.
+// The token is supplied for the operator rather than pasted by them. It is still
+// THEIR token: a per-user credential scoped to Kubernetes, so every call Headlamp
+// makes is recorded against the person who opened the console. A shared console
+// credential would be less work and would collapse the audit log to one actor for
+// the whole team, which is the reason to embed a console rather than link out.
+//
+// Who can get one is whoever has Kubernetes.Access — the minting route is gated
+// on that permission, so the console is governed by Provenance's roles and there
+// is no second thing to keep in sync.
 function ClusterConsole({ cluster, onClose }: { cluster: K8sCluster; onClose: () => void }) {
+  // "authorizing" until we know, so the iframe is not mounted before the cookie
+  // is set. Mounting first would load Headlamp unauthenticated, show its auth
+  // screen, and leave it there — the cookie arriving afterwards does not make an
+  // already-rendered Headlamp retry.
+  const [state, setState] = useState<"authorizing" | "ready" | "manual">("authorizing");
+  const url = consoleUrl(cluster.name);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      // Reuse a cookie that still works: reopening the console should not mint a
+      // new credential and revoke the one this browser is already holding.
+      if (await consoleAuthorized(cluster.name)) {
+        if (live) setState("ready");
+        return;
+      }
+      try {
+        const ok = await authorizeConsole(cluster.name);
+        if (live) setState(ok ? "ready" : "manual");
+      } catch {
+        // Provenance would not mint one. The console still works if the operator
+        // pastes a token, so fall back to that rather than to nothing.
+        if (live) setState("manual");
+      }
+    })();
+    return () => { live = false; };
+  }, [cluster.name]);
+
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
           {cluster.name}
         </Typography>
-        <Button size="small" onClick={onClose}>Close</Button>
+        <Stack direction="row" spacing={1}>
+          {/* Opens the same authorized console full-screen. Nothing is passed in
+              the URL: the cookie set above belongs to this origin, so a new tab
+              is already signed in. */}
+          <Button
+            size="small"
+            startIcon={<OpenInNewIcon />}
+            disabled={state === "authorizing"}
+            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+          >
+            Open in new tab
+          </Button>
+          <Button size="small" onClick={onClose}>Close</Button>
+        </Stack>
       </Stack>
-      <Alert severity="info" sx={{ mb: 1.5 }}>
-        Every call below is brokered: the cluster credential stays vaulted and each
-        request is recorded against you. On first use Headlamp asks for a token —
-        use <strong>Download kubeconfig</strong>, which mints one limited to
-        Kubernetes and nothing else in Provenance.
-      </Alert>
-      <Box
-        component="iframe"
-        title={`Kubernetes console for ${cluster.name}`}
-        src={`/headlamp/c/${encodeURIComponent(cluster.name)}/`}
-        sx={{ width: "100%", height: "70vh", border: 0, borderRadius: 1, bgcolor: "background.paper" }}
-      />
+      {state === "manual" ? (
+        <Alert severity="warning" sx={{ mb: 1.5 }}>
+          Provenance could not mint a console token for you, so Headlamp will ask for
+          one. Use <strong>Download kubeconfig</strong> and paste the token from it.
+        </Alert>
+      ) : (
+        <Alert severity="info" sx={{ mb: 1.5 }}>
+          Every call below is brokered: the cluster credential stays vaulted, and each
+          request is recorded against you — the console runs as a token limited to
+          Kubernetes and nothing else in Provenance.
+        </Alert>
+      )}
+      {state === "authorizing" ? (
+        <Stack alignItems="center" sx={{ py: 6 }} spacing={1.5}>
+          <CircularProgress size={28} />
+          <Typography variant="body2" color="text.secondary">Signing in to the console…</Typography>
+        </Stack>
+      ) : (
+        <Box
+          component="iframe"
+          title={`Kubernetes console for ${cluster.name}`}
+          src={url}
+          sx={{ width: "100%", height: "70vh", border: 0, borderRadius: 1, bgcolor: "background.paper" }}
+        />
+      )}
     </Paper>
   );
 }

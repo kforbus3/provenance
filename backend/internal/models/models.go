@@ -174,6 +174,21 @@ type APIToken struct {
 	Secret     string     `json:"secret,omitempty"` // full token, set only on creation
 }
 
+// ConsoleTokenNamePrefix marks the tokens the embedded Kubernetes console runs
+// as, so they can be found again and revoked.
+//
+// A marker is needed because these are NOT like the tokens an operator asks for.
+// A kubeconfig token is theirs to keep: it lives in a file on their laptop and
+// should outlive any one sign-in. A console token is an artefact of a browser
+// session that Provenance created on their behalf, and it has to die with that
+// session -- otherwise signing out of Provenance on a shared machine leaves the
+// next person at that browser with working cluster access.
+//
+// The marker lives here, in models, because the package that MINTS these tokens
+// and the package that ends sessions must agree on it and neither can import the
+// other.
+const ConsoleTokenNamePrefix = "Headlamp console for "
+
 // Role is a named collection of permissions.
 type Role struct {
 	ID          uuid.UUID `json:"id"`

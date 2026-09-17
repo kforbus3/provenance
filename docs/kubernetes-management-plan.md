@@ -114,6 +114,21 @@ This replaces most of what the original plan called table stakes. The built-in
 browser stays as the quick "what is running" view and the fallback when Headlamp
 is not deployed.
 
+**Single sign-on landed after the embed, and it needed a second mechanism.** 1a
+made the token per-user, which fixed attribution — but the operator still had to
+paste that token into Headlamp's auth screen, so there *was* a second login even
+though there was no second identity. Headlamp keeps a cluster token in an
+HttpOnly cookie set by its own backend, which JavaScript cannot write; what it
+can do is call the same-origin endpoint that sets it. So Provenance mints a
+short-lived scoped token and posts it to
+`POST /headlamp/clusters/<name>/set-token` before rendering the console. Being a
+cookie on **this** origin, it also signs in a plain browser tab — which is where
+**Open in new tab** comes from. See `kubernetes.md` for the shipped behaviour.
+
+Worth recording because it generalises: proxying the tool under Provenance's own
+origin, rather than linking to it, is what made its auth mechanism reachable at
+all. A linked-out Headlamp could not have been signed in this way.
+
 ## Phase 1b — the built-in browser, only where it earns it (table stakes)
 
 - **Resource kinds from API discovery, not a hardcoded map.** The current five

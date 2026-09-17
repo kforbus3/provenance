@@ -97,3 +97,55 @@ export async function downloadOnboardingManifest(
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// consoleUrl is where the embedded Headlamp serves one cluster's UI. Shared by
+// the iframe and the new-tab button so the two cannot drift.
+export function consoleUrl(clusterName: string): string {
+  return `/headlamp/c/${encodeURIComponent(clusterName)}/`;
+}
+
+// authorizeConsole makes the embedded console usable without its auth screen.
+//
+// Headlamp keeps a cluster's token in an HttpOnly cookie that its own backend
+// sets, so it cannot be written from here directly — but the endpoint that sets
+// it is same-origin, which is the whole reason Headlamp is proxied under
+// Provenance rather than linked to. So: ask Provenance for a scoped token, hand
+// it to Headlamp, and the cookie is then set for this origin — which means the
+// iframe AND a new tab are both authenticated, since a cookie belongs to the
+// origin and not to the frame that set it.
+//
+// Resolves true when the console is authorized, false when Provenance refused to
+// mint (a scoped caller, or no Kubernetes.Access) — the caller then falls back to
+// letting Headlamp ask for a token itself rather than showing a dead console.
+export async function authorizeConsole(clusterName: string): Promise<boolean> {
+  const { data } = await api.post<{ token: string; consoleBase: string }>(
+    "/api/v1/k8s/console-token", {},
+  );
+  const base = data.consoleBase || "/headlamp";
+  const res = await fetch(`${base}/clusters/${encodeURIComponent(clusterName)}/set-token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // Same origin, but stated rather than assumed: the response's only purpose
+    // is a Set-Cookie, and a fetch that drops it silently succeeds.
+    credentials: "same-origin",
+    body: JSON.stringify({ token: data.token }),
+  });
+  return res.ok;
+}
+
+// consoleAuthorized reports whether the console's cookie is still good.
+//
+// Checked before minting so that reopening the console does not mint a fresh
+// credential every time. The probe goes through Headlamp to the cluster, so it
+// answers the question that actually matters — can the console reach the API
+// server right now — rather than whether some cookie exists.
+export async function consoleAuthorized(clusterName: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/headlamp/clusters/${encodeURIComponent(clusterName)}/version`, {
+      credentials: "same-origin",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

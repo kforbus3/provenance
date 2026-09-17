@@ -1177,11 +1177,13 @@ Beyond SSH/RDP, Provenance brokers other privileged access the same way — thro
   from the Databases page (`Database.Manage` / `Database.Connect`). See
   **[Database access](./database-broker.md)**.
 - **Kubernetes** — register clusters and reach them via Provenance's authenticating proxy:
-  browse resources, open the **embedded console** (Headlamp, framed inside Provenance), download
-  a **kubeconfig** for `kubectl`/`k9s`, or generate the **cluster RBAC** a cluster needs before it
-  can be joined; `Kubernetes.Manage` / `Kubernetes.Access`. The console is an opt-in compose
-  profile — `docker compose --profile kubernetes up -d`. See
-  **[Kubernetes access](./kubernetes.md)**.
+  browse resources, open the **embedded console** (Headlamp, framed inside Provenance or in a new
+  tab — signed in either way, with no token to paste), download a **kubeconfig** for
+  `kubectl`/`k9s`, or generate the **cluster RBAC** a cluster needs before it can be joined.
+  `Kubernetes.Access` is what gates the console, because it gates minting the per-user token the
+  console runs as; signing out revokes it. `Kubernetes.Manage` covers registering and removing
+  clusters. The console is an opt-in compose profile —
+  `docker compose --profile kubernetes up -d`. See **[Kubernetes access](./kubernetes.md)**.
 
 Two more controls tighten the platform:
 
