@@ -35,8 +35,10 @@ func TestHeadlampIsGivenNoCredential(t *testing.T) {
 	out := renderHeadlampConfig("https://p", []store.K8sCluster{
 		{ID: uuid.New(), Name: "c1"},
 	})
-	if !strings.Contains(out, "users: []") {
-		t.Errorf("expected no users:\n%s", out)
+	// There IS a user entry — a context naming no user is invalid and client-go
+	// silently drops it — but it must carry no credential.
+	if !strings.Contains(out, "user: {}") {
+		t.Errorf("expected a credential-free placeholder user:\n%s", out)
 	}
 	for _, forbidden := range []string{"token:", "client-key", "password", "flt_"} {
 		if strings.Contains(out, forbidden) {

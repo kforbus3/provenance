@@ -65,20 +65,28 @@ func renderHeadlampConfig(publicURL string, clusters []store.K8sCluster) string 
 		b.WriteString("clusters: []\ncontexts: []\nusers: []\n")
 		return b.String()
 	}
+	// A context that names no user is not a valid context, and client-go drops
+	// the whole entry rather than complaining -- which is why Headlamp reported
+	// {"clusters":[]} and "failed to get context: key not found" from a file that
+	// looked right. So there IS a user: one with an empty credential block, which
+	// is what makes Headlamp ask the operator for a token instead of assuming a
+	// shared one.
+	const user = "provenance-operator"
 	b.WriteString("clusters:\n")
 	for _, c := range clusters {
 		b.WriteString("  - name: " + yamlStr(c.Name) + "\n    cluster:\n")
 		b.WriteString("      server: " + yamlStr(base+"/api/v1/k8s/clusters/"+c.ID.String()+"/proxy") + "\n")
 	}
+	b.WriteString("users:\n  - name: " + yamlStr(user) + "\n    user: {}\n")
 	b.WriteString("contexts:\n")
 	for _, c := range clusters {
 		b.WriteString("  - name: " + yamlStr(c.Name) + "\n    context:\n")
 		b.WriteString("      cluster: " + yamlStr(c.Name) + "\n")
+		b.WriteString("      user: " + yamlStr(user) + "\n")
 		if ns := strings.TrimSpace(c.Namespace); ns != "" {
 			b.WriteString("      namespace: " + yamlStr(ns) + "\n")
 		}
 	}
-	b.WriteString("users: []\n")
 	b.WriteString("current-context: " + yamlStr(clusters[0].Name) + "\n")
 	return b.String()
 }
