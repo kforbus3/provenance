@@ -522,6 +522,17 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 		}
 	}
 
+	// What this deploy is about to APPLY, not what the rollout intended to
+	// change. `compose up` brings up a service's depends_on as well, so a
+	// stateful image pinned in this file across a major version from the data on
+	// disk goes down with it -- which is how a Keycloak rollout took its Postgres
+	// out, the file having pinned 18 against a version-17 data directory.
+	if running, cerr := e.store.HostContainers(ctx, hostID); cerr == nil {
+		if why, bad := dangerousPin(compose, running); bad {
+			return fmt.Errorf("%s", why)
+		}
+	}
+
 	// The path is where a deploy WRITES, so check it against the host before
 	// writing anything.
 	e.reconcileStackPath(ctx, stack, r)

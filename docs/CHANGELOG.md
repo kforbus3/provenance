@@ -45,6 +45,18 @@ before the cluster credential is attached.
 > `Kubernetes.Operate` to restore writes. This is a deliberate tightening in the
 > safe direction.
 
+**A deploy is refused when the compose file pins a stateful image across a major
+version from the data on disk.** The existing guard checks the image a rollout is
+*changing*; this one checks what the deploy is about to *apply*, which is not the
+same thing. `compose up -d <service>` brings up that service's `depends_on` too,
+so a Keycloak upgrade recreated its database from a file still pinning Postgres
+18 against a version-17 data directory — Postgres refused the directory,
+crash-looped, the dependency never went healthy and Keycloak never started.
+Nothing in the rollout was a Postgres bump, which is exactly why the old rule did
+not see it. Refused rather than repaired: the file may be right and the container
+merely old, and rewriting somebody's pin would be a guess with a service behind
+it.
+
 ---
 
 ## v1.7.0 — 2026-09-17
