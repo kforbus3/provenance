@@ -45,6 +45,18 @@ before the cluster credential is attached.
 > `Kubernetes.Operate` to restore writes. This is a deliberate tightening in the
 > safe direction.
 
+**Verification asks about the services the deploy named, not just the
+repository.** The readback filtered `docker ps` by matching each container's
+image string against the rollout's repository — so a container recreated from an
+untagged image, which reports a bare `sha256:…` and names no repository, was
+dropped before a single check ran, including "is anything still on the old tag".
+That is how a partial update passed: `nextcloud-cron` moved to 35 and reported
+its tag, the Nextcloud app stayed on 34 and reported a digest, and the host was
+recorded as verified with the app and its cron job on different major versions
+against one data directory. A deploy knows which services it named, and a compose
+service can be found by its labels whatever its image says, so those are now
+checked by name — absent, wrong image, or not running all fail the host.
+
 **A narrowed deploy no longer reaches into the service's dependencies.**
 `docker compose up -d <service>` also brings up that service's `depends_on`, and
 recreates any of them that have drifted from the file — so a deploy asked to

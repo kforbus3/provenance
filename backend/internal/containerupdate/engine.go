@@ -570,7 +570,7 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// on the old image is the exact failure this rollout exists to catch, and a
 	// rollout that counted the exit code would march a no-op across the fleet
 	// while reporting every host as updated.
-	return e.verify(ctx, r, hostID)
+	return e.verifyDeployed(ctx, r, hostID, stack.Path, services)
 }
 
 // composeServicesFor returns EVERY compose service running this image on a host,
@@ -937,7 +937,15 @@ func parseVerifyOutput(out string) []runningContainer {
 
 // verify reads back what the host is actually running.
 func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) error {
-	return e.verifyRunning(ctx, r, hostID, false)
+	return e.verifyRunning(ctx, r, hostID, false, "", nil)
+}
+
+// verifyDeployed is verify plus the services this deploy actually named, which
+// is the only way to see a container whose image names no repository. See
+// verifyservices.go.
+func (e *Engine) verifyDeployed(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID,
+	dir string, services []string) error {
+	return e.verifyRunning(ctx, r, hostID, false, dir, services)
 }
 
 // verifyInPlace is the same check for a deploy that honoured the HOST's compose
@@ -945,15 +953,17 @@ func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.
 //
 // The distinction matters at exactly one point; see verifyRunning.
 func (e *Engine) verifyInPlace(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) error {
-	return e.verifyRunning(ctx, r, hostID, true)
+	return e.verifyRunning(ctx, r, hostID, true, "", nil)
 }
 
-func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID, inPlace bool) error {
+func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID,
+	inPlace bool, dir string, services []string) error {
 	h, err := e.store.GetHost(ctx, hostID)
 	if err != nil {
 		return fmt.Errorf("could not read the host back: %w", err)
 	}
-	out, _, failed := e.run.RunScript(ctx, hostexec.Privileged(verifyScript(r.Repository)), h)
+	script := verifyScript(r.Repository) + serviceReadback(dir, services)
+	out, _, failed := e.run.RunScript(ctx, hostexec.Privileged(script), h)
 	if failed || !strings.Contains(out, "::OK::") {
 		return fmt.Errorf("deployed, but could not read back what the host is running: %s",
 			trimOutput(out))
@@ -961,6 +971,14 @@ func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostI
 	want := r.Repository + ":" + r.ToTag
 	from := r.Repository + ":" + r.FromTag
 	seen := parseVerifyOutput(out)
+
+	// The services this deploy NAMED, checked first. This is the stronger
+	// statement -- it asks about the things that had to change, by name -- and it
+	// is the only check that can see a container whose image names no repository
+	// and is therefore skipped by everything below.
+	if why := checkServices(out, r.Repository, r.FromTag, r.ToTag); why != "" {
+		return fmt.Errorf("%s", why)
+	}
 
 	// A container still on the tag we are moving AWAY from means this host did
 	// not take the update, whatever else on it did. Checked BEFORE looking for a

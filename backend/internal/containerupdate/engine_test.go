@@ -1679,3 +1679,83 @@ func TestAContainerOnADanglingDigestDoesNotHideItsService(t *testing.T) {
 		t.Errorf("deployed %q, which drags in the database", d.services[0])
 	}
 }
+
+// The blindness, end to end through the engine.
+//
+// Written after the unit tests for checkServices passed with the engine's call
+// to it removed -- they exercised the function, not the wiring, so they proved
+// nothing about whether a rollout would actually catch this. This one drives
+// Tick and asserts the HOST fails.
+func TestTheEngineFailsAHostWhoseServiceIsOnAnUntaggedImage(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	host := ids[0]
+	f.rollouts[0].Repository = "nextcloud"
+	f.rollouts[0].FromTag = "34.0.4-apache"
+	f.rollouts[0].ToTag = "35.0.0-apache"
+	f.stacks[host] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: host, Enabled: true,
+		Path: "/opt/stacks/nextcloud", Compose: composeNextcloud,
+	}}
+	f.containers[host] = []models.Container{
+		{Name: "nextcloud-nextcloud-cron-1", Repository: "nextcloud", Tag: "34.0.4-apache",
+			ComposeProject: "nextcloud", ComposeService: "nextcloud-cron",
+			ComposeDir: "/opt/stacks/nextcloud"},
+		{Name: "nextcloud-nextcloud-1", Repository: "sha256",
+			Tag:            "94abf59f8e799025ee10b315b8419270f09e73cf410a54c0812debfc4aefefa7",
+			ComposeProject: "nextcloud", ComposeService: "nextcloud",
+			ComposeDir: "/opt/stacks/nextcloud"},
+	}
+
+	// What the host reports back: cron moved, the app is still on the untagged
+	// image. Exactly the production readback.
+	readback := "::OK::\n" +
+		"nextcloud:35.0.0-apache\tnextcloud-nextcloud-cron-1\trunning\tnextcloud@sha256:new\n" +
+		"::SVC::nextcloud-cron\tnextcloud:35.0.0-apache\trunning\n" +
+		"::SVC::nextcloud\tsha256:94abf59f8e799025ee10b315b8419270f09e73cf410a54c0812debfc4aefefa7\trunning\n"
+	newEngine(f, &fakeDeployer{}, scripted(readback, composeNextcloud)).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State != store.UpdateHostFailed {
+		t.Fatalf("host state = %q, want failed — the app service is still on 34 while cron "+
+			"moved to 35, against one data directory, and this was recorded as verified",
+			h.State)
+	}
+	if !strings.Contains(h.Error, "nextcloud") {
+		t.Errorf("the recorded error does not name the service: %s", h.Error)
+	}
+	if !strings.Contains(h.Error, "untagged") {
+		t.Errorf("the recorded error does not explain the untagged image, which is why "+
+			"every repository-matched check skipped it: %s", h.Error)
+	}
+}
+
+// And the same shape, correct, must still verify.
+func TestTheEngineVerifiesWhenEveryNamedServiceMoved(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	host := ids[0]
+	f.rollouts[0].Repository = "nextcloud"
+	f.rollouts[0].FromTag = "34.0.4-apache"
+	f.rollouts[0].ToTag = "35.0.0-apache"
+	f.stacks[host] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: host, Enabled: true,
+		Path: "/opt/stacks/nextcloud", Compose: composeNextcloud,
+	}}
+	f.containers[host] = []models.Container{
+		{Name: "nextcloud-nextcloud-1", Repository: "nextcloud", Tag: "34.0.4-apache",
+			ComposeProject: "nextcloud", ComposeService: "nextcloud",
+			ComposeDir: "/opt/stacks/nextcloud"},
+		{Name: "nextcloud-nextcloud-cron-1", Repository: "nextcloud", Tag: "34.0.4-apache",
+			ComposeProject: "nextcloud", ComposeService: "nextcloud-cron",
+			ComposeDir: "/opt/stacks/nextcloud"},
+	}
+	readback := "::OK::\n" +
+		"nextcloud:35.0.0-apache\tnextcloud-nextcloud-1\trunning\tnextcloud@sha256:new\n" +
+		"nextcloud:35.0.0-apache\tnextcloud-nextcloud-cron-1\trunning\tnextcloud@sha256:new\n" +
+		"::SVC::nextcloud\tnextcloud:35.0.0-apache\trunning\n" +
+		"::SVC::nextcloud-cron\tnextcloud:35.0.0-apache\trunning\n"
+	newEngine(f, &fakeDeployer{}, scripted(readback, composeNextcloud)).Tick(context.Background())
+
+	if got := f.hosts[rid][0].State; got != store.UpdateHostVerified {
+		t.Errorf("state = %q, want verified (error: %q)", got, f.hosts[rid][0].Error)
+	}
+}
