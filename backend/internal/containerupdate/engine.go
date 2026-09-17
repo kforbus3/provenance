@@ -547,7 +547,7 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// Narrowed to the service that runs this image. Bringing up the whole project
 	// would restart everything beside it — on a host running a model server and a
 	// vector database, updating curl would have restarted both.
-	services := e.composeServicesFor(ctx, r, hostID, compose)
+	services := e.composeServicesFor(ctx, r, hostID, stack.Path, compose)
 	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, services...); err != nil {
 		return fmt.Errorf("%s", trimOutput(err.Error()+"\n"+out))
 	}
@@ -576,21 +576,36 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 // project resolves by silently recreating them. Found on a host running a
 // llama.cpp model router and a separate embedding server from one image, where
 // only the embedding server was recreated.
+// Confined to the project being deployed. A host can run the same image from two
+// different compose projects, and a service name from the other one is not a
+// service here: passing it would fail the deploy outright with "no such
+// service". Scoped by the stack's own path, with an unscoped fallback for the
+// hosts where the recorded paths do not line up, which is how this behaved when
+// it only ever returned one name.
 func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
-	hostID uuid.UUID, compose string) []string {
+	hostID uuid.UUID, stackPath, compose string) []string {
 	containers, err := e.store.HostContainers(ctx, hostID)
 	if err == nil {
-		var found []string
-		seen := map[string]bool{}
+		var here, anywhere []string
+		seenHere, seenAny := map[string]bool{}, map[string]bool{}
 		for _, c := range containers {
-			if c.Repository == r.Repository && c.Tag == r.FromTag &&
-				c.ComposeService != "" && !seen[c.ComposeService] {
-				seen[c.ComposeService] = true
-				found = append(found, c.ComposeService)
+			if c.Repository != r.Repository || c.Tag != r.FromTag || c.ComposeService == "" {
+				continue
+			}
+			if !seenAny[c.ComposeService] {
+				seenAny[c.ComposeService] = true
+				anywhere = append(anywhere, c.ComposeService)
+			}
+			if stackPath != "" && c.ComposeDir == stackPath && !seenHere[c.ComposeService] {
+				seenHere[c.ComposeService] = true
+				here = append(here, c.ComposeService)
 			}
 		}
-		if len(found) > 0 {
-			return found
+		if len(here) > 0 {
+			return here
+		}
+		if len(anywhere) > 0 {
+			return anywhere
 		}
 	}
 

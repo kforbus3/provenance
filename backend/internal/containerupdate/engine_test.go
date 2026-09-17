@@ -1579,3 +1579,43 @@ func TestARebuildRecreatesEveryServiceOnTheImage(t *testing.T) {
 		}
 	}
 }
+
+// Narrowing to every matching service must not reach into a DIFFERENT project.
+//
+// A host can run one image from two compose projects. The deploy targets one
+// stack, so a service name belonging to the other is not a service there and
+// compose fails the whole deploy with "no such service" -- a failure introduced
+// by fixing the first-match-wins bug, if the widened selection is not confined
+// to the project being deployed.
+func TestNarrowingDoesNotLeakServicesFromAnotherProject(t *testing.T) {
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	host := ids[0]
+	f.stacks[host] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: host, Enabled: true,
+		Path: "/opt/stacks/site", Compose: composeNginx,
+	}}
+	f.containers[host] = []models.Container{
+		// The other project's container comes FIRST, so a selection that ignores
+		// the path picks it up.
+		{Name: "other", Repository: "nginx", Tag: "1.24",
+			ComposeProject: "elsewhere", ComposeService: "elsewhere-web",
+			ComposeDir: "/opt/stacks/elsewhere"},
+		{Name: "web", Repository: "nginx", Tag: "1.24",
+			ComposeProject: "site", ComposeService: "web",
+			ComposeDir: "/opt/stacks/site"},
+	}
+	d := &fakeDeployer{}
+	newEngine(f, d, scripted("::OK::\nnginx:1.27\tnginx\trunning\tnginx@sha256:new\n", composeNginx)).
+		Tick(context.Background())
+
+	if len(d.services) != 1 {
+		t.Fatalf("deployed %d times, want 1 (services: %v)", len(d.services), d.services)
+	}
+	if strings.Contains(d.services[0], "elsewhere") {
+		t.Errorf("deployed %q, which names a service from another compose project — "+
+			"compose would fail the whole deploy on it", d.services[0])
+	}
+	if !strings.Contains(d.services[0], "web") {
+		t.Errorf("deployed %q, want the matching service in this project", d.services[0])
+	}
+}
