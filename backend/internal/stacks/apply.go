@@ -151,7 +151,33 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	if pull {
 		b.WriteString("$_c pull" + pullTarget + "\n")
 	}
-	b.WriteString("$_c up -d" + target + "\n")
+	// --no-deps when narrowed, or the narrowing is undone by compose.
+	//
+	// `up -d <service>` also brings up that service's depends_on. If one of those
+	// has drifted from the file it is RECREATED, so a deploy asked to touch one
+	// service reaches into its database instead. That is not hypothetical: a
+	// rollout of quay.io/keycloak/keycloak ran `up -d keycloak`, compose
+	// recreated keycloak-db because the file pinned a different Postgres than the
+	// container was running, the new one refused the existing data directory, and
+	// `up` exited 1 with "dependency failed to start: container keycloak-db is
+	// unhealthy". Keycloak was down and nothing in the rollout had been a
+	// Postgres change.
+	//
+	// The services that MUST come along are already named in `target`: anything
+	// sharing this service's network namespace, which is stranded otherwise. That
+	// is the complete set, so compose does not need to work any of it out.
+	//
+	// Not passed on a whole-project deploy, where dependency order is the point.
+	// The risk --no-deps carries is a dependency that is genuinely stopped, which
+	// it will not start: the service then comes up and fails. That is a
+	// pre-existing broken state, it is visible (the verification reads back what
+	// is RUNNING), and it is much cheaper than recreating a database nobody asked
+	// about.
+	noDeps := ""
+	if len(services) > 0 {
+		noDeps = " --no-deps"
+	}
+	b.WriteString("$_c up -d" + noDeps + target + "\n")
 	return b.String()
 }
 

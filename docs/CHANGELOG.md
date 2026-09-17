@@ -45,6 +45,26 @@ before the cluster credential is attached.
 > `Kubernetes.Operate` to restore writes. This is a deliberate tightening in the
 > safe direction.
 
+**A narrowed deploy no longer reaches into the service's dependencies.**
+`docker compose up -d <service>` also brings up that service's `depends_on`, and
+recreates any of them that have drifted from the file — so a deploy asked to
+touch one service reached into its database. A Keycloak rollout, correctly
+narrowed to the `keycloak` service, recreated `keycloak-db`, the new Postgres
+refused the existing data directory, and the deploy failed with "dependency
+failed to start: container keycloak-db is unhealthy" with Keycloak down. Nothing
+in the rollout had been a Postgres change. Narrowed deploys now pass
+`--no-deps`; the services that genuinely must come along — anything sharing the
+service's network namespace — were already named explicitly, and a whole-project
+deploy is unchanged, because there dependency order is the point.
+
+**A failed deploy says what went wrong first.** The message was the last 600
+characters of the output, which for a deploy that pulls anything is as likely to
+be progress bars as a reason: the Keycloak failure above was reported as
+`…6.3MB b021fe485c81 Pull complete dcee140b22ee Extracting [====>] 546B/546B …`
+with the one line that mattered at the very end. The cause is now extracted and
+put first, preferring the specific phrase over the generic one that accompanies
+it, with the full transcript kept after it.
+
 **A container recreated from a digest no longer hides its service from an
 update.** Narrowing a deploy matched containers by repository and tag, and only
 consulted the compose file when *nothing* matched. A container recreated from an

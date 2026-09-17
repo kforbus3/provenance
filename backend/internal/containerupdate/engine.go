@@ -560,7 +560,9 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// vector database, updating curl would have restarted both.
 	services := e.composeServicesFor(ctx, r, hostID, stack.Path, compose)
 	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, services...); err != nil {
-		return fmt.Errorf("%s", trimOutput(err.Error()+"\n"+out))
+		// Cause first. The last 600 characters of a pull transcript is as likely
+		// to be progress bars as the reason anything failed.
+		return fmt.Errorf("%s", explainCompose(err.Error()+"\n"+out))
 	}
 
 	// Verified means the host is RUNNING the target, not that the deploy command

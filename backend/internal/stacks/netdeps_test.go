@@ -79,7 +79,7 @@ func TestANarrowedDeployBringsTheDependentsWithIt(t *testing.T) {
 	// The fix, at the level that matters: what the host is actually told to do.
 	got := RenderScript("/home/keith/media-stack", vpnCompose, 4, true, "gluetun")
 	for _, svc := range []string{"gluetun", "metube", "pinchflat", "qbittorrent"} {
-		if !strings.Contains(got, "up -d 'gluetun'") {
+		if !strings.Contains(got, "up -d --no-deps 'gluetun'") {
 			t.Fatalf("the service itself is not brought up:\n%s", got)
 		}
 		if !strings.Contains(got, "'"+svc+"'") {

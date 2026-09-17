@@ -140,7 +140,7 @@ func TestAnUpdateRolloutTouchesOnlyItsOwnService(t *testing.T) {
 	if !strings.Contains(got, "$_c pull 'web'") {
 		t.Errorf("did not pull just the service:\n%s", got)
 	}
-	if !strings.Contains(got, "$_c up -d 'web'") {
+	if !strings.Contains(got, "$_c up -d --no-deps 'web'") {
 		t.Errorf("did not bring up just the service:\n%s", got)
 	}
 	// --remove-orphans deletes containers the file no longer defines. That is a
@@ -234,5 +234,60 @@ func TestAFailedDeployIsStillDriftEvenAtTheRightRevision(t *testing.T) {
 	}
 	if !driftsFrom(in) {
 		t.Error("a failed deploy at the right revision must still count as drift")
+	}
+}
+
+// A narrowed deploy must not reach into the service's dependencies.
+//
+// This is the failure it exists to prevent, in full. A rollout of
+// quay.io/keycloak/keycloak was correctly narrowed to the `keycloak` service and
+// still took the database out: `up -d keycloak` also brings up keycloak's
+// depends_on, keycloak-db had drifted from the file, so compose RECREATED it,
+// the new Postgres refused the existing data directory, and the deploy exited 1
+// with "dependency failed to start: container keycloak-db is unhealthy".
+// Keycloak was down, and nothing in the rollout had been a Postgres change.
+func TestANarrowedDeployDoesNotTouchDependencies(t *testing.T) {
+	compose := "services:\n" +
+		"  postgres:\n    image: postgres:17.11-alpine\n" +
+		"  keycloak:\n    image: quay.io/keycloak/keycloak:26.7.4\n    depends_on:\n" +
+		"      postgres:\n        condition: service_healthy\n"
+	got := RenderScript("/opt/stacks/keycloak", compose, 3, true, "keycloak")
+
+	if !strings.Contains(got, "up -d --no-deps 'keycloak'") {
+		t.Errorf("the bring-up is not --no-deps, so compose will recreate the "+
+			"database this deploy was never asked to touch:\n%s", got)
+	}
+	if strings.Contains(got, "'postgres'") {
+		t.Errorf("the database was named in a deploy for keycloak:\n%s", got)
+	}
+}
+
+// A whole-project deploy is the opposite case: dependency order is the point,
+// and --no-deps would break a cold start.
+func TestAWholeProjectDeployKeepsItsDependencyOrder(t *testing.T) {
+	got := RenderScript("/opt/stacks/app", "services: {}", 1, true, "")
+	if strings.Contains(got, "--no-deps") {
+		t.Errorf("a whole-project deploy passed --no-deps:\n%s", got)
+	}
+	if !strings.Contains(got, "up -d --remove-orphans") {
+		t.Errorf("a whole-project deploy lost --remove-orphans:\n%s", got)
+	}
+}
+
+// Network dependents still have to come along: they share the service's network
+// namespace and are stranded on a namespace that no longer exists otherwise.
+// --no-deps must not undo that, which is why they are named explicitly.
+func TestNoDepsStillBringsNetworkDependents(t *testing.T) {
+	compose := "services:\n" +
+		"  gluetun:\n    image: qmcgaw/gluetun:v3\n" +
+		"  qbittorrent:\n    image: lscr.io/linuxserver/qbittorrent:5\n" +
+		"    network_mode: service:gluetun\n"
+	got := RenderScript("/home/keith/media-stack", compose, 4, true, "gluetun")
+	if !strings.Contains(got, "--no-deps") {
+		t.Errorf("expected --no-deps:\n%s", got)
+	}
+	if !strings.Contains(got, "'qbittorrent'") {
+		t.Errorf("the network dependent was left behind, stranding it on a namespace "+
+			"that no longer exists:\n%s", got)
 	}
 }
