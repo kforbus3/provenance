@@ -55,6 +55,9 @@ services:
     # stranded lock, but a clean handoff is instant.
     stop_grace_period: 30s
     environment:
+      # Where to write the embedded Headlamp's cluster list. Unset disables it,
+      # which is every deployment not running the kubernetes profile.
+      PROV_HEADLAMP_KUBECONFIG: ${PROV_HEADLAMP_KUBECONFIG:-/headlamp/clusters/kubeconfig}
       PROV_ENV: ${PROV_ENV:-${FLEET_ENV:-development}}
       # Server timezone — schedules compute their next run in this zone. Set TZ
       # in .env to your local zone (e.g. America/New_York) so "03:00" means your
@@ -225,6 +228,7 @@ services:
       # Optional signed release-channel index for the "check for updates" button.
       PROV_UPDATE_CHANNEL_URL: ${PROV_UPDATE_CHANNEL_URL:-${FLEET_UPDATE_CHANNEL_URL:-}}
     volumes:
+      - headlamp-clusters:/headlamp/clusters
       - recordings:/var/lib/prov/recordings
       - scans:/var/lib/prov/scans
       - scap-content:/var/lib/prov/scap-content
@@ -563,13 +567,22 @@ services:
     command:
       - "-plugins-dir=/headlamp/plugins"
       - "-base-url=/headlamp"
+      - "-kubeconfig=/headlamp/clusters/kubeconfig"
     environment:
       # Headlamp serves under a sub-path so it can be embedded rather than
       # occupying its own hostname.
       HEADLAMP_CONFIG_BASE_URL: /headlamp
+    volumes:
+      # Written by the backend: the cluster NAMES and SERVER URLs, with no user
+      # and no token. Headlamp cannot find a cluster it has never been told
+      # about, so without this the console opens on "Something went wrong with
+      # cluster <name>" -- which is what "give it no token" produced when it was
+      # implemented as "give it no kubeconfig".
+      - headlamp-clusters:/headlamp/clusters:ro
     networks: [prov]
 
 volumes:
+  headlamp-clusters:
   pgdata:
   recordings:
   scans:

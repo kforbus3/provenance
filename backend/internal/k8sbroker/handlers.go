@@ -6,6 +6,7 @@
 package k8sbroker
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -23,6 +24,14 @@ import (
 // Mount attaches the cluster-registry CRUD (Kubernetes.Manage) and the proxy /
 // resource-browser routes (Kubernetes.Access).
 func Mount(r chi.Router, d *app.Deps) {
+	// Write the cluster list once at startup: the set of clusters normally
+	// changes far less often than the process restarts, and without this a
+	// deployment that has never touched a cluster since boot shows Headlamp an
+	// empty list.
+	go func() {
+		h := &handler{d: d}
+		h.syncHeadlamp(context.Background())
+	}()
 	h := &handler{d: d}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
@@ -115,6 +124,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not register the cluster")
 		return
 	}
+	h.syncHeadlamp(r.Context())
 	h.audit(r, "k8s.cluster.create", c.ID, map[string]any{"name": c.Name, "apiServer": c.APIServer})
 	httpx.WriteJSON(w, http.StatusCreated, c)
 }
@@ -135,6 +145,7 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not update the cluster")
 		return
 	}
+	h.syncHeadlamp(r.Context())
 	h.audit(r, "k8s.cluster.update", c.ID, map[string]any{"name": c.Name})
 	httpx.WriteJSON(w, http.StatusOK, c)
 }
@@ -148,6 +159,7 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not delete the cluster")
 		return
 	}
+	h.syncHeadlamp(r.Context())
 	h.audit(r, "k8s.cluster.delete", id, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -169,4 +181,13 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// syncHeadlamp re-writes the embedded Headlamp's cluster list after the set of
+// clusters changes. Best effort: a deployment not running the kubernetes profile
+// has nowhere to write it and does not want it.
+func (h *handler) syncHeadlamp(ctx context.Context) {
+	if err := writeHeadlampClusters(ctx, h.d.Store, h.d.Cfg.PublicURL); err != nil {
+		h.d.Log.Warn("could not refresh the Headlamp cluster list", "err", err)
+	}
 }
