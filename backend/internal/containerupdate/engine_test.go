@@ -1619,3 +1619,63 @@ func TestNarrowingDoesNotLeakServicesFromAnotherProject(t *testing.T) {
 		t.Errorf("deployed %q, want the matching service in this project", d.services[0])
 	}
 }
+
+// The Nextcloud stack, which got past the first fix.
+//
+// `nextcloud-nextcloud-1` had been recreated at some point from an image
+// referenced by digest, so its inventory records repository "sha256" and tag
+// "94abf5...". It therefore matched nothing when the rollout looked for
+// containers running nextcloud:34.0.4-apache -- while the CRON container, on a
+// proper tag, matched fine. A non-empty match list meant the compose file was
+// never consulted, so only cron was recreated: the app stayed on 34 and cron
+// went to 35, sharing one data directory, and the verification missed it for the
+// same reason and called the host verified.
+const composeNextcloud = "services:\n" +
+	"  nextcloud:\n    image: nextcloud:35.0.0-apache\n" +
+	"  nextcloud-cron:\n    image: nextcloud:35.0.0-apache\n" +
+	"  db:\n    image: linuxserver/mariadb:11.8.8\n"
+
+func TestAContainerOnADanglingDigestDoesNotHideItsService(t *testing.T) {
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	host := ids[0]
+	f.rollouts[0].Repository = "nextcloud"
+	f.rollouts[0].FromTag = "34.0.4-apache"
+	f.rollouts[0].ToTag = "35.0.0-apache"
+	f.stacks[host] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: host, Enabled: true,
+		Path: "/opt/stacks/nextcloud", Compose: composeNextcloud,
+	}}
+	f.containers[host] = []models.Container{
+		// The app: recreated from a digest, so this is what the inventory holds.
+		{Name: "nextcloud-nextcloud-1", Repository: "sha256",
+			Tag:            "94abf59f8e799025ee10b315b8419270f09e73cf410a54c0812debfc4aefefa7",
+			ComposeProject: "nextcloud", ComposeService: "nextcloud",
+			ComposeDir: "/opt/stacks/nextcloud"},
+		// The cron job, on a real tag, which is the one that matched.
+		{Name: "nextcloud-nextcloud-cron-1", Repository: "nextcloud", Tag: "34.0.4-apache",
+			ComposeProject: "nextcloud", ComposeService: "nextcloud-cron",
+			ComposeDir: "/opt/stacks/nextcloud"},
+	}
+	d := &fakeDeployer{}
+	r := scripted("::OK::\nnextcloud:35.0.0-apache\tnextcloud-nextcloud-1\trunning\tx@sha256:new\n"+
+		"nextcloud:35.0.0-apache\tnextcloud-nextcloud-cron-1\trunning\tx@sha256:new\n",
+		composeNextcloud)
+	newEngine(f, d, r).Tick(context.Background())
+
+	if len(d.services) != 1 {
+		t.Fatalf("deployed %d times, want 1 (services: %v)", len(d.services), d.services)
+	}
+	if !strings.Contains(d.services[0], "nextcloud-cron") {
+		t.Errorf("deployed %q, missing the cron service", d.services[0])
+	}
+	// The one that matters: the app service comes from the FILE, because the
+	// container could not be matched.
+	if !strings.Contains(d.services[0], "nextcloud ") && !strings.HasSuffix(d.services[0], "nextcloud") {
+		t.Errorf("deployed %q — the app service was left behind, so it stays on the old "+
+			"image while cron moves, against one data directory", d.services[0])
+	}
+	// And nothing unrelated came along.
+	if strings.Contains(d.services[0], "db") {
+		t.Errorf("deployed %q, which drags in the database", d.services[0])
+	}
+}

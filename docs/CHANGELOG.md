@@ -45,6 +45,19 @@ before the cluster credential is attached.
 > `Kubernetes.Operate` to restore writes. This is a deliberate tightening in the
 > safe direction.
 
+**A container recreated from a digest no longer hides its service from an
+update.** Narrowing a deploy matched containers by repository and tag, and only
+consulted the compose file when *nothing* matched. A container recreated from an
+image referenced by digest records its repository as `sha256`, so it matches no
+repository at all — and in a project where one service does match and another
+does not, the file was never consulted and the unmatched service was left behind.
+On the Nextcloud stack that recreated the cron container onto 35 and left the app
+on 34 against one data directory, and the verification could not see it either,
+for the same reason, so the host was recorded as verified. Service selection is
+now the **union** of what the containers say and what the compose file says: the
+file is the authority on which services use an image, the containers only say
+what is running.
+
 **A deploy is refused when the compose file pins a stateful image across a major
 version from the data on disk.** The existing guard checks the image a rollout is
 *changing*; this one checks what the deploy is about to *apply*, which is not the

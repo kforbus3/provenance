@@ -595,6 +595,7 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 // it only ever returned one name.
 func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
 	hostID uuid.UUID, stackPath, compose string) []string {
+	var fromContainers []string
 	containers, err := e.store.HostContainers(ctx, hostID)
 	if err == nil {
 		var here, anywhere []string
@@ -613,10 +614,9 @@ func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
 			}
 		}
 		if len(here) > 0 {
-			return here
-		}
-		if len(anywhere) > 0 {
-			return anywhere
+			fromContainers = here
+		} else {
+			fromContainers = anywhere
 		}
 	}
 
@@ -630,10 +630,33 @@ func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
 	// The compose file being deployed is the better authority anyway: it is the
 	// thing about to be applied, and it names the tag this rollout is moving to
 	// or from.
-	if svcs := composefile.ServicesFor(compose, r.Repository, r.ToTag); len(svcs) > 0 {
-		return svcs
+	// UNION with the file, not a fallback to it.
+	//
+	// Matching containers is not enough on its own: a container recreated from an
+	// image referenced by digest records its repository as "sha256", so it never
+	// matches the rollout's repository at all. On the Nextcloud stack the cron
+	// container matched and the APP container did not -- and because the match
+	// list was non-empty, the file was never consulted, so only cron was
+	// recreated. The app stayed on 34 while cron went to 35, against one data
+	// directory, and the verification could not see it either for the same
+	// reason.
+	//
+	// The compose file is the authority on which services USE an image; the
+	// containers only say what is running. Take both.
+	out := fromContainers
+	seen := map[string]bool{}
+	for _, s := range out {
+		seen[s] = true
 	}
-	return composefile.ServicesFor(compose, r.Repository, r.FromTag)
+	for _, tag := range []string{r.ToTag, r.FromTag} {
+		for _, svc := range composefile.ServicesFor(compose, r.Repository, tag) {
+			if !seen[svc] {
+				seen[svc] = true
+				out = append(out, svc)
+			}
+		}
+	}
+	return out
 }
 
 // adopt reads the host's compose file for this image and records it as a stack.
