@@ -63,11 +63,11 @@ func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.
 //
 // For an update rollout, which is about one image. See renderScript's `service`
 // for why the whole project is the wrong scope there.
-func (s *Service) DeployPullingService(ctx context.Context, stackID uuid.UUID, service string) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, true, service)
+func (s *Service) DeployPullingService(ctx context.Context, stackID uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
+	return s.deploy(ctx, stackID, true, services...)
 }
 
-func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, service string) (*store.ContainerStack, string, error) {
+func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, services ...string) (*store.ContainerStack, string, error) {
 	st, err := s.store.GetStack(ctx, stackID)
 	if err != nil {
 		return nil, "", err
@@ -88,7 +88,7 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 	// run in flight from one that never started. See DeployStateDeploying.
 	_ = s.store.MarkStackDeploying(ctx, st.ID)
 
-	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(RenderScript(st.Path, st.Compose, st.Revision, pull, service)), h)
+	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(RenderScript(st.Path, st.Compose, st.Revision, pull, services...)), h)
 	state := "deployed"
 	if failed || code != 0 {
 		state = "failed"

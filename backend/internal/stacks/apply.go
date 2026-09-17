@@ -58,7 +58,8 @@ import (
 // --remove-orphans is dropped with it: removing containers the file no longer
 // defines is a whole-project decision, and making it as a side effect of updating
 // one image would delete things nobody mentioned.
-func RenderScript(dir, compose string, revision int, pull bool, service string) string {
+func RenderScript(dir, compose string, revision int, pull bool, services ...string) string {
+	services = narrowTo(services...)
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	// The heredoc delimiter is quoted, so nothing inside the compose file is
@@ -123,10 +124,20 @@ func RenderScript(dir, compose string, revision int, pull bool, service string) 
 	// namespace. Leaving those behind strands them on a namespace that no longer
 	// exists — running, healthy, and with no network. See networkDependents.
 	target := " --remove-orphans"
-	if service != "" {
-		target = " " + shellQuote(service)
-		for _, dep := range networkDependents(compose, service) {
-			target += " " + shellQuote(dep)
+	if len(services) > 0 {
+		target = ""
+		seen := map[string]bool{}
+		for _, svc := range services {
+			// Every named service AND every service sharing one's network
+			// namespace. Deduplicated because two named services can share a
+			// dependent, and naming it twice on one command line is an error.
+			for _, name := range append([]string{svc}, networkDependents(compose, svc)...) {
+				if seen[name] {
+					continue
+				}
+				seen[name] = true
+				target += " " + shellQuote(name)
+			}
 		}
 	}
 	// `pull` takes services, never --remove-orphans: that flag is an `up`
@@ -134,7 +145,7 @@ func RenderScript(dir, compose string, revision int, pull bool, service string) 
 	// and exit 16 before a single image was fetched. It only ever fired on a
 	// WHOLE-project pulling deploy, which is why it survived so long.
 	pullTarget := target
-	if service == "" {
+	if len(services) == 0 {
 		pullTarget = ""
 	}
 	if pull {
@@ -142,6 +153,24 @@ func RenderScript(dir, compose string, revision int, pull bool, service string) 
 	}
 	b.WriteString("$_c up -d" + target + "\n")
 	return b.String()
+}
+
+// narrowTo drops empty and duplicate service names.
+//
+// Empty is how every caller says "the whole project", and it arrives as a real
+// element through the variadic, so it has to be filtered rather than assumed
+// absent -- otherwise `up -d ”` runs and compose fails on a service named "".
+func narrowTo(services ...string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range services {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // rollbackScript restores the previous compose file and brings the stack back up.

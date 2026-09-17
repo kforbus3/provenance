@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v1.6.1 — 2026-09-17
+## v1.7.0 — 2026-09-17
 
 **Kubernetes management, end to end.** Provenance brokered access to clusters but
 could only list five resource kinds. It is now somewhere a cluster is operated,
@@ -55,6 +55,24 @@ service-account-only. They can now be owned by a user, and carry an optional
 **scope**: an API path prefix outside which the token is refused, enforced in
 middleware before the permission check. Scopes match on path *segments* — a token
 scoped to `/api/v1/k8s` must not reach `/api/v1/k8superadmin`.
+
+**A container update now recreates every service on the image, not the first.**
+The tag rewrite has always been file-wide — it changes *every* `image:` line
+naming the old tag — but the deploy that followed was narrowed to the first
+container found running it. In a project where one image backs several services
+(a worker and a web process from one build; a model router and a dedicated
+embedding server from one llama.cpp image) that recreated one of them and left
+the rest running the old image, while the compose file on disk already claimed
+the new tag for all of them. Declared state and running state disagreed, and the
+next unrelated `docker compose up -d` in that project would have resolved it by
+silently recreating the stragglers at a moment nobody chose.
+
+This reached production and the post-deploy verification caught it — the host
+failed with "deployed, but *x* is still running *the old tag*" and the rollout
+halted itself, which is the only reason it was found. Both paths are fixed: the
+adopted-stack deploy and the in-place rebuild through the host's own compose
+project. Narrowing is still narrow — services sharing the image and anything
+sharing their network namespace, never the whole project.
 
 **A revocation that revoked nothing is no longer reported as success.** 137 store
 writes ran an `UPDATE` or `DELETE` and returned only the database's error, so
@@ -2062,14 +2080,6 @@ rename, the new configuration, and the new features.
 ---
 
 ## v1.6.1 — A fleet-wide upgrade could not finish inside its own budget — 2026-08-15
-
-> **Note.** The `v1.6.1` git tag was later reused for the Provenance release of the
-> same number (top of this file), under the same policy as `v1.0.0`, `v1.1.0`,
-> `v1.3.0`, `v1.4.0`, `v1.5.0` and `v1.6.0`: no inherited tag of this repository has
-> ever been pushed — the remote carries only the Provenance line — so moving it breaks
-> nothing outside a working copy. Verified with `git ls-remote --tags` before doing it
-> rather than assumed. This entry is the release that originally carried the number and
-> stays here as the record of it; its commit is `70e3b7e`.
 
 A weekly "apt dist-upgrade" across a 14-host group failed with **exit 124** and a recap
 showing **zero failed and zero unreachable hosts**. Nothing was wrong with the fleet. A

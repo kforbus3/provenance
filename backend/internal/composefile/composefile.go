@@ -65,8 +65,30 @@ func Images(compose string) []Ref {
 //
 // A service key is the last key shallower than the "image:" line, which holds
 // for two-space and four-space files alike without assuming either.
+// ServiceFor returns the FIRST compose service whose image matches, or "" for
+// none. Prefer ServicesFor: one image can legitimately back several services,
+// and acting on only the first leaves the rest behind.
 func ServiceFor(compose, repo, tag string) string {
+	if svcs := ServicesFor(compose, repo, tag); len(svcs) > 0 {
+		return svcs[0]
+	}
+	return ""
+}
+
+// ServicesFor returns EVERY compose service whose image is repo:tag, in file
+// order.
+//
+// Plural because one image backing several services is ordinary -- a worker and
+// a web process from one build, or (the case that found this) a model router and
+// a dedicated embedding server from one llama.cpp image. A caller that narrows a
+// deploy to the first match brings up one of them and leaves the others running
+// the old image, while the compose file on disk claims otherwise: the running
+// state and the declared state disagree, and the next unrelated `up -d` in that
+// project silently recreates the stragglers.
+func ServicesFor(compose, repo, tag string) []string {
 	want := repo + ":" + tag
+	var found []string
+	seen := map[string]bool{}
 	var inServices bool
 	servicesIndent, serviceIndent := 0, -1
 	service := ""
@@ -101,8 +123,9 @@ func ServiceFor(compose, repo, tag string) string {
 			if at := strings.Index(bare, "@"); at >= 0 {
 				bare = bare[:at]
 			}
-			if strings.TrimSpace(bare) == want {
-				return service
+			if strings.TrimSpace(bare) == want && !seen[service] {
+				seen[service] = true
+				found = append(found, service)
 			}
 			continue
 		}
@@ -119,7 +142,7 @@ func ServiceFor(compose, repo, tag string) string {
 			service = key
 		}
 	}
-	return ""
+	return found
 }
 
 // SplitImageLine splits a compose "image:" line into the part up to and

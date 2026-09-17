@@ -21,8 +21,12 @@ import (
 // next deploy, silently, leaving the fleet on an image nobody can explain. Those
 // still require an adopted stack, where the change is recorded and has a history.
 
-// inPlaceScript pulls and recreates one service of an existing compose project.
-func inPlaceScript(dir, service string) string {
+// inPlaceScript pulls and recreates the named services of an existing compose
+// project.
+//
+// Plural: one image can back several services in a project, and recreating only
+// one of them leaves the others running the old image.
+func inPlaceScript(dir string, services ...string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	// Asked about BEFORE cd, and reported as a marker.
@@ -61,17 +65,24 @@ func inPlaceScript(dir, service string) string {
 	b.WriteString("  echo '::NOPROJECT::' >&2; exit 3\n")
 	b.WriteString("fi\n")
 
-	// And that this project is the one the container belongs to. Same reason.
-	fmt.Fprintf(&b, "if ! $_c config --services 2>/dev/null | grep -qx %s; then\n",
-		shellQuote(service))
-	b.WriteString("  echo '::NOSERVICE::' >&2; exit 4\n")
-	b.WriteString("fi\n")
+	// And that this project is the one the containers belong to. Same reason.
+	// Every service is checked, not just the first: a project that defines one of
+	// them and not another is not the project these containers came from, and
+	// finding that out after recreating half of them is worse than not starting.
+	targets := ""
+	for _, service := range services {
+		fmt.Fprintf(&b, "if ! $_c config --services 2>/dev/null | grep -qx %s; then\n",
+			shellQuote(service))
+		b.WriteString("  echo '::NOSERVICE::' >&2; exit 4\n")
+		b.WriteString("fi\n")
+		targets += " " + shellQuote(service)
+	}
 
 	// Pull first, then recreate. `up -d` alone finds the tag already present
 	// locally and starts the old bytes again -- which is the entire failure this
 	// exists to fix.
-	fmt.Fprintf(&b, "$_c pull %s\n", shellQuote(service))
-	fmt.Fprintf(&b, "$_c up -d %s\n", shellQuote(service))
+	fmt.Fprintf(&b, "$_c pull%s\n", targets)
+	fmt.Fprintf(&b, "$_c up -d%s\n", targets)
 	return b.String()
 }
 
@@ -81,7 +92,7 @@ func shellQuote(s string) string {
 }
 
 // inPlaceFailure turns the script's exit into something an operator can act on.
-func inPlaceFailure(dir, service string, out string) string {
+func inPlaceFailure(dir string, services []string, out string) string {
 	switch {
 	case strings.Contains(out, "::NODIR::"):
 		return fmt.Sprintf(
@@ -99,8 +110,9 @@ func inPlaceFailure(dir, service string, out string) string {
 				"its compose file as a stack to make it updatable.", dir)
 	case strings.Contains(out, "::NOSERVICE::"):
 		return fmt.Sprintf(
-			"the compose project at %s does not define a service called %q, so this is "+
-				"not the project this container came from.", dir, service)
+			"the compose project at %s does not define every service these containers "+
+				"name (%s), so this is not the project they came from.",
+			dir, strings.Join(services, ", "))
 	}
 	return trimOutput(out)
 }

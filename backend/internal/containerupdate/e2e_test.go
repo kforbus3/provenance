@@ -167,7 +167,7 @@ func TestE2EInPlaceUpdatesOneServiceAndNothingElse(t *testing.T) {
 
 	out, code := sh(t, inPlaceScript(dir, "probe"))
 	if code != 0 {
-		t.Fatalf("in-place failed (%d): %s", code, inPlaceFailure(dir, "probe", out))
+		t.Fatalf("in-place failed (%d): %s", code, inPlaceFailure(dir, []string{"probe"}, out))
 	}
 	if !running(t, dir, "probe") {
 		t.Error("the service is not running after an in-place update")
@@ -181,7 +181,7 @@ func TestE2EInPlaceRefusesAProjectItCannotSee(t *testing.T) {
 	if code == 0 {
 		t.Fatal("acted on a directory holding no compose project")
 	}
-	if msg := inPlaceFailure(dir, "probe", out); !strings.Contains(msg, "no compose project is readable") {
+	if msg := inPlaceFailure(dir, []string{"probe"}, out); !strings.Contains(msg, "no compose project is readable") {
 		t.Errorf("unhelpful reason: %s", msg)
 	}
 }
@@ -354,9 +354,11 @@ func (d *realDeployer) DeployPulling(ctx context.Context, id uuid.UUID) (*store.
 	return d.DeployPullingService(ctx, id, "")
 }
 
-func (d *realDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, service string) (*store.ContainerStack, string, error) {
-	d.services = append(d.services, service)
-	out, code := shRun(stacks.RenderScript(d.dir, d.compose(), 1, true, service))
+func (d *realDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
+	// One entry per CALL, space-separated, so "deployed once" stays assertable
+	// now that one call can narrow to several services.
+	d.services = append(d.services, strings.Join(services, " "))
+	out, code := shRun(stacks.RenderScript(d.dir, d.compose(), 1, true, services...))
 	if code != 0 {
 		return nil, out, fmt.Errorf("deploy exited %d", code)
 	}
@@ -610,7 +612,7 @@ func TestE2EAnUnreachableComposeProjectIsExplainedNotDumped(t *testing.T) {
 	if code == 0 {
 		t.Fatal("acted on a directory that does not exist")
 	}
-	msg := inPlaceFailure(missing, "nginx-proxy-manager", out)
+	msg := inPlaceFailure(missing, []string{"nginx-proxy-manager"}, out)
 
 	if strings.Contains(msg, "/bin/sh") || strings.Contains(msg, "can't cd") {
 		t.Errorf("the operator gets the shell's words, not an explanation:\n%s", msg)

@@ -41,7 +41,7 @@ type Store interface {
 // Deployer applies a stack to its host, pulling images first.
 type Deployer interface {
 	DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error)
-	DeployPullingService(ctx context.Context, stackID uuid.UUID, service string) (*store.ContainerStack, string, error)
+	DeployPullingService(ctx context.Context, stackID uuid.UUID, services ...string) (*store.ContainerStack, string, error)
 }
 
 // Runner executes a script on a host, for the verification read-back.
@@ -547,8 +547,8 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// Narrowed to the service that runs this image. Bringing up the whole project
 	// would restart everything beside it — on a host running a model server and a
 	// vector database, updating curl would have restarted both.
-	service := e.composeServiceFor(ctx, r, hostID, compose)
-	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, service); err != nil {
+	services := e.composeServicesFor(ctx, r, hostID, compose)
+	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, services...); err != nil {
 		return fmt.Errorf("%s", trimOutput(err.Error()+"\n"+out))
 	}
 
@@ -560,21 +560,37 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	return e.verify(ctx, r, hostID)
 }
 
-// composeServiceFor returns the compose service running this image on a host, or
-// "" when it cannot be established.
+// composeServicesFor returns EVERY compose service running this image on a host,
+// or nil when none can be established.
 //
-// Empty means "the whole project", which is the old behaviour and the safe
+// Nil means "the whole project", which is the old behaviour and the safe
 // fallback: a deploy that touches more than it needed is recoverable, and one
 // that touches nothing because a name was guessed wrong is an update reported as
 // applied that never happened.
-func (e *Engine) composeServiceFor(ctx context.Context, r store.UpdateRollout,
-	hostID uuid.UUID, compose string) string {
+//
+// ALL of them, not the first. One image backing several services in a project is
+// ordinary, and the tag rewrite is file-wide -- RewriteImageTag changes every
+// matching image: line. Narrowing the deploy to the first match therefore left
+// the compose file claiming the new tag for services still running the old one:
+// state that disagrees with itself, and that the next unrelated `up -d` in that
+// project resolves by silently recreating them. Found on a host running a
+// llama.cpp model router and a separate embedding server from one image, where
+// only the embedding server was recreated.
+func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
+	hostID uuid.UUID, compose string) []string {
 	containers, err := e.store.HostContainers(ctx, hostID)
 	if err == nil {
+		var found []string
+		seen := map[string]bool{}
 		for _, c := range containers {
-			if c.Repository == r.Repository && c.Tag == r.FromTag && c.ComposeService != "" {
-				return c.ComposeService
+			if c.Repository == r.Repository && c.Tag == r.FromTag &&
+				c.ComposeService != "" && !seen[c.ComposeService] {
+				seen[c.ComposeService] = true
+				found = append(found, c.ComposeService)
 			}
+		}
+		if len(found) > 0 {
+			return found
 		}
 	}
 
@@ -588,10 +604,10 @@ func (e *Engine) composeServiceFor(ctx context.Context, r store.UpdateRollout,
 	// The compose file being deployed is the better authority anyway: it is the
 	// thing about to be applied, and it names the tag this rollout is moving to
 	// or from.
-	if svc := composefile.ServiceFor(compose, r.Repository, r.ToTag); svc != "" {
-		return svc
+	if svcs := composefile.ServicesFor(compose, r.Repository, r.ToTag); len(svcs) > 0 {
+		return svcs
 	}
-	return composefile.ServiceFor(compose, r.Repository, r.FromTag)
+	return composefile.ServicesFor(compose, r.Repository, r.FromTag)
 }
 
 // adopt reads the host's compose file for this image and records it as a stack.
@@ -672,13 +688,31 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	if err != nil {
 		return false, nil // fall back to the stack message rather than invent one
 	}
+	// Every container on this image, not the first. See composeServicesFor: the
+	// first-match-wins version recreated one service and left its siblings on the
+	// old image.
+	//
+	// Scoped to the FIRST match's compose directory, because a script runs in one
+	// directory. Two projects on one host both running this image are two updates,
+	// and the second is picked up on the next pass rather than deployed from the
+	// wrong working directory.
 	var match *models.Container
+	var services []string
+	seen := map[string]bool{}
 	for i := range containers {
 		c := &containers[i]
-		if c.Repository == r.Repository && c.Tag == r.FromTag &&
-			c.ComposeDir != "" && c.ComposeService != "" {
+		if c.Repository != r.Repository || c.Tag != r.FromTag ||
+			c.ComposeDir == "" || c.ComposeService == "" {
+			continue
+		}
+		if match == nil {
 			match = c
-			break
+		} else if c.ComposeDir != match.ComposeDir {
+			continue
+		}
+		if !seen[c.ComposeService] {
+			seen[c.ComposeService] = true
+			services = append(services, c.ComposeService)
 		}
 	}
 	if match == nil {
@@ -689,9 +723,9 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	if err != nil {
 		return true, fmt.Errorf("could not read the host: %w", err)
 	}
-	out, code, failed := e.run.RunScript(ctx, hostexec.Privileged(inPlaceScript(match.ComposeDir, match.ComposeService)), h)
+	out, code, failed := e.run.RunScript(ctx, hostexec.Privileged(inPlaceScript(match.ComposeDir, services...)), h)
 	if failed || code != 0 {
-		msg := inPlaceFailure(match.ComposeDir, match.ComposeService, out)
+		msg := inPlaceFailure(match.ComposeDir, services, out)
 		if unreachableProject(out) {
 			// Nothing will make this work from here, so halting a fleet-wide
 			// rollout on it stops every other host for no gain, every time.
@@ -701,7 +735,7 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	}
 	e.log.Info("container updated in place",
 		"host", h.Hostname, "project", match.ComposeProject,
-		"service", match.ComposeService, "dir", match.ComposeDir)
+		"services", strings.Join(services, ","), "dir", match.ComposeDir)
 	e.refreshContainers(ctx, h)
 	return true, nil
 }

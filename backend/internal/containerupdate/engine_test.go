@@ -196,11 +196,13 @@ func (d *fakeDeployer) DeployPulling(context.Context, uuid.UUID) (*store.Contain
 	return nil, "compose output", d.err
 }
 
-func (d *fakeDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, service string) (*store.ContainerStack, string, error) {
+func (d *fakeDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++
-	d.services = append(d.services, service)
+	// One entry per CALL, space-separated: a deploy narrowed to several services
+	// is still one deploy, and the existing tests assert how many happened.
+	d.services = append(d.services, strings.Join(services, " "))
 	return nil, "compose output", d.err
 }
 
@@ -1482,5 +1484,98 @@ func TestAnUnreadableRefreshLeavesThePreviousListAlone(t *testing.T) {
 	}
 	if len(f.containers[ids[0]]) == 0 {
 		t.Error("the previous container list was lost")
+	}
+}
+
+// The real arrangement this got wrong, on a host running a llama.cpp model
+// router and a separate embedding server from ONE image.
+//
+// The tag rewrite is file-wide -- RewriteImageTag changes every matching
+// `image:` line -- so after a deploy narrowed to the first match, the compose
+// file claimed the new tag for a service still running the old one. The running
+// state and the declared state disagreed, `docker compose up -d --dry-run` in
+// that directory still showed the straggler pending, and the next unrelated
+// `up -d` there would have recreated it at a moment nobody chose.
+//
+// It reached production. The post-deploy verification caught it and halted the
+// rollout, which is the only reason anyone found out.
+const composeTwoServicesOneImage = "services:\n" +
+	"  llamacpp:\n    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b10991\n" +
+	"  llamacpp-embed:\n    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b10991\n"
+
+func twoServiceFixture() (*fakeStore, uuid.UUID) {
+	f, _, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	f.rollouts[0].Repository = "ghcr.io/ggml-org/llama.cpp"
+	f.rollouts[0].FromTag = "server-cuda-b10991"
+	f.rollouts[0].ToTag = "server-cuda-b11011"
+	f.containers[ids[0]] = []models.Container{
+		// Deliberately in this order: the embedding server is element 0 on the
+		// real host, and it is the one first-match-wins picked.
+		{Name: "llamacpp-embed", Repository: "ghcr.io/ggml-org/llama.cpp",
+			Tag: "server-cuda-b10991", ComposeProject: "test2",
+			ComposeService: "llamacpp-embed", ComposeDir: "/home/keith/test2"},
+		{Name: "llamacpp", Repository: "ghcr.io/ggml-org/llama.cpp",
+			Tag: "server-cuda-b10991", ComposeProject: "test2",
+			ComposeService: "llamacpp", ComposeDir: "/home/keith/test2"},
+	}
+	return f, ids[0]
+}
+
+func TestEveryServiceOnTheImageIsDeployedNotJustTheFirst(t *testing.T) {
+	f, _ := twoServiceFixture()
+	d := &fakeDeployer{}
+	r := scripted("::OK::\n"+
+		"ghcr.io/ggml-org/llama.cpp:server-cuda-b11011\tllamacpp\trunning\tx@sha256:new\n"+
+		"ghcr.io/ggml-org/llama.cpp:server-cuda-b11011\tllamacpp-embed\trunning\tx@sha256:new\n",
+		composeTwoServicesOneImage)
+	newEngine(f, d, r).Tick(context.Background())
+
+	if len(d.services) != 1 {
+		t.Fatalf("deployed %d times, want 1 call (services: %v)", len(d.services), d.services)
+	}
+	// One call, both services named. Two calls would work too, but one is what
+	// the code does and a second deploy of the same project is wasted churn.
+	for _, want := range []string{"llamacpp", "llamacpp-embed"} {
+		if !strings.Contains(d.services[0], want) {
+			t.Errorf("deployed %q, which leaves %q on the old image while the compose "+
+				"file already claims the new tag for it", d.services[0], want)
+		}
+	}
+}
+
+// Same defect, the other code path: a rebuild goes through the host's own
+// compose project rather than an adopted stack.
+func TestARebuildRecreatesEveryServiceOnTheImage(t *testing.T) {
+	f, _ := twoServiceFixture()
+	f.rollouts[0].ToTag = f.rollouts[0].FromTag // same tag: a rebuild
+	f.rollouts[0].TargetDigest = "sha256:new"
+	f.stacks[f.rollouts[0].ID] = nil
+	for id := range f.containers {
+		f.stacks[id] = nil // nothing adopted, so the in-place path is taken
+	}
+	out := "::OK::\n" +
+		"ghcr.io/ggml-org/llama.cpp:server-cuda-b10991\tllamacpp\trunning\tx@sha256:new\n" +
+		"ghcr.io/ggml-org/llama.cpp:server-cuda-b10991\tllamacpp-embed\trunning\tx@sha256:new\n"
+	var seen []string
+	r := &fakeRunner{respond: func(script string) (string, int, bool) {
+		seen = append(seen, script)
+		return out, 0, false
+	}}
+	newEngine(f, &fakeDeployer{}, r).Tick(context.Background())
+
+	var upDown string
+	for _, script := range seen {
+		if strings.Contains(script, "up -d") {
+			upDown = script
+		}
+	}
+	if upDown == "" {
+		t.Fatalf("no in-place bring-up ran at all; scripts: %d", len(seen))
+	}
+	for _, want := range []string{"'llamacpp'", "'llamacpp-embed'"} {
+		if !strings.Contains(upDown, want) {
+			t.Errorf("the in-place bring-up never names %s, leaving it on the old "+
+				"image:\n%s", want, upDown)
+		}
 	}
 }
