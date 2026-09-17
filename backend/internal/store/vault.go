@@ -305,8 +305,9 @@ func (s *Store) UpdateVaultSecretMeta(ctx context.Context, id uuid.UUID, in Vaul
 
 // DeleteVaultSecret removes a credential and all its versions/grants (cascade).
 func (s *Store) DeleteVaultSecret(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM vault_secrets WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a credential reported destroyed still resolves.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM vault_secrets WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // UserSecretAccess returns the highest access level (view|use|manage) a user has
@@ -392,8 +393,9 @@ func (s *Store) CreateVaultGrant(ctx context.Context, secretID uuid.UUID, kind s
 
 // DeleteVaultGrant removes a grant.
 func (s *Store) DeleteVaultGrant(ctx context.Context, secretID, grantID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM vault_grants WHERE id=$1 AND secret_id=$2`, grantID, secretID)
-	return err
+	// Matching nothing is a failure, not a no-op: a grant reported revoked still resolves the credential.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM vault_grants WHERE id=$1 AND secret_id=$2`, grantID, secretID)
+	return changed(tag, err)
 }
 
 // HostsUsingCredential returns the hosts that authenticate with a given vault

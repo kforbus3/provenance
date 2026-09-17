@@ -56,8 +56,9 @@ func (s *Store) SetPinnedHostKey(ctx context.Context, host, keyLine, keyType str
 // DeleteHostKey removes a host's pin (e.g. after a legitimate rebuild) so the next
 // connection re-pins.
 func (s *Store) DeleteHostKey(ctx context.Context, host string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM ssh_host_keys WHERE host=$1`, host)
-	return err
+	// Matching nothing is a failure, not a no-op: a pin reported cleared still refuses the host's new key.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM ssh_host_keys WHERE host=$1`, host)
+	return changed(tag, err)
 }
 
 // DeleteHostKeys removes the pins for every identity a host can be dialed as and

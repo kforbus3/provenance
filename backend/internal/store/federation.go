@@ -257,8 +257,9 @@ func (s *Store) GetFederationHub(ctx context.Context) (*FederationHub, error) {
 }
 
 func (s *Store) DeleteFederationHub(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM federation_hub WHERE id=1`)
-	return err
+	// Matching nothing is a failure, not a no-op: a hub reported removed that a site still trusts.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM federation_hub WHERE id=1`)
+	return changed(tag, err)
 }
 
 // UpdateFederationHubKey updates the site's stored hub public key + fingerprint,
@@ -364,8 +365,9 @@ func (s *Store) DeleteSite(ctx context.Context, id uuid.UUID) error {
 	if err := s.DeleteSiteCache(ctx, id); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM federation_sites WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a site reported removed that can still call in.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM federation_sites WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // UpsertGenericCache stores a snapshot into one of the generic per-site cache

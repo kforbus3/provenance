@@ -84,8 +84,9 @@ func (s *Store) ListActiveCAPublicKeys(ctx context.Context, kind string) ([]stri
 
 // RetireCAKey marks a CA inactive.
 func (s *Store) RetireCAKey(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `UPDATE ca_keys SET active=false, retired_at=now() WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a CA key reported retired still signs.
+	tag, err := s.pool.Exec(ctx, `UPDATE ca_keys SET active=false, retired_at=now() WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // InsertCertificateParams carries issued-certificate metadata.
@@ -165,15 +166,23 @@ func (s *Store) ListCertificates(ctx context.Context, sessionID *uuid.UUID, limi
 // RevokeCertificate marks a certificate revoked and records it in the KRL table.
 func (s *Store) RevokeCertificate(ctx context.Context, serial uint64, reason string) error {
 	return s.tx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx,
+		// A serial this instance never issued matches nothing here. The KRL entry
+		// below is still written -- refusing an unknown serial is the safe
+		// direction -- but the caller is told, because "revoked" for a
+		// certificate that was never found is the kind of success nobody should
+		// act on.
+		tag, err := tx.Exec(ctx,
 			`UPDATE ssh_certificates SET revoked_at=now(), revoke_reason=$2 WHERE serial=$1`,
+			int64(serial), reason)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO cert_revocations (serial, reason) VALUES ($1,$2) ON CONFLICT (serial) DO NOTHING`,
 			int64(serial), reason); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx,
-			`INSERT INTO cert_revocations (serial, reason) VALUES ($1,$2) ON CONFLICT (serial) DO NOTHING`,
-			int64(serial), reason)
-		return err
+		return changed(tag, nil)
 	})
 }
 

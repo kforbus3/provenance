@@ -104,8 +104,19 @@ func (h *Handler) init(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create administrator")
 		return
 	}
-	// Grant the built-in Super Administrator role for completeness.
-	_ = h.store.AssignRoleByName(r.Context(), u.ID, "Super Administrator")
+	// Grant the built-in Super Administrator role.
+	//
+	// Not "for completeness", and not ignorable: this wizard PERMANENTLY
+	// self-disables once it has run. An account created here without the role is
+	// an instance whose only user cannot administer it and whose only path to
+	// fixing that is the offline `provctl create-admin` recovery CLI. Failing
+	// loudly leaves the wizard available to try again.
+	if err := h.store.AssignRoleByName(r.Context(), u.ID, "Super Administrator"); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError,
+			"created the account but could not grant it the Super Administrator role; "+
+				"nothing has been locked in — retry, or use provctl create-admin")
+		return
+	}
 	_, _ = h.store.AppendAudit(r.Context(), models.AuditEvent{
 		ActorID: &u.ID, ActorName: u.Username, Action: "bootstrap.init",
 		TargetKind: "user", TargetID: u.ID.String(),

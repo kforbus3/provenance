@@ -370,8 +370,9 @@ func (s *Store) SetRolloutState(ctx context.Context, id uuid.UUID, state, reason
 }
 
 func (s *Store) DeleteRollout(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM imaging_rollouts WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a rollout reported deleted may still be mid-flight.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM imaging_rollouts WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // MachinesForTarget resolves a rollout's target to machine ids, now.

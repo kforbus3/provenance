@@ -292,8 +292,9 @@ func (s *Store) MarkStackDeploying(ctx context.Context, stackID uuid.UUID) error
 // intentions, and conflating them would make forgetting to record something a
 // way to destroy it.
 func (s *Store) DeleteStack(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM container_stacks WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a stack reported removed is still deployed.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM container_stacks WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 func truncateStr(s string, n int) string {

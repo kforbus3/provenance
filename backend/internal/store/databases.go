@@ -86,6 +86,7 @@ func (s *Store) UpdateDatabase(ctx context.Context, id uuid.UUID, in DatabaseInp
 
 // DeleteDatabase removes a database target.
 func (s *Store) DeleteDatabase(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM databases WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a database target reported removed that is still reachable.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM databases WHERE id=$1`, id)
+	return changed(tag, err)
 }

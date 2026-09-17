@@ -117,8 +117,9 @@ func scanUser(row pgx.Row) (*models.User, error) {
 
 // SetUserRequireMFA toggles whether a user must have a confirmed second factor.
 func (s *Store) SetUserRequireMFA(ctx context.Context, id uuid.UUID, require bool) error {
-	_, err := s.pool.Exec(ctx, `UPDATE users SET require_mfa=$2, updated_at=now() WHERE id=$1`, id, require)
-	return err
+	// Matching nothing is a failure, not a no-op: an MFA requirement that was not recorded is not required.
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET require_mfa=$2, updated_at=now() WHERE id=$1`, id, require)
+	return changed(tag, err)
 }
 
 // GetUserByUsername loads a user by (case-insensitive) username.
@@ -173,12 +174,17 @@ func (s *Store) GetPasswordHash(ctx context.Context, userID uuid.UUID) (string, 
 // SetPasswordHash updates a user's password and clears the force-change flag.
 func (s *Store) SetPasswordHash(ctx context.Context, userID uuid.UUID, hash string) error {
 	return s.tx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `
+		// The credentials row is the one that matters: if it matched nothing, the
+		// old password still works and the caller has been told the change
+		// succeeded. An account with no credentials row (SSO-only) is a real
+		// case, and it is exactly the case where "password changed" is a lie.
+		tag, err := tx.Exec(ctx, `
 			UPDATE user_credentials SET password_hash=$2, pw_changed_at=now()
-			WHERE user_id=$1`, userID, hash); err != nil {
+			WHERE user_id=$1`, userID, hash)
+		if err := changed(tag, err); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE users SET must_change_pw=false, updated_at=now() WHERE id=$1`, userID)
+		_, err = tx.Exec(ctx, `UPDATE users SET must_change_pw=false, updated_at=now() WHERE id=$1`, userID)
 		return err
 	})
 }
@@ -245,22 +251,25 @@ func (s *Store) UpdateUser(ctx context.Context, id uuid.UUID, p UpdateUserParams
 
 // DeleteUser removes a user.
 func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: an account reported deleted can still sign in.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // SetDisabled enables/disables an account.
 func (s *Store) SetDisabled(ctx context.Context, id uuid.UUID, disabled bool) error {
-	_, err := s.pool.Exec(ctx, `UPDATE users SET is_disabled=$2, updated_at=now() WHERE id=$1`, id, disabled)
-	return err
+	// Matching nothing is a failure, not a no-op: disabling an account that matched nothing leaves it able to log in.
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET is_disabled=$2, updated_at=now() WHERE id=$1`, id, disabled)
+	return changed(tag, err)
 }
 
 // SetSuperAdmin grants or revokes real super-administrator status (the
 // is_super_admin column — what guardSuperTarget and policy exemptions key on,
 // as opposed to the built-in "Super Administrator" RBAC role).
 func (s *Store) SetSuperAdmin(ctx context.Context, id uuid.UUID, super bool) error {
-	_, err := s.pool.Exec(ctx, `UPDATE users SET is_super_admin=$2, updated_at=now() WHERE id=$1`, id, super)
-	return err
+	// Matching nothing is a failure, not a no-op: granting or revoking super-admin that matched nothing changes no privilege.
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET is_super_admin=$2, updated_at=now() WHERE id=$1`, id, super)
+	return changed(tag, err)
 }
 
 // CountActiveSuperAdmins counts enabled super administrators. Callers use it to
@@ -275,8 +284,9 @@ func (s *Store) CountActiveSuperAdmins(ctx context.Context) (int, error) {
 
 // SetMustChangePassword toggles the forced-password-change flag.
 func (s *Store) SetMustChangePassword(ctx context.Context, id uuid.UUID, must bool) error {
-	_, err := s.pool.Exec(ctx, `UPDATE users SET must_change_pw=$2, updated_at=now() WHERE id=$1`, id, must)
-	return err
+	// Matching nothing is a failure, not a no-op: the flag is what forces the change; unset, nothing forces it.
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET must_change_pw=$2, updated_at=now() WHERE id=$1`, id, must)
+	return changed(tag, err)
 }
 
 // --- Login bookkeeping (lockout) ---
@@ -304,6 +314,7 @@ func (s *Store) RecordLoginFailure(ctx context.Context, id uuid.UUID, maxFailed 
 
 // Unlock clears a lockout.
 func (s *Store) Unlock(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: an account reported unlocked but still locked strands the user.
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, id)
+	return changed(tag, err)
 }

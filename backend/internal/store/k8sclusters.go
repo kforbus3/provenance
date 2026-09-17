@@ -96,6 +96,7 @@ func (s *Store) UpdateK8sCluster(ctx context.Context, id uuid.UUID, in K8sCluste
 }
 
 func (s *Store) DeleteK8sCluster(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM k8s_clusters WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a cluster reported removed is still brokered.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM k8s_clusters WHERE id=$1`, id)
+	return changed(tag, err)
 }

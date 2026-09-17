@@ -99,8 +99,9 @@ func (s *Store) ListMFA(ctx context.Context, userID uuid.UUID) ([]MFAMethod, err
 
 // DeleteMFA removes one of the user's methods.
 func (s *Store) DeleteMFA(ctx context.Context, userID, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM mfa_methods WHERE id=$1 AND user_id=$2`, id, userID)
-	return err
+	// Matching nothing is a failure, not a no-op: a factor reported removed is still accepted at login.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM mfa_methods WHERE id=$1 AND user_id=$2`, id, userID)
+	return changed(tag, err)
 }
 
 // ResetUserMFA removes all of a user's factors (admin action).

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kforbus3/provenance/backend/internal/models"
@@ -63,6 +64,29 @@ func (s *Store) tx(ctx context.Context, fn func(pgx.Tx) error) error {
 }
 
 // mapNotFound converts pgx.ErrNoRows into the package ErrNotFound.
+// changed turns "the database accepted my UPDATE and matched nothing" into an
+// error, for writes where matching nothing means the caller's intent did not
+// happen.
+//
+// This is the difference between `UPDATE users SET is_disabled=true WHERE id=$1`
+// succeeding and a user actually being disabled. A revocation that silently
+// revokes nothing is reported to the operator as "access removed", and under
+// row-level security it is indistinguishable from a write blocked by tenant
+// isolation -- a cross-tenant revoke would read as success.
+//
+// Only for SINGLE-TARGET writes. A bulk revoke that matches nothing is a real
+// answer ("this user had no live sessions"), not a failure, so those keep
+// returning a count instead.
+func changed(tag pgconn.CommandTag, err error) error {
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func mapNotFound(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound

@@ -79,8 +79,9 @@ func (s *Store) TouchSession(ctx context.Context, id uuid.UUID) error {
 
 // RevokeSession marks a session revoked.
 func (s *Store) RevokeSession(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a session reported revoked but still live is an open door.
+	tag, err := s.pool.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL`, id)
+	return changed(tag, err)
 }
 
 // RevokeUserSessions revokes all of a user's sessions (e.g. on disable).

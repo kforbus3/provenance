@@ -90,8 +90,9 @@ func (s *Store) SetUserSessionPolicy(ctx context.Context, userID uuid.UUID, allo
 
 // DeleteUserSessionPolicy removes a user's override so they inherit the global.
 func (s *Store) DeleteUserSessionPolicy(ctx context.Context, userID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM user_session_policies WHERE user_id=$1`, userID)
-	return err
+	// Matching nothing is a failure, not a no-op: the old policy still governs the session.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM user_session_policies WHERE user_id=$1`, userID)
+	return changed(tag, err)
 }
 
 // CountActiveSessions counts a user's live browser sessions (not revoked, not

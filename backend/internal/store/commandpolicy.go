@@ -100,8 +100,9 @@ func (s *Store) UpdateCommandPolicy(ctx context.Context, id uuid.UUID, in Comman
 }
 
 func (s *Store) DeleteCommandPolicy(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM command_policies WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a command rule reported deleted that still blocks or allows.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM command_policies WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // CommandApproval is a request-to-run (and, once approved, a time-boxed waiver).

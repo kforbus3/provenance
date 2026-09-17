@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -170,6 +171,10 @@ func (h *handler) disableUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.d.Store.SetDisabled(r.Context(), id, rq.Disabled); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "no such user, so nothing was changed")
+			return
+		}
 		httpx.WriteError(w, http.StatusInternalServerError, "could not update user")
 		return
 	}
@@ -441,6 +446,11 @@ func (h *handler) removeRole(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.d.Store.RemoveRole(r.Context(), userID, roleID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			httpx.WriteError(w, http.StatusNotFound,
+				"that user does not have this role, so no permission was removed")
+			return
+		}
 		httpx.WriteError(w, http.StatusInternalServerError, "could not remove role")
 		return
 	}

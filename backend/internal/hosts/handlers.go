@@ -1071,6 +1071,13 @@ func (h *handler) removeUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.d.Store.RemoveUserFromHost(r.Context(), hostID, userID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// Nothing was revoked. Reporting this as success is how an operator
+			// comes away believing access was removed when it was not.
+			httpx.WriteError(w, http.StatusNotFound,
+				"that user has no direct grant on this host, so nothing was revoked")
+			return
+		}
 		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke access")
 		return
 	}

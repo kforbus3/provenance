@@ -307,7 +307,15 @@ func (s *Service) Refresh(ctx context.Context, sessionID uuid.UUID, presentedRef
 	storedHash, err := s.store.GetSessionRefreshHash(ctx, sessionID)
 	if err != nil || storedHash != HashToken(presentedRefresh) {
 		// Possible replay of a rotated token: revoke the session defensively.
-		_ = s.store.RevokeSession(ctx, sessionID)
+		//
+		// Already-revoked is the common case here (that is often WHY the refresh
+		// hash no longer matches), so a missing row is expected. Any other error
+		// means the defensive revoke did not happen and is worth a log line
+		// rather than silence.
+		if err := s.store.RevokeSession(ctx, sessionID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("could not revoke a session on suspected refresh replay",
+				"session", sessionID, "err", err)
+		}
 		return nil, ErrSessionInvalid
 	}
 	u, err := s.store.GetUserByID(ctx, sess.UserID)
@@ -345,7 +353,16 @@ func (s *Service) endSession(ctx context.Context, sessionID uuid.UUID) error {
 	if s.onSessionDestroyed != nil {
 		s.onSessionDestroyed(ctx, uuid.Nil, sessionID, "")
 	}
-	return s.store.RevokeSession(ctx, sessionID)
+	// Already revoked is the expected outcome here, not a failure: this runs on
+	// logout, on idle and absolute timeout, and on account disable, so the same
+	// session is legitimately ended twice (a timeout fires, then the user clicks
+	// log out). Tolerated EXPLICITLY rather than by the store staying silent, so
+	// that a caller who does care -- an operator revoking one named session --
+	// still learns that it matched nothing.
+	if err := s.store.RevokeSession(ctx, sessionID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 // DestroySession ends ONE session: zeroizes its private key, revokes its

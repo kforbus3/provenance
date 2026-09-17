@@ -77,8 +77,9 @@ func (s *Store) CreateRole(ctx context.Context, name, description string) (*mode
 
 // DeleteRole removes a non-builtin role.
 func (s *Store) DeleteRole(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM roles WHERE id=$1 AND is_builtin=false`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a role reported deleted still carries its permissions.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM roles WHERE id=$1 AND is_builtin=false`, id)
+	return changed(tag, err)
 }
 
 // RolePermissions lists permission keys assigned to a role.
@@ -131,16 +132,18 @@ func (s *Store) RoleName(ctx context.Context, roleID uuid.UUID) (string, error) 
 
 // RemoveRole revokes a role from a user.
 func (s *Store) RemoveRole(ctx context.Context, userID, roleID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM user_roles WHERE user_id=$1 AND role_id=$2`, userID, roleID)
-	return err
+	// Matching nothing is a failure, not a no-op: the user keeps every permission the role carries.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM user_roles WHERE user_id=$1 AND role_id=$2`, userID, roleID)
+	return changed(tag, err)
 }
 
 // RemoveRoleByName revokes a role from a user by role name.
 func (s *Store) RemoveRoleByName(ctx context.Context, userID uuid.UUID, roleName string) error {
-	_, err := s.pool.Exec(ctx, `
+	// Matching nothing is a failure, not a no-op: same, by name.
+	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM user_roles WHERE user_id=$1
 		AND role_id IN (SELECT id FROM roles WHERE name=$2)`, userID, roleName)
-	return err
+	return changed(tag, err)
 }
 
 // UserRoleNames lists a user's role names.

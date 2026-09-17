@@ -312,3 +312,25 @@ The design is single-app-stack by default and scales along two well-understood a
 
 See [database.md](./database.md) for the full schema and [api.md](./api.md) for
 the endpoint reference.
+
+## Writes that revoke report when they revoked nothing
+
+A store write that runs an `UPDATE` or `DELETE` and returns only the database's
+error cannot tell the difference between "I changed the row" and "I matched
+nothing". For most writes that is harmless. For a **revocation** it is not: an
+account that was not disabled, a session that was not revoked, a grant that was
+not removed, all reported to the operator as done.
+
+Row-level security makes it worse. A write blocked by tenant isolation matches
+zero rows and looks identical to success, so a cross-tenant revoke would be
+reported as having worked.
+
+Single-target writes of that class therefore return `ErrNotFound` when they match
+nothing, via `store.changed(tag, err)`. Callers map it to `404` with a message
+saying what did *not* happen, rather than to a generic failure.
+
+**Bulk and idempotent writes deliberately do not.** `RevokeUserSessions` matching
+zero rows is a real answer — that user had no live sessions — and logout ends a
+session that may already have been ended by an idle timeout. Those tolerate the
+missing row *explicitly* at the call site, so a caller who does care still learns
+about it, rather than the store staying quiet for everybody.

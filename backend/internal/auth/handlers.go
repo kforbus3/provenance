@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -520,6 +521,10 @@ func (h *Handler) mfaDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.store.DeleteMFA(r.Context(), p.UserID, id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no such factor on this account; nothing was removed")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "could not remove")
 		return
 	}

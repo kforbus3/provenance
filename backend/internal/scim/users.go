@@ -178,10 +178,22 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, http.StatusBadRequest, "could not create user")
 		return
 	}
-	_ = h.d.Store.AssignRoleByName(r.Context(), u.ID, c.defaultRole())
+	// SCIM is how an identity provider provisions and DEPROVISIONS people, so a
+	// silent failure here is an account that exists with permissions nobody
+	// chose, or one the IdP believes is disabled and is not. Neither may be
+	// reported to the IdP as a successful provision.
+	if err := h.d.Store.AssignRoleByName(r.Context(), u.ID, c.defaultRole()); err != nil {
+		writeSCIMError(w, http.StatusInternalServerError,
+			"created the user but could not assign the default role")
+		return
+	}
 	// A create with active:false provisions an already-disabled account.
 	if !in.Active {
-		_ = h.d.Store.SetDisabled(r.Context(), u.ID, true)
+		if err := h.d.Store.SetDisabled(r.Context(), u.ID, true); err != nil {
+			writeSCIMError(w, http.StatusInternalServerError,
+				"created the user but could not disable it as requested")
+			return
+		}
 		u.IsDisabled = true
 	}
 	h.provisionAudit(r, "scim.user_provision", u, map[string]any{"userName": u.Username})

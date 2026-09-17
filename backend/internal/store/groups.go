@@ -206,8 +206,9 @@ func (s *Store) CreateGroup(ctx context.Context, name, description string) (*mod
 
 // DeleteGroup removes a group.
 func (s *Store) DeleteGroup(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM groups WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a group reported deleted still carries whatever it granted.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM groups WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // AddUserToGroup adds a user to a group.
@@ -219,8 +220,9 @@ func (s *Store) AddUserToGroup(ctx context.Context, userID, groupID uuid.UUID) e
 
 // RemoveUserFromGroup removes a user from a group.
 func (s *Store) RemoveUserFromGroup(ctx context.Context, userID, groupID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM user_groups WHERE user_id=$1 AND group_id=$2`, userID, groupID)
-	return err
+	// Matching nothing is a failure, not a no-op: membership carries access; removing nothing removes no access.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM user_groups WHERE user_id=$1 AND group_id=$2`, userID, groupID)
+	return changed(tag, err)
 }
 
 // AddHostToGroup adds a host to a group.
@@ -232,8 +234,9 @@ func (s *Store) AddHostToGroup(ctx context.Context, hostID, groupID uuid.UUID) e
 
 // RemoveHostFromGroup removes a host from a group.
 func (s *Store) RemoveHostFromGroup(ctx context.Context, hostID, groupID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM host_groups WHERE host_id=$1 AND group_id=$2`, hostID, groupID)
-	return err
+	// Matching nothing is a failure, not a no-op: the host keeps whatever the group grants.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM host_groups WHERE host_id=$1 AND group_id=$2`, hostID, groupID)
+	return changed(tag, err)
 }
 
 // UserGroupNames lists a user's group names.
@@ -252,8 +255,9 @@ func (s *Store) AddUserToHost(ctx context.Context, hostID, userID uuid.UUID) err
 
 // RemoveUserFromHost revokes a user's direct access to a host.
 func (s *Store) RemoveUserFromHost(ctx context.Context, hostID, userID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM host_users WHERE host_id=$1 AND user_id=$2`, hostID, userID)
-	return err
+	// Matching nothing is a failure, not a no-op: access reported removed but still granted is the worst failure here.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM host_users WHERE host_id=$1 AND user_id=$2`, hostID, userID)
+	return changed(tag, err)
 }
 
 // HostDirectUsers lists users granted direct (non-group) access to a host.

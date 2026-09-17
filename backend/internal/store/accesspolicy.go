@@ -137,8 +137,9 @@ func (s *Store) GetAccessPolicy(ctx context.Context, id uuid.UUID) (*AccessPolic
 }
 
 func (s *Store) DeleteAccessPolicy(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM access_policies WHERE id=$1`, id)
-	return err
+	// Matching nothing is a failure, not a no-op: a policy reported deleted that still governs access.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM access_policies WHERE id=$1`, id)
+	return changed(tag, err)
 }
 
 // (UserRoleNames is defined in rbac.go and reused here for ABAC exemption matching.)
