@@ -16,23 +16,56 @@ import (
 // new user hits, and the step where a rushed operator reaches for
 // cluster-admin because it is one line and works.
 //
-// Two levels, because there is no single right answer and pretending otherwise
-// is how the wrong one gets picked:
+// Three levels, because there is no single right answer and pretending
+// otherwise is how the wrong one gets picked:
 //
-//	read    — browse and diagnose. Cannot change anything, cannot read Secrets.
-//	operate — the above plus workload lifecycle. Still no Secrets, no
-//	          ServiceAccounts, no RBAC.
+//	read       — browse and diagnose. Cannot change anything, cannot read Secrets.
+//	operate    — the above plus workload lifecycle. Still no Secrets, no
+//	             ServiceAccounts, no RBAC, no namespaces.
+//	administer — the cluster, administered. Namespaces, CRDs, RBAC, storage,
+//	             network policy, quotas, Secrets. This is cluster-admin.
 //
-// Neither is cluster-admin, and neither grants Secrets. `edit`, the obvious
-// built-in for the second, grants Secrets read AND write, which is rarely what
-// somebody wants from a management UI and never what they expect.
+// `read` and `operate` are unchanged, so a cluster already joined at either
+// gains nothing by this existing. `administer` is a deliberate, named choice.
+//
+// Why offer it at all, having argued against cluster-admin here: because the
+// alternative was worse. Withholding it did not make the console safer, it made
+// it incomplete -- a console that cannot create a namespace, install a chart or
+// define a CRD is not somewhere a cluster is administered, and an operator who
+// needs those goes back to a terminal, which is the outcome embedding a console
+// was meant to prevent. Withheld capability does not disappear; it relocates to
+// somewhere with no audit trail.
+//
+// The original objection stands and is answered by HOW it is offered: the danger
+// was never that cluster-admin exists, it was a rushed operator reaching for it
+// as the default because it is one line and works. Here it is the third of three
+// named options, it is not the default, the manifest says what it grants, and
+// Provenance reports what each cluster actually permits (see capabilities) so
+// nobody has to infer their own access from a missing button.
+//
+// `administer` binds the built-in cluster-admin rather than enumerating an
+// equivalent role. An enumerated one would be a snapshot: it would miss every
+// API group added by a later Kubernetes release and every CRD installed after it
+// was written, failing silently and looking like a broken UI. If the intent is
+// "this cluster is administered from here", say that, do not approximate it.
 func (h *handler) onboarding(w http.ResponseWriter, r *http.Request) {
 	level := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("access")))
 	if level == "" {
 		level = "read"
 	}
-	if level != "read" && level != "operate" {
-		httpx.WriteError(w, http.StatusBadRequest, "access must be read or operate")
+	if level != "read" && level != "operate" && level != "administer" {
+		httpx.WriteError(w, http.StatusBadRequest,
+			"access must be read, operate or administer")
+		return
+	}
+	// A namespace bounds workload writes. It cannot bound cluster administration:
+	// namespaces, CRDs, storage classes and nodes are cluster-scoped, so a
+	// namespaced binding would silently grant almost none of what was asked for
+	// and the operator would discover it one missing button at a time.
+	if level == "administer" && strings.TrimSpace(r.URL.Query().Get("namespace")) != "" {
+		httpx.WriteError(w, http.StatusBadRequest,
+			"administer cannot be confined to a namespace — what it grants is "+
+				"cluster-scoped. Use operate with a namespace to bound writes.")
 		return
 	}
 	ns := strings.TrimSpace(r.URL.Query().Get("namespace")) // empty = cluster-wide
@@ -112,6 +145,25 @@ func onboardingManifest(level, namespace string) string {
 		}
 		b.WriteString("roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n")
 		b.WriteString("  name: provenance-operate\nsubjects:\n")
+		b.WriteString("  - kind: ServiceAccount\n    name: provenance\n    namespace: kube-system\n")
+	}
+
+	if level == "administer" {
+		b.WriteString("---\n# THE CLUSTER, ADMINISTERED. This is cluster-admin: namespaces, CRDs,\n")
+		b.WriteString("# RBAC, storage, network policy, quotas -- and Secrets, read and write.\n")
+		b.WriteString("#\n")
+		b.WriteString("# Bound to the built-in role rather than an enumerated copy on purpose: a\n")
+		b.WriteString("# copy is a snapshot that misses every API group a later Kubernetes adds\n")
+		b.WriteString("# and every CRD installed after it was written, and it fails by looking\n")
+		b.WriteString("# like a broken UI rather than by saying no.\n")
+		b.WriteString("#\n")
+		b.WriteString("# Provenance still brokers every call and still records it against the\n")
+		b.WriteString("# person who made it. What this removes is the cluster's own refusal, not\n")
+		b.WriteString("# Provenance's accounting. Choose it for a cluster you administer from\n")
+		b.WriteString("# here; choose operate for one where you only run workloads.\n")
+		b.WriteString("apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n")
+		b.WriteString("  name: provenance-administer\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n")
+		b.WriteString("  kind: ClusterRole\n  name: cluster-admin\nsubjects:\n")
 		b.WriteString("  - kind: ServiceAccount\n    name: provenance\n    namespace: kube-system\n")
 	}
 

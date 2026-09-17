@@ -17,6 +17,7 @@ import { useAuthStore } from "../store/auth";
 import {
   listClusters, createCluster, updateCluster, deleteCluster, listResources,
   downloadKubeconfig, downloadOnboardingManifest, authorizeConsole, consoleAuthorized, consoleUrl,
+  type K8sAccessLevel,
   type K8sCluster, type K8sClusterInput,
 } from "../api/kubernetes";
 import { listVaultSecrets } from "../api/vault";
@@ -34,6 +35,7 @@ export function KubernetesPage() {
   const [creating, setCreating] = useState(false);
   const [browsing, setBrowsing] = useState<K8sCluster | null>(null);
   const [managing, setManaging] = useState<K8sCluster | null>(null);
+  const [rbac, setRbac] = useState(false);
   const [kubeErr, setKubeErr] = useState<string | null>(null);
   const kube = useMutation({
     mutationFn: downloadKubeconfig,
@@ -57,9 +59,8 @@ export function KubernetesPage() {
         </Box>
         <Stack direction="row" spacing={1}>
           {canManage && (
-            <Button startIcon={<DownloadIcon />}
-              onClick={() => void downloadOnboardingManifest("operate", "")}
-              title="The ServiceAccount, RBAC and token a cluster needs before it can be joined. Never cluster-admin, never Secrets.">
+            <Button startIcon={<DownloadIcon />} onClick={() => setRbac(true)}
+              title="The ServiceAccount, RBAC and token a cluster needs before it can be joined">
               Cluster RBAC
             </Button>
           )}
@@ -119,6 +120,7 @@ export function KubernetesPage() {
       {kubeErr && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setKubeErr(null)}>{kubeErr}</Alert>}
       {managing && <ClusterConsole cluster={managing} onClose={() => setManaging(null)} />}
       {browsing && <ResourceBrowser cluster={browsing} onClose={() => setBrowsing(null)} />}
+      {rbac && <ClusterRbacDialog onClose={() => setRbac(false)} />}
       {creating && <ClusterDialog onClose={() => setCreating(false)} onSaved={() => { setCreating(false); invalidate(); }} />}
       {editing && <ClusterDialog cluster={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); invalidate(); }} />}
     </Box>
@@ -311,5 +313,77 @@ function ClusterConsole({ cluster, onClose }: { cluster: K8sCluster; onClose: ()
         />
       )}
     </Paper>
+  );
+}
+
+// ClusterRbacDialog is where the cluster's access level is CHOSEN, rather than
+// assumed.
+//
+// It used to hand out the `operate` manifest with no choice offered, which is
+// why joining a cluster produced a console that could restart a deployment but
+// not create a namespace, install a chart, or define a CRD — and nothing on
+// screen said why. Withheld capability does not disappear; the operator just
+// does it from a terminal instead, where Provenance records nothing.
+//
+// What makes `administer` reasonable to offer is that it is not the same
+// question as "who may use it". The cluster grants the capability; a person's
+// Provenance role decides what they may actually do with it, enforced on every
+// brokered call. So this choice is about the CLUSTER, and the Roles page is
+// about the people.
+function ClusterRbacDialog({ onClose }: { onClose: () => void }) {
+  const [access, setAccess] = useState<K8sAccessLevel>("operate");
+  const [namespace, setNamespace] = useState("");
+  const [err, setErr] = useState("");
+  const download = useMutation({
+    mutationFn: () => downloadOnboardingManifest(access, access === "administer" ? "" : namespace),
+    onSuccess: onClose,
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      setErr(e.response?.data?.error || "Could not generate the manifest."),
+  });
+  return (
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Cluster RBAC</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Apply this on the cluster you are joining. It creates the ServiceAccount,
+          the roles and a durable token — so joining a cluster does not mean
+          hand-writing RBAC, or reaching for <code>cluster-admin</code> because it
+          is one line and works.
+        </Typography>
+        {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
+        <Stack spacing={2}>
+          <TextField select label="What Provenance may do on this cluster" value={access}
+            onChange={(e) => setAccess(e.target.value as K8sAccessLevel)} fullWidth>
+            <MenuItem value="read">Read — browse and diagnose. No changes, no Secrets.</MenuItem>
+            <MenuItem value="operate">Operate — the above plus workloads. No Secrets, no RBAC, no namespaces.</MenuItem>
+            <MenuItem value="administer">Administer — the whole cluster: namespaces, CRDs, RBAC, storage, Secrets.</MenuItem>
+          </TextField>
+          {access === "administer" ? (
+            <Alert severity="warning">
+              This binds <code>cluster-admin</code>. It is what makes namespaces, CRDs
+              and Helm work from the console. Every call is still brokered and recorded
+              against the person who made it, and <strong>what each person may do is
+              decided by their Provenance role</strong> — <code>Kubernetes.Access</code> reads,
+              <code> Kubernetes.Operate</code> changes workloads, <code>Kubernetes.Administer</code>
+              administers the cluster and reads Secrets.
+            </Alert>
+          ) : (
+            <TextField label="Confine writes to one namespace (optional)" value={namespace}
+              onChange={(e) => setNamespace(e.target.value)} fullWidth
+              disabled={access === "read"}
+              helperText={access === "read"
+                ? "Read is cluster-wide: a console that cannot list namespaces or nodes is not useful."
+                : "Anything able to create workloads in a namespace can mount that namespace's Secrets into a pod and read them. Confining writes is what bounds that."} />
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" startIcon={<DownloadIcon />}
+          disabled={download.isPending} onClick={() => { setErr(""); download.mutate(); }}>
+          {download.isPending ? "Generating…" : "Download manifest"}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }

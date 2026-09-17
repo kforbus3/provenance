@@ -1,6 +1,7 @@
 package k8sbroker
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/credresolve"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"github.com/kforbus3/provenance/backend/internal/store"
@@ -65,6 +67,39 @@ func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 	// Everything after ".../proxy" is the upstream path (chi wildcard).
 	rest := "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 
+	// Who is asking decides what they may do -- not the cluster's
+	// ServiceAccount, which is the same for everyone. Checked HERE, before the
+	// request is forwarded and before the cluster credential is attached, so a
+	// refusal never reaches the cluster at all.
+	//
+	// Route middleware cannot do this: it gates the path /k8s/clusters/{id}/proxy/*
+	// as one thing, and the distinction is inside the wildcard.
+	p := auth.MustPrincipal(r)
+	if p == nil {
+		httpx.WriteError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	if ok, why := authorize(p.Has, r.Method, rest); !ok {
+		h.audit(r, "k8s.proxy.denied", id, map[string]any{
+			"cluster": cluster.Name, "method": r.Method, "path": rest,
+			"needs": requiredPermission(r.Method, rest),
+		})
+		httpx.WriteError(w, http.StatusForbidden, why)
+		return
+	}
+
+	// A self-review's answer is rewritten on the way back so Headlamp's buttons
+	// match this person's Provenance role. Its request body is needed to know
+	// what was asked, and it is read ONLY for these calls: buffering a watch or
+	// a log follow would defeat the streaming this proxy exists to do.
+	var reviewBody []byte
+	if isSelfReview(rest) {
+		reviewBody, _ = io.ReadAll(io.LimitReader(r.Body, reviewBodyLimit))
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(reviewBody))
+		r.ContentLength = int64(len(reviewBody))
+	}
+
 	rp := newClusterProxy(cluster, token, base, rest,
 		func(status int, err error) {
 			d := map[string]any{"cluster": cluster.Name, "method": r.Method, "path": rest}
@@ -75,7 +110,30 @@ func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 			h.audit(r, "k8s.proxy", id, d)
 		})
+	if reviewBody != nil || isSelfReview(rest) {
+		if f := reviewIntersector(p.Has, rest, reviewBody); f != nil {
+			audited := rp.ModifyResponse
+			rp.ModifyResponse = func(resp *http.Response) error {
+				if err := audited(resp); err != nil {
+					return err
+				}
+				return f(resp)
+			}
+		}
+	}
 	rp.ServeHTTP(w, r)
+}
+
+// reviewBodyLimit bounds what is read from a self-review request. These carry a
+// handful of fields; anything larger is not one, and reading it would hand a
+// caller a way to make the broker buffer whatever they like.
+const reviewBodyLimit = 64 << 10
+
+// isSelfReview reports whether a path is one of the self-inspection APIs whose
+// answer gets intersected with the caller's Provenance permissions.
+func isSelfReview(path string) bool {
+	resource, _, _ := parseAPIPath(path)
+	return resource == "selfsubjectaccessreviews" || resource == "selfsubjectrulesreviews"
 }
 
 // streamingTransport dials the cluster with its TLS settings and NO overall

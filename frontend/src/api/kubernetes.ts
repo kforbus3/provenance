@@ -81,8 +81,10 @@ export async function downloadKubeconfig(): Promise<void> {
 
 // The RBAC a cluster needs before Provenance can broker it. Downloaded rather
 // than shown, because it is applied with kubectl, not read.
+export type K8sAccessLevel = "read" | "operate" | "administer";
+
 export async function downloadOnboardingManifest(
-  access: "read" | "operate", namespace: string,
+  access: K8sAccessLevel, namespace: string,
 ): Promise<void> {
   const { data } = await api.get("/api/v1/k8s/onboarding-manifest", {
     params: { access, namespace: namespace || undefined },

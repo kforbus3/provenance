@@ -5,6 +5,48 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**What a person may do to a Kubernetes cluster is now decided by their
+Provenance role.** Every operator reaches a cluster through one registered
+credential, so the cluster cannot tell them apart — to it, every call is the same
+ServiceAccount. `Kubernetes.Access` was therefore all-or-nothing: whoever held it
+could do whatever that cluster's RBAC allowed, identically for an administrator
+and a read-only operator. Provenance sits in the middle of every call, so it is
+the only thing that *can* tell them apart, and now it does — checked per request,
+before the cluster credential is attached.
+
+- **`Kubernetes.Operate`** covers workload lifecycle; **`Kubernetes.Administer`**
+  covers the cluster itself and Secrets; `Kubernetes.Access` now means read.
+  Secrets need `Administer` **even to read**, because a console that can read
+  them is a second secrets manager with different rules. `exec` is not a read
+  either: it opens with a `GET` that upgrades the connection, so classifying by
+  HTTP method would have handed every read-only operator a shell in any
+  container.
+- **The console's buttons follow the same rules.** Headlamp renders what the
+  *cluster* says it may do, which is the ServiceAccount's answer — so a read-only
+  operator was shown every destructive control and each one then failed. That is
+  worse than an absent button: it cannot be told apart from a broken console.
+  Provenance now intersects those `SelfSubjectAccessReview` answers with the
+  caller's permissions on the way back. It can only narrow, never widen.
+- **A third onboarding level, `administer`**, grants the cluster — namespaces,
+  CRDs, RBAC, storage, Secrets. Withholding it did not make the console safer, it
+  made it incomplete: a console that cannot create a namespace or install a chart
+  sends the operator back to a terminal, where nothing is recorded. `read` and
+  `operate` are unchanged, and it is not the default.
+- **Helm in the console** (`-enable-helm`). Chart install, upgrade and rollback is
+  most of what managing a cluster means in practice. Helm 3 keeps release state
+  in Secrets, so it works on a cluster joined at `administer` and is governed by
+  `Kubernetes.Administer` like any other Secret access.
+
+> **Upgrade note.** The built-in Operator, Administrator and Super Administrator
+> roles are seeded with the new permissions and keep exactly what they had. A
+> **custom** role holding only `Kubernetes.Access` can now only read — grant it
+> `Kubernetes.Operate` to restore writes. This is a deliberate tightening in the
+> safe direction.
+
+---
+
 ## v1.7.0 — 2026-09-17
 
 **Kubernetes management, end to end.** Provenance brokered access to clusters but

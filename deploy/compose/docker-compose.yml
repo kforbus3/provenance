@@ -568,6 +568,17 @@ services:
       - "-plugins-dir=/headlamp/plugins"
       - "-base-url=/headlamp"
       - "-kubeconfig=/headlamp/clusters/kubeconfig"
+      # Helm, in the console. Chart install/upgrade/rollback is most of what
+      # "manage a cluster" means in practice, and doing it elsewhere is the
+      # single-pane promise breaking at the most common task.
+      #
+      # Helm 3 keeps release state in SECRETS in the release namespace, so this
+      # only works on a cluster joined at `administer`; at read/operate the
+      # cluster itself refuses, which is the correct answer rather than a bug.
+      # Provenance still decides who may use it: Secrets require
+      # Kubernetes.Administer on every brokered call, so enabling this does not
+      # widen anybody's access by itself.
+      - "-enable-helm"
     environment:
       # Headlamp serves under a sub-path so it can be embedded rather than
       # occupying its own hostname.

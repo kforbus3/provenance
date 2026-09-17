@@ -20,13 +20,40 @@ and works. What the manifest grants instead:
 
 - **read** — browse and diagnose. No writes, no Secrets.
 - **operate** — the above plus workload lifecycle. Still **no Secrets, no
-  ServiceAccounts, no RBAC**.
+  ServiceAccounts, no RBAC, no namespaces**.
+- **administer** — the whole cluster: namespaces, CRDs, RBAC, storage, network
+  policy, quotas, Secrets. This **is** `cluster-admin`.
 
-Neither is `cluster-admin`, and neither is the built-in `edit` role — `edit`
-grants Secrets read *and* write, which is rarely what somebody wants from a
-management UI and never what they expect. Being able to create a ServiceAccount
-is excluded for the same reason: it is a route to a token, and a token is a route
-back to everything the role withholds.
+`read` and `operate` are not `cluster-admin`, and neither is the built-in `edit`
+role — `edit` grants Secrets read *and* write, which is rarely what somebody
+wants from a management UI and never what they expect. Being able to create a
+ServiceAccount is excluded for the same reason: it is a route to a token, and a
+token is a route back to everything the role withholds.
+
+**Why `administer` exists, having argued all that.** Withholding it did not make
+the console safer, it made it incomplete. A console that cannot create a
+namespace, install a chart or define a CRD is not somewhere a cluster is
+administered, so an operator who needs those goes back to a terminal — and
+withheld capability does not disappear, it relocates to somewhere with no audit
+trail. The original objection was never that `cluster-admin` exists; it was a
+rushed operator reaching for it *as the default*. Here it is the third of three
+named choices, it is not the default, and the manifest states what it grants.
+
+**What makes it defensible is that it is a different question from "who may use
+it".** The cluster grants the capability; a person's Provenance role decides what
+they may actually do with it, checked on every brokered call — see
+[Who can do what](#who-can-do-what). A cluster at `administer` whose operators
+hold only `Kubernetes.Access` is a read-only console.
+
+It binds the built-in `cluster-admin` rather than an enumerated equivalent on
+purpose: an enumerated role is a snapshot that misses every API group a later
+Kubernetes adds and every CRD installed after it was written, and it fails by
+looking like a broken UI rather than by saying no.
+
+`administer` cannot be confined to a namespace — what it grants is
+cluster-scoped, so a namespaced binding would grant almost none of it and you
+would find out one missing button at a time. Use `operate` with a namespace to
+bound writes.
 
 Reading is always cluster-wide, because `view` alone does **not** cover
 cluster-scoped nodes and every cluster UI lists them. Writes can be confined to
@@ -111,19 +138,58 @@ when a frame is too small for the job.
 
 There is no login and no token to paste. Provenance signs the console in for you.
 
-### Who can open it
+### Who can do what
 
-Exactly whoever holds **`Kubernetes.Access`**. That permission gates the route
-that mints the console's credential, so the console is governed by Provenance's
-roles and there is nothing separate to keep in sync. `Kubernetes.Manage` is a
-different and stronger thing: it covers registering and removing clusters.
+**A person's Provenance role decides what they may do to a cluster — not the
+cluster's ServiceAccount.**
+
+Every operator reaches a cluster through one registered credential, so the
+cluster cannot tell them apart: to it, every call is the same ServiceAccount.
+Provenance is in the middle of every call, so it is the only thing that can, and
+it checks on every request before the cluster credential is attached:
+
+| Permission | What it allows |
+|---|---|
+| `Kubernetes.Access` | Read. Browse, diagnose, follow logs. |
+| `Kubernetes.Operate` | Workload lifecycle: pods, deployments, jobs, services, and `exec` into a container. |
+| `Kubernetes.Administer` | The cluster itself: namespaces, CRDs, RBAC, storage, nodes — and Secrets, **read as well as write**. |
+| `Kubernetes.Manage` | Registering and removing cluster targets. Separate from all of the above. |
+
+Two things worth knowing about that table:
+
+- **Secrets need `Kubernetes.Administer` even to read.** The reason the generated
+  cluster RBAC withholds Secrets is that a console able to read them is a second
+  secrets manager with different rules. Pointing a read-only console at a
+  fully-privileged cluster must not reintroduce that.
+- **`exec` is not a read.** `kubectl exec` opens with a `GET` that upgrades the
+  connection, so treating it by HTTP method would have handed every read-only
+  operator a shell in any container.
+
+A refusal names the missing *Provenance* permission rather than reporting a
+Kubernetes error, because the cluster did not refuse it — Provenance did, and an
+operator sent to examine their cluster's RBAC will not find anything wrong.
+
+**The console's buttons follow the same rules.** Headlamp decides what to render
+by asking the cluster what it may do (`SelfSubjectAccessReview`), and the cluster
+answers for the ServiceAccount. Provenance intersects that answer with the
+caller's permissions on the way back, so a read-only operator simply does not see
+the destructive controls. It can only ever narrow: a permission in Provenance
+cannot grant access the cluster withholds.
+
+> **Upgrading from a release before v1.7.0:** `Kubernetes.Access` used to imply
+> everything the cluster allowed. The built-in Operator, Administrator and Super
+> Administrator roles are seeded with the new permissions so they keep what they
+> had. A **custom** role holding only `Kubernetes.Access` now reads only — grant
+> it `Kubernetes.Operate` to restore writes.
 
 Two consequences worth knowing:
 
 - Taking `Kubernetes.Access` away stops an operator opening the console, but a
   console they already have open keeps working until its token expires (12 hours
   at most). To cut it immediately, revoke their `Headlamp console for <user>`
-  token from their API tokens, or disable the account.
+  token from their API tokens, or disable the account. Narrowing a role from
+  `Administer` to `Operate` takes effect on the **next request**, because the
+  check is per-request rather than per-session.
 - **Signing out of Provenance revokes the console token**, so a shared browser
   does not leave working cluster access behind for whoever sits down next.
 
