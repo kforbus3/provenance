@@ -289,10 +289,6 @@ func (e *Engine) firePlaybookInWaves(
 	}
 
 	runIDs := make([]uuid.UUID, 0, len(waves))
-	type stage struct {
-		id    uuid.UUID
-		hosts []*models.Host
-	}
 	stages := make([]stage, 0, len(waves))
 	for i, wave := range waves {
 		wh := make([]*models.Host, 0, len(wave))
@@ -326,27 +322,17 @@ func (e *Engine) firePlaybookInWaves(
 
 	go func() {
 		bg := context.WithoutCancel(ctx)
-		for i, st := range stages {
-			e.playbook.Run(bg, st.id, pb.Content, st.hosts, p.CheckMode)
-			run, gerr := e.store.GetPlaybookRun(bg, st.id)
-			if gerr != nil {
-				e.log.Error("scheduled playbook: reading wave result; stopping",
-					"schedule", sc.ID, "wave", i+1, "err", gerr)
-				return
+		runWave := func(st stage) { e.playbook.Run(bg, st.id, pb.Content, st.hosts, p.CheckMode) }
+		waveStatus := func(id uuid.UUID) (string, error) {
+			run, err := e.store.GetPlaybookRun(bg, id)
+			if err != nil {
+				return "", err
 			}
-			// "completed" is the only status a run reports on success; the others
-			// are "failed" and "interrupted". Checked against what the engine
-			// actually writes rather than a plausible-looking word -- comparing to
-			// "success" here would have stopped every sequence after its first
-			// wave, silently, and looked exactly like a fleet that stopped early
-			// on purpose.
-			if run.Status != models.PlaybookRunCompleted {
-				// Do not proceed to the hosts this wave stands on.
-				e.log.Warn("scheduled playbook: wave did not succeed; later waves skipped",
-					"schedule", sc.ID, "wave", i+1, "of", len(stages), "status", run.Status)
-				return
-			}
+			return run.Status, nil
 		}
+		runStages(stages, runWave, waveStatus, func(msg string, args ...any) {
+			e.log.Warn(msg, append([]any{"schedule", sc.ID}, args...)...)
+		})
 	}()
 	return "started", runIDs
 }
@@ -393,4 +379,43 @@ func (e *Engine) fireScript(ctx context.Context, sc *models.Schedule, hosts []*m
 	}
 	go e.winscript.Run(context.WithoutCancel(ctx), rec.ID, script.Content, winHosts, nil)
 	return "started", []uuid.UUID{rec.ID}
+}
+
+// stage is one wave: its own playbook run, over the hosts in that wave.
+type stage struct {
+	id    uuid.UUID
+	hosts []*models.Host
+}
+
+// runStages runs dependency-ordered waves in sequence and STOPS at the first one
+// that does not complete.
+//
+// Extracted from the goroutine so the halting rule can be tested, because it is
+// the part that is dangerous in both directions: too eager and a fleet upgrade
+// reboots the storage its remaining hosts stand on; too strict and every
+// sequence silently ends after its first wave. It shipped as the latter once --
+// gated on the status "success", which this system never writes -- and that was
+// caught by querying the database rather than by any test.
+func runStages(
+	stages []stage,
+	run func(stage),
+	status func(uuid.UUID) (string, error),
+	warn func(msg string, args ...any),
+) {
+	for i, st := range stages {
+		run(st)
+		got, err := status(st.id)
+		if err != nil {
+			// Not knowing whether a wave succeeded is not permission to continue:
+			// the next wave is the thing the previous one stands on.
+			warn("scheduled playbook: could not read a wave result; later waves skipped",
+				"wave", i+1, "of", len(stages), "err", err)
+			return
+		}
+		if got != models.PlaybookRunCompleted {
+			warn("scheduled playbook: wave did not succeed; later waves skipped",
+				"wave", i+1, "of", len(stages), "status", got)
+			return
+		}
+	}
 }
