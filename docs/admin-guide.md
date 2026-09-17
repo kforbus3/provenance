@@ -39,7 +39,8 @@ Set these in `.env` (generate with `openssl rand -hex 32`). In `production`
 | `PROV_AUDIT_HMAC_KEY` | ≥ 32 bytes — keys the tamper-evident audit chain |
 | `PROV_ANSIBLE_RUNNER_TOKEN` | ≥ 16 bytes — backend ⇄ `ansible-runner` shared secret (**must match** on the sidecar) |
 | `PROV_COOKIE_SECURE` | `true` when served over HTTPS |
-| `PROV_PUBLIC_URL` | your external base URL (cookies/CORS) |
+| `PROV_PUBLIC_URL` | your external base URL (cookies/CORS, **and the `server:` in every generated kubeconfig**) |
+| `PROV_HEADLAMP_KUBECONFIG` | where to write the embedded console's cluster list; unset disables it (default `/headlamp/clusters/kubeconfig`) |
 
 `PROV_RECORDING_KEY` (≥ 32 bytes, **optional**) additionally encrypts session
 recordings at rest — see [§18c](#18c-windows-desktops-rdp) and the
@@ -1175,8 +1176,11 @@ Beyond SSH/RDP, Provenance brokers other privileged access the same way — thro
 - **Databases** — register PostgreSQL, MySQL, MariaDB, or SQL Server targets and run audited SQL
   from the Databases page (`Database.Manage` / `Database.Connect`). See
   **[Database access](./database-broker.md)**.
-- **Kubernetes** — register clusters and reach them via Provenance's authenticating proxy (browse
-  resources, or point `kubectl` at the proxy); `Kubernetes.Manage` / `Kubernetes.Access`. See
+- **Kubernetes** — register clusters and reach them via Provenance's authenticating proxy:
+  browse resources, open the **embedded console** (Headlamp, framed inside Provenance), download
+  a **kubeconfig** for `kubectl`/`k9s`, or generate the **cluster RBAC** a cluster needs before it
+  can be joined; `Kubernetes.Manage` / `Kubernetes.Access`. The console is an opt-in compose
+  profile — `docker compose --profile kubernetes up -d`. See
   **[Kubernetes access](./kubernetes.md)**.
 
 Two more controls tighten the platform:

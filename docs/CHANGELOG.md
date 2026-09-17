@@ -5,6 +5,69 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**Kubernetes management, end to end.** Provenance brokered access to clusters but
+could only list five resource kinds. It is now somewhere a cluster is operated,
+without Provenance becoming a Kubernetes dashboard — the upstream Kubernetes
+Dashboard is archived, and its successor **Headlamp** (Apache-2.0, a Kubernetes
+SIG project) is embedded and routed through the broker instead of
+re-implemented.
+
+- **The proxy carries watches and shells.** It was `client.Do` plus a body copy,
+  which cannot do a watch (events sat buffered), an `exec`, `attach` or
+  `port-forward` (those are connection upgrades — there is no body to copy), or
+  `logs -f`. It also had a 30-second timeout on the whole request, when every one
+  of those is *supposed* to stay open. Rewritten on `httputil.ReverseProxy`, with
+  the deadline moved to the response headers.
+- **The console is embedded, not linked.** Framed under Provenance's own origin
+  from the cluster row. Provenance tells Headlamp which clusters exist — names
+  and server URLs pointing at the broker — and deliberately gives it **no
+  credential**, so each operator pastes their own token and the audit log names a
+  person rather than a shared account.
+- **Download kubeconfig** mints a token and returns a working config in one
+  action, for `kubectl`, `k9s`, Lens or a desktop Headlamp. The token is
+  **scoped to `/api/v1/k8s`** — it can reach the Kubernetes broker and nothing
+  else in Provenance, not a host, not a credential, not a playbook — and it
+  expires. A scoped token cannot mint another, so a leaked file cannot renew
+  itself past its own expiry.
+- **Cluster RBAC** generates the ServiceAccount, roles, bindings and long-lived
+  token Secret a cluster needs before it can be joined, at a **read** or
+  **operate** level. Neither is `cluster-admin`, and neither is the built-in
+  `edit` role — `edit` grants Secrets read *and* write, which is rarely what
+  anyone wants from a management UI and never what they expect.
+
+**Durable API tokens can belong to a person, and can be confined.** Tokens were
+service-account-only. They can now be owned by a user, and carry an optional
+**scope**: an API path prefix outside which the token is refused, enforced in
+middleware before the permission check. Scopes match on path *segments* — a token
+scoped to `/api/v1/k8s` must not reach `/api/v1/k8superadmin`.
+
+**A revocation that revoked nothing is no longer reported as success.** 137 store
+writes ran an `UPDATE` or `DELETE` and returned only the database's error, so
+they could not tell "I changed the row" from "I matched nothing". For a
+revocation that is the difference between an account being disabled and an
+operator being told it was — and under row-level security a write blocked by
+tenant isolation matched zero rows and looked identical to success. The
+revocation class now reports it, and handlers answer `404` naming what did *not*
+happen. Bulk and idempotent writes are unchanged, because zero rows there is a
+real answer.
+
+Bootstrap no longer ignores the result of granting the first account its
+Super Administrator role — that wizard permanently self-disables, so a silent
+failure left an instance whose only user could not administer it. SCIM no longer
+ignores the default-role assignment or the disable on an `active:false` create.
+
+**Container update rollouts** verify what they claim, and a major-version bump of
+an image that owns its on-disk format (postgres, mysql, mariadb, mongo,
+elasticsearch) is refused rather than applied and then reported as verified.
+
+**Dependency-ordered schedules.** A playbook schedule can run its hosts in waves
+— dependents first, whatever carries them last — so storage is never rebooted
+out from under guests still patching.
+
+---
+
 ## v1.6.0 — 2026-09-16
 
 **Provenance can be told which hosts stand on which, and act on it.** Hosts were

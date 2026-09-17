@@ -96,30 +96,67 @@ This is what makes **any** Kubernetes tool work through Provenance — `kubectl`
 `k9s`, Lens, or a desktop Headlamp — with the credential brokered, the calls
 audited, and the audit naming the person rather than a shared account.
 
-## Headlamp
+## The embedded console
 
 The stack ships [Headlamp](https://github.com/kubernetes-sigs/headlamp)
-(Apache-2.0, a Kubernetes SIG project) behind an opt-in profile:
+(Apache-2.0, a Kubernetes SIG project) behind an **opt-in** compose profile — a
+deployment that has joined no clusters should not run a Kubernetes UI:
 
     docker compose --profile kubernetes up -d
 
-It is deliberately **not** given a kubeconfig containing a token. A kubeconfig
-carries one credential, so a shared one would make every operator reach
-Provenance as the same identity and collapse the audit log to a single actor —
-which is the whole reason to embed a UI rather than link out to one. Each
-operator supplies their own scoped token instead.
+Open it from the cluster row (**Open cluster UI**). It is framed inside
+Provenance rather than linked to, so the operator does not leave the pane or log
+in a second time.
 
-Headlamp is not run with `-in-cluster`: it must not pick up an ambient
-ServiceAccount. Every cluster it can see arrives through Provenance's proxy or
+### How it is wired
+
+**Provenance tells Headlamp which clusters exist; Headlamp never learns a
+credential.** The backend writes a kubeconfig containing cluster names and
+server URLs — each pointing at `/api/v1/k8s/clusters/<id>/proxy`, never at a
+cluster directly — with a user entry carrying an **empty** credential block.
+Headlamp then shows its own *"Please paste your authentication token"* prompt,
+and each operator pastes the token from **Download kubeconfig**.
+
+That asymmetry is the point. A kubeconfig carries one credential, so a shared
+token would make every operator reach Provenance as the same identity and
+collapse the audit log to a single actor — which is the whole reason to embed a
+UI rather than link out to one.
+
+Two details that matter if you are debugging it:
+
+- The file is written to `PROV_HEADLAMP_KUBECONFIG` (default
+  `/headlamp/clusters/kubeconfig`), on a volume the backend writes and Headlamp
+  reads read-only. **Unset disables the whole mechanism**, which is the case for
+  any deployment not running the profile.
+- It is rewritten at backend startup and whenever a cluster is registered,
+  edited or removed. **Headlamp reads it at its own startup**, so a newly
+  registered cluster appears in the console after
+  `docker restart provenance-headlamp-1`. The built-in browser and `kubectl`
+  need no restart.
+
+Headlamp is deliberately **not** run with `-in-cluster`: it must not pick up an
+ambient ServiceAccount. Every cluster it can see arrives through the broker or
 not at all.
+
+### What you get
+
+The full Headlamp surface — workloads, storage, network, logs, events, search —
+rendered against live data, with every call brokered and audited. A cluster
+overview shows real CPU, memory, pod and node counts; watches arrive over a
+WebSocket that Provenance's proxy upgrades and passes through (visible in the
+audit log as `k8s.proxy` with status `101`).
 
 ## Use kubectl through the broker
 
 Point `kubectl` at Provenance's proxy for a cluster and authenticate with a Provenance token:
 
     kubectl --server=https://<prov-host>/api/v1/k8s/clusters/<clusterId>/proxy \
-            --token=<fleet-access-token> \
+            --token=<provenance-token> \
             get pods -n <namespace>
+
+Easier: **Download kubeconfig** produces a file that already has this right for
+every cluster you can see, so `KUBECONFIG=provenance-kubeconfig.yaml kubectl
+get nodes` just works.
 
 Provenance forwards each request to the cluster's API server with the vaulted credential and records it
 (`k8s.proxy`). What the caller can do in the cluster is bounded by the credential's own RBAC on the
@@ -130,4 +167,14 @@ cluster side, on top of Provenance's `Kubernetes.Access` gate and any [access po
 - The backend reaches the API server directly, so the cluster's control plane must be reachable from
   Provenance's network.
 - Use a least-privilege ServiceAccount token, not a cluster-admin credential, unless brokered
-  cluster-admin is genuinely intended.
+  cluster-admin is genuinely intended. **Cluster RBAC** generates one.
+- **`PROV_PUBLIC_URL` must be correct.** Both the downloadable kubeconfig and the
+  console's cluster list build their `server:` from it, so if it is wrong they
+  point somewhere unreachable and the failure looks like a broken cluster rather
+  than a misconfigured URL.
+- **A bearer token is not sent over plain HTTP.** `kubectl` (client-go) drops it,
+  so a kubeconfig edited to use `http://` fails with `missing access token` even
+  though the same token works over HTTPS. Serve Provenance over TLS.
+- Node rows in the built-in browser show a blank status. The browser reads
+  `status.phase`, which pods have and nodes do not — a node's readiness lives in
+  its conditions. The embedded console reports it correctly.
