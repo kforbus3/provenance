@@ -24,8 +24,15 @@ import (
 // Config is the fully-resolved application configuration.
 type Config struct {
 	// Server
-	HTTPAddr        string // e.g. ":8080"
-	PublicURL       string // external base URL, used for cookies/WebAuthn
+	HTTPAddr  string // e.g. ":8080"
+	PublicURL string // external base URL, used for cookies/WebAuthn
+
+	// Aldgate, the log collector. Empty disables the Logs page, which is the
+	// case for any deployment that has not stood one up -- so it is absent
+	// rather than broken, and the page says how to point at one.
+	AldgateURL      string
+	AldgateUser     string
+	AldgatePassword string
 	ShutdownTimeout time.Duration
 
 	// FIPS mode (opt-in policy profile). When true, every crypto choice routes
@@ -449,6 +456,9 @@ func Load() (*Config, error) {
 	c := &Config{
 		HTTPAddr:                    env("PROV_HTTP_ADDR", ":8080"),
 		PublicURL:                   env("PROV_PUBLIC_URL", "https://localhost:8443"),
+		AldgateURL:                  env("PROV_ALDGATE_URL", ""),
+		AldgateUser:                 env("PROV_ALDGATE_USER", "admin"),
+		AldgatePassword:             env("PROV_ALDGATE_PASSWORD", ""),
 		ShutdownTimeout:             envDuration("PROV_SHUTDOWN_TIMEOUT", 20*time.Second),
 		DatabaseURL:                 env("PROV_DATABASE_URL", "postgres://prov:prov@postgres:5432/prov?sslmode=disable"),
 		DBMaxConns:                  int32(envInt("PROV_DB_MAX_CONNS", 20)),

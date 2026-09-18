@@ -26,6 +26,7 @@ import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import KeyIcon from "@mui/icons-material/Key";
 import StorageIcon from "@mui/icons-material/Storage";
+import ArticleIcon from "@mui/icons-material/Article";
 import HubIcon from "@mui/icons-material/Hub";
 import InsightsIcon from "@mui/icons-material/Insights";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -124,6 +125,7 @@ export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
       { to: "/databases", label: "Databases", icon: <StorageIcon />, perm: "Database.Connect" },
       { to: "/kubernetes", label: "Kubernetes", icon: <HubIcon />, perm: "Kubernetes.Access" },
+      { to: "/logs", label: "Logs", icon: <ArticleIcon />, perm: "Logs.View" },
       { to: "/sessions", label: "Session Replay", icon: <HistoryIcon />, perm: "Session.Replay" },
     ],
   },

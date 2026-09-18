@@ -58,6 +58,11 @@ services:
       # Where to write the embedded Headlamp's cluster list. Unset disables it,
       # which is every deployment not running the kubernetes profile.
       PROV_HEADLAMP_KUBECONFIG: ${PROV_HEADLAMP_KUBECONFIG:-/headlamp/clusters/kubeconfig}
+      # Aldgate, for the Logs page. Empty disables it: the page then says how to
+      # point at a collector instead of reporting a fault.
+      PROV_ALDGATE_URL: ${PROV_ALDGATE_URL:-}
+      PROV_ALDGATE_USER: ${PROV_ALDGATE_USER:-admin}
+      PROV_ALDGATE_PASSWORD: ${PROV_ALDGATE_PASSWORD:-}
       PROV_ENV: ${PROV_ENV:-${FLEET_ENV:-development}}
       # Server timezone — schedules compute their next run in this zone. Set TZ
       # in .env to your local zone (e.g. America/New_York) so "03:00" means your
@@ -283,6 +288,10 @@ services:
     environment:
       # Resolved per request, so a stack without the kubernetes profile still boots.
       HEADLAMP_HOST: ${HEADLAMP_HOST:-headlamp:4466}
+      # The Aldgate log collector's Dashboards, proxied at /aldgate/. Points at
+      # a nonexistent name by default so a deployment without a collector gets a
+      # 502 on that one path instead of an nginx that will not boot.
+      ALDGATE_HOST: ${ALDGATE_HOST:-aldgate.invalid:5601}
       DNS_RESOLVER: ${DNS_RESOLVER:-127.0.0.11}
       VITE_API_BASE: ${PROV_PUBLIC_URL:-${FLEET_PUBLIC_URL:-http://localhost:8080}}
     depends_on:

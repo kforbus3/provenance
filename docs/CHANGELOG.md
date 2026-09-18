@@ -7,6 +7,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**Logs: the fleet's logs, in the same place as the fleet.** Provenance now
+searches an [Aldgate](https://github.com/kforbus3/aldgate) collector — syslog
+from every host, SNMP traps from network devices, stored in OpenSearch. A new
+**Logs** page searches by text, host, severity and time range, and shows which
+hosts and severities a match is spread across, which is how you get from
+"something is wrong" to "it is that machine". **Open log console** frames
+OpenSearch Dashboards under Provenance's own origin at `/aldgate/` for the
+analysis a table should not attempt: visualisations, alerting, Security
+Analytics.
+
+Searches are brokered server-side rather than from the browser, for the same
+three reasons the Kubernetes broker exists: the collector's credential never
+reaches a browser, every search is recorded as `logs.search` with its query and
+filters, and `Logs.View` decides who may run one. There is deliberately no write
+permission — changing a log is not something an audit trail should offer.
+
+`PROV_ALDGATE_URL` empty disables the page, and it says how to point at a
+collector instead of reporting a fault. See **[Logs](./aldgate.md)**.
+
+
 **An orphaned container no longer halts a rollout.** A container keeps the
 compose service label it was created with, so renaming or replacing a service in
 the file and bringing the project up without `--remove-orphans` leaves the old

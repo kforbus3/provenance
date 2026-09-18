@@ -63,6 +63,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/krl"
 	"github.com/kforbus3/provenance/backend/internal/lifecycle"
 	"github.com/kforbus3/provenance/backend/internal/livesessions"
+	"github.com/kforbus3/provenance/backend/internal/logsbroker"
 	"github.com/kforbus3/provenance/backend/internal/metrics"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/monitor"
@@ -1321,6 +1322,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	prefs.Mount(r, deps)
 	accesspolicyapi.Mount(r, deps)
 	k8sbroker.Mount(r, deps)
+	logsbroker.Mount(r, deps)
 	uebaapi.Mount(r, deps)
 	itsmapi.Mount(r, deps)
 	dr.MountPublic(r) // unauthenticated GET /dr/mode → {standby:false} so the SPA can detect posture

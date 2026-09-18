@@ -50,6 +50,7 @@ const LifecyclePage = lazy(() => named(import("./pages/LifecyclePage"), "Lifecyc
 const CommandPolicyPage = lazy(() => named(import("./pages/CommandPolicyPage"), "CommandPolicyPage"));
 const AccessPolicyPage = lazy(() => named(import("./pages/AccessPolicyPage"), "AccessPolicyPage"));
 const KubernetesPage = lazy(() => named(import("./pages/KubernetesPage"), "KubernetesPage"));
+const LogsPage = lazy(() => named(import("./pages/LogsPage"), "LogsPage"));
 const BehaviorPage = lazy(() => named(import("./pages/BehaviorPage"), "BehaviorPage"));
 const SitesPage = lazy(() => named(import("./pages/SitesPage"), "SitesPage"));
 const DisasterRecoveryPage = lazy(() => named(import("./pages/DisasterRecoveryPage"), "DisasterRecoveryPage"));
@@ -158,6 +159,7 @@ export function App() {
               <Route path="vault" element={<ProtectedRoute permission="Credential.View"><VaultPage /></ProtectedRoute>} />
               <Route path="databases" element={<ProtectedRoute permission="Database.Connect"><DatabasesPage /></ProtectedRoute>} />
               <Route path="kubernetes" element={<ProtectedRoute permission="Kubernetes.Access"><KubernetesPage /></ProtectedRoute>} />
+              <Route path="logs" element={<ProtectedRoute permission="Logs.View"><LogsPage /></ProtectedRoute>} />
               <Route path="enrollment" element={<ProtectedRoute permission="Host.Enroll"><EnrollmentPage /></ProtectedRoute>} />
               <Route path="certificates" element={<ProtectedRoute permission="Certificate.Manage"><CertificatesPage /></ProtectedRoute>} />
               <Route path="lifecycle" element={<ProtectedRoute permission="System.Configure"><LifecyclePage /></ProtectedRoute>} />
