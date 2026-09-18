@@ -568,16 +568,17 @@ services:
       - "-plugins-dir=/headlamp/plugins"
       - "-base-url=/headlamp"
       - "-kubeconfig=/headlamp/clusters/kubeconfig"
-      # Helm, in the console. Chart install/upgrade/rollback is most of what
-      # "manage a cluster" means in practice, and doing it elsewhere is the
-      # single-pane promise breaking at the most common task.
+      # Helm on the backend. NOTE: this does NOT put Helm in the console -- the
+      # bundled web frontend ships no Helm section, and the backend's Helm
+      # endpoints are gated behind an internal X-HEADLAMP_BACKEND-TOKEN that only
+      # Headlamp's desktop build sends. Verified against v0.43.0: /helm/* answers
+      # 403 "does not match HEADLAMP_BACKEND_TOKEN" from the browser, and the only
+      # shipped plugin is prometheus.
       #
-      # Helm 3 keeps release state in SECRETS in the release namespace, so this
-      # only works on a cluster joined at `administer`; at read/operate the
-      # cluster itself refuses, which is the correct answer rather than a bug.
-      # Provenance still decides who may use it: Secrets require
-      # Kubernetes.Administer on every brokered call, so enabling this does not
-      # widen anybody's access by itself.
+      # Left on so a later Headlamp that ships a Helm UI needs no redeploy. Such a
+      # UI would need a cluster joined at `administer`, because Helm 3 keeps
+      # release state in Secrets -- and Secrets require Kubernetes.Administer on
+      # every brokered call, so this flag widens nobody's access by itself.
       - "-enable-helm"
     environment:
       # Headlamp serves under a sub-path so it can be embedded rather than

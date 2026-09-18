@@ -247,11 +247,75 @@ not at all.
 
 ### What you get
 
-The full Headlamp surface — workloads, storage, network, logs, events, search —
-rendered against live data, with every call brokered and audited. A cluster
-overview shows real CPU, memory, pod and node counts; watches arrive over a
-WebSocket that Provenance's proxy upgrades and passes through (visible in the
-audit log as `k8s.proxy` with status `101`).
+Live data, every call brokered and audited. The cluster overview shows real CPU,
+memory, pod and node counts, and watches arrive over a WebSocket that
+Provenance's proxy upgrades and passes through (visible in the audit log as
+`k8s.proxy` with status `101`).
+
+**Creating things.** Two routes, and the first is easy to miss:
+
+- **A `+` beside the page heading** opens a form for that kind — *Create
+  Namespace* is a dialog with a Name field, not a YAML editor. It appears only
+  when your access allows the create, so an absent `+` means a permission is
+  missing, not a missing feature.
+- **`+ Create` at the bottom of the sidebar** takes arbitrary YAML, for kinds
+  with no dedicated form.
+
+**Per-object actions**, from the row menu or the object's own page:
+
+| Where | Actions |
+|---|---|
+| Any object (row menu) | Edit · Download · View YAML · Delete (with an optional *Force Delete*) |
+| Deployments, StatefulSets, … | Show logs · **Rollback** · **Restart** · **Scale** · Edit · Delete |
+| Pods | Show Logs · **Terminal / Exec** · **Attach** · Edit |
+| Nodes | **Cordon** · **Drain** · Edit · Delete |
+
+**Where everything lives.** Cluster overview, Namespaces, Nodes, Map (a
+dependency graph), Advanced Search (beta), and then:
+
+- **Workloads** — Pods, Deployments, StatefulSets, DaemonSets, ReplicaSets,
+  Jobs, CronJobs, JobSets
+- **Storage** — PersistentVolumeClaims, PersistentVolumes, StorageClasses,
+  VolumeAttributesClasses
+- **Network** — Services, Endpoints, EndpointSlices, Ingresses, IngressClasses,
+  NetworkPolicies
+- **Gateway (beta)** — Gateways, GatewayClasses, HTTPRoutes, GRPCRoutes,
+  ReferenceGrants, Backend TLS/Traffic policies
+- **Security** — ServiceAccounts, Roles, RoleBindings
+- **Configuration** — ConfigMaps, Secrets, HPAs, VPAs, PodDisruptionBudgets,
+  ResourceQuotas, LimitRanges, PriorityClasses, RuntimeClasses, Leases,
+  Mutating/ValidatingWebhookConfigurations
+- **Custom Resources** — CRDs and their instances, so anything a cluster has
+  installed is browsable without Provenance knowing about it in advance
+
+Press `/` anywhere to search.
+
+**Which actions your role allows.** The buttons follow the permission table
+above, so the surface changes per person rather than per cluster:
+
+| Permission | What becomes usable |
+|---|---|
+| `Kubernetes.Access` | Everything read-only: browse, logs, events, YAML, search |
+| `Kubernetes.Operate` | Scale · Restart · Rollback · Edit/Delete workloads · Terminal/Exec · Attach |
+| `Kubernetes.Administer` | Create/delete namespaces · Secrets (**including viewing them**) · ServiceAccounts, Roles, RoleBindings · CRDs · PersistentVolumes, StorageClasses · Cordon/Drain · ResourceQuotas, LimitRanges, NetworkPolicies |
+
+An action you expect and cannot see is a permission you do not have — either in
+Provenance, or in the RBAC the cluster was joined with. Check both: the cluster's
+level decides what the ServiceAccount *can* do, your role decides what you may
+ask it to do.
+
+**Prometheus metrics.** Headlamp ships a Prometheus plugin, so objects show a
+*Show Prometheus metrics* control. It needs Prometheus running in the cluster;
+without one the panel simply stays empty.
+
+**Helm is not available in this build.** Provenance starts Headlamp with
+`-enable-helm`, and the backend does expose Helm endpoints — but the bundled web
+frontend has no Helm section, and those endpoints are gated behind an internal
+`X-HEADLAMP_BACKEND-TOKEN` that only Headlamp's own desktop build sends. So chart
+install and rollback are **not** reachable from the console today; use `helm`
+with a downloaded kubeconfig, which goes through the same broker and is audited
+the same way. If a later Headlamp ships a Helm UI it will need a cluster joined
+at `administer`, because Helm keeps release state in Secrets.
 
 ## Use kubectl through the broker
 

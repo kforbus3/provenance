@@ -31,13 +31,19 @@ before the cluster credential is attached.
   caller's permissions on the way back. It can only narrow, never widen.
 - **A third onboarding level, `administer`**, grants the cluster — namespaces,
   CRDs, RBAC, storage, Secrets. Withholding it did not make the console safer, it
-  made it incomplete: a console that cannot create a namespace or install a chart
-  sends the operator back to a terminal, where nothing is recorded. `read` and
-  `operate` are unchanged, and it is not the default.
-- **Helm in the console** (`-enable-helm`). Chart install, upgrade and rollback is
-  most of what managing a cluster means in practice. Helm 3 keeps release state
-  in Secrets, so it works on a cluster joined at `administer` and is governed by
-  `Kubernetes.Administer` like any other Secret access.
+  made it incomplete: a console that cannot create a namespace sends the operator
+  back to a terminal, where nothing is recorded. Headlamp reveals the create
+  affordance once RBAC allows it — a `+` beside the page heading opening a typed
+  form, not a YAML editor. `read` and `operate` are unchanged, and it is not the
+  default.
+- **Helm is enabled on the Headlamp backend** (`-enable-helm`) but is **not
+  reachable from the console**: the bundled web frontend ships no Helm section,
+  and the backend's Helm endpoints are gated behind an internal
+  `X-HEADLAMP_BACKEND-TOKEN` that only Headlamp's desktop build sends. Use `helm`
+  with a downloaded kubeconfig, which goes through the same broker and is audited
+  the same way. The flag is left on so a later Headlamp that ships a Helm UI needs
+  no redeploy; such a UI would require a cluster joined at `administer`, since
+  Helm keeps release state in Secrets.
 
 > **Upgrade note.** The built-in Operator, Administrator and Super Administrator
 > roles are seeded with the new permissions and keep exactly what they had. A
