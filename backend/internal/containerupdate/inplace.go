@@ -109,10 +109,27 @@ func inPlaceFailure(dir string, services []string, out string) string {
 				"is readable there — it was probably deployed from somewhere else. Adopt "+
 				"its compose file as a stack to make it updatable.", dir)
 	case strings.Contains(out, "::NOSERVICE::"):
+		// Almost always an ORPHAN, not a wrong project.
+		//
+		// A container keeps the compose service label it was created with. Rename
+		// or delete that service in the file and bring the project up without
+		// --remove-orphans, and the old container keeps running under a name the
+		// file no longer knows. `docker compose ps` still lists it; `compose up -d
+		// <that service>` cannot, because there is nothing to bring up.
+		//
+		// The message this replaced said "this is not the project they came from",
+		// which was wrong in the case that actually happens: on a live host the
+		// caddy service had been replaced by nginx, the new container was healthy,
+		// and the six-day-old caddy container was still running beside it. It WAS
+		// that project -- the project had simply moved on without it.
 		return fmt.Sprintf(
-			"the compose project at %s does not define every service these containers "+
-				"name (%s), so this is not the project they came from.",
-			dir, strings.Join(services, ", "))
+			"the compose project at %s no longer defines %s. A container usually ends "+
+				"up like this when its service was renamed or replaced in the file and "+
+				"the project was brought up without --remove-orphans, leaving the old "+
+				"container running under a name the file has forgotten. Check whether it "+
+				"is still wanted; if not, remove it with "+
+				"`docker compose -f %s/docker-compose.yml up -d --remove-orphans`.",
+			dir, quotedList(services), dir)
 	}
 	return trimOutput(out)
 }
@@ -128,5 +145,27 @@ func inPlaceFailure(dir string, services []string, out string) string {
 // image is: halting a fleet-wide rollout on something permanently impossible
 // stops every other host for no gain, every time it runs.
 func unreachableProject(out string) bool {
-	return strings.Contains(out, "::NODIR::") || strings.Contains(out, "::NOACCESS::")
+	// NOSERVICE joins these: an orphaned container is not something a rollout can
+	// ever fix, so failing the HOST on it halts a fleet-wide rollout over one
+	// stale container and stops every other host for no gain. That is what
+	// happened -- a six-day-old orphan on one host halted the whole run. Reported
+	// as inapplicable, the way a host that has already moved past an image is.
+	return strings.Contains(out, "::NODIR::") ||
+		strings.Contains(out, "::NOACCESS::") ||
+		strings.Contains(out, "::NOSERVICE::")
+}
+
+// quotedList renders service names so an empty or odd one is still visible.
+func quotedList(services []string) string {
+	if len(services) == 0 {
+		return "the service this container names"
+	}
+	out := make([]string, 0, len(services))
+	for _, s := range services {
+		out = append(out, "\""+s+"\"")
+	}
+	if len(out) == 1 {
+		return "a service called " + out[0]
+	}
+	return "services called " + strings.Join(out, ", ")
 }

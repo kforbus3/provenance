@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**An orphaned container no longer halts a rollout.** A container keeps the
+compose service label it was created with, so renaming or replacing a service in
+the file and bringing the project up without `--remove-orphans` leaves the old
+container running under a name the file has forgotten. Provenance still offers to
+rebuild it — it is a real container on a real image — and `compose up -d <that
+service>` cannot work, because there is nothing to bring up. That failed the
+host, which halted the whole fleet-wide run over one stale container. It is now
+reported as inapplicable, like a host that has already moved past an image.
+
+The message was wrong too: it said "this is not the project they came from", when
+it *was* that project — the project had moved on without the container. It now
+says the service is no longer defined, and how to clear the orphan.
+
+---
+
 ## v1.7.1 — 2026-09-18
 
 **What a person may do to a Kubernetes cluster is now decided by their
