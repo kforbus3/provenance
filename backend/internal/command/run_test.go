@@ -31,3 +31,27 @@ func TestWhichHostsNeedACredentialFromTheVault(t *testing.T) {
 		}
 	}
 }
+
+// The hint exists because the output looks broken when it is not: RouterOS wraps
+// its own tables to a width an exec channel cannot tell it, so a working command
+// returns one character per line. It must not fire on Linux hosts (where nothing
+// is wrong) or on the `:put` form (which is the advice, and already formats).
+func TestTheRouterOSHintFiresOnlyWhereItHelps(t *testing.T) {
+	ros := &models.Host{Options: models.HostOptions{DeviceType: "routeros"}}
+	linux := &models.Host{}
+
+	if got := routerOSHint(ros, "/system/identity/print"); got == "" {
+		t.Error("a RouterOS print command got no hint, so the wrapped output looks like a failure")
+	}
+	if got := routerOSHint(ros, ":put [/system/identity/get name]"); got != "" {
+		t.Errorf("hint added to a :put command, which already prints plainly: %q", got)
+	}
+	if got := routerOSHint(linux, "/system/identity/print"); got != "" {
+		t.Errorf("hint added to a Linux host, where the output is not wrapped: %q", got)
+	}
+	// The legacy flag predates DeviceType and still marks a RouterOS host.
+	legacy := &models.Host{Options: models.HostOptions{RouterOSAPI: true}}
+	if got := routerOSHint(legacy, "/interface/print"); got == "" {
+		t.Error("a host marked by the legacy routerOsApi flag got no hint")
+	}
+}

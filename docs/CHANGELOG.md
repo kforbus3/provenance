@@ -7,6 +7,14 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**RouterOS output on the Commands page now says why it looks wrong.** RouterOS
+sizes its tables by asking the terminal where the cursor is and waiting for an
+answer; an exec channel cannot answer, so it wraps to roughly one column and
+`/system/identity/print` returns one letter per line. The command worked. The
+output now carries a short note pointing at the `:put` form, the terminal, or a
+RouterOS playbook — all of which format properly. (Requesting a pty was tried
+and is worse: it still wraps and then hangs on an interactive prompt.)
+
 **Run command now works on hosts that authenticate from the credential vault.**
 It dialled with Provenance-issued certificates only, so any host with
 `vault_password` or `vault_ssh_key` — in practice the network gear, since a

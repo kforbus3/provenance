@@ -173,21 +173,6 @@ func (s *Service) execOn(ctx context.Context, command string, h *models.Host, su
 	}
 	defer sess.Close()
 
-	// RouterOS wraps its output to the terminal width, and with no pty it assumes
-	// a width of about one character: `/system/identity/print` came back as
-	// "name: M", "i", "k", "r", "o"... one letter per line. The command ran fine;
-	// the answer was simply unreadable, which for a page whose entire output is
-	// text is the same as not working. Ask for a window it can format into.
-	//
-	// Only for RouterOS, using the device marker the host already carries. A pty
-	// on a Linux host would merge stderr into stdout and invite colour escapes
-	// into the transcript, for no gain on a one-shot command.
-	if h.IsRouterOS() {
-		if perr := sess.RequestPty("vt100", 50, 200, ssh.TerminalModes{ssh.ECHO: 0}); perr != nil {
-			return "pty: " + perr.Error(), -1, true
-		}
-	}
-
 	var buf cappedBuffer
 	sess.Stdout = &buf
 	sess.Stderr = &buf
@@ -209,7 +194,7 @@ func (s *Service) execOn(ctx context.Context, command string, h *models.Host, su
 				return buf.String() + "\n[error: " + rerr.Error() + "]", -1, true
 			}
 		}
-		return buf.String() + fmt.Sprintf("\n[exit code %d]", code), code, code != 0
+		return buf.String() + routerOSHint(h, command) + fmt.Sprintf("\n[exit code %d]", code), code, code != 0
 	}
 }
 
@@ -291,6 +276,28 @@ func (s *Service) connect(ctx context.Context, h *models.Host, sudo bool, userID
 // silently dialling with a certificate the host was never going to accept.
 func needsInjection(h *models.Host) bool {
 	return h.AuthMethod != "" && h.AuthMethod != "prov_cert"
+}
+
+// routerOSHint explains unreadable RouterOS output instead of leaving the
+// operator to wonder whether the command worked.
+//
+// RouterOS discovers the terminal width by asking where the cursor is (ESC[6n)
+// and waiting for a reply. Over an exec channel nobody replies, so it assumes
+// about one column and prints a table one character per line:
+// "name: M" / "i" / "k" / "r" / "o"...
+//
+// Requesting a pty does not fix it — measured, not assumed: it still gets no
+// reply, still wraps to one column, and then drops into an interactive prompt
+// that never exits, so the run hangs until it is timed out. `without-paging`
+// does not help either. The output is therefore left exactly as the device sent
+// it, and the operator is pointed at the two things that do work.
+func routerOSHint(h *models.Host, command string) string {
+	if !h.IsRouterOS() || strings.Contains(command, ":put") {
+		return ""
+	}
+	return "\n[note: RouterOS wrapped this output itself — it sizes tables to a terminal" +
+		"\n that an exec channel cannot provide. `:put [/system/identity/get name]` prints" +
+		"\n plainly, and the terminal or a RouterOS playbook gives full formatting.]"
 }
 
 // dialAuth opens a connection using an injected credential, trying the same
