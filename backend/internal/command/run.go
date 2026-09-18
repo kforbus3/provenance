@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/kforbus3/provenance/backend/internal/commandpolicy"
+	"github.com/kforbus3/provenance/backend/internal/credinject"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/sshgw"
@@ -141,7 +142,7 @@ func (s *Service) runOne(ctx context.Context, command string, h *models.Host, us
 		return out, code, failed
 	}
 
-	return s.execOn(ctx, command, h, sudo)
+	return s.execOn(ctx, command, h, sudo, userID)
 }
 
 // RunScript executes a script on a host for a PRODUCT feature -- a stack deploy,
@@ -156,31 +157,13 @@ func (s *Service) runOne(ctx context.Context, command string, h *models.Host, us
 //
 // Always the privileged tier: bringing a stack up needs the Docker socket.
 func (s *Service) RunScript(ctx context.Context, script string, h *models.Host) (string, int, bool) {
-	return s.execOn(ctx, script, h, true)
+	return s.execOn(ctx, script, h, true, uuid.Nil)
 }
 
-func (s *Service) execOn(ctx context.Context, command string, h *models.Host, sudo bool) (string, int, bool) {
-	// Same privilege tier as a terminal: Host.Sudo lands in the privileged account,
-	// everyone else in the host's login-only account. The jump hop always uses the
-	// privileged system principals — the jump host trusts only "fleet" — while the
-	// host hop carries the tier's principals, so sshd, not just this code, decides
-	// which account opens.
-	jumpSigner, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), runCertTTL)
-	if err != nil {
-		return "could not issue jump credential: " + err.Error(), -1, true
-	}
-	// Privileged runs present the same certificate to both hops; the login-only tier
-	// needs its own, since its principals are not trusted by the jump host.
-	loginUser, hostSigner := h.SSHUser, jumpSigner
-	if !sudo {
-		loginUser = h.SSHUser + "-login"
-		if hostSigner, err = s.issuer.SystemSigner(ctx, s.issuer.SystemHostLoginPrincipals(h.ID), runCertTTL); err != nil {
-			return "could not issue host credential: " + err.Error(), -1, true
-		}
-	}
-	conn, derr := s.dial(ctx, jumpSigner, hostSigner, h, loginUser)
+func (s *Service) execOn(ctx context.Context, command string, h *models.Host, sudo bool, userID uuid.UUID) (string, int, bool) {
+	conn, derr := s.connect(ctx, h, sudo, userID)
 	if derr != nil {
-		return "host unreachable: " + derr.Error(), -1, true
+		return derr.Error(), -1, true
 	}
 	defer conn.Close()
 
@@ -213,6 +196,103 @@ func (s *Service) execOn(ctx context.Context, command string, h *models.Host, su
 		}
 		return buf.String() + fmt.Sprintf("\n[exit code %d]", code), code, code != 0
 	}
+}
+
+// connect opens the SSH connection for a run, by whichever means the host
+// actually authenticates.
+//
+// This used to be cert-only, and that made "Run command" quietly unusable for a
+// whole class of host. Anything with auth_method vault_password or vault_ssh_key
+// — in practice the network gear, because a switch will never trust our CA —
+// failed here with "unable to authenticate, attempted methods [none publickey]":
+// the credential was sitting in Provenance's vault and this path never asked for
+// it. The terminal and the playbook runner both inject, so the same device was
+// reachable from one page of the same product and unreachable from another, with
+// an error that pointed at the device rather than at us.
+//
+// The requester's ID is passed through so a credential with a check-out policy is
+// only injected while that person holds an active check-out — the rule the
+// terminal enforces. A product-driven script (a stack deploy) has no requester
+// and takes the system path, like the monitor.
+func (s *Service) connect(ctx context.Context, h *models.Host, sudo bool, userID uuid.UUID) (*sshgw.Conn, error) {
+	if needsInjection(h) {
+		key, kerr := s.cfg.VaultKey()
+		if kerr != nil {
+			return nil, fmt.Errorf("credential injection failed: %w", kerr)
+		}
+		var (
+			inj  *credinject.Injection
+			ierr error
+		)
+		if userID == uuid.Nil {
+			inj, ierr = credinject.ForSystem(ctx, s.store, key, s.cfg.ExtSecret(), h)
+		} else {
+			inj, ierr = credinject.For(ctx, s.store, key, s.cfg.ExtSecret(), h, userID)
+		}
+		if ierr != nil {
+			return nil, fmt.Errorf("credential injection failed: %w", ierr)
+		}
+		if inj != nil {
+			// The credential names the account, so the Host.Sudo tier has nothing to
+			// select between: there is no "-login" companion account on a switch.
+			// This is what the terminal does once injection applies.
+			conn, derr := s.dialAuth(ctx, h, inj)
+			if derr != nil {
+				return nil, fmt.Errorf("host unreachable: %w", derr)
+			}
+			return conn, nil
+		}
+	}
+
+	// Same privilege tier as a terminal: Host.Sudo lands in the privileged account,
+	// everyone else in the host's login-only account. The jump hop always uses the
+	// privileged system principals — the jump host trusts only "fleet" — while the
+	// host hop carries the tier's principals, so sshd, not just this code, decides
+	// which account opens.
+	jumpSigner, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), runCertTTL)
+	if err != nil {
+		return nil, fmt.Errorf("could not issue jump credential: %w", err)
+	}
+	// Privileged runs present the same certificate to both hops; the login-only tier
+	// needs its own, since its principals are not trusted by the jump host.
+	loginUser, hostSigner := h.SSHUser, jumpSigner
+	if !sudo {
+		loginUser = h.SSHUser + "-login"
+		if hostSigner, err = s.issuer.SystemSigner(ctx, s.issuer.SystemHostLoginPrincipals(h.ID), runCertTTL); err != nil {
+			return nil, fmt.Errorf("could not issue host credential: %w", err)
+		}
+	}
+	conn, derr := s.dial(ctx, jumpSigner, hostSigner, h, loginUser)
+	if derr != nil {
+		return nil, fmt.Errorf("host unreachable: %w", derr)
+	}
+	return conn, nil
+}
+
+// needsInjection says whether a host authenticates with something out of the
+// vault rather than a certificate Provenance issues itself. Written as "not a
+// certificate" rather than a list of vault methods so a method added later is
+// treated as needing a credential — the safe direction, since the alternative is
+// silently dialling with a certificate the host was never going to accept.
+func needsInjection(h *models.Host) bool {
+	return h.AuthMethod != "" && h.AuthMethod != "prov_cert"
+}
+
+// dialAuth opens a connection using an injected credential, trying the same
+// address candidates as the certificate path.
+func (s *Service) dialAuth(ctx context.Context, h *models.Host, inj *credinject.Injection) (*sshgw.Conn, error) {
+	var lastErr error
+	for _, addr := range dedupe([]string{h.WGAddress, h.Address, h.Hostname}) {
+		c, derr := s.gw.DialSystemAuthViaJump(ctx, h.ID, addr, h.SSHPort, inj.LoginUser, inj.Auth)
+		if derr == nil {
+			return c, nil
+		}
+		lastErr = derr
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no reachable address")
+	}
+	return nil, lastErr
 }
 
 // dial opens a connection to the host (WireGuard overlay first, then management

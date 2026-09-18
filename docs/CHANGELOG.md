@@ -7,6 +7,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**Run command now works on hosts that authenticate from the credential vault.**
+It dialled with Provenance-issued certificates only, so any host with
+`vault_password` or `vault_ssh_key` — in practice the network gear, since a
+switch will never trust our CA — failed with "unable to authenticate, attempted
+methods [none publickey]". The terminal and the playbook runner both inject the
+credential, so the same device was reachable from one page of the product and
+unreachable from another, with an error that blamed the device. The requester is
+passed through, so a credential with a check-out policy is only used while that
+person holds an active check-out, exactly as in the terminal.
+
+
 **The Logs page now covers SNMP traps as well as syslog.** Aldgate normalises
 traps into the same fields, so one search spans the network gear and the
 machines: `severity_code <= 3` finds a switch port dropping next to the kernel
