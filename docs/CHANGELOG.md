@@ -7,6 +7,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**A log filter that matched nothing blanked the page.** Search results returned
+`null` for their host and severity aggregations when nothing matched, the page
+called `.map` on null, and React unmounted the whole tree — a blank screen with
+no error, for the most ordinary case there is. `entries` was guarded against
+this and the two aggregations were not, which only moved the crash. Every list
+is now an empty array at the source, and the page treats a missing list as empty
+regardless: no amount of server-side care is worth betting a whole page on.
+
+
 **Logs: the fleet's logs, in the same place as the fleet.** Provenance now
 searches an [Aldgate](https://github.com/kforbus3/aldgate) collector — syslog
 from every host, SNMP traps from network devices, stored in OpenSearch. A new

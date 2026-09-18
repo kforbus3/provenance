@@ -167,18 +167,22 @@ export function LogsPage() {
       )}
       {results.isError && <Alert severity="error" sx={{ mb: 2 }}>{err || "The search failed."}</Alert>}
 
+      {/* ?? [] on every list: the server now always sends arrays, but a page
+          that unmounts itself because one field came back null is a blank
+          screen with no error, and no amount of server-side care is worth
+          betting a whole page on. */}
       {results.data && (
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
           <Chip size="small" label={`${results.data.total.toLocaleString()} matched`} />
           <Chip size="small" variant="outlined" label={`${results.data.tookMs} ms`} />
           {/* Which hosts and severities the match is spread across: how an
               operator gets from "something is wrong" to "it is that machine". */}
-          {results.data.bySeverity.map((s) => (
+          {(results.data.bySeverity ?? []).map((s) => (
             <Chip key={s.key} size="small" label={`${s.key}: ${s.count}`}
               color={SEV_COLOUR[s.key] ?? "default"}
               variant={SEV_COLOUR[s.key] === "default" ? "outlined" : "filled"} />
           ))}
-          {results.data.byHost.slice(0, 8).map((h) => (
+          {(results.data.byHost ?? []).slice(0, 8).map((h) => (
             <Chip key={h.key} size="small" variant="outlined" label={`${h.key}: ${h.count}`}
               onClick={() => { setHost(h.key); setApplied((a) => ({ ...a, host: h.key })); }} />
           ))}

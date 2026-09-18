@@ -92,4 +92,20 @@ describe("LogsPage", () => {
     const link = await screen.findByRole("link", { name: /Open log console/ });
     expect(link).toHaveAttribute("href", "/aldgate/");
   });
+
+  // The exact shape the server used to return for a host with nothing in the
+  // window. keith hit this filtering by "docker": React called .map on null,
+  // unmounted the tree, and the page went blank with no error anywhere.
+  it("does not blank out when the server sends null aggregations", async () => {
+    vi.mocked(logsApi.searchLogs).mockResolvedValue({
+      total: 0, entries: [],
+      byHost: null as unknown as logsApi.LogBucket[],
+      bySeverity: null as unknown as logsApi.LogBucket[],
+      tookMs: 19,
+    });
+    renderPage();
+    // The page must still render its own furniture rather than disappearing.
+    expect(await screen.findByText(/Nothing matched/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Search$/ })).toBeInTheDocument();
+  });
 });

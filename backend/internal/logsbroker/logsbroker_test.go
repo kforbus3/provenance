@@ -126,3 +126,52 @@ func TestTheLimitIsClamped(t *testing.T) {
 		}
 	}
 }
+
+// An empty result must marshal with EMPTY ARRAYS, never null.
+//
+// This is the bug keith hit: filtering by a host with nothing in the window
+// returned {"byHost":null,"bySeverity":null}, the page called .map on null, and
+// React unmounted the tree -- a blank page, no error, for the most ordinary
+// case there is. Entries was guarded and the aggregations were not, which only
+// moved the crash.
+func TestAnEmptyResultMarshalsAsArraysNotNull(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// What OpenSearch returns for a filter that matched nothing.
+		_, _ = w.Write([]byte(`{"took":19,"hits":{"total":{"value":0},"hits":[]},
+			"aggregations":{"by_host":{"buckets":[]},"by_severity":{"buckets":[]}}}`))
+	}))
+	defer srv.Close()
+
+	res, err := New(srv.URL, "", "").Search(context.Background(), Query{Host: "docker"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	blob, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(blob)
+	for _, nope := range []string{`"entries":null`, `"byHost":null`, `"bySeverity":null`} {
+		if strings.Contains(got, nope) {
+			t.Errorf("response contains %s, which blanks the page:\n%s", nope, got)
+		}
+	}
+	for _, want := range []string{`"entries":[]`, `"byHost":[]`, `"bySeverity":[]`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("response is missing %s:\n%s", want, got)
+		}
+	}
+}
+
+// Same guarantee when OpenSearch omits the aggregations entirely.
+func TestMissingAggregationsStillMarshalAsArrays(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"took":3,"hits":{"total":{"value":0},"hits":[]}}`))
+	}))
+	defer srv.Close()
+	res, _ := New(srv.URL, "", "").Search(context.Background(), Query{})
+	blob, _ := json.Marshal(res)
+	if strings.Contains(string(blob), "null") {
+		t.Errorf("a response with no aggregations produced null: %s", blob)
+	}
+}

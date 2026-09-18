@@ -187,12 +187,20 @@ func (c *Client) Search(ctx context.Context, q Query) (*Result, error) {
 		return nil, fmt.Errorf("could not read the collector's reply: %w", err)
 	}
 
-	out := &Result{Total: resp.Hits.Total.Value, Took: resp.Took}
+	// Every slice starts empty, not nil. A nil slice marshals to JSON `null`,
+	// and the page then calls .map on null and unmounts the whole tree -- a
+	// BLANK PAGE, with no error message anywhere, for the ordinary case of a
+	// filter that matched nothing. Guarding only Entries (which is what this did)
+	// moves the crash to the aggregations rather than removing it.
+	out := &Result{
+		Total:   resp.Hits.Total.Value,
+		Took:    resp.Took,
+		Entries: []Entry{},
+		ByHost:  []Bucket{},
+		BySev:   []Bucket{},
+	}
 	for _, h := range resp.Hits.Hits {
 		out.Entries = append(out.Entries, entryFrom(h.Source))
-	}
-	if out.Entries == nil {
-		out.Entries = []Entry{}
 	}
 	for _, b := range resp.Aggregations.ByHost.Buckets {
 		out.ByHost = append(out.ByHost, Bucket{Key: b.Key, Count: b.DocCount})

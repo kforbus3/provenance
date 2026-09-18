@@ -70,10 +70,17 @@ enables `ForwardToSyslog`, and writes a disk-queued forwarding rule so a
 collector outage does not become a hole in that host's history. Container logs
 are separate; see `enroll-docker-logs.yml`.
 
+It also forces **RFC5424** on the forwarding rule. rsyslog's default, RFC3164,
+sends `Sep 18 16:32:25` with no timezone, so the collector reads it as UTC and
+files a host running in EDT four hours in the past. Nothing errors; the host
+simply vanishes from every time-based search, which reads exactly like a machine
+that stopped sending. If you enrol a host by hand, forward RFC5424.
+
 ## Fields
 
 Every message is normalised, which is what makes it searchable rather than
 greppable: `host` and `host_short`, `program`, `severity` with a numeric
 `severity_code` (so "error or worse" is a range), `facility`, `message`, and
 both `timestamp` (what the sender claimed) and `received_at` (when it arrived) —
-they differ when a device's clock is wrong.
+they differ when a device's clock is wrong — or when it is sending RFC3164 and
+Aldgate's `ALDGATE_TIMEZONE` is not set to the LAN's offset.
