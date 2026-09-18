@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.7.1 — 2026-09-18
 
 **What a person may do to a Kubernetes cluster is now decided by their
 Provenance role.** Every operator reaches a cluster through one registered
