@@ -48,9 +48,11 @@ and retention is the collector's business.
 | `PROV_ALDGATE_PASSWORD` | From the collector's `.env`. |
 | `ALDGATE_HOST` | `host:port` of Dashboards, for the `/aldgate/` proxy. Defaults to a nonexistent name so a deployment without a collector gets a 502 on that one path instead of an nginx that will not start. |
 
-The collector must serve Dashboards under the sub-path, or the embed is a blank
-page with no error anywhere: set `ALDGATE_BASEPATH=/aldgate` and
-`ALDGATE_REWRITE_BASEPATH=true` in Aldgate's `.env`.
+The collector must serve Dashboards under the sub-path: set
+`ALDGATE_BASEPATH=/aldgate` and `ALDGATE_REWRITE_BASEPATH=true` in Aldgate's
+`.env`. Provenance's nginx then forwards the `/aldgate/` prefix **intact** —
+Dashboards strips it itself, and stripping it in nginx as well makes every
+request a 404 while the proxy looks correct.
 
 The collector also needs `ALDGATE_API_BIND=0.0.0.0` when Provenance runs on a
 different machine, which it does here — the broker cannot reach a loopback port
