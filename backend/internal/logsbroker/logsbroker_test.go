@@ -73,8 +73,40 @@ func TestSearchBuildsTheExpectedQuery(t *testing.T) {
 	}
 }
 
-// An empty collector answers 404 on syslog-*. That is a new collector, not an
-// error, and the UI must show an empty result rather than a failure.
+// Both streams, or the page lies by omission: a switch's SNMP traps live in
+// snmp-*, and a search that only covers syslog-* reports a quiet network while
+// the trap saying a link went down sits one index away. Asserted on the request
+// path rather than the constant, so narrowing the search anywhere -- here or in
+// Hosts -- fails the test.
+func TestSearchCoversSyslogAndSnmp(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		_, _ = w.Write([]byte(`{"took":1,"hits":{"total":{"value":0},"hits":[]}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "admin", "pw")
+	if _, err := c.Search(context.Background(), Query{Host: "coreswitch"}); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if _, err := c.Hosts(context.Background(), "now-1h"); err != nil {
+		t.Fatalf("hosts: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("want 2 requests, got %d: %v", len(paths), paths)
+	}
+	for _, p := range paths {
+		for _, want := range []string{"syslog-*", "snmp-*", "ignore_unavailable=true"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("request path %q is missing %q — traps or a fresh collector would be invisible", p, want)
+			}
+		}
+	}
+}
+
+// An empty collector answers 404. That is a new collector, not an error, and
+// the UI must show an empty result rather than a failure.
 func TestAnEmptyCollectorIsNotAnError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

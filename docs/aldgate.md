@@ -84,3 +84,9 @@ greppable: `host` and `host_short`, `program`, `severity` with a numeric
 both `timestamp` (what the sender claimed) and `received_at` (when it arrived) —
 they differ when a device's clock is wrong — or when it is sending RFC3164 and
 Aldgate's `ALDGATE_TIMEZONE` is not set to the LAN's offset.
+
+SNMP traps carry the same fields and are searched together with syslog, because
+a switch's trap and the kernel message from the host behind it are usually the
+same incident seen twice — a page that showed one without the other would
+quietly report a healthy network. `log_type` tells them apart (`syslog` or
+`snmp_trap`) when you want only one.

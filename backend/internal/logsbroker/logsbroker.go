@@ -42,6 +42,14 @@ type Client struct {
 // Nil rather than an error: a deployment with no log collector is an ordinary
 // deployment, and the Logs page tells the operator how to point at one instead
 // of reporting a fault.
+// searchPath covers BOTH streams, and that is the whole point of the page: a
+// syslog line from a switch and an SNMP trap from the same switch are the same
+// event seen twice, and a search that returns one without the other quietly
+// tells you your network was fine. Aldgate normalises traps into the same
+// fields, so one query spans both. A wildcard that matches no index is ignored
+// rather than a 404, so a collector with no traps yet still searches cleanly.
+const searchPath = "/syslog-*,snmp-*/_search?ignore_unavailable=true"
+
 func New(baseURL, user, password string) *Client {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil
@@ -155,7 +163,7 @@ func (c *Client) Search(ctx context.Context, q Query) (*Result, error) {
 		"track_total_hits": 10000,
 	}
 
-	raw, err := c.post(ctx, "/syslog-*/_search", body)
+	raw, err := c.post(ctx, searchPath, body)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +237,7 @@ func (c *Client) Hosts(ctx context.Context, since string) ([]Bucket, error) {
 			"by_host": map[string]any{"terms": map[string]any{"field": "host", "size": 200}},
 		},
 	}
-	raw, err := c.post(ctx, "/syslog-*/_search", body)
+	raw, err := c.post(ctx, searchPath, body)
 	if err != nil {
 		return nil, err
 	}
@@ -319,8 +327,8 @@ func (c *Client) post(ctx context.Context, path string, body any) ([]byte, error
 		return nil, fmt.Errorf("the log collector rejected Provenance's credentials (HTTP %d) — check PROV_ALDGATE_USER and PROV_ALDGATE_PASSWORD", resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		// A 404 on syslog-* means no index exists yet, which is what a brand new
-		// collector looks like. Not an error worth showing as one.
+		// A 404 means no index exists yet, which is what a brand new collector
+		// looks like. Not an error worth showing as one.
 		return nil, errNoData
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

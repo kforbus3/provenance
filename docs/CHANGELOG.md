@@ -7,6 +7,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**The Logs page now covers SNMP traps as well as syslog.** Aldgate normalises
+traps into the same fields, so one search spans the network gear and the
+machines: `severity_code <= 3` finds a switch port dropping next to the kernel
+message from the host behind it. Searching only syslog meant a page that could
+report a quiet network while the trap saying otherwise sat one index away.
+
+
 **A log filter that matched nothing blanked the page.** Search results returned
 `null` for their host and severity aggregations when nothing matched, the page
 called `.map` on null, and React unmounted the whole tree — a blank screen with
