@@ -173,6 +173,21 @@ func (s *Service) execOn(ctx context.Context, command string, h *models.Host, su
 	}
 	defer sess.Close()
 
+	// RouterOS wraps its output to the terminal width, and with no pty it assumes
+	// a width of about one character: `/system/identity/print` came back as
+	// "name: M", "i", "k", "r", "o"... one letter per line. The command ran fine;
+	// the answer was simply unreadable, which for a page whose entire output is
+	// text is the same as not working. Ask for a window it can format into.
+	//
+	// Only for RouterOS, using the device marker the host already carries. A pty
+	// on a Linux host would merge stderr into stdout and invite colour escapes
+	// into the transcript, for no gain on a one-shot command.
+	if h.IsRouterOS() {
+		if perr := sess.RequestPty("vt100", 50, 200, ssh.TerminalModes{ssh.ECHO: 0}); perr != nil {
+			return "pty: " + perr.Error(), -1, true
+		}
+	}
+
 	var buf cappedBuffer
 	sess.Stdout = &buf
 	sess.Stderr = &buf
