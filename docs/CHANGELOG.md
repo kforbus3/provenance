@@ -7,6 +7,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**An orphan container is no longer reported as "already past" the update.** A
+rebuild rollout of `caddy:2-alpine` skipped its only host saying "this host was
+already past every image in this rollout — its compose files name newer tags than
+this rollout's target". Every part of that was false: the host ran an *older*
+digest than the registry, its compose file named nothing newer, and no rollout
+could ever change it, because the container is an orphan — the compose project no
+longer defines that service, so there is nothing for `up -d` to recreate. The
+engine had the right explanation and logged it, then replaced it with that summary
+on the host's row, so the rollout looked complete while the Updates page went on
+correctly offering the update. Orphans are now a distinct outcome carrying the
+real reason and the command that resolves it; a rollout that updated some images
+and could not update others says so instead of reporting only the successes.
+
+**The monitor no longer logs into network devices to see if they are up.** It
+probed every host over authenticated SSH each 30 seconds. On a RouterOS device
+the probe collects nothing — every fact command is a syntax error — so the login
+existed only to prove reachability, while writing "admin logged in" and "admin
+logged out" into the device's own log twice a minute: about 5,700 lines a day per
+device, all of it Provenance, and all of it now shipped to the log collector
+where it buried everything real. Those devices are checked by reading the SSH
+identification string instead, which is silent on the device (measured on the
+hardware). The trade is explicit: a device with a rotated credential now reads as
+online, because it is — the terminal, a command run or a playbook will say
+otherwise the moment anyone uses it.
+
+
 **RouterOS output on the Commands page now says why it looks wrong.** RouterOS
 sizes its tables by asking the terminal where the cursor is and waiting for an
 answer; an exec channel cannot answer, so it wraps to roughly one column and

@@ -4,6 +4,7 @@
 package monitor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -595,6 +596,60 @@ func windowsPrimaryIP(ifaces []winrm.Iface, wgAddr string) string {
 // wedged host costs a slot for seconds rather than for ever.
 const probeTimeout = 45 * time.Second
 
+// probesWithoutLogin reports whether this host's liveness should be checked by
+// reading the SSH banner instead of logging in.
+//
+// True exactly where a login buys nothing: a device the probe collects no facts
+// from, because every fact command returns a syntax error. Authenticating there
+// only writes "admin logged in"/"admin logged out" into the device's own log
+// twice a minute forever.
+func probesWithoutLogin(h *models.Host) bool {
+	return h.IsRouterOS()
+}
+
+// bannerProbe reports whether sshd on this address is answering, WITHOUT logging
+// in. It opens a TCP tunnel through the jump host, reads the SSH identification
+// string the server sends first, and hangs up.
+//
+// Used for devices where a successful login proves nothing we do not already
+// know. A RouterOS switch returns a syntax error for every fact command, so the
+// probe collected nothing from it and the login existed only to prove
+// reachability -- while writing two log lines on the device every 30 seconds:
+// "admin logged in", "admin logged out", around 5,700 a day per device, all of
+// them Provenance. keith saw them arriving in the log collector and asked why
+// something was logging into his access point constantly. Nothing was; this was.
+//
+// Measured on the real hardware: three banner reads produced no log entry at
+// all, while the authenticated probes either side of them produced the usual
+// pair. What this gives up is the credential check -- a device with a rotated
+// password now reads as online, because it IS online. That is what this field
+// claims, and the terminal, a command run or a playbook will say otherwise the
+// moment anyone actually uses the credential.
+func (m *Monitor) bannerProbe(ctx context.Context, h *models.Host, addr string) (int, error) {
+	start := time.Now()
+	tunnel, jump, err := m.gw.DialSystemRawViaJump(ctx, h.ID, addr, h.SSHPort)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = tunnel.Close()
+		_ = jump.Close()
+	}()
+	// The server speaks first in SSH, so there is nothing to send. A short
+	// deadline: a device that completes the handshake and then says nothing is
+	// not healthy, and must not hold a worker slot waiting.
+	_ = tunnel.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf := make([]byte, 64)
+	n, rerr := tunnel.Read(buf)
+	if rerr != nil && n == 0 {
+		return 0, fmt.Errorf("no SSH identification from %s: %w", addr, rerr)
+	}
+	if !bytes.HasPrefix(buf[:n], []byte("SSH-")) {
+		return 0, fmt.Errorf("%s answered on port %d but is not speaking SSH", addr, h.SSHPort)
+	}
+	return int(time.Since(start).Milliseconds()), nil
+}
+
 func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.Injection, h *models.Host) (models.HostStatus, *models.HostInventory, *models.HostMetrics) {
 	// A ceiling on one host, because the sweep's own context is the server's and
 	// has no deadline at all. A host that completes its TCP handshake and then
@@ -630,6 +685,8 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	var conn *sshgw.Conn
 	var dialErr error
 	var usedAddr string
+	// Tracked apart from conn because a banner probe succeeds without one.
+	reached := false
 	{
 		type result struct {
 			conn *sshgw.Conn
@@ -647,9 +704,16 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 				start := time.Now()
 				var c *sshgw.Conn
 				var err error
-				if inj != nil {
+				switch {
+				case probesWithoutLogin(h):
+					// Liveness without a login; see bannerProbe. No connection to
+					// hand back, because there is nothing this probe would run.
+					lat, berr := m.bannerProbe(dctx, h, addr)
+					results <- result{nil, addr, lat, berr}
+					return
+				case inj != nil:
 					c, err = m.gw.DialSystemAuthViaJump(dctx, h.ID, addr, h.SSHPort, loginUser, inj.Auth)
-				} else {
+				default:
 					c, err = m.gw.DialWithSigner(dctx, signer, addr, h.SSHPort, loginUser)
 				}
 				results <- result{c, addr, int(time.Since(start).Milliseconds()), err}
@@ -668,10 +732,11 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 				}
 				continue
 			}
-			if conn == nil || (r.addr == h.WGAddress && h.WGAddress != "") {
+			if !reached || (r.addr == h.WGAddress && h.WGAddress != "") {
 				if conn != nil {
 					conn.Close()
 				}
+				reached = true
 				conn, usedAddr = r.conn, r.addr
 				lat := r.lat
 				st.LatencyMS = &lat
@@ -683,25 +748,23 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 		// If we reached it via the WireGuard address, the overlay is healthy.
 		st.WGOK = usedAddr == h.WGAddress && h.WGAddress != ""
 	}
-	if dialErr != nil || conn == nil {
+	if dialErr != nil || !reached {
 		st.Status = "offline"
 		st.SSHOK = false
 		st.LastError = trunc(errStr(dialErr), 240)
 		st.LastFailureAt = &now
 		return st, nil, nil
 	}
-	defer conn.Close()
 	st.SSHOK = true
 	st.Status = "online"
 	st.LastSuccessAt = &now
 
-	// RouterOS (and other non-POSIX network devices) aren't Linux hosts — the fact/metric
-	// commands below return a RouterOS "syntax error" that would land in the OS field. A
-	// successful SSH connect is enough to report the device online; set a clean OS label
-	// (overwriting any prior garbage) and skip Linux fact collection.
+	// Returned BEFORE touching conn: the RouterOS path proved reachability with a
+	// banner read and has no connection to close or run anything on.
 	if h.IsRouterOS() {
 		return st, &models.HostInventory{OSName: "MikroTik RouterOS", CollectedAt: &now}, nil
 	}
+	defer conn.Close()
 
 	if out, err := runCmd(conn, "cat /proc/uptime 2>/dev/null"); err == nil {
 		st.UptimeSeconds = parseUptime(out)

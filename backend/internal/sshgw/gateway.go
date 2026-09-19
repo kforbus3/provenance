@@ -354,6 +354,39 @@ func (g *Gateway) DialSystemAuthViaJump(ctx context.Context, hostID uuid.UUID, h
 	return &Conn{Client: ssh.NewClient(ncc, chans, reqs), jump: jumpClient}, nil
 }
 
+// DialSystemRawViaJump opens a raw TCP tunnel to a host through the jump host in
+// a SYSTEM context — no user session, and no SSH authentication to the host
+// itself. The caller gets the bytes and decides what to do with them.
+//
+// It exists for liveness checks that must not log in. A RouterOS device writes
+// "admin logged in"/"admin logged out" for every authenticated connection, so a
+// 30-second monitor sweep produced ~5,700 log lines a day per switch — all of
+// them Provenance, none of them a person, and all of them shipped to the log
+// collector where they buried everything real. Reading the SSH banner proves
+// sshd is answering and leaves no trace on the device.
+//
+// Both returned handles must be closed by the caller.
+func (g *Gateway) DialSystemRawViaJump(ctx context.Context, hostID uuid.UUID, host string, port int) (net.Conn, *ssh.Client, error) {
+	if g.issuer == nil {
+		return nil, nil, fmt.Errorf("gateway issuer unavailable")
+	}
+	signer, err := g.issuer.SystemSigner(ctx, g.issuer.SystemHostPrincipals(hostID), 10*time.Minute)
+	if err != nil {
+		return nil, nil, err
+	}
+	jumpClient, err := g.DialJumpWithSigner(ctx, signer)
+	if err != nil {
+		return nil, nil, err
+	}
+	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	tunnel, err := jumpClient.DialContext(ctx, "tcp", target)
+	if err != nil {
+		_ = jumpClient.Close()
+		return nil, nil, fmt.Errorf("tunnel to %s via jump: %w", target, err)
+	}
+	return tunnel, jumpClient, nil
+}
+
 // DialDirectKey opens a direct SSH connection authenticating with a raw key
 // signer (a plain public key, not a certificate). Enrollment uses this to
 // bootstrap a host that has no password auth but already trusts an operator's
