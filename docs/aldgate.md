@@ -41,10 +41,13 @@ On the collector, set `ALDGATE_BASEPATH=/aldgate`,
 `ALDGATE_API_BIND=0.0.0.0`; then `make up` again.
 
 **3. Make hosts send.** From **Automation → Playbooks**, paste
-`ansible/enroll-syslog.yml` from the Aldgate repo and run it against every Linux
-host. One run does the fleet: it installs rsyslog where a host has only journald,
-turns on `ForwardToSyslog`, writes a disk-queued forwarding rule, and filters out
-Provenance's own probe churn (which is otherwise 90% of the traffic).
+`ansible/enroll-syslog.yml` from the Aldgate repo (keep the name **Enroll Syslog To
+Aldgate**). Then, from **Hosts**, select the hosts and choose **Bulk actions → Send
+logs to collector**: that runs the playbook you just imported over the selection.
+One run does the fleet — it installs rsyslog where a host has only journald, turns on
+`ForwardToSyslog`, writes a disk-queued forwarding rule, and filters out Provenance's
+own probe churn (which is otherwise 90% of the traffic). RouterOS devices in the
+selection are named and skipped, because step 4 is theirs.
 
 Container logs are separate — `ansible/enroll-docker-logs.yml` sets the Docker
 daemon's log driver.
@@ -159,7 +162,12 @@ Provenance: run `make bootstrap` on the collector and copy
 
 ## Enrolling hosts
 
-From Aldgate's repo, via **Automation → Playbooks** or directly:
+Once `ansible/enroll-syslog.yml` is imported under **Automation → Playbooks**, the
+everyday path is **Hosts → select → Bulk actions → Send logs to collector**. It finds
+the imported playbook (by the name **Enroll Syslog To Aldgate**, or any playbook whose
+name mentions syslog), runs it against the selection as one playbook run you can watch
+in **Automation**, and skips RouterOS devices by name rather than failing on them. With
+nothing imported it says so and names the file. Or run it directly:
 
     ansible-playbook -i <inventory> ansible/enroll-syslog.yml -e aldgate_host=10.10.0.177
 

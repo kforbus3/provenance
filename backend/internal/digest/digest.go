@@ -1,6 +1,7 @@
 // Package digest sends a recurring fleet-health summary (daily or weekly) built
 // from the same insights the dashboard and assistant use, delivered through the
-// existing notification channels. It is off until an operator enables it, and
+// existing notification channels. It is on by default (daily at 08:00) but delivers
+// only once the "fleet.digest" event is routed to a channel, and it is
 // deterministic — it needs no LLM, so the digest always sends even when Ollama is
 // unavailable.
 package digest
@@ -34,8 +35,20 @@ type Policy struct {
 	LastSent  int64  `json:"lastSent"`  // unix seconds of the last delivery
 }
 
+// The default is ON, daily, at 08:00.
+//
+// It was off, and an insight engine nobody reads is an insight engine that does
+// nothing: the operator had to know the feature existed and go and enable it. A
+// fleet-health summary is the one notification a systems administrator wants by
+// default, and this one is deterministic -- it needs no LLM, so it sends whether or
+// not Ollama is reachable.
+//
+// Turning it on by default is safe in the way that matters: delivery is controlled
+// separately by routing the "fleet.digest" event to a channel, so an install with
+// no channel configured sends nothing. Nobody is emailed because of this change;
+// the summary simply starts arriving as soon as there is somewhere to send it.
 func defaultPolicy() Policy {
-	return Policy{Enabled: false, Frequency: "daily", Hour: 8, Weekday: 1}
+	return Policy{Enabled: true, Frequency: "daily", Hour: 8, Weekday: 1}
 }
 
 // Service builds and sends digests on a schedule.
@@ -53,8 +66,20 @@ func New(st *store.Store, ins *insights.Service, nfy *notify.Service, log *slog.
 
 // LoadPolicy returns the stored policy (defaults if unset), normalized.
 func (s *Service) LoadPolicy(ctx context.Context) Policy {
+	raw, err := s.store.GetSetting(ctx, settingKey)
+	if err != nil {
+		raw = nil
+	}
+	return policyFromRaw(raw)
+}
+
+// policyFromRaw resolves the stored setting into an effective policy: the default
+// when nothing is stored, otherwise the stored document laid over the default. A
+// stored "enabled": false therefore stays false -- an operator who turned the digest
+// off is not re-enabled by the default changing.
+func policyFromRaw(raw []byte) Policy {
 	p := defaultPolicy()
-	if raw, err := s.store.GetSetting(ctx, settingKey); err == nil && len(raw) > 0 {
+	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &p)
 	}
 	return normalize(p)

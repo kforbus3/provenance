@@ -5,7 +5,7 @@ import { api } from "./client";
 
 export interface Insight {
   severity: "critical" | "warning" | "info";
-  category: string; // offline|disk|disk-runway|memory|load|updates
+  category: string; // offline|overlay|disk|disk-runway|memory|load|updates|logs
   hostId: string;
   hostname: string;
   title: string;

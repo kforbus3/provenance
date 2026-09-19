@@ -39,6 +39,9 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		pr.With(d.Auth.RequirePrivilegedPermission("Playbook.Run")).Post("/playbooks/{id}/run", h.run)
 		pr.With(d.Auth.RequirePermission("Playbook.Run")).Get("/playbooks/{id}/runs", h.runs)
 		pr.With(d.Auth.RequirePermission("Playbook.Run")).Get("/playbook-runs/{runId}", h.runStatus)
+		// "Send logs to collector" from the Hosts page: the same execution, gated the
+		// same way, with the playbook chosen for the operator instead of by them.
+		pr.With(d.Auth.RequirePrivilegedPermission("Playbook.Run")).Post("/hosts/enroll-logging", h.enrollLogs)
 	})
 }
 

@@ -19,12 +19,14 @@ vi.mock("../api/imaging", async () => {
   };
 });
 import * as api from "../api/imaging";
+import type { Image } from "../api/imaging";
 import { ImagesTabForTest as ImagesTab } from "./ImagingPage";
 
-const IMAGE = {
+const IMAGE: Image = {
   name: "debian-trixie-amd64-ab.img.zst", distro: "debian", suite: "trixie", arch: "amd64",
   size: 2_100_000_000, created: "2026-09-15T22:04:00Z", hasSbom: true, packages: 262,
-} as never;
+  encrypted: false, secureBoot: false,
+};
 
 function renderTab() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

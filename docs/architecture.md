@@ -227,7 +227,9 @@ layer gained multipart/mixed attachment support, which the webhook channel ignor
 The **`insights`** engine derives explainable, no-ML issues from host status +
 metric history — offline hosts, low/critical disk, high memory/load, pending
 security updates, and a disk-runway (days-to-full) projection with a confidence
-level. It backs a Dashboard "Needs attention" card, `GET /api/v1/insights` (scoped
+level. When a log collector is configured it also reports hosts whose error-log
+rate has jumped well above **their own** week-long baseline (one aggregation query,
+both windows in a single pass), which needs no per-host configuration. It backs a Dashboard "Needs attention" card, `GET /api/v1/insights` (scoped
 to accessible hosts), and a `prov_insights` assistant tool. The **`digest`**
 scheduler builds a daily/weekly fleet-health digest from the same insights and
 delivers it via `notify` (a `fleet.digest` event).

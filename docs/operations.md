@@ -618,14 +618,30 @@ To have reports arrive automatically:
 ## Provenance-health digest
 
 Get a recurring summary of what needs attention across the fleet — offline hosts, low disk (with
-a **days-to-full** projection), high memory/load, and pending security updates:
+a **days-to-full** projection), high memory/load, pending security updates, and (with a log
+collector configured) hosts whose error logging has spiked above their own baseline:
 
-1. **Settings → Provenance-health digest**. Choose **daily** or **weekly** and save.
-2. Route the **Provenance-health digest** (`fleet.digest`) event to a channel under **Notifications**.
+The digest is **on by default** (daily at 08:00), so the only step on a new install is
+telling Provenance where to send it:
+
+1. Route the **Provenance-health digest** (`fleet.digest`) event to a channel under
+   **Notifications**. Until a channel carries that event, the digest is generated and
+   silently discarded.
+2. Optional: **Settings → Provenance-health digest** changes the time, switches to
+   **weekly**, or turns it off.
 3. **Preview** shows the current digest; **Send now** delivers one immediately.
 
 The same signals power the Dashboard **"Needs attention"** card and the Ask AI assistant's
 "what's wrong with the fleet?" answers.
+
+### Log-based insights
+
+With a collector configured (see [Aldgate](aldgate.md)), a host is reported when it logs **30+
+errors an hour** *and* at least **4x** its own average over the previous week — both halves,
+so a machine that always logs loudly is not reported and a machine that went from nothing to a
+trickle is not either. A sender with no matching host (a switch, a firewall) is reported to
+super-admins by the name it uses in its logs. Nothing to configure: if the logs are arriving,
+the insight works.
 
 ## Audit forwarding (SIEM)
 

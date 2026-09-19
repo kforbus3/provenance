@@ -287,6 +287,11 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
 	s.auditFwd = auditfwd.New(st, log)
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
+	// Give the insight engine the log collector, so "this host is suddenly logging
+	// errors" reaches the dashboard and the daily digest without the operator having
+	// to go and search for it. New returns nil when no collector is configured, and
+	// SetLogSource handles that -- no collector simply means no log insights.
+	s.insights.SetLogSource(logsbroker.New(cfg.AldgateURL, cfg.AldgateUser, cfg.AldgatePassword))
 	s.digest = digest.New(st, s.insights, s.Notify, log)
 	s.reportSched = reportsched.New(st, s.Notify, log)
 	s.rotator = credvault.NewRotator(st, gateway, cfg, log, s.Notify)

@@ -48,6 +48,10 @@ type Client struct {
 // tells you your network was fine. Aldgate normalises traps into the same
 // fields, so one query spans both. A wildcard that matches no index is ignored
 // rather than a 404, so a collector with no traps yet still searches cleanly.
+// severityError is the syslog severity code for "error". Codes are ordered by
+// urgency ASCENDING (0=emerg .. 7=debug), so "error or worse" is <= 3.
+const severityError = 3
+
 const searchPath = "/syslog-*,snmp-*/_search?ignore_unavailable=true"
 
 func New(baseURL, user, password string) *Client {
@@ -350,4 +354,97 @@ func trim(s string) string {
 		return s[:300] + "…"
 	}
 	return s
+}
+
+// HostErrorRate is one host's count of error-or-worse log lines in two windows:
+// Recent (the last recentMinutes) and Baseline (everything before that, inside the
+// baseline window). The two are disjoint, so a caller can compare rates directly.
+type HostErrorRate struct {
+	Host     string
+	Recent   int
+	Baseline int
+	// The windows the counts came from, so a caller can turn counts into rates
+	// without having to remember what it asked for.
+	RecentMinutes   int
+	BaselineMinutes int
+}
+
+// ErrorRates counts error-or-worse lines per host over a recent window and the
+// baseline period preceding it, in ONE query.
+//
+// One query on purpose: this feeds the dashboard and the daily digest, which run
+// on every page load and every schedule tick, and a per-host round trip would turn
+// a fleet of 50 hosts into 50 searches against a collector that is also busy
+// indexing. The recent window is a filter sub-aggregation of the baseline bucket,
+// so OpenSearch counts both in one pass.
+//
+// Documents with no severity_code are not counted. Vector is told never to drop a
+// message it could not parse, and an unparsed line has no severity to compare --
+// counting it as an error would make every malformed-syslog device look like it was
+// on fire.
+func (c *Client) ErrorRates(ctx context.Context, recentMinutes, baselineHours int) ([]HostErrorRate, error) {
+	if recentMinutes <= 0 {
+		recentMinutes = 60
+	}
+	if baselineHours <= 0 {
+		baselineHours = 24 * 7
+	}
+	// The baseline must be longer than the recent window, or "compared with its
+	// baseline" compares a window with itself.
+	if baselineHours*60 <= recentMinutes {
+		baselineHours = (recentMinutes / 60) + 1
+	}
+	recent := fmt.Sprintf("now-%dm", recentMinutes)
+	body := map[string]any{
+		"size": 0,
+		"query": map[string]any{"bool": map[string]any{"filter": []any{
+			map[string]any{"range": map[string]any{
+				"timestamp": map[string]any{"gte": fmt.Sprintf("now-%dh", baselineHours)},
+			}},
+			map[string]any{"range": map[string]any{
+				"severity_code": map[string]any{"lte": severityError},
+			}},
+		}}},
+		"aggs": map[string]any{
+			"by_host": map[string]any{
+				"terms": map[string]any{"field": "host", "size": 200},
+				"aggs": map[string]any{
+					"recent": map[string]any{"filter": map[string]any{
+						"range": map[string]any{"timestamp": map[string]any{"gte": recent}},
+					}},
+				},
+			},
+		},
+	}
+	raw, err := c.post(ctx, searchPath, body)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Aggregations struct {
+			ByHost struct {
+				Buckets []struct {
+					Key      string
+					DocCount int `json:"doc_count"`
+					Recent   struct {
+						DocCount int `json:"doc_count"`
+					} `json:"recent"`
+				}
+			} `json:"by_host"`
+		} `json:"aggregations"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("could not read the collector's reply: %w", err)
+	}
+	out := []HostErrorRate{}
+	for _, b := range resp.Aggregations.ByHost.Buckets {
+		out = append(out, HostErrorRate{
+			Host:            b.Key,
+			Recent:          b.Recent.DocCount,
+			Baseline:        b.DocCount - b.Recent.DocCount,
+			RecentMinutes:   recentMinutes,
+			BaselineMinutes: baselineHours*60 - recentMinutes,
+		})
+	}
+	return out, nil
 }

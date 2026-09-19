@@ -331,6 +331,18 @@ export async function bulkHostMaintenance(hostIds: string[], minutes: number): P
   const { data } = await api.post<{ applied: number }>("/api/v1/hosts/bulk/maintenance", { hostIds, minutes });
   return data.applied;
 }
+export interface LogEnrolResult {
+  runId?: string;
+  playbook: string;
+  hostCount: number;
+  skipped: { hostname: string; reason: string }[];
+}
+// Point the selected hosts at the log collector by running the imported enrolment
+// playbook. Needs Playbook.Run, because that is what it does.
+export async function bulkEnrolLogging(hostIds: string[]): Promise<LogEnrolResult> {
+  const { data } = await api.post<LogEnrolResult>("/api/v1/hosts/enroll-logging", { hostIds });
+  return data;
+}
 export async function bulkHostTags(
   hostIds: string[], tags: { add?: string[]; remove?: string[] },
 ): Promise<number> {

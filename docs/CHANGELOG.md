@@ -7,6 +7,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**The dashboard reports a host that has started logging errors.** Provenance was
+collecting every host's logs and never mentioning them unless someone went to the
+Logs page and searched. A host is now surfaced under **Needs attention** — and in
+the digest — when it logs 30+ errors an hour *and* at least 4x its own average over
+the previous week. Both halves bind: the ratio alone fires on a machine that went
+from one error a day to six, and the floor alone fires forever on a machine that
+always logs loudly, which is how a dashboard teaches people to ignore it. The
+comparison is per host, against itself, so a noisy build server stays quiet and a
+database that normally logs nothing is reported at five. Senders with no matching
+host (a switch, a firewall) are reported to super-admins by the name they use in
+their logs. One aggregation query covers both windows, and a collector that is down
+or empty costs the dashboard nothing but these cards.
+
+**The fleet-health digest is on by default**, daily at 08:00. It was off until
+someone found the setting, which meant most installs never got it and the insight
+engine went unread. Nobody is newly emailed by this: delivery still depends on
+routing the `fleet.digest` event to a channel, so an install with no channel
+configured sends nothing — and an operator who had turned the digest off stays off.
+
+**Hosts → Bulk actions → Send logs to collector.** Enrolling a machine into log
+collection meant going to Automation, finding the right playbook, and picking hosts
+there. Select hosts on the **Hosts** page instead and it runs the imported
+enrolment playbook over the selection as one ordinary playbook run. It runs *your*
+playbook rather than a copy embedded in Provenance — a second copy would drift from
+the one that gets fixed when a new host type turns out to have no rsyslog, and you
+would have no way to tell which had just run on your fleet. RouterOS devices in the
+selection are named and skipped rather than failed, and an install with nothing
+imported is told which file to import.
+
 **The package count on the Images tab works, and now shows the packages.**
 Clicking it answered `missing access token`: it was a link straight at
 `/api/v1/imaging/images/<name>/sbom`, and a browser navigation carries no

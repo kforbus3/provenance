@@ -1,6 +1,8 @@
 // Package insights derives explainable, at-a-glance fleet-health observations
 // from the data the monitor already collects — current host status/metrics plus
-// the metric-history time series — with no ML dependency. It powers the Ask-AI
+// the metric-history time series — and, when a log collector is configured, from
+// how much each host is logging compared with its own recent history. No ML
+// dependency. It powers the Ask-AI
 // "what's wrong?" story and the dashboard insight cards. Everything is scoped to
 // the hosts the caller can access.
 package insights
@@ -42,7 +44,7 @@ const (
 // Insight is one surfaced observation about a host.
 type Insight struct {
 	Severity string `json:"severity"` // critical|warning|info
-	Category string `json:"category"` // offline|overlay|disk|disk-runway|memory|load|updates
+	Category string `json:"category"` // offline|overlay|disk|disk-runway|memory|load|updates|logs
 	HostID   string `json:"hostId"`
 	Hostname string `json:"hostname"`
 	Title    string `json:"title"`
@@ -54,6 +56,7 @@ type Service struct {
 	store           *store.Store
 	log             *slog.Logger
 	metricRetention time.Duration // 0 = history disabled → runway projection skipped
+	logs            logRates      // nil = no log collector configured → no log insights
 }
 
 func New(st *store.Store, log *slog.Logger, metricRetention time.Duration) *Service {
@@ -159,6 +162,13 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 			out = append(out, insight(sev, "disk-runway", c.id, c.hostname,
 				"Disk filling up", fmt.Sprintf("At the recent rate, the tightest filesystem fills in ~%.0f day(s) (%s confidence).", days, conf)))
 		}
+	}
+
+	// Hosts whose error logging has jumped above their own baseline. Last, because
+	// this is the only source that leaves the database, and a collector that is slow
+	// or down must cost the dashboard nothing but these cards.
+	if s.logs != nil {
+		out = append(out, s.logInsights(ctx, hosts, isSuperAdmin)...)
 	}
 
 	sort.SliceStable(out, func(a, b int) bool {

@@ -52,3 +52,32 @@ func TestNormalizeClampsBadValues(t *testing.T) {
 		t.Fatalf("normalize did not clamp: %+v", got)
 	}
 }
+
+// The digest ships enabled: an insight engine nobody reads does nothing, and a
+// fresh install should start summarizing the fleet without the operator having to
+// discover the feature first.
+func TestDefaultPolicyIsEnabledDaily(t *testing.T) {
+	p := policyFromRaw(nil)
+	if !p.Enabled {
+		t.Fatal("digest should be enabled by default")
+	}
+	if p.Frequency != "daily" || p.Hour != 8 {
+		t.Fatalf("default schedule = %s at %d, want daily at 8", p.Frequency, p.Hour)
+	}
+	// And the default actually fires, rather than being enabled but never due.
+	if !p.due(time.Date(2026, 9, 19, 8, 5, 0, 0, time.Local)) {
+		t.Fatal("default policy is enabled but never due")
+	}
+}
+
+// Changing the default must not resurrect the digest for an operator who turned it
+// off: a stored document wins over the default, field by field.
+func TestStoredPolicyOverridesTheDefault(t *testing.T) {
+	p := policyFromRaw([]byte(`{"enabled":false,"frequency":"weekly","hour":20,"weekday":5}`))
+	if p.Enabled {
+		t.Fatal("stored enabled:false was overridden by the new default")
+	}
+	if p.Frequency != "weekly" || p.Hour != 20 || p.Weekday != 5 {
+		t.Fatalf("stored schedule not preserved: %+v", p)
+	}
+}

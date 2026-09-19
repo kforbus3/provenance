@@ -207,3 +207,73 @@ func TestMissingAggregationsStillMarshalAsArrays(t *testing.T) {
 		t.Errorf("a response with no aggregations produced null: %s", blob)
 	}
 }
+
+// ErrorRates must come back with the two windows DISJOINT. OpenSearch's sub-
+// aggregation counts the recent window inside the baseline bucket, so the baseline
+// count has to have the recent one subtracted out; leaving it in makes every spike
+// look smaller than it is, and a big enough spike then never fires at all.
+func TestErrorRatesSplitsTheWindows(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"aggregations":{"by_host":{"buckets":[
+			{"key":"hypervisor","doc_count":150,"recent":{"doc_count":120}},
+			{"key":"nas","doc_count":4,"recent":{"doc_count":0}}
+		]}}}`))
+	}))
+	defer srv.Close()
+
+	rates, err := New(srv.URL, "admin", "pw").ErrorRates(context.Background(), 60, 24)
+	if err != nil {
+		t.Fatalf("error rates: %v", err)
+	}
+	if len(rates) != 2 {
+		t.Fatalf("got %d hosts, want 2", len(rates))
+	}
+	if rates[0].Host != "hypervisor" || rates[0].Recent != 120 || rates[0].Baseline != 30 {
+		t.Errorf("hypervisor = %+v, want recent 120 and baseline 30 (150 total minus the recent 120)", rates[0])
+	}
+	if rates[1].Baseline != 4 || rates[1].Recent != 0 {
+		t.Errorf("nas = %+v, want recent 0 baseline 4", rates[1])
+	}
+	// The windows must be reported in minutes, and the baseline must exclude the
+	// recent window there too, or a caller computing a rate divides by the wrong span.
+	if rates[0].RecentMinutes != 60 || rates[0].BaselineMinutes != 24*60-60 {
+		t.Errorf("windows = %dm recent / %dm baseline, want 60 / %d", rates[0].RecentMinutes, rates[0].BaselineMinutes, 24*60-60)
+	}
+
+	blob, _ := json.Marshal(got)
+	s := string(blob)
+	for _, want := range []string{
+		`"severity_code":{"lte":3}`, // error or worse, not warnings
+		`"gte":"now-24h"`,           // the baseline window bounds the whole query
+		`"gte":"now-60m"`,           // ...and the recent one is a sub-filter
+		`"by_host"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("query missing %s:\n%s", want, s)
+		}
+	}
+}
+
+// A baseline window no longer than the recent one would compare a window with
+// itself, and every host would read as exactly 1x its baseline forever.
+func TestErrorRatesRefusesADegenerateBaseline(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"aggregations":{"by_host":{"buckets":[]}}}`))
+	}))
+	defer srv.Close()
+
+	rates, err := New(srv.URL, "admin", "pw").ErrorRates(context.Background(), 120, 1)
+	if err != nil {
+		t.Fatalf("error rates: %v", err)
+	}
+	if len(rates) != 0 {
+		t.Fatalf("expected no hosts, got %+v", rates)
+	}
+	if blob, _ := json.Marshal(got); !strings.Contains(string(blob), `"gte":"now-3h"`) {
+		t.Errorf("a 2h recent window inside a 1h baseline was not widened:\n%s", blob)
+	}
+}

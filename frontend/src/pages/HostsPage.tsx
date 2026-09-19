@@ -31,7 +31,8 @@ import {
   getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
   removeHostGroup, removeHostUser, updateHost, setHostMaintenance, clearHostMaintenance, maintenanceActive,
   clearHostKeyPins, hostKeyMismatch,
-  bulkRefreshHosts, bulkHostMaintenance, bulkHostTags, listContainerImages,
+  bulkRefreshHosts, bulkHostMaintenance, bulkHostTags, bulkEnrolLogging, listContainerImages,
+  type LogEnrolResult,
 } from "../api/hosts";
 import { listVaultSecrets } from "../api/vault";
 import {
@@ -111,9 +112,32 @@ function SupportBundleButton({ host }: { host: Host }) {
   );
 }
 
+// enrolLoggingMessage turns the enrolment result into what the operator is told.
+//
+// Exported for test, and pure, because the thing most likely to go wrong here is not
+// the request -- it is reporting "Enrolling 6 hosts" when two of them were skipped.
+// A partial result that reads as a complete one is worse than an error.
+export function enrolLoggingMessage(res: LogEnrolResult): { text: string; sticky: boolean } {
+  const skipped = res.skipped ?? [];
+  const list = skipped.map((s) => `${s.hostname} (${s.reason})`).join("; ");
+  if (res.hostCount === 0) {
+    return { text: `Nothing to enrol — ${list || "no eligible hosts selected"}`, sticky: true };
+  }
+  if (skipped.length > 0) {
+    return {
+      text: `Enrolling ${res.hostCount} host(s) via “${res.playbook}”; skipped ${list}`,
+      sticky: true,
+    };
+  }
+  return {
+    text: `Enrolling ${res.hostCount} host(s) into log collection via “${res.playbook}”`,
+    sticky: false,
+  };
+}
+
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
-type BulkAction = "scan" | "refresh" | "maintenance" | "tags" | "migrateAccount" | "retireOldAccount";
+type BulkAction = "scan" | "refresh" | "maintenance" | "tags" | "sendLogs" | "migrateAccount" | "retireOldAccount";
 
 interface ToolbarProps {
   selectedCount: number;
@@ -128,7 +152,7 @@ declare module "@mui/x-data-grid" {
   interface ToolbarPropsOverrides extends ToolbarProps {}
 }
 
-function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh, onBulk }: ToolbarProps) {
+export function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh, onBulk }: ToolbarProps) {
   const [bulkEl, setBulkEl] = useState<null | HTMLElement>(null);
   const pick = (a: BulkAction) => { setBulkEl(null); onBulk(a); };
   return (
@@ -145,6 +169,7 @@ function HostsToolbar({ selectedCount, onNew, onDelete, onRefresh, onBulk }: Too
             <MenuItem onClick={() => pick("refresh")}>Refresh facts</MenuItem>
             <MenuItem onClick={() => pick("maintenance")}>Maintenance…</MenuItem>
             <MenuItem onClick={() => pick("tags")}>Edit tags…</MenuItem>
+            <MenuItem onClick={() => pick("sendLogs")}>Send logs to collector</MenuItem>
             <MenuItem onClick={() => pick("migrateAccount")}>Migrate login account (keeps the old one)</MenuItem>
             <MenuItem onClick={() => pick("retireOldAccount")}>Retire the superseded account…</MenuItem>
           </Menu>
@@ -585,6 +610,23 @@ export function HostsPage() {
   // reloads sshd, and doing fifteen of those at once turns one bad host into a
   // jump-host pile-up. Each host reports its own outcome, so one failure does not
   // hide the others' results.
+  // Send logs to collector: one playbook run over the selection. The result is kept on
+  // screen when anything was skipped or nothing ran, because a toast that vanishes is
+  // no way to learn that four of your six hosts were not enrolled.
+  const bulkEnrolLoggingMut = useMutation({
+    mutationFn: () => bulkEnrolLogging(selectedIds),
+    onSuccess: (res) => {
+      const { text, sticky } = enrolLoggingMessage(res);
+      setBulkSticky(sticky);
+      setBulkMsg(text);
+    },
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { error?: string } } };
+      setBulkSticky(true);
+      setBulkMsg(e.response?.data?.error ?? "Could not start log enrolment");
+    },
+  });
+
   const bulkMigrateAccountMut = useMutation({
     // Each host is a real SSH round trip — create the account, prove a certificate
     // login as it, remove the old one — so this takes roughly ten seconds per host
@@ -648,7 +690,8 @@ export function HostsPage() {
   });
 
   const onBulk = (action: BulkAction) => {
-    if (action === "scan") bulkScanMut.mutate();
+    if (action === "sendLogs") bulkEnrolLoggingMut.mutate();
+    else if (action === "scan") bulkScanMut.mutate();
     else if (action === "refresh") bulkRefreshMut.mutate();
     else if (action === "maintenance") setBulkMaintOpen(true);
     else if (action === "tags") setBulkTagsOpen(true);
