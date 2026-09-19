@@ -58,6 +58,18 @@ type Runner interface {
 // did wrong.
 var errSuperseded = errors.New("the host is running this repository at another tag")
 
+// errUnmanageable means the rollout cannot act on this container at all: it is
+// an orphan, or its compose directory is gone or unreadable. Distinct from
+// errSuperseded, which means the host has genuinely moved ON to a newer tag.
+//
+// Both are non-fatal -- halting a fleet-wide rollout over one stale container
+// stops every other host for no gain -- but they are opposite facts about the
+// world, and collapsing them into one told operators the update had landed when
+// nothing had happened. keith ran a rebuild of caddy:2-alpine, was told "this
+// host was already past every image in this rollout", and then quite reasonably
+// asked why the Updates page still offered it. The Updates page was right.
+var errUnmanageable = errors.New("this container is not managed by any compose file the rollout can use")
+
 // MaxAttempts is how many times one host may be started before it counts as
 // failed. A host that takes the work and does not finish three times is not
 // going to.
@@ -340,6 +352,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	}
 
 	applied, ran, past := 0, 0, 0
+	var stuck []string
 	for _, im := range images {
 		if ctx.Err() != nil {
 			return
@@ -381,6 +394,18 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		one.Repository, one.FromTag, one.ToTag, one.TargetDigest =
 			im.Repository, im.FromTag, im.ToTag, im.TargetDigest
 		if err := e.applyOne(ctx, one, hostID); err != nil {
+			if errors.Is(err, errUnmanageable) {
+				// Kept verbatim, because the message names the project, the
+				// missing service and the command that resolves it. Summarising
+				// it away is what made this invisible.
+				stuck = append(stuck, fmt.Sprintf("%s:%s — %s",
+					im.Repository, im.FromTag, strings.TrimPrefix(err.Error(),
+						errUnmanageable.Error()+": ")))
+				e.log.Info("update rollout: nothing here for the rollout to act on",
+					"host", hostID, "repository", im.Repository, "from", im.FromTag,
+					"detail", err.Error())
+				continue
+			}
 			if errors.Is(err, errSuperseded) {
 				past++
 				e.log.Info("update rollout: host has moved past this image",
@@ -401,7 +426,14 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		// the host; "already past them" points at the rollout being stale. Both
 		// are skips, neither is a failure.
 		detail := "this host was not running any of the images by the time its turn came"
-		if ran > 0 && past == ran {
+		if len(stuck) > 0 {
+			// Say what could not be applied and why. This is NOT "already past":
+			// the image is still outdated, the Updates page will still offer it,
+			// and it will keep being offered until somebody changes the compose
+			// file -- which is exactly what the message explains how to do.
+			detail = "nothing was updated here, and a rollout cannot fix it: " +
+				strings.Join(stuck, " | ")
+		} else if ran > 0 && past == ran {
 			detail = fmt.Sprintf(
 				"this host was already past every image in this rollout that it runs "+
 					"(%d of %d) — its compose files name newer tags than this rollout's target",
@@ -417,7 +449,14 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		}
 		return
 	}
-	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, ""); err != nil {
+	verifiedNote := ""
+	if len(stuck) > 0 {
+		// Some images landed and some could not. Reporting only the success would
+		// leave the operator believing the whole rollout applied.
+		verifiedNote = fmt.Sprintf("%d image(s) updated; %d could not be: %s",
+			applied, len(stuck), strings.Join(stuck, " | "))
+	}
+	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, verifiedNote); err != nil {
 		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
 	}
 	// The cached registry answers now describe what this host was running BEFORE
@@ -780,7 +819,10 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 		if unreachableProject(out) {
 			// Nothing will make this work from here, so halting a fleet-wide
 			// rollout on it stops every other host for no gain, every time.
-			return true, fmt.Errorf("%w: %s", errSuperseded, msg)
+			// Reported as unmanageable rather than superseded so the host's row
+			// carries THIS message -- which says what is wrong and what to do --
+			// instead of a summary claiming the host was already ahead.
+			return true, fmt.Errorf("%w: %s", errUnmanageable, msg)
 		}
 		return true, fmt.Errorf("%s", msg)
 	}

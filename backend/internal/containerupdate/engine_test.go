@@ -1759,3 +1759,58 @@ func TestTheEngineVerifiesWhenEveryNamedServiceMoved(t *testing.T) {
 		t.Errorf("state = %q, want verified (error: %q)", got, f.hosts[rid][0].Error)
 	}
 }
+
+// An orphan is not a supersession, and saying it is tells the operator the
+// opposite of the truth.
+//
+// keith rolled out a rebuild of caddy:2-alpine to `repo`. The container there is
+// an orphan — the compose project at /root/aptlywebui no longer defines a
+// `caddy` service, so `docker compose up -d caddy` has nothing to recreate. The
+// engine classified "no such service" as errSuperseded and reported "this host
+// was already past every image in this rollout … its compose files name newer
+// tags than this rollout's target". Every part of that is false: the host runs an
+// OLDER digest than the registry, its compose file names nothing of the sort, and
+// no rollout will ever change it. The rollout then said completed, so the update
+// looked done while the Updates page — correctly — kept offering it.
+//
+// The engine already had the right words; they went to the log and were thrown
+// away here. This asserts they reach the host's row instead.
+func TestAnOrphanContainerIsReportedAsAnOrphanNotASupersession(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	// A rebuild (same tag both ends) of a container with no managed stack: the
+	// in-place path, which is the one an orphan reaches.
+	f.rollouts[0].FromTag, f.rollouts[0].ToTag = "2-alpine", "2-alpine"
+	f.rollouts[0].Repository = "caddy"
+	f.stacks[ids[0]] = nil
+	f.containers[ids[0]][0].Repository = "caddy"
+	f.containers[ids[0]][0].Tag = "2-alpine"
+	f.containers[ids[0]][0].Image = "caddy:2-alpine"
+	f.containers[ids[0]][0].ComposeDir = "/root/aptlywebui"
+	f.containers[ids[0]][0].ComposeService = "caddy"
+	for i := range f.images[rid] {
+		f.images[rid][i].Repository = "caddy"
+		f.images[rid][i].FromTag, f.images[rid][i].ToTag = "2-alpine", "2-alpine"
+	}
+
+	// What the host actually says: the project no longer has that service.
+	run := &fakeRunner{respond: func(script string) (string, int, bool) {
+		return "::NOSERVICE::\n", 1, true
+	}}
+	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
+
+	h := f.hosts[rid][0]
+	if h.State != store.UpdateHostSkipped {
+		t.Fatalf("state = %q (%q), want skipped — an orphan is not a failure to "+
+			"halt a fleet on, but it is not success either", h.State, h.Error)
+	}
+	if strings.Contains(h.Error, "already past") {
+		t.Errorf("reported as a supersession: %q\n"+
+			"The host runs an OLDER image than the rollout targets. Saying it is "+
+			"ahead is the one reading that stops an operator looking further.", h.Error)
+	}
+	for _, want := range []string{"cannot fix it", "service"} {
+		if !strings.Contains(h.Error, want) {
+			t.Errorf("host row is missing %q, so the reason is only in the log: %q", want, h.Error)
+		}
+	}
+}
