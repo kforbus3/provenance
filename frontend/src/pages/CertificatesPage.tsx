@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { PickList } from "../components/PickList";
 import {
-  Alert, Box, Button, Chip, MenuItem, Paper, Stack, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, TextField, Tooltip, Typography, IconButton,
+  Alert, Box, Button, Chip, Paper, Stack, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, Tooltip, Typography, IconButton,
 } from "@mui/material";
 import BlockIcon from "@mui/icons-material/Block";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
@@ -120,20 +121,12 @@ export function CertificatesPage() {
         live only in backend memory and are never stored.
       </Alert>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }} sx={{ mb: 2 }}>
-        <TextField
-          select size="small" label="User" value={userFilter}
-          onChange={(e) => setUserFilter(e.target.value)} sx={{ minWidth: 180 }}
-        >
-          <MenuItem value="">All users</MenuItem>
-          {users.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
-        </TextField>
-        <TextField
-          select size="small" label="Host" value={hostFilter}
-          onChange={(e) => setHostFilter(e.target.value)} sx={{ minWidth: 180 }}
-        >
-          <MenuItem value="">All hosts</MenuItem>
-          {hosts.map((hn) => <MenuItem key={hn} value={hn}>{hn}</MenuItem>)}
-        </TextField>
+        <PickList label="User" value={userFilter} onChange={setUserFilter}
+                  anyLabel="All users" sx={{ minWidth: 200 }}
+                  options={users.map((u) => ({ value: u, label: u }))} />
+        <PickList label="Host" value={hostFilter} onChange={setHostFilter}
+                  anyLabel="All hosts" sx={{ minWidth: 200 }}
+                  options={hosts.map((hn) => ({ value: hn, label: hn }))} />
         <Box sx={{ flexGrow: 1 }} />
         <Typography variant="body2" color="text.secondary">{filtered.length} of {certs.length}</Typography>
       </Stack>

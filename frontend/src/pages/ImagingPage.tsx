@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { PickList } from "../components/PickList";
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, LinearProgress, MenuItem,
@@ -755,13 +756,11 @@ function InstallDialog({ machine, controlUrl, onClose, onDone, setMsg }: {
           no canary, no soak, no failure budget. Use it for machines that cannot reach
           this server at all; everything else should go through a rollout.
         </Alert>
-        <TextField select fullWidth label="Bundle" value={bundle}
-                   onChange={(e) => setBundle(e.target.value)}
-                   helperText="The machine fetches this itself, over the overlay it already trusts.">
-          {(bundleData?.bundles ?? []).map((b) => (
-            <MenuItem key={b.name} value={b.name}>{b.name}{b.version ? ` — ${b.version}` : ""}</MenuItem>
-          ))}
-        </TextField>
+        <PickList label="Bundle" value={bundle} onChange={setBundle} fullWidth
+                  helperText="The machine fetches this itself, over the overlay it already trusts."
+                  options={(bundleData?.bundles ?? []).map((b) => ({
+                    value: b.name, label: `${b.name}${b.version ? ` — ${b.version}` : ""}`,
+                  }))} />
         {!controlUrl && (
           <Alert severity="warning" sx={{ mt: 2 }}>
             No control URL is set, so there is no address to tell the machine to fetch
@@ -974,14 +973,12 @@ export function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
       <DialogTitle>New rollout</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField select fullWidth label="Bundle" value={bundle}
-                     onChange={(e) => setBundle(e.target.value)}>
-            {bundles.map((b) => (
-              <MenuItem key={b.name} value={b.name}>
-                {b.name}{b.version ? ` — ${b.version}` : " — no version recorded"}
-              </MenuItem>
-            ))}
-          </TextField>
+          <PickList label="Bundle" value={bundle} onChange={setBundle} fullWidth
+                    options={bundles.map((b) => ({
+                      value: b.name,
+                      label: `${b.name}${b.version ? ` — ${b.version}` : " — no version recorded"}`,
+                    }))} />
+
           <ToggleButtonGroup size="small" exclusive value={mode}
                              onChange={(_, v) => { if (v) setMode(v); }}>
             <ToggleButton value="fleet">Whole fleet</ToggleButton>
@@ -996,16 +993,10 @@ export function NewRolloutDialog({ open, onClose, onCreated, setMsg }: {
             </Alert>
           )}
           {mode === "group" && (
-            <TextField select fullWidth label="Group" value={group}
-                       onChange={(e) => setGroup(e.target.value)}
-                       helperText="Host groups, the same ones access and policy use. Members
-                                   that are not A/B machines are not targeted.">
-              {groups.map((g) => (
-                <MenuItem key={g.id} value={g.id}>
-                  {g.name}{g.hostCount != null ? ` (${g.hostCount} hosts)` : ""}
-                </MenuItem>
-              ))}
-            </TextField>
+            <PickList label="Group" value={group} onChange={setGroup} fullWidth
+                      helperText="Host groups, the same ones access and policy use. Members that are not A/B machines are not targeted."
+                      options={groups.map((g) => ({ value: g.id, label: g.name }))} />
+
           )}
           {mode === "hosts" && (
             <Autocomplete
@@ -1902,14 +1893,11 @@ function BuildBundleDialog({ open, images, onClose, onStarted, setMsg }: {
       <DialogTitle>Build an update bundle</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField select fullWidth label="Image" value={image}
-                     onChange={(e) => setImage(e.target.value)}>
-            {images.map((i) => (
-              <MenuItem key={i.name} value={i.name}>
-                {i.name}{i.version ? ` — ${i.version}` : ""}
-              </MenuItem>
-            ))}
-          </TextField>
+          <PickList label="Image" value={image} onChange={setImage} fullWidth
+                    options={images.map((i) => ({
+                      value: i.name, label: `${i.name}${i.version ? ` — ${i.version}` : ""}`,
+                    }))} />
+
           <TextField fullWidth label="Version" value={version}
                      onChange={(e) => setVersion(e.target.value)} placeholder="1.4.0"
                      helperText="How a rollout tells an updated machine from one still waiting. A bundle without one cannot be rolled out." />

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PickList } from "../components/PickList";
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody,
@@ -182,10 +183,9 @@ function RuleDialog({
             <MenuItem value="group">A host group</MenuItem>
           </TextField>
           {form.scopeKind === "group" && (
-            <TextField select label="Group" size="small" value={form.scopeGroupId ?? ""}
-              onChange={(e) => set("scopeGroupId", e.target.value)} fullWidth>
-              {groups.map((g) => <MenuItem key={g.id} value={g.id}>{g.name}</MenuItem>)}
-            </TextField>
+            <PickList label="Group" value={form.scopeGroupId ?? ""} fullWidth
+              onChange={(v) => set("scopeGroupId", v)}
+              options={groups.map((g) => ({ value: g.id, label: g.name }))} />
           )}
           <FormControlLabel
             control={<Switch checked={form.enabled} onChange={(e) => set("enabled", e.target.checked)} />}

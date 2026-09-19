@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PickList } from "../components/PickList";
 import {
   Alert, Box, Button, Chip, CircularProgress, IconButton, MenuItem, Paper, Stack,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
@@ -162,13 +163,14 @@ export function LogsPage() {
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") run(); }}
             helperText="All words must appear. Leave empty to see everything in the range." />
-          <TextField select label="Host" value={host} size="small" sx={{ minWidth: 200 }}
-            onChange={(e) => setHost(e.target.value)}>
-            <MenuItem value="">All hosts</MenuItem>
-            {(hosts.data ?? []).map((h) => (
-              <MenuItem key={h.key} value={h.key}>{h.key} ({h.count})</MenuItem>
-            ))}
-          </TextField>
+          {/* Typeable: nineteen hosts is already too many to hunt through a menu,
+              and the count stays in the label so "which of these is noisy" is still
+              answerable at a glance. */}
+          <PickList label="Host" value={host} onChange={setHost} anyLabel="All hosts"
+            sx={{ minWidth: 220 }}
+            options={(hosts.data ?? []).map((h) => ({
+              value: h.key, label: `${h.key} (${h.count})`,
+            }))} />
           <TextField select label="Severity" value={minSeverity} size="small" sx={{ minWidth: 190 }}
             onChange={(e) => setMinSeverity(Number(e.target.value))}>
             {SEVERITIES.map((s) => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}

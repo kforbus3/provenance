@@ -7,6 +7,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**Every data-backed picker can be typed into.** Host, group, image, bundle, user
+and credential selectors were plain menus, so choosing one host out of nineteen
+meant opening a list and hunting — and it got worse with every machine added. They
+are now typeahead pickers: type three characters and press Enter. Fixed
+enumerations (severity, protocol, day of week) are deliberately unchanged, because
+filtering a four-item list you can read at a glance is slower, not faster.
+Converted: Logs (host), Stacks (host), Certificates (user, host), Ad-hoc command
+(group), Command policy (group), Imaging (bundle ×2, group, image).
+
+
 **`make redeploy-single` now rebuilds every service it should.** It rebuilt
 backend, frontend, grype-scanner, ansible-runner and prov-updater — but not
 builder-runner or dockerproxy, both of which are built from this repo. The failure

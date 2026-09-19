@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
+import { PickList } from "../components/PickList";
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, MenuItem, Paper, Snackbar, Stack, Tab, Table, TableBody, TableCell,
+  IconButton, Paper, Snackbar, Stack, Tab, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Tabs, TextField, Tooltip, Typography,
 } from "@mui/material";
 import HistoryIcon from "@mui/icons-material/History";
@@ -307,10 +308,9 @@ export function StackEditor({ open, stack, hosts, onClose, onSaved }: {
             Saving records the definition. It does not deploy — use Deploy when you want
             the host to pick it up.
           </Alert>
-          <TextField select size="small" label="Host" value={hostId} disabled={stack !== null}
-                     onChange={(e) => setHostId(e.target.value)}>
-            {hosts.map((h) => <MenuItem key={h.id} value={h.id}>{h.hostname}</MenuItem>)}
-          </TextField>
+          <PickList label="Host" value={hostId} onChange={setHostId}
+                    disabled={stack !== null}
+                    options={hosts.map((h) => ({ value: h.id, label: h.hostname }))} />
           <TextField size="small" label="Stack name" value={name} disabled={stack !== null}
                      onChange={(e) => setName(e.target.value)}
                      helperText="The compose project name" />

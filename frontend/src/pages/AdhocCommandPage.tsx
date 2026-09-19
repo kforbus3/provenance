@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { PickList } from "../components/PickList";
 import {
-  Alert, Autocomplete, Box, Button, Chip, MenuItem, Paper, Stack, Table, TableBody,
+  Alert, Autocomplete, Box, Button, Chip, Paper, Stack, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, TextField, ToggleButton,
   ToggleButtonGroup, Typography,
 } from "@mui/material";
@@ -87,10 +88,8 @@ export function AdhocCommandPage() {
                 renderInput={(params) => <TextField {...params} label="Linux hosts" size="small" />}
               />
             ) : (
-              <TextField select size="small" label="Group" value={groupId}
-                onChange={(e) => setGroupId(e.target.value)} sx={{ flexGrow: 1 }}>
-                {groups.map((g) => <MenuItem key={g.id} value={g.id}>{g.name}</MenuItem>)}
-              </TextField>
+              <PickList label="Group" value={groupId} onChange={setGroupId} fullWidth
+                options={groups.map((g) => ({ value: g.id, label: g.name }))} />
             )}
             <Button
               variant="contained"

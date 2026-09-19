@@ -90,6 +90,38 @@ describe("LogsPage", () => {
     expect(last?.q).toBe("refused conn");
   });
 
+  // keith asked for this: with nineteen hosts sending, picking one out of a menu
+  // means hunting, and it gets worse with every machine added.
+  it("lets you type a host name to narrow the list", async () => {
+    vi.mocked(logsApi.logHosts).mockResolvedValue([
+      { key: "coreswitch", count: 12 }, { key: "containers", count: 400 },
+      { key: "docker", count: 900 }, { key: "hypervisor", count: 700 },
+    ]);
+    renderPage();
+    const picker = await screen.findByLabelText("Host");
+
+    // focus THEN change: a mouseDown opens the list but swallows the typing, so the
+    // same two events in the other order would test an unfiltered list.
+    fireEvent.focus(picker);
+    fireEvent.change(picker, { target: { value: "core" } });
+
+    expect(await screen.findByText(/coreswitch/)).toBeInTheDocument();
+    expect(screen.queryByText(/^docker/)).not.toBeInTheDocument();
+
+    fireEvent.keyDown(picker, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: /^Search$/ }));
+    await waitFor(() => {
+      const calls = vi.mocked(logsApi.searchLogs).mock.calls;
+      expect(calls[calls.length - 1]?.[0]?.host).toBe("coreswitch");
+    });
+  });
+
+  // The empty state has to say what it means: leaving it blank searches everything.
+  it("says that an empty host filter means all hosts", async () => {
+    renderPage();
+    expect(await screen.findByLabelText("Host")).toHaveAttribute("placeholder", "All hosts");
+  });
+
   // The console signs itself in, which means the session has to be minted BEFORE
   // the tab opens. Opening first and minting afterwards lands the person on a 401
   // from nginx -- which looks exactly like the console being broken.
