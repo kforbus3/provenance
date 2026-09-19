@@ -165,7 +165,7 @@ func TestE2EInPlaceUpdatesOneServiceAndNothingElse(t *testing.T) {
 	e2eEnabled(t)
 	dir := e2eProject(t, e2eFrom)
 
-	out, code := sh(t, inPlaceScript(dir, "probe"))
+	out, code := sh(t, inPlaceScript(dir, "", nil, []string{"probe"}))
 	if code != 0 {
 		t.Fatalf("in-place failed (%d): %s", code, inPlaceFailure(dir, []string{"probe"}, out))
 	}
@@ -177,7 +177,7 @@ func TestE2EInPlaceUpdatesOneServiceAndNothingElse(t *testing.T) {
 func TestE2EInPlaceRefusesAProjectItCannotSee(t *testing.T) {
 	e2eEnabled(t)
 	dir := t.TempDir() // no compose file here
-	out, code := sh(t, inPlaceScript(dir, "probe"))
+	out, code := sh(t, inPlaceScript(dir, "", nil, []string{"probe"}))
 	if code == 0 {
 		t.Fatal("acted on a directory holding no compose project")
 	}
@@ -608,7 +608,7 @@ func TestE2EAnUnreachableComposeProjectIsExplainedNotDumped(t *testing.T) {
 	e2eEnabled(t)
 	const missing = "/data/compose/40/stacks/nginx"
 
-	out, code := sh(t, inPlaceScript(missing, "nginx-proxy-manager"))
+	out, code := sh(t, inPlaceScript(missing, "", nil, []string{"nginx-proxy-manager"}))
 	if code == 0 {
 		t.Fatal("acted on a directory that does not exist")
 	}
@@ -631,5 +631,62 @@ func TestE2EAnUnreachableComposeProjectIsExplainedNotDumped(t *testing.T) {
 	if !unreachableProject(out) {
 		t.Error("an unreachable project is treated as an ordinary failure, which " +
 			"halts every other host for something nothing can fix")
+	}
+}
+
+// The overlay case, against real docker: a project whose service is defined in a
+// SECOND compose file, which is how keith's aptly stack is arranged.
+//
+// Both halves are asserted, because only the pair proves the fix does anything:
+// driven by the project's own files it updates, and driven by the working
+// directory alone it fails with exactly the ::NOSERVICE:: that the engine used to
+// read as "this container is an orphan no rollout can ever update".
+func TestE2EInPlaceUsesTheProjectsOwnComposeFiles(t *testing.T) {
+	e2eEnabled(t)
+	dir := t.TempDir()
+	base := filepath.Join(dir, "docker-compose.yml")
+	overlay := filepath.Join(dir, "docker-compose.tls-ui.yml")
+	// The base file names a DIFFERENT service, so discovery finds a valid project
+	// that simply does not contain the one we are updating — the real shape of the
+	// bug, rather than a project that fails to parse.
+	if err := os.WriteFile(base, []byte(`services:
+  other:
+    image: `+e2eFrom+`
+    command: ["sleep", "600"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overlay, []byte(`services:
+  probe:
+    image: `+e2eFrom+`
+    command: ["sleep", "600"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	up := exec.Command("docker", "compose", "-f", base, "-f", overlay, "up", "-d")
+	up.Dir = dir
+	if out, err := up.CombinedOutput(); err != nil {
+		t.Fatalf("compose up: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		down := exec.Command("docker", "compose", "-f", base, "-f", overlay, "down", "-v", "--remove-orphans")
+		down.Dir = dir
+		_ = down.Run()
+	})
+
+	// Without the files: the old behaviour, and the bug.
+	out, code := sh(t, inPlaceScript(dir, "", nil, []string{"probe"}))
+	if code == 0 {
+		t.Error("discovery alone found the overlay's service — this test no longer " +
+			"reproduces the arrangement it is here to cover")
+	} else if !strings.Contains(out, "::NOSERVICE::") {
+		t.Errorf("wanted ::NOSERVICE:: from default discovery, got:\n%s", out)
+	}
+
+	// With them: it works.
+	out, code = sh(t, inPlaceScript(dir, filepath.Base(dir), []string{base, overlay}, []string{"probe"}))
+	if code != 0 {
+		t.Fatalf("in-place failed with the project's own files (%d): %s",
+			code, inPlaceFailure(dir, []string{"probe"}, out))
 	}
 }

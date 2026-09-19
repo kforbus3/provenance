@@ -813,7 +813,8 @@ func (e *Engine) applyInPlace(ctx context.Context, r store.UpdateRollout, hostID
 	if err != nil {
 		return true, fmt.Errorf("could not read the host: %w", err)
 	}
-	out, code, failed := e.run.RunScript(ctx, hostexec.Privileged(inPlaceScript(match.ComposeDir, services...)), h)
+	out, code, failed := e.run.RunScript(ctx, hostexec.Privileged(
+		inPlaceScript(match.ComposeDir, match.ComposeProject, match.ComposeFiles, services)), h)
 	if failed || code != 0 {
 		msg := inPlaceFailure(match.ComposeDir, services, out)
 		if unreachableProject(out) {

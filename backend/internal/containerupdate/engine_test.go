@@ -669,7 +669,7 @@ func TestTheInPlaceScriptPullsBeforeRecreating(t *testing.T) {
 	// `up -d` alone finds the tag already present locally and starts the old bytes
 	// again. That is the entire failure this feature exists to catch, and it is
 	// just as available here as it was in the stack deploy.
-	s := inPlaceScript("/opt/stacks/site", "web")
+	s := inPlaceScript("/opt/stacks/site", "", nil, []string{"web"})
 	pull := strings.Index(s, "pull 'web'")
 	up := strings.Index(s, "up -d 'web'")
 	if pull < 0 || up < 0 {
@@ -685,7 +685,7 @@ func TestTheInPlaceScriptRefusesAProjectItCannotSee(t *testing.T) {
 	// a container it is that container's path, and the file is not on the host at
 	// all. Running blind would either fail confusingly or act on a DIFFERENT
 	// project that happens to live at the same path.
-	s := inPlaceScript("/opt/stacks/site", "web")
+	s := inPlaceScript("/opt/stacks/site", "", nil, []string{"web"})
 	if !strings.Contains(s, "config --services") {
 		t.Error("the script does not check that a compose project is readable there")
 	}

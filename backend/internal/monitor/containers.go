@@ -103,7 +103,7 @@ if ! $_rt ps --format '{{.ID}}' >/dev/null 2>&1; then
   fi
 fi
 echo "::OK::"
-$_pre $_rt ps --no-trunc --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null
+$_pre $_rt ps --no-trunc --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Label "com.docker.compose.project.working_dir"}}\t{{.Label "com.docker.compose.project.config_files"}}' 2>/dev/null
 echo "::IMAGES::"
 $_pre $_rt ps --no-trunc --format '{{.Image}}' 2>/dev/null | sort -u | while read -r _i; do
   [ -n "$_i" ] || continue
@@ -197,6 +197,16 @@ func parseContainers(out string) ([]models.Container, string, string) {
 		}
 		if len(f) > 8 {
 			c.ComposeProject, c.ComposeService, c.ComposeDir = f[6], f[7], f[8]
+		}
+		// The project's own file list, comma-separated by compose. Order is kept:
+		// compose merges overlays left to right, and the order decides which
+		// definition of a service wins.
+		if len(f) > 9 {
+			for _, path := range strings.Split(f[9], ",") {
+				if path = strings.TrimSpace(path); path != "" {
+					c.ComposeFiles = append(c.ComposeFiles, path)
+				}
+			}
 		}
 		c.Repository, c.Tag = splitImageRef(c.Image)
 		out2 = append(out2, c)

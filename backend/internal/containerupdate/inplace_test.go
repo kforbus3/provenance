@@ -46,3 +46,57 @@ func TestTheOrphanMessageNamesTheRealCause(t *testing.T) {
 		t.Error("the message still blames the wrong thing")
 	}
 }
+
+// A compose project assembled from an OVERLAY must be driven by its own files.
+//
+// keith's aptly stack is docker-compose.yml plus docker-compose.tls-ui.yml, and
+// the caddy service exists only in the overlay. The script used to cd into the
+// working directory and let compose discover files by their default names, which
+// finds docker-compose.yml alone — no caddy service in it, so `config --services`
+// never lists it, the script exits ::NOSERVICE::, and the engine concluded the
+// container was an orphan that no rollout could ever update. The container was
+// ordinary, and its own labels named both files.
+//
+// Every compose invocation has to carry the flags, not just the check: a `pull`
+// or an `up` without them acts on a different (default-discovered) project.
+func TestTheProjectsOwnComposeFilesAreUsed(t *testing.T) {
+	files := []string{"/root/aptlywebui/docker-compose.yml", "/root/aptlywebui/docker-compose.tls-ui.yml"}
+	s := inPlaceScript("/root/aptlywebui", "aptlywebui", files, []string{"caddy"})
+
+	for _, f := range files {
+		if !strings.Contains(s, "-f '"+f+"'") {
+			t.Errorf("script does not pass -f %s, so compose rediscovers the default file:\n%s", f, s)
+		}
+		if !strings.Contains(s, "[ -f '"+f+"' ]") {
+			t.Errorf("script does not check that %s exists here — a project deployed from "+
+				"inside a container records paths this host does not have", f)
+		}
+	}
+	if !strings.Contains(s, "-p 'aptlywebui'") {
+		t.Errorf("the project is not named, so the operation could land on another project:\n%s", s)
+	}
+	// Every compose invocation must go through the wrapper, or a pull or an up
+	// would act on a different (default-discovered) project than the one checked.
+	for _, verb := range []string{"_run config --services", "_run pull", "_run up -d"} {
+		if !strings.Contains(s, verb) {
+			t.Errorf("%q is missing, so that step bypasses the project's own files:\n%s", verb, s)
+		}
+	}
+	// The flags must reach compose as written, not as a word-split variable: that
+	// is how a quoted path becomes a literal quote character in an argument.
+	if strings.Contains(s, "$_f") || strings.Contains(s, "$_p") {
+		t.Errorf("flags are expanded from a variable, which cannot preserve quoting:\n%s", s)
+	}
+}
+
+// And a container with no recorded files keeps working exactly as before: the
+// flags collapse to empty and compose discovers the default file itself.
+func TestNoRecordedFilesFallsBackToDiscovery(t *testing.T) {
+	s := inPlaceScript("/opt/stacks/site", "", nil, []string{"web"})
+	if strings.Contains(s, "-f '") {
+		t.Errorf("a -f flag appeared with no recorded files:\n%s", s)
+	}
+	if !strings.Contains(s, "_run() { $_c") {
+		t.Errorf("the wrapper does not fall back to plain compose:\n%s", s)
+	}
+}

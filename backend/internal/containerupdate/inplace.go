@@ -26,7 +26,7 @@ import (
 //
 // Plural: one image can back several services in a project, and recreating only
 // one of them leaves the others running the old image.
-func inPlaceScript(dir string, services ...string) string {
+func inPlaceScript(dir, project string, files, services []string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	// Asked about BEFORE cd, and reported as a marker.
@@ -53,6 +53,51 @@ func inPlaceScript(dir string, services ...string) string {
 	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
 	b.WriteString("fi\n")
 
+	// Use the project's OWN compose files, when they are here.
+	//
+	// Without this, compose re-discovers files by their default names in this
+	// directory -- and a project assembled from an overlay does not define its
+	// services in those files. keith's aptly stack is docker-compose.yml plus
+	// docker-compose.tls-ui.yml, with the caddy service only in the overlay, so
+	// every attempt to recreate caddy reported "no such service" and every rebuild
+	// of caddy:2-alpine was written off as an orphaned container no rollout could
+	// fix. Nothing was wrong with the container; compose had recorded both files
+	// on it all along.
+	//
+	// Guarded by existence, which is why collecting these paths was avoided
+	// before: a project deployed from INSIDE a container records that container's
+	// paths, which are not on the host. If any recorded file is missing here, fall
+	// through to default discovery -- the previous behaviour -- rather than
+	// failing on a path that was never going to resolve.
+	//
+	// Passed through a shell FUNCTION rather than a variable of flags. A variable
+	// has to be expanded unquoted to split into separate arguments, and then the
+	// quoting that protects a path with a space in it arrives as literal quote
+	// characters -- compose looking for a file named `'/root/x.yml'`. A function
+	// keeps the arguments as written.
+	flags := ""
+	for _, f := range files {
+		flags += " -f " + shellQuote(f)
+	}
+	if project != "" {
+		// Named explicitly so the operation cannot land on a DIFFERENT project
+		// that happens to derive the same name from these files.
+		flags += " -p " + shellQuote(project)
+	}
+	b.WriteString("_own=0\n")
+	if len(files) > 0 {
+		cond := make([]string, 0, len(files))
+		for _, f := range files {
+			cond = append(cond, fmt.Sprintf("[ -f %s ]", shellQuote(f)))
+		}
+		fmt.Fprintf(&b, "if %s; then _own=1; fi\n", strings.Join(cond, " && "))
+	}
+	if flags != "" {
+		fmt.Fprintf(&b, "_run() { if [ \"$_own\" = 1 ]; then $_c%s \"$@\"; else $_c \"$@\"; fi; }\n", flags)
+	} else {
+		b.WriteString("_run() { $_c \"$@\"; }\n")
+	}
+
 	// Confirm compose can actually see a project HERE before touching anything.
 	//
 	// working_dir is recorded by whatever ran compose. For the ordinary case --
@@ -61,7 +106,7 @@ func inPlaceScript(dir string, services ...string) string {
 	// container it is whatever that container saw, and the file may not be here
 	// at all. Running blind would either fail confusingly or, worse, act on a
 	// DIFFERENT project that happens to live at the same path.
-	b.WriteString("if ! $_c config --services >/dev/null 2>&1; then\n")
+	b.WriteString("if ! _run config --services >/dev/null 2>&1; then\n")
 	b.WriteString("  echo '::NOPROJECT::' >&2; exit 3\n")
 	b.WriteString("fi\n")
 
@@ -71,7 +116,7 @@ func inPlaceScript(dir string, services ...string) string {
 	// finding that out after recreating half of them is worse than not starting.
 	targets := ""
 	for _, service := range services {
-		fmt.Fprintf(&b, "if ! $_c config --services 2>/dev/null | grep -qx %s; then\n",
+		fmt.Fprintf(&b, "if ! _run config --services 2>/dev/null | grep -qx %s; then\n",
 			shellQuote(service))
 		b.WriteString("  echo '::NOSERVICE::' >&2; exit 4\n")
 		b.WriteString("fi\n")
@@ -81,8 +126,8 @@ func inPlaceScript(dir string, services ...string) string {
 	// Pull first, then recreate. `up -d` alone finds the tag already present
 	// locally and starts the old bytes again -- which is the entire failure this
 	// exists to fix.
-	fmt.Fprintf(&b, "$_c pull%s\n", targets)
-	fmt.Fprintf(&b, "$_c up -d%s\n", targets)
+	fmt.Fprintf(&b, "_run pull%s\n", targets)
+	fmt.Fprintf(&b, "_run up -d%s\n", targets)
 	return b.String()
 }
 

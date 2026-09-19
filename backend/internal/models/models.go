@@ -189,6 +189,16 @@ type APIToken struct {
 // other.
 const ConsoleTokenNamePrefix = "Headlamp console for "
 
+// LogConsoleTokenNamePrefix is the same idea for the embedded log console: a
+// token Provenance minted so somebody could open Dashboards without being asked
+// for a password, which must die with their session for the same reason.
+//
+// A separate prefix rather than a shared one, because the two consoles are
+// revoked in the same breath but read very differently in a token list -- and a
+// name that says "Headlamp" for a log console is the kind of small lie that
+// wastes an hour later.
+const LogConsoleTokenNamePrefix = "Log console for "
+
 // Role is a named collection of permissions.
 type Role struct {
 	ID          uuid.UUID `json:"id"`
@@ -498,15 +508,28 @@ type Container struct {
 	// Where this container's compose project lives, from its own labels. This is
 	// what lets an image be updated in place without Provenance holding a copy of
 	// the compose file.
-	//
-	// Only the working directory, not the config file paths: those are recorded
-	// as whatever ran compose saw them, so a project deployed FROM a container
-	// carries that container's paths, which do not exist on the host.
 	ComposeProject string `json:"composeProject,omitempty"`
 	ComposeService string `json:"composeService,omitempty"`
 	ComposeDir     string `json:"composeDir,omitempty"`
-	Status         string `json:"status,omitempty"`
-	Ports          string `json:"ports,omitempty"`
+	// ComposeFiles is the project's own file list, from
+	// com.docker.compose.project.config_files.
+	//
+	// This was deliberately NOT collected at first, on the grounds that the paths
+	// are whatever ran compose saw — a project deployed from inside a container
+	// records that container's paths, which do not exist on the host. True, and
+	// the answer is to check they exist, not to do without them: the working
+	// directory alone means compose re-discovers files by their default names, and
+	// a project built from an OVERLAY does not define its services in those files.
+	//
+	// keith's aptly stack is exactly that: docker-compose.yml plus
+	// docker-compose.tls-ui.yml, with the caddy service only in the overlay.
+	// Rediscovering the default file found no caddy service, so every rebuild of
+	// caddy:2-alpine was reported as an orphaned container that no rollout could
+	// ever update — while the container was perfectly ordinary and compose knew
+	// exactly which two files described it.
+	ComposeFiles []string `json:"composeFiles,omitempty"`
+	Status       string   `json:"status,omitempty"`
+	Ports        string   `json:"ports,omitempty"`
 }
 
 type Session struct {
