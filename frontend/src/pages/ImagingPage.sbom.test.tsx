@@ -16,6 +16,7 @@ vi.mock("../api/imaging", async () => {
     imageSbomPackages: vi.fn(),
     downloadImageSbom: vi.fn(),
     imageDownloadUrl: (n: string) => `/api/v1/imaging/images/${n}/download?token=tok`,
+    startImageDownload: vi.fn(),
   };
 });
 import * as api from "../api/imaging";
@@ -74,5 +75,23 @@ describe("Images tab — package count", () => {
 
     expect(screen.getByText("openssl")).toBeInTheDocument();
     expect(screen.queryByText("adduser")).not.toBeInTheDocument();
+  });
+});
+
+// The Download button answered an error twice: first because it was a link straight at
+// the API (a navigation carries no Authorization header), then because the route was
+// still behind the header check despite a comment saying otherwise. What is testable
+// from here is the third way it can break: an href is built when the row renders, and
+// the token in it expires in fifteen minutes, so a tab left open holds a dead link.
+describe("Images tab — download", () => {
+  it("is an action taken on click, not a link built at render time", async () => {
+    renderTab();
+    const btn = await screen.findByRole("button", { name: "Download" });
+    // No href: the URL must be built from the token that is current when the
+    // operator clicks, not the one that was current when the table was drawn.
+    expect(btn).not.toHaveAttribute("href");
+
+    fireEvent.click(btn);
+    expect(api.startImageDownload).toHaveBeenCalledWith(IMAGE.name);
   });
 });

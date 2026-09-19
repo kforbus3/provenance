@@ -28,6 +28,24 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 	r.Post("/imaging/heartbeat", h.heartbeat)
 	mountImager(r, h)
 
+	// The image download, outside the group below on purpose.
+	//
+	// A browser navigating to a multi-gigabyte file cannot set an Authorization
+	// header, and Provenance's session cookies are scoped to /api/v1/auth so they
+	// never arrive here either. So it carries its token as a query parameter and
+	// checks it itself, exactly as the backup download does -- which keeps the
+	// response streaming instead of being buffered in JS.
+	//
+	// It lived in mountBuilds with a comment saying it was outside the authenticated
+	// group. It was not: mountBuilds is called with the group's router, so
+	// RequireAuth ran first and answered "missing access token" before the handler
+	// could look at the token in the URL. The comment was the only thing that had
+	// been arranged; the route had not. It is outside the group HERE, where being
+	// outside it is visible, and TestImageDownloadIsReachableWithoutABearerHeader
+	// drives the real router so a future move back inside fails a test instead of a
+	// download.
+	r.Get("/imaging/images/{name}/download", h.downloadImage)
+
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
 

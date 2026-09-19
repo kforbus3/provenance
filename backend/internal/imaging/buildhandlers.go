@@ -45,14 +45,11 @@ func mountBuilds(r chi.Router, h *handler) {
 	// Downloads. Imaging.View, not Build: reading an artefact is not producing
 	// one, and the person who has to hand an SBOM to an auditor is not
 	// necessarily the person allowed to start a build.
-	// NOT in the bearer-only group: a browser navigating to a multi-gigabyte
-	// download cannot set an Authorization header, and Provenance's session cookies
-	// are scoped to /api/v1/auth so they never arrive here either. The frontend used
-	// to link straight here on the belief that "the cookie carries the auth" -- it
-	// does not, and the Download button answered 401 for as long as that was
-	// believed. Authenticated from the token query parameter, exactly as the backup
-	// download is, so the response can still stream instead of being buffered in JS.
-	r.Get("/imaging/images/{name}/download", h.downloadImage)
+	//
+	// The image download is NOT here. It cannot be: every route in this function is
+	// registered on a router that already requires a bearer header, and a browser
+	// navigating to a download cannot send one. It is registered in Mount, outside
+	// that group, and authenticates itself from the token query parameter.
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images/{name}/sbom", h.downloadSBOM)
 
 	// The build overlay: files layered into an image.

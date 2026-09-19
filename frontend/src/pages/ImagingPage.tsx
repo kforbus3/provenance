@@ -31,7 +31,7 @@ import {
 } from "./imaging/writable-state";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
-  forgetImaging, imageDownloadUrl, imageSbomPackages, downloadImageSbom, imagingNow, installOnMachine,
+  forgetImaging, startImageDownload, imageSbomPackages, downloadImageSbom, imagingNow, installOnMachine,
   listBuilds, listBundles, listImages,
   deleteMachine, deleteRollout, forgetBuild, forgetFinishedBuilds, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
   type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
@@ -1319,7 +1319,7 @@ function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
                     {/* Imaging.View, not Build: taking a copy of an image is not
                         producing one, and the person who has to hand it to
                         somebody is not necessarily allowed to start a build. */}
-                    <Button size="small" href={imageDownloadUrl(i.name)}
+                    <Button size="small" onClick={() => startImageDownload(i.name)}
                             sx={{ textTransform: "none" }}>Download</Button>
                     {canBuild && (
                       <Button size="small" color="error" disabled={remove.isPending}

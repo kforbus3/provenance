@@ -376,6 +376,19 @@ export function imageDownloadUrl(name: string): string {
   return `/api/v1/imaging/images/${encodeURIComponent(name)}/download?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Start the download, building the URL at the moment of the click.
+ *
+ * Not an `href` on the button. An href is computed when the row renders, and the
+ * access token it embeds lives fifteen minutes -- so an Images tab left open across
+ * a token refresh held a link that was already dead, and the button answered 401 for
+ * no reason the operator could see. Reading the token when the click happens is the
+ * difference between a link and an action, and this is an action.
+ */
+export function startImageDownload(name: string): void {
+  window.location.assign(imageDownloadUrl(name));
+}
+
 /** One package from an image's SBOM. */
 export type SbomPackage = { name: string; version: string };
 
