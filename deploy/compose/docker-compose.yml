@@ -63,6 +63,15 @@ services:
       PROV_ALDGATE_URL: ${PROV_ALDGATE_URL:-}
       PROV_ALDGATE_USER: ${PROV_ALDGATE_USER:-admin}
       PROV_ALDGATE_PASSWORD: ${PROV_ALDGATE_PASSWORD:-}
+      # Console tiers. The embedded log console runs as one of these, picked from
+      # the viewer's Provenance role, so nobody is asked for a collector password
+      # and no browser is sent one. Both come from the collector's own .env, where
+      # its bootstrap generates them. Unset means the console falls back to asking
+      # for a password, which is what it did before this existed.
+      PROV_ALDGATE_CONSOLE_VIEWER_USER: ${PROV_ALDGATE_CONSOLE_VIEWER_USER:-prov_viewer}
+      PROV_ALDGATE_CONSOLE_VIEWER_PASSWORD: ${PROV_ALDGATE_CONSOLE_VIEWER_PASSWORD:-}
+      PROV_ALDGATE_CONSOLE_ADMIN_USER: ${PROV_ALDGATE_CONSOLE_ADMIN_USER:-prov_admin}
+      PROV_ALDGATE_CONSOLE_ADMIN_PASSWORD: ${PROV_ALDGATE_CONSOLE_ADMIN_PASSWORD:-}
       PROV_ENV: ${PROV_ENV:-${FLEET_ENV:-development}}
       # Server timezone — schedules compute their next run in this zone. Set TZ
       # in .env to your local zone (e.g. America/New_York) so "03:00" means your

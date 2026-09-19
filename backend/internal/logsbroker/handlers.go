@@ -14,19 +14,36 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
-// Mount attaches the log search routes.
+// Permissions. Searching is read-only; administering is the console that can
+// delete an index or rewrite a retention policy, which is administering the audit
+// trail itself and is deliberately a separate grant.
+const (
+	permLogsView       = "Logs.View"
+	permLogsAdminister = "Logs.Administer"
+)
+
+// Mount attaches the log search routes and the console's two endpoints.
 //
-// One permission, Logs.View, and it is a read-only surface: there is nothing
-// here that changes a log, because changing a log is not a thing an audit trail
-// should offer. Retention is the collector's business.
+// Searching is read-only: there is nothing here that changes a log, because
+// changing a log is not a thing an audit trail should offer. Retention is the
+// collector's business.
 func Mount(r chi.Router, d *app.Deps) {
 	c := New(d.Cfg.AldgateURL, d.Cfg.AldgateUser, d.Cfg.AldgatePassword)
 	h := &handler{d: d, c: c}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
-		pr.With(d.Auth.RequirePermission("Logs.View")).Get("/logs/search", h.search)
-		pr.With(d.Auth.RequirePermission("Logs.View")).Get("/logs/hosts", h.hosts)
-		pr.With(d.Auth.RequirePermission("Logs.View")).Get("/logs/status", h.status)
+		pr.With(d.Auth.RequirePermission(permLogsView)).Get("/logs/search", h.search)
+		pr.With(d.Auth.RequirePermission(permLogsView)).Get("/logs/hosts", h.hosts)
+		pr.With(d.Auth.RequirePermission(permLogsView)).Get("/logs/status", h.status)
+		pr.With(d.Auth.RequirePermission(permLogsView)).Post("/logs/console-token", h.consoleToken)
+	})
+	// The console's own authorization check, which nginx calls for every request
+	// to /aldgate/. Authenticated by the console COOKIE rather than a bearer
+	// header, because these are page loads the browser makes: see cookieAsBearer.
+	r.Group(func(pr chi.Router) {
+		pr.Use(cookieAsBearer)
+		pr.Use(d.Auth.RequireAuth)
+		pr.With(d.Auth.RequirePermission(permLogsView)).Get("/logs/console-authz", h.consoleAuthz)
 	})
 }
 

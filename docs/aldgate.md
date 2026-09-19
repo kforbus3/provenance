@@ -47,6 +47,8 @@ and retention is the collector's business.
 | `PROV_ALDGATE_USER` | Defaults to `admin`. |
 | `PROV_ALDGATE_PASSWORD` | From the collector's `.env`. |
 | `ALDGATE_HOST` | `host:port` of Dashboards, for the `/aldgate/` proxy. Defaults to a nonexistent name so a deployment without a collector gets a 502 on that one path instead of an nginx that will not start. |
+| `PROV_ALDGATE_CONSOLE_VIEWER_USER` / `..._PASSWORD` | The read-only console account (default user `prov_viewer`). From the collector's `.env`, where `make bootstrap` generates it. |
+| `PROV_ALDGATE_CONSOLE_ADMIN_USER` / `..._PASSWORD` | The full console account (default user `prov_admin`), same source. |
 
 The collector must serve Dashboards under the sub-path: set
 `ALDGATE_BASEPATH=/aldgate` and `ALDGATE_REWRITE_BASEPATH=true` in Aldgate's
@@ -58,6 +60,42 @@ The collector also needs `ALDGATE_API_BIND=0.0.0.0` when Provenance runs on a
 different machine, which it does here — the broker cannot reach a loopback port
 on another host. The security plugin stays on either way, so the credential is
 what protects 9200.
+
+## Opening the console
+
+**Open log console** signs you in. It used to hand you to Dashboards' own login
+form, which meant the only credential that worked was the collector's `admin`
+account — every privilege there is — and your Provenance role had no bearing on
+what you could do once past it. The collector had no idea who you were either.
+
+Now Provenance mints a short-lived console session, scoped to `/api/v1/logs` and
+held in an HttpOnly cookie on `/aldgate`. nginx checks that cookie on every
+request to the console through `auth_request`, and the backend answers with the
+collector credential for the tier your permissions earn:
+
+| Permission | Console |
+|---|---|
+| `Logs.View` | Read-only. Search, visualise, build dashboards; Dashboards itself runs in read-only mode and the account can read only `syslog-*` and `snmp-*`. |
+| `Logs.Administer` | Everything: index management, retention policies, the collector's own settings. Seeded to Super Administrator and Administrator only. |
+
+Two properties worth knowing:
+
+- **The credential never reaches the browser.** It travels in a response header
+  from an `internal` nginx location, which nginx copies into the proxied request.
+  Nothing in a page, a body or a cookie carries it.
+- **The tier is decided per request, not at sign-in.** A console session lasts
+  twelve hours; a role change must not. Someone moved from Administrator to
+  Operator drops to the read-only tier on their next request, with no cookie to
+  hunt down.
+
+Opening the console is audited as `logs.console.open` with the tier, and signing
+out of Provenance revokes the session, so the next person at that browser does not
+inherit a working console.
+
+If the console asks for a password, the collector's credentials have not reached
+Provenance: run `make bootstrap` on the collector and copy
+`ALDGATE_CONSOLE_VIEWER_PASSWORD` / `ALDGATE_CONSOLE_ADMIN_PASSWORD` from its
+`.env` into Provenance's `PROV_ALDGATE_CONSOLE_*` variables.
 
 ## Enrolling hosts
 

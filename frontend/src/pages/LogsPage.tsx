@@ -8,7 +8,7 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useQuery } from "@tanstack/react-query";
 import {
-  searchLogs, logHosts, logStatus,
+  searchLogs, logHosts, logStatus, openLogConsole,
   type LogEntry, type LogQuery,
 } from "../api/logs";
 
@@ -65,6 +65,24 @@ export function LogsPage() {
   // Held separately from the inputs so typing does not fire a query per
   // keystroke against a search cluster.
   const [applied, setApplied] = useState<LogQuery>({ since: "now-1h", limit: 200 });
+  const [opening, setOpening] = useState(false);
+  const [consoleError, setConsoleError] = useState("");
+
+  // The session is minted BEFORE the tab opens, and the tab is opened from the
+  // click, so the browser does not treat it as a popup. Opening first and minting
+  // afterwards would land the person on a 401 from nginx and look broken.
+  const openConsole = async () => {
+    setOpening(true);
+    setConsoleError("");
+    try {
+      const c = await openLogConsole();
+      window.open(`${c.consoleBase}/`, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setConsoleError(e instanceof Error ? e.message : "could not open the log console");
+    } finally {
+      setOpening(false);
+    }
+  };
 
   const status = useQuery({ queryKey: ["log-status"], queryFn: logStatus, retry: false });
   const hosts = useQuery({
@@ -123,11 +141,14 @@ export function LogsPage() {
               <RefreshIcon />
             </IconButton>
           </Tooltip>
-          {/* The deep-analysis surface, deliberately not reimplemented here. */}
-          <Button startIcon={<OpenInNewIcon />} href="/aldgate/" target="_blank"
-            rel="noopener noreferrer"
+          {/* The deep-analysis surface, deliberately not reimplemented here.
+              It signs itself in: openLogConsole mints a scoped console session and
+              the server swaps that for the collector credential this person's role
+              earns, so nobody is asked for the password the console's own login
+              form would otherwise demand. */}
+          <Button startIcon={<OpenInNewIcon />} onClick={openConsole} disabled={opening}
             title="Open the full log console (OpenSearch Dashboards) for visualisations, alerting and Security Analytics">
-            Open log console
+            {opening ? "Opening…" : "Open log console"}
           </Button>
         </Stack>
       </Stack>
@@ -166,6 +187,14 @@ export function LogsPage() {
         </Alert>
       )}
       {results.isError && <Alert severity="error" sx={{ mb: 2 }}>{err || "The search failed."}</Alert>}
+      {/* Shown here rather than in a toast: the usual cause is a collector whose
+          console credentials have not been provisioned, and the fix is a sentence
+          long. A button that quietly does nothing is the worst version of this. */}
+      {consoleError ? (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setConsoleError("")}>
+          {consoleError}
+        </Alert>
+      ) : null}
 
       {/* ?? [] on every list: the server now always sends arrays, but a page
           that unmounts itself because one field came back null is a blank

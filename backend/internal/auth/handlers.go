@@ -378,10 +378,20 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		//
 		// Best effort, and after Logout: failing to retire a token must not
 		// leave the caller signed in.
-		consoles, err := h.svc.store.RevokeAPITokensByNamePrefix(r.Context(), p.UserID,
-			models.ConsoleTokenNamePrefix)
-		if err != nil {
-			consoles = 0
+		// Both consoles. Each has its own name prefix so a token list reads
+		// truthfully, which means signing out has to ask for both -- a single
+		// prefix check here would leave the other console's cookie working for
+		// whoever sits down at this browser next.
+		consoles := 0
+		for _, prefix := range []string{
+			models.ConsoleTokenNamePrefix,
+			models.LogConsoleTokenNamePrefix,
+		} {
+			n, err := h.svc.store.RevokeAPITokensByNamePrefix(r.Context(), p.UserID, prefix)
+			if err != nil {
+				continue
+			}
+			consoles += n
 		}
 		detail := map[string]any{}
 		if consoles > 0 {

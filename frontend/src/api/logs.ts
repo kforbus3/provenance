@@ -67,3 +67,29 @@ export async function searchLogs(q: LogQuery): Promise<LogResult> {
   const { data } = await api.get<LogResult>("/api/v1/logs/search", { params: q });
   return data;
 }
+
+export type LogConsole = {
+  consoleBase: string;
+  /** "view" (read-only) or "administer" — decided from your Provenance role. */
+  tier: string;
+  expiresAt: string;
+};
+
+/**
+ * Open the log console as yourself.
+ *
+ * The console used to ask for a username and password of its own, which meant the
+ * only credential that worked was the collector's admin account and a Provenance
+ * role had nothing to do with what you could do once inside. This asks Provenance
+ * for a short-lived console session instead: it sets an HttpOnly cookie scoped to
+ * the console's path, and every request the console then makes is authorised
+ * server-side with the collector credential your permissions earn. No password is
+ * typed and none is sent to the browser.
+ *
+ * Called before opening the tab rather than on page load: it mints a credential
+ * and is audited, so it belongs to an explicit action.
+ */
+export async function openLogConsole(): Promise<LogConsole> {
+  const { data } = await api.post<LogConsole>("/api/v1/logs/console-token", {});
+  return data;
+}

@@ -13,7 +13,10 @@ import * as logsApi from "../api/logs";
 
 vi.mock("../api/logs", async () => {
   const actual = await vi.importActual<typeof logsApi>("../api/logs");
-  return { ...actual, logStatus: vi.fn(), logHosts: vi.fn(), searchLogs: vi.fn() };
+  return {
+    ...actual, logStatus: vi.fn(), logHosts: vi.fn(), searchLogs: vi.fn(),
+    openLogConsole: vi.fn(),
+  };
 });
 
 const entry = (over: Partial<logsApi.LogEntry> = {}): logsApi.LogEntry => ({
@@ -87,10 +90,38 @@ describe("LogsPage", () => {
     expect(last?.q).toBe("refused conn");
   });
 
-  it("offers the deep-analysis console rather than reimplementing it", async () => {
+  // The console signs itself in, which means the session has to be minted BEFORE
+  // the tab opens. Opening first and minting afterwards lands the person on a 401
+  // from nginx -- which looks exactly like the console being broken.
+  it("mints a console session before opening the console", async () => {
+    vi.mocked(logsApi.openLogConsole).mockResolvedValue({
+      consoleBase: "/aldgate", tier: "view", expiresAt: "2026-09-19T12:00:00Z",
+    });
+    const opened: string[] = [];
+    vi.spyOn(window, "open").mockImplementation((url) => {
+      opened.push(String(url));
+      return null;
+    });
+
     renderPage();
-    const link = await screen.findByRole("link", { name: /Open log console/ });
-    expect(link).toHaveAttribute("href", "/aldgate/");
+    fireEvent.click(await screen.findByRole("button", { name: /Open log console/ }));
+
+    await waitFor(() => expect(vi.mocked(logsApi.openLogConsole)).toHaveBeenCalled());
+    await waitFor(() => expect(opened).toEqual(["/aldgate/"]));
+  });
+
+  // A console that cannot be opened must say so. The usual cause is a collector
+  // whose console credentials were never copied into Provenance, and the fix is
+  // one sentence long -- but a button that silently does nothing tells nobody.
+  it("says why when the console cannot be opened", async () => {
+    vi.mocked(logsApi.openLogConsole).mockRejectedValue(
+      new Error("the console's credentials are not configured"));
+    vi.spyOn(window, "open").mockImplementation(() => null);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Open log console/ }));
+
+    expect(await screen.findByText(/credentials are not configured/)).toBeInTheDocument();
   });
 
   // The exact shape the server used to return for a host with nothing in the

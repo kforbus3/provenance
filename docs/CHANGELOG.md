@@ -7,6 +7,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**A container whose compose project uses an overlay can be updated again.** The
+in-place path `cd`-ed into the project's working directory and let compose
+rediscover files by their default names — so a project assembled from
+`docker-compose.yml` **plus** an overlay, with the service defined only in the
+overlay, reported "no such service". Every rebuild of that image was then written
+off as an orphaned container no rollout could ever fix, while the container was
+perfectly ordinary and Docker had recorded both files on it the whole time. The
+container's own `com.docker.compose.project.config_files` label is now collected
+and used, verified to exist on the host first (a project deployed from inside a
+container records paths this host does not have, which is why they were skipped
+originally) and falling back to discovery when it does not. Every compose
+invocation goes through one wrapper, so the check, the pull and the recreate
+cannot act on different projects.
+
+**The log console signs you in, and your Provenance role decides what you can do
+there.** `/aldgate/` was a bare proxy: Dashboards asked for its own username and
+password, so the only credential that worked was the collector's `admin` account
+— every privilege there is — and a Provenance role had no bearing on any of it.
+Now **Open log console** mints a short-lived scoped session, nginx checks it on
+every request, and the backend answers with the collector credential for the
+tier the person's permissions earn: `Logs.View` opens a read-only console,
+`Logs.Administer` (new, Administrator and above) opens the full one. The
+credential travels in a header from an internal location and never reaches the
+browser, and the tier is evaluated per request — so a role change takes effect on
+the next request rather than when a twelve-hour cookie expires.
+
+
 **An orphan container is no longer reported as "already past" the update.** A
 rebuild rollout of `caddy:2-alpine` skipped its only host saying "this host was
 already past every image in this rollout — its compose files name newer tags than
