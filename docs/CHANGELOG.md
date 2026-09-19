@@ -5,7 +5,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.8.0 — 2026-09-19
+
+**Provenance reads the logs and the mount tables it was already collecting.** Three
+of the four changes here have the same shape: Provenance held a fact and never
+volunteered it, so the operator had to go and ask. A host that starts logging errors
+now says so on the dashboard; a host that mounts its disks from another machine now
+corroborates — or contradicts — the dependency graph somebody typed in by hand; and
+enrolling a fleet into log collection is a bulk action rather than a trip to
+Automation.
 
 **The dependency graph is now checked against the machines.** Host topology is
 entered by hand, and a hand-entered graph that nothing ever checks drifts in

@@ -21,6 +21,21 @@ const KINDS: { value: HostDependencyKind; label: string; help: string }[] = [
   { value: "other", label: "Other", help: "an application-level dependency worth recording" },
 ];
 
+// evidenceNote is the note stored when a suggestion is accepted: what was observed at
+// the moment it was recorded.
+//
+// Bounded, and cut at a boundary. The first version sliced at 200 characters flat and
+// a real note came out ending "...on /mnt/pve/nas_iso_" -- a truncation that looks
+// like corrupted data rather than an abbreviation, on the one edge in this fleet
+// anybody will read twice.
+export function evidenceNote(evidence: string, limit = 240): string {
+  const full = `observed: ${evidence}`;
+  if (full.length <= limit) return full;
+  const cut = full.slice(0, limit);
+  const at = Math.max(cut.lastIndexOf(", "), cut.lastIndexOf(" "));
+  return `${cut.slice(0, at > limit / 2 ? at : limit).trimEnd()}…`;
+}
+
 // Recording what a host stands on.
 //
 // This is the input side of topology: nothing warns about a dependency nobody
@@ -69,7 +84,7 @@ export default function HostDependencies({ hostId }: { hostId: string }) {
   // the one thing a person reading this edge in six months will want.
   const accept = useMutation({
     mutationFn: (v: { dependsOnId: string; kind: HostDependencyKind; evidence: string }) =>
-      addHostDependency(hostId, v.dependsOnId, v.kind, `observed: ${v.evidence}`.slice(0, 200)),
+      addHostDependency(hostId, v.dependsOnId, v.kind, evidenceNote(v.evidence)),
     onSuccess: () => { setError(null); invalidate(); },
     onError: (e: unknown) => {
       const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;

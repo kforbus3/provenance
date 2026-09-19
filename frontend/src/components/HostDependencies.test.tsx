@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import HostDependencies from "./HostDependencies";
+import HostDependencies, { evidenceNote } from "./HostDependencies";
 import * as hostsApi from "../api/hosts";
 
 function renderWith() {
@@ -145,5 +145,34 @@ describe("corroborating the graph against the hosts", () => {
     });
     renderWith();
     expect(await screen.findByText(/not the same as finding nothing/i)).toBeInTheDocument();
+  });
+});
+
+// A note that ends mid-word reads as corrupted data rather than as an abbreviation.
+describe("the note stored with an accepted suggestion", () => {
+  it("keeps a short evidence line whole", () => {
+    expect(evidenceNote("mounts nas:/tank/vm on /mnt/vm (nfs4)"))
+      .toBe("observed: mounts nas:/tank/vm on /mnt/vm (nfs4)");
+  });
+
+  it("cuts a long one at a boundary, not mid-word", () => {
+    const long =
+      "mounts 10.0.0.1:/mnt/p03/vhost_vm_storage on /mnt/pve/nas_vm_storage (nfs), " +
+      "10.0.0.1:/mnt/p03/vhost_backups on /mnt/pve/nas_backup_10g (nfs), " +
+      "10.0.0.1:/mnt/p03/vhost_iso on /mnt/pve/nas_iso_10g (nfs4)";
+    // Every limit, not one: a single chosen limit can land on a space by luck, and
+    // then the test passes with no boundary logic at all -- which is exactly what
+    // happened the first time this was written.
+    const full = `observed: ${long}`;
+    for (let limit = 60; limit <= 160; limit++) {
+      const note = evidenceNote(long, limit);
+      expect(note.length).toBeLessThanOrEqual(limit + 1); // the ellipsis
+      expect(note.endsWith("…")).toBe(true);
+      // What is kept is a prefix of the real evidence, and the original continues
+      // with a separator -- so no word was split in half.
+      const kept = note.slice(0, -1);
+      expect(full.startsWith(kept)).toBe(true);
+      expect(full.slice(kept.length, kept.length + 1)).toMatch(/[ ,]/);
+    }
   });
 });
