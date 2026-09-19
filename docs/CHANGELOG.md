@@ -7,6 +7,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**`make redeploy-single` now rebuilds every service it should.** It rebuilt
+backend, frontend, grype-scanner, ansible-runner and prov-updater — but not
+builder-runner or dockerproxy, both of which are built from this repo. The failure
+mode is the worst kind: the fix is committed, the deploy reports success, and the
+old code keeps running because nothing rebuilt it. A sidecar-cleanup fix was
+"deployed" to a container that had been up for 27 hours. A test now compares the
+compose file's `build:` services against the recipe, so a service added later
+cannot be forgotten.
+
+
 **Deleting an image now takes its SBOMs with it.** `delete_image` removed a
 hardcoded `.sha256` and `.json`; the SBOM step had since started writing
 `.cdx.json`, `.spdx.json` and `.packages.tsv`, and nothing updated that list. Four

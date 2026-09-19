@@ -62,8 +62,16 @@ up-single: env ## Single-server production: (re)build & start the WHOLE stack in
 	@echo "hosts may show offline for a minute or two. For code-only updates use 'make redeploy-single'."
 
 .PHONY: redeploy-single
-redeploy-single: env ## Update app code (backend/frontend/scanner/ansible/updater) in place, leaving the jump host + overlay UP (no host-offline blip)
-	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner prov-updater
+redeploy-single: env ## Update every locally built app service in place, leaving the jump host + overlay UP (no host-offline blip)
+	@# EVERY service with a `build:` stanza except the jump host, which is excluded
+	@# on purpose (recreating it drops the overlay and takes hosts offline).
+	@#
+	@# builder-runner and dockerproxy were missing from this list, and the symptom is
+	@# the worst kind: a fix to the imaging runner or to the socket proxy's rules is
+	@# committed, deployed, reported as deployed -- and the old code keeps running,
+	@# because nothing rebuilt it. That is how a sidecar-cleanup fix shipped to a
+	@# 27-hour-old container. If a service is built here, it belongs in this list.
+	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner prov-updater builder-runner dockerproxy
 	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
 	@# This target deliberately does not touch the jump host — which means a release
 	@# that changes its ports, volumes or entrypoint (e.g. publishing the OpenVPN port)
