@@ -31,7 +31,12 @@ const errMsg = (e: unknown, fallback: string) =>
 // digest, and showing both as separate badges reads as two problems.
 type Verdict =
   | "error" | "newer" | "moved" | "current" | "unknown"
-  | "local" | "gone" | "self" | "unchecked" | "superseded" | "unavailable";
+  | "local" | "gone" | "self" | "unchecked" | "superseded" | "unavailable"
+  // A newer tag exists and a rollout can never apply it: a major version of an
+  // image that owns its on-disk format. Its own verdict so it is neither counted
+  // as available work nor swept into "roll out everything", where the refusal
+  // rejects the whole request and blocks the real updates behind it.
+  | "migration";
 
 // hostsOf normalises the hosts list.
 //
@@ -79,6 +84,7 @@ export function verdictOf(u: ImageUpdate, all: ImageUpdate[] = []): Verdict {
   // "cannot compare".
   switch (u.status) {
     case "local": return "local";
+    case "migration": return "migration";
     case "update": return "newer";
     case "moved": return "moved";
     case "unorderable": return "unknown";
@@ -110,6 +116,12 @@ function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
       );
     case "newer":
       return <Chip label={`${u.latestTag} available`} size="small" color="warning" />;
+    case "migration":
+      return (
+        <Tooltip title={u.note ?? ""}>
+          <Chip label={`${u.latestTag} — migration, not an update`} size="small" color="error" variant="outlined" />
+        </Tooltip>
+      );
     case "moved":
       return (
         <Tooltip title="The tag points at different bytes than these hosts are running — usually a rebuild of the same version.">
@@ -302,8 +314,12 @@ export function ContainerUpdatesTab() {
     // not a decision, but it is the row an operator will look for after
     // wondering why a rollout of the tag above it changed nothing.
     const rank: Record<Verdict, number> = {
-      newer: 0, moved: 1, superseded: 2, unavailable: 3, unknown: 4, error: 5,
-      unchecked: 6, current: 7, local: 8, self: 9, gone: 10,
+      // A migration sits directly under the actionable rows: it is not work anyone
+      // can do from here, but it is a decision someone has to make elsewhere, and
+      // burying a database that needs migrating among "up to date" rows is how it
+      // gets forgotten until the version it is on stops getting security fixes.
+      newer: 0, moved: 1, migration: 2, superseded: 3, unavailable: 4, unknown: 5,
+      error: 6, unchecked: 7, current: 8, local: 9, self: 10, gone: 11,
     };
     return [...rows].sort((a, b) =>
       rank[verdictOf(a, updates)] - rank[verdictOf(b, updates)] ||

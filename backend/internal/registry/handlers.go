@@ -10,6 +10,7 @@ import (
 
 	"github.com/kforbus3/provenance/backend/internal/app"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/stateful"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -54,7 +55,40 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not list container updates")
 		return
 	}
+	markMigrations(rows)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"updates": rows})
+}
+
+// markMigrations re-labels an "update" that a rollout can never apply.
+//
+// A major-version bump of a stateful image is refused when a rollout is started,
+// which was the whole guard -- and it left two rows on this page reading like
+// ordinary updates forever. That is not cosmetic:
+//
+//   - the summary counts them, so the number of things "available" never reaches
+//     zero no matter what the operator does;
+//   - "roll out everything" includes them, and the refusal rejects the WHOLE
+//     request, so one impossible row blocks every real update behind it.
+//
+// Saying it here, where the list is read, is what lets the page leave them out of
+// the count and out of the selection. The refusal at rollout time stays as the last
+// line of defence, because this annotation is advice and that one is a gate.
+func markMigrations(rows []store.ImageUpdateRow) {
+	for i := range rows {
+		r := &rows[i]
+		if r.Status != "update" || r.LatestTag == "" {
+			continue
+		}
+		how, yes := stateful.MajorBump(r.Repository, r.Tag, r.LatestTag)
+		if !yes {
+			continue
+		}
+		r.Status = "migration"
+		r.Note = r.LatestTag + " crosses a major version of an image that owns its on-disk " +
+			"format. The new version will refuse the existing data directory and the container " +
+			"will restart with the service down. It needs " + how + " first, with both versions " +
+			"available — which a container rollout cannot do."
+	}
 }
 
 func (h *handler) check(w http.ResponseWriter, r *http.Request) {

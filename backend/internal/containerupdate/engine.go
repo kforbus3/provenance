@@ -17,6 +17,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/monitor"
 	"github.com/kforbus3/provenance/backend/internal/pacing"
+	"github.com/kforbus3/provenance/backend/internal/stateful"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -379,7 +380,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		// Refused here as well as when the rollout is created, for the same reason
 		// the rule above is: a rollout created before this existed must not be
 		// applied by a later tick.
-		if how, yes := isStatefulMajorBump(im.Repository, im.FromTag, im.ToTag); yes {
+		if how, yes := stateful.MajorBump(im.Repository, im.FromTag, im.ToTag); yes {
 			e.fail(ctx, r.ID, hostID, fmt.Sprintf(
 				"%s %s → %s crosses a major version. This image owns its on-disk format: "+
 					"the new version refuses the existing data directory and the container "+

@@ -7,6 +7,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**An update a rollout can never apply is no longer offered as one.** A major-version
+bump of an image that owns its on-disk format — `postgres:16-alpine` → `18-alpine` —
+was refused when a rollout started, and listed as an ordinary update until then. That
+was not cosmetic: the summary counted it, so the number of updates "available" could
+never reach zero, and **"Update all" included it — and the refusal rejects the whole
+request, so one impossible row blocked every real update behind it.** Such a row now
+reads *"migration, not an update"* with the reason, is left out of the count, and is
+excluded from bulk rollouts. The refusal at rollout time stays as the last line of
+defence. The knowledge of which images own a format moved into its own package so the
+list and the engine cannot drift apart.
+
+**An interrupted file transfer now reaches a terminal status.** Every other kind of
+in-flight work is reconciled at startup — scans, vulnerability scans, remediations,
+playbook runs, command runs, script runs, enrollment jobs — and SFTP transfers were
+not, so a transfer cut off by a restart read as in-flight forever. Two uploads from
+June were still "started" in September. A transfer has no instance of its own, so it
+is reconciled through its SSH session: ended, owned by a dead instance, or gone.
+
 **Audit forwarding over syslog now defaults to TCP.** It defaulted to UDP, and that
 was measured losing data rather than argued about: sending this fleet's largest real
 audit event — a 14,133-byte host remediation, exactly the kind of record a SIEM exists

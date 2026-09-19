@@ -469,6 +469,13 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	if n, err := s.Store.FailStaleEnrollmentJobs(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("failed orphaned enrollment jobs", "count", n)
 	}
+	// File transfers belong to an SSH session rather than to an instance, so this
+	// one reconciles through the session. Without it an interrupted transfer never
+	// reached a terminal status at all -- two from June were still "started" in
+	// September.
+	if n, err := s.Store.FailStaleSFTPTransfers(ctx, lease, self); err == nil && n > 0 {
+		s.Log.Info("marked orphaned file transfers interrupted", "count", n)
+	}
 	// Revoke certificates issued by instances that have died (keyless now). Leader
 	// only, since it mutates the shared KRL and pushes it to hosts.
 	if s.isLeader() {

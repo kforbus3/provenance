@@ -14,6 +14,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"github.com/kforbus3/provenance/backend/internal/registry"
+	"github.com/kforbus3/provenance/backend/internal/stateful"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -213,7 +214,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	// the same moment: the operator asked for something a rollout cannot do, and
 	// should be told now rather than discover it as a crash-looping database.
 	for _, im := range images {
-		if how, yes := isStatefulMajorBump(im.Repository, im.FromTag, im.ToTag); yes {
+		if how, yes := stateful.MajorBump(im.Repository, im.FromTag, im.ToTag); yes {
 			httpx.WriteError(w, http.StatusBadRequest, im.Repository+" "+im.FromTag+" → "+
 				im.ToTag+" crosses a major version. This image owns its on-disk format: the "+
 				"new version will refuse the existing data directory and the container will "+
