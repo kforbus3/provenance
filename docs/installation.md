@@ -182,15 +182,33 @@ Administration Guide's vulnerability-scanning section for details.
 
 ---
 
-## 8. Next steps
+## 8. Make it useful — the order to do things in
 
-You now have a running Provenance. To make it useful:
+A running Provenance manages nothing until hosts are in it. This is the sequence,
+shortest first, with what each step buys you. Nothing here is optional in the sense
+of "nice to have" — until step 3 there is no history to look at when something
+breaks.
 
-1. **Enroll your first host** — [Host Enrollment Guide](./host-enrollment-guide.md).
-2. **Set up users, roles, and groups** — [Administration Guide](./admin-guide.md).
-3. **Configure single sign-on, notifications, and backups** — [Administration Guide](./admin-guide.md).
-4. **Harden for production / internet exposure** — [Deployment Guide](./deployment.md#7-post-deploy-hardening-checklist) and [Internet Exposure](./internet-exposure.md).
-5. **Know your recovery procedures before you need them** — [Break-Glass Runbook](./break-glass.md) and [Disaster Recovery](./disaster-recovery.md).
+| # | Step | Time | You get |
+|---|---|---|---|
+| 1 | **Enroll your hosts** — [Host Enrollment Guide](./host-enrollment-guide.md) | 2 min each, or one bulk action | Terminal, SFTP, commands, inventory, patch status, container updates |
+| 2 | **Users, roles and groups** — [Administration Guide](./admin-guide.md) | 10 min | Everyone signs in as themselves, and every action is recorded against a person |
+| 3 | **Stand up log collection** — [Logs](./aldgate.md#deploying-a-collector) | 10 min | Every host's logs searchable in one place, with the SIEM console one click away |
+| 4 | **Sign-on, notifications and backups** — [Administration Guide](./admin-guide.md) | 20 min | SSO, alerts that reach you, and a database you can restore |
+| 5 | **Harden it** — [Deployment Guide](./deployment.md#7-post-deploy-hardening-checklist), [Internet Exposure](./internet-exposure.md) | 30 min | Safe to expose, and safe to leave running |
+| 6 | **Learn the recovery paths before you need them** — [Break-Glass](./break-glass.md), [Disaster Recovery](./disaster-recovery.md) | read once | A way back in when the usual way is gone |
+
+Steps 1–3 are the ones that change what the product *is*: after them you can reach
+any machine, see what it is running, and read what it said. Everything later is
+about running it safely for other people.
+
+### Beyond the basics
+
+Once that is in place, these are independent and can be added whenever the need
+appears: [container updates](./containers.md), [image building and A/B
+rollouts](./imaging.md), [Kubernetes](./kubernetes.md),
+[databases](./database.md), [vulnerability scanning](./security-guide.md),
+[access policies](./access-policies.md) and [automation](./automation.md).
 
 For everything the platform can do, start at the [documentation index](./README.md).
 See the [CHANGELOG](./CHANGELOG.md) for what's new in each release.

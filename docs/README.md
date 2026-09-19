@@ -16,7 +16,12 @@ make test     # run backend + frontend tests
 ```
 
 Then open the frontend and complete the one-time **bootstrap** wizard to create
-the first Super Administrator. See the [Administrator Guide](./admin-guide.md).
+the first Super Administrator.
+
+That is Provenance running; it manages nothing until hosts are in it. The ordered
+path from there — enroll hosts, add people, stand up log collection, then harden —
+is [Make it useful](./installation.md#8-make-it-useful--the-order-to-do-things-in),
+and the reference for each part is below.
 
 ## Contents
 
@@ -91,6 +96,7 @@ brokering:
 | [automation.md](./automation.md) | integrators / operators | Driving Provenance as code with the Go SDK and the `fleet` CLI |
 | [behavior-analytics.md](./behavior-analytics.md) | security | UEBA: explainable, ML-free detection of access patterns deviating from a user's baseline |
 | [containers.md](./containers.md) | operators | What each host runs, image vulnerability scans, compose files under Provenance, and staged rollouts of image updates |
+| [aldgate.md](./aldgate.md) | operators / security | Fleet-wide log and SNMP collection: standing up a collector, making hosts and network devices send, searching from the Logs page, and the role-scoped SIEM console |
 | [database-broker.md](./database-broker.md) | operators / security | Brokered privileged access to databases with vaulted credentials, run through the jump host |
 | [kubernetes.md](./kubernetes.md) | operators / security | Brokered Kubernetes access via an authenticating proxy with a vaulted bearer token |
 | [external-secrets.md](./external-secrets.md) | operators / security | External-backed vault credentials fetched on demand from your secrets manager |

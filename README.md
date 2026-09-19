@@ -74,6 +74,13 @@ Then open the frontend (http://localhost:5173). On first run you'll be guided th
 **bootstrap wizard** to create the initial Super Administrator; the wizard then permanently
 self-disables.
 
+That gets Provenance running. It manages nothing until hosts are in it, so the next
+three steps are the ones that matter — enroll your hosts, add your people, and stand
+up log collection. Roughly half an hour, in order, with what each step buys you:
+[Make it useful](docs/installation.md#8-make-it-useful--the-order-to-do-things-in).
+For a production install rather than a local try-out, start at
+[Installation](docs/installation.md).
+
 Useful targets:
 
 ```bash

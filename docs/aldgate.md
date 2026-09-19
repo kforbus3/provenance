@@ -10,12 +10,72 @@ stores them in OpenSearch, and serves OpenSearch Dashboards. Provenance adds the
 two things a shared log store otherwise lacks: **one identity** and **a record
 of who searched what**.
 
+## Deploying a collector
+
+About ten minutes, and it is a separate machine on purpose: a log store that dies
+with the thing it was recording is not a log store.
+
+**1. Stand up the collector.** Any Debian/Ubuntu box with Docker — 4 GB RAM is
+enough for a small fleet.
+
+```bash
+git clone https://github.com/kforbus3/aldgate && cd aldgate
+make up          # random admin password, index templates, retention, dashboards
+make health      # nothing is sending yet; this proves it is listening
+```
+
+**2. Point Provenance at it.** Four values from the collector's `.env` into
+Provenance's, then `make redeploy-single`:
+
+```ini
+PROV_ALDGATE_URL=http://<collector>:9200
+PROV_ALDGATE_USER=admin
+PROV_ALDGATE_PASSWORD=<ALDGATE_ADMIN_PASSWORD>
+ALDGATE_HOST=<collector>:5601
+PROV_ALDGATE_CONSOLE_VIEWER_PASSWORD=<ALDGATE_CONSOLE_VIEWER_PASSWORD>
+PROV_ALDGATE_CONSOLE_ADMIN_PASSWORD=<ALDGATE_CONSOLE_ADMIN_PASSWORD>
+```
+
+On the collector, set `ALDGATE_BASEPATH=/aldgate`,
+`ALDGATE_REWRITE_BASEPATH=true`, and — when Provenance is on another machine —
+`ALDGATE_API_BIND=0.0.0.0`; then `make up` again.
+
+**3. Make hosts send.** From **Automation → Playbooks**, paste
+`ansible/enroll-syslog.yml` from the Aldgate repo and run it against every Linux
+host. One run does the fleet: it installs rsyslog where a host has only journald,
+turns on `ForwardToSyslog`, writes a disk-queued forwarding rule, and filters out
+Provenance's own probe churn (which is otherwise 90% of the traffic).
+
+Container logs are separate — `ansible/enroll-docker-logs.yml` sets the Docker
+daemon's log driver.
+
+**4. Make network devices send.** They refuse key auth, so their credentials live
+in Provenance's vault and these run from the same Playbooks page:
+`ansible/enroll-routeros.yml` for MikroTik (syslog **and** SNMP traps) and
+`ansible/enroll-openwrt.yml` for OpenWrt. SwOS switches can do neither; there is
+nothing to enrol.
+
+**5. Check it.** `make health` on the collector, then the **Logs** page here. The
+host filter lists everything that has sent anything, so a host missing from it has
+not sent — which is a different problem from a search that matched nothing.
+
+### When something is missing
+
+| Symptom | Cause |
+|---|---|
+| A host is absent from the last hour but present over 24h | its clock or timezone. RFC3164 syslog carries no offset, so a host in a non-UTC zone lands hours in the past — the enrolment playbook forwards RFC5424, network gear needs `ALDGATE_TIMEZONE` |
+| The console asks for a username and password | the two `PROV_ALDGATE_CONSOLE_*` values have not reached Provenance |
+| The console opens but has no index patterns | saved objects went to a private tenant. `make bootstrap` on the collector writes them to the shared one |
+| The Logs page says no collector is configured | `PROV_ALDGATE_URL` is empty |
+
 ## Two surfaces
 
 **Logs** (the page) answers the question an operator actually arrives with —
 *what was this machine saying, around then*. Search text, filter by host,
 severity and time range, and see which hosts and severities the match is spread
-across so you can narrow from "something is wrong" to "it is that machine".
+across so you can narrow from "something is wrong" to "it is that machine". The
+host filter is typeable — three characters and Enter, rather than hunting a menu
+that grows with the fleet.
 
 **Open log console** opens Dashboards, proxied under Provenance's own origin at
 `/aldgate/`, for what a table should not try to be: visualisations, Alerting,
