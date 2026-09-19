@@ -24,13 +24,19 @@ func (s *Store) CompleteSFTPTransfer(ctx context.Context, id uuid.UUID, sizeByte
 // months: a transfer interrupted by a restart never got a status, so it reads as
 // in-flight forever, in the UI and in every report built from these rows.
 //
+// 'failed' rather than 'interrupted': the status column has a CHECK constraint
+// allowing started/completed/failed, and the first version of this wrote
+// 'interrupted' -- so every run raised a constraint violation, the caller's
+// `err == nil &&` guard swallowed it, and the fix did nothing at all while appearing
+// to be deployed. The rows are still there in production is how that was caught.
+//
 // A transfer has no instance of its own; its SSH session does. So a transfer is
 // abandoned when its session has ended, when its session's owning instance is dead,
 // or when the session row is gone entirely (pruned by retention long after the
 // transfer stopped). A live peer's in-flight transfer is left strictly alone.
 func (s *Store) FailStaleSFTPTransfers(ctx context.Context, lease time.Duration, self uuid.UUID) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE sftp_transfers t SET status='interrupted', completed_at=now()
+		UPDATE sftp_transfers t SET status='failed', completed_at=now()
 		WHERE t.completed_at IS NULL AND (
 		  NOT EXISTS (SELECT 1 FROM ssh_sessions s WHERE s.id = t.ssh_session_id)
 		  OR EXISTS (SELECT 1 FROM ssh_sessions s WHERE s.id = t.ssh_session_id

@@ -448,34 +448,33 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	if n, err := s.Store.CloseStaleRDPRecordings(ctx, lease, self); err == nil && n > 0 {
 		s.Log.Info("closed orphaned rdp recordings", "count", n)
 	}
-	if n, err := s.Store.FailStaleScans(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("failed orphaned scans", "count", n)
+	// Each of these gives a terminal status to work abandoned by a dead instance.
+	//
+	// The error is LOGGED, which it was not: every one of these was written as
+	// `err == nil && n > 0`, so a query that failed did nothing and said nothing. The
+	// file-transfer reconciler below was added writing a status its table's CHECK
+	// constraint forbids -- every run raised a violation, every run was silent, and
+	// the rows it was written to clean up were still sitting there afterwards. A
+	// reconciler that cannot reconcile has to be audible.
+	reconcile := func(what string, fn func(context.Context, time.Duration, uuid.UUID) (int64, error)) {
+		n, err := fn(ctx, lease, self)
+		switch {
+		case err != nil:
+			s.Log.Warn("reconcile "+what, "err", err)
+		case n > 0:
+			s.Log.Info("reconciled "+what, "count", n)
+		}
 	}
-	if n, err := s.Store.FailStaleVulnScans(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("failed orphaned vuln scans", "count", n)
-	}
-	if n, err := s.Store.FailStaleRemediations(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("failed orphaned remediations", "count", n)
-	}
-	if n, err := s.Store.FailStalePlaybookRuns(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("marked orphaned playbook runs interrupted", "count", n)
-	}
-	if n, err := s.Store.FailStaleCommandRuns(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("reconciled stale command runs", "count", n)
-	}
-	if n, err := s.Store.FailStaleWinScriptRuns(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("failed orphaned script runs", "count", n)
-	}
-	if n, err := s.Store.FailStaleEnrollmentJobs(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("failed orphaned enrollment jobs", "count", n)
-	}
-	// File transfers belong to an SSH session rather than to an instance, so this
-	// one reconciles through the session. Without it an interrupted transfer never
-	// reached a terminal status at all -- two from June were still "started" in
-	// September.
-	if n, err := s.Store.FailStaleSFTPTransfers(ctx, lease, self); err == nil && n > 0 {
-		s.Log.Info("marked orphaned file transfers interrupted", "count", n)
-	}
+	reconcile("orphaned scans", s.Store.FailStaleScans)
+	reconcile("orphaned vuln scans", s.Store.FailStaleVulnScans)
+	reconcile("orphaned remediations", s.Store.FailStaleRemediations)
+	reconcile("orphaned playbook runs", s.Store.FailStalePlaybookRuns)
+	reconcile("stale command runs", s.Store.FailStaleCommandRuns)
+	reconcile("orphaned script runs", s.Store.FailStaleWinScriptRuns)
+	reconcile("orphaned enrollment jobs", s.Store.FailStaleEnrollmentJobs)
+	// File transfers belong to an SSH session rather than to an instance, so that one
+	// reconciles through the session.
+	reconcile("orphaned file transfers", s.Store.FailStaleSFTPTransfers)
 	// Revoke certificates issued by instances that have died (keyless now). Leader
 	// only, since it mutates the shared KRL and pushes it to hosts.
 	if s.isLeader() {
