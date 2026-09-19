@@ -33,6 +33,31 @@ function recurrenceText(r: Recurrence): string {
 }
 
 // Recurring scans and playbook runs. Disabled by default; enable one to start it.
+// What the last firing produced, not just that it fired.
+//
+// The cell used to read "(started)" on every schedule, always: lastStatus records what
+// firing DID and never changes afterwards. A playbook schedule that failed six nights
+// in a row was indistinguishable from one that worked, on the page an operator opens
+// to find out which. lastOutcome comes from the runs the firing created; the firing
+// status is kept as the tooltip, because "skipped: no hosts" and "error: group not
+// found" are firing failures with no run behind them to report.
+function LastRun({ s }: { s: Schedule }) {
+  const when = formatDateTime(s.lastRunAt!);
+  if (!s.lastOutcome) {
+    // Nothing was produced -- a vulndb refresh, or a firing that had no hosts. The
+    // firing status is all there is, so show it rather than invent a verdict.
+    return <>{`${when} (${s.lastStatus})`}</>;
+  }
+  const color = s.lastOutcome === "failed" ? "error" : s.lastOutcome === "running" ? "info" : "success";
+  return (
+    <Tooltip title={`Fired: ${s.lastStatus}`}>
+      <span>
+        {when} <Chip size="small" variant="outlined" color={color} label={s.lastOutcome} />
+      </span>
+    </Tooltip>
+  );
+}
+
 export function SchedulesPage() {
   const qc = useQueryClient();
   const { data: schedules = [], isLoading } = useQuery({
@@ -119,7 +144,7 @@ export function SchedulesPage() {
                       label="Running…"
                     />
                   ) : s.lastRunAt ? (
-                    `${formatDateTime(s.lastRunAt)} (${s.lastStatus})`
+                    <LastRun s={s} />
                   ) : (
                     "never"
                   )}

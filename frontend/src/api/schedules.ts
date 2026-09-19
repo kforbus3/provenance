@@ -21,7 +21,13 @@ export interface Schedule {
   payload?: unknown;
   requester?: string;
   lastRunAt?: string;
+  // What FIRING did ("started", "skipped: no hosts", "error: …"). It never changes
+  // afterwards, so on its own every schedule reads "started" forever.
   lastStatus?: string;
+  // What the firing PRODUCED, derived from the runs it created: "completed",
+  // "failed", "running", or absent when it produced nothing. This is the answer to
+  // "did it work".
+  lastOutcome?: "completed" | "failed" | "running" | "";
   nextRunAt?: string;
   running?: boolean;
   createdAt: string;

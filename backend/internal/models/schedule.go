@@ -35,9 +35,18 @@ type Schedule struct {
 	NextRunAt  *time.Time      `json:"nextRunAt,omitempty"`
 	// Running is computed (not stored): true while the scan/playbook records from
 	// the most recent fire are still pending or running.
-	Running   bool      `json:"running"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Running bool `json:"running"`
+	// LastOutcome is computed too: what the last firing PRODUCED -- completed,
+	// failed, running, or empty when it produced nothing (a vulndb refresh, or a
+	// firing with no hosts).
+	//
+	// LastStatus says what FIRING did and never changes afterwards, so every schedule
+	// reads "started" forever: one that failed six nights running looks exactly like
+	// one that worked, on the page an operator opens to find out which. This is the
+	// answer to "did it work", derived from the runs themselves.
+	LastOutcome string    `json:"lastOutcome,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // ScanSchedulePayload is the Payload for a scan schedule.

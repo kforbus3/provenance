@@ -7,6 +7,16 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**A schedule now says whether its last run worked.** Every schedule read `started`
+forever — `last_status` records what *firing* did and never changes afterwards, so a
+playbook schedule that failed six nights in a row looked exactly like one that worked,
+on the page an operator opens to find out which. The **last run** column now carries
+the outcome of the records the firing created (`completed` / `failed` / `running`),
+with the firing status kept in the tooltip. Failure outranks in-flight, which outranks
+completed: a batch where one host failed is a failure to look at. A firing that
+produced no run — a CVE-database refresh, or one with no hosts — still shows its firing
+status rather than a verdict it cannot have.
+
 **An update a rollout can never apply is no longer offered as one.** A major-version
 bump of an image that owns its on-disk format — `postgres:16-alpine` → `18-alpine` —
 was refused when a rollout started, and listed as an ordinary update until then. That

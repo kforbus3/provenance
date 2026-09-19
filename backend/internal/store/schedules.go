@@ -210,6 +210,39 @@ func (s *Store) GetSchedule(ctx context.Context, id uuid.UUID) (*models.Schedule
 	return sc, nil
 }
 
+// lastOutcomeSQL resolves what the schedule's last firing actually PRODUCED.
+//
+// last_status records what firing did -- "started", "skipped: no hosts", "error: ..."
+// -- and by design it never changes afterwards, because the outcome belongs to the run
+// it created. The consequence was that every schedule on this fleet read "started"
+// forever: a playbook schedule that failed six nights running looked exactly like one
+// that worked, on the page an operator goes to in order to find out which.
+//
+// So the outcome is derived from the records the firing created (last_run_ids), which
+// is where the truth already lived. Failed beats in-flight beats completed, because a
+// batch where one host failed is a failure to look at.
+//
+// Built here rather than in four copies: the vocabularies differ per table but the
+// question does not.
+var lastOutcomeSQL = func() string {
+	frag := func(kind, table, alias string) string {
+		return `WHEN kind='` + kind + `' THEN (
+			SELECT CASE
+				WHEN count(*) = 0 THEN ''
+				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('failed','error','cancelled','interrupted','rolled_back')) > 0 THEN 'failed'
+				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('pending','running','started')) > 0 THEN 'running'
+				ELSE 'completed'
+			END
+			FROM ` + table + ` ` + alias + ` WHERE ` + alias + `.id = ANY(schedules.last_run_ids))`
+	}
+	return "CASE " +
+		frag("scan", "host_scans", "hs") + " " +
+		frag("playbook", "playbook_runs", "pr") + " " +
+		frag("vulnscan", "vuln_scans", "vs") + " " +
+		frag("script", "winscript_runs", "ws") + " " +
+		"ELSE '' END AS last_outcome"
+}()
+
 func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 	// `running` is derived from the launched records: a scan schedule is running
 	// while any of its last_run_ids host_scans are pending/running; likewise a
@@ -224,7 +257,8 @@ func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 					SELECT 1 FROM playbook_runs pr
 					WHERE pr.id = ANY(schedules.last_run_ids) AND pr.status IN ('pending','running'))
 				ELSE false
-			END AS running
+			END AS running,
+			`+lastOutcomeSQL+`
 		FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -236,7 +270,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 		var rec, payload []byte
 		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Kind, &sc.Enabled, &sc.TargetKind, &sc.TargetID,
 			&sc.TargetName, &rec, &payload, &sc.Requester, &sc.LastRunAt, &sc.LastStatus,
-			&sc.NextRunAt, &sc.CreatedAt, &sc.UpdatedAt, &sc.Running); err != nil {
+			&sc.NextRunAt, &sc.CreatedAt, &sc.UpdatedAt, &sc.Running, &sc.LastOutcome); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(rec, &sc.Recurrence)

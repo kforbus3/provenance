@@ -545,7 +545,11 @@ supersedes them.)
 The **Schedules** page (needs `Schedule.Manage`) runs scans or playbook runs on a recurring
 basis. Create a schedule (**interval**, **daily**, or **weekly**), pick its target, and it's
 **disabled until you enable it**. Each row shows the **enable toggle**, **next run**, **last
-run** (and status), and a **Run now** action. Results land in the normal scan / playbook **run
+run** with the **outcome of what that run produced** — `completed`, `failed` or
+`running`, derived from the scans or playbook runs the firing created — and a **Run now**
+action. Hover the outcome for the firing status itself (`started`, `skipped: no hosts`,
+`error: …`); a firing that produced no run at all, like a CVE-database refresh, shows
+that status instead of a verdict it cannot have. Results land in the normal scan / playbook **run
 history**, tagged **scheduled** so you can tell automated runs from manual ones. Daily/weekly
 clock times are interpreted in the configured **app time zone**.
 
