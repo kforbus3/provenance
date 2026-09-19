@@ -5,6 +5,21 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**Forwarded audit events carry a stable hostname.** The syslog HOSTNAME field was
+`os.Hostname()`, which inside a container is the container ID and changes on every
+recreate — so a collector that groups by host would collect a new meaningless host per
+deployment, with the audit trail scattered across all of them. It is now
+`PROV_PUBLIC_URL`'s hostname, the name people already call the install by, falling back
+to the OS hostname where no public URL is set.
+
+Worth knowing alongside it: enrolling your hosts in log collection does **not** cover
+Provenance's own audit trail. Its containers log to Docker's logging driver, not to the
+host's syslog, so the trail reaches a collector only when audit forwarding is switched
+on — see [Operations](operations.md#audit-forwarding-siem).
+
+
 ## v1.8.0 — 2026-09-19
 
 **Provenance reads the logs and the mount tables it was already collecting.** Three

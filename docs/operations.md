@@ -649,6 +649,18 @@ the insight works.
 collector — **syslog** (RFC 5424, over **UDP** or **TCP**) or an **HTTP JSON** endpoint. Set
 the **type**, the **address** (`host:port` for syslog, a URL for HTTP), and the **protocol**
 (syslog only), then enable it. Use **Send test event** to confirm the collector receives it.
+
+This is **not** covered by having your hosts enrolled in log collection. Provenance runs in
+containers whose logs go to Docker's logging driver, not to the host's syslog, so its audit
+trail never reaches the collector unless this is switched on. Pointed at your own Aldgate
+collector (`<collector>:514`, TCP), audit events become searchable on the **Logs** page beside
+the hosts they were performed on — "who ran what" next to "what the machine said" — and the
+trail also lives somewhere the Provenance host's administrator cannot quietly edit.
+
+Every forwarded event carries `PROV_PUBLIC_URL`'s hostname as its syslog HOSTNAME, not the
+container's. A container ID changes on every recreate, and a collector that groups by host
+would otherwise collect a new meaningless host per deployment with the audit trail scattered
+across all of them.
 Forwarding is **best-effort and off by default** — the in-app **hash-chained audit log stays
 the system of record**, so a dropped forward never blocks an action.
 

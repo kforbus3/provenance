@@ -1,11 +1,14 @@
 package auditfwd
 
 import (
+	"os"
+
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"github.com/kforbus3/provenance/backend/internal/config"
 	"io"
 	"log/slog"
 	"math/big"
@@ -106,4 +109,29 @@ func selfSignedCAPEM(t *testing.T) string {
 		t.Fatalf("createcert: %v", err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+// The HOSTNAME field of every forwarded event. os.Hostname() inside a container is
+// the container ID -- "201d87dbd4a8" -- and it changes on every recreate, so a
+// collector that groups by host collects a new meaningless host per deployment and
+// the audit trail scatters across all of them. On a log server whose host list is how
+// an operator navigates, that is worse than not forwarding.
+func TestSyslogHostIsStableAcrossRedeployment(t *testing.T) {
+	got := syslogHost(&config.Config{PublicURL: "https://prov.example.com"})
+	if got != "prov.example.com" {
+		t.Errorf("syslogHost = %q, want the instance's public name", got)
+	}
+	// A port must not end up in the syslog HOSTNAME field.
+	if got := syslogHost(&config.Config{PublicURL: "https://prov.example.com:8443/"}); got != "prov.example.com" {
+		t.Errorf("syslogHost = %q, want the host without the port", got)
+	}
+	// No public URL configured: fall back rather than invent. Whatever the machine
+	// calls itself is at least true.
+	host, _ := os.Hostname()
+	if got := syslogHost(&config.Config{}); got != host {
+		t.Errorf("syslogHost = %q, want the OS hostname %q as the fallback", got, host)
+	}
+	if got := syslogHost(nil); got == "" {
+		t.Error("syslogHost returned empty; a syslog line with no HOSTNAME is malformed")
+	}
 }

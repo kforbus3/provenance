@@ -285,7 +285,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
-	s.auditFwd = auditfwd.New(st, log)
+	s.auditFwd = auditfwd.New(st, cfg, log)
 	s.insights = insights.New(st, log, cfg.MetricHistoryRetention)
 	// Give the insight engine the log collector, so "this host is suddenly logging
 	// errors" reaches the dashboard and the daily digest without the operator having

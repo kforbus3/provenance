@@ -16,12 +16,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/kforbus3/provenance/backend/internal/config"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/ssrf"
 	"github.com/kforbus3/provenance/backend/internal/store"
@@ -77,13 +79,9 @@ type Forwarder struct {
 	dropped atomic.Uint64
 }
 
-func New(st *store.Store, log *slog.Logger) *Forwarder {
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "provenance"
-	}
+func New(st *store.Store, cfg *config.Config, log *slog.Logger) *Forwarder {
 	f := &Forwarder{
-		store: st, log: log, hostname: host,
+		store: st, log: log, hostname: syslogHost(cfg),
 		client:   ssrf.SafeClient(5 * time.Second),
 		cacheTTL: 30 * time.Second,
 		queue:    make(chan models.AuditEvent, queueCapacity),
@@ -93,6 +91,29 @@ func New(st *store.Store, log *slog.Logger) *Forwarder {
 	// dropped silently.
 	go f.worker()
 	return f
+}
+
+// syslogHost is the HOSTNAME field every forwarded event carries.
+//
+// Not os.Hostname(): inside a container that is the container ID, and it changes on
+// every recreate. A collector that groups by host then accumulates a new, meaningless
+// host for each deployment and the audit trail scatters across all of them -- on a
+// log server whose host list is how an operator navigates, that is worse than no
+// forwarding at all.
+//
+// The instance's public URL is the name people already call this install by, and it
+// survives redeployment. os.Hostname() remains the fallback for a deployment that has
+// not set one (development, where the hostname is usually meaningful anyway).
+func syslogHost(cfg *config.Config) string {
+	if cfg != nil {
+		if u, err := url.Parse(strings.TrimSpace(cfg.PublicURL)); err == nil && u.Hostname() != "" {
+			return u.Hostname()
+		}
+	}
+	if h, _ := os.Hostname(); h != "" {
+		return h
+	}
+	return "provenance"
 }
 
 // LoadConfig reads the stored config (zero value if unset).
