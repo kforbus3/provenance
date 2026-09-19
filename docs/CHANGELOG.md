@@ -7,6 +7,19 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**The package count on the Images tab works, and now shows the packages.**
+Clicking it answered `missing access token`: it was a link straight at
+`/api/v1/imaging/images/<name>/sbom`, and a browser navigation carries no
+Authorization header — the code assumed "the cookie carries the auth", but
+Provenance's session cookies are scoped to `/api/v1/auth` and never reach that
+route. The count now opens a filterable list of package names and versions, which
+is the question a click there is asking. **The Download button had the same defect
+and answered 401**; it authenticates from a short-lived token in the URL like the
+backup download, because a multi-gigabyte image should stream rather than be
+buffered in the browser — and that download is now audited with the actor's name
+rather than anonymously.
+
+
 **Every data-backed picker can be typed into.** Host, group, image, bundle, user
 and credential selectors were plain menus, so choosing one host out of nineteen
 meant opening a list and hunting — and it got worse with every machine added. They

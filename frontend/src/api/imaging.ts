@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, getAccessToken } from "./client";
 
 // Imaging: OS images, signed update bundles, and staged rollouts.
 //
@@ -362,13 +362,52 @@ export async function cancelBuild(id: string): Promise<BuildJob> {
 
 // Downloads go through the browser as a normal navigation rather than through
 // axios: an image is several gigabytes, and buffering one in JS to hand it to a
-// save dialog defeats the point of streaming it. The cookie carries the auth.
+// save dialog defeats the point of streaming it.
+//
+// The token goes in the URL because a navigation cannot set an Authorization
+// header and Provenance's session cookies are scoped to /api/v1/auth, so they
+// never reach this route. This comment used to say "the cookie carries the auth";
+// it does not, and the Download button answered 401 for as long as that was
+// believed. Same arrangement as the backup download, and kept to the streaming
+// endpoints only -- a URL-borne credential ends up in access logs, which is a
+// trade worth making for a multi-gigabyte stream and not for a 200 KB document.
 export function imageDownloadUrl(name: string): string {
-  return `/api/v1/imaging/images/${encodeURIComponent(name)}/download`;
+  const token = getAccessToken() ?? "";
+  return `/api/v1/imaging/images/${encodeURIComponent(name)}/download?token=${encodeURIComponent(token)}`;
 }
 
-export function imageSbomUrl(name: string): string {
-  return `/api/v1/imaging/images/${encodeURIComponent(name)}/sbom`;
+/** One package from an image's SBOM. */
+export type SbomPackage = { name: string; version: string };
+
+/**
+ * The packages in an image, read from its SPDX SBOM.
+ *
+ * Fetched with the bearer token like every other API call, rather than linked to.
+ * Linking straight at the endpoint is what produced "missing access token" when
+ * anyone clicked the package count -- a navigation carries no Authorization
+ * header.
+ */
+export async function imageSbomPackages(name: string): Promise<SbomPackage[]> {
+  const { data } = await api.get<{ packages?: { name?: string; versionInfo?: string }[] }>(
+    `/api/v1/imaging/images/${encodeURIComponent(name)}/sbom`,
+  );
+  return (data.packages ?? [])
+    .map((p) => ({ name: p.name ?? "", version: p.versionInfo ?? "" }))
+    .filter((p) => p.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The SBOM itself, for saving. */
+export async function downloadImageSbom(name: string): Promise<void> {
+  const { data } = await api.get(`/api/v1/imaging/images/${encodeURIComponent(name)}/sbom`, {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name}.spdx.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function deleteImage(name: string) {

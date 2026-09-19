@@ -31,7 +31,7 @@ import {
 } from "./imaging/writable-state";
 import {
   buildLog, cancelBuild, createRollout, deleteBundle, deleteImage, diskUsage,
-  forgetImaging, imageDownloadUrl, imageSbomUrl, imagingNow, installOnMachine,
+  forgetImaging, imageDownloadUrl, imageSbomPackages, downloadImageSbom, imagingNow, installOnMachine,
   listBuilds, listBundles, listImages,
   deleteMachine, deleteRollout, forgetBuild, forgetFinishedBuilds, listMachines, listRollouts, nudgeMachine, startBuild, steerRollout, updateMachine,
   type BuildJob, type Bundle, type Image, type ImagingNow, type Machine, type Rollout,
@@ -1162,12 +1162,73 @@ function DiskChip() {
   );
 }
 
+/**
+ * What is actually inside an image, read from its SPDX SBOM.
+ *
+ * The package count in the table used to link straight at /sbom, which a browser
+ * navigates to with no Authorization header -- so clicking it answered "missing
+ * access token". Fetching it properly costs nothing and answers the better
+ * question: 262 packages is a number, `openssl 3.5.1` is an answer.
+ */
+function SbomDialog({ name, onClose, setMsg }: {
+  name: string | null; onClose: () => void; setMsg: (m: Note) => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const q = useQuery({
+    queryKey: ["image-sbom", name],
+    queryFn: () => imageSbomPackages(name as string),
+    enabled: !!name,
+  });
+  const pkgs = q.data ?? [];
+  const shown = filter
+    ? pkgs.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()))
+    : pkgs;
+  return (
+    <Dialog open={!!name} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Packages in {name}</DialogTitle>
+      <DialogContent>
+        <TextField size="small" fullWidth autoFocus label="Filter" value={filter}
+                   onChange={(e) => setFilter(e.target.value)} sx={{ mt: 1, mb: 2 }}
+                   placeholder="openssl" />
+        {q.isLoading && <CircularProgress size={20} />}
+        {q.isError && <Alert severity="error">Could not read the SBOM for this image.</Alert>}
+        {!q.isLoading && !q.isError && (
+          <>
+            <Typography variant="caption" color="text.secondary">
+              {shown.length} of {pkgs.length} packages
+            </Typography>
+            <Table size="small">
+              <TableBody>
+                {shown.map((p) => (
+                  <TableRow key={`${p.name}-${p.version}`}>
+                    <TableCell sx={{ fontFamily: "monospace" }}>{p.name}</TableCell>
+                    <TableCell sx={{ fontFamily: "monospace" }} align="right">{p.version}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => {
+          if (name) {
+            downloadImageSbom(name).catch(() => setMsg({ kind: "error", text: "SBOM download failed" }));
+          }
+        }}>Download SBOM</Button>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
   images: Image[]; dir: string; imagerArches: Record<string, boolean>; canBuild: boolean;
   onChanged: () => void; setMsg: (m: Note) => void;
 }) {
   const [building, setBuilding] = useState(false);
   const [buildingImager, setBuildingImager] = useState(false);
+  const [sbomFor, setSbomFor] = useState<string | null>(null);
   const remove = useMutation({
     mutationFn: (name: string) => deleteImage(name),
     onSuccess: () => { setMsg({ kind: "success", text: "Image deleted." }); onChanged(); },
@@ -1238,7 +1299,12 @@ function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
                   <TableCell>
                     {i.hasSbom
                       ? (
-                        <Button size="small" href={imageSbomUrl(i.name)}
+                        /* Opens the list rather than linking at the endpoint. The
+                           link used to navigate straight to /sbom, which carries no
+                           Authorization header, so clicking the package count
+                           answered "missing access token" — and "what is actually in
+                           this image" is the question the count invites. */
+                        <Button size="small" onClick={() => setSbomFor(i.name)}
                                 sx={{ textTransform: "none", p: 0, minWidth: 0 }}>
                           {i.packages ?? 0} packages
                         </Button>
@@ -1271,6 +1337,7 @@ function ImagesTab({ images, dir, imagerArches, canBuild, onChanged, setMsg }: {
       <BuildImagerDialog open={buildingImager} arches={imagerArches}
                          onClose={() => setBuildingImager(false)}
                          onStarted={onChanged} setMsg={setMsg} />
+      <SbomDialog name={sbomFor} onClose={() => setSbomFor(null)} setMsg={setMsg} />
     </>
   );
 }
@@ -1921,3 +1988,7 @@ function BuildBundleDialog({ open, images, onClose, onStarted, setMsg }: {
     </Dialog>
   );
 }
+
+// Exported for tests only: the Images tab renders inside the page's tab switch, and
+// the package-count bug lives in one cell of its table.
+export { ImagesTab as ImagesTabForTest };

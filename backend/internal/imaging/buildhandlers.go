@@ -17,6 +17,7 @@ import (
 
 	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
+	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
 // The build and provisioning half of the API.
@@ -44,7 +45,14 @@ func mountBuilds(r chi.Router, h *handler) {
 	// Downloads. Imaging.View, not Build: reading an artefact is not producing
 	// one, and the person who has to hand an SBOM to an auditor is not
 	// necessarily the person allowed to start a build.
-	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images/{name}/download", h.downloadImage)
+	// NOT in the bearer-only group: a browser navigating to a multi-gigabyte
+	// download cannot set an Authorization header, and Provenance's session cookies
+	// are scoped to /api/v1/auth so they never arrive here either. The frontend used
+	// to link straight here on the belief that "the cookie carries the auth" -- it
+	// does not, and the Download button answered 401 for as long as that was
+	// believed. Authenticated from the token query parameter, exactly as the backup
+	// download is, so the response can still stream instead of being buffered in JS.
+	r.Get("/imaging/images/{name}/download", h.downloadImage)
 	r.With(h.d.Auth.RequirePermission("Imaging.View")).Get("/imaging/images/{name}/sbom", h.downloadSBOM)
 
 	// The build overlay: files layered into an image.
@@ -568,13 +576,26 @@ func (h *handler) serveArtifact(w http.ResponseWriter, r *http.Request, path, fi
 }
 
 func (h *handler) downloadImage(w http.ResponseWriter, r *http.Request) {
+	// This route is outside the authenticated group (see Mount), so it does its own
+	// check. The permission is the same one the rest of the section requires.
+	principal, err := h.d.Auth.AuthenticateToken(r.Context(), r.URL.Query().Get("token"))
+	if err != nil || principal == nil || !principal.Has("Imaging.View") {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	name := chi.URLParam(r, "name")
 	path, err := h.svc.ImagePath(name)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	h.audit(r, "imaging.image.download", name, nil)
+	// Recorded with the principal in hand rather than through h.audit, which reads
+	// the request context -- and this route has no principal there, so going through
+	// it would file "somebody downloaded a machine image" with no name on it.
+	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+		Action: "imaging.image.download", TargetKind: "imaging", TargetID: name,
+		ActorID: &principal.UserID, ActorName: principal.Username, IP: httpx.ClientIP(r),
+	})
 	h.serveArtifact(w, r, path, filepath.Base(path), "application/octet-stream")
 }
 
