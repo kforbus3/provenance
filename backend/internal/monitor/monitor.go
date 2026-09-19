@@ -688,12 +688,7 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	// Tracked apart from conn because a banner probe succeeds without one.
 	reached := false
 	{
-		type result struct {
-			conn *sshgw.Conn
-			addr string
-			lat  int
-			err  error
-		}
+		type result = probeResult
 		// Cancelled as soon as one succeeds, so the losing dials stop rather than
 		// running on in the background holding jump-host slots.
 		dctx, cancel := context.WithCancel(ctx)
@@ -724,31 +719,39 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 		// -- so a race won by the LAN address must not report wgOk=false for a
 		// host whose tunnel is fine. Wait for every dial to settle before
 		// deciding; they are concurrent, so that costs the slowest, not the sum.
+		all := make([]result, 0, len(candidates))
 		for range candidates {
-			r := <-results
-			if r.err != nil {
-				if dialErr == nil {
-					dialErr = r.err
-				}
-				continue
-			}
-			if !reached || (r.addr == h.WGAddress && h.WGAddress != "") {
-				if conn != nil {
-					conn.Close()
-				}
-				reached = true
-				conn, usedAddr = r.conn, r.addr
-				lat := r.lat
-				st.LatencyMS = &lat
-				dialErr = nil
-			} else {
-				r.conn.Close()
+			all = append(all, <-results)
+		}
+		chosen, firstErr := settleProbe(all, h.WGAddress)
+		dialErr = firstErr
+		if chosen != nil {
+			reached = true
+			conn, usedAddr = chosen.conn, chosen.addr
+			lat := chosen.lat
+			st.LatencyMS = &lat
+			dialErr = nil
+		}
+		// Everything not chosen is closed, including a second success.
+		for i := range all {
+			if all[i].conn != nil && (chosen == nil || all[i].addr != chosen.addr) {
+				all[i].conn.Close()
 			}
 		}
 		// If we reached it via the WireGuard address, the overlay is healthy.
 		st.WGOK = usedAddr == h.WGAddress && h.WGAddress != ""
 	}
-	if dialErr != nil || !reached {
+	// `reached` decides, not dialErr. This used to be `dialErr != nil || ...`, and
+	// dialErr was whatever the LAST failing candidate left behind -- so a host that
+	// answered on one address was reported offline because another address failed,
+	// depending purely on which reply arrived last.
+	//
+	// keith was getting "wap disconnected"/"wap recovered" emails in pairs minutes
+	// apart. Nothing was wrong with the access point: it is probed at three
+	// candidate addresses, one of which is the bare hostname, and the jump host
+	// cannot resolve "wap" -- so that dial always failed and roughly half the time
+	// its failure landed after the success that had already cleared the error.
+	if !reached {
 		st.Status = "offline"
 		st.SSHOK = false
 		st.LastError = trunc(errStr(dialErr), 240)
@@ -1163,4 +1166,40 @@ func overlayWhereToLook(name string) string {
 		return "Check the openvpn client on the host and the openvpn server on the jump host."
 	}
 	return "Check the WireGuard service on the host and the peer entry on the jump host."
+}
+
+// probeResult is one candidate address's answer.
+type probeResult struct {
+	conn *sshgw.Conn
+	addr string
+	lat  int
+	err  error
+}
+
+// settleProbe picks which candidate address to believe, and returns the first
+// error only as the reason for a host where NOTHING answered.
+//
+// Order-independent on purpose. The previous version folded this into the receive
+// loop and let each failing candidate overwrite a cleared error, so the verdict
+// depended on which goroutine replied last: a host answering on its management
+// address was reported offline because the bare hostname did not resolve, then
+// online again on the next sweep, producing pairs of disconnect/recover
+// notifications for a device that never went anywhere.
+//
+// The overlay address wins when more than one answers, because reaching a host
+// over the overlay is also what proves the overlay works.
+func settleProbe(all []probeResult, wgAddr string) (chosen *probeResult, firstErr error) {
+	for i := range all {
+		r := &all[i]
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		if chosen == nil || (wgAddr != "" && r.addr == wgAddr) {
+			chosen = r
+		}
+	}
+	return chosen, firstErr
 }

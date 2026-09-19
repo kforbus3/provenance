@@ -70,6 +70,8 @@ export async function searchLogs(q: LogQuery): Promise<LogResult> {
 
 export type LogConsole = {
   consoleBase: string;
+  /** Where to open: the shipped dashboard, not Dashboards' home screen. */
+  consoleURL?: string;
   /** "view" (read-only) or "administer" — decided from your Provenance role. */
   tier: string;
   expiresAt: string;

@@ -95,7 +95,9 @@ describe("LogsPage", () => {
   // from nginx -- which looks exactly like the console being broken.
   it("mints a console session before opening the console", async () => {
     vi.mocked(logsApi.openLogConsole).mockResolvedValue({
-      consoleBase: "/aldgate", tier: "view", expiresAt: "2026-09-19T12:00:00Z",
+      consoleBase: "/aldgate",
+      consoleURL: "/aldgate/app/dashboards#/view/aldgate-overview",
+      tier: "view", expiresAt: "2026-09-19T12:00:00Z",
     });
     const opened: string[] = [];
     vi.spyOn(window, "open").mockImplementation((url) => {
@@ -107,7 +109,10 @@ describe("LogsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Open log console/ }));
 
     await waitFor(() => expect(vi.mocked(logsApi.openLogConsole)).toHaveBeenCalled());
-    await waitFor(() => expect(opened).toEqual(["/aldgate/"]));
+    // The shipped dashboard, not Dashboards' home screen: a console that opens on
+    // a "choose an index pattern" screen is a tool you have to assemble first.
+    await waitFor(() =>
+      expect(opened).toEqual(["/aldgate/app/dashboards#/view/aldgate-overview"]));
   });
 
   // A console that cannot be opened must say so. The usual cause is a collector

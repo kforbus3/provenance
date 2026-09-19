@@ -7,6 +7,24 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**"Open log console" lands on a dashboard with data in it.** It opened
+Dashboards' home screen, in the viewer's own private tenant, which is empty — a
+console that signs you in and then asks you to choose an index pattern is a tool
+you have to assemble before it answers anything. The console is now pinned to the
+shared (global) tenant and opens the *Fleet logs — overview* dashboard Aldgate
+ships with: volume over time, severity mix, noisiest hosts, error sources, and
+saved searches for errors, authentication and SNMP traps.
+
+**A host that answered is no longer reported offline because another address
+didn't.** The probe races a host's overlay address, management address and
+hostname, and the first error to arrive was overwriting the success that had
+already cleared it — so the verdict depended on which reply landed last. A device
+whose bare hostname the jump host cannot resolve therefore flapped between online
+and offline, sending paired disconnect/recover notifications for something that
+never went anywhere. Reachability is now decided by whether any candidate
+answered, and the first error is kept only as the reason when none did.
+
+
 **A container whose compose project uses an overlay can be updated again.** The
 in-place path `cd`-ed into the project's working directory and let compose
 rediscover files by their default names — so a project assembled from

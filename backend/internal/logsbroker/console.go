@@ -17,6 +17,15 @@ import (
 // ALDGATE_BASEPATH; all four have to agree or the console 404s.
 const consoleBasePath = "/aldgate"
 
+// consoleLanding is where "Open log console" actually goes: the dashboard Aldgate
+// ships with, over the last 24 hours, rather than Dashboards' home screen.
+//
+// A console that opens on a home screen asking you to choose an index pattern is a
+// tool you have to assemble before it answers anything. This lands on log volume,
+// severity mix, the noisiest hosts and what is failing -- and the saved searches
+// are one click from there.
+const consoleLanding = consoleBasePath + "/app/dashboards#/view/aldgate-overview"
+
 // consoleScope limits a console token to the logs routes and nothing else, so a
 // stolen console cookie cannot reach the rest of the API as its owner.
 const consoleScope = "/api/v1/logs"
@@ -112,8 +121,12 @@ func (h *handler) consoleToken(w http.ResponseWriter, r *http.Request) {
 	})
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"consoleBase": consoleBasePath,
-		"tier":        tier,
-		"expiresAt":   expires.Format(time.RFC3339),
+		// Where to actually open. Sent by the server rather than built in the SPA
+		// so the dashboard id lives in one place -- it is Aldgate's, and the two
+		// would drift the first time it changed.
+		"consoleURL": consoleLanding,
+		"tier":       tier,
+		"expiresAt":  expires.Format(time.RFC3339),
 	})
 }
 

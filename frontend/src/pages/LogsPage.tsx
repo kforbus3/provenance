@@ -76,7 +76,10 @@ export function LogsPage() {
     setConsoleError("");
     try {
       const c = await openLogConsole();
-      window.open(`${c.consoleBase}/`, "_blank", "noopener,noreferrer");
+      // The shipped dashboard, not Dashboards' home screen — the server names it,
+      // so the id is not duplicated here. Falls back to the console root for a
+      // backend older than that field.
+      window.open(c.consoleURL || `${c.consoleBase}/`, "_blank", "noopener,noreferrer");
     } catch (e) {
       setConsoleError(e instanceof Error ? e.message : "could not open the log console");
     } finally {
