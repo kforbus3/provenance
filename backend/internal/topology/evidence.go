@@ -310,5 +310,59 @@ func nameIndex(hosts []models.Host) map[string]*models.Host {
 		add(h.Address, h)
 		add(h.WGAddress, h)
 	}
+	// Then the addresses each host reports having something BOUND to, which is how a
+	// machine's other network interfaces become known.
+	//
+	// Production is why: the hypervisor mounts its NAS over a dedicated 10G storage
+	// network, so its fstab names 10.0.0.1 -- an address that appears nowhere in the
+	// NAS's host record, which carries a hostname and an overlay address. The single
+	// most important storage dependency in the fleet would have been reported as a
+	// machine Provenance does not manage. The NAS does report binding 10.0.0.1,
+	// because that is where it serves NFS from.
+	//
+	// Second pass on purpose: add() keeps the first claim on a name, so an address a
+	// host was CONFIGURED with always wins over one merely observed, and a floating
+	// address two hosts have both bound at some point cannot displace a real identity.
+	for i := range hosts {
+		h := &hosts[i]
+		if h.Inventory == nil {
+			continue
+		}
+		for _, p := range h.Inventory.ListeningPorts {
+			if a := boundAddress(p.Address); a != "" {
+				add(a, h)
+			}
+		}
+	}
 	return idx
+}
+
+// boundAddress returns the address a socket is bound to when it identifies the host,
+// or "" when it does not.
+//
+// A wildcard says nothing about which interface. Loopback is every host. A
+// link-local address is scoped to one link and is exactly what the veth churn is
+// made of -- indexing those would let one host's transient interface claim a name.
+func boundAddress(addr string) string {
+	// Zone first, brackets second. The other order leaves a bracket stranded in the
+	// middle of "[fe80::1]%eth0" -- Trim only cuts at the ends -- and the result then
+	// fails to parse as an address at all. Which still rejected it, by accident, and
+	// made the link-local guard below dead code that a test appeared to cover.
+	a := strings.ToLower(strings.TrimSpace(addr))
+	if i := strings.Index(a, "%"); i >= 0 {
+		a = a[:i] // an IPv6 zone: [fe80::1]%eth0
+	}
+	a = strings.Trim(a, "[]")
+	switch {
+	case a == "", a == "*", a == "0.0.0.0", a == "::":
+		return ""
+	case a == "127.0.0.1" || strings.HasPrefix(a, "127.") || a == "::1":
+		return ""
+	case strings.HasPrefix(a, "fe80:"):
+		return ""
+	}
+	if net.ParseIP(a) == nil {
+		return "" // not an address at all
+	}
+	return a
 }

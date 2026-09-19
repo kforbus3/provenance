@@ -191,3 +191,64 @@ func TestAnAddressIsNotTruncatedToItsFirstLabel(t *testing.T) {
 		t.Fatalf("expected the address to be reported unmanaged, got %+v", v.Unmanaged)
 	}
 }
+
+// The most important storage dependency in this fleet, and the one the whole feature
+// exists for: the hypervisor mounts the NAS over a dedicated 10G storage network, so
+// its fstab names 10.0.0.1 -- an address that appears nowhere in the NAS's host
+// record, which carries only a hostname and an overlay address. Without the bound
+// addresses it reports, the NAS reads as a machine Provenance does not manage.
+func TestAMountOverASecondaryNetworkStillFindsTheHost(t *testing.T) {
+	nas := host("nas", "", inv("", nil,
+		models.ListeningPort{Port: 2049, Address: "10.0.0.1", Exposed: true},
+		models.ListeningPort{Port: 22, Address: "0.0.0.0", Exposed: true},
+	))
+	nas.WGAddress = "10.100.0.17"
+	hypervisor := host("hypervisor", "", inv("", []models.NetworkMount{
+		mount("10.0.0.1", "10.0.0.1:/mnt/p03/vhost_vm_storage", "/mnt/pve/nas_vm_storage", "nfs"),
+	}))
+	v := ForHost(hypervisor.ID, []models.Host{nas, hypervisor}, nil)
+	if len(v.Unmanaged) != 0 {
+		t.Fatalf("the NAS was reported as unmanaged over its storage network: %+v", v.Unmanaged)
+	}
+	if len(v.Suggestions) != 1 || v.Suggestions[0].DependsOnID != nas.ID || v.Suggestions[0].Kind != KindStorage {
+		t.Fatalf("hypervisor -> nas over 10.0.0.1 was not suggested: %+v", v.Suggestions)
+	}
+}
+
+// A bound address only identifies a host when it is specific to it. A wildcard is
+// every interface, loopback is every host, and a link-local address is what the
+// container veth churn is made of -- one of those claiming a name would attach the
+// evidence to whichever host was seen first.
+func TestOnlySpecificBoundAddressesIdentifyAHost(t *testing.T) {
+	for _, a := range []string{"", "*", "0.0.0.0", "::", "127.0.0.1", "127.0.1.1", "::1",
+		"[fe80::207:43ff:fe64:78d0]%bond0", "eth0"} {
+		if got := boundAddress(a); got != "" {
+			t.Errorf("boundAddress(%q) = %q, want it ignored", a, got)
+		}
+	}
+	for in, want := range map[string]string{
+		"10.0.0.1":       "10.0.0.1",
+		"[2001:db8::5]":  "2001:db8::5",
+		" 192.168.50.1 ": "192.168.50.1",
+	} {
+		if got := boundAddress(in); got != want {
+			t.Errorf("boundAddress(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An address a host was configured with must outrank one merely observed, so a
+// floating address cannot pull the evidence onto the wrong machine.
+func TestAConfiguredAddressOutranksAnObservedOne(t *testing.T) {
+	real := host("real", "10.0.0.50", inv("", nil))
+	impostor := host("impostor", "10.0.0.51", inv("", nil,
+		models.ListeningPort{Port: 80, Address: "10.0.0.50", Exposed: true}, // a VIP it also holds
+	))
+	client := host("client", "10.0.0.60", inv("", []models.NetworkMount{
+		mount("10.0.0.50", "10.0.0.50:/export", "/mnt/x", "nfs4"),
+	}))
+	v := ForHost(client.ID, []models.Host{real, impostor, client}, nil)
+	if len(v.Suggestions) != 1 || v.Suggestions[0].DependsOnID != real.ID {
+		t.Fatalf("the observed binding outranked the configured address: %+v", v.Suggestions)
+	}
+}
