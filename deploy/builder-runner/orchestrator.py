@@ -1037,9 +1037,7 @@ def delete_bundle(name: str) -> dict:
 
     was_latest = _latest_pointer() == name
     os.remove(path)
-    for sidecar in (path + ".json", path + ".sha256"):
-        if os.path.isfile(sidecar):
-            os.remove(sidecar)
+    _remove_sidecars(path)
 
     new_latest = None
     if was_latest:
@@ -1106,6 +1104,43 @@ def imager_features() -> list[str]:
     return []
 
 
+def _remove_sidecars(path: str) -> list[str]:
+    """Remove every file that belongs to `path`, and let the directory say which
+    those are rather than a list in here.
+
+    The list used to be `.sha256` and `.json`. The SBOM step had since started
+    writing `.cdx.json`, `.spdx.json` and `.packages.tsv`, and nothing updated
+    this -- so deleting an image from the UI left three files per image behind
+    for good. keith found four deleted builds' SBOMs still sitting in the output
+    directory, which is how a "deleted" image keeps taking up space and keeps
+    showing up in a file listing. An enumerated list is wrong the moment anything
+    writes a new sidecar, and it is wrong silently: nothing fails, the files just
+    accumulate.
+
+    The `.` boundary is what makes a prefix match safe here. `foo.img.zst.`
+    cannot match `foo-2.img.zst`, so a sibling build is never touched -- which is
+    the mistake that would matter, given these names differ only by a suffix.
+    """
+    removed: list[str] = []
+    directory = os.path.dirname(path) or "."
+    prefix = os.path.basename(path) + "."
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return removed
+    for fn in sorted(entries):
+        if not fn.startswith(prefix):
+            continue
+        full = os.path.join(directory, fn)
+        if os.path.isfile(full) or os.path.islink(full):
+            try:
+                os.remove(full)
+                removed.append(fn)
+            except OSError:
+                pass
+    return removed
+
+
 def delete_image(name: str) -> None:
     if "/" in name or ".." in name:
         raise ValueError("invalid name")
@@ -1113,9 +1148,7 @@ def delete_image(name: str) -> None:
     if not re.search(r"\.img(\.zst|\.gz)?$", name) or not os.path.isfile(path):
         raise FileNotFoundError(name)
     os.remove(path)
-    for sidecar in (path + ".sha256", path + ".json"):
-        if os.path.isfile(sidecar):
-            os.remove(sidecar)
+    _remove_sidecars(path)
 
 
 def disk_usage() -> dict:

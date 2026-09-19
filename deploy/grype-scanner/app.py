@@ -21,9 +21,11 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -47,12 +49,76 @@ SCAN_CONCURRENCY = int(os.environ.get("GRYPE_SCAN_CONCURRENCY", "2"))
 _scan_sem = asyncio.Semaphore(max(1, SCAN_CONCURRENCY))
 
 
+# Where each run's scratch space goes. grype (via stereoscope/syft) extracts whole
+# image layers and package databases here, which for a container image is gigabytes.
+SCAN_TMP_ROOT = os.environ.get("GRYPE_TMP_ROOT", tempfile.gettempdir())
+
+# Anything older than this was left by a run that is certainly over.
+STALE_TMP_AGE = max(2 * SCAN_TIMEOUT, 3600)
+
+# The prefixes grype's own libraries use, plus ours.
+_TMP_PREFIXES = ("prov-scan-", "stereoscope-", "syft-cataloger-")
+
+
+def _sweep_scan_temp(root: str = SCAN_TMP_ROOT, max_age: int = STALE_TMP_AGE) -> int:
+    """Delete scratch trees an earlier run left behind. Returns bytes freed.
+
+    These accumulate because of how a timeout kills a scan: subprocess.run sends
+    SIGKILL, so stereoscope's deferred cleanup never runs and its extracted layers
+    stay on disk forever. On this fleet that reached 6.6GB inside the scanner
+    container -- most of a 92GB root filesystem -- with nothing in any log to say
+    where the space had gone.
+    Only trees older than max_age are touched, so a scan in flight is never
+    disturbed: a running scan's directory is at most SCAN_TIMEOUT old.
+    """
+    freed = 0
+    now = time.time()
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return 0
+    for name in entries:
+        if not name.startswith(_TMP_PREFIXES):
+            continue
+        path = os.path.join(root, name)
+        try:
+            if now - os.stat(path).st_mtime < max_age:
+                continue
+            for dirpath, _dirs, files in os.walk(path):
+                for fn in files:
+                    try:
+                        freed += os.lstat(os.path.join(dirpath, fn)).st_size
+                    except OSError:
+                        pass
+            shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+    return freed
+
+
 async def _run_grype(args: list[str], timeout: int) -> subprocess.CompletedProcess:
-    """Run grype off the event loop, bounded by the concurrency semaphore."""
+    """Run grype off the event loop, bounded by the concurrency semaphore.
+
+    The sweep runs here rather than at startup: this container runs for weeks, so a
+    startup hook would fire once and never again, and anything leaked in between
+    would sit there until someone noticed 7GB missing. A scan is also the only
+    moment the scratch space matters.
+
+    Each run gets its own TMPDIR, removed in a finally -- which is the difference
+    between a scan that is killed and one that leaks. subprocess.run raises
+    TimeoutExpired after SIGKILLing grype, so nothing grype registered to clean up
+    ever runs; giving it a directory we own means the cleanup is ours to guarantee.
+    """
     async with _scan_sem:
-        return await asyncio.to_thread(
-            subprocess.run, args, capture_output=True, timeout=timeout, env=BASE_ENV
-        )
+        _sweep_scan_temp()
+        tmp = tempfile.mkdtemp(prefix="prov-scan-", dir=SCAN_TMP_ROOT)
+        env = {**BASE_ENV, "TMPDIR": tmp}
+        try:
+            return await asyncio.to_thread(
+                subprocess.run, args, capture_output=True, timeout=timeout, env=env
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 MAX_SCAN_UPLOAD = int(os.environ.get("GRYPE_MAX_SCAN_BYTES", str(256 << 20)))   # host package DBs
 MAX_DB_UPLOAD = int(os.environ.get("GRYPE_MAX_DB_BYTES", str(2 << 30)))          # DB archive can be ~1GB
 

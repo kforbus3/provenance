@@ -131,3 +131,62 @@ def test_image_ref_requires_a_digest():
     ]
     for ref in bad:
         assert not IMAGE_REF.match(ref), f"should reject {ref!r}"
+
+
+# --- scratch-space cleanup ---------------------------------------------------
+#
+# The scanner's writable layer reached 7GB on this fleet, 6.6GB of it /tmp, with
+# nothing in any log to say where the space had gone. The mechanism: a scan that
+# exceeds GRYPE_SCAN_TIMEOUT is SIGKILLed by subprocess.run, so stereoscope's
+# deferred cleanup never runs and the image layers it extracted stay forever. Each
+# run now gets a TMPDIR removed in a finally, and this sweep clears anything an
+# earlier version (or a hard crash) left behind.
+
+import os
+import time
+
+from app import _sweep_scan_temp
+
+
+def _tree(root, name, age_s, size=2048):
+    d = os.path.join(root, name)
+    os.makedirs(os.path.join(d, "layer"), exist_ok=True)
+    f = os.path.join(d, "layer", "blob")
+    with open(f, "wb") as fh:
+        fh.write(b"\0" * size)
+    old = time.time() - age_s
+    os.utime(d, (old, old))
+    return d
+
+
+def test_sweep_removes_stale_trees_and_reports_what_it_freed(tmp_path):
+    root = str(tmp_path)
+    stale = _tree(root, "stereoscope-123", age_s=7200)
+    syft = _tree(root, "syft-cataloger-456", age_s=7200)
+
+    freed = _sweep_scan_temp(root=root, max_age=3600)
+
+    assert not os.path.exists(stale)
+    assert not os.path.exists(syft)
+    assert freed >= 4096, "should report the bytes it reclaimed, not just delete"
+
+
+def test_sweep_leaves_a_scan_that_is_still_running(tmp_path):
+    """A running scan's directory is at most SCAN_TIMEOUT old. Deleting it would
+    break a scan that is working, which is worse than the disk usage."""
+    root = str(tmp_path)
+    fresh = _tree(root, "prov-scan-inflight", age_s=60)
+
+    _sweep_scan_temp(root=root, max_age=3600)
+
+    assert os.path.exists(fresh), "swept a scan that was still running"
+
+
+def test_sweep_ignores_anything_it_did_not_create(tmp_path):
+    """/tmp is shared. Only the known prefixes are ours to delete."""
+    root = str(tmp_path)
+    other = _tree(root, "someone-elses-data", age_s=99999)
+
+    _sweep_scan_temp(root=root, max_age=3600)
+
+    assert os.path.exists(other), "deleted a directory belonging to something else"

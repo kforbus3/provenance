@@ -7,6 +7,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**Deleting an image now takes its SBOMs with it.** `delete_image` removed a
+hardcoded `.sha256` and `.json`; the SBOM step had since started writing
+`.cdx.json`, `.spdx.json` and `.packages.tsv`, and nothing updated that list. Four
+deleted builds had left their SBOMs in the output directory — nothing failed, so
+nothing said so. Sidecars are now found by prefix, with the `.` boundary keeping a
+sibling build (`foo-2.img.zst`) safe.
+
+**The vulnerability scanner no longer leaks its scratch space.** A scan that
+exceeds its timeout is SIGKILLed, so stereoscope's deferred cleanup never runs and
+the image layers it extracted stay on disk. That reached **6.6 GB** inside the
+scanner container here, with nothing in any log pointing at it. Each scan now gets
+its own `TMPDIR` removed in a `finally` — which is what makes a killed scan clean
+up — and each run first sweeps trees older than twice the scan timeout, so
+anything an earlier version left is reclaimed without waiting for a restart.
+
+
 **"Open log console" lands on a dashboard with data in it.** It opened
 Dashboards' home screen, in the viewer's own private tenant, which is empty — a
 console that signs you in and then asks you to choose an index pattern is a tool
