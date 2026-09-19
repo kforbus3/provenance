@@ -340,7 +340,30 @@ func (h *handler) listDependencies(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"dependsOn": dependsOn, "dependents": dependents,
+		// What the machines themselves say about the same question. A graph typed in
+		// by hand and never checked drifts in silence, and the preview built on it
+		// then states something false with complete confidence -- so the recorded
+		// edges Provenance can see for itself are marked, the ones it can see that
+		// nobody recorded are offered, and a server outside the fleet is named as the
+		// blind spot it is.
+		"evidence": h.dependencyEvidence(r, id, dependsOn),
 	})
+}
+
+// dependencyEvidence corroborates one host's recorded dependencies against what it
+// reports. Scoped to the hosts the caller can see, for the same reason every other
+// read here is: a name resolved out of a host they cannot access would tell them it
+// exists.
+//
+// Evidence is an addition to the recorded graph, never a precondition for reading it,
+// so a failure here returns an empty view rather than failing the request.
+func (h *handler) dependencyEvidence(r *http.Request, id uuid.UUID, recorded []store.HostDependencyEdge) topology.HostView {
+	p := auth.MustPrincipal(r)
+	hosts, err := h.d.Store.ListAccessibleHosts(r.Context(), p.UserID, p.IsSuperAdmin || p.Has("Host.Enroll") || p.Has("Admin.All"))
+	if err != nil {
+		return topology.HostView{Confirmations: []topology.Confirmation{}, Suggestions: []topology.Suggestion{}, Unmanaged: []topology.Unmanaged{}}
+	}
+	return topology.ForHost(id, hosts, recorded)
 }
 
 // addDependency records that this host stands on another.

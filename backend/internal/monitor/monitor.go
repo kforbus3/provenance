@@ -895,6 +895,7 @@ func collectInventory(conn *sshgw.Conn) (models.HostInventory, bool) {
 	collectUpdates(conn, &inv)
 	collectObsolete(conn, &inv)
 	collectListeningPorts(conn, &inv)
+	collectNetworkMounts(conn, &inv)
 	// Containers are deliberately NOT collected here. See containersTTL.
 	return inv, true
 }

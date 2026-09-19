@@ -47,12 +47,12 @@ Direction is "dependent first" because that is how every question is asked. *Wha
 does this host stand on* is the primary key; *what stands on this host* is the
 reverse index.
 
-## What is deliberately not here yet
+## What reads it
 
-The table is the foundation, not the feature. Two things will read it, and
-neither can be built on a schema that cannot express the relationship:
+The table is the foundation, not the feature. Two things read it, and neither
+could be built on a schema that cannot express the relationship:
 
-**Schedule ordering** — now built. A playbook schedule can be set to *Order by
+**Schedule ordering.** A playbook schedule can be set to *Order by
 dependencies*, which runs its hosts in waves instead of all at once: dependents
 first, whatever carries them last. Storage is never rebooted out from under
 guests that are still patching, because the guests' wave has to finish first.
@@ -70,8 +70,8 @@ This replaces ordering by clock arithmetic. Hand-timing means choosing a gap and
 hoping the earlier run fits inside it, which is a race: a guest run bounded by a
 ninety-minute timeout can still be going when the storage window opens.
 
-**Blast-radius preview.** Before an action that disrupts a host, say what it will
-actually reach:
+**Blast-radius preview.** Before an action that disrupts a host, it says what that
+will actually reach:
 
 > This targets 15 hosts. 13 of them have their disks served by `nas`, which is
 > also in this batch.
@@ -91,20 +91,56 @@ standard isolation policy.
 
 ## Recording an edge
 
-Topology is **asserted, not collected**. A host cannot report that it is a guest
-of a particular hypervisor, or that its disks arrive over NFS from a particular
-NAS — those are facts about the estate, not about the machine.
-
-So it is entered by hand, on the host's detail dialog under **Dependencies**,
-which shows both directions: what this host *stands on*, and what it *carries*.
-The empty state says the consequence rather than just "none", because a host with
-nothing recorded is not a host with no dependencies — it is one nothing can warn
-about yet.
+Topology is **asserted**: a host cannot report that it is a guest of a particular
+hypervisor, because a guest cannot see whose hypervisor it is running on. So an
+edge is entered by hand, on the host's detail dialog under **Dependencies**, which
+shows both directions: what this host *stands on*, and what it *carries*. The empty
+state says the consequence rather than just "none", because a host with nothing
+recorded is not a host with no dependencies — it is one nothing can warn about yet.
 
 `GET`, `POST` and `DELETE` on `/api/v1/hosts/{id}/dependencies`. Reading is
 `Host.View`; writing is `Host.Edit`, because an edge changes what a bulk action
 warns about and what an ordered schedule does. It is a property of the host, not
 a note about it.
+
+## Checking the graph against the machines
+
+An asserted graph that nothing ever checks drifts in silence. A host gains an NFS
+mount, nobody records it, and the preview and the wave ordering then state
+something false with complete confidence — which is worse than having no graph,
+because a warning that has been right nine times is believed the tenth.
+
+Part of it *is* collectable, and the earlier claim that none of it was has been
+wrong from the start: `/proc/self/mounts` names the server a filesystem arrives
+from, in plain text, readable without root. The monitor collects it in the same
+sweep as everything else, along with the host's answer to `systemd-detect-virt`,
+and the **Dependencies** section reports three things:
+
+| what it says | meaning |
+|---|---|
+| **seen on the host** on a recorded edge | the host's own mount table agrees with what was asserted; hover for the mount |
+| **"Provenance can see these, and nobody has recorded them"** | an observed dependency with no edge, offered with a **Record it** button |
+| **"depends on `x`, which Provenance does not manage"** | the server is not an enrolled host, so no edge can exist for it — the one gap careful data entry cannot close |
+
+Nothing is written automatically. An observation is evidence; an edge is an
+assertion about the estate, and a person makes it. Accepting a suggestion stores
+the evidence as the edge's note, so what was observed at the time it was recorded
+survives.
+
+A **recorded edge with no observation is not reported as wrong**, and this is the
+important restraint. A guest's disks live on the NAS by way of the hypervisor's
+mount, not the guest's, so almost every true `storage` edge in a virtualised
+estate is invisible from the dependent — flagging those as unverified would bury a
+correct graph in false doubt. Silence about an edge means "nothing to see from
+here", never "this is wrong".
+
+The hypervisor guess is deliberately narrow: a host that reports it is virtualised
+is offered an edge to the fleet's hypervisor **only when there is exactly one**. A
+guess between two would be recorded as a fact and then read back as one by
+something deciding what to reboot.
+
+A host that has never reported its mounts says so, rather than reading as a host
+with no network storage.
 
 ## Cycles
 

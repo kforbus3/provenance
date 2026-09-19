@@ -73,3 +73,77 @@ describe("recording what a host stands on", () => {
       expect(screen.getByText(/nas → hypervisor → guest-a → nas/)).toBeInTheDocument());
   });
 });
+
+// A hand-entered graph that nothing checks drifts in silence, and the blast-radius
+// preview built on it then states something false with complete confidence. So the
+// host's own report is shown next to the graph: edges it agrees with are marked,
+// edges it can see that nobody recorded are offered, and a server outside the fleet
+// is named as the blind spot it is.
+describe("corroborating the graph against the hosts", () => {
+  it("marks a recorded edge the host itself reports", async () => {
+    vi.spyOn(hostsApi, "listHostDependencies").mockResolvedValue({
+      dependsOn: [{
+        hostId: "h1", hostname: "guest-a", dependsOnId: "h2", dependsOn: "nas",
+        kind: "storage", note: "",
+      }],
+      dependents: [],
+      evidence: {
+        confirmations: [{ dependsOnId: "h2", kind: "storage", evidence: "mounts nas:/tank/vm on /mnt/vm (nfs4)" }],
+        suggestions: [], unmanaged: [], collected: true,
+      },
+    });
+    renderWith();
+    expect(await screen.findByText("seen on the host")).toBeInTheDocument();
+  });
+
+  it("offers an unrecorded dependency instead of writing it, and records the evidence with it", async () => {
+    vi.spyOn(hostsApi, "listHostDependencies").mockResolvedValue({
+      dependsOn: [], dependents: [],
+      evidence: {
+        confirmations: [],
+        suggestions: [{
+          dependsOnId: "h2", dependsOn: "nas", kind: "storage",
+          evidence: "mounts nas:/tank/home on /home (nfs4)",
+        }],
+        unmanaged: [], collected: true,
+      },
+    });
+    const add = vi.spyOn(hostsApi, "addHostDependency").mockResolvedValue();
+    renderWith();
+
+    expect(await screen.findByText("nas")).toBeInTheDocument();
+    expect(screen.getByText(/mounts nas:\/tank\/home/)).toBeInTheDocument();
+    // Nothing was written just by looking at it: an observation is evidence, an
+    // edge is an assertion.
+    expect(add).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Record it/ }));
+    await waitFor(() => expect(add).toHaveBeenCalledWith(
+      "h1", "h2", "storage", "observed: mounts nas:/tank/home on /home (nfs4)",
+    ));
+  });
+
+  it("names a server outside the fleet as something it cannot warn about", async () => {
+    vi.spyOn(hostsApi, "listHostDependencies").mockResolvedValue({
+      dependsOn: [], dependents: [],
+      evidence: {
+        confirmations: [], suggestions: [],
+        unmanaged: [{ server: "synology", evidence: "mounts synology:/volume1/tv on /mnt/tv (nfs4)" }],
+        collected: true,
+      },
+    });
+    renderWith();
+    expect(await screen.findByText("synology")).toBeInTheDocument();
+    expect(screen.getByText(/does not manage/)).toBeInTheDocument();
+  });
+
+  // "Nothing to check against" must not read as "checked, and found nothing".
+  it("says when the host has never reported its mounts", async () => {
+    vi.spyOn(hostsApi, "listHostDependencies").mockResolvedValue({
+      dependsOn: [], dependents: [],
+      evidence: { confirmations: [], suggestions: [], unmanaged: [], collected: false },
+    });
+    renderWith();
+    expect(await screen.findByText(/not the same as finding nothing/i)).toBeInTheDocument();
+  });
+});

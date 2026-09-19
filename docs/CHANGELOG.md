@@ -7,6 +7,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**The dependency graph is now checked against the machines.** Host topology is
+entered by hand, and a hand-entered graph that nothing ever checks drifts in
+silence — a host gains an NFS mount, nobody records it, and the blast-radius
+preview and wave ordering built on that graph state something false with complete
+confidence. That is worse than having no graph, because a warning that has been
+right nine times is believed the tenth.
+
+Part of it was collectable all along, and the documentation's claim that none of it
+was is what kept this unbuilt: `/proc/self/mounts` names the server a filesystem
+arrives from, in plain text, without root. The monitor now reads it in the same
+sweep as everything else, along with `systemd-detect-virt`, and the host's
+**Dependencies** section marks a recorded edge **seen on the host** (hover for the
+mount), offers an observed dependency nobody has recorded with a **Record it**
+button, and names a storage server that is not an enrolled host as the one gap
+careful data entry cannot close.
+
+Nothing is written automatically: an observation is evidence, an edge is an
+assertion about the estate, and a person makes it. Accepting a suggestion keeps the
+evidence as the edge's note. A recorded edge with **no** observation is deliberately
+*not* flagged as wrong — a guest's disks reach it through the hypervisor's mount,
+not its own, so almost every true `storage` edge in a virtualised estate is
+invisible from the dependent, and flagging those would bury a correct graph in
+false doubt. The hypervisor guess is offered only when the fleet has exactly one:
+a coin toss between two would be recorded as a fact and read back as one by
+something deciding what to reboot.
+
 **The dashboard reports a host that has started logging errors.** Provenance was
 collecting every host's logs and never mentioning them unless someone went to the
 Logs page and searched. A host is now surfaced under **Needs attention** — and in

@@ -453,6 +453,35 @@ type HostInventory struct {
 	// distribution upgrades. Used to classify a vulnerability whose package can't be
 	// updated (the fix is to remove it). Nil = not yet collected; empty = none.
 	ObsoletePackages []string `json:"obsoletePackages,omitempty"`
+
+	// NetworkMounts is what this host mounts from another machine. Nil = not yet
+	// collected; empty = collected and nothing is mounted over the network.
+	//
+	// This is the evidence behind a storage dependency. The topology graph is
+	// asserted by an operator -- as it must be, because no machine knows it is a
+	// guest of a particular hypervisor -- but a host absolutely does know that its
+	// /mnt/media arrives from nas over NFS, and a graph nobody ever checks against
+	// the machines goes stale without saying so.
+	NetworkMounts   []NetworkMount `json:"networkMounts,omitempty"`
+	MountsCheckedAt *time.Time     `json:"mountsCheckedAt,omitempty"`
+	// Virtualisation is what the host says it is running on ("kvm", "vmware",
+	// "lxc", "none"), from systemd-detect-virt. It says that a host IS a guest,
+	// never whose -- a guest cannot see its hypervisor -- which is exactly enough
+	// to suggest an edge when the estate has one hypervisor and to say nothing when
+	// it has two.
+	Virtualisation string `json:"virtualisation,omitempty"`
+}
+
+// NetworkMount is one filesystem this host mounts from another machine.
+type NetworkMount struct {
+	// Source as the kernel reports it: "10.10.0.9:/tank/media", "//nas/share".
+	Source string `json:"source"`
+	// Server is the host part of Source -- a name or an address -- which is what
+	// gets matched against the fleet. Split here rather than in the UI because
+	// every fstype spells it differently and getting it wrong invents a dependency.
+	Server string `json:"server"`
+	Target string `json:"target"`
+	FSType string `json:"fsType"`
 }
 
 // PendingUpdate is one upgradable package on a host.

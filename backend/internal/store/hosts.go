@@ -216,20 +216,25 @@ func (s *Store) attachHostDetailsBatch(ctx context.Context, hosts []*models.Host
 		SELECT host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb, collected_at,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
 			listening_ports, ports_checked_at,
+			network_mounts, mounts_checked_at, COALESCE(virtualisation,''),
 			containers, containers_checked_at, COALESCE(containers_status,''),
 			COALESCE(containers_detail,'')
 		FROM host_inventory WHERE host_id = ANY($1)`, ids); err == nil {
 		for rows.Next() {
 			var hid uuid.UUID
 			var inv models.HostInventory
-			var updatePkgs, obsoletePkgs, ports, containers []byte
+			var updatePkgs, obsoletePkgs, ports, mounts, containers []byte
 			if rows.Scan(&hid, &inv.OSName, &inv.OSVersion, &inv.KernelVersion, &inv.Architecture,
 				&inv.SSHVersion, &inv.CPUCount, &inv.MemoryMB, &inv.CollectedAt,
 				&inv.UpdatesAvailable, &inv.SecurityUpdates, &inv.UpdatesCheckedAt, &updatePkgs, &obsoletePkgs,
 				&ports, &inv.PortsCheckedAt,
+				&mounts, &inv.MountsCheckedAt, &inv.Virtualisation,
 				&containers, &inv.ContainersCheckedAt, &inv.ContainersStatus,
 				&inv.ContainersDetail) != nil {
 				continue
+			}
+			if len(mounts) > 0 {
+				_ = json.Unmarshal(mounts, &inv.NetworkMounts)
 			}
 			if len(updatePkgs) > 0 {
 				_ = json.Unmarshal(updatePkgs, &inv.UpdatePackages)
@@ -598,6 +603,13 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 	if inv.ListeningPorts != nil {
 		ports, _ = json.Marshal(inv.ListeningPorts)
 	}
+	// Same contract again: nil = this sweep did not ask, [] = asked and there are
+	// none. Blanking this one would silently withdraw the evidence behind a storage
+	// dependency, so a host that could not be reached keeps what it reported before.
+	var mounts []byte
+	if inv.NetworkMounts != nil {
+		mounts, _ = json.Marshal(inv.NetworkMounts)
+	}
 	var containers []byte
 	if inv.Containers != nil {
 		containers, _ = json.Marshal(inv.Containers)
@@ -606,8 +618,9 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 		INSERT INTO host_inventory (host_id, os_name, os_version, kernel_version, architecture, ssh_version, cpu_count, memory_mb,
 			updates_available, security_updates, updates_checked_at, update_packages, obsolete_packages,
 			listening_ports, ports_checked_at,
+			network_mounts, mounts_checked_at, virtualisation,
 			containers, containers_checked_at, containers_status, containers_detail, collected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now())
 		ON CONFLICT (host_id) DO UPDATE SET
 			os_name=EXCLUDED.os_name, os_version=EXCLUDED.os_version, kernel_version=EXCLUDED.kernel_version,
 			architecture=EXCLUDED.architecture, ssh_version=EXCLUDED.ssh_version, cpu_count=EXCLUDED.cpu_count,
@@ -620,6 +633,9 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 			obsolete_packages=COALESCE(EXCLUDED.obsolete_packages, host_inventory.obsolete_packages),
 			listening_ports=COALESCE(EXCLUDED.listening_ports, host_inventory.listening_ports),
 			ports_checked_at=COALESCE(EXCLUDED.ports_checked_at, host_inventory.ports_checked_at),
+			network_mounts=COALESCE(EXCLUDED.network_mounts, host_inventory.network_mounts),
+			mounts_checked_at=COALESCE(EXCLUDED.mounts_checked_at, host_inventory.mounts_checked_at),
+			virtualisation=COALESCE(NULLIF(EXCLUDED.virtualisation, ''), host_inventory.virtualisation),
 			-- Same rule, and it matters more here: a sweep that could not reach the
 			-- docker socket must not blank a list collected when it could.
 			--
@@ -641,6 +657,7 @@ func (s *Store) UpsertInventory(ctx context.Context, hostID uuid.UUID, inv model
 		hostID, inv.OSName, inv.OSVersion, inv.KernelVersion, inv.Architecture, inv.SSHVersion, inv.CPUCount, inv.MemoryMB,
 		inv.UpdatesAvailable, inv.SecurityUpdates, inv.UpdatesCheckedAt, updatePkgs, obsoletePkgs,
 		ports, inv.PortsCheckedAt,
+		mounts, inv.MountsCheckedAt, inv.Virtualisation,
 		containers, inv.ContainersCheckedAt, inv.ContainersStatus, inv.ContainersDetail)
 	return err
 }

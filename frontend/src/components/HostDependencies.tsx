@@ -1,8 +1,9 @@
 import { useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Chip, MenuItem, Stack, TextField, Typography,
+  Alert, Autocomplete, Box, Button, Chip, MenuItem, Stack, TextField, Tooltip, Typography,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -63,9 +64,28 @@ export default function HostDependencies({ hostId }: { hostId: string }) {
     onSuccess: invalidate,
   });
 
+  // Accepting a suggestion is the same write as typing it in, with the evidence
+  // kept as the note: what was observed at the moment it was recorded, which is
+  // the one thing a person reading this edge in six months will want.
+  const accept = useMutation({
+    mutationFn: (v: { dependsOnId: string; kind: HostDependencyKind; evidence: string }) =>
+      addHostDependency(hostId, v.dependsOnId, v.kind, `observed: ${v.evidence}`.slice(0, 200)),
+    onSuccess: () => { setError(null); invalidate(); },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(msg || "Could not record that dependency.");
+    },
+  });
+
   const options = (hosts?.hosts ?? []).filter((h) => h.id !== hostId);
   const dependsOn = data?.dependsOn ?? [];
   const dependents = data?.dependents ?? [];
+  const evidence = data?.evidence;
+  const suggestions = evidence?.suggestions ?? [];
+  const unmanaged = evidence?.unmanaged ?? [];
+  const confirmedBy = new Map(
+    (evidence?.confirmations ?? []).map((c) => [`${c.dependsOnId}:${c.kind}`, c.evidence]),
+  );
 
   return (
     <Box>
@@ -73,6 +93,7 @@ export default function HostDependencies({ hostId }: { hostId: string }) {
       {dependsOn.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Nothing recorded. Until something is, no bulk action can warn about it.
+          {suggestions.length > 0 && " Provenance can see some of it — below."}
         </Typography>
       ) : (
         <Stack spacing={0.5} sx={{ mb: 1 }}>
@@ -80,6 +101,14 @@ export default function HostDependencies({ hostId }: { hostId: string }) {
             <Stack key={`${e.dependsOnId}:${e.kind}`} direction="row" spacing={1} alignItems="center">
               <Chip size="small" label={e.kind} />
               <Typography variant="body2">{e.dependsOn}</Typography>
+              {confirmedBy.has(`${e.dependsOnId}:${e.kind}`) && (
+                <Tooltip title={confirmedBy.get(`${e.dependsOnId}:${e.kind}`) ?? ""}>
+                  <Chip
+                    size="small" color="success" variant="outlined" icon={<CheckCircleOutlineIcon />}
+                    label="seen on the host"
+                  />
+                </Tooltip>
+              )}
               {e.note && (
                 <Typography variant="caption" color="text.secondary">{e.note}</Typography>
               )}
@@ -105,6 +134,46 @@ export default function HostDependencies({ hostId }: { hostId: string }) {
             ))}
           </Stack>
         </>
+      )}
+
+      {suggestions.length > 0 && (
+        <>
+          <Typography variant="subtitle2" sx={{ mb: 0.5, mt: 1 }}>
+            Provenance can see these, and nobody has recorded them
+          </Typography>
+          <Stack spacing={0.5} sx={{ mb: 1 }}>
+            {suggestions.map((sg) => (
+              <Stack key={`${sg.dependsOnId}:${sg.kind}`} direction="row" spacing={1} alignItems="center"
+                     flexWrap="wrap" useFlexGap>
+                <Chip size="small" label={sg.kind} />
+                <Typography variant="body2">{sg.dependsOn}</Typography>
+                <Typography variant="caption" color="text.secondary">{sg.evidence}</Typography>
+                <Button size="small" variant="outlined" disabled={accept.isPending}
+                        onClick={() => accept.mutate(sg)}>
+                  Record it
+                </Button>
+              </Stack>
+            ))}
+          </Stack>
+        </>
+      )}
+
+      {unmanaged.length > 0 && (
+        <Alert severity="info" sx={{ mb: 1 }}>
+          {unmanaged.map((u) => (
+            <Typography key={u.server} variant="body2">
+              This host depends on <b>{u.server}</b>, which Provenance does not manage — no
+              dependency can be recorded for it, and nothing here will warn about it. ({u.evidence})
+            </Typography>
+          ))}
+        </Alert>
+      )}
+
+      {evidence && !evidence.collected && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+          This host has not reported its mounts yet, so nothing above could be checked against
+          it. That is not the same as finding nothing.
+        </Typography>
       )}
 
       {error && <Alert severity="warning" sx={{ mb: 1 }} onClose={() => setError(null)}>{error}</Alert>}

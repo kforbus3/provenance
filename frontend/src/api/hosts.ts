@@ -509,9 +509,27 @@ export type HostDependencyEdge = {
   note: string;
 };
 
+// What the host itself reports about the same question. The graph is asserted by a
+// person; this is the part Provenance can check, so a recorded edge can be marked
+// as seen and an unrecorded one can be offered instead of going unnoticed.
+export type HostDependencyEvidence = {
+  confirmations: { dependsOnId: string; kind: HostDependencyKind; evidence: string }[];
+  suggestions: { dependsOnId: string; dependsOn: string; kind: HostDependencyKind; evidence: string }[];
+  // A machine this host depends on that Provenance does not manage: no edge can be
+  // recorded for it at all.
+  unmanaged: { server: string; evidence: string }[];
+  // false = this host has never reported its mounts, so there is nothing to
+  // corroborate with. Not the same as corroborating nothing.
+  collected: boolean;
+};
+
 export async function listHostDependencies(
   hostId: string,
-): Promise<{ dependsOn: HostDependencyEdge[]; dependents: HostDependencyEdge[] }> {
+): Promise<{
+  dependsOn: HostDependencyEdge[];
+  dependents: HostDependencyEdge[];
+  evidence?: HostDependencyEvidence;
+}> {
   const { data } = await api.get(`/api/v1/hosts/${hostId}/dependencies`);
   return data;
 }
