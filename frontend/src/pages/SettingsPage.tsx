@@ -1316,7 +1316,10 @@ function AuditForwardingCard() {
         enabled: loaded.enabled ?? false,
         type: loaded.type || "syslog",
         address: loaded.address ?? "",
-        protocol: loaded.protocol || "udp",
+        // TCP, not UDP: a 14 KB audit event reached the collector truncated to 8 KB
+        // over UDP with no error anywhere, while TCP delivered it whole. A stored
+        // choice still wins -- this only fills in an unconfigured one.
+        protocol: loaded.protocol || "tcp",
       });
     }
   }, [loaded, cfg]);
@@ -1364,9 +1367,13 @@ function AuditForwardingCard() {
             placeholder={cfg.type === "http" ? "https://siem.example.com/audit" : "siem.example.com:514"} />
           {cfg.type === "syslog" && (
             <TextField select size="small" label="Protocol" value={cfg.protocol}
-              onChange={(e) => set({ protocol: e.target.value as AuditForwardConfig["protocol"] })} sx={{ width: 110 }}>
-              <MenuItem value="udp">UDP</MenuItem>
+              onChange={(e) => set({ protocol: e.target.value as AuditForwardConfig["protocol"] })}
+              sx={{ width: 190 }}
+              helperText={cfg.protocol === "udp"
+                ? "UDP truncates a large event without reporting it — a 14 KB audit record arrived at 8 KB."
+                : " "}>
               <MenuItem value="tcp">TCP</MenuItem>
+              <MenuItem value="udp">UDP</MenuItem>
             </TextField>
           )}
         </Stack>

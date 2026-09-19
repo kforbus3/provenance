@@ -309,11 +309,25 @@ func (f *Forwarder) dialSyslog(cfg Config) (net.Conn, error) {
 		}
 		return tls.DialWithDialer(dialer, "tcp", cfg.Address, tc)
 	}
-	proto := strings.ToLower(cfg.Protocol)
-	if proto != "tcp" {
-		proto = "udp"
+	return dialer.Dial(syslogProto(cfg.Protocol), cfg.Address)
+}
+
+// syslogProto resolves the transport, defaulting to TCP.
+//
+// It defaulted to UDP, which is the wrong trade for an audit trail and was measured
+// making it wrong: a real 14 KB event (a host remediation, the kind of record this
+// exists for) arrived at the collector TRUNCATED to 8 KB over UDP, with no error
+// anywhere, while the same event over TCP arrived whole. A truncated JSON payload is
+// also unparseable, so the record looks present and cannot be read.
+//
+// An operator who explicitly chose UDP keeps it -- some collectors only accept it, and
+// this is not the place to overrule that. Only an absent or unrecognised value now
+// resolves to TCP.
+func syslogProto(configured string) string {
+	if strings.ToLower(strings.TrimSpace(configured)) == "udp" {
+		return "udp"
 	}
-	return dialer.Dial(proto, cfg.Address)
+	return "tcp"
 }
 
 // tlsConfig builds the client TLS config for a syslog target: ServerName from the

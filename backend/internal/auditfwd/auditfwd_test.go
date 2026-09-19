@@ -135,3 +135,22 @@ func TestSyslogHostIsStableAcrossRedeployment(t *testing.T) {
 		t.Error("syslogHost returned empty; a syslog line with no HOSTNAME is malformed")
 	}
 }
+
+// The transport default. UDP was the default and it was measured losing data: a real
+// 14 KB audit event (a host remediation) reached the collector truncated to 8 KB with
+// no error reported, while TCP delivered the same event whole. For an audit trail that
+// is the wrong trade, and silence is the reason -- the record looks present.
+func TestSyslogTransportDefaultsToTCP(t *testing.T) {
+	for _, in := range []string{"", "  ", "TCP", "tcp", "nonsense"} {
+		if got := syslogProto(in); got != "tcp" {
+			t.Errorf("syslogProto(%q) = %q, want tcp", in, got)
+		}
+	}
+	// ...but an operator who chose UDP keeps it. Some collectors accept nothing else,
+	// and overruling a stored choice is a different bug from fixing a default.
+	for _, in := range []string{"udp", "UDP", " udp "} {
+		if got := syslogProto(in); got != "udp" {
+			t.Errorf("syslogProto(%q) = %q, want the operator's udp honoured", in, got)
+		}
+	}
+}

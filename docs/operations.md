@@ -657,6 +657,11 @@ collector (`<collector>:514`, TCP), audit events become searchable on the **Logs
 the hosts they were performed on — "who ran what" next to "what the machine said" — and the
 trail also lives somewhere the Provenance host's administrator cannot quietly edit.
 
+Use **TCP** (the default). Over UDP, a 14 KB audit event — a host remediation — reached a
+collector on the same LAN truncated to 8 KB with nothing reported at either end, and a
+truncated JSON payload cannot be parsed afterwards either. UDP remains available for
+collectors that accept nothing else.
+
 Every forwarded event carries `PROV_PUBLIC_URL`'s hostname as its syslog HOSTNAME, not the
 container's. A container ID changes on every recreate, and a collector that groups by host
 would otherwise collect a new meaningless host per deployment with the audit trail scattered

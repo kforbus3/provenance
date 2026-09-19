@@ -7,6 +7,15 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**Audit forwarding over syslog now defaults to TCP.** It defaulted to UDP, and that
+was measured losing data rather than argued about: sending this fleet's largest real
+audit event — a 14,133-byte host remediation, exactly the kind of record a SIEM exists
+for — reached the collector **truncated to 8 KB over UDP, with no error anywhere**,
+while the same event over TCP arrived whole. A truncated JSON payload is also
+unparseable, so the record looks present and cannot be read. An operator who
+explicitly chose UDP keeps it; only an absent or unrecognised value now resolves to
+TCP, and the UI says what UDP costs while it is selected.
+
 **Forwarded audit events carry a stable hostname.** The syslog HOSTNAME field was
 `os.Hostname()`, which inside a container is the container ID and changes on every
 recreate — so a collector that groups by host would collect a new meaningless host per
