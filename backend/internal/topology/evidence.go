@@ -21,6 +21,7 @@ package topology
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
@@ -159,7 +160,7 @@ func observedFor(self *models.Host, hosts []models.Host, index map[string]*model
 		sort.Strings(order)
 		for _, key := range order {
 			g := byServer[key]
-			target := index[key]
+			target := lookupServer(index, key)
 			// A host mounting from itself (loopback NFS, or its own name) is not a
 			// dependency on anything, and recording it would be a self-edge the
 			// schema forbids anyway.
@@ -262,6 +263,26 @@ func listensAsHypervisor(h *models.Host) bool {
 		}
 	}
 	return false
+}
+
+// lookupServer finds the host a mount's server names.
+//
+// The index holds each host's own spellings; this handles the other direction. An
+// fstab written as "nas.example.com:/mnt/nas" has to find a host enrolled as "nas",
+// which is what production actually looked like -- the first host to report a mount
+// named the FQDN, and matching only the literal string would have reported the
+// fleet's NAS as a machine Provenance does not manage.
+func lookupServer(index map[string]*models.Host, server string) *models.Host {
+	key := strings.ToLower(strings.TrimSpace(server))
+	if h := index[key]; h != nil {
+		return h
+	}
+	// Try the label before the domain. Only for something that looks like a name:
+	// truncating an IPv4 address at its first dot would match a host called "10".
+	if i := strings.Index(key, "."); i > 0 && net.ParseIP(key) == nil {
+		return index[key[:i]]
+	}
+	return nil
 }
 
 // nameIndex maps every name a mount source might use to the host that answers to it.

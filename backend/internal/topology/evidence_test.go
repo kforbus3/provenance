@@ -157,3 +157,37 @@ func TestCollectedSaysWhetherTheHostHasEverReported(t *testing.T) {
 		t.Error("a host that reported no mounts was marked not collected")
 	}
 }
+
+// The first host in production to report a mount named the server by its FQDN
+// ("nas.example.com:/mnt/nas") while the host itself is enrolled as "nas". Matching
+// only the literal string reported the fleet's own NAS as a machine Provenance does
+// not manage -- an alarming message about a host sitting right there in the list.
+func TestAMountNamingTheFQDNFindsAHostEnrolledShort(t *testing.T) {
+	nas := host("nas", "10.10.0.9", inv("", nil))
+	ai := host("ai", "10.10.0.162", inv("", []models.NetworkMount{
+		mount("nas.example.com", "nas.example.com:/mnt/nas", "/mnt/nas", "nfs4"),
+	}))
+	v := ForHost(ai.ID, []models.Host{nas, ai}, nil)
+	if len(v.Unmanaged) != 0 {
+		t.Fatalf("the fleet's own NAS was reported as unmanaged: %+v", v.Unmanaged)
+	}
+	if len(v.Suggestions) != 1 || v.Suggestions[0].DependsOnID != nas.ID {
+		t.Fatalf("FQDN mount did not resolve to the short-named host: %+v", v.Suggestions)
+	}
+}
+
+// ...but an address must not be truncated at its first dot, or 10.10.0.9 matches a
+// host called "10" and the evidence points at the wrong machine entirely.
+func TestAnAddressIsNotTruncatedToItsFirstLabel(t *testing.T) {
+	ten := host("10", "192.168.9.9", inv("", nil))
+	h := host("client", "10.10.0.50", inv("", []models.NetworkMount{
+		mount("10.10.0.9", "10.10.0.9:/tank", "/mnt/tank", "nfs4"),
+	}))
+	v := ForHost(h.ID, []models.Host{ten, h}, nil)
+	if len(v.Suggestions) != 0 {
+		t.Fatalf("an address was matched by its first label: %+v", v.Suggestions)
+	}
+	if len(v.Unmanaged) != 1 || v.Unmanaged[0].Server != "10.10.0.9" {
+		t.Fatalf("expected the address to be reported unmanaged, got %+v", v.Unmanaged)
+	}
+}
