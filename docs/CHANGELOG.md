@@ -5,7 +5,11 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.8.1 — 2026-09-19
+
+Follow-ups to v1.8.0, all found by looking at what production actually held rather than
+at what the code said it did.
+
 
 **A schedule now says whether its last run worked.** Every schedule read `started`
 forever — `last_status` records what *firing* did and never changes afterwards, so a
