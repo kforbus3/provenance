@@ -351,12 +351,20 @@ frontend-typecheck: ## Typecheck the frontend exactly as the production image bu
 	# This is `tsc -b`, the same invocation the image uses, rather than
 	# `--noEmit`: they read the same config but not necessarily the same way,
 	# and the point of this target is to be identical to the thing that broke.
-	docker run --rm -v $(PWD)/frontend:/app -w /app node:22-alpine \
+	@# node_modules on a volume, not in the bind mount: see frontend-test.
+	docker run --rm -v $(PWD)/frontend:/app -v prov-frontend-node-modules:/app/node_modules \
+	  -w /app node:22-alpine \
 	  sh -c "npm ci --silent && npx tsc -b"
 
 .PHONY: frontend-test
 frontend-test: ## Run frontend unit tests
-	docker run --rm -v $(PWD)/frontend:/app -w /app node:22-alpine \
+	@# npm ci writes node_modules INTO the mounted directory, so running this on a
+	@# Mac replaces the host's native binaries (rollup, esbuild) with Linux ones and
+	@# the next `npm run build` on the host dies with MODULE_NOT_FOUND from
+	@# rollup/dist/native.js. node_modules is therefore kept inside the container,
+	@# on a volume of its own, and the host's is left alone.
+	docker run --rm -v $(PWD)/frontend:/app -v prov-frontend-node-modules:/app/node_modules \
+	  -w /app node:22-alpine \
 	  sh -c "npm ci && npm run test -- --run"
 
 .PHONY: scanner-test
