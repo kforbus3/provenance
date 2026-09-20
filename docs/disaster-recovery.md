@@ -318,6 +318,27 @@ fire the DNS/WG webhook (from the now-normal **Force failover**, or your automat
 > stacks) to enable console promotion; leave it unset to require `provctl`/DB
 > promotion instead.
 
+### If the app connects as a non-superuser role, grant it pg_promote — on the primary
+
+`pg_promote()` is superuser-only unless `EXECUTE` is granted, and a **multi-tenant**
+deployment is required to connect as a `NOSUPERUSER NOBYPASSRLS` role. The two
+requirements collide: console promotion then fails with
+`permission denied for function pg_promote`.
+
+Run this **on the primary**, as part of setting the standby up:
+
+```sql
+GRANT EXECUTE ON FUNCTION pg_promote(boolean, integer) TO <app_role>;
+```
+
+On the primary, because a standby is read-only — the grant cannot be made there, and a
+failover is the wrong moment to discover that. It reaches the standby through
+replication like any other catalogue change.
+
+The standby console reports what it can actually do: `promotionEnabled` is false, with
+the grant to run in `promotionBlocked`, when the role cannot promote. `provctl` and your
+own database tooling remain the fallback either way.
+
 ## Failback
 
 Not symmetric — it needs replication re-established the *other* way first:

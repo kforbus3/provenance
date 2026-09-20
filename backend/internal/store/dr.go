@@ -111,3 +111,22 @@ func (s *Store) PromoteDB(ctx context.Context) (bool, error) {
 	err := s.pool.QueryRow(ctx, `SELECT pg_promote()`).Scan(&ok)
 	return ok, err
 }
+
+// CanPromoteDB reports whether the role this instance connects as may actually call
+// pg_promote().
+//
+// Asked rather than assumed, because the two documented requirements collide: a
+// multi-tenant deployment MUST connect as a non-superuser role, and pg_promote() is
+// superuser-only unless EXECUTE has been granted. QA hit it in the worst place -- the
+// break-glass console reported "promotion enabled", the operator pressed the button
+// during a simulated site loss, and got `permission denied for function pg_promote
+// (SQLSTATE 42501)`. A console that offers a capability it has not checked is worse
+// than one that says up front it cannot.
+func (s *Store) CanPromoteDB(ctx context.Context) bool {
+	var ok bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT has_function_privilege(current_user, 'pg_promote(boolean,integer)', 'execute')`).Scan(&ok); err != nil {
+		return false
+	}
+	return ok
+}

@@ -26,9 +26,19 @@ type standbyHandler struct {
 // (status only, no secrets, no writes).
 func (h *standbyHandler) mode(w http.ResponseWriter, r *http.Request) {
 	repl, err := h.d.Store.DBReplication(r.Context())
+	// Promotion needs BOTH a break-glass token and a database role allowed to call
+	// pg_promote(). Reporting only the token was a promise the console could not keep:
+	// a multi-tenant deployment connects as a non-superuser by requirement, and
+	// pg_promote is superuser-only unless EXECUTE is granted.
+	canPromote := h.d.Store.CanPromoteDB(r.Context())
 	resp := map[string]any{
 		"standby":          true,
-		"promotionEnabled": h.token != "",
+		"promotionEnabled": h.token != "" && canPromote,
+	}
+	if h.token != "" && !canPromote {
+		resp["promotionBlocked"] = "this instance's database role may not call pg_promote(). " +
+			"Grant it — GRANT EXECUTE ON FUNCTION pg_promote(boolean, integer) TO <role>; — " +
+			"or promote with provctl / your database tooling instead."
 	}
 	if err == nil {
 		resp["inRecovery"] = repl.InRecovery
@@ -62,7 +72,15 @@ func (h *standbyHandler) promoteAndRestart(w http.ResponseWriter, r *http.Reques
 
 	ok, err := h.d.Store.PromoteDB(r.Context())
 	if err != nil {
-		httpx.WriteError(w, http.StatusBadGateway, "pg_promote failed: "+err.Error())
+		msg := "pg_promote failed: " + err.Error()
+		if !h.d.Store.CanPromoteDB(r.Context()) {
+			// Say what to do about it. "permission denied for function pg_promote" during
+			// a site failure is not the moment to go looking for the grant syntax.
+			msg += " — this instance's database role may not call pg_promote(). Grant it " +
+				"(GRANT EXECUTE ON FUNCTION pg_promote(boolean, integer) TO <role>;) or " +
+				"promote with provctl / your database tooling."
+		}
+		httpx.WriteError(w, http.StatusBadGateway, msg)
 		return
 	}
 	h.d.Log.Warn("DR standby: database promoted via console; restarting into normal mode")
