@@ -5,6 +5,39 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.8 — 2026-09-20
+
+**Rotating the CA now distributes it.** A host learns the CA once, at enrollment,
+through `TrustedUserCAKeys` — so after a rotation every host still trusted only the
+retiring key, and because already-issued certificates keep working until they expire,
+nothing looked wrong until they did, fleet-wide and at once. The documented remedy was
+to re-enrol every host. Rotating through the API now pushes the current keys to every
+enrolled host and **reports which took them**, using the same verified, bounded-parallel
+path the KRL distribution already had; a host that did not take it is named at Error,
+because it will start rejecting logins. All *active* keys are written, so certificates
+issued either side of the rotation keep working, and it refuses to write an empty file —
+a host with an empty trust file accepts no certificate from anyone, including whoever
+would repair it.
+
+**A pre-upgrade backup could not be restored into the one situation it exists for.**
+Restoring over the database it came from fails once the upgrade's migrations have run —
+`cannot drop constraint … because other objects depend on it` — and left rows from both
+sides in the same table. A restore now builds a **separate** database, loads the dump
+there, and only then swaps the two by rename, keeping the previous one as
+`<db>_superseded_<timestamp>`. A failure at any point before the swap changes nothing.
+
+**A stopped wave no longer looks like one about to start.** Dependency-ordered schedules
+run dependents first and stop the rest when a wave fails — verified end to end — but the
+later waves' run rows, created up front, stayed at `pending` for ever. They are now
+closed out with a reason naming the wave that stopped them.
+
+Verified clean this round, with no changes needed: audit-chain tamper detection (a
+rewritten row, a row downgraded to the keyless algorithm, and a deleted row are all
+caught, and restoring the original clears the verdict); vault rekey, CA rotation and
+FIPS reseal, after which every secret still decrypts and hosts stay reachable; session
+recordings, which are encrypted at rest and replay as valid asciicast; and approvals,
+where **self-approval is refused even for someone holding `Approval.Decide`**.
+
 ## v1.9.7 — 2026-09-20
 
 **A deleted host kept its overlay access.** On a certificate overlay the certificate is
