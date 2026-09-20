@@ -23,6 +23,16 @@ vi.mock("../api/containerUpdates", () => ({
 
 import { listContainerUpdates } from "../api/containerUpdates";
 
+// The tab now defaults to showing only the images something is available for.
+// Every test in this file is about RENDERING -- null hosts, a row for an image no
+// host runs any more, the image filter not matching hostnames -- on fixtures whose
+// verdicts that default hides. So these render the full list, which is what their
+// subject requires; the default itself is covered in
+// ContainerUpdatesTab.filter.test.tsx.
+function showEverything() {
+  fireEvent.click(screen.getByRole("checkbox"));
+}
+
 function renderTab() {
   useAuthStore.setState({
     user: { id: "1", username: "alice" },
@@ -51,6 +61,7 @@ describe("ContainerUpdatesTab", () => {
     ] as never);
 
     renderTab();
+    showEverything();
 
     await waitFor(() =>
       expect(screen.getByText(/provenance-backend:1\.2\.3/)).toBeInTheDocument(),
@@ -71,6 +82,7 @@ describe("ContainerUpdatesTab", () => {
     ] as never);
 
     renderTab();
+    showEverything();
 
     await waitFor(() => expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument());
     expect(screen.getByText(/provenance-backend:1\.2\.3/)).toBeInTheDocument();
@@ -105,6 +117,7 @@ describe("ContainerUpdatesTab filtering", () => {
     // a hostname to find. The text box searches images; the host picker is exact.
     vi.mocked(listContainerUpdates).mockResolvedValue(rows as never);
     renderTab();
+    showEverything();
     await waitFor(() => expect(screen.getByText(/nginx:1\.24/)).toBeInTheDocument());
 
     const imageFilter = screen.getByPlaceholderText("Filter by image");

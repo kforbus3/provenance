@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Chip, Collapse, IconButton, Paper, Snackbar,
-  Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  TextField, Tooltip, Typography,
+  Alert, Autocomplete, Box, Button, Chip, Collapse, FormControlLabel, IconButton, Paper, Snackbar, Stack, Switch, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
@@ -263,6 +261,15 @@ export function ContainerUpdatesTab() {
   const canScan = useAuthStore((s) => s.has("Host.Scan"));
   const canRun = useAuthStore((s) => s.has("Command.Run"));
   const [filter, setFilter] = useState("");
+  // Default: only the images something is actually available for.
+  //
+  // This screen listed every image the fleet runs -- 52 rows on the deployment
+  // this was reported from, of which six were upgradable. The other 46 said
+  // "built locally", "upgraded by bundle" or "up to date", which are answers to a
+  // question nobody opened this tab to ask. The full list is still worth having:
+  // it is how you tell "nothing to upgrade" from "never checked". So it is one
+  // click away rather than the default.
+  const [showAll, setShowAll] = useState(false);
   // Host is its own control, not part of the text search.
   //
   // One box matching both meant typing a host's name found images whose NAME
@@ -321,10 +328,21 @@ export function ContainerUpdatesTab() {
       newer: 0, moved: 1, migration: 2, superseded: 3, unavailable: 4, unknown: 5,
       error: 6, unchecked: 7, current: 8, local: 9, self: 10, gone: 11,
     };
+    if (!showAll) {
+      // Something is available: a newer version, a rebuilt tag, or a major bump
+      // that needs a migration. A migration stays in: it IS a new version that
+      // exists, and it is the row most worth not forgetting.
+      //
+      // Rows we could not check stay in too, deliberately. Hiding them would make
+      // an empty list mean "nothing to upgrade" when it might mean "we do not
+      // know", and the reassuring reading is the dangerous one.
+      const keep = new Set<Verdict>(["newer", "moved", "migration", "error", "unchecked"]);
+      rows = rows.filter((u) => keep.has(verdictOf(u, updates)));
+    }
     return [...rows].sort((a, b) =>
       rank[verdictOf(a, updates)] - rank[verdictOf(b, updates)] ||
       a.repository.localeCompare(b.repository));
-  }, [updates, filter, hostFilter]);
+  }, [updates, filter, hostFilter, showAll]);
 
   // Counted separately, because they are not the same news.
   //
@@ -366,6 +384,17 @@ export function ContainerUpdatesTab() {
         <TextField size="small" placeholder="Filter by image"
                    value={filter} onChange={(e) => setFilter(e.target.value)}
                    sx={{ maxWidth: 280, flex: 1 }} />
+        {/* The full list answers a different question -- "what are we running, and
+            has it been checked" -- which is worth being able to ask, and is not what
+            this tab is opened for. */}
+        <FormControlLabel
+          sx={{ whiteSpace: "nowrap", mr: 0 }}
+          control={<Switch size="small" checked={showAll}
+                           onChange={(e) => setShowAll(e.target.checked)} />}
+          label={<Typography variant="body2">
+            {showAll ? `All ${updates.length} images` : "Only what can be upgraded"}
+          </Typography>}
+        />
         {canScan && (
           <Tooltip title="Re-asks the registries about the images already discovered. It does not go out to your hosts — that is the monitor sweep's job.">
             <span>
