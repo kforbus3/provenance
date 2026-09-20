@@ -315,10 +315,35 @@ touched, so nothing was disturbed.
 
 **The file parses and the stack does not come up.** This is the expensive one, and
 it used to leave the host on the new file with the service stopped — until somebody
-noticed and rolled back by hand. Now the previous compose file is restored, brought
+noticed and rolled back by hand. Now the last file that *worked* is restored, brought
 up again, and the on-host revision marker is put back to the revision the host was
 actually running. The rejected file is kept as `docker-compose.yml.rejected` so it
 can be read.
+
+Three files live beside the compose file on the host, and the difference between them
+is the difference between a working restore and a useless one:
+
+| file | what it is |
+|---|---|
+| `docker-compose.yml.last-good` | the last one this host actually brought up. Written only on success, never touched by a failure. This is what a restore and a rollback prefer. |
+| `docker-compose.yml.prev` | the one that was there before this deploy, whatever state it was in. The fallback for a host with no known-good copy yet. |
+| `docker-compose.yml.rejected` | the one that just failed, kept so it can be read. |
+
+`.prev` is rotated at the start of every deploy — but **not when nothing is running on
+the file that is there**, because that file is not one that works and `.prev` already
+holds something better. Without that rule a second failed deploy copies the broken live
+file over the good `.prev`, the restore puts back the file it just rejected, and the host
+is left with no working compose file anywhere. That happened.
+
+### The same revision is not deployed twice
+
+If the last deploy of *this* revision failed and the definition has not changed since,
+Deploy asks first. Pressing it again sends the identical file and gets the identical
+result; the row saying "failed at r3" is describing an attempt, not inviting a retry of
+it. The dialog names the revision, the host, when it failed and what it said, and offers
+**Deploy it again anyway** — because a retry is reasonable when the thing that was fixed
+is not in the compose file. Editing the definition makes a new revision, which is not
+this case and is not asked about.
 
 The deploy is still recorded as **failed**, because it was: the definition in
 Provenance is the thing that needs fixing, and the stack row goes on saying so.

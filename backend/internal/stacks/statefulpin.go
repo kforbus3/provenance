@@ -3,9 +3,11 @@ package stacks
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/stateful"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // StatefulMajorError refuses a deploy that would put a stateful image a major
@@ -164,4 +166,60 @@ func splitImage(ref string) (repo, tag string) {
 		return ref, "latest" // the colon was a registry port
 	}
 	return ref[:i], ref[i+1:]
+}
+
+// AlreadyFailedError refuses a deploy of a revision this host has already failed on.
+//
+// The Stacks page shows the failure; pressing Deploy runs the identical file again and
+// produces the identical failure, which is how a stack that was already down stayed down
+// through a second attempt — and, before the rotation was guarded, lost its last working
+// compose file on the way.
+//
+// Nothing has changed between the two attempts, and that is the whole point: this is not
+// a retry of something transient, it is the same input. A retry is still reasonable when
+// the operator fixed something OUTSIDE the compose file (a disk, a credential, a
+// dependency), so this is a question rather than a wall.
+type AlreadyFailedError struct {
+	Revision int        `json:"revision"`
+	When     *time.Time `json:"when,omitempty"`
+	Hostname string     `json:"hostname,omitempty"`
+	Detail   string     `json:"detail,omitempty"`
+}
+
+func (e *AlreadyFailedError) Error() string {
+	when := ""
+	if e.When != nil {
+		when = " at " + e.When.Format("15:04 on 2 Jan")
+	}
+	return fmt.Sprintf("revision %d already failed on %s%s and the definition has not "+
+		"changed since, so deploying it again runs the same file and gets the same result. "+
+		"Edit the compose file, or deploy anyway if you have fixed something off the host.",
+		e.Revision, e.Hostname, when)
+}
+
+// alreadyFailed reports whether this exact revision is the one the host last failed on.
+//
+// Deployed is what the host CONFIRMED, so equality with Revision means there is nothing
+// new to send. A stack whose definition has been edited since has a higher Revision and
+// is not this case.
+func alreadyFailed(st *store.ContainerStack) *AlreadyFailedError {
+	if st == nil || st.DeployState != DeployStateFailed || st.Deployed == nil || *st.Deployed != st.Revision {
+		return nil
+	}
+	return &AlreadyFailedError{
+		Revision: st.Revision, When: st.DeployedAt, Hostname: st.Hostname,
+		Detail: firstLine(st.DeployDetail),
+	}
+}
+
+// firstLine is the part of a stored deploy output worth putting in a dialog.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 300 {
+		s = s[:300] + "…"
+	}
+	return s
 }

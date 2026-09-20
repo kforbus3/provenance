@@ -17,6 +17,10 @@ import (
 func composeStub(t *testing.T, dir string, upFailures int) string {
 	t.Helper()
 	bin := t.TempDir()
+	// The up-counter lives in the stub's OWN directory, not the stack's: a test that
+	// runs several deploys against one directory shares `calls` deliberately (it is the
+	// log of everything that happened) but must NOT share the counter, or the second
+	// deploy starts already past its allowance and quietly succeeds.
 	body := `#!/bin/sh
 echo "docker $*" >> ` + dir + `/calls
 case "$1 $2" in
@@ -26,8 +30,8 @@ case "$2" in
   "config") exit 0 ;;
   "pull") exit 0 ;;
   "up")
-    n=$(cat ` + dir + `/ups 2>/dev/null || echo 0)
-    n=$((n+1)); echo "$n" > ` + dir + `/ups
+    n=$(cat ` + bin + `/ups 2>/dev/null || echo 0)
+    n=$((n+1)); echo "$n" > ` + bin + `/ups
     if [ "$n" -le ` + itoa(upFailures) + ` ]; then
       echo "dependency failed to start: container keycloak-db is unhealthy" >&2
       exit 1
@@ -153,4 +157,165 @@ func TestFirstDeployFailureSaysThereIsNoPrevious(t *testing.T) {
 	if strings.Contains(string(out), "::RESTORED::") {
 		t.Errorf("claimed a restore with no previous file:\n%s", out)
 	}
+}
+
+// The state a pre-1.9.2 deploy left on the host, and the deploy that followed it.
+//
+// This is the sequence exactly as it happened, and the reason it cost the good file:
+//
+//	02:50  (old code) live=good -> .prev=good, write bad, `up` fails, NO restore.
+//	       The host is left with live=bad, .prev=good, and the stack DOWN.
+//	03:54  Deploy pressed again. The rotation copies the live BAD file over .prev,
+//	       destroying the only good copy on the machine. The deploy fails, the restore
+//	       puts back .prev -- which is now the same broken file -- and reports success.
+//
+// The rotation is what did the damage, so that is what this asserts: with nothing
+// running on the file that is there, the previous one must survive.
+func TestRotationKeepsTheGoodFileWhenNothingIsRunning(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Exactly what the earlier deploy left behind.
+	write("docker-compose.yml", badCompose)
+	write("docker-compose.yml.prev", goodCompose)
+	write(".provenance-revision", "3\n")
+
+	// `ps -q` reports nothing running, because the stack is down — which is the fact
+	// the rotation has to notice.
+	script := RenderScript(dir, badCompose, 3, false, "")
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+composeStub(t, dir, 1)+":"+os.Getenv("PATH"))
+	out, _ := cmd.CombinedOutput()
+
+	prev, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml.prev"))
+	if err != nil {
+		t.Fatalf("the previous compose file is gone entirely: %v", err)
+	}
+	if strings.TrimSpace(string(prev)) != strings.TrimSpace(goodCompose) {
+		t.Fatalf("the rotation copied a file that nothing was running over the last good "+
+			"copy — the host now has no working compose file anywhere:\n%s\n--- output:\n%s",
+			prev, out)
+	}
+	// And having kept it, the restore put it back and brought the stack up on it.
+	live, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(live)) != strings.TrimSpace(goodCompose) {
+		t.Errorf("the host was not returned to the file that works:\n%s", live)
+	}
+	if !strings.Contains(string(out), "::KEEPINGPREV::") {
+		t.Errorf("the output does not say the previous file was kept:\n%s", out)
+	}
+}
+
+// The other half of the rule: when the stack IS running, the file serving it is what
+// .prev should hold. Otherwise an ordinary edit could never be rolled back.
+func TestRotationStillRunsWhenTheStackIsUp(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(goodCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml.prev"), []byte("an ancient file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := composeStubRunning(t, dir)
+	script := RenderScript(dir, badCompose, 4, false, "")
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+	out, _ := cmd.CombinedOutput()
+
+	prev, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml.prev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(prev)) != strings.TrimSpace(goodCompose) {
+		t.Errorf("the running file was not rotated into .prev, so a rollback would go "+
+			"back too far:\n%s\n--- output:\n%s", prev, out)
+	}
+}
+
+// Rollback restores the file that worked, not merely the previous revision.
+func TestRollbackPrefersTheKnownGoodFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The state two failed deploys leave behind: .prev is as broken as the live file.
+	write("docker-compose.yml", badCompose)
+	write("docker-compose.yml.prev", badCompose)
+	write("docker-compose.yml.last-good", goodCompose)
+
+	cmd := exec.Command("sh", "-c", rollbackScript(dir))
+	cmd.Env = append(os.Environ(), "PATH="+composeStub(t, dir, 0)+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rollback failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "::ROLLEDBACKTO::docker-compose.yml.last-good") {
+		t.Errorf("rollback does not say what it restored, or chose .prev — which here is "+
+			"the broken file:\n%s", out)
+	}
+	live, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(live) != goodCompose {
+		t.Errorf("rollback restored a file that does not come up:\n%s", live)
+	}
+}
+
+// A host that has never had a successful deploy under this version still rolls back to
+// its previous revision — the fallback must not be lost.
+func TestRollbackFallsBackToPrevWhenNoKnownGood(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(badCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml.prev"), []byte(goodCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", rollbackScript(dir))
+	cmd.Env = append(os.Environ(), "PATH="+composeStub(t, dir, 0)+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rollback failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "::ROLLEDBACKTO::docker-compose.yml.prev") {
+		t.Errorf("rollback did not fall back to the previous revision:\n%s", out)
+	}
+}
+
+// composeStubRunning is composeStub for a stack that IS up: `ps -q` names a container,
+// and `up` succeeds the first time and fails after, so the rotation guard sees a live
+// project while the new file still fails.
+func composeStubRunning(t *testing.T, dir string) string {
+	t.Helper()
+	bin := t.TempDir()
+	body := `#!/bin/sh
+echo "docker $*" >> ` + dir + `/calls
+case "$1 $2" in
+  "compose version") exit 0 ;;
+esac
+case "$2" in
+  "config") exit 0 ;;
+  "ps") echo deadbeefcafe; exit 0 ;;
+  "pull") exit 0 ;;
+  "up")
+    n=$(cat ` + bin + `/ups 2>/dev/null || echo 0)
+    n=$((n+1)); echo "$n" > ` + bin + `/ups
+    if [ "$n" -le 1 ]; then echo "container is unhealthy" >&2; exit 1; fi
+    exit 0 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
 }

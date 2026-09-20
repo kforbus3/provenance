@@ -3,8 +3,10 @@ package stacks
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
 // The real file from the outage, reduced to the part that decides it.
@@ -163,5 +165,75 @@ func TestSplitImageKeepsARegistryPort(t *testing.T) {
 		if repo != tc.repo || tag != tc.tag {
 			t.Errorf("%q split to (%q, %q), want (%q, %q)", tc.ref, repo, tag, tc.repo, tc.tag)
 		}
+	}
+}
+
+func TestAlreadyFailedRevision(t *testing.T) {
+	rev := func(n int) *int { return &n }
+	when := time.Date(2026, 9, 20, 2, 50, 0, 0, time.UTC)
+
+	cases := []struct {
+		name string
+		st   store.ContainerStack
+		want bool
+	}{
+		{
+			name: "the host failed on exactly this revision",
+			st: store.ContainerStack{
+				Revision: 3, Deployed: rev(3), DeployState: DeployStateFailed,
+				Hostname: "identity", DeployedAt: &when,
+				DeployDetail: "dependency failed to start: container keycloak-db is unhealthy\nmore",
+			},
+			want: true,
+		},
+		{
+			name: "the definition has been edited since it failed",
+			st: store.ContainerStack{
+				Revision: 4, Deployed: rev(3), DeployState: DeployStateFailed,
+			},
+			want: false,
+		},
+		{
+			name: "the last deploy succeeded",
+			st: store.ContainerStack{
+				Revision: 3, Deployed: rev(3), DeployState: DeployStateDeployed,
+			},
+			want: false,
+		},
+		{
+			name: "never deployed",
+			st:   store.ContainerStack{Revision: 1},
+			want: false,
+		},
+		{
+			name: "a deploy is in flight",
+			st: store.ContainerStack{
+				Revision: 3, Deployed: rev(3), DeployState: DeployStateDeploying,
+			},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := alreadyFailed(&tc.st)
+			if tc.want != (got != nil) {
+				t.Fatalf("alreadyFailed = %v, want refusal=%v", got, tc.want)
+			}
+			if !tc.want {
+				return
+			}
+			msg := got.Error()
+			for _, want := range []string{"revision 3", "identity", "02:50", "not changed"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("the refusal does not mention %q — an operator cannot tell "+
+						"what already happened: %s", want, msg)
+				}
+			}
+			// The stored output's first line is what the dialog shows; a wall of text
+			// is not.
+			if strings.Contains(got.Detail, "\n") || !strings.Contains(got.Detail, "keycloak-db") {
+				t.Errorf("detail is not the first line of the failure: %q", got.Detail)
+			}
+		})
 	}
 }

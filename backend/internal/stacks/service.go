@@ -48,7 +48,16 @@ const (
 )
 
 func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, false, false, "")
+	return s.deploy(ctx, stackID, false, Waivers{}, "")
+}
+
+// Waivers are the refusals an operator has answered for. Each is separate on purpose:
+// confirming that a database has been migrated says nothing about whether a revision
+// that already failed should be sent again, and one dialog must not stand in for the
+// other.
+type Waivers struct {
+	StatefulMajor bool
+	AlreadyFailed bool
 }
 
 // DeployAcknowledgingStatefulMajor is Deploy with the stateful-image guard waived.
@@ -59,8 +68,8 @@ func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.Contain
 // who is doing the right thing. So the refusal is the default and this is the answer
 // to it -- reached from the UI only after the dialog has named the image, both
 // versions and the migration involved.
-func (s *Service) DeployAcknowledgingStatefulMajor(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, false, true, "")
+func (s *Service) DeployWaiving(ctx context.Context, stackID uuid.UUID, w Waivers) (*store.ContainerStack, string, error) {
+	return s.deploy(ctx, stackID, false, w, "")
 }
 
 // DeployPulling is Deploy, fetching images first.
@@ -68,7 +77,7 @@ func (s *Service) DeployAcknowledgingStatefulMajor(ctx context.Context, stackID 
 // For update rollouts. See renderScript's `pull` for why an ordinary deploy does
 // not do this and why an update rollout must.
 func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, true, false, "")
+	return s.deploy(ctx, stackID, true, Waivers{}, "")
 }
 
 // DeployPullingService is DeployPulling narrowed to one compose service.
@@ -78,38 +87,63 @@ func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.
 func (s *Service) DeployPullingService(ctx context.Context, stackID uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
 	// Never acknowledged: a rollout is automation, and the whole point of the guard
 	// is that this decision belongs to a person who has a migration plan.
-	return s.deploy(ctx, stackID, true, false, services...)
+	// A rollout waives nothing: every one of these refusals exists because the decision
+	// belongs to a person, and automation has no way to have made it.
+	return s.deploy(ctx, stackID, true, Waivers{}, services...)
 }
 
-// PreflightStatefulMajor answers the stateful-image question without deploying
-// anything, so the refusal can be a dialog rather than a failure that arrives
-// minutes later in a row on a table.
+// Preflight answers every refusal a deploy can raise, on the request itself, before
+// anything is detached and before the host is touched.
 //
-// It reads only the database: the stored compose and the containers the last sweep
-// saw. Nothing is written and the host is not contacted, which is what makes it safe
-// to run on the request itself while the deploy that follows does not.
-func (s *Service) PreflightStatefulMajor(ctx context.Context, stackID uuid.UUID) (*StatefulMajorError, error) {
+// A deploy reports back asynchronously — it pulls images and that takes minutes — so it
+// cannot ask a question. Anything an operator has to answer has to be answered here, and
+// that means these checks read only the database: the stored compose, the containers the
+// last sweep saw, and what the host last confirmed. Nothing is written.
+//
+// Returns nil when the deploy may proceed. Otherwise a body naming the refusal, what it
+// found, and the parameter that answers it.
+//
+// A failure to READ is not a refusal: if the stack or host cannot be loaded, this says
+// nothing and lets the deploy proceed to fail on its own terms, where the error is real.
+// The same checks run again inside deploy, so nothing is waived by a query going wrong.
+func (s *Service) Preflight(ctx context.Context, stackID uuid.UUID, waive Waivers) map[string]any {
 	st, err := s.store.GetStack(ctx, stackID)
-	if err != nil {
-		return nil, err
+	if err != nil || strings.TrimSpace(st.Compose) == "" {
+		return nil
 	}
-	if strings.TrimSpace(st.Compose) == "" {
-		return nil, nil
+	if !waive.StatefulMajor {
+		if h, err := s.store.GetHost(ctx, st.HostID); err == nil && h.Inventory != nil {
+			if c := statefulPinConflict(st.Compose, nil, h.Inventory.Containers, st.Path); c != nil {
+				return map[string]any{
+					"error":       c.Error(),
+					"code":        "stateful_major_bump",
+					"service":     c.Service,
+					"repository":  c.Repo,
+					"from":        c.FromTag,
+					"to":          c.ToTag,
+					"migration":   c.How,
+					"acknowledge": "acknowledgeStatefulMajor=1",
+				}
+			}
+		}
 	}
-	h, err := s.store.GetHost(ctx, st.HostID)
-	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
+	if !waive.AlreadyFailed {
+		if f := alreadyFailed(st); f != nil {
+			return map[string]any{
+				"error":       f.Error(),
+				"code":        "revision_already_failed",
+				"revision":    f.Revision,
+				"when":        f.When,
+				"hostname":    f.Hostname,
+				"detail":      f.Detail,
+				"acknowledge": "acknowledgeFailedRevision=1",
+			}
+		}
 	}
-	if h.Inventory == nil {
-		// Nothing collected from this host yet, so there is no evidence either way.
-		// Silence here means "cannot tell", and the deploy proceeds -- refusing on
-		// an absence would block every first deploy.
-		return nil, nil
-	}
-	return statefulPinConflict(st.Compose, nil, h.Inventory.Containers, st.Path), nil
+	return nil
 }
 
-func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull, ackStatefulMajor bool, services ...string) (*store.ContainerStack, string, error) {
+func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waive Waivers, services ...string) (*store.ContainerStack, string, error) {
 	st, err := s.store.GetStack(ctx, stackID)
 	if err != nil {
 		return nil, "", err
@@ -127,9 +161,17 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull, ackStatef
 	// Nothing is recorded and nothing is written: this deploy has not happened, so a
 	// deployment row saying it failed would be wrong. The caller gets an error it can
 	// recognise and offer a way through.
-	if !ackStatefulMajor && h.Inventory != nil {
+	if !waive.StatefulMajor && h.Inventory != nil {
 		if conflict := statefulPinConflict(st.Compose, services, h.Inventory.Containers, st.Path); conflict != nil {
 			return st, "", conflict
+		}
+	}
+	if !waive.AlreadyFailed && len(services) == 0 {
+		// Whole-project deploys only. A rollout narrowed to one service is a different
+		// input from the failed whole-project attempt, so the failure says nothing
+		// about it.
+		if failed := alreadyFailed(st); failed != nil {
+			return st, "", failed
 		}
 	}
 

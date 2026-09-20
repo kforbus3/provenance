@@ -13,7 +13,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listStacks, saveStack, deployStack, rollbackStack, deleteStack, stackHistory,
-  statefulMajorRefusal, type StatefulMajorRefusal,
+  deployRefusal, type DeployRefusal, type DeployWaivers,
   type ContainerStack, type StackRevision,
 } from "../api/stacks";
 import { listHosts } from "../api/hosts";
@@ -93,19 +93,20 @@ export function StacksPage() {
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["stacks"] });
 
-  // A deploy the backend refused because it crosses a major version of a database
-  // image. Held here so the operator can be shown what it would do and answer for it;
-  // see StatefulMajorRefusal.
-  const [statefulAsk, setStatefulAsk] = useState<{ id: string; r: StatefulMajorRefusal } | null>(null);
+  // A deploy the backend refused and wants an answer to. Held here so the operator is
+  // shown what it found rather than a snackbar that scrolls away; see DeployRefusal.
+  const [ask, setAsk] = useState<{ id: string; waive: DeployWaivers; r: DeployRefusal } | null>(null);
 
   const deploy = useMutation({
-    mutationFn: (v: { id: string; acknowledge?: boolean }) => deployStack(v.id, v.acknowledge ?? false),
+    mutationFn: (v: { id: string; waive?: DeployWaivers }) => deployStack(v.id, v.waive ?? {}),
     // Accepted, not finished. The row reports the outcome when there is one.
     onSuccess: (r) => { setSnack(r.note ?? "Deploying — the row updates when it finishes."); refresh(); },
     onError: (e, v) => {
-      const refusal = statefulMajorRefusal(e);
+      const refusal = deployRefusal(e);
       if (refusal) {
-        setStatefulAsk({ id: v.id, r: refusal });
+        // Carry the waivers already given: answering the second question must not
+        // silently un-answer the first, or the two dialogs bounce off each other.
+        setAsk({ id: v.id, waive: v.waive ?? {}, r: refusal });
         return;
       }
       setSnack(errMsg(e, "The deploy could not be started."));
@@ -253,56 +254,88 @@ export function StacksPage() {
       />
       <HistoryDialog stack={historyOf} onClose={() => setHistoryOf(null)} />
 
-      {/* The stateful-image refusal.
+      {/* A deploy the backend refused, and the question it wants answered.
 
-          Not a snackbar. This is the one deploy that takes a service down for hours
-          rather than failing cleanly — the new database refuses the data directory it
-          is pointed at — and the operator needs both versions and the migration in
-          front of them to answer it. The way through exists because somebody who has
-          already run pg_upgrade means exactly what the guard is refusing. */}
-      <Dialog open={statefulAsk !== null} onClose={() => setStatefulAsk(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>This deploy would change a database major version</DialogTitle>
+          Not a snackbar. Each of these is a deploy that takes a service DOWN rather
+          than failing cleanly, so the operator gets what was found and decides. Both
+          have a way through, because both describe something a person can legitimately
+          mean: a database whose data directory has already been migrated, or a retry
+          after fixing something that is not in the compose file. */}
+      <Dialog open={ask !== null} onClose={() => setAsk(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {ask?.r.code === "stateful_major_bump"
+            ? "This deploy would change a database major version"
+            : "This revision already failed on this host"}
+        </DialogTitle>
         <DialogContent>
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            {statefulAsk?.r.error}
-          </Alert>
+          <Alert severity="warning" sx={{ mb: 2 }}>{ask?.r.error}</Alert>
           <Table size="small">
             <TableBody>
-              <TableRow>
-                <TableCell>Service</TableCell>
-                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.service}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Image</TableCell>
-                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.repository}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Running now</TableCell>
-                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.from}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>This deploy pins</TableCell>
-                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.to}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Needs</TableCell>
-                <TableCell>{statefulAsk?.r.migration}</TableCell>
-              </TableRow>
+              {ask?.r.code === "stateful_major_bump" && <>
+                <TableRow>
+                  <TableCell>Service</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{ask.r.service}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Image</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{ask.r.repository}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Running now</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{ask.r.from}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>This deploy pins</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{ask.r.to}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Needs</TableCell>
+                  <TableCell>{ask.r.migration}</TableCell>
+                </TableRow>
+              </>}
+              {ask?.r.code === "revision_already_failed" && <>
+                <TableRow>
+                  <TableCell>Revision</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>r{ask.r.revision}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Host</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace" }}>{ask.r.hostname}</TableCell>
+                </TableRow>
+                {ask.r.when && <TableRow>
+                  <TableCell>Failed</TableCell>
+                  <TableCell>{formatDateTime(ask.r.when)}</TableCell>
+                </TableRow>}
+                {ask.r.detail && <TableRow>
+                  <TableCell>It said</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>{ask.r.detail}</TableCell>
+                </TableRow>}
+              </>}
             </TableBody>
           </Table>
           <Typography variant="body2" sx={{ mt: 2 }}>
-            Edit the compose file to pin the version the data directory holds, or — if
-            the data has already been migrated with {statefulAsk?.r.migration} — deploy
-            anyway.
+            {ask?.r.code === "stateful_major_bump"
+              ? `Edit the compose file to pin the version the data directory holds, or — if the data has already been migrated with ${ask.r.migration} — deploy anyway.`
+              : "Nothing in the definition has changed since it failed, so this sends the same file again. Edit the compose file, or deploy anyway if you have fixed something off the host."}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setStatefulAsk(null)}>Cancel</Button>
+          <Button onClick={() => setAsk(null)}>Cancel</Button>
           <Button color="warning" onClick={() => {
-            const ask = statefulAsk;
-            setStatefulAsk(null);
-            if (ask) deploy.mutate({ id: ask.id, acknowledge: true });
-          }}>The data is migrated — deploy anyway</Button>
+            const a = ask;
+            setAsk(null);
+            if (!a) return;
+            // The previous waivers plus this one: answering the second question must
+            // not un-answer the first.
+            const waive: DeployWaivers = { ...a.waive };
+            if (a.r.code === "stateful_major_bump") waive.statefulMajor = true;
+            else waive.failedRevision = true;
+            deploy.mutate({ id: a.id, waive });
+          }}>
+            {ask?.r.code === "stateful_major_bump"
+              ? "The data is migrated — deploy anyway"
+              : "Deploy it again anyway"}
+          </Button>
         </DialogActions>
       </Dialog>
 

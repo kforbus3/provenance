@@ -67,10 +67,38 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	// ${VAR:-default} is ordinary in one -- and expanding those here would write
 	// something different from what was reviewed.
 	fmt.Fprintf(&b, "mkdir -p %s\n", shellQuote(dir))
+	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
+
+	// Which compose binary, established once and used for the rotation guard below, the
+	// validation, and the bring-up. The same two-flavour check as everywhere else: a
+	// host on the older standalone binary must not silently do nothing.
+	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
+	b.WriteString("  _c=\"docker compose\"\n")
+	b.WriteString("elif command -v docker-compose >/dev/null 2>&1; then\n")
+	b.WriteString("  _c=\"docker-compose\"\n")
+	b.WriteString("else\n")
+	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
+	b.WriteString("fi\n")
 	fmt.Fprintf(&b, "cat > %s <<'PROVENANCE_COMPOSE_EOF'\n%s\nPROVENANCE_COMPOSE_EOF\n",
 		shellQuote(dir+"/.docker-compose.yml.new"), compose)
-	fmt.Fprintf(&b, "if [ -f %s ]; then cp -f %s %s; fi\n",
-		shellQuote(dir+"/docker-compose.yml"),
+	// Rotate the current file aside -- unless nothing is running on it.
+	//
+	// .prev means "the file that was here", and copying over it unconditionally is how
+	// the last good copy of a compose file was destroyed. The sequence: a deploy writes
+	// a broken file and leaves it there; the operator presses Deploy again; this line
+	// copies the BROKEN live file over the good .prev; the deploy fails again and the
+	// restore below puts back what .prev now holds, which is the file it just rejected.
+	// The host ends with no working compose file anywhere and a restore that reported
+	// success.
+	//
+	// So the question is asked of the machine rather than assumed: if the project has
+	// no running containers, the file sitting there is not one that works, and .prev
+	// already holds something better. Keep it.
+	fmt.Fprintf(&b, "if [ -f %s ]; then\n", shellQuote(dir+"/docker-compose.yml"))
+	fmt.Fprintf(&b, "  if [ -f %s ] && [ -z \"$($_c ps -q 2>/dev/null)\" ]; then\n",
+		shellQuote(dir+"/docker-compose.yml.prev"))
+	b.WriteString("    echo '::KEEPINGPREV::nothing is running on the current compose file, so the previous one is kept'\n")
+	fmt.Fprintf(&b, "  else\n    cp -f %s %s\n  fi\nfi\n",
 		shellQuote(dir+"/docker-compose.yml"),
 		shellQuote(dir+"/docker-compose.yml.prev"))
 	fmt.Fprintf(&b, "mv -f %s %s\n",
@@ -86,18 +114,6 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 		shellQuote(dir+"/.provenance-revision"))
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s\n",
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
-	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
-
-	// Which compose binary, established once and used for both the validation
-	// below and the bring-up. The same two-flavour check as everywhere else: a
-	// host on the older standalone binary must not silently do nothing.
-	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
-	b.WriteString("  _c=\"docker compose\"\n")
-	b.WriteString("elif command -v docker-compose >/dev/null 2>&1; then\n")
-	b.WriteString("  _c=\"docker-compose\"\n")
-	b.WriteString("else\n")
-	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
-	b.WriteString("fi\n")
 
 	// Validate BEFORE acting, and put the previous file back if it does not parse.
 	//
@@ -205,20 +221,41 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	b.WriteString(up + " || _rc=$?\n")
 	b.WriteString("if [ \"$_rc\" -ne 0 ]; then\n")
 	b.WriteString("  echo \"::UPFAILED::the stack did not come up (exit $_rc)\"\n")
-	b.WriteString("  if [ -f docker-compose.yml.prev ]; then\n")
+	// WHICH file to go back to, and this is the whole lesson of the second outage.
+	//
+	// .prev is rotated at the top of every deploy, so it means "whatever was here a
+	// moment ago" -- not "something that worked". Deploy a broken file twice and the
+	// second rotation overwrites the last good copy WITH the broken one, and a restore
+	// built on .prev then faithfully puts back the file it just rejected. That is
+	// exactly what happened: a Keycloak stack ended with no working compose file
+	// anywhere on the host, and the restore reported doing its job.
+	//
+	// So the known-good copy is its own file, written only where a bring-up actually
+	// succeeded (see below), and never touched by a failure. .prev stays as it was --
+	// the previous revision, whatever state it was in -- and is the fallback for a host
+	// that has not had a successful deploy since this version arrived.
+	b.WriteString("  _back=\n")
+	b.WriteString("  if [ -f docker-compose.yml.last-good ]; then _back=docker-compose.yml.last-good\n")
+	b.WriteString("  elif [ -f docker-compose.yml.prev ]; then _back=docker-compose.yml.prev\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  if [ -n \"$_back\" ]; then\n")
 	b.WriteString("    cp -f docker-compose.yml docker-compose.yml.rejected\n")
-	b.WriteString("    mv -f docker-compose.yml.prev docker-compose.yml\n")
+	b.WriteString("    cp -f \"$_back\" docker-compose.yml\n")
 	b.WriteString("    if [ -n \"$_prevrev\" ]; then printf '%s\\n' \"$_prevrev\" > .provenance-revision; fi\n")
 	b.WriteString("    if " + up + "; then\n")
-	b.WriteString("      echo '::RESTORED::the previous compose file was put back and the stack is up on it'\n")
+	b.WriteString("      echo \"::RESTORED::$_back was put back and the stack is up on it\"\n")
+	b.WriteString("      cp -f docker-compose.yml docker-compose.yml.last-good\n")
 	b.WriteString("    else\n")
-	b.WriteString("      echo '::RESTOREFAILED::the previous compose file was put back but the stack did not come up on it either'\n")
+	b.WriteString("      echo \"::RESTOREFAILED::$_back was put back but the stack did not come up on it either\"\n")
 	b.WriteString("    fi\n")
 	b.WriteString("  else\n")
-	b.WriteString("    echo '::NOPREVIOUS::there is no previous compose file on this host to fall back to'\n")
+	b.WriteString("    echo '::NOPREVIOUS::there is no earlier compose file on this host to fall back to'\n")
 	b.WriteString("  fi\n")
 	b.WriteString("  exit $_rc\n")
 	b.WriteString("fi\n")
+	// It came up. THIS is what "known good" means -- observed, not assumed -- and it is
+	// the only place this file is written.
+	b.WriteString("cp -f docker-compose.yml docker-compose.yml.last-good\n")
 	return b.String()
 }
 
@@ -240,20 +277,39 @@ func narrowTo(services ...string) []string {
 	return out
 }
 
-// rollbackScript restores the previous compose file and brings the stack back up.
+// rollbackScript restores the last compose file that worked and brings the stack up.
+//
+// The last one that WORKED, not the previous revision. Those are the same file right
+// up until the moment it matters: two failed deploys in a row leave .prev holding a
+// file that does not come up, and a rollback to it is a rollback to nothing. An
+// operator pressing this is asking for the stack to run again, so the known-good copy
+// is preferred and .prev is the fallback for a host that has no known-good copy yet.
+//
+// Which one was used is printed, because "rolled back" without saying to what is how
+// somebody concludes the rollback worked and the stack is fine.
 func rollbackScript(dir string) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
-	b.WriteString("if [ ! -f docker-compose.yml.prev ]; then\n")
-	b.WriteString("  echo 'no previous revision on this host to roll back to' >&2; exit 1\n")
+	b.WriteString("_back=\n")
+	b.WriteString("if [ -f docker-compose.yml.last-good ]; then _back=docker-compose.yml.last-good\n")
+	b.WriteString("elif [ -f docker-compose.yml.prev ]; then _back=docker-compose.yml.prev\n")
 	b.WriteString("fi\n")
-	b.WriteString("mv -f docker-compose.yml.prev docker-compose.yml\n")
+	b.WriteString("if [ -z \"$_back\" ]; then\n")
+	b.WriteString("  echo 'no earlier compose file on this host to roll back to' >&2; exit 1\n")
+	b.WriteString("fi\n")
+	b.WriteString("cp -f docker-compose.yml docker-compose.yml.rolled-back-from\n")
+	b.WriteString("cp -f \"$_back\" docker-compose.yml\n")
+	b.WriteString("echo \"::ROLLEDBACKTO::$_back\"\n")
 	b.WriteString("if docker compose version >/dev/null 2>&1; then\n")
-	b.WriteString("  docker compose up -d --remove-orphans\n")
+	b.WriteString("  _c=\"docker compose\"\n")
 	b.WriteString("else\n")
-	b.WriteString("  docker-compose up -d --remove-orphans\n")
+	b.WriteString("  _c=docker-compose\n")
 	b.WriteString("fi\n")
+	b.WriteString("$_c up -d --remove-orphans\n")
+	// It came up, so this is now the known-good copy too -- otherwise the next failed
+	// deploy would fall back past it to something older.
+	b.WriteString("cp -f docker-compose.yml docker-compose.yml.last-good\n")
 	return b.String()
 }
 

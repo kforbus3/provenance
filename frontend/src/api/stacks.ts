@@ -84,10 +84,15 @@ export async function deleteStack(id: string): Promise<void> {
 // screen went on showing the previous outcome and pressing Deploy looked like it
 // had done nothing. The stack row carries the state from here on: "deploying"
 // while it runs, then deployed or failed.
-export async function deployStack(id: string, acknowledgeStatefulMajor = false):
+export type DeployWaivers = { statefulMajor?: boolean; failedRevision?: boolean };
+
+export async function deployStack(id: string, waive: DeployWaivers = {}):
   Promise<{ status: string; note?: string }> {
-  const q = acknowledgeStatefulMajor ? "?acknowledgeStatefulMajor=1" : "";
-  const { data } = await api.post<{ status: string; note?: string }>(`/api/v1/stacks/${id}/deploy${q}`);
+  const q = new URLSearchParams();
+  if (waive.statefulMajor) q.set("acknowledgeStatefulMajor", "1");
+  if (waive.failedRevision) q.set("acknowledgeFailedRevision", "1");
+  const qs = q.toString() ? `?${q}` : "";
+  const { data } = await api.post<{ status: string; note?: string }>(`/api/v1/stacks/${id}/deploy${qs}`);
   return data;
 }
 
@@ -107,9 +112,25 @@ export type StatefulMajorRefusal = {
   migration: string;
 };
 
-export function statefulMajorRefusal(e: unknown): StatefulMajorRefusal | null {
-  const r = (e as { response?: { status?: number; data?: StatefulMajorRefusal } })?.response;
-  if (r?.status === 409 && r.data?.code === "stateful_major_bump") return r.data;
+// A deploy of a revision this host has already failed on. The definition has not
+// changed since, so the same file would be sent again — which is how a stack that was
+// already down stayed down through a second attempt.
+export type FailedRevisionRefusal = {
+  code: "revision_already_failed";
+  error: string;
+  revision: number;
+  when?: string;
+  hostname?: string;
+  detail?: string;
+};
+
+export type DeployRefusal = StatefulMajorRefusal | FailedRevisionRefusal;
+
+export function deployRefusal(e: unknown): DeployRefusal | null {
+  const r = (e as { response?: { status?: number; data?: DeployRefusal } })?.response;
+  if (r?.status !== 409) return null;
+  const code = r.data?.code;
+  if (code === "stateful_major_bump" || code === "revision_already_failed") return r.data ?? null;
   return null;
 }
 
