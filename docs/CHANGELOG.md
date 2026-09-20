@@ -7,6 +7,39 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**Log search is scoped to the hosts you can see.** `Logs.View` meant every line from
+every machine the collector had ever heard from. Under multi-tenancy that is a
+cross-tenant leak, and QA demonstrated it rather than argued it: a customer tenant with
+**zero hosts** searched the collector and got the provider tenant's log lines back —
+hostnames, programs and message text. Within a single tenant it was the same shape: an
+operator with access to one host could read every host's authentication logs.
+
+A caller now sees lines from the hosts they can access, resolved through the same
+tenant- and access-scoped host list the rest of the product uses, and an empty list
+returns nothing rather than everything. The host dropdown is filtered the same way — an
+unfiltered one is a list of other people's machine names. A **provider-level super
+administrator** keeps the unrestricted view, deliberately: a collector also receives
+lines from senders that are not enrolled hosts (a switch, a firewall, something someone
+pointed at it), and hiding those from the person responsible for the whole estate would
+hide exactly the traffic nobody is managing. In a single-tenant deployment that is the
+ordinary super admin, so their view does not change.
+
+**The log console is provider-only when multi-tenancy is on.** It opens the collector's
+own Dashboards, signed in with an account that can read every index it holds; that
+cannot be scoped per tenant while one collector is shared. A customer tenant is now told
+so and pointed at the Logs page, rather than handed a session that undoes the boundary
+the search now enforces.
+
+**Twenty-three settings config.go reads had no way in from the shipped compose stack** —
+including `PROV_FIPS_MODE`, `PROV_OVERLAY` and `PROV_DR_STANDBY_TOKEN`, so the FIPS
+profile, the overlay choice and disaster-recovery standby could not be enabled at all
+with the deployment this project ships, however carefully an operator edited `.env`.
+They are all passed through now, and a test fails when a new setting appears in
+config.go without a line in the compose file. `PROV_MIGRATE_ON_START` was among them,
+which is what the multi-tenancy setup needs: its serving role is deliberately not
+allowed to change the schema, and without that flag the backend exits at boot with
+`create schema_migrations: permission denied for schema public`.
+
 **A QA install that followed the installation guide exactly could not create its first
 administrator.** The guide says to start from `.env.production.example`; that file
 shipped `PROV_ALLOW_BOOTSTRAP=false` "as belt-and-braces"; the guide then says to create

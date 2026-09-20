@@ -52,6 +52,63 @@ type handler struct {
 	c *Client
 }
 
+// senderScope returns the sender names this caller may see, and whether they may see
+// everything the collector holds.
+//
+// A log line is host data. Before this, Logs.View meant every line from every machine
+// the collector had ever heard from -- which in a multi-tenant deployment let one
+// customer's administrator read another customer's authentication logs, hostnames and
+// commands. That was demonstrated in QA: a customer tenant with zero hosts searched the
+// collector and got the provider tenant's lines back.
+//
+// The rule: a caller sees lines from the hosts they can access. ListAccessibleHosts is
+// already tenant-scoped by row-level security and access-scoped per user, so both
+// boundaries come from the same place the rest of the product uses.
+//
+// Unrestricted is reserved for a provider-level super administrator, and exists for one
+// concrete reason: a collector also holds lines from senders that are NOT enrolled hosts
+// -- a switch, a firewall, a device someone pointed at it. Restricting that operator to
+// enrolled hosts would hide exactly the traffic nobody is managing. In a single-tenant
+// deployment the ordinary super admin IS the provider admin, so this keeps their view
+// unchanged.
+func (h *handler) senderScope(r *http.Request) (allow []string, unrestricted bool) {
+	p := auth.MustPrincipal(r)
+	if p == nil {
+		return nil, false
+	}
+	if p.IsProviderAdmin() {
+		return nil, true
+	}
+	hosts, err := h.d.Store.ListAccessibleHosts(r.Context(), p.UserID, false)
+	if err != nil {
+		// Fail closed: an error listing hosts must not widen the search.
+		h.d.Log.Warn("log scope: list accessible hosts", "err", err)
+		return nil, false
+	}
+	for i := range hosts {
+		allow = append(allow, senderNames(hosts[i])...)
+	}
+	return allow, false
+}
+
+// senderNames is every name a host's log lines might arrive under: the collector
+// shortens some senders, and a host enrolled by address sends under its own hostname.
+func senderNames(h models.Host) []string {
+	out := []string{}
+	add := func(v string) {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	add(h.Hostname)
+	if i := strings.Index(h.Hostname, "."); i > 0 {
+		add(h.Hostname[:i])
+	}
+	add(h.Address)
+	return out
+}
+
 // status says whether a collector is configured and reachable.
 //
 // Its own endpoint because "no logs" and "no collector" look identical in a
@@ -66,7 +123,14 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	hosts, err := h.c.Hosts(r.Context(), "now-24h")
+	allow, unrestricted := h.senderScope(r)
+	if !unrestricted && len(allow) == 0 {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"configured": true, "reachable": true, "url": h.c.BaseURL, "hostsSending": 0,
+		})
+		return
+	}
+	hosts, err := h.c.Hosts(r.Context(), "now-24h", allow)
 	if err != nil && !IsNoData(err) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"configured": true, "reachable": false, "error": err.Error(),
@@ -85,7 +149,12 @@ func (h *handler) hosts(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": []Bucket{}})
 		return
 	}
-	hosts, err := h.c.Hosts(r.Context(), r.URL.Query().Get("since"))
+	allow, unrestricted := h.senderScope(r)
+	if !unrestricted && len(allow) == 0 {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": []Bucket{}})
+		return
+	}
+	hosts, err := h.c.Hosts(r.Context(), r.URL.Query().Get("since"), allow)
 	if err != nil {
 		if IsNoData(err) {
 			httpx.WriteJSON(w, http.StatusOK, map[string]any{"hosts": []Bucket{}})
@@ -115,6 +184,17 @@ func (h *handler) search(w http.ResponseWriter, r *http.Request) {
 		Until:     strings.TrimSpace(q.Get("until")),
 		Limit:     limit,
 		Ascending: q.Get("order") == "asc",
+	}
+
+	allow, unrestricted := h.senderScope(r)
+	if !unrestricted {
+		if len(allow) == 0 {
+			// No accessible hosts means no accessible log lines. Returning the whole
+			// collector here is what the unscoped version did.
+			httpx.WriteJSON(w, http.StatusOK, &Result{Entries: []Entry{}, ByHost: []Bucket{}, BySev: []Bucket{}})
+			return
+		}
+		query.Hosts = allow
 	}
 
 	res, err := h.c.Search(r.Context(), query)

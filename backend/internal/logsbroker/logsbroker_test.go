@@ -90,7 +90,7 @@ func TestSearchCoversSyslogAndSnmp(t *testing.T) {
 	if _, err := c.Search(context.Background(), Query{Host: "coreswitch"}); err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if _, err := c.Hosts(context.Background(), "now-1h"); err != nil {
+	if _, err := c.Hosts(context.Background(), "now-1h", nil); err != nil {
 		t.Fatalf("hosts: %v", err)
 	}
 	if len(paths) != 2 {

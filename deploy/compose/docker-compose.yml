@@ -73,6 +73,43 @@ services:
       PROV_ALDGATE_CONSOLE_ADMIN_USER: ${PROV_ALDGATE_CONSOLE_ADMIN_USER:-prov_admin}
       PROV_ALDGATE_CONSOLE_ADMIN_PASSWORD: ${PROV_ALDGATE_CONSOLE_ADMIN_PASSWORD:-}
       PROV_ENV: ${PROV_ENV:-${FLEET_ENV:-development}}
+      # Applying migrations at startup. Off when the serving role is deliberately not
+      # allowed to change the schema -- the multi-tenancy setup points PROV_DATABASE_URL
+      # at a non-superuser role, and with this unset the backend exits at boot with
+      # "create schema_migrations: permission denied for schema public".
+      PROV_MIGRATE_ON_START: ${PROV_MIGRATE_ON_START:-}
+
+      # Settings config.go reads that had no way in from here.
+      #
+      # Twenty-two of them, found by comparing config.go against this file during a QA
+      # install -- including PROV_FIPS_MODE, PROV_OVERLAY and PROV_DR_STANDBY_TOKEN, so
+      # the FIPS profile, the overlay choice and disaster-recovery standby could not be
+      # turned on at all with the shipped stack. An empty default leaves each one unset,
+      # so nothing changes until an operator puts it in .env. A test now fails when a
+      # new setting appears in config.go without a line here.
+      PROV_BACKUP_DIR: ${PROV_BACKUP_DIR:-}
+      PROV_CA_ROTATE_AFTER: ${PROV_CA_ROTATE_AFTER:-}
+      PROV_DR_STANDBY_TOKEN: ${PROV_DR_STANDBY_TOKEN:-}
+      PROV_FIPS_MODE: ${PROV_FIPS_MODE:-}
+      PROV_GUACD_ADDR: ${PROV_GUACD_ADDR:-}
+      PROV_IMAGING_SECRET_PREFIX: ${PROV_IMAGING_SECRET_PREFIX:-}
+      PROV_KMS_AWS_SESSION_TOKEN: ${PROV_KMS_AWS_SESSION_TOKEN:-}
+      PROV_KMS_GCP_CREDENTIALS: ${PROV_KMS_GCP_CREDENTIALS:-}
+      PROV_KMS_VAULT_CACERT: ${PROV_KMS_VAULT_CACERT:-}
+      PROV_KMS_VAULT_SKIP_VERIFY: ${PROV_KMS_VAULT_SKIP_VERIFY:-}
+      PROV_METRIC_HISTORY_RETENTION: ${PROV_METRIC_HISTORY_RETENTION:-}
+      PROV_METRIC_HISTORY_SAMPLE: ${PROV_METRIC_HISTORY_SAMPLE:-}
+      PROV_MFA_ENCRYPTION_KEY: ${PROV_MFA_ENCRYPTION_KEY:-}
+      PROV_MONITOR_CONFIRM_DELAY: ${PROV_MONITOR_CONFIRM_DELAY:-}
+      PROV_MONITOR_OFFLINE_CONFIRMATIONS: ${PROV_MONITOR_OFFLINE_CONFIRMATIONS:-}
+      PROV_MSRC_API_URL: ${PROV_MSRC_API_URL:-}
+      PROV_MSRC_MONTHS: ${PROV_MSRC_MONTHS:-}
+      PROV_OVERLAY: ${PROV_OVERLAY:-}
+      PROV_RDP_DRIVE_DIR: ${PROV_RDP_DRIVE_DIR:-}
+      PROV_RDP_PROXY_HOST: ${PROV_RDP_PROXY_HOST:-}
+      PROV_REDIS_URL: ${PROV_REDIS_URL:-}
+      PROV_SHUTDOWN_TIMEOUT: ${PROV_SHUTDOWN_TIMEOUT:-}
+      PROV_VULN_SCAN_TIMEOUT: ${PROV_VULN_SCAN_TIMEOUT:-}
       # Server timezone — schedules compute their next run in this zone. Set TZ
       # in .env to your local zone (e.g. America/New_York) so "03:00" means your
       # 3 AM; defaults to UTC.

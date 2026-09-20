@@ -76,6 +76,23 @@ func (h *handler) consoleToken(w http.ResponseWriter, r *http.Request) {
 			"no log collector is configured — set PROV_ALDGATE_URL")
 		return
 	}
+	// Multi-tenancy: the console is the collector's OWN interface, and the account it
+	// signs in with can read every index the collector holds. The search API can be
+	// scoped to the hosts a caller may see; a Dashboards session cannot, because the
+	// scoping would have to live in OpenSearch roles per tenant and this deployment has
+	// one shared collector.
+	//
+	// So a customer tenant does not get a console. Handing one over would undo the
+	// isolation the rest of this page now enforces -- and doing it silently would be
+	// worse than refusing, because the operator would believe the boundary held.
+	if h.d.Cfg.MultiTenancy && !p.IsProviderAdmin() {
+		httpx.WriteError(w, http.StatusForbidden,
+			"the log console opens the collector's own interface, which is shared across "+
+				"tenants and cannot be scoped to one — so it is available only to provider "+
+				"administrators. Search from the Logs page instead: that is scoped to the "+
+				"hosts you can see.")
+		return
+	}
 	tier, _ := h.tierFor(p)
 	if tier == "" {
 		// Nothing to hand nginx, so opening the console would only land the person

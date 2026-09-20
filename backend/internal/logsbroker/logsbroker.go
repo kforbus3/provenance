@@ -79,6 +79,15 @@ type Query struct {
 	Until     string
 	Limit     int
 	Ascending bool
+	// Hosts restricts the search to these sender names. Empty means unrestricted,
+	// which only a provider-level super administrator may ask for -- see the handler.
+	//
+	// This exists because a log line is host data, and the rest of the product treats
+	// host data as something a person either may or may not see. Without it, Logs.View
+	// meant every line from every machine: under multi-tenancy one customer's
+	// administrator could read another customer's authentication logs, hostnames and
+	// commands, which was demonstrated in QA before this was added.
+	Hosts []string
 }
 
 // Entry is one log line, flattened for display.
@@ -132,6 +141,9 @@ func (c *Client) Search(ctx context.Context, q Query) (*Result, error) {
 	}
 	if h := strings.TrimSpace(q.Host); h != "" {
 		filters = append(filters, map[string]any{"term": map[string]any{"host": strings.ToLower(h)}})
+	}
+	if len(q.Hosts) > 0 {
+		filters = append(filters, map[string]any{"terms": map[string]any{"host": lowerAll(q.Hosts)}})
 	}
 	if p := strings.TrimSpace(q.Program); p != "" {
 		filters = append(filters, map[string]any{"term": map[string]any{"program": p}})
@@ -228,15 +240,20 @@ func (c *Client) Search(ctx context.Context, q Query) (*Result, error) {
 // Used by the UI to offer a host filter, and worth having for its own sake: a
 // host that has stopped sending is the failure this whole system is most likely
 // to suffer and least likely to announce.
-func (c *Client) Hosts(ctx context.Context, since string) ([]Bucket, error) {
+func (c *Client) Hosts(ctx context.Context, since string, allow []string) ([]Bucket, error) {
 	if since == "" {
 		since = "now-24h"
 	}
+	filters := []any{map[string]any{"range": map[string]any{"timestamp": map[string]any{"gte": since}}}}
+	if len(allow) > 0 {
+		// The dropdown is a list of other people's machine names when it is not
+		// restricted, which is a smaller leak than the log lines themselves and the
+		// same leak in kind.
+		filters = append(filters, map[string]any{"terms": map[string]any{"host": lowerAll(allow)}})
+	}
 	body := map[string]any{
-		"size": 0,
-		"query": map[string]any{"range": map[string]any{
-			"timestamp": map[string]any{"gte": since},
-		}},
+		"size":  0,
+		"query": map[string]any{"bool": map[string]any{"filter": filters}},
 		"aggs": map[string]any{
 			"by_host": map[string]any{"terms": map[string]any{"field": "host", "size": 200}},
 		},
@@ -447,4 +464,21 @@ func (c *Client) ErrorRates(ctx context.Context, recentMinutes, baselineHours in
 		})
 	}
 	return out, nil
+}
+
+// lowerAll normalises sender names for a keyword term filter, which is case
+// sensitive: "Web01" and "web01" are different terms, and a host recorded with a
+// capital letter would silently match nothing.
+func lowerAll(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, s := range in {
+		v := strings.ToLower(strings.TrimSpace(s))
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
