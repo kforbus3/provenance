@@ -171,7 +171,7 @@ test-db: ## Run the database-backed tests against a throwaway PostgreSQL
 	         echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
 	         apt-get update -qq >/dev/null && apt-get install -y -qq postgresql-client-16 >/dev/null && \
 	         go run ./cmd/provctl migrate-db "$$PROV_TEST_DATABASE_URL" && \
-	         go test ./internal/store/ -run "EverySQLStatement|StoreQueriesParse" -v && \
+	         go test ./internal/store/ -run "EverySQLStatement|StoreQueriesParse|AssigningARoleThatDoesNotExist" -v && \
 	         go test ./internal/backup/ -run RestoreOverAMigratedDatabase -v'
 
 comma := ,

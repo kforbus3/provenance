@@ -131,6 +131,12 @@ func (h *Handler) oidcConfigPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Refused before anything is stored: a mapping to a role that does not exist
+	// grants nothing, and saying so now is the difference between a typo and a
+	// person who can sign in and do nothing. See checkRoleMapping.
+	if !checkRoleMapping(r.Context(), w, h.svc.store, c.DefaultRole, c.GroupRoleMap) {
+		return
+	}
 	cur := h.oidcConfig(r.Context())
 	if c.ClientSecret != "" {
 		enc, err := secretbox.Seal(h.svc.cfg.CAKeyPassphrase, []byte(c.ClientSecret))
@@ -425,7 +431,11 @@ func (h *Handler) provisionOIDCUser(ctx context.Context, c oidcConfig, claims ma
 		if role == "" {
 			role = "Read-Only"
 		}
-		_ = h.svc.store.AssignRoleByName(ctx, user.ID, role)
+		if err := h.svc.store.AssignRoleByName(ctx, user.ID, role); err != nil {
+			h.svc.log.Error("identity provider: the default role could not be granted to a "+
+				"newly provisioned user, who now holds no permissions at all",
+				"user", user.ID, "username", username, "role", role, "err", err)
+		}
 	}
 	if user.IsDisabled {
 		return nil, errors.New("disabled")
@@ -485,12 +495,29 @@ func reconcileGroupRoleActions(groupRoleMap map[string]string, groups []string) 
 // roles the user's current IdP groups grant and revokes the IdP-managed roles they
 // no longer grant, while never disturbing locally-assigned roles. Best-effort — a
 // store error on one role must not abort the login.
+//
+// Best-effort, but no longer silent. Every one of these calls discarded its error,
+// and the store's assign-by-name reported success for a role that did not exist --
+// so a group mapped to a misspelled role produced a user who authenticated
+// perfectly and held nothing, with no trace anywhere. checkRoleMapping now refuses
+// such a configuration when it is saved; this is the net for one that was saved
+// before that existed, or whose role was renamed or deleted afterwards.
 func (s *Service) reconcileGroupRoles(ctx context.Context, userID uuid.UUID, groupRoleMap map[string]string, groups []string) {
 	add, remove := reconcileGroupRoleActions(groupRoleMap, groups)
 	for _, role := range add {
-		_ = s.store.AssignRoleByName(ctx, userID, role)
+		if err := s.store.AssignRoleByName(ctx, userID, role); err != nil {
+			// Error, not Warn: the person signing in has just been given less
+			// access than the configuration says they have, and the only symptom
+			// they will report is that nothing works.
+			s.log.Error("identity provider: a mapped role could not be granted",
+				"user", userID, "role", role, "err", err)
+		}
 	}
 	for _, role := range remove {
+		// A role the user does not hold is nothing to remove, and the store counts
+		// that as a failure -- so this one stays quiet by design. The revocation
+		// that matters is the one that DOES match, and it is checked by the tests
+		// in this package rather than by a log line.
 		_ = s.store.RemoveRoleByName(ctx, userID, role)
 	}
 }

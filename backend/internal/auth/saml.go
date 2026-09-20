@@ -561,6 +561,11 @@ func (h *Handler) samlConfigPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Refused before anything is stored: a mapping to a role that does not exist
+	// grants nothing. See checkRoleMapping.
+	if !checkRoleMapping(r.Context(), w, h.svc.store, c.DefaultRole, c.GroupRoleMap) {
+		return
+	}
 	if c.IdPCertificate != "" {
 		if _, err := parseIDPCert(c.IdPCertificate); err != nil {
 			writeError(w, http.StatusBadRequest, "IdP certificate is not valid PEM or base64 DER")
@@ -645,7 +650,11 @@ func (h *Handler) provisionSAMLUser(ctx context.Context, c samlConfig, info *sam
 		if role == "" {
 			role = "Read-Only"
 		}
-		_ = h.svc.store.AssignRoleByName(ctx, user.ID, role)
+		if err := h.svc.store.AssignRoleByName(ctx, user.ID, role); err != nil {
+			h.svc.log.Error("identity provider: the default role could not be granted to a "+
+				"newly provisioned user, who now holds no permissions at all",
+				"user", user.ID, "role", role, "err", err)
+		}
 	}
 	if user.IsDisabled {
 		return nil, errors.New("disabled")

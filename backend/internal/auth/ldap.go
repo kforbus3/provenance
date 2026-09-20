@@ -142,7 +142,11 @@ func (s *Service) authenticateLDAP(ctx context.Context, username, password strin
 		if role == "" {
 			role = "Read-Only"
 		}
-		_ = s.store.AssignRoleByName(ctx, user.ID, role)
+		if err := s.store.AssignRoleByName(ctx, user.ID, role); err != nil {
+			s.log.Error("identity provider: the default role could not be granted to a "+
+				"newly provisioned user, who now holds no permissions at all",
+				"user", user.ID, "role", role, "err", err)
+		}
 	}
 	if user.IsDisabled {
 		return nil, ErrAccountDisabled
@@ -200,6 +204,11 @@ func (h *Handler) ldapConfigPut(w http.ResponseWriter, r *http.Request) {
 	var c ldapConfig
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&c); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Refused before anything is stored: a mapping to a role that does not exist
+	// grants nothing. See checkRoleMapping.
+	if !checkRoleMapping(r.Context(), w, h.svc.store, c.DefaultRole, c.GroupRoleMap) {
 		return
 	}
 	cur := h.svc.ldapConfig(r.Context())

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -114,10 +115,72 @@ func (s *Store) AssignRole(ctx context.Context, userID, roleID uuid.UUID) error 
 
 // AssignRoleByName grants a role to a user by role name.
 func (s *Store) AssignRoleByName(ctx context.Context, userID uuid.UUID, roleName string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO user_roles (user_id, role_id)
-		SELECT $1, id FROM roles WHERE name=$2 ON CONFLICT DO NOTHING`, userID, roleName)
+	// The role is resolved first, so a name that names nothing is an error rather
+	// than a successful no-op.
+	//
+	// This was `INSERT ... SELECT id FROM roles WHERE name=$2 ON CONFLICT DO
+	// NOTHING`, which inserts nothing and returns nil when no such role exists.
+	// Every caller is an identity provider mapping an IdP group to a Provenance
+	// role, and the roles here are named Administrator and Read-Only -- so an
+	// operator who wires up SSO with "Admin" and "Viewer", which is what most
+	// products call them, gets users who authenticate perfectly and hold no
+	// permissions at all, with nothing logged and nothing refused. Found by
+	// mapping three Keycloak groups and having exactly the one whose spelling
+	// happened to match take effect.
+	//
+	// RowsAffected cannot tell the two cases apart on its own: ON CONFLICT DO
+	// NOTHING also reports zero rows for a role the user already holds, which is a
+	// genuine no-op success.
+	var roleID uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM roles WHERE name=$1`, roleName).Scan(&roleID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %q", ErrNoSuchRole, roleName)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)
+		ON CONFLICT DO NOTHING`, userID, roleID)
 	return err
+}
+
+// ErrNoSuchRole reports a role name that does not name a role. Distinguished from
+// any other failure because the remedy is different: nothing is wrong with the
+// database, the configuration names something that is not there.
+var ErrNoSuchRole = errors.New("no such role")
+
+// RoleNames lists every role name, for validating a configuration against the
+// roles that exist and for telling an operator what the valid answers are.
+func (s *Store) RoleNames(ctx context.Context) ([]string, error) {
+	return s.scanStrings(ctx, `SELECT name FROM roles ORDER BY name`)
+}
+
+// UnknownRoleNames returns those of the given names that do not name a role,
+// in the order given, with duplicates and blanks dropped.
+//
+// Used by the identity-provider configuration endpoints so a group→role mapping
+// that cannot work is refused when it is saved, rather than at the login of the
+// person it silently grants nothing to.
+func (s *Store) UnknownRoleNames(ctx context.Context, names []string) ([]string, error) {
+	have, err := s.RoleNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]bool, len(have))
+	for _, n := range have {
+		known[n] = true
+	}
+	var unknown []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] || known[n] {
+			continue
+		}
+		seen[n] = true
+		unknown = append(unknown, n)
+	}
+	return unknown, nil
 }
 
 // RoleName returns a role's name by id ("" when the role does not exist).
