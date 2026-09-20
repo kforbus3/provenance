@@ -16,16 +16,23 @@ RUN git clone --depth=1 https://git.zx2c4.com/wireguard-go /src \
 
 FROM ${BASE_IMAGE}
 
-# Install OpenSSH, wireguard-tools, iproute, and sudo across apt/dnf bases.
+# Install OpenSSH, wireguard-tools, iproute, sudo -- and python3, across apt/dnf bases.
+#
+# python3 is not optional: Ansible runs its modules through the target's Python, so a
+# node without it fails every playbook at fact-gathering with "No python interpreters
+# found". The Ubuntu node shipped without it and the Rocky node only had it by luck (a
+# dnf dependency), so a new operator trying playbooks against the fabric this exists to
+# demonstrate got a fatal error on half of it. Named explicitly on both branches now,
+# rather than depending on what a base image happens to pull in.
 RUN if command -v apt-get >/dev/null 2>&1; then \
       export DEBIAN_FRONTEND=noninteractive; \
       apt-get update && \
       apt-get install -y --no-install-recommends \
-        openssh-server wireguard-tools iproute2 iptables sudo ca-certificates && \
+        openssh-server wireguard-tools iproute2 iptables sudo ca-certificates python3 && \
       rm -rf /var/lib/apt/lists/*; \
     elif command -v dnf >/dev/null 2>&1; then \
       dnf -y install epel-release && \
-      dnf -y install openssh-server wireguard-tools iproute iptables sudo && \
+      dnf -y install openssh-server wireguard-tools iproute iptables sudo python3 && \
       dnf clean all; \
     else \
       echo "unsupported base image: no apt-get or dnf" >&2; exit 1; \

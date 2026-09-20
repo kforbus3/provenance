@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+**A QA install that followed the installation guide exactly could not create its first
+administrator.** The guide says to start from `.env.production.example`; that file
+shipped `PROV_ALLOW_BOOTSTRAP=false` "as belt-and-braces"; the guide then says to create
+the first account on the bootstrap page, which with the flag off never appears —
+`/bootstrap/init` answers "bootstrap is no longer available" on an install with zero
+users. The endpoint already gates itself on there being no users and seals the instant
+the first one exists, so the flag was defending nothing and blocking the only documented
+way in. The example ships `true` now, the guide documents `provctl create-admin` as the
+alternative for operators who keep it off, and a test fails if the example turns it off
+again.
+
+**The local test fabric could not run playbooks on its Ubuntu node.** Ansible runs its
+modules through the target's Python, and the node shipped without one — so every
+playbook failed there at fact-gathering with "No python interpreters found", while the
+Rocky node passed because dnf had pulled Python in by accident. Both branches name
+`python3` explicitly now. This is the fabric a new operator is told to try the product
+against.
+
+**`make up` requires `PROV_ENV=development`, and the guide now says so.** The fabric's
+containers get new SSH host keys on every rebuild, so it enables
+`PROV_SSH_INSECURE_HOST_KEYS`, which a production environment refuses on start — the
+documented "full stack + test fabric" command left the backend crash-looping with the
+reason only in `docker logs`.
+
+
 ## v1.8.1 — 2026-09-19
 
 Follow-ups to v1.8.0, all found by looking at what production actually held rather than

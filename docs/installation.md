@@ -118,7 +118,14 @@ Ansible sidecar, the Grype vulnerability-scanner sidecar, and the jump host. The
 version stamped into the build is derived from the nearest git tag.
 
 - To bring up only the base application stack (no co-located jump host — you supply
-  an external one): `make up`.
+  an external one): `make up-app`.
+- `make up` adds the **local test fabric** (a jump host and two sample managed hosts)
+  for trying the product without touching real machines. It requires
+  `PROV_ENV=development`: the fabric's containers get new SSH host keys on every
+  rebuild, so it turns on `PROV_SSH_INSECURE_HOST_KEYS`, which a production
+  environment refuses outright — the backend will exit on start and say so. Run
+  `make trust` once afterwards to make the fabric trust your CA, then enrol the two
+  hosts from the UI.
 - Check status any time: `make ps-single` (or `docker compose ps`).
 - Tail logs: `make logs-single`.
 
@@ -144,6 +151,16 @@ it becomes the super administrator.
 > Bootstrap self-gates: once any user exists, the bootstrap endpoint is closed. If you
 > ever need to recover from losing all administrators, see
 > [Disaster Recovery](./disaster-recovery.md#recovery-scenarios).
+
+**No bootstrap page?** It is disabled when `PROV_ALLOW_BOOTSTRAP=false`. Either set it
+to `true` and restart the backend, or create the first account from the command line:
+
+```bash
+docker compose exec backend provctl create-admin <username> <password> [email]
+```
+
+Both produce the same super administrator. The endpoint closes itself either way once
+an account exists.
 
 Sign in with the account you just created. You'll be prompted to set up two-factor
 authentication if your policy requires it (see the [User Guide](./user-guide.md#1-sign-in)).
