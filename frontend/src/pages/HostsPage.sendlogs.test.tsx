@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { DataGrid } from "@mui/x-data-grid";
 import { HostsToolbar, enrolLoggingMessage } from "./HostsPage";
 
-// "Send logs to collector" runs the imported enrolment playbook over the selection.
+// "Send logs to collector" runs the imported enrollment playbook over the selection.
 // Two things must hold: the action is reachable from Bulk actions, and what the
 // operator is told afterwards matches what actually happened.
 
@@ -55,7 +55,7 @@ describe("Send logs to collector", () => {
       hostCount: 0,
       skipped: [{ hostname: "coreswitch", reason: "RouterOS device" }],
     });
-    expect(text).toMatch(/^Nothing to enrol/);
+    expect(text).toMatch(/^Nothing to enroll/);
     expect(text).toContain("coreswitch");
     expect(sticky).toBe(true);
   });

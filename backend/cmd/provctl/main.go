@@ -236,7 +236,7 @@ func run(cmd string, args []string) error {
 		fmt.Println("  certificates signed by it are rejected — and because already-issued")
 		fmt.Println("  certificates keep working until they expire, nothing looks wrong until they do.")
 		fmt.Println()
-		fmt.Println("  Re-enrol each managed host (Hosts -> select -> Enroll, or the enrollment API);")
+		fmt.Println("  Re-enroll each managed host (Hosts -> select -> Enroll, or the enrollment API);")
 		fmt.Println("  that rewrites TrustedUserCAKeys with the current key. Verify with:")
 		fmt.Println("      ssh-keygen -lf /etc/ssh/prov_ca.pub      # on the host")
 		fmt.Println("      GET /api/v1/certificates/ca              # activeUserCA here")

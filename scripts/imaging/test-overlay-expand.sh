@@ -8,7 +8,7 @@
 # KEEP_KEY=1          leave a usable LUKS keyfile in crypttab
 #
 # The combination that used to strand a machine forever is SKIP_IMAGER_GROW=1
-# with no key: the partition was never grown, and by first boot enrolment had
+# with no key: the partition was never grown, and by first boot enrollment had
 # consumed the keyfile, so `cryptsetup resize` had nothing to work with. The
 # imager growing the partition is what makes that state unreachable.
 #
@@ -93,7 +93,7 @@ cryptsetup open --key-file "$KEY" "${TARGET}p6" luks-overlay || fail "luksOpen a
 if [ "${KEEP_KEY:-0}" = 1 ]; then
     printf 'luks-overlay %sp6 %s luks\n' "$TARGET" "$KEY" > /etc/crypttab
 else
-    rm -f "$KEY"                 # as LUKS enrolment would have done
+    rm -f "$KEY"                 # as LUKS enrollment would have done
     printf 'luks-overlay %sp6 none luks\n' "$TARGET" > /etc/crypttab
 fi
 mkdir -p /var/lib/overlay

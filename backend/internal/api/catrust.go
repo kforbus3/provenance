@@ -18,7 +18,7 @@ import (
 // TrustedUserCAKeys, written once at enrollment, so after a rotation every host still
 // trusts only the key on its way out — and because already-issued certificates keep
 // working until they expire, nothing looks wrong until they do, fleet-wide and at once.
-// The documented remedy was "re-enrol every host", which is a lot of machine for a file
+// The documented remedy was "re-enroll every host", which is a lot of machine for a file
 // copy, and easy to leave undone.
 //
 // Observed on a QA host: after `provctl rotate-ca`, enrollment failed with

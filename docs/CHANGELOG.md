@@ -105,7 +105,7 @@ pre-authorise a future alteration, and refuses an empty note.
 through `TrustedUserCAKeys` — so after a rotation every host still trusted only the
 retiring key, and because already-issued certificates keep working until they expire,
 nothing looked wrong until they did, fleet-wide and at once. The documented remedy was
-to re-enrol every host. Rotating through the API now pushes the current keys to every
+to re-enroll every host. Rotating through the API now pushes the current keys to every
 enrolled host and **reports which took them**, using the same verified, bounded-parallel
 path the KRL distribution already had; a host that did not take it is named at Error,
 because it will start rejecting logins. All *active* keys are written, so certificates
@@ -328,7 +328,7 @@ server's own network (`MULTI ERROR: … violates tunnel network/netmask constrai
 tunnel came up, carried traffic, and died every two minutes while enrollment reported
 `OVPN_SERVER_ALREADY_RUNNING`. A fingerprint of the config the daemon was *started* with is
 kept beside it now, and a change restarts the server. Only a change does, so an unchanged
-re-enrolment still causes no blip.
+re-enrollment still causes no blip.
 
 **A jump host older than OpenVPN 2.6 cannot serve a FIPS host at all.** Pre-2.6 derives
 data-channel keys with the TLS 1.0 PRF, which a FIPS policy forbids, and 2.6's replacement
@@ -385,7 +385,7 @@ production elsewhere. Chasing the difference found all three:
   host was unreachable with a fully established tunnel. The cert overlay gets its own
   `10.101.0.0/24` by default now, and sharing a prefix is warned about at startup.
 
-Verified end to end on FIPS Ubuntu 22.04: every enrolment step passes, including
+Verified end to end on FIPS Ubuntu 22.04: every enrollment step passes, including
 `jump host reached 10.101.0.2:22 over the openvpn tunnel`, with AES-256-GCM negotiated.
 
 
@@ -561,7 +561,7 @@ configured sends nothing — and an operator who had turned the digest off stays
 **Hosts → Bulk actions → Send logs to collector.** Enrolling a machine into log
 collection meant going to Automation, finding the right playbook, and picking hosts
 there. Select hosts on the **Hosts** page instead and it runs the imported
-enrolment playbook over the selection as one ordinary playbook run. It runs *your*
+enrollment playbook over the selection as one ordinary playbook run. It runs *your*
 playbook rather than a copy embedded in Provenance — a second copy would drift from
 the one that gets fixed when a new host type turns out to have no rsyslog, and you
 would have no way to tell which had just run on your fleet. RouterOS devices in the

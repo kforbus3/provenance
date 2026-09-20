@@ -14,15 +14,15 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 )
 
-// canonicalLogEnrolmentPlaybook is the name Aldgate's enrolment playbook carries when
+// canonicalLogEnrolmentPlaybook is the name Aldgate's enrollment playbook carries when
 // imported as documented. Matched first, exactly, so an install that followed the
 // documentation gets a predictable answer.
 const canonicalLogEnrolmentPlaybook = "enroll syslog to aldgate"
 
-// logEnrolmentDocHint is the whole error message for an install with no enrolment
+// logEnrolmentDocHint is the whole error message for an install with no enrollment
 // playbook imported. It names the file and where to put it, because "no playbook
 // found" tells an operator nothing they can act on.
-const logEnrolmentDocHint = "No log-enrolment playbook is imported. Import " +
+const logEnrolmentDocHint = "No log-enrollment playbook is imported. Import " +
 	"aldgate/ansible/enroll-syslog.yml under Automation → Playbooks (see docs/aldgate.md), " +
 	"then run this again."
 
@@ -37,7 +37,7 @@ type enrollLogsSkip struct {
 }
 
 // enrollLogs points the selected hosts at the log collector by running the imported
-// enrolment playbook against them.
+// enrollment playbook against them.
 //
 // It runs the operator's OWN playbook rather than a copy embedded here. A second copy
 // would drift from Aldgate's -- the file that gets fixed when a new host type turns
@@ -66,7 +66,7 @@ func (h *handler) enrollLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	pb, err := h.d.Store.GetPlaybook(r.Context(), chosen.ID)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not read the enrolment playbook")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the enrollment playbook")
 		return
 	}
 
@@ -149,7 +149,7 @@ func (h *handler) enrollLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// pickLogEnrolmentPlaybook chooses the playbook that enrols a Linux host into log
+// pickLogEnrolmentPlaybook chooses the playbook that enrolls a Linux host into log
 // collection, or nil when none is imported.
 //
 // Matching by name because that is what the operator sees and can change. The

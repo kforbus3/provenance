@@ -31,16 +31,16 @@ CONFIG = os.path.join(ROOT, "backend/internal/config/config.go")
 COMPOSE = os.path.join(ROOT, "deploy/compose/docker-compose.yml")
 
 # Known-undeclared as of 2026-09-09. See the docstring: a snapshot, not a target.
-KNOWN_UNDECLARED = {
-    "PROV_BACKUP_DIR", "PROV_DR_STANDBY_TOKEN", "PROV_FIPS_MODE",
-    "PROV_GUACD_ADDR", "PROV_IMAGING_SECRET_PREFIX",
-    "PROV_KMS_AWS_SESSION_TOKEN", "PROV_KMS_GCP_CREDENTIALS",
-    "PROV_KMS_VAULT_CACERT", "PROV_KMS_VAULT_SKIP_VERIFY",
-    "PROV_MFA_ENCRYPTION_KEY", "PROV_MIGRATE_ON_START",
-    "PROV_MONITOR_OFFLINE_CONFIRMATIONS", "PROV_MSRC_API_URL",
-    "PROV_MSRC_MONTHS", "PROV_OVERLAY", "PROV_OVERLAY_PEER_ISOLATION",
-    "PROV_RDP_DRIVE_DIR", "PROV_RDP_PROXY_HOST", "PROV_REDIS_URL",
-}
+# Empty, and worth keeping that way.
+#
+# It held nineteen entries, eighteen of which had since been declared in compose
+# and did not need excusing any more. The stale-entry check below was therefore
+# failing on every run -- and a check that always fails is a check nobody reads,
+# which is how the nineteenth went unnoticed: PROV_OVERLAY_PEER_ISOLATION reached
+# the jump host container and not the backend, although both read it, so turning
+# isolation off changed one half of the option and not the other. It is now
+# declared for the backend too, and there is nothing left to excuse.
+KNOWN_UNDECLARED: set[str] = set()
 
 failures = []
 checks = 0

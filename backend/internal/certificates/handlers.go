@@ -104,11 +104,11 @@ func (h *handler) rotate(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.d.DistributeCATrust == nil {
 		res["note"] = "CA trust was NOT distributed: every enrolled host still trusts only " +
-			"the previous key and will reject new certificates. Re-enrol them."
+			"the previous key and will reject new certificates. Re-enroll them."
 	} else if failed > 0 {
 		res["note"] = fmt.Sprintf("%d host(s) did not take the new CA and will reject "+
 			"certificates signed by it once their current ones expire — see the log for which, "+
-			"then re-run distribution or re-enrol them", failed)
+			"then re-run distribution or re-enroll them", failed)
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)
 }

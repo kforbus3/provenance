@@ -112,6 +112,13 @@ services:
       PROV_MSRC_API_URL: ${PROV_MSRC_API_URL:-}
       PROV_MSRC_MONTHS: ${PROV_MSRC_MONTHS:-}
       PROV_OVERLAY: ${PROV_OVERLAY:-}
+      # The backend reads this too, and until now only the jump host container
+      # received it. Setting PROV_OVERLAY_PEER_ISOLATION=0 therefore turned
+      # isolation off in the jump host while the backend went on generating
+      # isolating overlay config and refusing hosts whose config was not isolated:
+      # the two halves of one option disagreeing, with no way to set the backend's
+      # half at all. Same default as the jump host's.
+      PROV_OVERLAY_PEER_ISOLATION: ${PROV_OVERLAY_PEER_ISOLATION:-${FLEET_OVERLAY_PEER_ISOLATION:-1}}
       PROV_RDP_DRIVE_DIR: ${PROV_RDP_DRIVE_DIR:-}
       PROV_RDP_PROXY_HOST: ${PROV_RDP_PROXY_HOST:-}
       PROV_REDIS_URL: ${PROV_REDIS_URL:-}

@@ -337,7 +337,7 @@ export interface LogEnrolResult {
   hostCount: number;
   skipped: { hostname: string; reason: string }[];
 }
-// Point the selected hosts at the log collector by running the imported enrolment
+// Point the selected hosts at the log collector by running the imported enrollment
 // playbook. Needs Playbook.Run, because that is what it does.
 export async function bulkEnrolLogging(hostIds: string[]): Promise<LogEnrolResult> {
   const { data } = await api.post<LogEnrolResult>("/api/v1/hosts/enroll-logging", { hostIds });

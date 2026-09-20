@@ -264,7 +264,7 @@ export function LogsPage() {
                   <TableCell colSpan={5}>
                     <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
                       {status.data?.hostsSending === 0
-                        ? "The collector is reachable but no host has sent anything yet. Enrol hosts with the Aldgate playbook."
+                        ? "The collector is reachable but no host has sent anything yet. Enroll hosts with the Aldgate playbook."
                         : "Nothing matched. Widen the time range, or clear the filters."}
                     </Typography>
                   </TableCell>

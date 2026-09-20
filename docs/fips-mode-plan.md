@@ -23,7 +23,7 @@ Three things did not work, all found here and two of them fixed:
 
 **The jump host offered only an Ed25519 host key.** A FIPS-mode backend offers only
 FIPS-approved host-key algorithms, so it could not complete a handshake with its own jump
-host — meaning a FIPS deployment could not enrol or reach anything at all, since every
+host — meaning a FIPS deployment could not enroll or reach anything at all, since every
 connection goes through it. The jump host now generates and offers ECDSA and RSA host
 keys alongside Ed25519. A non-FIPS client still prefers Ed25519, so existing pinned host
 keys stay valid.
@@ -59,7 +59,7 @@ at work, and chasing why it failed here produced four real defects.
    both to the same prefix is warned at startup.
 4. **The server was never restarted onto the config that had just been rewritten.**
    The provisioning script wrote `server.conf` and then skipped the start because an
-   openvpn was already running against that path — deliberately, so re-enrolment does
+   openvpn was already running against that path — deliberately, so re-enrollment does
    not drop live tunnels. But openvpn reads its config once, so after fix 3 the daemon
    went on enforcing `10.100.0.0/24` while the file beside it said `10.101.0.0/24`, and
    every client was pushed an address outside the server's own tunnel network:
@@ -74,12 +74,12 @@ at work, and chasing why it failed here produced four real defects.
    `OVPN_SERVER_ALREADY_RUNNING` reported each time. The script now keeps a fingerprint
    of the config the daemon was **started with** (`server.conf.active`, and
    `client.ovpn.active` on the host) and restarts only when it no longer matches — so an
-   unchanged re-enrolment is still free of blips, while a changed tunnel network is
+   unchanged re-enrollment is still free of blips, while a changed tunnel network is
    actually applied. The first run after an upgrade has nothing to compare and restarts
    once, which is the honest choice: the alternative is assuming a running process
    matches a file nobody has checked, which is this bug.
 
-Verified after the four fixes: enrolment completes every step including
+Verified after the four fixes: enrollment completes every step including
 `verify_overlay_tunnel ok — jump host reached 10.101.0.2:22 over the openvpn tunnel`,
 the server negotiates AES-256-GCM, and the host reports online with the overlay healthy.
 

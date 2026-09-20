@@ -56,7 +56,7 @@ daemon's log driver.
 in Provenance's vault and these run from the same Playbooks page:
 `ansible/enroll-routeros.yml` for MikroTik (syslog **and** SNMP traps) and
 `ansible/enroll-openwrt.yml` for OpenWrt. SwOS switches can do neither; there is
-nothing to enrol.
+nothing to enroll.
 
 **5. Check it.** `make health` on the collector, then the **Logs** page here. The
 host filter lists everything that has sent anything, so a host missing from it has
@@ -66,7 +66,7 @@ not sent — which is a different problem from a search that matched nothing.
 
 | Symptom | Cause |
 |---|---|
-| A host is absent from the last hour but present over 24h | its clock or timezone. RFC3164 syslog carries no offset, so a host in a non-UTC zone lands hours in the past — the enrolment playbook forwards RFC5424, network gear needs `ALDGATE_TIMEZONE` |
+| A host is absent from the last hour but present over 24h | its clock or timezone. RFC3164 syslog carries no offset, so a host in a non-UTC zone lands hours in the past — the enrollment playbook forwards RFC5424, network gear needs `ALDGATE_TIMEZONE` |
 | The console asks for a username and password | the two `PROV_ALDGATE_CONSOLE_*` values have not reached Provenance |
 | The console opens but has no index patterns | saved objects went to a private tenant. `make bootstrap` on the collector writes them to the shared one |
 | The Logs page says no collector is configured | `PROV_ALDGATE_URL` is empty |
@@ -180,7 +180,7 @@ It also forces **RFC5424** on the forwarding rule. rsyslog's default, RFC3164,
 sends `Sep 18 16:32:25` with no timezone, so the collector reads it as UTC and
 files a host running in EDT four hours in the past. Nothing errors; the host
 simply vanishes from every time-based search, which reads exactly like a machine
-that stopped sending. If you enrol a host by hand, forward RFC5424.
+that stopped sending. If you enroll a host by hand, forward RFC5424.
 
 ## Fields
 

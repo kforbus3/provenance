@@ -153,7 +153,7 @@ else
 fi
 mount | grep -q ab-bootpart && bad "left the BOOT partition mounted" || pass "BOOT unmounted again"
 
-echo "== it does nothing once enrolment has moved crypttab to clevis =="
+echo "== it does nothing once enrollment has moved crypttab to clevis =="
 # This is what keeps luks-enroll-reap.sh honest: the reaper destroys the
 # bootstrap keyslot only after a boot that did not use the bootstrap key.
 rm -rf /cryptkey

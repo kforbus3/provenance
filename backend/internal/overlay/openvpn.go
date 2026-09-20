@@ -840,7 +840,7 @@ else
   if ! openvpn --show-ciphers 2>/dev/null | grep -qiE "^(AES|CHACHA)"; then
     echo OVPN_NO_CIPHERS
     if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ]; then
-      echo "OVPN_DIAGNOSIS=this host runs FIPS mode and its OpenVPN ($(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)) reports no usable data ciphers. OpenVPN 2.5 resolves ciphers against OpenSSL's default provider, which a FIPS host does not have active; 2.6 fetches them provider-aware and works. Install OpenVPN 2.6 or newer -- on Ubuntu 22.04: apt install -t jammy-backports openvpn -- and enrol again."
+      echo "OVPN_DIAGNOSIS=this host runs FIPS mode and its OpenVPN ($(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)) reports no usable data ciphers. OpenVPN 2.5 resolves ciphers against OpenSSL's default provider, which a FIPS host does not have active; 2.6 fetches them provider-aware and works. Install OpenVPN 2.6 or newer -- on Ubuntu 22.04: apt install -t jammy-backports openvpn -- and enroll again."
     else
       echo "OVPN_DIAGNOSIS=this host's OpenVPN reports no usable data ciphers, so no tunnel can be established. Check that its OpenSSL providers are configured (openvpn --show-ciphers lists nothing)."
     fi
@@ -857,7 +857,7 @@ else
   if journalctl -u openvpn@prov-overlay -u openvpn-client@prov-overlay -n 200 --no-pager 2>/dev/null | grep -q 'PRF calculation failed' ||
      grep -q 'PRF calculation failed' %[1]s/client.log 2>/dev/null; then
     echo OVPN_PEER_TOO_OLD
-    echo "OVPN_DIAGNOSIS=this host runs FIPS mode and the jump host's OpenVPN is older than 2.6, so the data-channel keys cannot be derived: pre-2.6 uses the TLS 1.0 PRF, which FIPS forbids, and only 2.6 offers the replacement. The tunnel connects and carries nothing. Upgrade OpenVPN on the JUMP HOST to 2.6 or newer (Ubuntu 22.04: apt install -t jammy-backports openvpn), restart its server, and enrol again. This host's OpenVPN is $(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)."
+    echo "OVPN_DIAGNOSIS=this host runs FIPS mode and the jump host's OpenVPN is older than 2.6, so the data-channel keys cannot be derived: pre-2.6 uses the TLS 1.0 PRF, which FIPS forbids, and only 2.6 offers the replacement. The tunnel connects and carries nothing. Upgrade OpenVPN on the JUMP HOST to 2.6 or newer (Ubuntu 22.04: apt install -t jammy-backports openvpn), restart its server, and enroll again. This host's OpenVPN is $(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)."
   fi
   # The address the client was told to dial. When the tunnel never comes up this is
   # almost always the answer — the server's UDP port is not reachable from here —

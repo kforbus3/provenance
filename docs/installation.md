@@ -124,7 +124,7 @@ version stamped into the build is derived from the nearest git tag.
   `PROV_ENV=development`: the fabric's containers get new SSH host keys on every
   rebuild, so it turns on `PROV_SSH_INSECURE_HOST_KEYS`, which a production
   environment refuses outright — the backend will exit on start and say so. Run
-  `make trust` once afterwards to make the fabric trust your CA, then enrol the two
+  `make trust` once afterwards to make the fabric trust your CA, then enroll the two
   hosts from the UI.
 - Check status any time: `make ps-single` (or `docker compose ps`).
 - Tail logs: `make logs-single`.

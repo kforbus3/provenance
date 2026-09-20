@@ -26,7 +26,7 @@ func TestPickLogEnrolmentPlaybookPrefersTheLinuxOne(t *testing.T) {
 	}
 	got := pickLogEnrolmentPlaybook(all)
 	if got == nil || got.Name != "Enroll Syslog To Aldgate" {
-		t.Fatalf("picked %v, want the Linux enrolment playbook", got)
+		t.Fatalf("picked %v, want the Linux enrollment playbook", got)
 	}
 }
 
@@ -56,7 +56,7 @@ func TestPickLogEnrolmentPlaybookReturnsNilWhenAbsent(t *testing.T) {
 		pb("Enroll Syslog To Aldgate (RouterOS)", now), // device-only: not a substitute
 	}
 	if got := pickLogEnrolmentPlaybook(all); got != nil {
-		t.Fatalf("picked %q with no Linux enrolment playbook imported", got.Name)
+		t.Fatalf("picked %q with no Linux enrollment playbook imported", got.Name)
 	}
 	if got := pickLogEnrolmentPlaybook(nil); got != nil {
 		t.Fatalf("picked %q from an empty install", got.Name)

@@ -112,7 +112,7 @@ function SupportBundleButton({ host }: { host: Host }) {
   );
 }
 
-// enrolLoggingMessage turns the enrolment result into what the operator is told.
+// enrolLoggingMessage turns the enrollment result into what the operator is told.
 //
 // Exported for test, and pure, because the thing most likely to go wrong here is not
 // the request -- it is reporting "Enrolling 6 hosts" when two of them were skipped.
@@ -121,7 +121,7 @@ export function enrolLoggingMessage(res: LogEnrolResult): { text: string; sticky
   const skipped = res.skipped ?? [];
   const list = skipped.map((s) => `${s.hostname} (${s.reason})`).join("; ");
   if (res.hostCount === 0) {
-    return { text: `Nothing to enrol — ${list || "no eligible hosts selected"}`, sticky: true };
+    return { text: `Nothing to enroll — ${list || "no eligible hosts selected"}`, sticky: true };
   }
   if (skipped.length > 0) {
     return {
@@ -623,7 +623,7 @@ export function HostsPage() {
     onError: (err: unknown) => {
       const e = err as { response?: { data?: { error?: string } } };
       setBulkSticky(true);
-      setBulkMsg(e.response?.data?.error ?? "Could not start log enrolment");
+      setBulkMsg(e.response?.data?.error ?? "Could not start log enrollment");
     },
   });
 

@@ -1373,6 +1373,15 @@ def _dhcp_collision_problems(cfg: dict) -> list[str]:
 
     Both checks are refusals rather than warnings. There is no configuration where
     answering DHCP on the default-route interface is what somebody meant.
+
+    The range check deliberately EXCLUDES the provisioning interface itself. A DHCP
+    server has to be on the segment it serves, so a range inside the provisioning
+    NIC's own subnet is not a collision — it is the arrangement this feature exists
+    to create. The first version of this check looked at every interface including
+    the chosen one, so it refused the only correct configuration there is: a
+    dedicated NIC at 192.168.50.1/24 handing out 192.168.50.100–150 was rejected as
+    "a network this host is already on". The test that was meant to cover this
+    asserted only that the default-route complaint was absent, so it passed.
     """
     problems: list[str] = []
     try:
@@ -1394,7 +1403,34 @@ def _dhcp_collision_problems(cfg: dict) -> list[str]:
 
     start = _ip_or_none(cfg.get("DHCP_RANGE_START"))
     end = _ip_or_none(cfg.get("DHCP_RANGE_END"))
+    chosen_net = _net_or_none(chosen.get("ip"), chosen.get("prefixlen")) if chosen else None
+
+    # The range has to be ON the provisioning segment. Addresses outside it are
+    # handed to machines this server then cannot reach, and the failure looks like
+    # a broken image rather than a broken range.
+    if chosen_net is not None and start is not None and end is not None:
+        outside = [str(a) for a in (start, end) if a not in chosen_net]
+        if outside:
+            problems.append(
+                f"The lease range {cfg.get('DHCP_RANGE_START')}–{cfg.get('DHCP_RANGE_END')} "
+                f"is not on {chosen_name} ({chosen_net}), the provisioning network. A "
+                "machine given an address outside that subnet cannot reach this server, "
+                "and the install fails looking like a problem with the image."
+            )
+
+    # What is NOT covered, stated so nobody reads more into these checks than is
+    # there: a second NIC on a populated network that happens not to carry the
+    # default route. Serving DHCP there would collide with whatever runs it, and
+    # nothing here can tell that segment apart from a dedicated provisioning one --
+    # both are "a NIC with a static address and no default route". The structural
+    # signals available are used (the default route, the other interfaces' subnets,
+    # the range being on the chosen segment at all); deciding the rest would need
+    # evidence from the network, not from the interface list.
     for iface in ifaces:
+        # Not the provisioning interface: serving DHCP on the segment this NIC is
+        # on is the point, not a collision.
+        if chosen is not None and iface.get("name") == chosen_name:
+            continue
         net = _net_or_none(iface.get("ip"), iface.get("prefixlen"))
         if net is None:
             continue
