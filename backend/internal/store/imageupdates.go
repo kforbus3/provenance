@@ -44,6 +44,10 @@ type TrackedImage struct {
 	// tag points at in the registry is how a moved tag -- same tag, new bytes --
 	// becomes visible, which a version-number comparison alone can never see.
 	Digest string `json:"digest,omitempty"`
+	// Digests is every digest any host's copy of this tag answers to; Digest is one
+	// of them. See the query, and models.Container.Digests, for why one is not
+	// enough.
+	Digests []string `json:"digests,omitempty"`
 	// Declared marks a tag that comes from a managed stack's compose file rather
 	// than from a running container.
 	//
@@ -72,7 +76,27 @@ func (s *Store) TrackedImages(ctx context.Context) ([]TrackedImage, error) {
 		       -- One tag can be running at several digests across the fleet
 		       -- mid-rollout. max() picks one deterministically rather than
 		       -- duplicating the row; the per-host digests stay in inventory.
-		       MAX(COALESCE(c->>'digest', '')) AS digest
+		       MAX(COALESCE(c->>'digest', '')) AS digest,
+		       -- Every digest any host's copy of this tag answers to.
+		       --
+		       -- An image carries more than one whenever a registry republishes a
+		       -- multi-arch index over unchanged layers, and a comparison against
+		       -- one of them reports an up-to-date host as behind -- which is how
+		       -- python:3.14 was offered as an update that had already been applied,
+		       -- with every rollout sent to fix it failing verification against the
+		       -- image it was asking for.
+		       --
+		       -- COALESCE to the single digest for rows collected before this was
+		       -- recorded, so an upgrade does not lose what it already knew.
+		       COALESCE(
+		         (SELECT array_agg(DISTINCT d) FROM (
+		            SELECT jsonb_array_elements_text(c2->'digests') AS d
+		            FROM jsonb_array_elements(COALESCE(hi.containers,'[]'::jsonb)) AS c2
+		            WHERE c2->>'repository' = c->>'repository'
+		              AND COALESCE(c2->>'tag','') = COALESCE(c->>'tag','')
+		          ) x WHERE d <> ''),
+		         ARRAY[]::text[]
+		       ) AS digests
 		FROM host_inventory hi,
 		     LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
 		WHERE COALESCE(c->>'repository','') <> ''
@@ -86,7 +110,7 @@ func (s *Store) TrackedImages(ctx context.Context) ([]TrackedImage, error) {
 	out := []TrackedImage{}
 	for rows.Next() {
 		var t TrackedImage
-		if err := rows.Scan(&t.Repository, &t.Tag, &t.Digest); err != nil {
+		if err := rows.Scan(&t.Repository, &t.Tag, &t.Digest, &t.Digests); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -526,4 +550,29 @@ func (s *Store) InvalidateImageCheck(ctx context.Context, repository, tag string
 		`DELETE FROM container_image_updates WHERE repository=$1 AND tag=$2`,
 		repository, tag)
 	return err
+}
+
+// RunningDigest reports whether this tag, on some host, is an image that answers to
+// the digest the registry currently serves.
+//
+// Membership rather than equality. An image carries several RepoDigests when a
+// registry republishes a multi-arch index over unchanged layers, and comparing
+// against one arbitrary entry reports a host that is exactly current as behind --
+// permanently, since redeploying cannot change which entry is first.
+//
+// Falls back to the single Digest for rows collected before the set was recorded,
+// which is the same answer this gave before.
+func (t TrackedImage) RunningDigest(registry string) bool {
+	if registry == "" {
+		return false
+	}
+	for _, d := range t.Digests {
+		if d == registry {
+			return true
+		}
+	}
+	if len(t.Digests) == 0 {
+		return t.Digest == registry
+	}
+	return false
 }

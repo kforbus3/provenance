@@ -118,7 +118,7 @@ func TestParseVerifyOutputSkipsMarkersAndShortLines(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("parsed %d, want 1 (markers and chatter must be skipped)", len(got))
 	}
-	if got[0].name != "nginx" || got[0].digest != "nginx@sha256:x" {
+	if got[0].name != "nginx" || len(got[0].digests) != 1 || got[0].digests[0] != "nginx@sha256:x" {
 		t.Errorf("parsed wrong fields: %+v", got[0])
 	}
 }
@@ -160,5 +160,59 @@ func TestASuccessfulRolloutDropsTheStaleRegistryAnswer(t *testing.T) {
 	if !found {
 		t.Errorf("the stale registry answer for nginx:1.27 was not dropped; "+
 			"a completed rebuild would keep reading as pending. invalidated=%v", f.invalidated)
+	}
+}
+
+// An image answers to more than one digest, and the rollout targets the second.
+//
+// Docker Hub republished the python:3.14 INDEX — a platform or attestation change —
+// while the amd64 image underneath it stayed byte-identical. A host that had pulled
+// the tag before and after ended up with one image carrying two RepoDigests:
+//
+//	python@sha256:a2e978…   (the older index)
+//	python@sha256:be8ccd…   (the one the rollout targets)
+//
+// and `docker inspect rag-api` confirmed it was running exactly that image id. Reading
+// RepoDigests[0] picked the older one — Docker does not order them by recency — so the
+// verification failed forever on a host that had done precisely what was asked, and the
+// rollout halted with the remaining hosts left pending.
+func TestVerifyAcceptsAnyOfAnImagesDigests(t *testing.T) {
+	const (
+		older  = "sha256:a2e9788143507cacbb754fcc06ad3b7108ca9c334f97a466906103846107cdd5"
+		target = "sha256:be8ccd085666c34273c9dc5607c9842f8b2e3116128aae45148ce164c07ce09d"
+	)
+	// Exactly what the probe emits for such an image: both digests, comma-terminated.
+	out := "::OK::\npython:3.14\trag-api\trunning\tpython@" + older + ",python@" + target + ",\n"
+	got := parseVerifyOutput(out)
+	if len(got) != 1 {
+		t.Fatalf("parsed %d containers, want 1", len(got))
+	}
+	if len(got[0].digests) != 2 {
+		t.Fatalf("parsed %d digests, want both: %+v", len(got[0].digests), got[0])
+	}
+	if !got[0].matches(target) {
+		t.Errorf("the container is running the target image and was not recognised — "+
+			"this is the rollout that could never pass: %+v", got[0])
+	}
+	if !got[0].matches(older) {
+		t.Errorf("the older index digest names the same image and must also match: %+v", got[0])
+	}
+	if got[0].matches("sha256:deadbeef") {
+		t.Error("an unrelated digest matched")
+	}
+	if got[0].matches("") {
+		t.Error("an empty target matched, which would verify anything")
+	}
+}
+
+// A locally built image has no registry digest at all. That is "cannot tell", and it
+// must not read as a match.
+func TestVerifyDoesNotMatchAnImageWithNoDigests(t *testing.T) {
+	got := parseVerifyOutput("::OK::\nmyapp:1.0\tmyapp\trunning\t\n")
+	if len(got) != 1 {
+		t.Fatalf("parsed %d, want 1", len(got))
+	}
+	if got[0].matches("sha256:whatever") {
+		t.Error("an image with no digests matched a target")
 	}
 }

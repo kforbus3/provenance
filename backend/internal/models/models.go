@@ -533,7 +533,18 @@ type Container struct {
 	// nothing about which nginx:1.25, and both vulnerability scanning and update
 	// detection need the answer rather than the label.
 	Digest string `json:"digest,omitempty"`
-	State  string `json:"state,omitempty"`
+	// Digests is every digest this image answers to, and Digest is the first of
+	// them.
+	//
+	// RepoDigests is a list. An image carries more than one entry whenever a
+	// registry republishes a multi-arch index over unchanged layers -- a platform
+	// added, an attestation changed -- and a host that pulled the tag before and
+	// after holds both. Docker does not order them by recency, so reading one
+	// arbitrarily is how an up-to-date host reads as behind: python:3.14 was offered
+	// as an update it had already taken, and the rollout sent to apply it failed
+	// verification against an image that WAS the target.
+	Digests []string `json:"digests,omitempty"`
+	State   string   `json:"state,omitempty"`
 	// Where this container's compose project lives, from its own labels. This is
 	// what lets an image be updated in place without Provenance holding a copy of
 	// the compose file.

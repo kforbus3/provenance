@@ -237,7 +237,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 			rec.Note = drifted(img)
 			return rec
 		}
-		if img.Digest != "" && digest != img.Digest {
+		if img.Digest != "" && !img.RunningDigest(digest) {
 			rec.Status = store.ImageStatusMoved
 			rec.Note = "tag moved: this host is running an older build of " + img.Tag
 			return rec
@@ -260,7 +260,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		// never pulled. The same guard exists below for the ordinary path; it was
 		// missing here, and a rate-limited registry put that sentence on every
 		// declared row.
-		if !img.Declared && img.Digest != "" && digest != img.Digest {
+		if !img.Declared && img.Digest != "" && !img.RunningDigest(digest) {
 			rec.Note = "tag moved since this host pulled it; " + rec.Note
 		}
 		return rec
@@ -304,7 +304,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		}
 		return rec
 	}
-	if newest == "" && img.Digest != "" && digest != img.Digest {
+	if newest == "" && img.Digest != "" && !img.RunningDigest(digest) {
 		rec.Status = store.ImageStatusMoved
 		// No newer version tag, but the tag this host runs does not point where
 		// the host's copy came from. A rebuild of the same version -- a base

@@ -248,3 +248,52 @@ func TestParseContainersNeedsARealTabToFindADigest(t *testing.T) {
 		t.Error("fixture wrong: a backslash-t should NOT parse as a digest")
 	}
 }
+
+// The probe must record EVERY digest an image answers to.
+//
+// One image gains a second RepoDigest whenever a registry republishes a multi-arch
+// index over unchanged layers. Recording only the first made an up-to-date host read
+// as behind for good: python:3.14 was offered as an update it had already taken, and
+// the rollout sent to apply it failed verification against the very image it wanted.
+func TestParseContainersKeepsEveryDigest(t *testing.T) {
+	const (
+		older   = "sha256:a2e9788143507cacbb754fcc06ad3b7108ca9c334f97a466906103846107cdd5"
+		current = "sha256:be8ccd085666c34273c9dc5607c9842f8b2e3116128aae45148ce164c07ce09d"
+	)
+	out := "::OK::\n" +
+		"abc\trag-api\tpython:3.14\trunning\tUp 15 hours\t\ttest2\trag-api\t/home/keith/test2\t\n" +
+		"::IMAGES::\n" +
+		"python:3.14\tpython@" + older + ",python@" + current + ",\n"
+
+	containers, status, _ := parseContainers(out)
+	if status != ContainersOK {
+		t.Fatalf("status %q, want ok", status)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("parsed %d containers, want 1", len(containers))
+	}
+	c := containers[0]
+	if len(c.Digests) != 2 || c.Digests[0] != older || c.Digests[1] != current {
+		t.Fatalf("digests not all kept: %+v", c.Digests)
+	}
+	// And the single field everything already reads still carries one of them.
+	if c.Digest != older {
+		t.Errorf("Digest = %q, want the first of the list", c.Digest)
+	}
+}
+
+// An image with no registry digest at all — built locally — records none, and must
+// not gain an empty one.
+func TestParseContainersOnALocallyBuiltImage(t *testing.T) {
+	out := "::OK::\n" +
+		"abc\tapp\tprovenance-backend\trunning\tUp 2 days\t\tprovenance\tbackend\t/srv\t\n" +
+		"::IMAGES::\n" +
+		"provenance-backend\t\n"
+	containers, _, _ := parseContainers(out)
+	if len(containers) != 1 {
+		t.Fatalf("parsed %d, want 1", len(containers))
+	}
+	if len(containers[0].Digests) != 0 || containers[0].Digest != "" {
+		t.Errorf("a locally built image gained a digest: %+v", containers[0])
+	}
+}

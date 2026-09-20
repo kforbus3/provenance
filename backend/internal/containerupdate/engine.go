@@ -904,7 +904,7 @@ $_rt ps --no-trunc --format '{{.Image}}	{{.Names}}	{{.State}}' 2>/dev/null | whi
     ` + shellCase(repo) + `) ;;
     *) continue ;;
   esac
-  _d=$($_rt image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null)
+  _d=$($_rt image inspect --format '{{range .RepoDigests}}{{.}},{{end}}' "$_i" 2>/dev/null)
   echo "$_i	$_n	$_s	$_d"
 done
 `
@@ -928,10 +928,44 @@ func shellCase(repo string) string {
 // runningContainer is one line of verifyScript's output: a container using the
 // repository under test.
 type runningContainer struct {
-	ref    string // repository:tag
-	name   string // container name
-	state  string // docker/podman container state, e.g. "running", "restarting"
-	digest string // "repo@sha256:..." as RepoDigests reports it
+	ref   string // repository:tag
+	name  string // container name
+	state string // docker/podman container state, e.g. "running", "restarting"
+	// Every digest this image answers to, not the first one.
+	//
+	// RepoDigests is a LIST, and an image legitimately carries more than one entry:
+	// a registry that republishes a multi-arch index -- a platform added, an
+	// attestation changed -- gives the same unchanged amd64 image a second index
+	// digest, and a host that has pulled the tag both before and after holds both.
+	// Docker does not order them by recency, so taking [0] picks one arbitrarily.
+	//
+	// Reading index 0 is why a python:3.14 rollout could never pass: the image the
+	// host was running WAS the target, byte for byte, and answered to
+	// sha256:be8ccd... as its second digest while [0] was the older sha256:a2e978...
+	// The rollout halted on a host that had done exactly what was asked of it.
+	digests []string // each "repo@sha256:..."
+}
+
+// matches reports whether this container's image answers to the digest a rollout
+// is aiming at. ANY of them is a match: they all name the same image.
+func (c runningContainer) matches(target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, d := range c.digests {
+		if _, got, ok := strings.Cut(d, "@"); ok && got == target {
+			return true
+		}
+	}
+	return false
+}
+
+// digestForDisplay is what to show an operator when no digest matched.
+func (c runningContainer) digestForDisplay() string {
+	if len(c.digests) == 0 {
+		return ""
+	}
+	return c.digests[0]
 }
 
 // isRunning reports whether the container is actually up.
@@ -969,7 +1003,14 @@ func parseVerifyOutput(out string) []runningContainer {
 			state: strings.ToLower(strings.TrimSpace(parts[2])),
 		}
 		if len(parts) > 3 {
-			c.digest = strings.TrimSpace(parts[3])
+			// Comma-separated, and trailing-comma terminated by the template that
+			// produced it. An image with no registry digest at all (built locally)
+			// leaves this empty, which is not the same as not matching.
+			for _, d := range strings.Split(parts[3], ",") {
+				if d = strings.TrimSpace(d); d != "" {
+					c.digests = append(c.digests, d)
+				}
+			}
 		}
 		if c.ref == "" {
 			continue
@@ -1058,12 +1099,11 @@ func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostI
 		if r.TargetDigest == "" {
 			return nil // nothing to compare against; running the tag is the answer
 		}
-		// RepoDigests is "repo@sha256:...", so compare the digest part only.
-		if _, d, ok := strings.Cut(c.digest, "@"); ok && d == r.TargetDigest {
+		if c.matches(r.TargetDigest) {
 			return nil
 		}
 		return fmt.Errorf("deployed, but %s is running %s rather than the %s this rollout targets",
-			want, shortDigest(c.digest), shortDigest(r.TargetDigest))
+			want, shortDigest(c.digestForDisplay()), shortDigest(r.TargetDigest))
 	}
 	// Nothing running the tag we wanted. If the repository is running at some
 	// OTHER tag, the host has moved past this image rather than failed to take it

@@ -107,7 +107,14 @@ $_pre $_rt ps --no-trunc --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t
 echo "::IMAGES::"
 $_pre $_rt ps --no-trunc --format '{{.Image}}' 2>/dev/null | sort -u | while read -r _i; do
   [ -n "$_i" ] || continue
-  _d=$($_pre $_rt image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null)
+  # EVERY digest, not the first. RepoDigests is a list, and an image answers to
+  # more than one whenever a registry republishes a multi-arch index over unchanged
+  # layers: the same bytes gain a second index digest, and a host that pulled the tag
+  # before and after holds both. Docker does not order them by recency, so [0] is
+  # arbitrary -- and picking the stale one makes an up-to-date host look behind
+  # forever, offering an update that has already been applied and failing every
+  # rollout sent to fix it.
+  _d=$($_pre $_rt image inspect --format '{{range .RepoDigests}}{{.}},{{end}}' "$_i" 2>/dev/null)
   # printf, not echo. Whether echo expands \t depends on the shell: dash does,
   # bash does not. On a bash host this line emitted a literal backslash-t, the
   # parser found no tab, and EVERY digest was dropped -- which silently turned off
@@ -160,15 +167,19 @@ func parseContainers(out string) ([]models.Container, string, string) {
 
 	body, images, _ := strings.Cut(out, "::IMAGES::")
 	// image reference -> repo digest, so a moving tag can still be pinned.
-	digests := map[string]string{}
+	digests := map[string][]string{}
 	for _, line := range strings.Split(images, "\n") {
-		ref, d, ok := strings.Cut(strings.TrimSpace(line), "\t")
-		if !ok || ref == "" || d == "" {
+		ref, list, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || ref == "" || list == "" {
 			continue
 		}
-		// `image inspect` returns repo@sha256:..., and only the digest is useful.
-		if _, sha, found := strings.Cut(d, "@"); found {
-			digests[ref] = sha
+		// A comma-separated list, terminated by a trailing comma from the template
+		// that produced it. `image inspect` returns repo@sha256:..., and only the
+		// digest part is useful.
+		for _, d := range strings.Split(list, ",") {
+			if _, sha, found := strings.Cut(strings.TrimSpace(d), "@"); found && sha != "" {
+				digests[ref] = append(digests[ref], sha)
+			}
 		}
 	}
 
@@ -182,12 +193,20 @@ func parseContainers(out string) ([]models.Container, string, string) {
 		if len(f) < 4 {
 			continue
 		}
+		all := digests[f[2]]
 		c := models.Container{
-			ID:     shortID(f[0]),
-			Name:   f[1],
-			Image:  f[2],
-			State:  f[3],
-			Digest: digests[f[2]],
+			ID:      shortID(f[0]),
+			Name:    f[1],
+			Image:   f[2],
+			State:   f[3],
+			Digests: all,
+		}
+		// Digest stays the single value everything already reads and displays. It is
+		// the FIRST of the list, which is what this recorded before -- what changed is
+		// that the others are no longer thrown away, so a comparison can ask whether
+		// the image answers to a digest rather than whether one arbitrary entry does.
+		if len(all) > 0 {
+			c.Digest = all[0]
 		}
 		if len(f) > 4 {
 			c.Status = f[4]
