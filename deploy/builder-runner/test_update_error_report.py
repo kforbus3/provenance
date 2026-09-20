@@ -62,7 +62,11 @@ Installing `http://192.168.50.1/bundles/x.raucb` failed
 
 
 def sh(script, arg):
-    return subprocess.run(["bash", "-c", script, "_", arg],
+    # sh, not bash: the imaging-test target runs this on python:3.13-alpine, which
+    # has busybox and no bash. The rules under test are POSIX anyway -- printf,
+    # grep, head, tail -- and running them under the shell the image actually has
+    # is closer to the machine than running them under one it does not.
+    return subprocess.run(["sh", "-c", script, "_", arg],
                           capture_output=True, text=True).stdout.strip()
 
 
