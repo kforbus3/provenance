@@ -1351,9 +1351,79 @@ def provisioning_preflight(cfg: dict | None = None) -> list[str]:
     if cfg.get("MODE", "dhcp") == "dhcp":
         if not (cfg.get("DHCP_RANGE_START") and cfg.get("DHCP_RANGE_END")):
             problems.append("Standalone DHCP needs a lease range.")
+        problems += _dhcp_collision_problems(cfg)
     elif not cfg.get("PROXY_SUBNET"):
         problems.append("Proxy mode needs the subnet of the imaging network.")
     return problems
+
+
+def _dhcp_collision_problems(cfg: dict) -> list[str]:
+    """The two ways standalone DHCP takes down somebody else's network.
+
+    list_interfaces() has always marked the NIC carrying the default route, and its
+    own docstring says that is "the main LAN, and the one you do *not* want a
+    standalone DHCP server on". Nothing checked it. Configuring MODE=dhcp on that
+    interface, with a lease range inside the network it is already on, produced
+    exactly one complaint — that the netboot imager had not been built yet.
+
+    Starting that stack puts a second DHCP server on a live network, handing out
+    addresses from a pool something else already owns. The symptoms land on
+    machines that have nothing to do with imaging, minutes to hours later, and
+    nothing in this product's logs connects them to it.
+
+    Both checks are refusals rather than warnings. There is no configuration where
+    answering DHCP on the default-route interface is what somebody meant.
+    """
+    problems: list[str] = []
+    try:
+        ifaces = list_interfaces()
+    except Exception:  # never let a preflight throw: it runs on page render
+        return problems
+
+    chosen_name = (cfg.get("INTERFACE") or "").strip()
+    chosen = next((i for i in ifaces if i.get("name") == chosen_name), None)
+
+    if chosen and chosen.get("default"):
+        problems.append(
+            f"{chosen_name} is the interface carrying this host's default route — it "
+            "faces your main network. Running a standalone DHCP server there puts a "
+            "second one on a network that already has one, and machines with nothing "
+            "to do with imaging will start taking leases from it. Use a separate "
+            "interface facing an isolated segment, or proxy DHCP mode."
+        )
+
+    start = _ip_or_none(cfg.get("DHCP_RANGE_START"))
+    end = _ip_or_none(cfg.get("DHCP_RANGE_END"))
+    for iface in ifaces:
+        net = _net_or_none(iface.get("ip"), iface.get("prefixlen"))
+        if net is None:
+            continue
+        hits = [str(a) for a in (start, end) if a is not None and a in net]
+        if not hits:
+            continue
+        where = f"{iface.get('name')} ({net})"
+        problems.append(
+            f"The lease range {cfg.get('DHCP_RANGE_START')}–{cfg.get('DHCP_RANGE_END')} "
+            f"is inside {where}, a network this host is already on. Those addresses "
+            "belong to whatever runs that network; handing them out from here will "
+            "collide with its own DHCP server and with machines already holding them. "
+            "Give the provisioning network a range of its own."
+        )
+    return problems
+
+
+def _ip_or_none(value):
+    try:
+        return ipaddress.ip_address((value or "").strip())
+    except ValueError:
+        return None
+
+
+def _net_or_none(ip, prefixlen):
+    try:
+        return ipaddress.ip_network(f"{ip}/{int(prefixlen)}", strict=False)
+    except (ValueError, TypeError):
+        return None
 
 
 def read_env() -> dict:
