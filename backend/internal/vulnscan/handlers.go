@@ -165,6 +165,30 @@ func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The scan outlives the request, so it needs a context that is not cancelled
+	// with it -- and one that still knows which tenant it is for.
+	//
+	// This was context.WithoutCancel(context.Background()), which is just
+	// context.Background(): a context with no values at all. Under multi-tenancy
+	// that made vulnerability scanning fail completely and quietly. The scan row
+	// was created on the REQUEST context, so it landed in the right tenant; the
+	// scan itself ran, SSHed to the host and came back with findings; and then the
+	// insert was refused:
+	//
+	//   store findings: ERROR: new row violates row-level security policy
+	//   for table "vuln_findings" (SQLSTATE 42501)
+	//
+	// because vuln_findings.tenant_id defaults to prov_current_tenant(), and on a
+	// context with no tenant that is nobody. Every manual scan on a multi-tenant
+	// instance ended as "failed" with no findings stored, and nothing in the
+	// message pointed at tenancy.
+	//
+	// TenantScope is the idiom already used for detached work elsewhere (see the
+	// terminal's disconnect callback): a background context, explicitly scoped to
+	// the tenant this request is acting for, rather than the request's whole value
+	// set carried into a goroutine that outlives it.
+	bg := h.d.Auth.TenantScope(context.Background(), p)
+
 	ids := []string{}
 	for _, host := range hosts {
 		scanID, err := h.d.Store.CreateVulnScan(r.Context(), host.ID, &p.UserID, p.Username, false)
@@ -185,7 +209,7 @@ func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
 		go func(hst *models.Host, id uuid.UUID) {
 			scanSem <- struct{}{}
 			defer func() { <-scanSem }()
-			h.svc.Run(context.WithoutCancel(context.Background()), id, hst)
+			h.svc.Run(bg, id, hst)
 		}(host, scanID)
 	}
 	h.audit(r, "vuln_scan.start", map[string]any{"hosts": len(ids)})
@@ -447,7 +471,29 @@ func (h *handler) containerImages(w http.ResponseWriter, r *http.Request) {
 
 // scanContainerImages runs a scan pass now rather than waiting for the daily one.
 func (h *handler) scanContainerImages(w http.ResponseWriter, r *http.Request) {
-	scanned, failed := h.svc.ScanContainerImages(r.Context())
-	h.audit(r, "vuln_scan.container_images", map[string]any{"scanned": scanned, "failed": failed})
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"scanned": scanned, "failed": failed})
+	// Detached, because this is a sweep of every image the fleet runs and each one
+	// is a grype run of tens of seconds. On the request's own context it could not
+	// finish: every route is behind middleware.Timeout(60s), so a fleet of any size
+	// had its remaining results thrown away with
+	//
+	//   "container scan: saving result" err="context deadline exceeded"
+	//
+	// once the minute was up -- images scanned, bytes read, findings computed, and
+	// then dropped on the floor, with the caller getting no answer either.
+	//
+	// The tenant does not matter for these particular rows (container_image_scans
+	// is Provenance-global: the same digest is the same bytes for everybody, and
+	// the table carries no tenant_id), but the scope is set anyway so this does not
+	// become the next thing that quietly writes nothing if that ever changes.
+	ctx, cancel := context.WithTimeout(
+		h.d.Auth.TenantScope(context.Background(), auth.MustPrincipal(r)), 2*time.Hour)
+	h.audit(r, "vuln_scan.container_images", map[string]any{"started": true})
+	go func() {
+		defer cancel()
+		scanned, failed := h.svc.ScanContainerImages(ctx)
+		h.d.Log.Info("container image scan finished", "scanned", scanned, "failed", failed)
+	}()
+	// Accepted, not done: the caller polls /container-images for results, which is
+	// what the scheduled sweep has always left behind too.
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"started": true})
 }

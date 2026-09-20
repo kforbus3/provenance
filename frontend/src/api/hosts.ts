@@ -467,9 +467,13 @@ export async function listContainerImages(): Promise<ContainerImageScan[]> {
   return data.images ?? [];
 }
 
-export async function scanContainerImages(): Promise<{ scanned: number; failed: number }> {
-  const { data } = await api.post<{ scanned: number; failed: number }>(
-    `/api/v1/container-images/scan`);
+// Starts a sweep of every container image the fleet runs; it does not wait for
+// it. A fleet-wide sweep is many grype runs of tens of seconds each and cannot
+// complete inside a request — it used to try, and had its later results discarded
+// when the 60-second route timeout fired. Results appear through
+// listContainerImages as they land.
+export async function scanContainerImages(): Promise<{ started: boolean }> {
+  const { data } = await api.post<{ started: boolean }>(`/api/v1/container-images/scan`);
   return data;
 }
 
