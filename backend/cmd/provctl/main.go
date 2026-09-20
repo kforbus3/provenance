@@ -214,6 +214,32 @@ func run(cmd string, args []string) error {
 			return err
 		}
 		fmt.Printf("rotated user CA; new active id %s\n", caMgr.ActiveID())
+		// The rotation is half the operation, and the half that is not done here is
+		// the one that decides whether the fleet stays reachable.
+		//
+		// A managed host trusts the CA through TrustedUserCAKeys, written during
+		// enrollment. Rotating mints a new key and retires the old one — but nothing
+		// tells the hosts, so every one of them still trusts only the key that is on
+		// its way out. Certificates signed by the new CA are rejected, and the failure
+		// does not arrive at rotation time: it arrives later, fleet-wide, when the old
+		// certificates expire. Saying only "rotated" invites exactly that.
+		fmt.Println()
+		fmt.Println("  NEXT STEP — REQUIRED. Managed hosts do not learn this key by themselves.")
+		fmt.Println("  Each host trusts the CA through TrustedUserCAKeys, written at enrollment,")
+		fmt.Println("  and still trusts only the PREVIOUS key. Until a host is given the new one,")
+		fmt.Println("  certificates signed by it are rejected — and because already-issued")
+		fmt.Println("  certificates keep working until they expire, nothing looks wrong until they do.")
+		fmt.Println()
+		fmt.Println("  Re-enrol each managed host (Hosts -> select -> Enroll, or the enrollment API);")
+		fmt.Println("  that rewrites TrustedUserCAKeys with the current key. Verify with:")
+		fmt.Println("      ssh-keygen -lf /etc/ssh/prov_ca.pub      # on the host")
+		fmt.Println("      GET /api/v1/certificates/ca              # activeUserCA here")
+		fmt.Println("  The two fingerprints must match.")
+		if pub := caMgr.PublicKeyAuthorized(); pub != "" {
+			fmt.Println()
+			fmt.Println("  New active user CA public key:")
+			fmt.Printf("      %s\n", strings.TrimSpace(pub))
+		}
 
 	case "list-users":
 		users, err := st.ListUsers(ctx)
@@ -390,7 +416,17 @@ func fipsCheck(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) erro
 	_ = pool.QueryRow(ctx,
 		`SELECT count(*) FROM hosts WHERE enrolled AND coalesce(overlay,'') <> 'openvpn' AND wg_address IS NOT NULL`).Scan(&wgHosts)
 	fmt.Printf("  Hosts on WireGuard     : %d   [%s]\n", wgHosts, ok(wgHosts == 0))
-	fmt.Printf("  Go FIPS module active  : %v   [%s]\n", cryptoprofile.ModuleActive(), ok(cryptoprofile.ModuleActive()))
+	// Whose process? This one's.
+	//
+	// cryptoprofile.ModuleActive() reports the Go FIPS module of the CALLING binary, and
+	// provctl is not the server. On a deployment whose backend logs moduleActive=true,
+	// this line printed "false [NOT-FIPS]" — a compliance report contradicting the thing
+	// it is reporting on, which is worse than not printing it. Labelled for what it is,
+	// with the server's own answer beside it where the report can obtain one.
+	fmt.Printf("  Go FIPS module (provctl): %v   [%s]\n", cryptoprofile.ModuleActive(), ok(cryptoprofile.ModuleActive()))
+	fmt.Printf("     note                 : this is provctl's own process. The SERVER reports its\n")
+	fmt.Printf("                            module state at startup — look for moduleActive in the\n")
+	fmt.Printf("                            backend log, or the FIPS panel in Settings.\n")
 
 	var caAlgo string
 	_ = pool.QueryRow(ctx, `SELECT algo FROM ca_keys WHERE kind='user' AND active=true ORDER BY created_at DESC LIMIT 1`).Scan(&caAlgo)

@@ -925,8 +925,24 @@ func (h *handler) del(w http.ResponseWriter, r *http.Request) {
 	// certificate overlay the certificate is the credential — wiping the host's copy
 	// does not stop a copy taken off it earlier, only revocation does. The CRL is
 	// published to the jump host by the overlay cleanup further down.
+	// Unconditionally — NOT only when a teardown was asked for.
+	//
+	// The paragraph above is the argument for it, and the condition here used to
+	// contradict that argument: revocation was gated on `teardown`. Deleting a host
+	// without teardown therefore removed the only record of which serial was its
+	// (overlay_clients cascades) and left the certificate live and now unrevokable.
+	//
+	// Demonstrated on a QA host: deleted from Provenance, its OpenVPN client restarted,
+	// and the jump host accepted the fresh handshake, handed back the same pinned
+	// address and carried traffic. The deleted host still had the overlay.
+	//
+	// Teardown and revocation answer different questions. Teardown is "go and clean
+	// that machine", which needs to reach it. Revocation is "this control plane no
+	// longer accepts that credential", which needs nothing but itself — and is MORE
+	// important for the host that is not being torn down, because that is the one
+	// nobody is going to clean.
 	revoked := 0
-	if teardown && h.d.RevokeHostOverlayCerts != nil && host != nil {
+	if h.d.RevokeHostOverlayCerts != nil && host != nil {
 		var rerr error
 		if revoked, rerr = h.d.RevokeHostOverlayCerts(r.Context(), host); rerr != nil {
 			// Not fatal to the delete — but the operator has to know the certificate

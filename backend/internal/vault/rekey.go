@@ -50,7 +50,18 @@ func RekeySecrets(ctx context.Context, st *store.Store, oldKey, newKey []byte) (
 		}
 		plain, e := secretbox.Open(oldKey, v.Sealed)
 		if e != nil {
-			return res, fmt.Errorf("version %s: cannot decrypt with the old key (wrong --old passphrase, or a version under a third key): %w", v.ID, e)
+			// Name the likely cause first. The passphrase an operator reaches for is
+			// the one in .env — and what sealed these rows is whatever the RUNNING
+			// process was started with. Those diverge the moment .env is edited
+			// without a restart, which is exactly the state a deployment is in while
+			// somebody is part-way through rotating its secrets. The value the
+			// process holds is visible in `docker inspect`, and that is the one to
+			// pass to --old.
+			return res, fmt.Errorf("version %s: cannot decrypt with the old key. The most "+
+				"common cause is that --old came from .env while these secrets were "+
+				"sealed by the RUNNING process, which holds whatever it was STARTED "+
+				"with — compare `docker inspect <backend> | grep PROV_VAULT_PASSPHRASE` "+
+				"against .env. Otherwise this version is under a third key: %w", v.ID, e)
 		}
 		sealed, e := secretbox.Seal(newKey, plain)
 		if e != nil {
