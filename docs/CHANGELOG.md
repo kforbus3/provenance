@@ -5,6 +5,51 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.2 — 2026-09-20
+
+**A deploy that does not come up no longer leaves the host down.** The compose file was
+restored when it would not *parse* — the cheap failure. When it parsed, deployed, and the
+stack did not come up, the host kept the new file with the service stopped until somebody
+noticed. That is the Keycloak outage: a stored compose pinning `postgres:18.6-alpine` over
+a version 17 data directory, the database refusing it, `depends_on: service_healthy` never
+satisfied — and `docker-compose.yml.prev`, the file that had been serving fine, sitting
+beside it for twenty hours. A failed bring-up now restores it, brings it up with the same
+narrowing, and puts the on-host revision marker back to what the host was running; the
+rejected file is kept as `docker-compose.yml.rejected`. The deploy is still recorded as
+failed, because it was — the difference is that the service is running while you fix the
+definition.
+
+**A database major version is refused on the deploy path too.** The guard that knows
+`postgres`, `mysql`, `mongo` and the rest own their on-disk format was consulted by
+rollouts and the Updates list, but not by a stack deploy — so the same pin took the same
+Keycloak down a second time, from a Deploy re-applying the stored file, because the first
+fix had been made on the host where nothing reads it. The comparison is against the image
+the host is **running**, since that is what wrote the format on disk. Because a deploy is
+your own file, the refusal offers a way through: a dialog naming the image, both versions
+and the migration, and *"the data is migrated — deploy anyway"*, recorded in the audit
+trail as an acknowledged waiver. Automation never gets that option.
+
+**The overlay server is restarted onto a config it was given.** `openvpn` reads its config
+once, and the provisioning script skipped the start whenever one was already running — so
+after the overlay moved off the WireGuard subnet, the daemon went on enforcing the old
+tunnel network from a file that said otherwise, pushing every client an address outside the
+server's own network (`MULTI ERROR: … violates tunnel network/netmask constraint`). The
+tunnel came up, carried traffic, and died every two minutes while enrollment reported
+`OVPN_SERVER_ALREADY_RUNNING`. A fingerprint of the config the daemon was *started* with is
+kept beside it now, and a change restarts the server. Only a change does, so an unchanged
+re-enrolment still causes no blip.
+
+**A jump host older than OpenVPN 2.6 cannot serve a FIPS host at all.** Pre-2.6 derives
+data-channel keys with the TLS 1.0 PRF, which a FIPS policy forbids, and 2.6's replacement
+must be supported by both ends. A FIPS host against the 2.5 server Ubuntu 22.04 ships
+finished its TLS handshake, received its overlay address, and then failed to make keys —
+tunnel up, zero traffic, and every symptom on the managed host while the cause was the jump
+host. The jump-host provisioning now checks its own version, upgrades from backports,
+reports it, and restarts (a new binary is not a new process); the host-side diagnostics
+recognise the error and name the jump host; and the jump-host image fails to build if it did
+not get 2.6. Verified on a FIPS box end to end: 0% packet loss over a tunnel that had been
+losing 100%.
+
 ## v1.9.1 — 2026-09-20
 
 **A backend outage no longer takes the UI with it.** nginx proxied `/api/` to a literal
