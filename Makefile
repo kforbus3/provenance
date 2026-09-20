@@ -134,6 +134,25 @@ bundle: ## Build + sign a .provup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_F
 	  --key $(BUNDLE_KEY_ABS) --out $(BUNDLE_OUT_ABS) --components $(BUNDLE_COMPONENTS)
 	@echo "Built $(BUNDLE_OUT_ABS). Upload it in the UI (Settings -> Updates) to upgrade in place."
 
+.PHONY: test-db
+test-db: ## Run the database-backed tests against a throwaway PostgreSQL
+	@# Why this exists: a query shipped that could not run at all — an ungrouped
+	@# column in a GROUP BY — and `go test ./...` was green throughout, because no
+	@# test in the suite executes SQL. The update checker silently returned nothing
+	@# and the Updates page went empty in production. These tests need a real schema
+	@# to parse against, so they are skipped unless one is handed to them.
+	@set -e; \
+	name=prov-testdb-$$$$; \
+	trap "docker rm -f $$name >/dev/null 2>&1 || true" EXIT; \
+	docker run -d --name $$name -e POSTGRES_PASSWORD=test -e POSTGRES_USER=prov \
+	  -e POSTGRES_DB=prov -p 0:5432 postgres:16-alpine >/dev/null; \
+	port=$$(docker port $$name 5432/tcp | head -1 | sed 's/.*://'); \
+	url="postgres://prov:test@127.0.0.1:$$port/prov?sslmode=disable"; \
+	echo "waiting for postgres on $$port"; \
+	for i in $$(seq 1 60); do docker exec $$name pg_isready -U prov >/dev/null 2>&1 && break; sleep 1; done; \
+	cd backend && go run ./cmd/provctl migrate-db "$$url" && \
+	PROV_TEST_DATABASE_URL="$$url" go test ./internal/store/ -run EverySQLStatement -v
+
 comma := ,
 
 .PHONY: ps-single

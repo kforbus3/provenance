@@ -88,6 +88,13 @@ services:
       # so nothing changes until an operator puts it in .env. A test now fails when a
       # new setting appears in config.go without a line here.
       PROV_BACKUP_DIR: ${PROV_BACKUP_DIR:-}
+      # The connection BACKUPS are taken over, when it differs from the serving one.
+      # It must differ under multi-tenancy: the serving role is NOSUPERUSER
+      # NOBYPASSRLS (that is what isolates tenants) and pg_dump as such a role fails on
+      # every table with a row-level security policy, so a multi-tenant deployment can
+      # otherwise take no backup — and therefore cannot upgrade, since the upgrade
+      # refuses to start without one. Point it at the owner role migrations run as.
+      PROV_BACKUP_DATABASE_URL: ${PROV_BACKUP_DATABASE_URL:-}
       PROV_CA_ROTATE_AFTER: ${PROV_CA_ROTATE_AFTER:-}
       PROV_DR_STANDBY_TOKEN: ${PROV_DR_STANDBY_TOKEN:-}
       PROV_FIPS_MODE: ${PROV_FIPS_MODE:-}

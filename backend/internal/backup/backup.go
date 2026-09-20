@@ -30,6 +30,8 @@ import (
 
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/kforbus3/provenance/backend/internal/config"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -158,12 +160,34 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
-	dumpEnv, derr := pgEnv(s.cfg.DatabaseURL)
+	// Can the role this dump will run as actually read everything? Asked before the
+	// work starts, so the answer is a sentence rather than an exit code. See rlsExempt.
+	dsn := s.dumpDSN()
+	if s.cfg.MultiTenancy {
+		exempt, err := s.rlsExempt(cctx, dsn)
+		if err != nil {
+			return nil, fmt.Errorf("checking whether the backup role can read past row-level security: %w", err)
+		}
+		if !exempt {
+			return nil, fmt.Errorf("multi-tenancy is enabled and this deployment's database role " +
+				"is subject to row-level security, so pg_dump cannot read the whole database and " +
+				"would either fail or silently dump only one tenant's rows. Set " +
+				"PROV_BACKUP_DATABASE_URL to the OWNER role (the one migrations run as) — the " +
+				"serving role must stay NOSUPERUSER NOBYPASSRLS, because that is what isolates " +
+				"tenants")
+		}
+	}
+	dumpEnv, derr := pgEnv(dsn)
 	if derr != nil {
 		return nil, derr
 	}
 	dump := exec.CommandContext(cctx, "pg_dump", "--no-owner", "--clean", "--if-exists")
 	dump.Env = append(os.Environ(), dumpEnv...)
+	// pg_dump's stderr, kept. Only openssl's was, so every dump failure reported
+	// "pg_dump=exit status 1" and nothing else -- including the one that matters here,
+	// where pg_dump names the table and the reason in a sentence.
+	var dumpErrBuf strings.Builder
+	dump.Stderr = &dumpErrBuf
 	enc := exec.CommandContext(cctx, "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-pass", "env:PROV_BK_PASS")
 	enc.Env = append(os.Environ(), "PROV_BK_PASS="+pass)
 
@@ -202,7 +226,11 @@ func (s *Service) Create(ctx context.Context) (*Info, error) {
 
 	if dumpErr != nil || encWaitErr != nil {
 		os.Remove(tmp)
-		return nil, fmt.Errorf("backup failed: pg_dump=%v openssl=%v %s", dumpErr, encWaitErr, encErr.String())
+		if why := firstError(dumpErrBuf.String()); why != "" {
+			return nil, fmt.Errorf("backup failed: %s", why)
+		}
+		return nil, fmt.Errorf("backup failed: pg_dump=%v openssl=%v %s",
+			dumpErr, encWaitErr, encErr.String())
 	}
 	if err := os.Rename(tmp, final); err != nil {
 		os.Remove(tmp)
@@ -335,4 +363,74 @@ func (s *Service) Open(name string) (io.ReadCloser, int64, error) {
 		return nil, 0, err
 	}
 	return f, fi.Size(), nil
+}
+
+// firstError picks the operative line out of a pg_dump transcript.
+//
+// pg_dump prints the cause and then several lines of context; the first "error:" line
+// is the sentence an operator needs, and the "detail:" that follows it usually names
+// the way out. Anything else is noise at the moment somebody is reading this because a
+// backup did not happen.
+func firstError(stderr string) string {
+	var cause, detail string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case cause == "" && strings.Contains(line, "error:"):
+			cause = line
+		case cause != "" && detail == "" && strings.Contains(line, "detail:"):
+			detail = line
+		}
+	}
+	if cause == "" {
+		return ""
+	}
+	if detail != "" {
+		return cause + " (" + detail + ")"
+	}
+	return cause
+}
+
+// rlsExempt reports whether the role this backup will run as can read past row-level
+// security, and is the check that turns an opaque failure into an answer.
+//
+// It matters only under multi-tenancy, and there it matters completely. Tenant
+// isolation REQUIRES the serving role to be NOSUPERUSER NOBYPASSRLS -- the backend
+// refuses to start otherwise -- and pg_dump run as such a role does not produce a
+// smaller backup, it produces no backup at all:
+//
+//	pg_dump: error: query failed: ERROR: query would be affected by row-level security
+//	policy for table "access_policies"
+//
+// Since a failed pre-upgrade backup aborts an upgrade, that left a multi-tenant
+// deployment unable to back up OR upgrade, with "pg_dump=exit status 1" as the only
+// explanation.
+//
+// --enable-row-security is NOT the fix, and this is the important part: it makes
+// pg_dump succeed while dumping only the rows visible under the current tenant, which
+// is a partial backup that looks exactly like a complete one. A backup that silently
+// omits most of the estate is worse than one that failed.
+func (s *Service) rlsExempt(ctx context.Context, dsn string) (bool, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return false, err
+	}
+	defer pool.Close()
+	var exempt bool
+	err = pool.QueryRow(ctx,
+		`SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user`).Scan(&exempt)
+	return exempt, err
+}
+
+// dumpDSN is the connection the dump runs over.
+//
+// PROV_BACKUP_DATABASE_URL when set, the serving URL otherwise. They are the same
+// thing on a single-tenant deployment and must differ on a multi-tenant one, where the
+// serving role is deliberately unable to read past row-level security and therefore
+// unable to dump.
+func (s *Service) dumpDSN() string {
+	if u := strings.TrimSpace(s.cfg.BackupDatabaseURL); u != "" {
+		return u
+	}
+	return s.cfg.DatabaseURL
 }

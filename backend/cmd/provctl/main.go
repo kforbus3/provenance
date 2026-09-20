@@ -56,6 +56,7 @@ Usage:
   provctl fips reseal-secrets                            Re-seal all at-rest secrets to the FIPS (PBKDF2) envelope
   provctl fips flag-stale-passwords                     Force non-FIPS local passwords to change (re-hash) on next login
   provctl vault rekey --old … --new …                   Rotate the vault master passphrase (re-encrypt all vault secrets)
+  provctl migrate-db <postgres-url>                     Apply migrations to a scratch database (for query checks; see make test-db)
   provctl kms status                                    Report the configured external KMS/HSM backend and its health
   provctl kms wrap [value]                              Wrap a passphrase with the external KMS (reads stdin if no value)
   provctl kms unwrap <token>                            Unwrap a KMS blob to verify it (prints the plaintext)
@@ -76,6 +77,19 @@ func run(cmd string, args []string) error {
 	// operation that needs no config or database — dispatch it before loading either.
 	if cmd == "release" {
 		return runRelease(args)
+	}
+
+	// Building a throwaway schema needs neither the deployment's config nor its
+	// database -- it is handed the one it should touch. Dispatched here for the same
+	// reason as `release` above: loading config would connect to a database that, for
+	// this command, is precisely the wrong one.
+	if cmd == "migrate-db" {
+		if len(args) != 1 {
+			return fmt.Errorf("usage: provctl migrate-db <postgres-url>   (applies migrations to a scratch database)")
+		}
+		mctx, mcancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer mcancel()
+		return migrateOnly(mctx, args[0])
 	}
 
 	cfg, err := config.Load()

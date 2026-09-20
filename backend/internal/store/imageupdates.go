@@ -80,25 +80,36 @@ func (s *Store) TrackedImages(ctx context.Context) ([]TrackedImage, error) {
 		       -- Every digest any host's copy of this tag answers to.
 		       --
 		       -- An image carries more than one whenever a registry republishes a
-		       -- multi-arch index over unchanged layers, and a comparison against
-		       -- one of them reports an up-to-date host as behind -- which is how
+		       -- multi-arch index over unchanged layers, and a comparison against one
+		       -- of them reports an up-to-date host as behind -- which is how
 		       -- python:3.14 was offered as an update that had already been applied,
 		       -- with every rollout sent to fix it failing verification against the
 		       -- image it was asking for.
 		       --
-		       -- COALESCE to the single digest for rows collected before this was
-		       -- recorded, so an upgrade does not lose what it already knew.
-		       COALESCE(
-		         (SELECT array_agg(DISTINCT d) FROM (
-		            SELECT jsonb_array_elements_text(c2->'digests') AS d
-		            FROM jsonb_array_elements(COALESCE(hi.containers,'[]'::jsonb)) AS c2
-		            WHERE c2->>'repository' = c->>'repository'
-		              AND COALESCE(c2->>'tag','') = COALESCE(c->>'tag','')
-		          ) x WHERE d <> ''),
-		         ARRAY[]::text[]
-		       ) AS digests
+		       -- Aggregated through the lateral below rather than a correlated
+		       -- subquery: a subquery here references the ungrouped c, which is not
+		       -- a slow query but an INVALID one --
+		       --
+		       --   ERROR: subquery uses ungrouped column "c.value" from outer query
+		       --
+		       -- so TrackedImages returned an error, the checker received no images,
+		       -- and the Updates page went silently empty. It compiled and the suite
+		       -- passed, because no test in it executes this SQL.
+		       COALESCE(array_agg(DISTINCT d.digest)
+		                FILTER (WHERE d.digest IS NOT NULL AND d.digest <> ''),
+		                ARRAY[]::text[]) AS digests
 		FROM host_inventory hi,
 		     LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
+		     -- Both shapes at once: the list recorded since digests became plural, and
+		     -- the single value rows collected before that carry. UNION so a row
+		     -- holding both does not double-count, LEFT so a locally built image with
+		     -- no digest at all still produces its repository:tag row.
+		     LEFT JOIN LATERAL (
+		         SELECT dd AS digest
+		         FROM jsonb_array_elements_text(COALESCE(c->'digests', '[]'::jsonb)) AS dd
+		         UNION
+		         SELECT c->>'digest' WHERE COALESCE(c->>'digest','') <> ''
+		     ) AS d ON TRUE
 		WHERE COALESCE(c->>'repository','') <> ''
 		  AND COALESCE(c->>'tag','') <> ''
 		GROUP BY 1, 2

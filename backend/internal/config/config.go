@@ -382,8 +382,17 @@ type Config struct {
 	// Encrypted database backups: destination directory and the passphrase used
 	// to encrypt them (openssl AES-256-CBC, PBKDF2). The passphrase falls back to
 	// the CA passphrase if unset; set a distinct one to decouple the two.
-	BackupDir        string
-	BackupPassphrase string
+	BackupDir string
+	// BackupDatabaseURL is the connection backups are taken over, when it differs
+	// from the serving one.
+	//
+	// It has to differ under multi-tenancy. Tenant isolation requires the serving
+	// role to be NOSUPERUSER NOBYPASSRLS, and pg_dump run as such a role fails on
+	// every table with a row-level security policy — so without this a multi-tenant
+	// deployment can take no backup at all, and therefore cannot upgrade, since the
+	// upgrade refuses to start without a successful pre-upgrade backup.
+	BackupDatabaseURL string
+	BackupPassphrase  string
 
 	// In-UI upgrade system. ReleaseTrustKeys are extra base64 Ed25519 release public
 	// keys (comma/space-separated) trusted in addition to any baked into the binary —
@@ -548,6 +557,7 @@ func Load() (*Config, error) {
 		MSRCMonths:          envInt("PROV_MSRC_MONTHS", 12),
 		CARotateAfter:       envDuration("PROV_CA_ROTATE_AFTER", 365*24*time.Hour),
 		BackupDir:           env("PROV_BACKUP_DIR", "/var/lib/prov/backups"),
+		BackupDatabaseURL:   env("PROV_BACKUP_DATABASE_URL", ""),
 		ReleaseTrustKeys:    env("PROV_RELEASE_TRUST_KEYS", ""),
 		UpdatesDir:          env("PROV_UPDATES_DIR", "/var/lib/prov/updates"),
 		UpdaterURL:          env("PROV_UPDATER_URL", "http://prov-updater:9000"),
