@@ -43,10 +43,18 @@ func insertUser(ctx context.Context, tx pgx.Tx, p CreateUserParams) (*models.Use
 		INSERT INTO users (username, email, display_name, is_super_admin, must_change_pw, auth_source)
 		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
 		RETURNING id, username, COALESCE(email,''), display_name, is_super_admin,
-		          is_disabled, email_verified, must_change_pw, created_at, updated_at`,
+		          is_disabled, email_verified, must_change_pw, created_at, updated_at,
+		          tenant_id`,
 		p.Username, p.Email, p.DisplayName, p.IsSuperAdmin, p.MustChangePw, p.AuthSource)
+	// tenant_id is RETURNED, not assumed. The column defaults to prov_current_tenant(),
+	// so the row lands in the right tenant either way -- but leaving it out of the
+	// response meant a provider admin creating a user inside a customer tenant was
+	// told it belonged to tenant 00000000-…-0000. The row was right and the
+	// confirmation was wrong, which is the worse way round for a feature whose whole
+	// promise is that data stays where it belongs.
 	if err := row.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.IsSuperAdmin,
-		&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		&u.IsDisabled, &u.EmailVerified, &u.MustChangePw, &u.CreatedAt, &u.UpdatedAt,
+		&u.TenantID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `

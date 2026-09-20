@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.1 — 2026-09-20
+
+**A backend outage no longer takes the UI with it.** nginx proxied `/api/` to a literal
+upstream, which it resolves at startup and refuses to start without — so whenever the
+backend was down or misconfigured, the frontend exited too and there was no page to
+read, just a refused connection. A QA install with one wrong value in `.env` showed
+nothing at all until somebody thought to run `docker logs`. The backend is reached
+through a variable now, exactly as Headlamp and the log console already were: the
+application loads and `/api/` answers 502. Verified by starting the frontend with no
+backend running at all, which used to be fatal.
+
+**Creating a user inside a customer tenant reports the right tenant.** The row was
+always written correctly; the response omitted `tenant_id` and so claimed
+`00000000-0000-0000-0000-000000000000`. A confirmation that contradicts the database is
+the wrong way round for a feature whose promise is that data stays where it belongs.
+
 ## v1.9.0 — 2026-09-20
 
 Everything below came out of a QA/UAT pass: a clean install from a clean clone
