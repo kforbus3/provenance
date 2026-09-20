@@ -143,19 +143,36 @@ test-db: ## Run the database-backed tests against a throwaway PostgreSQL
 	@# Why this exists: a query shipped that could not run at all — an ungrouped
 	@# column in a GROUP BY — and `go test ./...` was green throughout, because no
 	@# test in the suite executes SQL. The update checker silently returned nothing
-	@# and the Updates page went empty in production. These tests need a real schema
-	@# to parse against, so they are skipped unless one is handed to them.
+	@# and the Updates page went empty in production.
+	@#
+	@# postgresql-client-16 specifically, matching the server below and the version the
+	@# backend image ships. A NEWER pg_dump writes settings an older server rejects —
+	@# "unrecognized configuration parameter transaction_timeout" — so a mismatched
+	@# client produces backups that cannot be restored onto their own server.
+	@#
+	@# Run INSIDE a container, not on the host: these tests need pg_dump, psql and
+	@# openssl as well as a database, and on a machine without them the backup tests
+	@# skip — which reads as a pass. A skipped test that looks green is the thing this
+	@# whole target exists to stop.
 	@set -e; \
-	name=prov-testdb-$$$$; \
-	trap "docker rm -f $$name >/dev/null 2>&1 || true" EXIT; \
-	docker run -d --name $$name -e POSTGRES_PASSWORD=test -e POSTGRES_USER=prov \
-	  -e POSTGRES_DB=prov -p 0:5432 postgres:16-alpine >/dev/null; \
-	port=$$(docker port $$name 5432/tcp | head -1 | sed 's/.*://'); \
-	url="postgres://prov:test@127.0.0.1:$$port/prov?sslmode=disable"; \
-	echo "waiting for postgres on $$port"; \
-	for i in $$(seq 1 60); do docker exec $$name pg_isready -U prov >/dev/null 2>&1 && break; sleep 1; done; \
-	cd backend && go run ./cmd/provctl migrate-db "$$url" && \
-	PROV_TEST_DATABASE_URL="$$url" go test ./internal/store/ -run EverySQLStatement -v
+	net=prov-testdb-net-$$$$; db=prov-testdb-$$$$; \
+	trap "docker rm -f $$db >/dev/null 2>&1 || true; docker network rm $$net >/dev/null 2>&1 || true" EXIT; \
+	docker network create $$net >/dev/null; \
+	docker run -d --name $$db --network $$net -e POSTGRES_PASSWORD=test -e POSTGRES_USER=prov \
+	  -e POSTGRES_DB=prov postgres:16-alpine -c max_connections=200 >/dev/null; \
+	echo "waiting for postgres"; \
+	for i in $$(seq 1 60); do docker exec $$db pg_isready -U prov >/dev/null 2>&1 && break; sleep 1; done; \
+	url="postgres://prov:test@$$db:5432/prov?sslmode=disable"; \
+	docker run --rm --network $$net -v "$$PWD/backend:/src" -w /src \
+	  -e PROV_TEST_DATABASE_URL="$$url" -e GOFLAGS=-buildvcs=false golang:1.26-bookworm \
+	  sh -c 'apt-get update -qq >/dev/null && apt-get install -y -qq curl gnupg openssl >/dev/null && \
+	         install -d /usr/share/postgresql-common/pgdg && \
+	         curl -sS -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+	         echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
+	         apt-get update -qq >/dev/null && apt-get install -y -qq postgresql-client-16 >/dev/null && \
+	         go run ./cmd/provctl migrate-db "$$PROV_TEST_DATABASE_URL" && \
+	         go test ./internal/store/ -run EverySQLStatement -v && \
+	         go test ./internal/backup/ -run RestoreOverAMigratedDatabase -v'
 
 comma := ,
 
