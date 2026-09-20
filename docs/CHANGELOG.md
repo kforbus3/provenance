@@ -60,6 +60,13 @@ from the UI also used to wipe it, because the frontend type had no field for it 
 save replaced the whole record; and the Test button answered "invalid request body" when
 pressed with nothing to send.
 
+Sealing it then broke the thing the token is for, which is worth recording because of how
+it hid: the send path read the plaintext field, and a save caches what it *stored*, so
+every event after a configuration save was forwarded with no `Authorization` header. The
+events still arrived. A collector that does not check the token would never have noticed;
+one that requires it would have begun refusing the audit trail with nothing on this side
+to point at. Found by forwarding a real event to a sink and reading what the sink got.
+
 ### Imaging
 
 **The DHCP preflight refused the only correct configuration there is.** The check added in
