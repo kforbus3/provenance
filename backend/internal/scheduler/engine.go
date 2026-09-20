@@ -332,6 +332,15 @@ func (e *Engine) firePlaybookInWaves(
 		}
 		runStages(stages, runWave, waveStatus, func(msg string, args ...any) {
 			e.log.Warn(msg, append([]any{"schedule", sc.ID}, args...)...)
+		}, func(st stage, reason string) {
+			// Recorded as interrupted rather than failed: nothing was attempted on
+			// these hosts, and calling that a failure would put them in every report
+			// of things that went wrong on machines that were never touched.
+			if err := e.store.CompletePlaybookRun(bg, st.id,
+				models.PlaybookRunInterrupted, reason, nil, reason); err != nil {
+				e.log.Warn("scheduled playbook: could not mark a skipped wave",
+					"schedule", sc.ID, "run", st.id, "err", err)
+			}
 		})
 	}()
 	return "started", runIDs
@@ -401,7 +410,17 @@ func runStages(
 	run func(stage),
 	status func(uuid.UUID) (string, error),
 	warn func(msg string, args ...any),
+	skip func(st stage, reason string),
 ) {
+	// Every wave's run row is created up front, so the ones that never execute have to
+	// be closed out — or they sit at "pending" for ever, which on the history screen is
+	// indistinguishable from "about to start". An operator looking at a stopped
+	// sequence would see one failed wave and one apparently still coming.
+	stop := func(from int, reason string) {
+		for _, rest := range stages[from:] {
+			skip(rest, reason)
+		}
+	}
 	for i, st := range stages {
 		run(st)
 		got, err := status(st.id)
@@ -410,11 +429,15 @@ func runStages(
 			// the next wave is the thing the previous one stands on.
 			warn("scheduled playbook: could not read a wave result; later waves skipped",
 				"wave", i+1, "of", len(stages), "err", err)
+			stop(i+1, fmt.Sprintf("not run: the result of wave %d of %d could not be read, "+
+				"and this wave is what that one stands on", i+1, len(stages)))
 			return
 		}
 		if got != models.PlaybookRunCompleted {
 			warn("scheduled playbook: wave did not succeed; later waves skipped",
 				"wave", i+1, "of", len(stages), "status", got)
+			stop(i+1, fmt.Sprintf("not run: wave %d of %d %s, and this wave is what that "+
+				"one stands on", i+1, len(stages), got))
 			return
 		}
 	}
