@@ -5,6 +5,36 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.4 — 2026-09-20
+
+**An image answers to more than one digest, and only the first was being read.** A
+rollout halted with
+
+> python:3.14 → 3.14: deployed, but python:3.14 is running sha256:a2e978814350… rather
+> than the sha256:be8ccd085666… this rollout targets
+
+on a host that was running exactly the right image. Docker Hub had republished the
+`python:3.14` **index** — a platform or attestation change — over unchanged amd64
+layers, so the one local image carried both the old and the new index digest in its
+`RepoDigests`. Both probes read `{{index .RepoDigests 0}}`, and Docker does not order
+that list by recency, so the arbitrary first entry was the stale one.
+
+The consequences compound, which is why this is worth an upgrade rather than a
+forgiveness: the Updates page offers an update the host has **already applied**, and no
+number of redeploys can change which entry is first; every rollout sent to apply it
+fails verification against the image it is asking for; and a multi-image rollout
+**halts** there, leaving its remaining hosts pending behind a host that did nothing
+wrong.
+
+Both probes now emit every `RepoDigest`, and every comparison asks whether the image
+*answers to* the digest rather than whether one entry equals it — in the rollout's
+verification and in the Updates check alike. `Digest` stays the first entry, so
+anything that displays or scans by it is unchanged, and an image with no registry
+digest at all still matches nothing: "cannot tell" is not "current".
+
+After upgrading, **Resume** on a halted rollout returns its failed hosts to pending and
+retries them.
+
 ## v1.9.3 — 2026-09-20
 
 **The restore in 1.9.2 could put back a broken file, and did.** It restored
