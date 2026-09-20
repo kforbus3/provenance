@@ -21,6 +21,7 @@ import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 import { ContainerUpdatesTab } from "./ContainerUpdatesTab";
 import { RolloutsTab } from "./RolloutsTab";
+import { UnhealthyContainersBanner } from "./UnhealthyContainersBanner";
 import { DiscoveredProjectsPanel } from "./DiscoveredProjectsPanel";
 import { TabErrorBoundary } from "../components/TabErrorBoundary";
 
@@ -138,6 +139,11 @@ export function StacksPage() {
           </Button>
         )}
       </Stack>
+
+      {/* What is WRONG, before what is available. An update offered on a page
+          that is silent about a container which has not stayed up for three days
+          is answering the less urgent question first. */}
+      <UnhealthyContainersBanner />
 
       {/* Two halves of one job: what a host SHOULD run, and what is available to
           run. Separate tabs rather than separate pages because deciding to take

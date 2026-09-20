@@ -19,6 +19,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/pacing"
 	"github.com/kforbus3/provenance/backend/internal/stateful"
 	"github.com/kforbus3/provenance/backend/internal/store"
+	"github.com/kforbus3/provenance/backend/internal/transienterr"
 )
 
 // Store is the slice of the store the engine needs.
@@ -170,12 +171,40 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 	// The budget is checked before anything else starts. Checking after would
 	// send this tick's batch to hosts under a rollout that has already failed.
 	if pacing.BudgetExceeded(strategy, failed) {
+		// WHY it stopped, in the sentence an operator reads first.
+		//
+		// "1 host(s) failed; the rollout stopped on its own." was the whole of it,
+		// and a rollout covering three images is displayed under the name of the
+		// first one -- so a halt caused by faster-whisper was read, correctly and
+		// uselessly, as a llama.cpp failure. The operator had to open the host rows
+		// to find which image had actually failed.
 		reason := fmt.Sprintf("%d host(s) failed; the rollout stopped on its own.", failed)
+		if why := firstFailure(hosts); why != "" {
+			reason += " First failure: " + why
+		}
 		if err := e.store.SetUpdateRolloutState(ctx, r.ID, store.UpdateRolloutHalted, reason); err != nil {
 			e.log.Warn("update rollout: halting", "rollout", r.ID, "err", err)
 		}
+		// Hosts that never got a turn are closed out rather than left pending.
+		//
+		// A halted rollout is never advanced again, so a pending row is a host
+		// waiting for something that will not happen -- and it reads as "queued,
+		// any moment now" on a page whose rollout stopped hours ago. One sat like
+		// that in production while the rollout beside it said halted.
+		//
+		// Skipped, not failed: nothing was attempted on them, and counting them as
+		// failures would misreport the blast radius of the thing that went wrong.
+		for _, h := range hosts {
+			if h.State != store.UpdateHostPending {
+				continue
+			}
+			if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, h.HostID, store.UpdateHostSkipped,
+				"the rollout halted before this host's turn; nothing was changed here"); err != nil {
+				e.log.Warn("update rollout: closing out a pending host", "host", h.HostID, "err", err)
+			}
+		}
 		e.log.Warn("update rollout halted", "rollout", r.ID,
-			"repository", r.Repository, "failed", failed)
+			"repository", r.Repository, "failed", failed, "reason", reason)
 		return
 	}
 
@@ -228,7 +257,16 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		}}
 	}
 
-	claimed := make([]uuid.UUID, 0, capacity)
+	// The attempt count is carried along with the host, because a failure that
+	// looks transient is retried by leaving the host pending -- and whether there
+	// is another attempt left to leave it for is exactly this number. Read here,
+	// where the claim happens, rather than re-read later from a row another tick
+	// may have moved.
+	type claim struct {
+		host     uuid.UUID
+		attempts int
+	}
+	claimed := make([]claim, 0, capacity)
 	for _, h := range hosts {
 		if capacity <= 0 || ctx.Err() != nil {
 			break
@@ -249,16 +287,18 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 			continue // somebody else took it
 		}
 		capacity--
-		claimed = append(claimed, h.HostID)
+		// The claim itself incremented attempts, so this is the number of attempts
+		// including the one about to run.
+		claimed = append(claimed, claim{host: h.HostID, attempts: h.Attempts + 1})
 	}
 
 	var wg sync.WaitGroup
-	for _, hostID := range claimed {
+	for _, c := range claimed {
 		wg.Add(1)
-		go func(hostID uuid.UUID) {
+		go func(c claim) {
 			defer wg.Done()
-			e.applyAll(ctx, r, images, hostID)
-		}(hostID)
+			e.applyAll(ctx, r, images, c.host, c.attempts)
+		}(c)
 	}
 	wg.Wait()
 }
@@ -273,7 +313,8 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 // The first failure stops this host. Continuing would apply later updates on top
 // of a host already known to be in a state nobody intended, and the failure
 // budget is about hosts.
-func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []store.RolloutImage, hostID uuid.UUID) {
+func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []store.RolloutImage,
+	hostID uuid.UUID, attempts int) {
 	containers, err := e.store.HostContainers(ctx, hostID)
 	if err != nil {
 		e.fail(ctx, r.ID, hostID, "could not read what this host is running: "+err.Error())
@@ -414,7 +455,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 					"detail", err.Error())
 				continue
 			}
-			e.fail(ctx, r.ID, hostID,
+			e.failOrRetry(ctx, r.ID, hostID, attempts,
 				fmt.Sprintf("%s:%s → %s: %s", im.Repository, im.FromTag, im.ToTag, err.Error()))
 			return
 		}
@@ -581,6 +622,7 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// update -- the same tag rebuilt -- rewrites nothing, and writing an
 	// identical revision would fill the history with entries that record no
 	// change while claiming one.
+	wasCompose, rewrote := stack.Compose, compose != stack.Compose
 	if compose != stack.Compose {
 		_, err := e.store.UpsertStack(ctx, store.StackInput{
 			HostID: stack.HostID, Name: stack.Name, Path: stack.Path, Compose: compose,
@@ -600,6 +642,26 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 	// vector database, updating curl would have restarted both.
 	services := e.composeServicesFor(ctx, r, hostID, stack.Path, compose)
 	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, services...); err != nil {
+		// The rollout wrote this revision, so the rollout takes it back when the
+		// host would not have it.
+		//
+		// Leaving it stored is what turned one failed pull into a lasting
+		// disagreement: the deploy script put the host's compose file back to
+		// ls66, while the stack record went on holding the ls67 text the rollout
+		// had written. Nothing was wrong on the host and nothing was wrong in the
+		// database -- they simply described different stacks, and the next deploy
+		// of that project for any reason at all would have resolved it by applying
+		// a version nobody had chosen.
+		//
+		// Only when the host actually went back. A person's failed edit stays
+		// stored, because they meant it and will want to retry it; an automated
+		// one that the host rejected has no author to come back to it. And if the
+		// host kept the new file (a deploy that ran but did not produce the
+		// expected container) reverting here would CREATE the disagreement it
+		// exists to prevent, so the script's own report is what decides.
+		if rewrote && hostWentBack(out) {
+			e.revertStack(ctx, stack, wasCompose, r)
+		}
 		// Cause first. The last 600 characters of a pull transcript is as likely
 		// to be progress bars as the reason anything failed.
 		return fmt.Errorf("%s", explainCompose(err.Error()+"\n"+out))
@@ -1142,6 +1204,104 @@ func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostI
 		return fmt.Errorf("%w: %s", errSuperseded, ref)
 	}
 	return fmt.Errorf("deployed, but no container on this host is running %s", want)
+}
+
+// failOrRetry records a host's failure -- unless the failure reads like weather,
+// in which case the host goes back to pending and the next tick tries again.
+//
+// This is the second half of the rollout that a registry rate limit ended. The
+// deploy script now retries a transient pull within one deploy (see
+// stacks.RenderScript), which covers a limit that clears in milliseconds. It does
+// not cover a registry having a bad ten minutes: those retries all happen inside
+// the same SSH session, seconds apart. So the same judgement is applied again at
+// this level, where the gap between attempts is a tick rather than a sleep.
+//
+// A retry leaves the state pending, NOT failed, which matters beyond this host:
+// the failure budget counts failed hosts, so recording a transient error as a
+// failure is what halted a three-image rollout over a limit the registry asked
+// to have retried in half a millisecond.
+//
+// Bounded by MaxAttempts, the same ceiling the claim loop enforces, so a
+// genuinely unreachable registry still ends the host rather than looping until
+// somebody notices.
+// hostWentBack reports whether the deploy script put the previous compose file
+// back on the host. Its own markers, because only the script knows: a deploy can
+// fail before it writes, after it writes, or after it has brought something up.
+func hostWentBack(out string) bool {
+	for _, marker := range []string{"::REVERTEDTO::", "::RESTORED::", "::RESTOREFAILED::"} {
+		if strings.Contains(out, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// revertStack puts the stack record back to the compose text the host is on.
+//
+// A new revision rather than an edit of the failed one: the history is the record
+// of what was attempted, and quietly rewriting the entry that failed would erase
+// the attempt. The note says what happened, so the next person to read the
+// history sees the bump and the revert as two events.
+func (e *Engine) revertStack(ctx context.Context, stack *store.ContainerStack, was string, r store.UpdateRollout) {
+	if _, err := e.store.UpsertStack(ctx, store.StackInput{
+		HostID: stack.HostID, Name: stack.Name, Path: stack.Path, Compose: was,
+		Note: fmt.Sprintf("reverted: %s:%s → %s did not apply, and the host was put back "+
+			"on the previous compose file", r.Repository, r.FromTag, r.ToTag),
+		AuthorName: "container update rollout",
+	}); err != nil {
+		// Reported loudly: the consequence of failing here is a stack record that
+		// disagrees with its host, which is the condition this exists to clear.
+		e.log.Error("update rollout: could not put the stack record back after a failed apply; "+
+			"the stored compose now names a version the host is not running",
+			"stack", stack.ID, "path", stack.Path, "err", err)
+		return
+	}
+	e.log.Info("update rollout: stack record put back to match the host",
+		"stack", stack.ID, "repository", r.Repository)
+}
+
+// firstFailure is the earliest recorded host failure, reduced to its first line.
+//
+// The first line is where the useful part is: host errors carry a whole pull
+// transcript after it, and a halt reason is read in a table cell.
+func firstFailure(hosts []store.UpdateRolloutHost) string {
+	var best *store.UpdateRolloutHost
+	for i := range hosts {
+		h := &hosts[i]
+		if h.State != store.UpdateHostFailed || h.Forgiven || strings.TrimSpace(h.Error) == "" {
+			continue
+		}
+		if best == nil || h.ChangedAt.Before(best.ChangedAt) {
+			best = h
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	line := strings.TrimSpace(best.Error)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	const max = 200
+	if len(line) > max {
+		line = line[:max] + "…"
+	}
+	return line
+}
+
+func (e *Engine) failOrRetry(ctx context.Context, rollout, host uuid.UUID, attempts int, msg string) {
+	if attempts < MaxAttempts && transienterr.Is(msg) {
+		if err := e.store.SetUpdateRolloutHostState(ctx, rollout, host, store.UpdateHostPending,
+			fmt.Sprintf("attempt %d of %d did not get through, and the reason looks temporary; "+
+				"this host will be tried again: %s", attempts, MaxAttempts, msg)); err != nil {
+			e.log.Warn("update rollout: recording a retry", "host", host, "err", err)
+			return
+		}
+		e.log.Info("update rollout: transient failure, will retry",
+			"rollout", rollout, "host", host, "attempt", attempts, "detail", msg)
+		return
+	}
+	e.fail(ctx, rollout, host, msg)
 }
 
 func (e *Engine) fail(ctx context.Context, rollout, host uuid.UUID, msg string) {

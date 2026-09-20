@@ -5,6 +5,68 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.10 — 2026-09-20
+
+**A failed image pull left the host describing a version it was not running.** A rollout
+rewrote a host's compose file from faster-whisper `ls66` to `ls67`, the pull came back
+`toomanyrequests: retry-after: 548.005µs`, and the deploy script — running under `set -e`
+with a bare `docker compose pull` — ended right there: after the new file had been moved
+into place, and before any of the restore logic. The host was left with a compose file
+naming `ls67`, a container running `ls66`, and the correct `ls66` file sitting untouched
+beside it as `docker-compose.yml.last-good`, exactly as designed and never consulted.
+
+Nothing looked wrong on the host and nothing looked wrong in the control plane. They
+simply described different stacks, and the next `up` in that project for any reason at
+all would have resolved the disagreement by recreating the service onto a version nobody
+had deployed. There were three restore paths and they disagreed; there is now one, used by
+a failed parse, a failed pull and a failed bring-up alike. A pull failure reverts the file
+and the revision marker and does **not** touch containers — nothing was stopped, and
+starting a project somebody had deliberately taken down is not a decision for an error
+handler to make.
+
+**A registry rate limit no longer ends a rollout.** The same 548-microsecond retry-after
+was recorded as the host's failure; the failure budget was one host; the rollout halted
+with its second host left pending forever. Three images, two hosts, and nothing wrong
+with any of them. Pulls are now retried when the failure reads like weather rather than
+an answer — rate limits, 5xx from a registry, a TLS handshake that timed out, a layer
+stream reset mid-download — first within the deploy, then again across ticks by leaving
+the host retryable instead of failed. An unauthorized registry or a tag that does not
+exist still fails on the first attempt, because repeating an answer only buries it.
+
+**A rollout now takes back the revision it wrote.** When the host goes back to its
+previous compose file, the stack record follows it, as a new revision so the history still
+shows that the bump was attempted. A person's failed edit is left alone: they meant it and
+will want to retry it.
+
+**A halted rollout says what failed, and stops leaving hosts pending.** "1 host(s) failed;
+the rollout stopped on its own." was the whole message — and a rollout covering three
+images is listed under the name of the first, so a halt caused by faster-whisper was
+displayed as a llama.cpp failure. The reason now names the failure, and hosts that never
+got a turn are closed out as skipped rather than left reading "queued" under a rollout
+that stopped hours ago.
+
+**Containers that are not running properly are now stated once, at the top of the
+Containers page.** Two were crash-looping in this fleet — one on the GPU host, one on the
+build host — for long enough that nobody could say when they had started. Every part of
+the machinery was innocent: the state was collected, served, and drawn as an orange chip
+inside one host's expanded detail panel, in a 220-pixel scrolling list. Seeing it required
+already suspecting that host. Fleet-wide there was no question that could be asked at all.
+The list is deliberately narrow — a crash loop, a failed healthcheck, a non-zero exit that
+has not come back — because a list that also contains every one-shot container that
+finished normally is one nobody reads.
+
+**An image with no repository tags is no longer offered updates.** `docker ps` reports
+those by ID, and splitting `sha256:60b1fa07833c…` on the colon produced a repository
+called `sha256` with a 64-character hex tag, which was then asked whether a newer
+`sha256:60b1fa07833c…` was available. The row sat at the top of the Updates page, above
+the real images, permanently unanswerable.
+
+Also: `make test-db` now runs the query-execution test as well as the parse test. It had
+been skipping — the two targets spell the test-database variable differently — and a
+skipped test reads as a pass.
+
+---
+
 ## v1.9.9 — 2026-09-20
 
 **The provisioning stack could be pointed at your main network and said nothing.** It

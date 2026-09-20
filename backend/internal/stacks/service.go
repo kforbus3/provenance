@@ -211,6 +211,19 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waiv
 		// brings it up. Saying only "deploy failed" left people to find that out by
 		// looking, or to assume the stack was down when it was not.
 		switch {
+		// The pull is its own case, because the host's state after one is
+		// different in a way that matters: nothing was recreated, so the stack is
+		// still up on what it was running. Reported as "deploy failed" alone, this
+		// read as an outage and sent people to look at a stack that was fine.
+		case strings.Contains(out, "::PULLFAILED::") && strings.Contains(out, "::REVERTEDTO::"):
+			return st, out, fmt.Errorf("the images for this deploy could not be pulled on %s "+
+				"(exit %d) — nothing was recreated, the stack is still running what it was, and "+
+				"the compose file was put back. The refused file is on the host as "+
+				"docker-compose.yml.rejected", h.Hostname, code)
+		case strings.Contains(out, "::PULLFAILED::"):
+			return st, out, fmt.Errorf("the images for this deploy could not be pulled on %s "+
+				"(exit %d) — nothing was recreated and the stack is still running what it was",
+				h.Hostname, code)
 		case strings.Contains(out, "::RESTORED::"):
 			return st, out, fmt.Errorf("deploy failed on %s (exit %d) — the previous compose file "+
 				"was restored and the stack is running on it. The rejected file is on the host as "+

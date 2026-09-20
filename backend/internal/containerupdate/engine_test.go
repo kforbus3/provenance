@@ -187,13 +187,25 @@ type fakeDeployer struct {
 	calls    int
 	err      error
 	services []string // what each deploy was narrowed to
+	// out overrides the deploy transcript. The engine reads the script's own
+	// markers out of it to learn what happened to the file ON the host, so a test
+	// about that has to be able to say.
+	out string
 }
 
 func (d *fakeDeployer) DeployPulling(context.Context, uuid.UUID) (*store.ContainerStack, string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++
-	return nil, "compose output", d.err
+	return nil, d.transcript(), d.err
+}
+
+// transcript is the deploy output, defaulting to something inert.
+func (d *fakeDeployer) transcript() string {
+	if d.out != "" {
+		return d.out
+	}
+	return "compose output"
 }
 
 func (d *fakeDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
@@ -203,7 +215,7 @@ func (d *fakeDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, serv
 	// One entry per CALL, space-separated: a deploy narrowed to several services
 	// is still one deploy, and the existing tests assert how many happened.
 	d.services = append(d.services, strings.Join(services, " "))
-	return nil, "compose output", d.err
+	return nil, d.transcript(), d.err
 }
 
 type fakeRunner struct {

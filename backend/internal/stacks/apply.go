@@ -12,6 +12,8 @@ package stacks
 import (
 	"fmt"
 	"strings"
+
+	"github.com/kforbus3/provenance/backend/internal/transienterr"
 )
 
 // renderScript is the script run on the host to apply one stack.
@@ -58,6 +60,11 @@ import (
 // --remove-orphans is dropped with it: removing containers the file no longer
 // defines is a whole-project decision, and making it as a side effect of updating
 // one image would delete things nobody mentioned.
+// pullAttempts is how many times a pull is tried when the failure looks
+// transient. Three, with a 10s then 15s pause: a registry rate limit clears in
+// well under that, and a registry that is genuinely down is not worth a fourth.
+const pullAttempts = 3
+
 func RenderScript(dir, compose string, revision int, pull bool, services ...string) string {
 	services = narrowTo(services...)
 	var b strings.Builder
@@ -115,6 +122,52 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s\n",
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
 
+	// One way back, used by every failure that can leave a file on the host that
+	// the host is not running.
+	//
+	// There were three of these and they disagreed. A compose file that did not
+	// parse was put back from .prev with `mv` -- destroying .prev, so a second
+	// failure had nothing left. A bring-up that failed was put back from
+	// .last-good with the revision marker corrected. A PULL that failed was not
+	// put back at all: `set -e` ended the script at the pull, after the new file
+	// had already been moved into place, and nothing below this line ever ran.
+	//
+	// That last one is not hypothetical. A rollout rewrote a host's compose file
+	// to faster-whisper ls67, the pull hit a registry rate limit, the script
+	// stopped, and the file was left naming ls67 with an ls66 container running
+	// beside it -- while .last-good sat there holding the correct ls66 file,
+	// untouched, exactly as designed and never consulted. The host and the
+	// control plane then disagreed about what that stack was, and the next
+	// unrelated `up` in that project would have resolved the disagreement by
+	// recreating the service onto a version nobody had deployed.
+	//
+	// So: one function, called from all three, and containers are NOT touched
+	// here. Reverting the file is always right; restarting things is not, and
+	// only the bring-up path knows whether anything needs starting.
+	b.WriteString("_reverted=0\n")
+	b.WriteString("_prov_revert() {\n")
+	b.WriteString("  _back=\n")
+	b.WriteString("  if [ -f docker-compose.yml.last-good ]; then _back=docker-compose.yml.last-good\n")
+	b.WriteString("  elif [ -f docker-compose.yml.prev ]; then _back=docker-compose.yml.prev\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  if [ -z \"$_back\" ]; then\n")
+	b.WriteString("    echo '::NOPREVIOUS::there is no earlier compose file on this host to fall back to'\n")
+	b.WriteString("    return 0\n")
+	b.WriteString("  fi\n")
+	// Kept, because a failure nobody can inspect is one nobody can fix.
+	b.WriteString("  cp -f docker-compose.yml docker-compose.yml.rejected\n")
+	b.WriteString("  cp -f \"$_back\" docker-compose.yml\n")
+	b.WriteString("  if [ -n \"$_prevrev\" ]; then printf '%s\\n' \"$_prevrev\" > .provenance-revision; fi\n")
+	b.WriteString("  _reverted=1\n")
+	b.WriteString("  echo \"::REVERTEDTO::$_back\"\n")
+	// The revision the host is on now that the file has gone back. The control
+	// plane needs this number: it is how the stored compose is brought back into
+	// agreement with the host, rather than being left describing an apply that
+	// did not happen.
+	b.WriteString("  echo \"::REVERTEDREV::$_prevrev\"\n")
+	b.WriteString("  return 0\n")
+	b.WriteString("}\n")
+
 	// Validate BEFORE acting, and put the previous file back if it does not parse.
 	//
 	// A compose file is written here from whatever the stack record holds, and a
@@ -130,10 +183,11 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	// opinion about a format only compose has the final say on.
 	b.WriteString("if ! $_c config -q >/dev/null 2>&1; then\n")
 	b.WriteString("  _why=$($_c config -q 2>&1 | head -5)\n")
-	fmt.Fprintf(&b, "  if [ -f %s ]; then mv -f %s %s; fi\n",
-		shellQuote(dir+"/docker-compose.yml.prev"),
-		shellQuote(dir+"/docker-compose.yml.prev"),
-		shellQuote(dir+"/docker-compose.yml"))
+	// Through the shared revert, which prefers the last file known to have come
+	// UP over merely the last file that was here, and keeps .prev rather than
+	// consuming it. The old `mv` from .prev meant a second unparseable deploy had
+	// nothing left to fall back to.
+	b.WriteString("  _prov_revert\n")
 	b.WriteString("  echo \"::BADCOMPOSE::$_why\" >&2\n")
 	b.WriteString("  exit 5\n")
 	b.WriteString("fi\n")
@@ -168,8 +222,48 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	if len(services) == 0 {
 		pullTarget = ""
 	}
+	//
+	// Retried, because a pull fails for reasons that are weather rather than
+	// answers. A production rollout of three images was ended by
+	// "toomanyrequests: retry-after: 548.005µs" -- a registry asking to be called
+	// back in half a millisecond, treated as a permanent failure, with the
+	// remaining host left pending and the compose file left rewritten. See
+	// transienterr for which failures are retried and which are final; an
+	// unauthorized registry or a missing tag still fails on the first attempt,
+	// because repeating it only buries the message.
+	//
+	// And on final failure the file goes BACK. This is the path that was missing:
+	// under `set -e` a failing pull ended the script here, after the new compose
+	// file was already in place.
 	if pull {
-		b.WriteString("$_c pull" + pullTarget + "\n")
+		b.WriteString("_pullrc=0\n")
+		b.WriteString("_try=1\n")
+		// The pause between attempts, overridable so the tests that exercise the
+		// retry do not have to wait through it. Nothing sets it in production.
+		b.WriteString("_pullwait=${PROV_PULL_RETRY_SECONDS:-5}\n")
+		b.WriteString("while : ; do\n")
+		b.WriteString("  _pullrc=0\n")
+		// Captured rather than streamed, because the decision to retry is made on
+		// the text. Echoed immediately either way, so a slow pull's transcript is
+		// not lost when the deploy fails.
+		b.WriteString("  _pullout=$($_c pull" + pullTarget + " 2>&1) || _pullrc=$?\n")
+		b.WriteString("  printf '%s\\n' \"$_pullout\"\n")
+		b.WriteString("  if [ \"$_pullrc\" -eq 0 ]; then break; fi\n")
+		fmt.Fprintf(&b, "  if [ \"$_try\" -ge %d ]; then break; fi\n", pullAttempts)
+		b.WriteString("  case \"$(printf '%s' \"$_pullout\" | tr 'A-Z' 'a-z')\" in\n")
+		b.WriteString("  " + transienterr.ShellCase() + ")\n")
+		b.WriteString("    echo \"::PULLRETRY::attempt $_try hit a transient registry error; trying again\"\n")
+		b.WriteString("    _try=$((_try+1))\n")
+		b.WriteString("    sleep $((_try*_pullwait))\n")
+		b.WriteString("    ;;\n")
+		b.WriteString("  *) break ;;\n")
+		b.WriteString("  esac\n")
+		b.WriteString("done\n")
+		b.WriteString("if [ \"$_pullrc\" -ne 0 ]; then\n")
+		b.WriteString("  echo \"::PULLFAILED::the images could not be pulled (exit $_pullrc)\"\n")
+		b.WriteString("  _prov_revert\n")
+		b.WriteString("  exit $_pullrc\n")
+		b.WriteString("fi\n")
 	}
 	// --no-deps when narrowed, or the narrowing is undone by compose.
 	//
@@ -234,22 +328,18 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	// succeeded (see below), and never touched by a failure. .prev stays as it was --
 	// the previous revision, whatever state it was in -- and is the fallback for a host
 	// that has not had a successful deploy since this version arrived.
-	b.WriteString("  _back=\n")
-	b.WriteString("  if [ -f docker-compose.yml.last-good ]; then _back=docker-compose.yml.last-good\n")
-	b.WriteString("  elif [ -f docker-compose.yml.prev ]; then _back=docker-compose.yml.prev\n")
-	b.WriteString("  fi\n")
-	b.WriteString("  if [ -n \"$_back\" ]; then\n")
-	b.WriteString("    cp -f docker-compose.yml docker-compose.yml.rejected\n")
-	b.WriteString("    cp -f \"$_back\" docker-compose.yml\n")
-	b.WriteString("    if [ -n \"$_prevrev\" ]; then printf '%s\\n' \"$_prevrev\" > .provenance-revision; fi\n")
+	b.WriteString("  _prov_revert\n")
+	// Only this path brings anything up: a bring-up failed, so something may be
+	// stopped. The pull path deliberately does not -- nothing was stopped there,
+	// and starting a project somebody had deliberately taken down would be a new
+	// decision taken by an error handler.
+	b.WriteString("  if [ \"$_reverted\" = \"1\" ]; then\n")
 	b.WriteString("    if " + up + "; then\n")
 	b.WriteString("      echo \"::RESTORED::$_back was put back and the stack is up on it\"\n")
 	b.WriteString("      cp -f docker-compose.yml docker-compose.yml.last-good\n")
 	b.WriteString("    else\n")
 	b.WriteString("      echo \"::RESTOREFAILED::$_back was put back but the stack did not come up on it either\"\n")
 	b.WriteString("    fi\n")
-	b.WriteString("  else\n")
-	b.WriteString("    echo '::NOPREVIOUS::there is no earlier compose file on this host to fall back to'\n")
 	b.WriteString("  fi\n")
 	b.WriteString("  exit $_rc\n")
 	b.WriteString("fi\n")

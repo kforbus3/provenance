@@ -164,3 +164,28 @@ export async function listDiscoveredProjects(): Promise<DiscoveredProject[]> {
     "/api/v1/stacks/discovered");
   return data.projects ?? [];
 }
+
+// A container the fleet reports as not doing its job.
+//
+// Deliberately narrow: a crash loop, a failed healthcheck, a non-zero exit that
+// has not come back. A one-shot container that exited 0 is not listed, because a
+// list that includes those gets ignored -- and then the crash loop underneath is
+// invisible again for a new reason.
+export interface UnhealthyContainer {
+  hostId: string;
+  hostname: string;
+  name: string;
+  image?: string;
+  state: string;
+  status?: string;
+  composeProject?: string;
+  composeDir?: string;
+  stackId?: string;
+  collectedAt?: string;
+  why: string;
+}
+
+export async function listUnhealthyContainers(): Promise<UnhealthyContainer[]> {
+  const { data } = await api.get<{ containers: UnhealthyContainer[] }>(`/api/v1/stacks/unhealthy`);
+  return data.containers ?? [];
+}

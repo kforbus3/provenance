@@ -38,11 +38,25 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 		// What exists on the fleet, whether or not Provenance manages it. No setup:
 		// every compose-managed container records its own project and directory.
 		pr.With(d.Auth.RequirePermission("Host.View")).Get("/stacks/discovered", h.discovered)
+		// Containers the fleet reports as not doing their job, fleet-wide. Not
+		// under a stack id: the whole point is the question nobody could ask
+		// before, which is "is anything wrong anywhere".
+		pr.With(d.Auth.RequirePermission("Host.View")).Get("/stacks/unhealthy", h.unhealthy)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Post("/stacks", h.save)
 		pr.With(d.Auth.RequirePermission("Host.Edit")).Delete("/stacks/{id}", h.del)
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/stacks/{id}/deploy", h.deploy)
 		pr.With(d.Auth.RequirePermission("Command.Run")).Post("/stacks/{id}/rollback", h.rollback)
 	})
+}
+
+func (h *handler) unhealthy(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.store.UnhealthyContainers(r.Context())
+	if err != nil {
+		h.d.Log.Warn("listing unhealthy containers", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list container health")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"containers": out})
 }
 
 func (h *handler) discovered(w http.ResponseWriter, r *http.Request) {

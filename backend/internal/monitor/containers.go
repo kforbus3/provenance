@@ -268,6 +268,23 @@ func shortID(id string) string {
 // registry.example.com:5000/app, and splitting on the first colon there gives a
 // "tag" of 5000/app. Only a colon AFTER the last slash introduces a tag.
 func splitImageRef(ref string) (repo, tag string) {
+	// An image with no repository tags at all. `docker ps` reports those by ID --
+	// "sha256:60b1fa07833c…" -- and splitting on the colon produced a repository
+	// called "sha256" with a 64-character hex "tag", which then went to the
+	// registry to be asked whether a newer sha256:60b1fa07833c… was available.
+	//
+	// It reached production: a row reading `sha256 | 60b1fa0783…` sat at the top of
+	// the Updates page, above the real images, permanently unanswerable. This
+	// happens to any image whose tag has been removed or replaced -- an ordinary
+	// consequence of rebuilding a local image under the same name.
+	//
+	// Reported as having neither repository nor tag, which is the truth of it. The
+	// container still appears in inventory under its image ID; it is registry
+	// checks and rollouts that have nothing to work with, and both select on a
+	// non-empty repository and tag.
+	if isImageID(ref) {
+		return "", ""
+	}
 	if i := strings.LastIndex(ref, "@"); i >= 0 {
 		ref = ref[:i] // a digest-pinned reference carries no tag
 	}
@@ -278,4 +295,20 @@ func splitImageRef(ref string) (repo, tag string) {
 	}
 	// No tag written means latest, which is what the daemon resolved.
 	return ref, "latest"
+}
+
+// isImageID reports whether a reference is a bare image ID rather than a name:
+// "sha256:" and 64 hex characters, or the digest alone.
+func isImageID(ref string) bool {
+	hex := strings.TrimPrefix(ref, "sha256:")
+	if len(hex) != 64 {
+		return false
+	}
+	for i := 0; i < len(hex); i++ {
+		c := hex[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }

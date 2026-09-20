@@ -33,9 +33,19 @@ import (
 // A compile error in the same file is caught in milliseconds. SQL in a string
 // gets no such treatment unless something runs it.
 func TestStoreQueriesParse(t *testing.T) {
-	url := os.Getenv("PROVENANCE_TEST_DB_URL")
+	// Either name. This test arrived with PROVENANCE_TEST_DB_URL and its own
+	// `make store-queries` target; the later containerised target (`make test-db`)
+	// standardised on PROV_TEST_DATABASE_URL, and adding this test to it made it
+	// SKIP -- which reads as a pass. Accepting both means the query-execution
+	// check runs wherever a database is offered, rather than only where somebody
+	// remembered which spelling that target used.
+	url := os.Getenv("PROV_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("PROVENANCE_TEST_DB_URL is not set; run via `make store-queries`")
+		url = os.Getenv("PROVENANCE_TEST_DB_URL")
+	}
+	if url == "" {
+		t.Skip("no test database offered (PROV_TEST_DATABASE_URL or PROVENANCE_TEST_DB_URL); " +
+			"run via `make test-db` or `make store-queries`")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -84,6 +94,7 @@ func TestStoreQueriesParse(t *testing.T) {
 		{"DeleteUpdateRollout", func() error { return s.DeleteUpdateRollout(ctx, id) }},
 		{"MarkStackDeploying", func() error { return s.MarkStackDeploying(ctx, id) }},
 		{"PruneImageUpdates", func() error { return s.PruneImageUpdates(ctx, []TrackedImage{{Repository: "a/b", Tag: "1"}}) }},
+		{"UnhealthyContainers", func() error { _, err := s.UnhealthyContainers(ctx); return err }},
 	}
 
 	for _, c := range cases {
@@ -103,6 +114,7 @@ func TestStoreQueriesParse(t *testing.T) {
 	for _, m := range []string{
 		"DiscoveredProjects", "ImageUpdates", "ImageUpdatesWithHosts", "TrackedImages",
 		"EnabledStackComposes", "LastCheckedAt", "ListStacks", "ListUpdateRollouts",
+		"UnhealthyContainers",
 	} {
 		if !covered[m] {
 			t.Errorf("%s is not exercised here", m)
