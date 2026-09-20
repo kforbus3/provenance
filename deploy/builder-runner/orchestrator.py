@@ -657,6 +657,49 @@ def _free_name(base: str) -> str:
     raise RuntimeError(f"could not find a free name based on {base}")
 
 
+def _refuse_image_larger_than_the_disk(image_size) -> None:
+    """Refuse an image that cannot fit where it is being written.
+
+    --image-size is GiB (build-image.sh says so, and the form is labelled
+    "Image size (GiB)"), so a caller thinking in MiB asks for a thousand times
+    what they meant. build-image.sh has a "too small" check and nothing at the
+    other end, so 6144 was accepted on a volume with 17 GiB free: it created a
+    6 TiB sparse file, debootstrapped into it, built both slots, wrote the SBOM,
+    and reached step 15 of 16 before starting to compress -- at which point zstd
+    began reading six terabytes of mostly zeros, and the build looked like it had
+    hung. Twenty minutes to find out, and the only way to find out was to look at
+    the file size by hand.
+
+    Sparseness is why nothing failed earlier and why this has to be checked up
+    front: the apparent size is what compression reads, what a download streams
+    and what a non-sparse-aware copy needs, even while the blocks are not there
+    yet.
+    """
+    if image_size in ("auto", 0, "0", "", None):
+        return
+    try:
+        want = int(str(image_size).strip())
+    except ValueError:
+        raise ValueError(
+            f"image_size must be a whole number of GiB or 'auto', not {image_size!r}"
+        ) from None
+    if want <= 0:
+        raise ValueError("image_size must be a positive number of GiB, or 'auto'")
+    out = settings.output_dir
+    if not os.path.isdir(out):
+        return
+    free = shutil.disk_usage(out).free
+    want_bytes = want * 1024**3
+    # A margin for the compressed copy, which is written beside the image.
+    if want_bytes > free:
+        raise ValueError(
+            f"image_size {want} GiB does not fit: the image library has "
+            f"{free / 1024**3:.1f} GiB free. --image-size is in GiB, so a value "
+            f"meant as MiB asks for 1024 times too much. Use 'auto' for the "
+            f"smallest image the chosen layout allows."
+        )
+
+
 def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     """Return (command, label, env) to build an A/B image.
 
@@ -664,6 +707,7 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     build-image.sh reads PASSWORD / LUKS_PASS — so they never appear on a
     command line visible in `ps` or in persisted job metadata.
     """
+    _refuse_image_larger_than_the_disk(opts.get("image_size"))
     distro = opts.get("distro", "debian")
     suite = opts.get("suite", "trixie")
     # The builder container runs as the architecture it is building, so
