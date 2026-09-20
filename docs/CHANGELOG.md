@@ -87,8 +87,9 @@ question that an error path should not answer.
 Two standing failures, both predating this work, both making `make test` useless as a
 signal: a stale exception list in the compose-environment check (which was masking a real
 one — `PROV_OVERLAY_PEER_ISOLATION` reached the jump host and not the backend, although
-both read it), and 43 British spellings of "enrol" against a checker that has always been
-in the gate. `test_dhcp_preflight.py` had never run at all: it was written as pytest among
+both read it), and 43 British spellings of the enrollment verb against a checker that has
+always been in the gate — which, being a checker for exactly that word, also declines to let
+this sentence name the spelling it rejects. `test_dhcp_preflight.py` had never run at all: it was written as pytest among
 plain scripts and was not in the target's list.
 
 ---
