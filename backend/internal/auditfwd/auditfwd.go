@@ -25,6 +25,7 @@ import (
 
 	"github.com/kforbus3/provenance/backend/internal/config"
 	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/secretbox"
 	"github.com/kforbus3/provenance/backend/internal/ssrf"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -60,15 +61,67 @@ type Config struct {
 	CACertPEM string `json:"caCertPem,omitempty"`
 	// Token, when set, authenticates http forwards as "Authorization: Bearer <token>"
 	// so a collector can reject unauthenticated posts.
+	//
+	// Write-only from the API, and sealed at rest in TokenEnc. It was neither: the
+	// collector credential sat in the settings table in plaintext and came straight
+	// back out of GET /audit/forwarding, while every comparable secret in this
+	// product -- the OIDC client secret, the SMTP password, the PagerDuty routing
+	// key, the SAML SP key, the LDAP bind password -- is secretbox-sealed and
+	// replaced by a boolean on read. A token in the settings table is also a token
+	// in every database backup.
 	Token string `json:"token,omitempty"`
+	// TokenEnc is the sealed form, which is what is stored.
+	TokenEnc string `json:"tokenEnc,omitempty"`
+}
+
+// tokenValue returns the bearer token to send: the freshly-supplied one, the
+// sealed one, or a legacy plaintext one.
+//
+// The legacy case matters. Deployments configured before the token was sealed have
+// it stored as plaintext `token`, and refusing to read that would silently stop
+// authenticating to their collector -- turning a storage fix into an outage. It is
+// re-sealed the next time the configuration is saved.
+func (c Config) tokenValue(passphrase []byte) string {
+	if t := strings.TrimSpace(c.Token); t != "" {
+		return t
+	}
+	if c.TokenEnc != "" {
+		if b, err := secretbox.Open(passphrase, c.TokenEnc); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return ""
+}
+
+// HasToken reports whether a token is configured, without revealing it.
+func (c Config) HasToken() bool {
+	return strings.TrimSpace(c.Token) != "" || c.TokenEnc != ""
+}
+
+// Redacted is the form safe to return from the API: no token in either form, and
+// a boolean saying whether one is set.
+func (c Config) Redacted() map[string]any {
+	return map[string]any{
+		"enabled":            c.Enabled,
+		"type":               c.Type,
+		"address":            c.Address,
+		"protocol":           c.Protocol,
+		"tls":                c.TLS,
+		"insecureSkipVerify": c.InsecureSkipVerify,
+		"caCertPem":          c.CACertPEM,
+		"tokenSet":           c.HasToken(),
+	}
 }
 
 // Forwarder sends audit events to the configured sink.
 type Forwarder struct {
-	store    *store.Store
-	log      *slog.Logger
-	client   *http.Client
-	hostname string
+	store *store.Store
+	// passphrase seals the collector token at rest, the same key every other
+	// secret in this product is sealed with.
+	passphrase []byte
+	log        *slog.Logger
+	client     *http.Client
+	hostname   string
 
 	mu       sync.Mutex
 	cached   Config
@@ -80,8 +133,12 @@ type Forwarder struct {
 }
 
 func New(st *store.Store, cfg *config.Config, log *slog.Logger) *Forwarder {
+	var passphrase []byte
+	if cfg != nil {
+		passphrase = cfg.CAKeyPassphrase
+	}
 	f := &Forwarder{
-		store: st, log: log, hostname: syslogHost(cfg),
+		store: st, log: log, hostname: syslogHost(cfg), passphrase: passphrase,
 		client:   ssrf.SafeClient(5 * time.Second),
 		cacheTTL: 30 * time.Second,
 		queue:    make(chan models.AuditEvent, queueCapacity),
@@ -118,6 +175,15 @@ func syslogHost(cfg *config.Config) string {
 
 // LoadConfig reads the stored config (zero value if unset).
 func (f *Forwarder) LoadConfig(ctx context.Context) Config {
+	c := f.loadStored(ctx)
+	// The send path wants a usable token, so it is opened here and never leaves
+	// this process in this form. The API uses Redacted().
+	c.Token = c.tokenValue(f.passphrase)
+	return c
+}
+
+// loadStored reads the configuration exactly as persisted.
+func (f *Forwarder) loadStored(ctx context.Context) Config {
 	var c Config
 	if raw, err := f.store.GetSetting(ctx, settingKey); err == nil && len(raw) > 0 {
 		_ = json.Unmarshal(raw, &c)
@@ -145,6 +211,27 @@ func (f *Forwarder) SaveConfig(ctx context.Context, c Config) error {
 			return err
 		}
 	}
+	// Seal a newly-supplied token; keep the stored one when none was sent, which
+	// is how an edit that does not touch the token leaves it alone.
+	if t := strings.TrimSpace(c.Token); t != "" {
+		enc, err := secretbox.Seal(f.passphrase, []byte(t))
+		if err != nil {
+			return fmt.Errorf("could not seal the collector token: %w", err)
+		}
+		c.TokenEnc = enc
+	} else if c.TokenEnc == "" {
+		// Carry the stored one forward, re-sealing a legacy plaintext value on the
+		// way past so it stops being plaintext.
+		prev := f.loadStored(ctx)
+		if prev.TokenEnc != "" {
+			c.TokenEnc = prev.TokenEnc
+		} else if legacy := strings.TrimSpace(prev.Token); legacy != "" {
+			if enc, err := secretbox.Seal(f.passphrase, []byte(legacy)); err == nil {
+				c.TokenEnc = enc
+			}
+		}
+	}
+	c.Token = ""
 	if err := f.store.SetSetting(ctx, settingKey, c); err != nil {
 		return err
 	}
