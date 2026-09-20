@@ -15,7 +15,9 @@ import (
 	"time"
 
 	saml2 "github.com/russellhaering/gosaml2"
+	"github.com/russellhaering/gosaml2/types"
 	dsig "github.com/russellhaering/goxmldsig"
+	dsigtypes "github.com/russellhaering/goxmldsig/types"
 
 	"github.com/google/uuid"
 
@@ -512,15 +514,82 @@ func (h *Handler) samlSLO(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
+// spMetadata builds this SP's metadata document.
+//
+// Built here rather than by the library, because the library cannot produce one
+// without an SP signing key: gosaml2's Metadata() asks for the encryption
+// certificate unconditionally and returns "empty SP encryption certificate". An SP
+// signing key is optional in this product -- samlSP says so, and sets
+// SignAuthnRequests only when one is configured -- so the metadata endpoint
+// answered 500 "could not build metadata" for a configuration that is supported
+// and works.
+//
+// That matters more than it sounds. Every IdP's setup instructions begin by
+// importing the SP's metadata, and an SP that cannot publish it has to be
+// registered by hand, field by field, with the entity ID and ACS URL retyped. The
+// endpoint existed, was routed, was documented, and had never produced a document
+// on an instance without an SP key.
+//
+// Metadata with no KeyDescriptor is valid and is the correct description of an SP
+// that does not sign: it still carries the entity ID, the ACS endpoint and
+// binding, and the SLO endpoint. The key descriptor is added when there is a key
+// to describe.
+func spMetadata(sp *saml2.SAMLServiceProvider) (*types.EntityDescriptor, error) {
+	var keys []types.KeyDescriptor
+	if sp.GetSigningKey() != nil {
+		certBytes, err := sp.GetSigningCertBytes()
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, types.KeyDescriptor{
+			Use: "signing",
+			KeyInfo: dsigtypes.KeyInfo{
+				X509Data: dsigtypes.X509Data{
+					X509Certificates: []dsigtypes.X509Certificate{{
+						Data: base64.StdEncoding.EncodeToString(certBytes),
+					}},
+				},
+			},
+		})
+	}
+	d := &types.EntityDescriptor{
+		ValidUntil: time.Now().UTC().Add(7 * 24 * time.Hour),
+		EntityID:   sp.ServiceProviderIssuer,
+		SPSSODescriptor: &types.SPSSODescriptor{
+			AuthnRequestsSigned:        sp.SignAuthnRequests,
+			WantAssertionsSigned:       !sp.SkipSignatureValidation,
+			ProtocolSupportEnumeration: saml2.SAMLProtocolNamespace,
+			KeyDescriptors:             keys,
+			AssertionConsumerServices: []types.IndexedEndpoint{{
+				Binding:  saml2.BindingHttpPost,
+				Location: sp.AssertionConsumerServiceURL,
+				Index:    1,
+			}},
+		},
+	}
+	// Advertised only when there is one: an IdP told about an SLO endpoint will use
+	// it, and naming one this deployment does not serve turns logout into an error
+	// the user sees.
+	if sp.ServiceProviderSLOURL != "" {
+		d.SPSSODescriptor.SingleLogoutServices = []types.Endpoint{{
+			Binding:  saml2.BindingHttpPost,
+			Location: sp.ServiceProviderSLOURL,
+		}}
+	}
+	return d, nil
+}
+
 // samlMetadata serves the SP metadata XML the IdP needs to register this app.
 func (h *Handler) samlMetadata(w http.ResponseWriter, r *http.Request) {
 	c := h.samlConfig(r.Context())
 	sp, err := h.samlSP(c)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not build metadata")
+		writeError(w, http.StatusInternalServerError,
+			"could not build metadata: the configured IdP certificate or SP signing key "+
+				"could not be loaded")
 		return
 	}
-	md, err := sp.Metadata()
+	md, err := spMetadata(sp)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not build metadata")
 		return
