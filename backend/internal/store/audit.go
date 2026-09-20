@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -307,9 +308,14 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (intact bool, brokenAtSeq 
 // it, which is the operation the chain exists to make impossible -- would sit at
 // the head of the report forever and hide every genuine break behind it.
 type AuditChainResult struct {
-	// BrokenAtSeq is the first row whose hash or prev_hash does not match: a real
-	// alteration. 0 when the chain is sound.
+	// BrokenAtSeq is the first UNACKNOWLEDGED row whose hash or prev_hash does not
+	// match: a real alteration nobody has accounted for. 0 when the chain is sound.
 	BrokenAtSeq int64
+	// Acknowledged are breaks somebody has investigated and recorded. They are still
+	// breaks — the data is still altered or missing and always will be — but they are
+	// not news, and verification continues past them so a LATER break is still
+	// visible. A chain that can only ever say BROKEN is one people stop reading.
+	Acknowledged []AcknowledgedBreak
 	// WeakFromSeq is the first keyless row written AFTER the chain was keyed. From
 	// there the tail is not tamper-evident: a party with database write access can
 	// append or rebuild keyless rows and they verify, because each row names its
@@ -319,10 +325,41 @@ type AuditChainResult struct {
 	WeakCount int
 }
 
+// AcknowledgedBreak is a break in the chain that was investigated and recorded.
+type AcknowledgedBreak struct {
+	BrokenAtSeq int64     `json:"brokenAtSeq"`
+	By          string    `json:"by"`
+	Note        string    `json:"note"`
+	At          time.Time `json:"at"`
+}
+
 // VerifyAuditChainDetail recomputes the chain and reports both conditions.
 func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, error) {
 	var out AuditChainResult
 	key := currentAuditHMACKey()
+	// Acknowledgements are loaded first, but honoured only where the audit event that
+	// recorded one is itself present and verifies further down the chain. A party with
+	// database write access can insert into audit_chain_breaks; they cannot forge the
+	// chained event it points at without the key. See the migration.
+	acks := map[int64]AcknowledgedBreak{}
+	evidence := map[int64]int64{} // evidence seq -> the break it accounts for
+	if ar, aerr := s.pool.Query(ctx, `
+		SELECT broken_at_seq, evidence_seq, COALESCE(acknowledged_name,''), COALESCE(note,''), acknowledged_at
+		FROM audit_chain_breaks`); aerr == nil {
+		for ar.Next() {
+			var b AcknowledgedBreak
+			var ev int64
+			if ar.Scan(&b.BrokenAtSeq, &ev, &b.By, &b.Note, &b.At) == nil {
+				acks[b.BrokenAtSeq] = b
+				evidence[ev] = b.BrokenAtSeq
+			}
+		}
+		ar.Close()
+	}
+	// A break is only reported as acknowledged once its evidence row has been walked
+	// and verified, so this collects them and they are moved across at the end.
+	pending := map[int64]AcknowledgedBreak{}
+	verifiedEvidence := map[int64]bool{}
 	rows, qerr := s.pool.Query(ctx, `
 		SELECT seq, tenant_id::text, actor_id, COALESCE(actor_name,''), action, target_kind, target_id,
 		       COALESCE(host(ip),''), detail, prev_hash, hash, created_at, hash_alg
@@ -360,8 +397,26 @@ func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, e
 		want := auditMAC(alg, key, prev, canonical)
 		// Constant-time compare on the hash; prev_hash linkage must also match.
 		if prevH != prev || !hmac.Equal([]byte(h), []byte(want)) {
-			out.BrokenAtSeq = seq
-			return out, nil
+			ack, ok := acks[seq]
+			if !ok {
+				out.BrokenAtSeq = seq
+				return out, nil
+			}
+			// Accounted for: resume from this row's own recorded hash and keep
+			// checking. Nothing here is repaired — the row stays exactly as it is and
+			// this break is reported for ever — but the rows after it are still
+			// verified, so a new break cannot hide behind an old one.
+			pending[seq] = ack
+			prev = h
+			if alg == auditAlgHMAC {
+				seenKeyed = true
+			}
+			continue
+		}
+		if b, ok := evidence[seq]; ok {
+			// This row IS an acknowledgement, and it has just verified as part of the
+			// chain. That is what makes the acknowledgement trustworthy.
+			verifiedEvidence[b] = true
 		}
 		// No downgrade once the chain is keyed.
 		//
@@ -389,7 +444,25 @@ func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, e
 		}
 		prev = h
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	// Only acknowledgements whose own audit event verified are honoured. One without
+	// it is a row somebody wrote directly into the database, and the break it claims to
+	// account for is reported as though it had never been acknowledged.
+	for seq, ack := range pending {
+		if verifiedEvidence[seq] {
+			out.Acknowledged = append(out.Acknowledged, ack)
+			continue
+		}
+		if out.BrokenAtSeq == 0 || seq < out.BrokenAtSeq {
+			out.BrokenAtSeq = seq
+		}
+	}
+	sort.Slice(out.Acknowledged, func(i, j int) bool {
+		return out.Acknowledged[i].BrokenAtSeq < out.Acknowledged[j].BrokenAtSeq
+	})
+	return out, nil
 }
 
 func nilUUID(u *uuid.UUID) string {
@@ -408,4 +481,37 @@ func jsonOrEmpty(m map[string]any) []byte {
 		return []byte("{}")
 	}
 	return b
+}
+
+// AcknowledgeAuditChainBreak records that a break was investigated.
+//
+// It repairs nothing. The altered or missing rows stay exactly as they are and the
+// break is reported for ever — as reviewed rather than as news — and verification
+// carries on past it so a later break is still visible.
+//
+// evidenceSeq is the audit event that recorded this acknowledgement, written by the
+// caller through the ordinary audited path so that it is part of the chain. The
+// verifier honours an acknowledgement only when that event verifies, which is what
+// stops a party with database write access from simply inserting one here.
+func (s *Store) AcknowledgeAuditChainBreak(ctx context.Context, brokenAtSeq, evidenceSeq int64,
+	by *uuid.UUID, byName, note string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO audit_chain_breaks (broken_at_seq, evidence_seq, acknowledged_by, acknowledged_name, note)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (broken_at_seq) DO UPDATE
+		   SET evidence_seq = EXCLUDED.evidence_seq,
+		       acknowledged_by = EXCLUDED.acknowledged_by,
+		       acknowledged_name = EXCLUDED.acknowledged_name,
+		       note = EXCLUDED.note,
+		       acknowledged_at = now()`,
+		brokenAtSeq, evidenceSeq, by, byName, note)
+	return err
+}
+
+// LatestAuditSeq is the sequence number of the most recent audit event, used to point
+// an acknowledgement at the event that recorded it.
+func (s *Store) LatestAuditSeq(ctx context.Context) (int64, error) {
+	var seq int64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(seq),0) FROM audit_events`).Scan(&seq)
+	return seq, err
 }

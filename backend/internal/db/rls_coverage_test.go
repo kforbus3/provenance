@@ -50,6 +50,9 @@ var rlsGlobalAllowlist = map[string]string{
 	"role_permissions": "global role->permission mapping (part of the shared RBAC catalog) (0001).",
 	"settings":         "fleet-wide key/value instance configuration (branding, toggles); not per-tenant data (0001).",
 
+	// --- audit chain integrity (0105) ---
+	"audit_chain_breaks": "acknowledged breaks in the audit hash chain. The chain is ONE sequence across every tenant (seq is global and each row links to the one before it regardless of whose data it describes), so a break is a property of the chain rather than of a tenant, and acknowledging one is a provider-level act. Scoping it per tenant would let one customer acknowledgement hide a break spanning the whole chain (0105).",
+
 	// --- SSH certificate authority (one fleet-wide CA) ---
 	"ca_keys":          "the fleet-wide SSH certificate-authority keypair(s); single shared CA, not tenant data (0001).",
 	"cert_revocations": "revocation list (by serial) for the single fleet-wide SSH CA; one global CRL (0001).",

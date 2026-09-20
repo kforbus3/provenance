@@ -5,14 +5,17 @@ package auditapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/kforbus3/provenance/backend/internal/app"
+	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/store"
@@ -28,6 +31,10 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.With(d.Auth.RequirePermission("Audit.View")).Get("/audit", h.list)
 		pr.With(d.Auth.RequirePermission("Audit.View")).Get("/audit/actions", h.actions)
 		pr.With(d.Auth.RequirePermission("Audit.View")).Get("/audit/verify", h.verify)
+		// Acknowledging a break needs more than reading the log: it is a statement
+		// that somebody investigated an integrity failure, so it sits behind the
+		// permission that governs the instance rather than Audit.View.
+		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/audit/verify/acknowledge", h.acknowledgeBreak)
 		pr.With(d.Auth.RequirePermission("Audit.Export")).Get("/audit/export", h.export)
 	})
 }
@@ -229,6 +236,13 @@ func (h *handler) verify(w http.ResponseWriter, r *http.Request) {
 	// exists to make impossible -- so folding it in would leave the report saying
 	// "broken" forever and hide every genuine break behind it.
 	body := map[string]any{"intact": res.BrokenAtSeq == 0, "brokenAtSeq": res.BrokenAtSeq}
+	// Acknowledged breaks are reported beside the verdict, never folded into it. They
+	// are permanent facts about this chain — the rows are still altered or missing —
+	// and hiding them would be the forgery the chain exists to prevent. What they
+	// change is only whether the break is NEWS.
+	if len(res.Acknowledged) > 0 {
+		body["acknowledgedBreaks"] = res.Acknowledged
+	}
 	if res.WeakFromSeq != 0 {
 		body["weakFromSeq"] = res.WeakFromSeq
 		body["weakCount"] = res.WeakCount
@@ -266,4 +280,90 @@ func (h *handler) export(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, _ = w.Write([]byte("]"))
+}
+
+// acknowledgeBreak records that a detected break in the audit chain was investigated.
+//
+// It does not repair anything, and cannot: the rows stay as they are, and verification
+// reports the break for ever. What changes is that verification CONTINUES past it, so a
+// later break is visible instead of hiding behind a permanent red light nobody reads.
+//
+// The acknowledgement is written as an ordinary audit event first, and that event's
+// sequence number is what the record points at. The verifier honours an acknowledgement
+// only when its event is present and verifies as part of the chain — so an entry
+// inserted straight into the database, without the key needed to produce a chained
+// event, accounts for nothing.
+func (h *handler) acknowledgeBreak(w http.ResponseWriter, r *http.Request) {
+	var rq struct {
+		BrokenAtSeq int64  `json:"brokenAtSeq"`
+		Note        string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if rq.BrokenAtSeq <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "brokenAtSeq is required")
+		return
+	}
+	if strings.TrimSpace(rq.Note) == "" {
+		// The note is the whole value of the record. An acknowledgement with no
+		// account of what was found is indistinguishable from dismissing the alarm.
+		httpx.WriteError(w, http.StatusBadRequest,
+			"a note is required: record what was investigated and what was found")
+		return
+	}
+	ctx := tenant.WithBypass(r.Context())
+
+	// Confirm the break is real and unacknowledged before recording anything. Allowing
+	// an acknowledgement for a sequence that does not break would let somebody
+	// pre-authorise a future alteration.
+	res, err := h.d.Store.VerifyAuditChainDetail(ctx)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not verify audit chain")
+		return
+	}
+	if res.BrokenAtSeq != rq.BrokenAtSeq {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf(
+			"the chain does not currently break at %d (the first unacknowledged break is %d). "+
+				"Acknowledging a sequence that does not break would pre-authorise a future alteration",
+			rq.BrokenAtSeq, res.BrokenAtSeq))
+		return
+	}
+
+	p := auth.MustPrincipal(r)
+	// Written through the ordinary audited path, so it is chained like everything else
+	// — which is exactly what makes it usable as evidence.
+	ev := models.AuditEvent{
+		Action:     "audit.chain_break_acknowledged",
+		TargetKind: "audit_chain",
+		TargetID:   fmt.Sprint(rq.BrokenAtSeq),
+		Detail:     map[string]any{"brokenAtSeq": rq.BrokenAtSeq, "note": rq.Note},
+	}
+	httpx.Audit(r, h.d.Store, ev)
+	// The event just written is the evidence this record points at.
+	evidence, err := h.d.Store.LatestAuditSeq(ctx)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the audit sequence")
+		return
+	}
+	var by *uuid.UUID
+	name := ""
+	if p != nil {
+		by = &p.UserID
+		name = p.Username
+	}
+	if err := h.d.Store.AcknowledgeAuditChainBreak(ctx, rq.BrokenAtSeq, evidence, by, name, rq.Note); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not record the acknowledgement")
+		return
+	}
+	after, _ := h.d.Store.VerifyAuditChainDetail(ctx)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"acknowledged": rq.BrokenAtSeq,
+		"evidenceSeq":  evidence,
+		"intact":       after.BrokenAtSeq == 0,
+		"brokenAtSeq":  after.BrokenAtSeq,
+		"note": "the break is permanent and will always be reported; verification now " +
+			"continues past it, so a later break is still visible",
+	})
 }
