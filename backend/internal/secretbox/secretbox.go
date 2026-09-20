@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"strings"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -242,4 +243,15 @@ func Open(passphrase []byte, encoded string) ([]byte, error) {
 		return nil, err
 	}
 	return OpenBytes(passphrase, raw)
+}
+
+// IsAuthFailure reports whether an error is a sealed value failing its authentication
+// tag — that is, the wrong key, not a corrupt or malformed blob.
+//
+// The distinction matters where it is acted on: a wrong passphrase is an operator
+// configuration problem with a clear remedy, while a malformed blob is damage. Callers
+// use this to say which, because the error underneath ("cipher: message authentication
+// failed") says neither.
+func IsAuthFailure(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "message authentication failed")
 }

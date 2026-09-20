@@ -222,9 +222,33 @@ func (s *Service) Apply(ctx context.Context, path string, actorName string) erro
 
 func (s *Service) fail(msg string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now()
 	s.local.State, s.local.Error, s.local.UpdatedAt = "failed", msg, &now
+	// Lift the drain, because the thing that was supposed to lift it did not happen.
+	//
+	// Drain is set before dispatching on the reasoning that the replacement container
+	// starts un-drained, so the state dies with the old one. That is true of an upgrade
+	// that REPLACES the container — and an upgrade can fail after being dispatched and
+	// before anything is swapped, which leaves this very process running, drained, with
+	// nothing left to un-drain it. /ready keeps failing, a load balancer keeps the
+	// instance ejected, and every connected UI keeps showing "Upgrading — reconnecting
+	// shortly" for an upgrade that stopped minutes ago.
+	//
+	// Observed: a bundle apply failed at the rollback-anchor step (before any image was
+	// swapped) and the instance sat at draining=true, state=failed, serving for ten
+	// minutes with no way back but a manual restart.
+	wasDraining := s.draining
+	s.draining = false
+	s.mu.Unlock()
+	if wasDraining && s.hub != nil {
+		s.hub.Broadcast("system.maintenance", map[string]any{
+			"draining": false,
+			"message":  "The upgrade did not complete. This instance is still running the previous version.",
+		})
+	}
+	if wasDraining {
+		s.log.Info("upgrade: drain lifted after a failed upgrade", "err", msg)
+	}
 }
 
 // Status returns the current upgrade status. Once an apply is dispatched the updater
@@ -308,12 +332,40 @@ func (s *Service) Status(ctx context.Context) Status {
 			return local
 		}
 
+		// The updater has finished and failed, and this process is still here to read
+		// that — so the container was never replaced and the drain set before dispatch
+		// has nothing left to lift it. Same reasoning as fail(); this is the path that
+		// covers a failure the UPDATER reports rather than one the backend raised.
+		if us.State == "failed" {
+			s.liftDrainAfterFailure(us.Error)
+		}
 		us.Draining = s.IsDraining()
 		return us
 	}
 
 	local.Draining = draining
 	return local
+}
+
+// liftDrainAfterFailure un-drains an instance the updater has given up on.
+//
+// Idempotent and quiet when there is nothing to do: Status is polled continuously by
+// every open UI, so this runs constantly and must not broadcast on each call.
+func (s *Service) liftDrainAfterFailure(why string) {
+	s.mu.Lock()
+	if !s.draining {
+		s.mu.Unlock()
+		return
+	}
+	s.draining = false
+	s.mu.Unlock()
+	if s.hub != nil {
+		s.hub.Broadcast("system.maintenance", map[string]any{
+			"draining": false,
+			"message":  "The upgrade did not complete. This instance is still running the previous version.",
+		})
+	}
+	s.log.Info("upgrade: drain lifted after the updater reported failure", "err", why)
 }
 
 // localInFlight reports whether this process believes it has an upgrade running.

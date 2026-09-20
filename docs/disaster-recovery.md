@@ -346,9 +346,34 @@ Not symmetric — it needs replication re-established the *other* way first:
 1. Bring the old primary back; **re-seed its PostgreSQL as a fresh standby of the
    now-primary** (base backup or `pg_rewind`) — it cannot resume as primary with
    stale data.
+
+   Two things stop this in practice, both found by doing it:
+
+   - **The standby's parameters must be at least as large as the primary's.** A stock
+     PostgreSQL has `max_connections=100`; the shipped stack runs 200, so a re-seed onto
+     a default container refuses to start recovery at all:
+
+     ```
+     FATAL:  recovery aborted because of insufficient parameter settings
+     DETAIL: max_connections = 100 is a lower setting than on the primary server,
+             where its value was 200.
+     ```
+
+     It is only in the PostgreSQL log — Provenance never sees the database come up.
+   - **The instance must carry the same secret set as the deployment whose database it
+     is taking over**: `PROV_CA_PASSPHRASE` above all, and normally
+     `PROV_VAULT_PASSPHRASE`, `PROV_JWT_SECRET` and `PROV_AUDIT_HMAC_KEY` with it. The
+     CA key is sealed in the database with the passphrase, so a standby with its own
+     passphrase inherits a key it cannot open and exits at boot. It says so plainly now;
+     before, it said `load CA signer: cipher: message authentication failed`.
 2. Let it catch up (watch its DR page replay lag).
 3. In a maintenance window, **Force failover on the old primary** with DB promotion,
    fire its webhook to move DNS/WG back, return operators to its domain.
+
+   A promoted instance **exits** so it can come back in normal mode, and relies on its
+   supervisor to restart it — the shipped compose sets `restart: unless-stopped`, so
+   this is automatic there. Run Provenance without a restart policy and promotion takes
+   the instance down until somebody starts it again.
 4. Re-seed the other side as its standby to restore the original posture.
 
 ## What Provenance does vs. what you do

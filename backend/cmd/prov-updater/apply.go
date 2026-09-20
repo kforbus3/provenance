@@ -212,7 +212,17 @@ func (u *Updater) Apply(ctx context.Context, req ApplyReq) {
 				continue
 			}
 			if err := u.docker.Tag(ctx, id, rb); err != nil {
-				u.fail(fmt.Sprintf("tag rollback %s: %v", svc, err))
+				// Say what this means, because the raw daemon error does not.
+				//
+				// "No such image: sha256:..." here is the running container's OWN image
+				// having been removed or replaced under it — which a container survives,
+				// since it holds the layers open, but which leaves nothing to tag. The
+				// upgrade stops, correctly: without an anchor there is no way back. What
+				// an operator needs to know is that nothing has been changed yet.
+				u.fail(fmt.Sprintf("could not create a rollback point for %s: %v — "+
+					"this usually means the image the container is running has been "+
+					"removed or rebuilt since it started, so there is nothing to tag. "+
+					"No images were changed; the upgrade did not start", svc, err))
 				return
 			}
 			rollbackTags[svc] = rb

@@ -191,7 +191,24 @@ func (s *Service) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 	// Site-facing link: no operator session, so all site/cache DB access runs under
 	// bypass with the site's own tenant supplied explicitly (site-as-tenant).
-	bctx := tenant.WithBypass(r.Context())
+	// The link outlives the request that opened it, so it must not borrow the
+	// request's context.
+	//
+	// Every route is behind middleware.Timeout(60s). A federation link is a long-lived
+	// WebSocket: the connection is hijacked and survives that timeout, but r.Context()
+	// does not — and this context is what serveSite hands to every database write in
+	// the ingest loop. Sixty seconds after a site linked, every push it sent was
+	// dropped with
+	//
+	//	ingest host ... err="context deadline exceeded"
+	//
+	// once per push, forever, at WARN. The link stayed "up", the Sites page showed the
+	// site healthy with zero lag, and the hub's aggregated view stayed permanently
+	// empty. A site could be linked for a week and the hub would never learn one host.
+	//
+	// WithoutCancel keeps the request's values and drops only its cancellation; the
+	// loop still ends when the session closes, which is what serveSite waits on.
+	bctx := tenant.WithBypass(context.WithoutCancel(r.Context()))
 	site, err := s.deps.Store.GetSite(bctx, siteID)
 	if err != nil || site.Status == "revoked" {
 		writeErr(w, http.StatusForbidden, "unknown or revoked site")

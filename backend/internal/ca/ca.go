@@ -57,6 +57,25 @@ func (c *CA) EnsureUserCA(ctx context.Context) error {
 	}
 	signer, err := c.decryptSigner(priv)
 	if err != nil {
+		// Name the cause, because the one underneath does not.
+		//
+		// An authentication failure here means exactly one thing: the CA key in this
+		// database was sealed with a DIFFERENT passphrase from the one this process
+		// has. The underlying error is "cipher: message authentication failed", which
+		// tells an operator nothing about which of the two to change.
+		//
+		// The moment this is most likely to be read is a disaster failover, where a
+		// standby has inherited the primary's database but not its secret set —
+		// documented ("keep the secret set identical") and, until now, presented as a
+		// cipher error to somebody under time pressure at 3am.
+		if secretbox.IsAuthFailure(err) {
+			return fmt.Errorf("the certificate authority key in this database cannot be "+
+				"decrypted with this instance's PROV_CA_PASSPHRASE. The key was sealed "+
+				"with a different passphrase — on a DR standby or a restored backup, that "+
+				"means this instance has not been given the same secret set as the "+
+				"deployment whose database it is now serving (PROV_CA_PASSPHRASE, and "+
+				"usually PROV_VAULT_PASSPHRASE and PROV_JWT_SECRET with it): %w", err)
+		}
 		return fmt.Errorf("load CA signer: %w", err)
 	}
 	c.mu.Lock()
