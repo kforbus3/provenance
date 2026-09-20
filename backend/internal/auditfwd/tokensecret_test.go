@@ -92,3 +92,51 @@ func TestAnUnopenableTokenIsNotSentAsGarbage(t *testing.T) {
 		t.Errorf("tokenValue returned %q for an unopenable token", got)
 	}
 }
+
+// A forwarded event must carry the bearer token even when the config holding it
+// is the STORED form, with the token only in its sealed field.
+//
+// This is a regression the sealing introduced and the tests above did not catch.
+// SaveConfig caches what it stored — TokenEnc set, Token cleared — and the send
+// path read cfg.Token directly, so every event forwarded after a configuration
+// save went out with no Authorization header. Events still arrived, so nothing
+// looked wrong until a collector that requires the token began refusing them.
+// Found by forwarding a real event and looking at what the collector received.
+//
+// Tested through bearerHeader rather than send: the SSRF guard refuses a loopback
+// collector, correctly, so there is no httptest server to point send() at. That
+// guard is the reason this needs its own function, not a reason to skip the test.
+func TestAForwardedEventCarriesTheSealedToken(t *testing.T) {
+	enc, err := secretbox.Seal(passphrase, []byte("qa-collector-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &Forwarder{passphrase: passphrase}
+
+	// The stored form, exactly as SaveConfig caches it: sealed, no plaintext.
+	stored := Config{Enabled: true, Type: "http", Address: "https://collector/audit", TokenEnc: enc}
+	if got := f.bearerHeader(stored); got != "Bearer qa-collector-token" {
+		t.Errorf("a sealed token produced %q — the event would be forwarded "+
+			"unauthenticated", got)
+	}
+
+	// An already-opened config (what LoadConfig returns) works too.
+	opened := stored
+	opened.Token = "qa-collector-token"
+	if got := f.bearerHeader(opened); got != "Bearer qa-collector-token" {
+		t.Errorf("an opened config produced %q", got)
+	}
+
+	// A legacy plaintext-only config keeps authenticating.
+	if got := f.bearerHeader(Config{Token: "old-plaintext-token"}); got != "Bearer old-plaintext-token" {
+		t.Errorf("a legacy token produced %q", got)
+	}
+
+	// And no token means no header, rather than "Bearer " with nothing after it.
+	if got := f.bearerHeader(Config{Enabled: true, Type: "http"}); got != "" {
+		t.Errorf("an unconfigured token produced the header %q", got)
+	}
+	if got := f.bearerHeader(Config{TokenEnc: "not-a-sealed-value"}); got != "" {
+		t.Errorf("an unopenable token produced the header %q", got)
+	}
+}

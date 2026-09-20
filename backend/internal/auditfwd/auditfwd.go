@@ -319,6 +319,25 @@ func (f *Forwarder) SendTest(cfg Config) error {
 	})
 }
 
+// bearerHeader is the Authorization header for an http forward, or "" when no
+// token is configured.
+//
+// Its own function because it is the whole of a bug that arrived silently and
+// cannot be reached from a test through send(): the SSRF guard refuses a loopback
+// collector, correctly, so there is no httptest server to point send() at.
+//
+// The bug: this read cfg.Token directly, and SaveConfig caches what it STORED --
+// TokenEnc set, Token cleared -- so every event forwarded after a configuration
+// save went out with no Authorization header. Events still arrived, so nothing
+// looked wrong until a collector that requires the token began refusing them.
+// tokenValue accepts either form.
+func (f *Forwarder) bearerHeader(cfg Config) string {
+	if tok := cfg.tokenValue(f.passphrase); tok != "" {
+		return "Bearer " + tok
+	}
+	return ""
+}
+
 func (f *Forwarder) send(cfg Config, e models.AuditEvent) error {
 	// Defense in depth: validate the destination on the live path too. SafeClient
 	// only re-checks redirects, not the initial target, and a config persisted
@@ -334,8 +353,16 @@ func (f *Forwarder) send(cfg Config, e models.AuditEvent) error {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if tok := strings.TrimSpace(cfg.Token); tok != "" {
-			req.Header.Set("Authorization", "Bearer "+tok)
+		// tokenValue, not cfg.Token: the config reaching here can be either the
+		// stored form (sealed) or one already opened, and reading the plaintext
+		// field alone silently sends events unauthenticated. That happened the
+		// moment the token was sealed -- SaveConfig caches what it stored, which
+		// carries TokenEnc and an empty Token, so every event after a config save
+		// went out with no Authorization header at all. Events still arrived, so
+		// nothing looked wrong until a collector that requires the token started
+		// refusing them.
+		if h := f.bearerHeader(cfg); h != "" {
+			req.Header.Set("Authorization", h)
 		}
 		resp, err := f.client.Do(req)
 		if err != nil {
