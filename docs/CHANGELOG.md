@@ -7,6 +7,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## Unreleased
 
+**The OpenVPN overlay works on a FIPS host.** It did not, for three separate reasons,
+and the first draft of this note blamed the platform — wrongly, since this runs in
+production elsewhere. Chasing the difference found all three:
+
+- **OpenVPN 2.5 cannot read ciphers from the OpenSSL 3 FIPS provider**, so on a FIPS
+  host it offers none at all and refuses every `--data-ciphers` value. 2.6 fetches them
+  provider-aware and lists 18 on the same machine. The installer now upgrades OpenVPN on
+  a FIPS host that has no usable cipher, and names the version requirement if it still
+  cannot.
+- **The client config was written to both systemd unit paths**, and on Debian/Ubuntu the
+  legacy `openvpn.service` umbrella starts an instance for `/etc/openvpn/*.conf` — so
+  the host ran two clients for one profile with one certificate, each kicking the other
+  off the server, while the tunnel device sat there looking healthy. It now writes the
+  file for the unit it starts and removes the other.
+- **The cert overlay inherited the WireGuard subnet** whenever `PROV_OVERLAY=openvpn` —
+  which FIPS forces. The jump host runs the WireGuard server regardless, so it held two
+  connected routes for one prefix, the kernel chose `wg0`, and every OpenVPN-enrolled
+  host was unreachable with a fully established tunnel. The cert overlay gets its own
+  `10.101.0.0/24` by default now, and sharing a prefix is warned about at startup.
+
+Verified end to end on FIPS Ubuntu 22.04: every enrolment step passes, including
+`jump host reached 10.101.0.2:22 over the openvpn tunnel`, with AES-256-GCM negotiated.
+
+
 **Log search is scoped to the hosts you can see.** `Logs.View` meant every line from
 every machine the collector had ever heard from. Under multi-tenancy that is a
 cross-tenant leak, and QA demonstrated it rather than argued it: a customer tenant with

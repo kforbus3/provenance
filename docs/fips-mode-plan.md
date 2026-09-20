@@ -34,19 +34,33 @@ the backend's own startup, and until it succeeds every connection fails with
 `unable to authenticate, no supported methods remain` — which says nothing about CA
 trust. It now retries every 5s until the first success.
 
-**OpenVPN cannot carry the overlay on FIPS-enabled Ubuntu 22.04.** This is the platform,
-not Provenance: OpenVPN 2.5.11 does not read ciphers from the OpenSSL 3 FIPS provider, so
-`openvpn --show-ciphers` lists **nothing** and every `--data-ciphers` value is refused —
-AES-256-GCM, AES-128-GCM, AES-256-CBC and AES-128-CBC were each tried and each rejected.
-No configuration fixes it. So on such a host:
+**The OpenVPN overlay works on FIPS Ubuntu 22.04 — with three fixes.** An earlier
+draft of this section said the platform could not do it. That was wrong: keith runs it
+at work, and chasing why it failed here produced three real defects.
 
-- enrol with **no overlay** (the host must be reachable from the jump host directly),
-  which was verified working end to end; or
-- provide an OpenVPN build that supports OpenSSL 3 providers (2.6+), or a distribution
-  whose OpenVPN does.
+1. **OpenVPN 2.5 cannot use the OpenSSL 3 FIPS provider.** It resolves ciphers against
+   the default provider, so on a FIPS host `openvpn --show-ciphers` lists **nothing**
+   and every `--data-ciphers` value is refused. **2.6 fetches them provider-aware**: on
+   the same machine it lists 18 and negotiates AES-256-GCM. Ubuntu 22.04 ships 2.5 and
+   carries 2.6 in backports, so the overlay installer now upgrades it when the host is
+   in FIPS mode and has no usable cipher, and says exactly that if it still cannot.
+2. **The client config was written to both unit paths.** `/etc/openvpn/client/*.conf`
+   is read by `openvpn-client@`, and `/etc/openvpn/*.conf` is *also* started by the
+   legacy `openvpn.service` umbrella on Debian/Ubuntu — so the host ran two clients for
+   one profile, with one certificate. They kicked each other off the server in turn and
+   the tunnel carried nothing while the device sat there with the right address. It now
+   writes the file for the unit it is actually going to start, and removes the other.
+3. **The cert overlay inherited the WireGuard subnet.** When `PROV_OVERLAY=openvpn` —
+   which FIPS forces, WireGuard not being approved — `PROV_OVPN_SUBNET` defaulted to
+   the WireGuard pool. But the jump host runs the WireGuard server regardless, so it
+   held **two connected routes for 10.100.0.0/24**, the kernel chose `wg0`, and every
+   OpenVPN host was unreachable ("No route to host") with a perfectly healthy tunnel.
+   The cert overlay now gets `10.101.0.0/24` by default, and a deployment that sets
+   both to the same prefix is warned at startup.
 
-The bring-up script now detects the empty cipher list, and the enrolment error says this
-in one sentence instead of ending with twenty lines of OpenVPN log.
+Verified after the three fixes: enrolment completes every step including
+`verify_overlay_tunnel ok — jump host reached 10.101.0.2:22 over the openvpn tunnel`,
+the server negotiates AES-256-GCM, and the host reports online with the overlay healthy.
 
 **Ed25519 SSH keys stop working on a FIPS host** — including an operator's own. Enabling
 FIPS locked the tester out of the box until an ECDSA key was added. Worth saying out loud

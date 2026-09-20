@@ -547,6 +547,31 @@ if ! command -v openvpn >/dev/null 2>&1; then
   fi
 fi
 command -v openvpn >/dev/null 2>&1 || { echo OVPN_INSTALL_FAILED; exit 1; }
+
+# On a FIPS host, OpenVPN must be able to fetch ciphers from the OpenSSL 3 FIPS
+# provider. OpenVPN 2.5 cannot: it resolves ciphers against the default provider, so
+# with fips+base active 'openvpn --show-ciphers' lists NOTHING and every
+# --data-ciphers value is refused ("Unsupported cipher in --data-ciphers"). 2.6 uses
+# the provider-aware fetch and works -- 18 ciphers on the same machine where 2.5 saw
+# none. Ubuntu 22.04 ships 2.5 and carries 2.6 in backports, so the upgrade is one
+# apt line; without it the overlay simply cannot come up, and the error an operator
+# gets says nothing about versions.
+if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ] \
+   && ! openvpn --show-ciphers 2>/dev/null | grep -qiE '^(AES|CHACHA)'; then
+  echo OVPN_FIPS_NEEDS_PROVIDER_AWARE
+  if command -v apt-get >/dev/null 2>&1; then
+    _codename=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")
+    if [ -n "$_codename" ]; then
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq -t "${_codename}-backports" openvpn >/dev/null 2>&1 || true
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q openvpn >/dev/null 2>&1 || true
+  fi
+  if openvpn --show-ciphers 2>/dev/null | grep -qiE '^(AES|CHACHA)'; then
+    echo "OVPN_FIPS_PROVIDER_FIXED=$(openvpn --version 2>/dev/null | head -1 | cut -d' ' -f2)"
+  fi
+fi
 mkdir -p %[1]s
 umask 077
 cat > %[1]s/ca.crt <<'FLEOF'
@@ -574,14 +599,27 @@ cat > %[1]s/client.ovpn <<'FLEOF'
     # Enrollment then saw a working tunnel and reported success. The host stayed
     # connected until it was rebooted, and came back with no overlay.
     mkdir -p /etc/openvpn/client 2>/dev/null || true
+    # ONE config file, for the unit that is actually going to run it.
+    #
+    # Both were written before, so that whichever template the distribution had would
+    # find one. On Debian and Ubuntu both exist -- and /etc/openvpn/*.conf is ALSO what
+    # the legacy openvpn.service umbrella starts an instance for. So the host ended up
+    # running two clients for the same profile, with the same certificate: they connect
+    # to the server in turn, each kicking the other off, and the tunnel carries nothing.
+    # The device is up with the right address the whole time, which is why this looked
+    # like a server-side routing problem rather than two copies of the client fighting.
     cp %[1]s/client.ovpn /etc/openvpn/client/prov-overlay.conf 2>/dev/null || true
-    cp %[1]s/client.ovpn /etc/openvpn/prov-overlay.conf 2>/dev/null || true
     # openvpn-client@ first: it is what current distributions ship. openvpn@ is
     # the legacy template, still present on older Debian/Ubuntu.
     if systemctl enable --now openvpn-client@prov-overlay >/dev/null 2>&1; then
       OVPN_PERSISTENT=1
-    elif systemctl enable --now openvpn@prov-overlay >/dev/null 2>&1; then
+      # Leave nothing for the legacy umbrella to pick up, and stop anything it has
+      # already started from an earlier attempt.
+      rm -f /etc/openvpn/prov-overlay.conf 2>/dev/null || true
+      systemctl disable --now openvpn@prov-overlay >/dev/null 2>&1 || true
+    elif cp %[1]s/client.ovpn /etc/openvpn/prov-overlay.conf 2>/dev/null && systemctl enable --now openvpn@prov-overlay >/dev/null 2>&1; then
       OVPN_PERSISTENT=1
+      rm -f /etc/openvpn/client/prov-overlay.conf 2>/dev/null || true
     else
       # Last resort: a daemon that is running now and is enabled by nothing. It
       # is better than no tunnel, and it must not be mistaken for a configured
@@ -664,7 +702,7 @@ else
   if ! openvpn --show-ciphers 2>/dev/null | grep -qiE "^(AES|CHACHA)"; then
     echo OVPN_NO_CIPHERS
     if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ]; then
-      echo "OVPN_DIAGNOSIS=this host runs FIPS mode and its OpenVPN ($(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)) reports no usable data ciphers, so no tunnel can be established. OpenVPN 2.5 does not read ciphers from the OpenSSL 3 FIPS provider. Use an OpenVPN build that supports OpenSSL 3 providers (2.6+), or enrol this host without an overlay (it must then be reachable from the jump host directly)."
+      echo "OVPN_DIAGNOSIS=this host runs FIPS mode and its OpenVPN ($(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)) reports no usable data ciphers. OpenVPN 2.5 resolves ciphers against OpenSSL's default provider, which a FIPS host does not have active; 2.6 fetches them provider-aware and works. Install OpenVPN 2.6 or newer -- on Ubuntu 22.04: apt install -t jammy-backports openvpn -- and enrol again."
     else
       echo "OVPN_DIAGNOSIS=this host's OpenVPN reports no usable data ciphers, so no tunnel can be established. Check that its OpenSSL providers are configured (openvpn --show-ciphers lists nothing)."
     fi

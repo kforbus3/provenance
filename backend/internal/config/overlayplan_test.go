@@ -23,12 +23,16 @@ func TestOverlayPlanDefaults(t *testing.T) {
 			wantSubnet: "10.101.0.0/24", wantJump: "10.101.0.1",
 		},
 		{
-			// An existing FIPS fleet already holds addresses out of PROV_WG_SUBNET.
-			// Moving the pool underneath it would invalidate every enrolled address at
-			// once, and there is no WireGuard hub for it to collide with.
-			name:    "openvpn-only deployment keeps its existing pool",
+			// This used to inherit the WireGuard pool, on the reasoning that an
+			// OpenVPN-only install has no WireGuard hub to collide with. The stack this
+			// project ships contradicts that: the jump host runs the WireGuard server
+			// whatever the default overlay is. QA proved the consequence on a FIPS
+			// deployment -- tunnel established, AES-256-GCM negotiated, ccd address
+			// pinned, and "No route to host" from the jump host, because wg0 and tun0
+			// both owned 10.100.0.0/24 and the kernel chose wg0.
+			name:    "the cert overlay gets its own pool even when it is the default",
 			overlay: "openvpn", wgSubnet: "10.100.0.0/24", wgJump: "10.100.0.1",
-			wantSubnet: "10.100.0.0/24", wantJump: "10.100.0.1",
+			wantSubnet: "10.101.0.0/24", wantJump: "10.101.0.1",
 		},
 		{
 			name:    "explicit subnet wins, jump address derived",

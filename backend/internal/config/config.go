@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"net/url"
@@ -652,11 +653,20 @@ func Load() (*Config, error) {
 // otherwise.
 func applyOverlayDefaults(c *Config) {
 	if c.OVPNSubnet == "" {
-		if c.Overlay == "openvpn" {
-			c.OVPNSubnet, c.OVPNJumpIP = c.WGSubnet, c.WGJumpIP
-		} else {
-			c.OVPNSubnet = "10.101.0.0/24"
-		}
+		// Its own subnet, ALWAYS -- including when the cert overlay is the default.
+		//
+		// It used to inherit the WireGuard pool in that case, to spare an install from
+		// moving addresses it had already handed out. But the jump host runs the
+		// WireGuard server regardless, so both overlays then terminate on it with the
+		// same prefix: two connected routes for 10.100.0.0/24, the kernel picks wg0,
+		// and every OpenVPN-enrolled host becomes unreachable ("No route to host")
+		// while its tunnel sits there perfectly established. QA hit this on a FIPS
+		// deployment -- where PROV_OVERLAY=openvpn is not a choice but a consequence,
+		// since WireGuard is not an approved algorithm.
+		//
+		// An install that genuinely wants them to share a pool can still say so with
+		// PROV_OVPN_SUBNET; it just is not what happens by accident.
+		c.OVPNSubnet = "10.101.0.0/24"
 	}
 	if c.OVPNJumpIP == "" {
 		c.OVPNJumpIP = firstHost(c.OVPNSubnet)
@@ -859,10 +869,22 @@ func (c *Config) validateOverlays() error {
 	if err != nil {
 		return fmt.Errorf("PROV_WG_SUBNET %q is not a valid CIDR: %w", c.WGSubnet, err)
 	}
-	// Equal plans mean "this deployment speaks one overlay" — the shape an existing
-	// OpenVPN-only install keeps. Partial overlap is never intentional and would
-	// hand out addresses from one pool that route into the other.
+	// Equal plans are allowed but not silent. "This deployment speaks one overlay" is
+	// the shape an existing OpenVPN-only install keeps, and it works only if the
+	// WireGuard server really is absent. In the stack this project ships it is not:
+	// the jump host runs it regardless, so both overlays terminate there with the same
+	// prefix, the kernel routes the shared subnet to wg0, and every host on the cert
+	// overlay is unreachable while its tunnel looks perfectly healthy. QA lost an
+	// afternoon to it on a FIPS deployment, where the cert overlay is not a choice.
+	//
+	// Partial overlap is never intentional and would hand out addresses from one pool
+	// that route into the other.
 	if c.OVPNSubnet == c.WGSubnet {
+		log.Printf("WARN PROV_OVPN_SUBNET and PROV_WG_SUBNET are both %s. Both overlays "+
+			"terminate on the jump host, so it will hold two connected routes for that "+
+			"prefix and hosts on the OpenVPN overlay may be unreachable even with a "+
+			"healthy tunnel. Give the cert overlay its own subnet (default 10.101.0.0/24) "+
+			"unless this deployment genuinely runs no WireGuard server.", c.OVPNSubnet)
 		return nil
 	}
 	if wgNet.Contains(ovpnNet.IP) || ovpnNet.Contains(wgNet.IP) {
