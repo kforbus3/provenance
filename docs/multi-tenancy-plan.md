@@ -9,6 +9,39 @@ customer tenant, switches into it, and each tenant's hosts/data are fully isolat
 the provider cannot see a customer's hosts and vice versa; an unscoped request sees
 nothing (fail closed).
 
+**Also proven with `PROV_FIPS_MODE=true`**, on a FIPS-enabled Ubuntu 22.04 host
+(`fips_enabled=1`, FIPS kernel), because the two features had only ever been tested
+beside each other rather than together. Row-level security is tenant-GUC plumbing with
+no cryptography in it, so it was expected to be FIPS-neutral — but the two places FIPS
+*does* change behaviour both sit on tenant paths, and neither had been exercised:
+
+| checked under FIPS | result |
+|---|---|
+| a user created inside a customer tenant | hashed `$pbkdf2-sha256$`, not argon2 |
+| that user logging in | verifies and issues a session |
+| a secret sealed inside a tenant, then revealed | round-trips to the original plaintext |
+| hosts, users, groups, playbooks, roles, schedules, stacks, sessions, audit, vault secrets | no cross-tenant rows on any list |
+| a customer user sending `X-Prov-Tenant` for another tenant | ignored — still sees only its own |
+| fetching or revealing another tenant's row by id | 404, with and without the forged header |
+| a customer user listing or creating tenants | 403 `provider-tenant admin required` |
+
+One thing worth knowing before enabling it on a host that is already running: the
+backend **refuses to start** when multi-tenancy is on and the database role is a
+superuser, and says exactly what to do about it —
+
+```
+fatal: multi-tenancy is enabled but the database role is a SUPERUSER, which BYPASSES
+row-level security and would break tenant isolation. Connect as a non-superuser role
+created WITH NOBYPASSRLS — e.g. `CREATE ROLE prov_app LOGIN NOSUPERUSER NOBYPASSRLS
+PASSWORD '…'; GRANT ALL ON ALL TABLES IN SCHEMA public TO prov_app;` — and point
+PROV_DATABASE_URL at it
+```
+
+which is the right failure: the alternative is a deployment that looks isolated and is
+not. Migrations still run as the owner, so the order is: boot once with the flag off to
+migrate, create the role, then point `PROV_DATABASE_URL` at it with
+`PROV_MIGRATE_ON_START=false`.
+
 ## Enabling it
 
 1. Set `PROV_MULTI_TENANCY=true`.

@@ -83,6 +83,12 @@ Verified after the four fixes: enrolment completes every step including
 `verify_overlay_tunnel ok — jump host reached 10.101.0.2:22 over the openvpn tunnel`,
 the server negotiates AES-256-GCM, and the host reports online with the overlay healthy.
 
+**Multi-tenancy has been exercised under FIPS**, not merely beside it: tenant isolation,
+a tenant user hashed and authenticated with PBKDF2, and a tenant secret sealed and
+revealed, all on a FIPS host with a non-superuser database role. See
+`docs/multi-tenancy-plan.md` for what was checked and what the backend refuses to do
+without that role.
+
 **Ed25519 SSH keys stop working on a FIPS host** — including an operator's own. Enabling
 FIPS locked the tester out of the box until an ECDSA key was added. Worth saying out loud
 before an operator enables it on a machine they reach only by an Ed25519 key.
