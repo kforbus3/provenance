@@ -5,6 +5,45 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.7 — 2026-09-20
+
+**A deleted host kept its overlay access.** On a certificate overlay the certificate is
+the credential, and revocation was gated on whether a *teardown* was also requested — so
+deleting a host without teardown removed the only record of which serial was its
+(`overlay_clients` cascades) and left a certificate that was both live and now
+impossible to revoke. Demonstrated: a host deleted from Provenance had its OpenVPN
+client restarted, and the jump host accepted the handshake, returned the same pinned
+address and carried traffic at 0% loss. Teardown means "go and clean that machine" and
+needs to reach it; revocation means "stop accepting this credential" and needs nothing
+but the control plane — and matters most for the host nobody is going to clean. After
+the fix the same test ends in `VERIFY ERROR: certificate revoked` and no tunnel.
+
+**An old database could not be upgraded at all.** Every bundle declares
+`minFromVersion 0.0.0`. Migrating a v0.55.5 schema forward stopped at 0074 with
+`function prov_current_tenant() does not exist`: the fleet→prov rename edited
+`0051_tenancy` in place, so an install that had already applied it never received the
+new names, and the migration that converges the two populations runs at 0097 — too late
+for the seven migrations between them that need those names. Six of those seven fail
+*silently*, wrapping their tenant work in "if the prov_ functions exist", so
+`host_status_events` came out with no tenant_id and no row-level security: a table that
+simply is not isolated, on a deployment that believes it is.
+
+`0051a_tenant_function_rename_repair` brings the rename forward to where the names are
+established. **`make test-upgrade-schema`** builds both paths in throwaway databases and
+compares columns, RLS policies and indexes — 1010 columns, 78 policies and every index
+identical with the repair, and no completed upgrade at all without it.
+
+**Three commands that did not say what they needed.** `provctl rotate-ca` printed
+"rotated user CA" and nothing else, while every managed host still trusted only the
+retiring key — and because issued certificates keep working until they expire, nothing
+looks wrong until they do, fleet-wide. It now prints the required next step, how to
+verify the fingerprints match, and the new public key. `provctl vault rekey` blamed the
+passphrase without mentioning the usual cause (`--old` taken from `.env` while the rows
+were sealed by the running process, which holds what it was *started* with). And
+`provctl fips check` reported its own process's Go FIPS module under a heading that read
+as the deployment's, printing `false [NOT-FIPS]` on a server whose backend logs
+`moduleActive=true`.
+
 ## v1.9.6 — 2026-09-20
 
 Everything here came from standing features up and using them: a hub/site federation
