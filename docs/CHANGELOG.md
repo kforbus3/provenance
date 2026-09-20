@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.3 — 2026-09-20
+
+**The restore in 1.9.2 could put back a broken file, and did.** It restored
+`docker-compose.yml.prev` — which is rotated at the start of *every* deploy, so it means
+"the file that was here", not "a file that works". Deploy a broken file, then press
+Deploy again: the second rotation copies the broken live file over the good `.prev`, and
+the restore faithfully puts back the file it just rejected. On the stack this was written
+for, that left no working compose file anywhere on the host, with the restore reporting
+success. Three changes:
+
+- `docker-compose.yml.last-good` is written **only** where a bring-up actually succeeded,
+  and never touched by a failure. Restores and rollbacks prefer it; `.prev` remains the
+  fallback for a host that has not had a successful deploy since this version.
+- the rotation asks the machine before overwriting `.prev`: if the project has no running
+  containers, what is sitting there is not a file that works, so the previous one is kept.
+- **Rollback restores the last file that worked**, not merely the previous revision, and
+  says which it used. After two failed deploys `.prev` is as broken as the live file, and
+  rolling back to it is rolling back to nothing.
+
+**A revision that already failed is not deployed again without asking.** The Stacks row
+says "failed at r3"; pressing Deploy sent revision 3 again — the same file, the same
+result, and on the way it cost the last good copy. A whole-project deploy of a revision
+the host has already failed on now asks first, naming the revision, the host, when it
+failed and what it said, with *"Deploy it again anyway"* for the case where what was
+fixed is not in the compose file. Editing the definition makes a new revision and is not
+asked about. Rollouts waive nothing.
+
 ## v1.9.2 — 2026-09-20
 
 **A deploy that does not come up no longer leaves the host down.** The compose file was
