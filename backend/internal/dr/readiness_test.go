@@ -2,6 +2,7 @@ package dr
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -21,15 +22,17 @@ func TestPromotionReadinessAsksTheDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	i := strings.Index(body, `"promotionEnabled"`)
-	if i < 0 {
+	// The EXPRESSION assigned to promotionEnabled, not the neighbourhood around it: the
+	// first version of this test read the following 120 characters, which swept in the
+	// canPromote reference from the very next statement -- so restoring the defect left
+	// it passing. Captured precisely now.
+	m := regexp.MustCompile(`"promotionEnabled":\s*([^,\n]+)`).FindStringSubmatch(body)
+	if m == nil {
 		t.Fatal("promotionEnabled not reported at all")
 	}
-	// The line must depend on more than the token.
-	line := body[i:min(i+120, len(body))]
-	if !strings.Contains(line, "canPromote") {
-		t.Errorf("promotionEnabled is reported without asking whether the database role "+
-			"can call pg_promote(): %q", strings.TrimSpace(line))
+	if !strings.Contains(m[1], "canPromote") {
+		t.Errorf("promotionEnabled is computed as %q -- without asking whether the database "+
+			"role can call pg_promote()", strings.TrimSpace(m[1]))
 	}
 	if !strings.Contains(body, "CanPromoteDB") {
 		t.Error("the standby console never asks CanPromoteDB")
@@ -39,11 +42,4 @@ func TestPromotionReadinessAsksTheDatabase(t *testing.T) {
 	if !strings.Contains(body, "GRANT EXECUTE ON FUNCTION pg_promote") {
 		t.Error("the blocked-promotion message does not name the grant that fixes it")
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
