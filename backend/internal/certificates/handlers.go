@@ -4,6 +4,7 @@ package certificates
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -82,7 +83,34 @@ func (h *handler) rotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, "certificate.ca_rotate", h.ca.ActiveID(), nil)
-	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "rotated", "activeCa": h.ca.ActiveID()})
+
+	// Finish the job. A rotation that stops here leaves every host trusting only the
+	// retiring key: certificates signed by the new one are rejected, and because the
+	// certificates already issued keep working until they expire, nothing looks wrong
+	// until they do — fleet-wide, at once, hours or days later.
+	//
+	// The distribution is reported rather than assumed, because a host that did not
+	// take it is a host that will stop accepting logins, and the operator has a window
+	// to fix it only if they know which.
+	pushed, failed := 0, 0
+	if h.d.DistributeCATrust != nil {
+		pushed, failed, _ = h.d.DistributeCATrust(r.Context())
+		h.audit(r, "certificate.ca_trust_distributed", h.ca.ActiveID(),
+			map[string]any{"pushed": pushed, "failed": failed})
+	}
+	res := map[string]any{
+		"status": "rotated", "activeCa": h.ca.ActiveID(),
+		"trustPushed": pushed, "trustFailed": failed,
+	}
+	if h.d.DistributeCATrust == nil {
+		res["note"] = "CA trust was NOT distributed: every enrolled host still trusts only " +
+			"the previous key and will reject new certificates. Re-enrol them."
+	} else if failed > 0 {
+		res["note"] = fmt.Sprintf("%d host(s) did not take the new CA and will reject "+
+			"certificates signed by it once their current ones expire — see the log for which, "+
+			"then re-run distribution or re-enrol them", failed)
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *handler) revoke(w http.ResponseWriter, r *http.Request) {

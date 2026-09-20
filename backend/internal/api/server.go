@@ -345,6 +345,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		Gateway: s.Gateway, Live: s.Live, Watch: s.Watch, Events: s.Hub, Notify: s.Notify,
 		AccessPolicy: accesspolicy.NewEnforcer(s.Store, s.Log)}
 	s.deps.DistributeKRL = s.distributeKRL
+	s.deps.DistributeCATrust = s.distributeCATrust
 
 	// Multi-site federation is mode-gated: standalone builds no service and mounts no
 	// routes, so its behavior is entirely unchanged.

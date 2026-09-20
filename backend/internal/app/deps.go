@@ -53,6 +53,16 @@ type Deps struct {
 	// must surface it rather than report distribution as complete.
 	DistributeKRL func(ctx context.Context) (pushed, failed int, err error)
 
+	// DistributeCATrust writes the current user-CA public keys to every enrolled
+	// host's TrustedUserCAKeys, returning how many were verified and how many were
+	// not. A host in the failed count will reject certificates signed by the current
+	// CA as soon as the ones it already holds expire.
+	//
+	// Rotation is what makes this necessary: a host learns the CA once, at
+	// enrollment, so without this a rotated fleet is one certificate lifetime away
+	// from locking itself out.
+	DistributeCATrust func(ctx context.Context) (pushed, failed int, err error)
+
 	// ForgetHostKeys drops cached SSH host-key pins for the given dial identities
 	// (set by the server; nil in tests). Deleting the ssh_host_keys rows is not
 	// enough on its own — the gateway caches each pin per process, so a running

@@ -224,7 +224,13 @@ func run(cmd string, args []string) error {
 		// does not arrive at rotation time: it arrives later, fleet-wide, when the old
 		// certificates expire. Saying only "rotated" invites exactly that.
 		fmt.Println()
-		fmt.Println("  NEXT STEP — REQUIRED. Managed hosts do not learn this key by themselves.")
+		fmt.Println("  NEXT STEP — REQUIRED from this command. Rotating through the API")
+		fmt.Println("  (POST /api/v1/certificates/ca/rotate, or Settings -> Certificates)")
+		fmt.Println("  distributes the new key to every enrolled host and reports which took it.")
+		fmt.Println("  provctl runs outside the server and cannot reach the hosts, so after")
+		fmt.Println("  rotating HERE the distribution is still owed.")
+		fmt.Println()
+		fmt.Println("  Managed hosts do not learn this key by themselves.")
 		fmt.Println("  Each host trusts the CA through TrustedUserCAKeys, written at enrollment,")
 		fmt.Println("  and still trusts only the PREVIOUS key. Until a host is given the new one,")
 		fmt.Println("  certificates signed by it are rejected — and because already-issued")
