@@ -1,6 +1,7 @@
 package imaging
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -699,13 +701,26 @@ func (h *handler) setProvisioningEnv(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) steerProvisioning(w http.ResponseWriter, r *http.Request) {
 	verb := chi.URLParam(r, "verb")
+	// Not the request's context. Bringing the PXE stack up pulls and starts
+	// dnsmasq and nginx, which takes longer than the 60 seconds every route is
+	// allowed -- so pressing Start answered
+	//
+	//   reaching the image builder: Post ".../server/up": context deadline
+	//   exceeded
+	//
+	// while the stack came up perfectly and began serving DHCP on the
+	// provisioning segment. A control that reports failure for work that
+	// succeeded is worse than one that is slow: the operator's next move is to
+	// press it again, or to go looking for a fault that is not there.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
+	defer cancel()
 	var out string
 	var err error
 	switch verb {
 	case "up":
-		out, err = h.svc.StartProvisioning(r.Context())
+		out, err = h.svc.StartProvisioning(ctx)
 	case "down":
-		out, err = h.svc.StopProvisioning(r.Context())
+		out, err = h.svc.StopProvisioning(ctx)
 	default:
 		httpx.WriteError(w, http.StatusBadRequest, "verb must be up or down")
 		return

@@ -1862,8 +1862,16 @@ def server_down() -> str:
     return (_compose("down").stderr or "stopped").strip()
 
 
-def _docker_logs(container: str, tail: int, since: str = "") -> list[str]:
+def _docker_logs(container: str, tail: int, since: str = "", timestamps: bool = False) -> list[str]:
     cmd = ["docker", "logs", "--tail", str(tail)]
+    if timestamps:
+        # The daemon's own receive time, prefixed as RFC3339Nano. Asked for
+        # because these containers print no time of their own: dnsmasq's lines
+        # start "dnsmasq-dhcp: 95640 DHCPACK(...)", so taking the first 19
+        # characters as a timestamp -- which is what server_clients did --
+        # reported the last-seen time of every machine on the provisioning
+        # network as "dnsmasq-dhcp: 95640".
+        cmd.append("--timestamps")
     if since:
         cmd += ["--since", since]
     cmd.append(container)
@@ -1888,6 +1896,23 @@ CLIENT_WINDOW = "15m"
 _NGINX_RE = re.compile(r'^(\S+) \S+ \S+ \[[^\]]*\] "GET (/\S*) HTTP/[^"]*" (\d{3}) (\d+)')
 
 
+# The RFC3339Nano stamp `docker logs --timestamps` puts in front of every line.
+_DOCKER_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\s")
+
+
+def _log_time(line: str) -> str:
+    """The time a log line was received, or "" when there is none to read.
+
+    Empty rather than a guess: server_clients used to take line[:19] as the
+    timestamp, and these containers print no time of their own, so every machine
+    on the provisioning network was reported as last seen at
+    "dnsmasq-dhcp: 95640" -- the log prefix and the DHCP transaction id. A field
+    the UI shows as "when" is better empty than confidently wrong.
+    """
+    m = _DOCKER_TS_RE.match(line)
+    return m.group(1).replace("T", " ") if m else ""
+
+
 def server_clients() -> list[dict]:
     """Machines active on the provisioning network right now.
 
@@ -1900,7 +1925,7 @@ def server_clients() -> list[dict]:
     network and needs an image assigned.
     """
     seen: dict[str, dict] = {}
-    for line in _docker_logs("debian-ab-dnsmasq", 400, since=CLIENT_WINDOW):
+    for line in _docker_logs("debian-ab-dnsmasq", 400, since=CLIENT_WINDOW, timestamps=True):
         mac = re.search(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", line)
         if not mac:
             continue
@@ -1915,7 +1940,7 @@ def server_clients() -> list[dict]:
             entry["event"] = "downloading bootloader"
         elif "BOOTP" in line or "PXE" in line:
             entry["event"] = "PXE booting"
-        entry["last"] = line[:19]
+        entry["last"] = _log_time(line)
 
     # nginx completes a log line only when the transfer finishes, so a logged
     # 200 for the image file means the machine has fully downloaded (and
