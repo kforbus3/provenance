@@ -28,10 +28,30 @@ func Mount(r chi.Router, d *app.Deps) {
 	// changes far less often than the process restarts, and without this a
 	// deployment that has never touched a cluster since boot shows Headlamp an
 	// empty list.
-	go func() {
-		h := &handler{d: d}
-		h.syncHeadlamp(context.Background())
-	}()
+	//
+	// Not under multi-tenancy, where this produced the very thing it exists to
+	// prevent. k8s_clusters is row-level-security protected, context.Background()
+	// carries no tenant, and a policy that matches nothing is not an error -- the
+	// list came back empty with no err, so the startup sync cheerfully overwrote
+	// the kubeconfig with no clusters at all and logged nothing. Leaving the file
+	// alone is strictly better than replacing it with an answer we know is
+	// meaningless.
+	//
+	// Reading it with a tenant bypass would not be right either: there is one
+	// kubeconfig for the whole deployment, so that would put every tenant's
+	// cluster names in a file every tenant's console reads. The per-request syncs
+	// below have the same shape of problem in the other direction -- each rewrites
+	// the shared file with only the acting tenant's clusters -- and that is a
+	// design question about this integration rather than something to settle here.
+	if !d.Cfg.MultiTenancy {
+		go func() {
+			h := &handler{d: d}
+			h.syncHeadlamp(context.Background())
+		}()
+	} else {
+		d.Log.Info("kubernetes: skipping the startup Headlamp cluster sync under " +
+			"multi-tenancy; the cluster list is written when a cluster is added or removed")
+	}
 	h := &handler{d: d}
 	r.Group(func(pr chi.Router) {
 		pr.Use(d.Auth.RequireAuth)
