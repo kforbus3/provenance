@@ -5,6 +5,94 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased — for v2.0.0
+
+### Identity providers
+
+**An SSO group mapping onto a role that does not exist granted nothing, silently.**
+Three Keycloak groups were mapped against a live instance — `prov-admins` → "Admin",
+`prov-operators` → "Operator", `prov-readonly` → "Viewer" — and the configuration saved
+with `{"saved": true}`. This product's roles are called **Administrator, Operator,
+Read-Only, Auditor**, so exactly one of the three mappings did anything. All three users
+then authenticated perfectly, with the right identity, the right email and the groups claim
+read correctly; two of them held no permissions at all. Nothing was logged and nothing was
+refused. The symptom is a person who can sign in and then cannot do anything, which looks
+like a permissions problem everywhere except where the cause is — and "Admin"/"Viewer" is
+what most products call these, so it is the likely spelling on a first setup.
+
+The configuration endpoints now refuse an unknown role name and list the ones that exist,
+because not knowing them is the whole difficulty. Underneath, `AssignRoleByName` was
+`INSERT … SELECT id FROM roles WHERE name=$2`, which inserts nothing and reports no error;
+it now returns a distinct "no such role", and the OIDC, SAML and LDAP login paths log at
+Error instead of discarding it.
+
+**The default role was revoked in the same login that granted it.** With
+`defaultRole: Read-Only` and `prov-readonly → Read-Only` — the ordinary configuration —
+a user in none of the mapped groups was provisioned with the floor and then stripped of it
+by the authoritative group sync, because the floor was also a mapped value. The existing
+comment asserted this could not happen; it is true only while the default role is not also
+mapped, which is not the configuration anyone writes.
+
+**SAML SP metadata could not be produced without an SP signing key.** Every IdP's setup
+instructions begin by importing SP metadata, and the endpoint answered
+`500 {"error":"could not build metadata"}` on an instance where SAML otherwise worked,
+because the library asks for an encryption certificate unconditionally. Metadata with no
+KeyDescriptor is valid and is the correct description of an SP that does not sign.
+
+### Vulnerability scanning
+
+**Every manual scan failed under multi-tenancy, and stored nothing.** The scan ran, reached
+the host, and came back with findings; then the insert was refused with *new row violates
+row-level security policy for table "vuln_findings"*, because the goroutine was handed
+`context.WithoutCancel(context.Background())` — which is just `context.Background()`, a
+context with no tenant. The scan finished as "failed" with a message pointing nowhere near
+tenancy. The container-image sweep had the other half of the same problem: it ran on the
+request's context, so a fleet's worth of results was thrown away when the 60-second route
+timeout fired, after the images had been pulled and the findings computed.
+
+### Audit forwarding
+
+**The collector token was stored and returned in plaintext.** `GET /audit/forwarding`
+handed it straight back, and it sat unencrypted in the settings table — and therefore in
+every database backup — while every other secret in this product is sealed and replaced by
+a boolean on read. It is now sealed, never returned, and reported as `tokenSet`. Saving
+from the UI also used to wipe it, because the frontend type had no field for it and the
+save replaced the whole record; and the Test button answered "invalid request body" when
+pressed with nothing to send.
+
+### Imaging
+
+**The DHCP preflight refused the only correct configuration there is.** The check added in
+v1.9.9 looked at every interface including the chosen one, so a dedicated provisioning NIC
+at 192.168.50.1/24 handing out 192.168.50.100–150 — a DHCP server on the segment it serves
+— was rejected as "a network this host is already on". Found by configuring it for real.
+It now skips the provisioning interface and gains the true inverse: a range that interface
+is *not* on hands machines addresses this server cannot reach.
+
+**An image larger than the disk is refused.** `--image-size` is GiB, and nothing checked
+the upper end: 6144, six gigabytes in anyone's head, created a 6 TiB sparse file,
+debootstrapped into it, built both slots, wrote the SBOM, and reached step 15 of 16 before
+zstd began reading six terabytes of zeros.
+
+### Kubernetes
+
+**The startup Headlamp sync overwrote the cluster list with nothing under multi-tenancy.**
+`k8s_clusters` is RLS-protected and the sync ran on a tenant-less context, so the read
+returned no rows and no error — producing precisely the empty list the sync exists to
+prevent. It is skipped under multi-tenancy, where the shared kubeconfig has a design
+question that an error path should not answer.
+
+### The gate
+
+Two standing failures, both predating this work, both making `make test` useless as a
+signal: a stale exception list in the compose-environment check (which was masking a real
+one — `PROV_OVERLAY_PEER_ISOLATION` reached the jump host and not the backend, although
+both read it), and 43 British spellings of "enrol" against a checker that has always been
+in the gate. `test_dhcp_preflight.py` had never run at all: it was written as pytest among
+plain scripts and was not in the target's list.
+
+---
+
 ## v1.9.10 — 2026-09-20
 
 **A failed image pull left the host describing a version it was not running.** A rollout
