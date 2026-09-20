@@ -316,6 +316,24 @@ export function ProvisioningTab({ images, canProvision, setMsg }: {
               • write <code>{cfg.IMAGE_FILE || "nothing — no default image is set"}</code> to each
               machine, then {cfg.ACTION || "reboot"}
             </Typography>
+            {/* The consequence of "reboot" that nothing said, and that is
+                destructive rather than merely surprising. A machine set to boot
+                from the network first — which is how it PXE-booted in the first
+                place — comes straight back here after rebooting, and is written
+                again. Observed: a machine imaged, verified and rebooted three
+                times in four minutes, each pass wiping what the last one built.
+                Said here because this panel is where consequences belong; the
+                alternative was a preflight refusal, and refusing a configuration
+                that is correct for a provisioning run is the mistake that
+                preceded this one. */}
+            {(cfg.ACTION || "reboot") === "reboot" && (cfg.IMAGE_FILE || "") !== "" && (
+              <Typography variant="caption" display="block" sx={{ color: "warning.main", mt: 0.5 }}>
+                • and write it <strong>again</strong> to any machine that reboots back onto
+                this network. A machine whose firmware boots from the network first will be
+                re-imaged on every boot for as long as an image is assigned to it — choose{" "}
+                <code>poweroff</code>, or clear the assignment once the machine is installed.
+              </Typography>
+            )}
           </Paper>
         )}
 

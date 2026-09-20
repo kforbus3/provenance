@@ -174,6 +174,33 @@ A window may wrap past midnight (`22:00`–`04:00`), in which case it belongs to
 the day it *started* on: a Saturday window covers 23:00 Saturday and 01:00
 Sunday, and neither Saturday noon nor Sunday noon.
 
+## A machine that boots from the network first is re-imaged every time
+
+The default action after writing an image is **reboot**, and the machine got here
+because its firmware boots from the network before its disk. Those two facts
+together mean that a machine with an image assigned to it is imaged again on its
+next boot, and the boot after that, for as long as the assignment stands. Each pass
+wipes what the last one built.
+
+That is not a bug in the sense that anything misbehaves — every part does exactly
+what it was told — but it is destructive, and nothing used to say so. Observed on a
+test machine: imaged, verified and rebooted three times in four minutes.
+
+Two ways to end a provisioning run, and one of them should always be chosen:
+
+* **`poweroff`** as the action. The machine writes its image, verifies it, and
+  stops. Somebody changes its boot order (or simply powers it on once the
+  provisioning stack is down) and it boots what it was given. This is the right
+  default for a rack of new machines.
+* **Clear the assignment** once the machine reports `done`. The per-MAC script is
+  removed immediately, so the next PXE boot falls through to `unassigned.ipxe`,
+  which writes nothing.
+
+A **default `IMAGE_FILE`** widens this from "the machines you named" to "every
+machine that PXE-boots on this segment", including one that was imaged an hour ago
+and has merely rebooted. Set it only while a run is actually happening, and prefer
+per-MAC assignments.
+
 ## Building images
 
 Builds run in the **builder-runner** sidecar, which is the only thing in a
