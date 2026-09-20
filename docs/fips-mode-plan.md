@@ -8,6 +8,50 @@ dashboard are in place. Both a FIPS boot and a default WireGuard boot are valida
 Docker. The only remaining items are operator-provided (FIPS-OpenSSL host images) — see
 "Implementation status" below.
 
+## Verified on real FIPS hardware (2026-09-19)
+
+Tested on Ubuntu 22.04.5 with `pro enable fips-updates` — `fips_enabled=1`, kernel
+`5.15.0-190-fips`, OpenSSL refusing MD5, sshd built as `+Fips3`. Provenance deployed on
+that host with `PROV_FIPS_MODE=true`: the backend logs
+`FIPS MODE ENABLED … moduleActive:true`, the user CA is **ECDSA P-256**, all 108
+migrations applied, and the whole read surface answered (16/16 endpoints). A managed
+host was enrolled with a password bootstrap, got CA trust installed, and **certificate
+login was verified** through the jump host; ad-hoc commands and an Ansible playbook both
+ran against it (`fips=1 kernel=5.15.0-190-fips`).
+
+Three things did not work, all found here and two of them fixed:
+
+**The jump host offered only an Ed25519 host key.** A FIPS-mode backend offers only
+FIPS-approved host-key algorithms, so it could not complete a handshake with its own jump
+host — meaning a FIPS deployment could not enrol or reach anything at all, since every
+connection goes through it. The jump host now generates and offers ECDSA and RSA host
+keys alongside Ed25519. A non-FIPS client still prefers Ed25519, so existing pinned host
+keys stay valid.
+
+**The jump host's CA trust could take five minutes to appear.** Its auto-sync polls the
+backend's public CA endpoint every 300s; on a fresh deployment the first attempt races
+the backend's own startup, and until it succeeds every connection fails with
+`unable to authenticate, no supported methods remain` — which says nothing about CA
+trust. It now retries every 5s until the first success.
+
+**OpenVPN cannot carry the overlay on FIPS-enabled Ubuntu 22.04.** This is the platform,
+not Provenance: OpenVPN 2.5.11 does not read ciphers from the OpenSSL 3 FIPS provider, so
+`openvpn --show-ciphers` lists **nothing** and every `--data-ciphers` value is refused —
+AES-256-GCM, AES-128-GCM, AES-256-CBC and AES-128-CBC were each tried and each rejected.
+No configuration fixes it. So on such a host:
+
+- enrol with **no overlay** (the host must be reachable from the jump host directly),
+  which was verified working end to end; or
+- provide an OpenVPN build that supports OpenSSL 3 providers (2.6+), or a distribution
+  whose OpenVPN does.
+
+The bring-up script now detects the empty cipher list, and the enrolment error says this
+in one sentence instead of ending with twenty lines of OpenVPN log.
+
+**Ed25519 SSH keys stop working on a FIPS host** — including an operator's own. Enabling
+FIPS locked the tester out of the box until an ECDSA key was added. Worth saying out loud
+before an operator enables it on a machine they reach only by an Ed25519 key.
+
 ## Implementation status
 
 **Done (P2 — cert-authenticated overlay: OpenVPN, per-host selectable):**

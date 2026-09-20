@@ -654,6 +654,21 @@ else
   # an empty log and said nothing about why.
   set +e
   echo OVPN_HOST_NO_TUNNEL
+  # Does this host's OpenVPN have ANY usable data cipher? On a FIPS-enabled Ubuntu
+  # 22.04 the answer is none: OpenVPN 2.5 does not query the OpenSSL 3 FIPS provider
+  # for ciphers, so every --data-ciphers value is refused ("Unsupported cipher in
+  # --data-ciphers") and no tunnel can ever come up. That is a property of the
+  # platform, not of this configuration, and the raw OpenVPN log does not say so --
+  # an operator reading "NCP cipher list contains unsupported ciphers" has no way to
+  # get from there to "your distribution's OpenVPN cannot see the FIPS module".
+  if ! openvpn --show-ciphers 2>/dev/null | grep -qiE "^(AES|CHACHA)"; then
+    echo OVPN_NO_CIPHERS
+    if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ]; then
+      echo "OVPN_DIAGNOSIS=this host runs FIPS mode and its OpenVPN ($(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)) reports no usable data ciphers, so no tunnel can be established. OpenVPN 2.5 does not read ciphers from the OpenSSL 3 FIPS provider. Use an OpenVPN build that supports OpenSSL 3 providers (2.6+), or enrol this host without an overlay (it must then be reachable from the jump host directly)."
+    else
+      echo "OVPN_DIAGNOSIS=this host's OpenVPN reports no usable data ciphers, so no tunnel can be established. Check that its OpenSSL providers are configured (openvpn --show-ciphers lists nothing)."
+    fi
+  fi
   # The address the client was told to dial. When the tunnel never comes up this is
   # almost always the answer — the server's UDP port is not reachable from here —
   # and it is not otherwise visible to whoever reads the enrollment error.

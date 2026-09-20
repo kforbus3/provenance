@@ -139,6 +139,15 @@ func checkHostBringup(out, overlayIP string) (string, error) {
 	got := hostIP(out)
 	switch {
 	case got == "":
+		// When the host itself diagnosed WHY, lead with that instead of the generic
+		// hint plus twenty lines of OpenVPN log. The case this exists for: a
+		// FIPS-enabled Ubuntu 22.04 whose OpenVPN 2.5 cannot see the OpenSSL 3 FIPS
+		// provider and therefore has no usable data cipher at all -- no configuration
+		// choice fixes it, and "NCP cipher list contains unsupported ciphers" does not
+		// lead anybody to that conclusion.
+		if d := diagnosis(out); d != "" {
+			return "", fmt.Errorf("the host brought up no OpenVPN tunnel: %s", d)
+		}
 		return "", fmt.Errorf("the host brought up no OpenVPN tunnel%s. %s: %s",
 			remoteSuffix(out), noTunnelHint, oneLine(out))
 	case got != overlayIP:
@@ -210,6 +219,17 @@ func remoteSuffix(out string) string {
 			if r := strings.TrimSpace(rest); r != "" && r != ":" {
 				return " at " + r
 			}
+		}
+	}
+	return ""
+}
+
+// diagnosis returns the host's own explanation for a failed bring-up, when the
+// bring-up script was able to name one (OVPN_DIAGNOSIS=...).
+func diagnosis(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "OVPN_DIAGNOSIS="); ok {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

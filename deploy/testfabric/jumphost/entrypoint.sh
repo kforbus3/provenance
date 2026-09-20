@@ -218,6 +218,13 @@ if [ -n "${PROV_BACKEND_URL:-}" ]; then
   echo "[jumphost] CA auto-sync enabled from ${PROV_BACKEND_URL}"
   (
     interval="${PROV_CA_SYNC_INTERVAL:-300}"
+    # Until the CA has been fetched ONCE, retry quickly. The steady-state interval is
+    # five minutes, and on a fresh deployment the first attempt races the backend's own
+    # startup -- so a failed first fetch left the jump host trusting nothing for five
+    # minutes, and every connection through it failed with "unable to authenticate, no
+    # supported methods remain". Nothing in that message points at CA trust, and on a
+    # brand-new install it is the first thing an operator does.
+    first=1
     while true; do
       if curl -fsS --max-time 10 "${PROV_BACKEND_URL%/}/api/v1/certificates/ca/pub" -o /tmp/prov_ca.new 2>/dev/null \
          && [ -s /tmp/prov_ca.new ]; then
@@ -227,8 +234,11 @@ if [ -n "${PROV_BACKEND_URL:-}" ]; then
           pkill -HUP sshd 2>/dev/null || true
           echo "[jumphost] installed/updated Provenance CA trust"
         fi
+        first=0
+      elif [ "$first" = 1 ]; then
+        echo "[jumphost] CA not available yet from ${PROV_BACKEND_URL} — retrying"
       fi
-      sleep "$interval"
+      if [ "$first" = 1 ]; then sleep 5; else sleep "$interval"; fi
     done
   ) &
 fi
@@ -238,6 +248,12 @@ fi
 # identity is stable for known_hosts pinning; default keys cover other types.
 mkdir -p /etc/ssh/keys
 [ -f /etc/ssh/keys/ssh_host_ed25519_key ] || ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/keys/ssh_host_ed25519_key
+# ECDSA and RSA as well: a FIPS-mode backend offers only FIPS-approved host-key
+# algorithms and cannot negotiate Ed25519, so an Ed25519-only jump host made every
+# connection in a FIPS deployment fail at the handshake. Generated alongside, in the
+# persisted directory, so they survive restarts like the first one.
+[ -f /etc/ssh/keys/ssh_host_ecdsa_key ] || ssh-keygen -q -t ecdsa -b 256 -N '' -f /etc/ssh/keys/ssh_host_ecdsa_key
+[ -f /etc/ssh/keys/ssh_host_rsa_key ] || ssh-keygen -q -t rsa -b 3072 -N '' -f /etc/ssh/keys/ssh_host_rsa_key
 ssh-keygen -A >/dev/null 2>&1 || true
 echo "[jumphost] starting sshd"
 exec /usr/sbin/sshd -D -e

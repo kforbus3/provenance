@@ -323,3 +323,35 @@ func TestPersistentTunnelCarriesNoWarning(t *testing.T) {
 		t.Errorf("warned about a tunnel that is enabled at boot: %q", detail)
 	}
 }
+
+// A FIPS-enabled Ubuntu 22.04 cannot bring up an OpenVPN tunnel at all: its OpenVPN
+// 2.5 does not read ciphers from the OpenSSL 3 FIPS provider, so every --data-ciphers
+// value is refused and --show-ciphers lists nothing. No configuration fixes it.
+//
+// The enrollment error was twenty lines of OpenVPN log ending "NCP cipher list
+// contains unsupported ciphers or is too long", which does not lead anyone to "your
+// distribution's OpenVPN cannot see the FIPS module". When the host can name the
+// cause, the error leads with it.
+func TestAHostsOwnDiagnosisLeadsTheError(t *testing.T) {
+	out := "OVPN_WAITED=60s\nOVPN_HOST_NO_TUNNEL\nOVPN_NO_CIPHERS\n" +
+		"OVPN_DIAGNOSIS=this host runs FIPS mode and its OpenVPN (2.5.11) reports no usable data ciphers\n" +
+		"--- openvpn client log ---\nUnsupported cipher in --data-ciphers: AES-256-GCM\n"
+	_, err := checkHostBringup(out, "10.100.0.5")
+	if err == nil {
+		t.Fatal("a bring-up with no tunnel must be an error")
+	}
+	if !strings.Contains(err.Error(), "FIPS mode") || !strings.Contains(err.Error(), "no usable data ciphers") {
+		t.Errorf("the host's diagnosis is not in the error: %v", err)
+	}
+	if strings.Contains(err.Error(), "NCP cipher list") {
+		t.Errorf("the raw log is still leading the error: %v", err)
+	}
+}
+
+// Without a diagnosis, the generic hint and log tail are still what an operator gets.
+func TestWithoutADiagnosisTheOldErrorIsKept(t *testing.T) {
+	_, err := checkHostBringup("OVPN_HOST_NO_TUNNEL\nOVPN_REMOTE=vpn.example.com:1194\n", "10.100.0.5")
+	if err == nil || !strings.Contains(err.Error(), "vpn.example.com:1194") {
+		t.Errorf("the remote-address hint was lost: %v", err)
+	}
+}
