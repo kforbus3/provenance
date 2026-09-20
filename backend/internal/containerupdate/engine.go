@@ -16,6 +16,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/monitor"
+	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/pacing"
 	"github.com/kforbus3/provenance/backend/internal/stateful"
 	"github.com/kforbus3/provenance/backend/internal/store"
@@ -83,11 +84,29 @@ type Engine struct {
 	run   Runner
 	log   *slog.Logger
 	now   func() time.Time
+	// nfy is optional: an engine with no notifier still runs rollouts, it just
+	// tells nobody when one stops. Nil in the tests that do not care.
+	nfy Notifier
+}
+
+// Notifier is the part of the notification service this engine uses. An
+// interface, so the engine's tests do not need one.
+type Notifier interface {
+	Notify(ctx context.Context, ev notify.Event)
 }
 
 func New(st Store, dep Deployer, run Runner, log *slog.Logger) *Engine {
 	return &Engine{store: st, dep: dep, run: run, log: log, now: time.Now}
 }
+
+// SetNotifier attaches the notification service.
+//
+// Separate from New because a halted rollout went unannounced for the whole life
+// of this feature while the OS-image rollout beside it has notified since the day
+// it shipped -- and adding a parameter to New would have meant touching every
+// test that constructs an engine, which is how a thing like this gets deferred
+// again.
+func (e *Engine) SetNotifier(n Notifier) { e.nfy = n }
 
 // Run drives rollouts forward on a tick.
 //
@@ -205,6 +224,19 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		}
 		e.log.Warn("update rollout halted", "rollout", r.ID,
 			"repository", r.Repository, "failed", failed, "reason", reason)
+		// Somebody is told. A halted rollout is a fleet-wide update that has
+		// stopped partway with hosts on two different versions, and until now the
+		// only way to learn about it was to open the page: one sat halted in
+		// production for hours with its second host pending, and was found by
+		// eye. The OS-image rollout has raised this event since imaging shipped.
+		if e.nfy != nil {
+			e.nfy.Notify(context.WithoutCancel(ctx), notify.Event{
+				Type:     notify.EventContainerRolloutHalted,
+				Severity: notify.SeverityError,
+				Title:    fmt.Sprintf("Container rollout halted: %s → %s", r.Repository, r.ToTag),
+				Body:     reason,
+			})
+		}
 		return
 	}
 

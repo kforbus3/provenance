@@ -39,6 +39,13 @@ const (
 	EventCredentialRotated      = "credential.rotated"       //nolint:gosec // not a credential: notification event-type name
 	EventCredentialRotateFailed = "credential.rotate_failed" //nolint:gosec // not a credential: notification event-type name
 	EventRolloutHalted          = "rollout.halted"
+	// The container equivalents of the two above. A halted OS-image rollout has
+	// notified since imaging shipped; a halted CONTAINER rollout notified nobody,
+	// and neither did a managed stack that would not deploy. Both were found the
+	// same way in production -- by somebody opening the page hours later and
+	// noticing a red chip.
+	EventContainerRolloutHalted = "container.rollout.halted"
+	EventStackDeployFailed      = "container.stack.failed"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -65,6 +72,8 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventCredentialRotated, "Vault credential auto-rotated"},
 	{EventCredentialRotateFailed, "Vault credential auto-rotation failed"},
 	{EventRolloutHalted, "OS update rollout halted on its failure budget"},
+	{EventContainerRolloutHalted, "Container update rollout halted on its failure budget"},
+	{EventStackDeployFailed, "Managed stack failed to deploy"},
 }
 
 const settingKey = "notifications"

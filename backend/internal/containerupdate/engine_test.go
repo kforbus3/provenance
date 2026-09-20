@@ -40,8 +40,24 @@ type fakeStore struct {
 	refreshed  []uuid.UUID // hosts whose containers were re-read after a change
 }
 
+// ActiveUpdateRollouts returns only RUNNING rollouts, like the real query.
+//
+// It used to return every rollout regardless of state, which made the fake
+// disagree with the store on the one thing this loop depends on: a halted rollout
+// is never advanced again. Under the old fake a halted rollout was re-advanced on
+// every tick, so it re-halted every tick -- invisible while halting only wrote a
+// row, and immediately visible once it also raised a notification, which appeared
+// four times for one halt.
 func (f *fakeStore) ActiveUpdateRollouts(context.Context) ([]store.UpdateRollout, error) {
-	return f.rollouts, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.UpdateRollout
+	for _, r := range f.rollouts {
+		if r.State == store.UpdateRolloutRunning {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) UpdateRolloutHosts(_ context.Context, id uuid.UUID) ([]store.UpdateRolloutHost, error) {
@@ -83,6 +99,15 @@ func (f *fakeStore) SetUpdateRolloutState(_ context.Context, id uuid.UUID, state
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rolloutSet = append(f.rolloutSet, fmt.Sprintf("%s:%s", state, reason))
+	// The state actually changes, as it does in the store. Recording the call and
+	// leaving the row alone left the fixture claiming a halted rollout was still
+	// running.
+	for i := range f.rollouts {
+		if f.rollouts[i].ID == id {
+			f.rollouts[i].State = state
+			f.rollouts[i].HaltReason = reason
+		}
+	}
 	return nil
 }
 

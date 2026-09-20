@@ -13,6 +13,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/hostexec"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/monitor"
+	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -27,11 +28,28 @@ type Service struct {
 	store *store.Store
 	run   Runner
 	log   *slog.Logger
+	// nfy is optional: without it deploys still work, they just tell nobody when
+	// one fails.
+	nfy Notifier
+}
+
+// Notifier is the part of the notification service this package uses.
+type Notifier interface {
+	Notify(ctx context.Context, ev notify.Event)
 }
 
 func New(st *store.Store, run Runner, log *slog.Logger) *Service {
 	return &Service{store: st, run: run, log: log}
 }
+
+// SetNotifier attaches the notification service.
+//
+// A managed stack that would not deploy told nobody. It is recorded, and it shows
+// as a red chip on the Containers page, and that is where it stayed: the Keycloak
+// stack in this fleet sat failed from 17:34 one evening until somebody looked the
+// next day. A deploy is something an operator STARTED, so the failure has an
+// audience by definition.
+func (s *Service) SetNotifier(n Notifier) { s.nfy = n }
 
 var ErrNoCompose = errors.New("this stack has no compose file to deploy")
 
@@ -206,38 +224,65 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waiv
 		s.log.Warn("recording stack deployment", "stack", st.ID, "err", rerr)
 	}
 	if state == "failed" {
+		if s.nfy != nil {
+			s.nfy.Notify(context.WithoutCancel(ctx), notify.Event{
+				Type:     notify.EventStackDeployFailed,
+				Severity: notify.SeverityError,
+				Title:    fmt.Sprintf("Stack deploy failed: %s on %s", st.Name, h.Hostname),
+				// The marker-derived summary rather than the transcript: what
+				// happened to the service is the part that decides whether this is
+				// an outage or a refused change. See the switch below.
+				Body: deployOutcome(out, h.Hostname, code),
+			})
+		}
 		// What happened to the SERVICE is the part an operator needs first, and it is
 		// not in the exit code: the script puts the previous compose file back and
 		// brings it up. Saying only "deploy failed" left people to find that out by
 		// looking, or to assume the stack was down when it was not.
-		switch {
-		// The pull is its own case, because the host's state after one is
-		// different in a way that matters: nothing was recreated, so the stack is
-		// still up on what it was running. Reported as "deploy failed" alone, this
-		// read as an outage and sent people to look at a stack that was fine.
-		case strings.Contains(out, "::PULLFAILED::") && strings.Contains(out, "::REVERTEDTO::"):
-			return st, out, fmt.Errorf("the images for this deploy could not be pulled on %s "+
-				"(exit %d) — nothing was recreated, the stack is still running what it was, and "+
-				"the compose file was put back. The refused file is on the host as "+
-				"docker-compose.yml.rejected", h.Hostname, code)
-		case strings.Contains(out, "::PULLFAILED::"):
-			return st, out, fmt.Errorf("the images for this deploy could not be pulled on %s "+
-				"(exit %d) — nothing was recreated and the stack is still running what it was",
-				h.Hostname, code)
-		case strings.Contains(out, "::RESTORED::"):
-			return st, out, fmt.Errorf("deploy failed on %s (exit %d) — the previous compose file "+
-				"was restored and the stack is running on it. The rejected file is on the host as "+
-				"docker-compose.yml.rejected", h.Hostname, code)
-		case strings.Contains(out, "::RESTOREFAILED::"):
-			return st, out, fmt.Errorf("deploy failed on %s (exit %d) AND the previous compose file "+
-				"did not come up either — this stack is down", h.Hostname, code)
-		case strings.Contains(out, "::NOPREVIOUS::"):
-			return st, out, fmt.Errorf("deploy failed on %s (exit %d) and this host has no previous "+
-				"compose file to fall back to — this stack is down", h.Hostname, code)
-		}
-		return st, out, fmt.Errorf("deploy failed on %s (exit %d)", h.Hostname, code)
+		return st, out, fmt.Errorf("%s", deployOutcome(out, h.Hostname, code))
 	}
 	return st, out, nil
+}
+
+// deployOutcome says what happened to the SERVICE, not just to the command.
+//
+// That is the part an operator needs first and it is not in the exit code: the
+// script puts the previous compose file back and brings it up, so "deploy failed"
+// on its own reads as an outage and sends somebody to look at a stack that is
+// running perfectly. The distinctions come from the script's own markers, because
+// only the script knows whether it failed before writing, after writing, or after
+// bringing something up.
+//
+// One function, used by the error returned to the caller and by the notification,
+// so the two cannot describe the same failure differently.
+func deployOutcome(out, hostname string, code int) string {
+	switch {
+	// The pull is its own case: nothing was recreated, so the stack is still up on
+	// what it was running.
+	case strings.Contains(out, "::PULLFAILED::") && strings.Contains(out, "::REVERTEDTO::"):
+		return fmt.Sprintf("the images for this deploy could not be pulled on %s "+
+			"(exit %d) — nothing was recreated, the stack is still running what it was, and "+
+			"the compose file was put back. The refused file is on the host as "+
+			"docker-compose.yml.rejected", hostname, code)
+	case strings.Contains(out, "::PULLFAILED::"):
+		return fmt.Sprintf("the images for this deploy could not be pulled on %s "+
+			"(exit %d) — nothing was recreated and the stack is still running what it was",
+			hostname, code)
+	case strings.Contains(out, "::RESTORED::"):
+		return fmt.Sprintf("deploy failed on %s (exit %d) — the previous compose file "+
+			"was restored and the stack is running on it. The rejected file is on the host as "+
+			"docker-compose.yml.rejected", hostname, code)
+	case strings.Contains(out, "::RESTOREFAILED::"):
+		return fmt.Sprintf("deploy failed on %s (exit %d) AND the previous compose file "+
+			"did not come up either — this stack is down", hostname, code)
+	case strings.Contains(out, "::NOPREVIOUS::"):
+		return fmt.Sprintf("deploy failed on %s (exit %d) and this host has no previous "+
+			"compose file to fall back to — this stack is down", hostname, code)
+	case strings.Contains(out, "::BADCOMPOSE::"):
+		return fmt.Sprintf("the compose file for this stack is not one compose can read, so it "+
+			"was not applied on %s (exit %d); the previous file is still in place", hostname, code)
+	}
+	return fmt.Sprintf("deploy failed on %s (exit %d)", hostname, code)
 }
 
 // Rollback restores the previous compose file ON THE HOST and brings it up.

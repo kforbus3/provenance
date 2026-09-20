@@ -277,11 +277,16 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// the ad-hoc command service so there is one implementation of "reach a host
 	// and run something" rather than two that drift.
 	s.stacks = stacks.New(st, s.commandSvc, log)
+	// A failed deploy and a halted rollout both told nobody: recorded, shown as a
+	// red chip, and found hours later by eye. Both are things an operator started,
+	// so both have an audience.
+	s.stacks.SetNotifier(s.Notify)
 	s.imageCheck = registry.NewChecker(st, log)
 	// The rollout engine drives stack deploys, so it is given the stacks service
 	// rather than a second implementation of "write a compose file and bring it
 	// up" that would drift from the one an operator uses by hand.
 	s.updateEngine = containerupdate.New(st, s.stacks, s.commandSvc, log)
+	s.updateEngine.SetNotifier(s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
