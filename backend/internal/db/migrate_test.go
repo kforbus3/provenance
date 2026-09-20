@@ -7,7 +7,21 @@ import (
 	"testing"
 )
 
-var migNameRe = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(_[a-z0-9]+)*\.sql$`)
+// A migration is NNNN_snake_case.sql. The optional letter after the number is for the
+// one case appending cannot serve: a repair that has to run BEFORE migrations which
+// already exist and depend on it.
+//
+// 0051a is that case. The fleet->prov rename edited 0051 in place, so an install that
+// had already applied 0051 never received the new function names — and seven later
+// migrations need them, one failing outright and six skipping their tenant work in
+// silence. The repair has to land right after 0051; there is no four-digit number
+// between 0051 and 0052, and renumbering an applied migration is the thing this file
+// exists to prevent.
+//
+// It is not a general licence to insert. A new migration still takes the next unused
+// ordinal; a letter suffix says "this had to go here", and the reason belongs in the
+// file.
+var migNameRe = regexp.MustCompile(`^(\d{4}[a-z]?)_[a-z0-9]+(_[a-z0-9]+)*\.sql$`)
 
 // knownDupOrdinals are migration number prefixes that ship two files. They are
 // harmless — the migrator applies each unique FILENAME exactly once, in lexical

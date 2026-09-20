@@ -134,6 +134,10 @@ bundle: ## Build + sign a .provup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_F
 	  --key $(BUNDLE_KEY_ABS) --out $(BUNDLE_OUT_ABS) --components $(BUNDLE_COMPONENTS)
 	@echo "Built $(BUNDLE_OUT_ABS). Upload it in the UI (Settings -> Updates) to upgrade in place."
 
+.PHONY: test-upgrade-schema
+test-upgrade-schema: ## Verify an OLD database upgrades to the same schema as a fresh install
+	@deploy/scripts/upgrade-schema-check.sh $(FROM_TAG)
+
 .PHONY: test-db
 test-db: ## Run the database-backed tests against a throwaway PostgreSQL
 	@# Why this exists: a query shipped that could not run at all — an ungrouped
