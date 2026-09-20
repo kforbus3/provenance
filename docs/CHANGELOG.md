@@ -5,6 +5,54 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.6 — 2026-09-20
+
+Everything here came from standing features up and using them: a hub/site federation
+pair, a disaster-recovery failback, a deliberately broken upgrade bundle, and a
+permission sweep over every route the code declares.
+
+**Federation was impossible through the shipped stack.** The endpoints a site dials on
+its hub live outside `/api/v1` — they are machine-to-machine, not operator API — and
+nginx proxied `/api/`, `/headlamp/` and `/aldgate/` and nothing else. So a hub handed a
+joining site its public URL, the site POSTed the join there, and nginx answered with its
+own `405 Not Allowed`, having tried to serve `/federation/join` as a static file. Now
+proxied, with the upgrade headers the long-lived link needs.
+
+**`/ready` was not proxied either.** An upgrade drains by making `/ready` fail so a load
+balancer ejects the instance; unproxied, it fell through to the SPA and returned 200
+with `index.html` regardless. A new test derives the backend's non-`/api` routes from the
+source and fails when nginx does not cover one — it found both of these.
+
+**A linked site pushed its inventory into a void.** The hub ran the whole link on the
+HTTP request's context, and every route is behind a 60-second timeout. The WebSocket
+survives that; the context does not — so a minute after a site linked, every write in
+the ingest loop failed with `context deadline exceeded`, once per push, forever, at
+WARN. The link reported **up**, the Sites page showed zero lag, and the aggregated view
+stayed permanently empty.
+
+**A failed upgrade left the instance drained.** Drain is set before dispatch, on the
+reasoning that the replacement container starts un-drained — true only if the container
+is actually replaced. An upgrade that fails after dispatch left this process running,
+drained, with nothing to lift it: `/ready` failing and a maintenance banner up, for an
+upgrade that stopped minutes ago.
+
+**Two messages that made a bad moment worse.** A CA key that will not decrypt now says
+the passphrase does not match the database it is serving — the disaster-recovery case,
+where a standby inherits a primary's database without its secret set; it used to say
+`load CA signer: cipher: message authentication failed`. A missing rollback anchor now
+says the running image has been removed or rebuilt and that **nothing was changed**.
+
+**Backups.** `pg_dump`'s stderr is no longer discarded, so a failed backup names its
+cause; a backup can be **verified** without restoring it, catching the truncated dump a
+file size cannot show; and there is a **restore** path, which refuses to run while
+anything else is connected to the target. A multi-tenant deployment needs
+`PROV_BACKUP_DATABASE_URL` pointed at the owner role — without it `pg_dump` cannot read
+past row-level security, which means no backup and therefore no upgrade.
+
+The disaster-recovery runbook gains the two traps that actually stopped a failback: a
+standby whose `max_connections` is lower than the primary's refuses to start recovery at
+all, and a promoted instance exits for its supervisor to restart it.
+
 ## v1.9.5 — 2026-09-20
 
 **Fixes the Updates page going empty in 1.9.4.** The query that lists what the fleet is
