@@ -244,7 +244,24 @@ if [ "$rc" -ne 0 ]; then
             echo "  This machine's compatible is '$(sed -n 's/^compatible=//p' /etc/rauc/system.conf 2>/dev/null)';"
             echo "  the bundle must declare the same one."
         fi
-        if printf '%s' "$_err" | grep -qiE "dm table|verity|nbd|mounting bundle|streaming"; then
+        # Device-mapper first, because it is checked by the broader pattern below
+        # and is NOT a streaming problem -- and being told it was one sends you to
+        # measure free space, which is fine, while the real cause goes unexamined.
+        #
+        # RAUC mounts a verity bundle through device-mapper. Nothing else in these
+        # images uses it, so on an image built before this was fixed the modules are
+        # present in the kernel tree and never loaded, and the install fails at the
+        # very last step with the bundle already downloaded and its signature
+        # already verified.
+        if printf '%s' "$_err" | grep -qiE "/dev/mapper/control|load dm table|DM_VERITY"; then
+            echo "  This machine cannot mount the bundle: device-mapper is not loaded."
+            echo "  Nothing else in this image uses it, so nothing loads it. The bundle"
+            echo "  is fine -- its signature verified before this failed."
+            echo "  Fix it now:      sudo modprobe dm_mod dm_verity && sudo $0 $*"
+            echo "  Fix it for good: echo -e 'dm_mod\\ndm_verity' |"
+            echo "                     sudo tee /etc/modules-load.d/rauc-verity.conf"
+            echo "  Images built after this was fixed carry that file already."
+        elif printf '%s' "$_err" | grep -qiE "dm table|verity|nbd|mounting bundle|streaming"; then
             echo "  This is a streaming problem, not a problem with the bundle. The"
             echo "  download-and-install retry above should have avoided it; if that"
             echo "  also failed, check free space in /var/tmp and that the server"

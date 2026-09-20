@@ -2038,6 +2038,43 @@ chmod 0755 "$MNT/usr/lib/ab/initramfs/ab-overlay" \
            "$MNT/usr/lib/ab/initramfs/ab-luks-key" 2>/dev/null || true
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
+
+# RAUC mounts a verity bundle through device-mapper, so dm_mod and dm_verity have
+# to be loaded when it runs -- and nothing else in these images uses either, so
+# nothing loads them.
+#
+# Without them every update fails at the LAST step, after the whole bundle has
+# been fetched over the network and its signature verified:
+#
+#   20% Verifying signature done.
+#   30% Checking manifest contents done.
+#  100% Installing failed.
+#   LastError: Failed mounting bundle: Failed to open /dev/mapper/control:
+#              No such file or directory
+#
+# and with dm_mod alone loaded it gets one step further and fails again:
+#
+#   LastError: Failed mounting bundle: Failed to load dm table: Argument list
+#              too long, check DM_VERITY, DM_CRYPT or CRYPTO_AES kernel options
+#
+# Both messages read as a problem with the bundle. Neither is: the bundle is
+# signed, verified and correct, and the image is what cannot mount it. This is the
+# failure docs/imaging.md warns about in the abstract -- "the machine images and
+# boots perfectly and only fails the first time you try to update it, rauc is used
+# for nothing else" -- and it is the most expensive place in the whole flow to
+# fail, because the machine has already downloaded hundreds of megabytes.
+#
+# Found on a machine imaged by this builder and updated for the first time: the
+# modules were present in the kernel tree, and modprobing both by hand turned a
+# failing install into a successful one that booted the new slot.
+install -d "$MNT/etc/modules-load.d"
+printf '%s\n' \
+    '# RAUC mounts verity bundles through device-mapper. Without these, every A/B' \
+    '# update fails at the mount step -- after downloading and verifying the whole' \
+    '# bundle -- with an error that reads as a problem with the bundle.' \
+    'dm_mod' \
+    'dm_verity' \
+    > "$MNT/etc/modules-load.d/rauc-verity.conf"
 # RAUC reads and writes the boot environment itself, so it needs the same path
 # the bootloader was installed with. The shipped file names Debian's; left
 # uncorrected, RAUC on an RHEL machine reads an env block GRUB never looks at,

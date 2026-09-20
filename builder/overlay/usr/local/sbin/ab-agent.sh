@@ -315,7 +315,22 @@ apply_update() {
     out="$("$UPDATE_CMD" "$bundle_url" 2>&1)"; rc=$?
     if [ "$rc" -ne 0 ]; then
         UPDATE_STATE=failed
-        UPDATE_ERROR="$(echo "$out" | grep -iE 'error|failed' | tail -1)"
+        # RAUC's own LastError first, then the first matching line -- never the
+        # last one.
+        #
+        # This was `grep -iE 'error|failed' | tail -1`, and ab-update prints a block
+        # of human-facing advice AFTER the error it is advising about. Every line of
+        # that advice says "failed" somewhere, so the last match was a fragment of
+        # the advice rather than the error, and the rollout recorded
+        #
+        #   also failed, check free space in /var/tmp and that the server
+        #
+        # for a machine whose actual failure was that device-mapper was not loaded.
+        # A middle line of a four-line explanation, cut off, presented as the cause
+        # -- it sent the operator to measure free space, which was fine, while the
+        # real error sat five lines higher in the same output.
+        UPDATE_ERROR="$(printf '%s\n' "$out" | grep -oiE 'LastError:.*' | head -1)"
+        [ -n "$UPDATE_ERROR" ] || UPDATE_ERROR="$(printf '%s\n' "$out" | grep -iE 'error|failed' | head -1)"
         [ -n "$UPDATE_ERROR" ] || UPDATE_ERROR="ab-update exited $rc"
         save_state
         log "update failed: $UPDATE_ERROR"
