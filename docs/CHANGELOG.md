@@ -5,6 +5,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.5 — 2026-09-20
+
+**Fixes the Updates page going empty in 1.9.4.** The query that lists what the fleet is
+running could not run at all — the digest set added in 1.9.4 was gathered by a
+correlated subquery referencing an ungrouped column inside a `GROUP BY`, which
+PostgreSQL rejects. So the update checker received no images and the page showed
+nothing, which looks exactly like "nothing needs updating". **Upgrade from 1.9.4
+promptly: an install on it is not reporting available updates at all.**
+
+The aggregation is now a lateral join, and covers both shapes — the digest list
+recorded since 1.9.4 and the single value in rows collected before it.
+
+**And a check that would have caught it.** Nothing in the test suite executed this
+package's SQL, so a query that could never run kept a green build. There is now a test
+that takes every statement handed straight to the database layer and PREPAREs it
+against a real schema — parsing, name resolution and type checking, without executing
+anything — 446 of them. `make test-db` stands up a throwaway PostgreSQL, migrates it
+with the new `provctl migrate-db`, and runs it, so the check needs no fixture and no
+live deployment.
+
 ## v1.9.4 — 2026-09-20
 
 **An image answers to more than one digest, and only the first was being read.** A
