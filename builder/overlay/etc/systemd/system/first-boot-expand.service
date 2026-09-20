@@ -1,12 +1,35 @@
 [Unit]
 Description=Grow overlay partition to fill disk on first boot
-# RequiresMountsFor pulls in and orders after the generated mount unit for the
-# overlay, so the LUKS mapper is open and the filesystem is mounted before this
-# runs. Previously the unit carried DefaultDependencies=no with only
-# After=local-fs.target, which allowed it to run early enough that `blkid -L
-# overlay` could find nothing — and the old script treated that as "nothing to
-# do", stamped itself done and disabled itself, permanently.
-RequiresMountsFor=/var/lib/overlay
+# Ordered after the overlay mount, but NOT requiring it -- and that distinction is
+# the whole point of this unit.
+#
+# Both halves have been wrong in turn. It first carried DefaultDependencies=no with
+# only After=local-fs.target, which let it run before the device existed: `blkid -L
+# overlay` found nothing and the old script called that "nothing to do", stamped
+# itself done and disabled itself, permanently. That was fixed with
+# RequiresMountsFor=/var/lib/overlay, which overshot.
+#
+# It was RequiresMountsFor=/var/lib/overlay, which is a hard requirement: when the
+# overlay cannot be mounted, the generated mount unit fails and systemd refuses to
+# start this one at all ("Dependency failed for first-boot-expand.service").
+# Repairing an overlay that will not mount is exactly this unit's job, so the
+# dependency prevented the one thing it exists to do. A machine whose overlay
+# filesystem is larger than its partition -- which is what an interrupted re-image
+# leaves behind, since the partition table is restored from the image before the
+# overlay's contents are -- sat permanently with
+#
+#   EXT4-fs (sda6): bad geometry: block count 15071212 exceeds size of device
+#   ab-overlay: overlay filesystem would not mount -- booting the slot directly
+#
+# booting without persistence, reporting only "degraded", while the unit that
+# could have grown the partition and fixed it never ran. Its own code says "leave
+# the unit enabled so the next boot tries again"; the retry could never happen.
+#
+# Ordering is still wanted, for the reason the requirement was added in the first
+# place: run too early and `blkid -L overlay` finds nothing. The script handles
+# that case correctly now -- it reports and retries rather than stamping itself
+# done -- so ordering is enough and the requirement is not.
+After=var-lib-overlay.mount
 # /boot too: `cryptsetup resize` on the encrypted overlay needs a key, and the
 # bootstrap key lives on the BOOT partition (crypttab names /cryptkey/luks.key,
 # which exists only inside the initramfs). Without this the resize would fall

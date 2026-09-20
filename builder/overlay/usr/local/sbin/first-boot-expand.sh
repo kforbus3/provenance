@@ -172,6 +172,23 @@ if [ "$ENCRYPTED" = 1 ]; then
         log "  dm-crypt mapping already spans the partition; no key needed"
     fi
 fi
+# An unmounted overlay whose superblock is larger than its partition cannot be
+# resized until it has been checked: resize2fs refuses a filesystem with errors,
+# and so does the kernel's mount. That is the state an interrupted re-image leaves
+# behind -- the partition table comes back from the image before the overlay's
+# contents do -- and until the partition was grown above, it was also unmountable,
+# so nothing could reach it.
+#
+# Only while unmounted, and only in preen mode. e2fsck on a mounted filesystem
+# corrupts it, and an e2fsck that asks questions on a machine with nobody in front
+# of it hangs the boot.
+if [ -z "${MOUNTPOINT:-}" ] && command -v e2fsck >/dev/null 2>&1; then
+    if ! resize2fs -P "$OVERLAY_FS" >/dev/null 2>&1; then
+        log "  the overlay needs checking before it can be resized; running e2fsck -fp"
+        e2fsck -fp "$OVERLAY_FS" 2>&1 | sed 's/^/    /'
+        log "  e2fsck finished (exit $?)"
+    fi
+fi
 resize2fs "$OVERLAY_FS" 2>&1 | sed 's/^/  /'
 
 AFTER="$(fs_size_bytes "${MOUNTPOINT:-$OVERLAY_FS}")"
