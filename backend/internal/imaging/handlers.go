@@ -25,8 +25,30 @@ func Mount(r chi.Router, d *app.Deps, svc *Service) {
 
 	// Machines. No session, no role -- see the comment on heartbeat, and the
 	// stronger version of the same argument at the top of imagerhandlers.go.
-	r.Post("/imaging/heartbeat", h.heartbeat)
-	mountImager(r, h)
+	//
+	// Under TenantBypass, and this is load-bearing rather than tidy. These are the
+	// only writes in the product that arrive with no principal at all: a machine on
+	// a provisioning segment has no session, no user and therefore no tenant, while
+	// imaging_machines is row-level-security protected with tenant_id defaulting to
+	// prov_current_tenant(). On a multi-tenant instance every heartbeat was refused
+	//
+	//   new row violates row-level security policy for table "imaging_machines"
+	//
+	// and the endpoint answered 200 anyway, because a heartbeat that cannot be
+	// recorded must not make a machine retry forever. So machines could never
+	// register, never appeared on the Machines page, and could never be targeted by
+	// a rollout -- while each one was told, every five minutes, that it had checked
+	// in. The whole A/B update path was dead and nothing said so.
+	//
+	// Bypass is the same answer TenantBypass already gives the pre-authentication
+	// endpoints (login, the SSO callbacks, bootstrap): rows created under it land in
+	// the provider tenant, which for imaging is the right owner -- the provisioning
+	// segment belongs to whoever runs the deployment, not to a customer.
+	r.Group(func(mr chi.Router) {
+		mr.Use(auth.TenantBypass)
+		mr.Post("/imaging/heartbeat", h.heartbeat)
+		mountImager(mr, h)
+	})
 
 	// The image download, outside the group below on purpose.
 	//
@@ -95,10 +117,15 @@ func MountMachineCompat(r chi.Router, d *app.Deps, svc *Service) {
 	// already in the field -- reaching them is what this endpoint is FOR -- so the
 	// original path stays mounted forever. `/api/prov/heartbeat` is what newly
 	// built images use; neither is a deprecated alias of the other.
-	r.Post("/api/fleet/heartbeat", h.heartbeat)
-	r.Post("/api/prov/heartbeat", h.heartbeat)
-	r.Post("/api/imaging/report", h.imagerReport)
-	r.Post("/api/imaging/checkin", h.imagerCheckin)
+	// Same bypass, same reason: these are the unversioned paths images in the field
+	// already use, and they reach the same handlers.
+	r.Group(func(mr chi.Router) {
+		mr.Use(auth.TenantBypass)
+		mr.Post("/api/fleet/heartbeat", h.heartbeat)
+		mr.Post("/api/prov/heartbeat", h.heartbeat)
+		mr.Post("/api/imaging/report", h.imagerReport)
+		mr.Post("/api/imaging/checkin", h.imagerCheckin)
+	})
 }
 
 type handler struct {
@@ -197,7 +224,14 @@ func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 	// machine on the network could put itself into a rollout it was never
 	// targeted by.
 	if _, err := h.svc.store.ReportMachine(r.Context(), m); err != nil {
-		h.svc.log.Warn("imaging: recording a heartbeat", "machine", id, "err", err)
+		// Error, not Warn. The machine is answered 200 either way -- a heartbeat it
+		// cannot deliver must not make it retry forever -- so this line is the only
+		// evidence that a machine is checking in and is nonetheless invisible: absent
+		// from the Machines page, and impossible for a rollout to target. That went
+		// unnoticed at Warn level for the whole life of multi-tenancy.
+		h.svc.log.Error("imaging: a machine checked in but could not be recorded; "+
+			"it will not appear on the Machines page and no rollout can reach it",
+			"machine", id, "err", err)
 		writeKV(w, map[string]string{"ok": "false", "error": "could not record"})
 		return
 	}
