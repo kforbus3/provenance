@@ -5,6 +5,38 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.9 — 2026-09-20
+
+**The provisioning stack could be pointed at your main network and said nothing.** It
+runs a DHCP server, and its preflight exists — in its own words — to catch "a DHCP
+server on an interface that already has one, a provisioning range overlapping the office
+network". It checked neither. Configured for standalone DHCP on the interface holding
+the LAN address, with a lease range inside that same subnet, the only problem reported
+was that the netboot imager had not been built yet. Starting it would have put a second
+DHCP server on a live network, with the symptoms landing on machines that have nothing
+to do with imaging and nothing connecting them to it.
+
+Both are now refusals. The knowledge was already written down and never acted on: the
+interface list has always marked the NIC carrying the default route, with a comment
+saying that is "the one you do *not* want a standalone DHCP server on". The
+configuration this feature is actually for — an isolated segment with a range of its
+own — is untouched.
+
+**A detected break in the audit chain can now be acknowledged, never repaired.** A break
+is permanent: nothing can make altered or missing rows verify again, and anything that
+did would be the forgery the chain exists to prevent. But a verdict that can only ever
+say BROKEN stops being read, and then a real break arrives at an indicator everyone has
+learned to ignore — and there was no way out of that state at all. Someone with
+`System.Configure` can now record what they investigated and found. Nothing in the log
+is touched, the break is reported for ever as reviewed, and **verification continues past
+it so a later break is still visible**.
+
+The acknowledgement names the audit event that recorded it, and is honoured only when
+that event is present and itself verifies as part of the chain — so forging one needs the
+HMAC key, and a row inserted straight into the database accounts for nothing. It also
+refuses to acknowledge a sequence that does not currently break, which would otherwise
+pre-authorise a future alteration, and refuses an empty note.
+
 ## v1.9.8 — 2026-09-20
 
 **Rotating the CA now distributes it.** A host learns the CA once, at enrollment,
