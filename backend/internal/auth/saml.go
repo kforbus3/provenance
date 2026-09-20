@@ -662,7 +662,7 @@ func (h *Handler) provisionSAMLUser(ctx context.Context, c samlConfig, info *sam
 	// Group → role mapping, authoritative for IdP-managed roles: assign the roles
 	// the assertion's current groups grant and revoke the IdP-managed roles they no
 	// longer grant, leaving locally-assigned roles intact (see reconcileGroupRoles).
-	h.svc.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, samlAttrValues(info.Values, c.GroupsAttr))
+	h.svc.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, samlAttrValues(info.Values, c.GroupsAttr), c.DefaultRole)
 	return user, nil
 }
 

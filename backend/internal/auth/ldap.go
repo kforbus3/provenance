@@ -158,7 +158,7 @@ func (s *Service) authenticateLDAP(ctx context.Context, username, password strin
 	for _, g := range groups {
 		cns = append(cns, ldapCN(g))
 	}
-	s.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, cns)
+	s.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, cns, c.DefaultRole)
 	return user, nil
 }
 

@@ -74,9 +74,12 @@ func TestReconcileGroupRoleActionsIsAuthoritative(t *testing.T) {
 		return true
 	}
 
+	// No default role in these cases (the "" argument): with one configured the
+	// floor is never revoked, which has its own test below.
+	//
 	// User is currently in cn=admins only. Operator/Read-Only are IdP-managed roles
 	// the user no longer has a group for → must be revoked. Administrator → assigned.
-	add, remove := reconcileGroupRoleActions(mapping, []string{"cn=admins"})
+	add, remove := reconcileGroupRoleActions(mapping, []string{"cn=admins"}, "")
 	if !eq(add, []string{"Administrator"}) {
 		t.Errorf("add = %v, want [Administrator]", add)
 	}
@@ -86,7 +89,7 @@ func TestReconcileGroupRoleActionsIsAuthoritative(t *testing.T) {
 
 	// A group not in the mapping (cn=other) contributes nothing; "Read-Only" and
 	// "Operator" remain in the remove set because no current group grants them.
-	add, remove = reconcileGroupRoleActions(mapping, []string{"cn=admins", "cn=ops", "cn=other"})
+	add, remove = reconcileGroupRoleActions(mapping, []string{"cn=admins", "cn=ops", "cn=other"}, "")
 	if !eq(add, []string{"Administrator", "Operator"}) {
 		t.Errorf("add = %v, want [Administrator Operator]", add)
 	}
@@ -97,7 +100,7 @@ func TestReconcileGroupRoleActionsIsAuthoritative(t *testing.T) {
 	// No groups: every IdP-managed role is revoked, none assigned. A locally-assigned
 	// role (never a value in the mapping) is by construction absent from both lists,
 	// so it is never disturbed.
-	add, remove = reconcileGroupRoleActions(mapping, nil)
+	add, remove = reconcileGroupRoleActions(mapping, nil, "")
 	if len(add) != 0 {
 		t.Errorf("add = %v, want empty", add)
 	}
@@ -106,7 +109,7 @@ func TestReconcileGroupRoleActionsIsAuthoritative(t *testing.T) {
 	}
 
 	// An empty mapping is a no-op in both directions (feature unconfigured).
-	if add, remove = reconcileGroupRoleActions(nil, []string{"cn=admins"}); add != nil || remove != nil {
+	if add, remove = reconcileGroupRoleActions(nil, []string{"cn=admins"}, ""); add != nil || remove != nil {
 		t.Errorf("empty mapping: add=%v remove=%v, want nil/nil", add, remove)
 	}
 }
@@ -132,5 +135,65 @@ func TestSAMLReplayCacheRejectsReplays(t *testing.T) {
 	// After the TTL the entry is evicted; the ID may legitimately recur.
 	if c.observe("assertion-1", base.Add(11*time.Minute)) {
 		t.Error("after the TTL the ID must no longer be considered a replay")
+	}
+}
+
+// The default role is a floor, and must survive a reconciliation that finds the
+// user in none of the mapped groups.
+//
+// This configuration is the ordinary one, and it was broken:
+//
+//	defaultRole:  "Read-Only"
+//	groupRoleMap: {"prov-admins": "Administrator", "prov-readonly": "Read-Only"}
+//
+// Read-Only is both the floor and a mapped value. A user in none of the mapped
+// groups was provisioned with Read-Only and then stripped of it by this
+// reconciliation inside the same login, finishing with no roles at all — while the
+// configuration said every SSO user gets Read-Only. Seen against a live Keycloak:
+// the user in no mapped group ended with (NONE), and the only reason the other
+// three looked right is that their groups happened to grant the same role back.
+func TestTheDefaultRoleIsNeverRevokedByGroupReconciliation(t *testing.T) {
+	mapping := map[string]string{
+		"prov-admins":    "Administrator",
+		"prov-operators": "Operator",
+		"prov-readonly":  "Read-Only",
+	}
+	has := func(list []string, want string) bool {
+		for _, v := range list {
+			if v == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	// In no mapped group at all: the floor stays.
+	add, remove := reconcileGroupRoleActions(mapping, nil, "Read-Only")
+	if has(remove, "Read-Only") {
+		t.Errorf("the default role is revoked for a user in no mapped group: remove=%v", remove)
+	}
+	if has(add, "Read-Only") {
+		t.Errorf("the default role is re-granted on every login: add=%v — provisioning "+
+			"grants it once, and re-imposing a role an administrator removed is a "+
+			"different wrong answer", add)
+	}
+	// The roles that genuinely are group-conferred are still revoked: this must not
+	// turn into "nothing is ever taken away".
+	for _, want := range []string{"Administrator", "Operator"} {
+		if !has(remove, want) {
+			t.Errorf("%s was not revoked for a user in no group: remove=%v", want, remove)
+		}
+	}
+
+	// And in a group that does grant the floor, it is granted rather than skipped.
+	add, _ = reconcileGroupRoleActions(mapping, []string{"prov-readonly"}, "Read-Only")
+	if !has(add, "Read-Only") {
+		t.Errorf("a user whose group grants the default role was not granted it: add=%v", add)
+	}
+
+	// A default role outside the mapping is untouched either way, as before.
+	_, remove = reconcileGroupRoleActions(mapping, nil, "Auditor")
+	if has(remove, "Auditor") {
+		t.Errorf("a default role outside the mapping appeared in remove: %v", remove)
 	}
 }

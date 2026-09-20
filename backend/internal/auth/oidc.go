@@ -443,7 +443,7 @@ func (h *Handler) provisionOIDCUser(ctx context.Context, c oidcConfig, claims ma
 	// Group → role mapping, authoritative for IdP-managed roles: Provenance roles the
 	// user's current IdP groups grant are assigned, and IdP-managed roles they no
 	// longer grant are revoked (see reconcileGroupRoles).
-	h.svc.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, claimStrings(claims, c.GroupsClaim))
+	h.svc.reconcileGroupRoles(ctx, user.ID, c.GroupRoleMap, claimStrings(claims, c.GroupsClaim), c.DefaultRole)
 	return user, nil
 }
 
@@ -465,7 +465,26 @@ func idpAccountConflict(u *models.User, source string) bool {
 // own configured roles are the only reliable signal of which assignments the IdP
 // owns. Every role outside that value set — locally-assigned roles and the
 // provisioning DefaultRole — is left untouched (never returned in remove).
-func reconcileGroupRoleActions(groupRoleMap map[string]string, groups []string) (add, remove []string) {
+//
+// defaultRole is excluded from remove explicitly, and this is the correction to
+// the paragraph above. It said the DefaultRole is "left untouched", which is true
+// only while the default role is not also one of the mapped values — and in the
+// most ordinary configuration it is:
+//
+//	defaultRole:  "Read-Only"
+//	groupRoleMap: {"prov-admins": "Administrator", "prov-readonly": "Read-Only"}
+//
+// A user in none of the mapped groups was then provisioned with Read-Only and
+// stripped of it by this reconciliation in the same login, ending with no roles at
+// all — while the configuration said every SSO user gets Read-Only. Observed
+// against a live Keycloak: a user in no mapped group finished with (NONE).
+//
+// The default role is a floor for anyone the IdP authenticates, not a grant that
+// one group happens to confer, so group membership is not the right thing to
+// revoke it on. It is not re-granted here either: provisioning grants it once, and
+// re-imposing a role an administrator deliberately removed would be a different
+// wrong answer.
+func reconcileGroupRoleActions(groupRoleMap map[string]string, groups []string, defaultRole string) (add, remove []string) {
 	if len(groupRoleMap) == 0 {
 		return nil, nil
 	}
@@ -482,9 +501,12 @@ func reconcileGroupRoleActions(groupRoleMap map[string]string, groups []string) 
 		}
 	}
 	for role := range managed {
-		if desired[role] {
+		switch {
+		case desired[role]:
 			add = append(add, role)
-		} else {
+		case role == defaultRole:
+			// The floor. Not granted here and never taken away here.
+		default:
 			remove = append(remove, role)
 		}
 	}
@@ -502,8 +524,9 @@ func reconcileGroupRoleActions(groupRoleMap map[string]string, groups []string) 
 // perfectly and held nothing, with no trace anywhere. checkRoleMapping now refuses
 // such a configuration when it is saved; this is the net for one that was saved
 // before that existed, or whose role was renamed or deleted afterwards.
-func (s *Service) reconcileGroupRoles(ctx context.Context, userID uuid.UUID, groupRoleMap map[string]string, groups []string) {
-	add, remove := reconcileGroupRoleActions(groupRoleMap, groups)
+func (s *Service) reconcileGroupRoles(ctx context.Context, userID uuid.UUID,
+	groupRoleMap map[string]string, groups []string, defaultRole string) {
+	add, remove := reconcileGroupRoleActions(groupRoleMap, groups, defaultRole)
 	for _, role := range add {
 		if err := s.store.AssignRoleByName(ctx, userID, role); err != nil {
 			// Error, not Warn: the person signing in has just been given less
