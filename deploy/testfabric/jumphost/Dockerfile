@@ -25,6 +25,29 @@ RUN apt-get update \
       curl \
  && rm -rf /var/lib/apt/lists/*
 
+# OpenVPN 2.6, from backports, and asserted rather than assumed.
+#
+# Ubuntu 22.04 ships 2.5, which derives data-channel keys with the TLS 1.0 PRF. A
+# FIPS-mode managed host is forbidden from using it, and 2.6's replacement (the TLS
+# Exporter) has to be supported by BOTH ends -- so a FIPS host connecting to a 2.5
+# server completes the TLS handshake, receives its overlay address, and then carries
+# nothing:
+#
+#   TLS Error: PRF calculation failed ... the policy does not allow it (e.g. running in
+#   FIPS mode). The peer did not announce support for the modern TLS Export feature
+#
+# The tunnel device sits there with the right address while the server logs an
+# inactivity timeout every two minutes, and every visible symptom is on the managed
+# host. The final awk is the point of this block: it fails the BUILD if the installed
+# openvpn is still older than 2.6, because an image that quietly shipped 2.5 is exactly
+# how this was missed.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends -t jammy-backports openvpn \
+ && rm -rf /var/lib/apt/lists/* \
+ && openvpn --version | head -1 \
+ && openvpn --version | head -1 \
+      | awk '{split($2,v,"."); exit !(v[1]>2 || (v[1]==2 && v[2]>=6))}'
+
 COPY --from=wgbuild /src/wireguard-go /usr/local/bin/wireguard-go
 
 # Login user that the Provenance CA-signed certificates map to. Passwordless sudo

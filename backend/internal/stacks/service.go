@@ -48,7 +48,19 @@ const (
 )
 
 func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, false, "")
+	return s.deploy(ctx, stackID, false, false, "")
+}
+
+// DeployAcknowledgingStatefulMajor is Deploy with the stateful-image guard waived.
+//
+// The guard exists because nobody means to point postgres 18 at a version 17 data
+// directory. But somebody who has just run pg_upgrade by hand means exactly that, and
+// a guard with no way through would make the platform useless for the one operator
+// who is doing the right thing. So the refusal is the default and this is the answer
+// to it -- reached from the UI only after the dialog has named the image, both
+// versions and the migration involved.
+func (s *Service) DeployAcknowledgingStatefulMajor(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
+	return s.deploy(ctx, stackID, false, true, "")
 }
 
 // DeployPulling is Deploy, fetching images first.
@@ -56,7 +68,7 @@ func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.Contain
 // For update rollouts. See renderScript's `pull` for why an ordinary deploy does
 // not do this and why an update rollout must.
 func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, true, "")
+	return s.deploy(ctx, stackID, true, false, "")
 }
 
 // DeployPullingService is DeployPulling narrowed to one compose service.
@@ -64,10 +76,40 @@ func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.
 // For an update rollout, which is about one image. See renderScript's `service`
 // for why the whole project is the wrong scope there.
 func (s *Service) DeployPullingService(ctx context.Context, stackID uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, true, services...)
+	// Never acknowledged: a rollout is automation, and the whole point of the guard
+	// is that this decision belongs to a person who has a migration plan.
+	return s.deploy(ctx, stackID, true, false, services...)
 }
 
-func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, services ...string) (*store.ContainerStack, string, error) {
+// PreflightStatefulMajor answers the stateful-image question without deploying
+// anything, so the refusal can be a dialog rather than a failure that arrives
+// minutes later in a row on a table.
+//
+// It reads only the database: the stored compose and the containers the last sweep
+// saw. Nothing is written and the host is not contacted, which is what makes it safe
+// to run on the request itself while the deploy that follows does not.
+func (s *Service) PreflightStatefulMajor(ctx context.Context, stackID uuid.UUID) (*StatefulMajorError, error) {
+	st, err := s.store.GetStack(ctx, stackID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(st.Compose) == "" {
+		return nil, nil
+	}
+	h, err := s.store.GetHost(ctx, st.HostID)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
+	if h.Inventory == nil {
+		// Nothing collected from this host yet, so there is no evidence either way.
+		// Silence here means "cannot tell", and the deploy proceeds -- refusing on
+		// an absence would block every first deploy.
+		return nil, nil
+	}
+	return statefulPinConflict(st.Compose, nil, h.Inventory.Containers, st.Path), nil
+}
+
+func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull, ackStatefulMajor bool, services ...string) (*store.ContainerStack, string, error) {
 	st, err := s.store.GetStack(ctx, stackID)
 	if err != nil {
 		return nil, "", err
@@ -78,6 +120,17 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 	h, err := s.store.GetHost(ctx, st.HostID)
 	if err != nil {
 		return nil, "", fmt.Errorf("host: %w", err)
+	}
+
+	// Refuse before touching the host, not after.
+	//
+	// Nothing is recorded and nothing is written: this deploy has not happened, so a
+	// deployment row saying it failed would be wrong. The caller gets an error it can
+	// recognise and offer a way through.
+	if !ackStatefulMajor && h.Inventory != nil {
+		if conflict := statefulPinConflict(st.Compose, services, h.Inventory.Containers, st.Path); conflict != nil {
+			return st, "", conflict
+		}
 	}
 
 	// In progress, recorded before it starts.
@@ -111,6 +164,22 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, serv
 		s.log.Warn("recording stack deployment", "stack", st.ID, "err", rerr)
 	}
 	if state == "failed" {
+		// What happened to the SERVICE is the part an operator needs first, and it is
+		// not in the exit code: the script puts the previous compose file back and
+		// brings it up. Saying only "deploy failed" left people to find that out by
+		// looking, or to assume the stack was down when it was not.
+		switch {
+		case strings.Contains(out, "::RESTORED::"):
+			return st, out, fmt.Errorf("deploy failed on %s (exit %d) — the previous compose file "+
+				"was restored and the stack is running on it. The rejected file is on the host as "+
+				"docker-compose.yml.rejected", h.Hostname, code)
+		case strings.Contains(out, "::RESTOREFAILED::"):
+			return st, out, fmt.Errorf("deploy failed on %s (exit %d) AND the previous compose file "+
+				"did not come up either — this stack is down", h.Hostname, code)
+		case strings.Contains(out, "::NOPREVIOUS::"):
+			return st, out, fmt.Errorf("deploy failed on %s (exit %d) and this host has no previous "+
+				"compose file to fall back to — this stack is down", h.Hostname, code)
+		}
 		return st, out, fmt.Errorf("deploy failed on %s (exit %d)", h.Hostname, code)
 	}
 	return st, out, nil

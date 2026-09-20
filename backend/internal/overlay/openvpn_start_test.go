@@ -355,3 +355,270 @@ func TestWithoutADiagnosisTheOldErrorIsKept(t *testing.T) {
 		t.Errorf("the remote-address hint was lost: %v", err)
 	}
 }
+
+// A config rewritten under a running server must restart it.
+//
+// This is the failure that made the OpenVPN overlay flap for two days: moving the
+// overlay off the WireGuard subnet rewrote the tunnel network in server.conf, the
+// daemon went on enforcing the old one, and the script reported
+// OVPN_SERVER_ALREADY_RUNNING every time:
+//
+//	MULTI ERROR: primary virtual IP for prov-h-8295... (10.101.0.2) violates tunnel
+//	network/netmask constraint (10.100.0.0/255.255.255.0)
+//
+// The harness runs the REAL gate from the generated script, with the process checks
+// and the launch stubbed by shell functions so a test can stand in for a daemon. What
+// it asserts is behaviour, not text: an unchanged config must still take the
+// already-running path (no blip on ordinary re-enrollment), and a changed one must
+// restart and record the new fingerprint.
+func TestServerRestartsOntoAChangedConfig(t *testing.T) {
+	cases := []struct {
+		name          string
+		running       bool
+		activeContent string // "" means no .active file at all
+		wantMarkers   []string
+		wantAbsent    []string
+		wantActive    bool // .active must end up matching server.conf
+	}{
+		{
+			name: "unchanged config is left alone", running: true, activeContent: "same",
+			wantMarkers: []string{"OVPN_SERVER_ALREADY_RUNNING"},
+			wantAbsent:  []string{"OVPN_SERVER_CONFIG_CHANGED", "OVPN_SERVER_STARTED"},
+		},
+		{
+			name: "changed config restarts the server", running: true, activeContent: "an older config\n",
+			wantMarkers: []string{"OVPN_SERVER_CONFIG_CHANGED", "OVPN_SERVER_STARTED"},
+			wantAbsent:  []string{"OVPN_SERVER_ALREADY_RUNNING"},
+			wantActive:  true,
+		},
+		{
+			name: "no fingerprint and nothing running starts it", running: false, activeContent: "",
+			wantMarkers: []string{"OVPN_SERVER_STARTED"},
+			wantAbsent:  []string{"OVPN_SERVER_ALREADY_RUNNING"},
+			wantActive:  true,
+		},
+		{
+			name: "no fingerprint under a running daemon restarts it", running: true, activeContent: "",
+			wantMarkers: []string{"OVPN_SERVER_CONFIG_CHANGED", "OVPN_SERVER_STARTED"},
+			wantAbsent:  []string{"OVPN_SERVER_ALREADY_RUNNING"},
+			wantActive:  true,
+		},
+	}
+
+	o := startTestOverlay()
+	conf, err := o.ServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := o.JumpServerScript([]byte("ca"), []byte("crt"), []byte("key"), []byte(testCRLPEM), conf)
+	// To the end of the script: the gate is the last thing it renders, and cutting at
+	// the first "fi" stops short of the launch (which is how this test first passed
+	// while exercising nothing).
+	gate := script[strings.Index(script, "_ovpn_conf_changed=1"):]
+	if !strings.Contains(gate, "openvpn --config") {
+		t.Fatalf("the extracted gate does not contain the launch, so this test proves nothing:\n%s", gate)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			confPath := filepath.Join(dir, "server.conf")
+			activePath := filepath.Join(dir, "server.conf.active")
+			if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.activeContent != "" {
+				body := tc.activeContent
+				if body == "same" {
+					body = conf
+				}
+				if err := os.WriteFile(activePath, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.running {
+				if err := os.WriteFile(filepath.Join(dir, "running"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Stand-ins for the daemon and the process table. `kill` stops the
+			// stub server; `openvpn` starts it; both record that they ran, so a
+			// gate that skips the restart cannot pass by accident.
+			stubs := "ST=" + dir + "\n" +
+				"ovpn_server_running() { [ -f \"$ST/running\" ]; }\n" +
+				"ovpn_server_pids() { [ -f \"$ST/running\" ] && echo 4242; }\n" +
+				"kill() { rm -f \"$ST/running\"; echo \"KILLED $*\" >> \"$ST/acts\"; }\n" +
+				"sleep() { :; }\n" +
+				"openvpn() { touch \"$ST/running\"; echo \"LAUNCHED $*\" >> \"$ST/acts\"; }\n"
+			harness := stubs + strings.ReplaceAll(gate, provDir, dir) + "\n"
+
+			out, err := exec.Command("sh", "-c", harness).CombinedOutput()
+			if err != nil {
+				t.Fatalf("gate failed: %v\n%s", err, out)
+			}
+			got := string(out)
+			for _, want := range tc.wantMarkers {
+				if !strings.Contains(got, want) {
+					t.Errorf("gate did not report %s\noutput: %s", want, got)
+				}
+			}
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(got, absent) {
+					t.Errorf("gate reported %s when it must not\noutput: %s", absent, got)
+				}
+			}
+			acts, _ := os.ReadFile(filepath.Join(dir, "acts"))
+			if tc.wantActive {
+				if !strings.Contains(string(acts), "LAUNCHED") {
+					t.Errorf("no launch happened, so the daemon is still on the old config; acts=%q", acts)
+				}
+				active, err := os.ReadFile(activePath)
+				if err != nil {
+					t.Fatalf("no fingerprint recorded after a start: %v", err)
+				}
+				if string(active) != conf {
+					t.Errorf("fingerprint does not match the config the daemon was started with:\n%s", active)
+				}
+			} else {
+				if strings.Contains(string(acts), "LAUNCHED") || strings.Contains(string(acts), "KILLED") {
+					t.Errorf("an unchanged config disturbed a running server: acts=%q", acts)
+				}
+			}
+			if tc.running && tc.activeContent == "same" {
+				if _, err := os.Stat(filepath.Join(dir, "running")); err != nil {
+					t.Errorf("the running server was stopped for an unchanged config: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// The jump host's OpenVPN must be 2.6+ or a FIPS client cannot use the tunnel.
+//
+// A 2.6 FIPS client against a 2.5 server completes the TLS handshake, takes its
+// PUSH_REPLY, and then fails to derive data-channel keys, because pre-2.6 key
+// expansion is the TLS 1.0 PRF and FIPS forbids it:
+//
+//	TLS Error: PRF calculation failed ... the policy does not allow it
+//	TLS Error: generate_key_expansion failed
+//
+// The device comes up with the right address and carries nothing. The error appears on
+// the CLIENT while the cause is the server, so the server script has to check itself.
+func TestJumpServerRequiresOpenVPN26(t *testing.T) {
+	o := startTestOverlay()
+	conf, err := o.ServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := o.JumpServerScript([]byte("ca"), []byte("crt"), []byte("key"), []byte(testCRLPEM), conf)
+	// The version block, up to where the material starts being written.
+	i := strings.Index(script, "_ovpn_major_minor()")
+	j := strings.Index(script, "mkdir -p ")
+	if i < 0 || j < 0 || j < i {
+		t.Fatal("the version check is no longer where this test reads it")
+	}
+	block := script[i:j]
+
+	for _, tc := range []struct {
+		version    string
+		upgradesTo string // what a successful apt upgrade would install; "" = none available
+		wantPre26  bool
+		wantForce  bool
+		wantStuck  bool
+	}{
+		{version: "2.6.12", wantPre26: false},
+		{version: "2.5.11", upgradesTo: "2.6.12", wantPre26: true, wantForce: true},
+		{version: "2.5.11", upgradesTo: "", wantPre26: true, wantStuck: true},
+		{version: "3.0.0", wantPre26: false},
+	} {
+		t.Run(tc.version+"->"+tc.upgradesTo, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := t.TempDir()
+			// `openvpn --version` reports whatever the state file holds, so an
+			// "upgrade" is the stub apt-get rewriting it.
+			if err := os.WriteFile(filepath.Join(dir, "version"), []byte(tc.version), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			write := func(name, body string) {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write("openvpn", `echo "OpenVPN $(cat `+dir+`/version) x86_64-pc-linux-gnu"`)
+			upgrade := ":"
+			if tc.upgradesTo != "" {
+				upgrade = `case "$*" in *backports*) echo ` + tc.upgradesTo + ` > ` + dir + `/version ;; esac`
+			}
+			write("apt-get", upgrade)
+
+			// Exported: the script reads the codename in a subshell (it sources
+			// /etc/os-release there), so an unexported variable is invisible to it —
+			// which is also why a host whose os-release omits VERSION_CODENAME
+			// reports STILL_PRE26 instead of quietly skipping the check.
+			harness := "PATH=" + bin + ":$PATH\nexport PATH\n" +
+				"VERSION_CODENAME=jammy\nexport VERSION_CODENAME\n" + block
+			out, err := exec.Command("sh", "-c", harness).CombinedOutput()
+			if err != nil {
+				t.Fatalf("version block failed: %v\n%s", err, out)
+			}
+			got := string(out)
+			if tc.wantPre26 != strings.Contains(got, "OVPN_SERVER_PRE26=") {
+				t.Errorf("OVPN_SERVER_PRE26 presence wrong for %s: %s", tc.version, got)
+			}
+			if tc.wantForce && !strings.Contains(got, "OVPN_SERVER_UPGRADED=2.6") {
+				t.Errorf("a 2.5 server was not upgraded, so a FIPS host's tunnel will carry "+
+					"nothing: %s", got)
+			}
+			if tc.wantStuck && !strings.Contains(got, "OVPN_SERVER_STILL_PRE26=") {
+				t.Errorf("an un-upgradable 2.5 server is not reported, so the enrollment gives "+
+					"no hint why the tunnel is dead: %s", got)
+			}
+			if !strings.Contains(got, "OVPN_SERVER_VERSION=") {
+				t.Errorf("the server's version is not reported at all: %s", got)
+			}
+		})
+	}
+}
+
+// An upgraded binary is still the old code until the process restarts, so the upgrade
+// must force one even when the config is byte-identical.
+func TestUpgradedServerBinaryForcesARestart(t *testing.T) {
+	o := startTestOverlay()
+	conf, err := o.ServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := o.JumpServerScript([]byte("ca"), []byte("crt"), []byte("key"), []byte(testCRLPEM), conf)
+	gate := script[strings.Index(script, "_ovpn_conf_changed=1"):]
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "server.conf"), []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Identical fingerprint: only the forced restart can make this start anything.
+	if err := os.WriteFile(filepath.Join(dir, "server.conf.active"), []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "running"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubs := "ST=" + dir + "\n_ovpn_force_restart=1\n" +
+		"ovpn_server_running() { [ -f \"$ST/running\" ]; }\n" +
+		"ovpn_server_pids() { [ -f \"$ST/running\" ] && echo 4242; }\n" +
+		"kill() { rm -f \"$ST/running\"; }\n" +
+		"sleep() { :; }\n" +
+		"openvpn() { touch \"$ST/running\"; echo LAUNCHED >> \"$ST/acts\"; }\n"
+	out, err := exec.Command("sh", "-c", stubs+strings.ReplaceAll(gate, provDir, dir)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("gate failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "OVPN_SERVER_CONFIG_CHANGED") {
+		t.Errorf("an upgraded binary did not restart the server, so it keeps running the old "+
+			"code and a FIPS client still cannot make keys: %s", out)
+	}
+	acts, _ := os.ReadFile(filepath.Join(dir, "acts"))
+	if !strings.Contains(string(acts), "LAUNCHED") {
+		t.Error("nothing was started after the upgrade")
+	}
+}

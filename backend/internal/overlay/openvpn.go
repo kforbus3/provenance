@@ -291,11 +291,17 @@ func runningCheck(fn, confPath string) string {
   done
   return 1
 }
-`, fn, confPath)
+%[3]s() {
+  for _p in $(pgrep -x openvpn 2>/dev/null); do
+    if tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -qF -- '%[2]s'; then echo "$_p"; fi
+  done
+}
+`, fn, confPath, strings.TrimSuffix(fn, "_running")+"_pids")
 }
 
 func (o *OpenVPN) JumpServerScript(caPEM, certPEM, keyPEM, crlPEM []byte, serverConf string) string {
 	return fmt.Sprintf(`set -e
+_ovpn_force_restart=0
 if ! command -v openvpn >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq openvpn >/dev/null 2>&1
   elif command -v dnf >/dev/null 2>&1; then dnf install -y -q openvpn >/dev/null 2>&1
@@ -303,6 +309,65 @@ if ! command -v openvpn >/dev/null 2>&1; then
   elif command -v apk >/dev/null 2>&1; then apk add --no-cache openvpn >/dev/null 2>&1
   fi
 fi
+# The SERVER's version decides whether a FIPS client can use the tunnel at all.
+#
+# OpenVPN derives its data-channel keys from the TLS session. Up to 2.5 that is the
+# TLS 1.0 PRF, which a FIPS policy forbids; 2.6 announces the modern TLS Exporter and
+# uses that instead. Both ends have to support it, so a 2.6 FIPS client against a 2.5
+# server completes the TLS handshake, receives its PUSH_REPLY, and then cannot make
+# keys:
+#
+#   TLS Error: PRF calculation failed ... the policy does not allow it (e.g. running in
+#   FIPS mode). The peer did not announce support for the modern TLS Export feature
+#   TLS Error: generate_key_expansion failed
+#
+# The tunnel device comes up with the right address and carries nothing, the server
+# logs an inactivity timeout every two minutes, and the error is on the CLIENT while
+# the cause is the jump host -- which is why this is checked and reported here.
+#
+# Ubuntu 22.04 (the jump-host image) ships 2.5 and carries 2.6 in backports, the same
+# one-line upgrade the managed-host installer already makes for FIPS hosts.
+_ovpn_major_minor() {
+  openvpn --version 2>/dev/null | head -1 | awk '{print $2}' | cut -d. -f1,2
+}
+_ovpn_is_26() {
+  _v=$(_ovpn_major_minor)
+  _maj=$(echo "$_v" | cut -d. -f1)
+  _min=$(echo "$_v" | cut -d. -f2)
+  [ -z "$_maj" ] && return 1
+  if [ "$_maj" -gt 2 ] 2>/dev/null; then return 0; fi
+  [ "$_maj" = "2" ] && [ -n "$_min" ] && [ "$_min" -ge 6 ] 2>/dev/null
+}
+if ! _ovpn_is_26; then
+  echo "OVPN_SERVER_PRE26=$(_ovpn_major_minor)"
+  if command -v apt-get >/dev/null 2>&1; then
+    # Read, not sourced. '.' is a special builtin, so on a host with no
+    # /etc/os-release the shell running this substitution EXITS -- the echo never
+    # runs, the codename comes back empty, and the upgrade below is skipped with
+    # nothing said about why. Sourcing also executes whatever the file contains, in
+    # this shell, to obtain one value. The environment is honoured as a fallback so a
+    # distribution that declares no codename can still be told which suite to use.
+    _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -1)
+    [ -n "$_codename" ] || _codename="${VERSION_CODENAME:-}"
+    if [ -n "$_codename" ]; then
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq -t "${_codename}-backports" openvpn >/dev/null 2>&1 || true
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q openvpn >/dev/null 2>&1 || true
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache -u openvpn >/dev/null 2>&1 || true
+  fi
+  if _ovpn_is_26; then
+    # A new binary is not a new process: the running server keeps the old code until
+    # it is restarted, so the upgrade has to force one.
+    _ovpn_force_restart=1
+    echo "OVPN_SERVER_UPGRADED=$(_ovpn_major_minor)"
+  else
+    echo "OVPN_SERVER_STILL_PRE26=$(_ovpn_major_minor)"
+  fi
+fi
+echo "OVPN_SERVER_VERSION=$(_ovpn_major_minor)"
 mkdir -p %[1]s/ccd
 umask 077
 cat > %[1]s/ca.crt <<'FLEOF'
@@ -319,9 +384,48 @@ cat > %[1]s/crl.pem <<'FLEOF'
 chmod 0644 %[1]s/crl.pem
 cat > %[1]s/server.conf <<'FLEOF'
 %[6]sFLEOF
-%[7]s%[8]sif ovpn_server_running; then
+%[7]s%[8]s# Running is not the same as running THIS config.
+#
+# The check above answers "is there an openvpn serving this path", and re-enrollment
+# leans on that so a live overlay is not dropped for nothing. But the config is
+# rewritten every time, and openvpn reads it ONCE at start: when its contents change
+# -- most consequentially the tunnel network -- the process goes on serving the old
+# one from a file that says something else, and nothing anywhere reports a
+# disagreement.
+#
+# That is not theoretical. Moving the OpenVPN overlay off the WireGuard subnet
+# rewrote 'server 10.101.0.0' while the running server still enforced 10.100.0.0/24,
+# so every client was pushed an address outside the server's own tunnel network:
+#
+#   MULTI ERROR: primary virtual IP for prov-h-8295... (10.101.0.2) violates tunnel
+#   network/netmask constraint (10.100.0.0/255.255.255.0)
+#   ... Inactivity timeout (--ping-restart), restarting
+#
+# The tunnel came up, carried traffic, and died every two minutes, while the jump
+# host kept two routes for one prefix and this script kept reporting
+# OVPN_SERVER_ALREADY_RUNNING. So the fingerprint of the config the daemon was
+# actually STARTED with is kept beside it, and a change restarts the server.
+#
+# Only a change does. An unchanged config still takes the already-running path, which
+# is what makes ordinary re-enrollment free of blips. The first run after an upgrade
+# has no fingerprint to compare and restarts once: the alternative is assuming the
+# running process matches a file nobody has checked, which is the bug above.
+_ovpn_conf_changed=1
+if [ -f %[1]s/server.conf.active ] && cmp -s %[1]s/server.conf %[1]s/server.conf.active; then
+  _ovpn_conf_changed=0
+fi
+# An openvpn that was just upgraded is still the old code until it restarts.
+if [ "$_ovpn_force_restart" = "1" ]; then _ovpn_conf_changed=1; fi
+if ovpn_server_running && [ "$_ovpn_conf_changed" = "0" ]; then
   echo OVPN_SERVER_ALREADY_RUNNING
 else
+  if ovpn_server_running; then
+    echo OVPN_SERVER_CONFIG_CHANGED
+    for _p in $(ovpn_server_pids); do kill "$_p" 2>/dev/null || true; done
+    _i=0
+    while [ $_i -lt 10 ] && ovpn_server_running; do sleep 1; _i=$((_i+1)); done
+    for _p in $(ovpn_server_pids); do kill -9 "$_p" 2>/dev/null || true; done
+  fi
   # --daemon detaches before the tun/bind work, so its failures land nowhere unless
   # a log is named. That log is the only account of WHY a start failed, and it is
   # tailed into the enrollment step below.
@@ -334,6 +438,10 @@ else
     sleep 1; _i=$((_i+1))
   done
   if ovpn_server_running; then
+    # The fingerprint records what is RUNNING, so it is written only once a start
+    # has taken. A failed start leaves the change pending and the next enrollment
+    # tries again, rather than recording a config nothing is serving.
+    cp %[1]s/server.conf %[1]s/server.conf.active 2>/dev/null || true
     echo OVPN_SERVER_STARTED
   else
     echo OVPN_SERVER_START_FAILED
@@ -560,7 +668,14 @@ if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ] \
    && ! openvpn --show-ciphers 2>/dev/null | grep -qiE '^(AES|CHACHA)'; then
   echo OVPN_FIPS_NEEDS_PROVIDER_AWARE
   if command -v apt-get >/dev/null 2>&1; then
-    _codename=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")
+    # Read, not sourced. '.' is a special builtin, so on a host with no
+    # /etc/os-release the shell running this substitution EXITS -- the echo never
+    # runs, the codename comes back empty, and the upgrade below is skipped with
+    # nothing said about why. Sourcing also executes whatever the file contains, in
+    # this shell, to obtain one value. The environment is honoured as a fallback so a
+    # distribution that declares no codename can still be told which suite to use.
+    _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -1)
+    [ -n "$_codename" ] || _codename="${VERSION_CODENAME:-}"
     if [ -n "$_codename" ]; then
       apt-get update -qq >/dev/null 2>&1 || true
       apt-get install -y -qq -t "${_codename}-backports" openvpn >/dev/null 2>&1 || true
@@ -582,7 +697,26 @@ cat > %[1]s/client.key <<'FLEOF'
 %[4]sFLEOF
 cat > %[1]s/client.ovpn <<'FLEOF'
 %[5]sFLEOF
-%[6]s%[7]sif ! ovpn_client_running; then
+%[6]s%[7]s# A running client on a stale profile, for the same reason the server has this:
+# openvpn reads its config once, so a client left running across a change (a new
+# tunnel network, a reissued certificate, a moved jump host) keeps dialling the old
+# one while the file beside it says otherwise. Stop it and let the activation below
+# treat this as a fresh bring-up -- which also re-answers the systemd question, since
+# which unit template owns the profile can change with the config.
+_ovpn_client_conf_changed=1
+if [ -f %[1]s/client.ovpn.active ] && cmp -s %[1]s/client.ovpn %[1]s/client.ovpn.active; then
+  _ovpn_client_conf_changed=0
+fi
+if ovpn_client_running && [ "$_ovpn_client_conf_changed" = "1" ]; then
+  echo OVPN_CLIENT_CONFIG_CHANGED
+  systemctl stop openvpn-client@prov-overlay >/dev/null 2>&1 || true
+  systemctl stop openvpn@prov-overlay >/dev/null 2>&1 || true
+  for _p in $(ovpn_client_pids); do kill "$_p" 2>/dev/null || true; done
+  _i=0
+  while [ $_i -lt 10 ] && ovpn_client_running; do sleep 1; _i=$((_i+1)); done
+  for _p in $(ovpn_client_pids); do kill -9 "$_p" 2>/dev/null || true; done
+fi
+if ! ovpn_client_running; then
   if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
     # BOTH locations, because the two unit templates read different ones and
     # which template exists depends on the distribution.
@@ -684,7 +818,11 @@ if [ -n "$OVPN_IP" ]; then
   else
     echo OVPN_HOST_NOT_PERSISTENT
   fi
-%[9]s  echo OVPN_HOST_CONFIGURED
+%[9]s  # Same rule as the server: the fingerprint describes what is RUNNING, so it is
+  # written only where a tunnel was actually observed. A profile that did not come
+  # up stays "changed" and is retried rather than recorded as live.
+  cp %[1]s/client.ovpn %[1]s/client.ovpn.active 2>/dev/null || true
+  echo OVPN_HOST_CONFIGURED
 else
   # Diagnostics only — nothing here may abort the script. "set -e" is still on, and
   # journalctl/systemctl status exit non-zero for a unit that is merely inactive:
@@ -706,6 +844,20 @@ else
     else
       echo "OVPN_DIAGNOSIS=this host's OpenVPN reports no usable data ciphers, so no tunnel can be established. Check that its OpenSSL providers are configured (openvpn --show-ciphers lists nothing)."
     fi
+  fi
+  # Keys that cannot be derived, which reads as an OpenSSL problem on this host and is
+  # not one.
+  #
+  # Pre-2.6 OpenVPN expands data-channel keys with the TLS 1.0 PRF. A FIPS policy
+  # forbids it, and 2.6's replacement (the TLS Exporter) has to be supported by BOTH
+  # ends -- so a FIPS host talking to a 2.5 jump host completes the TLS handshake,
+  # receives its address, and then fails here. The tunnel device is up with the correct
+  # address and carries nothing. Every symptom is on this host; the fix is on the other
+  # one, and nothing in the raw error says so.
+  if journalctl -u openvpn@prov-overlay -u openvpn-client@prov-overlay -n 200 --no-pager 2>/dev/null | grep -q 'PRF calculation failed' ||
+     grep -q 'PRF calculation failed' %[1]s/client.log 2>/dev/null; then
+    echo OVPN_PEER_TOO_OLD
+    echo "OVPN_DIAGNOSIS=this host runs FIPS mode and the jump host's OpenVPN is older than 2.6, so the data-channel keys cannot be derived: pre-2.6 uses the TLS 1.0 PRF, which FIPS forbids, and only 2.6 offers the replacement. The tunnel connects and carries nothing. Upgrade OpenVPN on the JUMP HOST to 2.6 or newer (Ubuntu 22.04: apt install -t jammy-backports openvpn), restart its server, and enrol again. This host's OpenVPN is $(openvpn --version 2>/dev/null | head -1 | cut -d\  -f2)."
   fi
   # The address the client was told to dial. When the tunnel never comes up this is
   # almost always the answer — the server's UDP port is not reachable from here —

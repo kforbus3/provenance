@@ -191,11 +191,40 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 	// Same treatment as the registry check, for the same reason: work that
 	// outlasts a request must not be tied to one.
 	ctx := context.WithoutCancel(r.Context())
+
+	// The stateful-image refusal is answered ON the request, before anything is
+	// detached, because a deploy that reports back asynchronously cannot ask a
+	// question. See Service.PreflightStatefulMajor.
+	ack := r.URL.Query().Get("acknowledgeStatefulMajor") == "1"
+	if !ack {
+		if conflict, err := h.svc.PreflightStatefulMajor(ctx, id); err == nil && conflict != nil {
+			httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+				"error":       conflict.Error(),
+				"code":        "stateful_major_bump",
+				"service":     conflict.Service,
+				"repository":  conflict.Repo,
+				"from":        conflict.FromTag,
+				"to":          conflict.ToTag,
+				"migration":   conflict.How,
+				"acknowledge": "acknowledgeStatefulMajor=1",
+			})
+			return
+		}
+	}
 	// Captured here, not in the goroutine: the actor belongs to the request, and
 	// reading it after the handler has returned is a race waiting to be found.
 	actor := auth.MustPrincipal(r)
 	go func() {
-		st, out, err := h.svc.Deploy(ctx, id)
+		var (
+			st  *store.ContainerStack
+			out string
+			err error
+		)
+		if ack {
+			st, out, err = h.svc.DeployAcknowledgingStatefulMajor(ctx, id)
+		} else {
+			st, out, err = h.svc.Deploy(ctx, id)
+		}
 		if err != nil {
 			detail := map[string]any{"output": out}
 			if st != nil {
@@ -206,8 +235,13 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 			h.auditAs(ctx, actor, "stack.deploy_failed", id.String(), detail)
 			return
 		}
-		h.auditAs(ctx, actor, "stack.deploy", id.String(), map[string]any{
-			"host": st.Hostname, "name": st.Name, "revision": st.Revision})
+		detail := map[string]any{"host": st.Hostname, "name": st.Name, "revision": st.Revision}
+		if ack {
+			// A waived guard is a decision, and the only place it can be read back
+			// from afterwards is here.
+			detail["statefulMajorAcknowledged"] = true
+		}
+		h.auditAs(ctx, actor, "stack.deploy", id.String(), detail)
 	}()
 
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{

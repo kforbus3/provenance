@@ -34,9 +34,9 @@ the backend's own startup, and until it succeeds every connection fails with
 `unable to authenticate, no supported methods remain` — which says nothing about CA
 trust. It now retries every 5s until the first success.
 
-**The OpenVPN overlay works on FIPS Ubuntu 22.04 — with three fixes.** An earlier
+**The OpenVPN overlay works on FIPS Ubuntu 22.04 — with four fixes.** An earlier
 draft of this section said the platform could not do it. That was wrong: keith runs it
-at work, and chasing why it failed here produced three real defects.
+at work, and chasing why it failed here produced four real defects.
 
 1. **OpenVPN 2.5 cannot use the OpenSSL 3 FIPS provider.** It resolves ciphers against
    the default provider, so on a FIPS host `openvpn --show-ciphers` lists **nothing**
@@ -57,8 +57,29 @@ at work, and chasing why it failed here produced three real defects.
    OpenVPN host was unreachable ("No route to host") with a perfectly healthy tunnel.
    The cert overlay now gets `10.101.0.0/24` by default, and a deployment that sets
    both to the same prefix is warned at startup.
+4. **The server was never restarted onto the config that had just been rewritten.**
+   The provisioning script wrote `server.conf` and then skipped the start because an
+   openvpn was already running against that path — deliberately, so re-enrolment does
+   not drop live tunnels. But openvpn reads its config once, so after fix 3 the daemon
+   went on enforcing `10.100.0.0/24` while the file beside it said `10.101.0.0/24`, and
+   every client was pushed an address outside the server's own tunnel network:
 
-Verified after the three fixes: enrolment completes every step including
+   ```
+   MULTI ERROR: primary virtual IP for prov-h-8295… (10.101.0.2) violates tunnel
+   network/netmask constraint (10.100.0.0/255.255.255.0)
+   … Inactivity timeout (--ping-restart), restarting
+   ```
+
+   The tunnel came up, carried traffic, and died every two minutes, with
+   `OVPN_SERVER_ALREADY_RUNNING` reported each time. The script now keeps a fingerprint
+   of the config the daemon was **started with** (`server.conf.active`, and
+   `client.ovpn.active` on the host) and restarts only when it no longer matches — so an
+   unchanged re-enrolment is still free of blips, while a changed tunnel network is
+   actually applied. The first run after an upgrade has nothing to compare and restarts
+   once, which is the honest choice: the alternative is assuming a running process
+   matches a file nobody has checked, which is this bug.
+
+Verified after the four fixes: enrolment completes every step including
 `verify_overlay_tunnel ok — jump host reached 10.101.0.2:22 over the openvpn tunnel`,
 the server negotiates AES-256-GCM, and the host reports online with the overlay healthy.
 

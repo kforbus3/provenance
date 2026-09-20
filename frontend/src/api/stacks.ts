@@ -84,9 +84,33 @@ export async function deleteStack(id: string): Promise<void> {
 // screen went on showing the previous outcome and pressing Deploy looked like it
 // had done nothing. The stack row carries the state from here on: "deploying"
 // while it runs, then deployed or failed.
-export async function deployStack(id: string): Promise<{ status: string; note?: string }> {
-  const { data } = await api.post<{ status: string; note?: string }>(`/api/v1/stacks/${id}/deploy`);
+export async function deployStack(id: string, acknowledgeStatefulMajor = false):
+  Promise<{ status: string; note?: string }> {
+  const q = acknowledgeStatefulMajor ? "?acknowledgeStatefulMajor=1" : "";
+  const { data } = await api.post<{ status: string; note?: string }>(`/api/v1/stacks/${id}/deploy${q}`);
   return data;
+}
+
+// A deploy refused because it would move a database image across a major version.
+//
+// 409 rather than a failure minutes later: the check reads the stored compose against
+// the containers the host is running, so it can be answered on the request. Both
+// versions and the migration are named, because the operator is the one who has to
+// decide whether the data directory has already been converted.
+export type StatefulMajorRefusal = {
+  code: "stateful_major_bump";
+  error: string;
+  service: string;
+  repository: string;
+  from: string;
+  to: string;
+  migration: string;
+};
+
+export function statefulMajorRefusal(e: unknown): StatefulMajorRefusal | null {
+  const r = (e as { response?: { status?: number; data?: StatefulMajorRefusal } })?.response;
+  if (r?.status === 409 && r.data?.code === "stateful_major_bump") return r.data;
+  return null;
 }
 
 export async function rollbackStack(id: string): Promise<{ output: string }> {

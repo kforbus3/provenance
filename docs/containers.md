@@ -303,6 +303,61 @@ name the old bytes.
 Every rewrite is a normal stack revision, visible in the stack's history and
 rollback-able like any other.
 
+## A deploy that does not come up
+
+A deploy writes the stored compose file over the host's, keeping the previous one
+beside it as `docker-compose.yml.prev`, and brings the project up. Two things can
+go wrong, and they are handled differently:
+
+**The file does not parse.** compose's own parser is the check, run before
+anything is acted on, and the previous file goes straight back. Nothing was
+touched, so nothing was disturbed.
+
+**The file parses and the stack does not come up.** This is the expensive one, and
+it used to leave the host on the new file with the service stopped — until somebody
+noticed and rolled back by hand. Now the previous compose file is restored, brought
+up again, and the on-host revision marker is put back to the revision the host was
+actually running. The rejected file is kept as `docker-compose.yml.rejected` so it
+can be read.
+
+The deploy is still recorded as **failed**, because it was: the definition in
+Provenance is the thing that needs fixing, and the stack row goes on saying so.
+What changed is that the service is running while you fix it. The error names which
+of the two happened:
+
+> deploy failed on `identity` (exit 1) — the previous compose file was restored and
+> the stack is running on it. The rejected file is on the host as
+> `docker-compose.yml.rejected`
+
+and, when even that did not work, says plainly that the stack is down.
+
+### A database major version is refused
+
+A compose file that moves `postgres`, `mysql`, `mongo`, `elasticsearch` and the
+like **forward across a major version** is refused before the host is touched:
+
+> service "postgres" would move postgres from 17.11-alpine to 18.6-alpine, which
+> crosses a major version of an image that owns its on-disk format: the new one
+> will refuse the existing data directory and the stack will not come up. That
+> needs pg_upgrade first.
+
+The comparison is against the image the host is **running**, not against the
+previous revision, because what matters is the format on disk and the only
+evidence of that is the image which has been writing it. A patch or minor move is
+untouched. A deploy narrowed to one service only considers that service and
+whatever shares its network namespace, since nothing else is brought up.
+
+This is the same rule the Updates list and rollouts apply, in one place rather than
+three. The difference here is that a deploy is a person's own file, so the dialog
+offers a way through — **the data is migrated — deploy anyway** — which is recorded
+in the audit trail as an acknowledged waiver. Automation never gets that option: a
+rollout has no migration plan.
+
+It earns this because it happened. A Keycloak went down twice for the same pinned
+`postgres:18.6-alpine` over a version 17 data directory: the first time from a
+rollout, and the second time from a Deploy that re-applied the stored file, because
+the fix from the first had been made on the host where nothing reads it.
+
 ## When a host shows nothing
 
 The **Containers** section of a host's detail page says which of these it is,

@@ -80,6 +80,10 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	// operator standing on the machine can answer "what is this" without the
 	// control plane, and so a drifted host can be identified without trusting a
 	// database that may be describing an apply that never landed.
+	// Read before it is overwritten, so a failed deploy can put back the number the
+	// host was actually running rather than guessing at revision-1.
+	fmt.Fprintf(&b, "_prevrev=$(cat %s 2>/dev/null || echo '')\n",
+		shellQuote(dir+"/.provenance-revision"))
 	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s\n",
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
@@ -177,7 +181,44 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	if len(services) > 0 {
 		noDeps = " --no-deps"
 	}
-	b.WriteString("$_c up -d" + noDeps + target + "\n")
+	// A deploy that does not come up must not be the thing that leaves the host down.
+	//
+	// The parse check above already refuses to replace a working file with one compose
+	// cannot read. That is the CHEAP failure. The expensive one parses, deploys, and
+	// does not come up -- and until now it kept the new file in place with the stack
+	// stopped, so the host stayed broken until a person noticed and rolled back by
+	// hand.
+	//
+	// That is how a Keycloak went down twice for the same reason. The stored compose
+	// pinned postgres 18 over a version 17 data directory; the new database refused
+	// the directory, keycloak's depends_on: service_healthy was never satisfied, `up`
+	// exited non-zero -- and the previous file, the one that had been serving fine,
+	// was sitting right there as .prev, untouched, for twenty hours.
+	//
+	// So: put it back, bring it up with the same narrowing, and restore the revision
+	// marker to what the host was running. The deploy is still recorded as FAILED --
+	// it failed, and the operator has to fix the file -- but the service is up while
+	// they do. The rejected file is kept beside it as .rejected, because a failure
+	// nobody can inspect is one nobody can fix.
+	up := "$_c up -d" + noDeps + target
+	b.WriteString("_rc=0\n")
+	b.WriteString(up + " || _rc=$?\n")
+	b.WriteString("if [ \"$_rc\" -ne 0 ]; then\n")
+	b.WriteString("  echo \"::UPFAILED::the stack did not come up (exit $_rc)\"\n")
+	b.WriteString("  if [ -f docker-compose.yml.prev ]; then\n")
+	b.WriteString("    cp -f docker-compose.yml docker-compose.yml.rejected\n")
+	b.WriteString("    mv -f docker-compose.yml.prev docker-compose.yml\n")
+	b.WriteString("    if [ -n \"$_prevrev\" ]; then printf '%s\\n' \"$_prevrev\" > .provenance-revision; fi\n")
+	b.WriteString("    if " + up + "; then\n")
+	b.WriteString("      echo '::RESTORED::the previous compose file was put back and the stack is up on it'\n")
+	b.WriteString("    else\n")
+	b.WriteString("      echo '::RESTOREFAILED::the previous compose file was put back but the stack did not come up on it either'\n")
+	b.WriteString("    fi\n")
+	b.WriteString("  else\n")
+	b.WriteString("    echo '::NOPREVIOUS::there is no previous compose file on this host to fall back to'\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  exit $_rc\n")
+	b.WriteString("fi\n")
 	return b.String()
 }
 

@@ -13,6 +13,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listStacks, saveStack, deployStack, rollbackStack, deleteStack, stackHistory,
+  statefulMajorRefusal, type StatefulMajorRefusal,
   type ContainerStack, type StackRevision,
 } from "../api/stacks";
 import { listHosts } from "../api/hosts";
@@ -92,11 +93,23 @@ export function StacksPage() {
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["stacks"] });
 
+  // A deploy the backend refused because it crosses a major version of a database
+  // image. Held here so the operator can be shown what it would do and answer for it;
+  // see StatefulMajorRefusal.
+  const [statefulAsk, setStatefulAsk] = useState<{ id: string; r: StatefulMajorRefusal } | null>(null);
+
   const deploy = useMutation({
-    mutationFn: deployStack,
+    mutationFn: (v: { id: string; acknowledge?: boolean }) => deployStack(v.id, v.acknowledge ?? false),
     // Accepted, not finished. The row reports the outcome when there is one.
     onSuccess: (r) => { setSnack(r.note ?? "Deploying — the row updates when it finishes."); refresh(); },
-    onError: (e) => setSnack(errMsg(e, "The deploy could not be started.")),
+    onError: (e, v) => {
+      const refusal = statefulMajorRefusal(e);
+      if (refusal) {
+        setStatefulAsk({ id: v.id, r: refusal });
+        return;
+      }
+      setSnack(errMsg(e, "The deploy could not be started."));
+    },
   });
   const rollback = useMutation({
     mutationFn: rollbackStack,
@@ -204,7 +217,7 @@ export function StacksPage() {
                       <Tooltip title="Write this revision to the host and bring it up">
                         <span>
                           <Button size="small" startIcon={<PublishIcon />} disabled={deploy.isPending}
-                                  onClick={() => deploy.mutate(s.id)}>Deploy</Button>
+                                  onClick={() => deploy.mutate({ id: s.id })}>Deploy</Button>
                         </span>
                       </Tooltip>
                     )}
@@ -239,6 +252,59 @@ export function StacksPage() {
         onSaved={(msg) => { setCreating(false); setEditing(null); setSnack(msg); refresh(); }}
       />
       <HistoryDialog stack={historyOf} onClose={() => setHistoryOf(null)} />
+
+      {/* The stateful-image refusal.
+
+          Not a snackbar. This is the one deploy that takes a service down for hours
+          rather than failing cleanly — the new database refuses the data directory it
+          is pointed at — and the operator needs both versions and the migration in
+          front of them to answer it. The way through exists because somebody who has
+          already run pg_upgrade means exactly what the guard is refusing. */}
+      <Dialog open={statefulAsk !== null} onClose={() => setStatefulAsk(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>This deploy would change a database major version</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {statefulAsk?.r.error}
+          </Alert>
+          <Table size="small">
+            <TableBody>
+              <TableRow>
+                <TableCell>Service</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.service}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Image</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.repository}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Running now</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.from}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>This deploy pins</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{statefulAsk?.r.to}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Needs</TableCell>
+                <TableCell>{statefulAsk?.r.migration}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+          <Typography variant="body2" sx={{ mt: 2 }}>
+            Edit the compose file to pin the version the data directory holds, or — if
+            the data has already been migrated with {statefulAsk?.r.migration} — deploy
+            anyway.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStatefulAsk(null)}>Cancel</Button>
+          <Button color="warning" onClick={() => {
+            const ask = statefulAsk;
+            setStatefulAsk(null);
+            if (ask) deploy.mutate({ id: ask.id, acknowledge: true });
+          }}>The data is migrated — deploy anyway</Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={output !== null} onClose={() => setOutput(null)} maxWidth="md" fullWidth>
         <DialogTitle>{output?.title}</DialogTitle>
