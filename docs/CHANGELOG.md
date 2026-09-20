@@ -5,7 +5,13 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v1.9.0 — 2026-09-20
+
+Everything below came out of a QA/UAT pass: a clean install from a clean clone
+following the installation guide, then multi-tenancy, disaster-recovery failover,
+Kubernetes, logging and a real FIPS host. Two of these are security fixes and three
+made a documented path impossible to complete.
+
 
 **The OpenVPN overlay works on a FIPS host.** It did not, for three separate reasons,
 and the first draft of this note blamed the platform — wrongly, since this runs in
