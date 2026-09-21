@@ -234,7 +234,10 @@ func (s *Service) collectWindows(ctx context.Context, scanID uuid.UUID, h *model
 	if err != nil {
 		return nil, "", fmt.Errorf("credential: %w", err)
 	}
-	cands := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
+	// The overlay address is only a candidate once the host is on the overlay: an
+	// enrollment script assigns one before the host has joined anything, and this
+	// path dials cands[0] and never falls back. See winrm.ManagementAddrs.
+	cands := winrm.ManagementAddrs(h.WGAddress, h.Address, h.Hostname, h.Enrolled)
 	if len(cands) == 0 {
 		return nil, "", fmt.Errorf("host has no address")
 	}

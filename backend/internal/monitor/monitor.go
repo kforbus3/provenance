@@ -487,7 +487,9 @@ func (m *Monitor) collectWindowsFactsOver(ctx context.Context, jump *ssh.Client,
 		m.log.Debug("rdp facts: no usable credential", "host", h.Hostname, "err", err)
 		return nil
 	}
-	cands := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
+	// See winrm.ManagementAddrs: an enrollment script assigns an overlay address
+	// before the host has joined the overlay, and this path uses cands[0].
+	cands := winrm.ManagementAddrs(h.WGAddress, h.Address, h.Hostname, h.Enrolled)
 	if len(cands) == 0 {
 		return nil
 	}

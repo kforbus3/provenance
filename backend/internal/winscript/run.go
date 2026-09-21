@@ -63,15 +63,16 @@ func (l *liveRun) snapshot() string {
 	return l.buf.String()
 }
 
-// firstWinAddr picks the address reachable through the jump host: the WireGuard
-// overlay address first, then the management address, then the hostname.
+// firstWinAddr picks the address reachable through the jump host: the overlay address
+// once the host is actually on the overlay, otherwise its ordinary address.
+//
+// It used to take the overlay address whenever one was set. Fetching an enrollment
+// script sets one before the host has joined anything, so every script run against a
+// host mid-enrollment failed with "No route to host" while the host sat answering on
+// its ordinary address. See winrm.ManagementAddrs.
 func firstWinAddr(h *models.Host) string {
-	for _, a := range []string{h.WGAddress, h.Address, h.Hostname} {
-		if strings.TrimSpace(a) != "" {
-			return a
-		}
-	}
-	return h.Hostname
+	return winrm.ManagementAddr(strings.TrimSpace(h.WGAddress), strings.TrimSpace(h.Address),
+		strings.TrimSpace(h.Hostname), h.Enrolled)
 }
 
 // Run executes a PowerShell script on the given Windows hosts, streaming per-host
