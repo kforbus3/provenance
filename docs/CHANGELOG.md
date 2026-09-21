@@ -5,6 +5,53 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.1 — 2026-09-21
+
+Security fixes from an external audit, plus documentation drift found by an external
+review. Upgrading is an ordinary in-place bundle upgrade; it generates
+`PROV_RECORDING_KEY` for you (see below).
+
+**Any workload on the backend's network could take over an RDP session.** Each session
+opens an ephemeral listener — it must bind all interfaces, because guacd runs in its own
+container — and then handed the session to whoever connected first. The prize is a live
+RDP session to a managed host with the brokered credential already injected: the winner
+sees the password and the desktop. The backend now accepts that connection only from the
+address `PROV_GUACD_ADDR` resolves to, refusing and logging anything else while it keeps
+waiting for the real guacd, so a rogue connection can neither take the session nor deny
+it. This is a source-address check and therefore defence in depth; the security guide
+now also carries the network topology that isolates backend and guacd properly.
+
+**Session recordings were written unencrypted unless somebody opted in.** A terminal
+recording holds what the operator typed and what came back — pasted passwords, tokens,
+command output — at 0640. Outside development the backend now requires
+`PROV_RECORDING_KEY`, or `PROV_RECORDING_ALLOW_PLAINTEXT=true` as the deliberate,
+logged decision to do without. **Upgrade bundles generate the key automatically**, so a
+bundle upgrade never meets this.
+
+**A reachable gRPC vulnerability in the backend and the Terraform provider**
+(GO-2026-6348 heap exhaustion; a server panic in the provider). Both now on gRPC 1.83.2
+— one patch beyond the version the audit named, because govulncheck still reported a
+reachable path in the provider at 1.83.1.
+
+**A session that reaches a host outside its overlay now says so.** The fallback from a
+host's overlay address to its direct address is documented behaviour unless strict
+overlay mode is on, but it was only visible afterwards in a session's audit detail. It
+now logs at WARN when it happens, naming both addresses and the setting that would
+refuse it. The default is unchanged: which hosts are legitimately direct is an
+operator's call.
+
+**Documented defaults are now checked against the code.** architecture.md claimed a
+7-day user-certificate TTL; it is 12 hours, the renewal window is 3 hours rather than
+24, the playbook-run certificate is the run timeout plus 15 minutes rather than a fixed
+2 hours, and the principal is `prov` rather than `fleet`. Every one of those describes
+how long a stolen credential stays useful. A new gate checks documented defaults against
+`config.go`, and requires a stated lifetime in the security documents to name the
+setting that controls it — because all 35 checkable statements were correct and all four
+wrong ones were in prose nothing could check.
+
+Also: release workflows pin every action by commit SHA, use `npm ci`, enable BuildKit
+provenance, and build all five shipped images rather than two.
+
 ## v2.0.0 — 2026-09-21
 
 Everything below was found by using the product rather than by reading it: a live

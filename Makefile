@@ -124,6 +124,16 @@ BUNDLE_PLATFORM ?= linux/amd64
 
 .PHONY: bundle
 bundle: ## Build + sign a .provup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_FROM, BUNDLE_KEY)
+	@# A release that introduces a REQUIRED setting has to carry it, or upgrading
+	@# deployments meet a backend that refuses to start. The manifest can declare
+	@# config additions the updater merges into .env before recreating containers;
+	@# this target could not pass any, so the capability existed and was unreachable
+	@# from the documented release path.
+	@#
+	@#   BUNDLE_CONFIG_SECRETS="PROV_X PROV_Y"   generated 32-byte hex, if absent
+	@#   BUNDLE_CONFIG_ADDS="PROV_Z=value"        literal value, if absent
+	@#
+	@# Both are additive and never overwrite a value an operator has set.
 	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.26 go run ./cmd/provctl release keygen"; exit 1)
 	PROV_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \
@@ -131,7 +141,9 @@ bundle: ## Build + sign a .provup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_F
 	done
 	cd backend && go run ./cmd/provctl release build \
 	  --version $(BUNDLE_VERSION) --from $(BUNDLE_FROM) \
-	  --key $(BUNDLE_KEY_ABS) --out $(BUNDLE_OUT_ABS) --components $(BUNDLE_COMPONENTS)
+	  --key $(BUNDLE_KEY_ABS) --out $(BUNDLE_OUT_ABS) --components $(BUNDLE_COMPONENTS) \
+	  $(foreach k,$(BUNDLE_CONFIG_SECRETS),--config-secret $(k)) \
+	  $(foreach kv,$(BUNDLE_CONFIG_ADDS),--config-add $(kv))
 	@echo "Built $(BUNDLE_OUT_ABS). Upload it in the UI (Settings -> Updates) to upgrade in place."
 
 .PHONY: test-upgrade-schema
