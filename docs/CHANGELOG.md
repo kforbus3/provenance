@@ -46,6 +46,51 @@ the long-form account of the ones found by testing.
 
 ## Unreleased — for v2.0.0
 
+### Audit integrity
+
+**A broken audit chain could only be diagnosed by acknowledging it one row at a time.**
+The verdict stops at the first break, which is right for the question it answers daily
+and useless for the question asked once the answer is already "broken": how much, where,
+and does this look like one event or many. Answering that by acknowledging breaks to see
+what surfaces behind them is not an investigation.
+
+The scale this matters at was measured, not estimated. The `ON DELETE SET NULL` foreign
+key dropped in 1.9.11's migration 0106 nulled `actor_id` — a column the hash covers — on
+every event of every deleted user. The first production chain examined after that fix had
+**3,054 broken rows out of 5,521**: 55% of the log, from a handful of accounts deleted over
+three months. Every deployment that has ever deleted a user has some version of this, and
+until it is accounted for the chain cannot report a *new* alteration, because the verdict
+never gets past the first old one.
+
+So: **Diagnose** on the broken verdict walks the whole chain and reports every break at
+once — the count, the span, how many have no actor (consistent with that defect), and how
+many have a broken `prev_hash` **link**. The last number is the one that is evidence rather
+than inference: losing a column breaks one row's own hash, while removing, inserting or
+reordering rows breaks the links. The production chain above had zero broken links.
+
+A **span** of breaks can then be acknowledged in one audited action instead of thousands.
+It repairs nothing — nothing can make an altered row verify again — and it is constrained
+so it cannot become a way to hide an edit: only breaks with no `actor_id` and an intact
+link are ever covered, the number of breaks in the span is measured and recorded at the
+time, and if the covered count ever exceeds it the whole acknowledgement stops being
+honoured and every break under it is reported again. As in 1.9.x, an acknowledgement is
+honoured only while the chained audit event recording it verifies, which needs the HMAC key.
+
+**Compliance evidence packs would have called such a chain "cryptographically intact".**
+Acknowledging a break deliberately makes the verdict stop saying "broken"; the pack read
+only that boolean, so acknowledging those 3,054 rows would have produced a compliance
+document asserting integrity over rows known not to verify. Packs now report **PASS WITH
+EXCEPTIONS**, with the count, who recorded each exception, when, and their note. The Audit
+page had the same flaw and no longer says "intact" over rows that do not verify.
+
+**The scan misclassified 136 of those 3,054 breaks as having no known cause**, because the
+fingerprint required an actor *name* as well as a missing actor id. `host.enroll` and
+`host.enroll_failed` record an actor id and no name, so losing the id left them with
+neither. Surviving rows of the same actions still carry an id with no name, which is what
+showed it — an operator would have gone looking for tampering that did not happen.
+
+`provctl audit-scan [--verbose]` performs the same read-only walk from the command line.
+
 ### Identity providers
 
 **An SSO group mapping onto a role that does not exist granted nothing, silently.**

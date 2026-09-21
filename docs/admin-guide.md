@@ -582,6 +582,9 @@ on the **System Health** page (§17).
 | Health / readiness | `GET /health`, `GET /ready` |
 | System Health (components + jobs) | `GET /api/v1/system/health` (`System.Configure`) — the **Health** page (§17) |
 | Verify audit chain | `GET /api/v1/audit/verify` |
+| Enumerate every break in the chain | `GET /api/v1/audit/verify/scan` |
+| Acknowledge one break | `POST /api/v1/audit/verify/acknowledge` |
+| Acknowledge a span of breaks with one cause | `POST /api/v1/audit/verify/acknowledge-range` |
 
 For backups see §11; for restore, recovery, and break-glass procedures see
 [break-glass.md](./break-glass.md) and [Disaster Recovery](./disaster-recovery.md).

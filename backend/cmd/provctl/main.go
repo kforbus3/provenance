@@ -50,6 +50,7 @@ Usage:
   provctl enable-user <username>                        Re-enable and unlock a disabled account
   provctl rotate-ca                                     Generate a new active user CA
   provctl list-users                                    List accounts
+  provctl audit-scan                                    Enumerate every break in the audit chain (read-only)
   provctl support-bundle [--out FILE] [--anonymise]      Write a support bundle about this instance (--anonymise masks hostnames + IPs)
   provctl wg-peers                                      Print overlay [Peer] stanzas for standby jump-host failover
   provctl fips check                                    Report FIPS readiness (module, CA key type, password KDFs)
@@ -261,6 +262,62 @@ func run(cmd string, args []string) error {
 				flags += " [disabled]"
 			}
 			fmt.Printf("%-24s %s%s\n", u.Username, u.ID, flags)
+		}
+
+	case "audit-scan":
+		verbose := false
+		for _, a := range args {
+			if a == "--verbose" || a == "-v" {
+				verbose = true
+			}
+		}
+		// Diagnose a chain the daily verdict only says "broken" about. Read-only: it
+		// enumerates every break in one walk, so the extent and the shape of the damage
+		// are visible without acknowledging anything to find out what is behind it.
+		scan, err := st.ScanAuditChain(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("walked %d event(s)\n", scan.Rows)
+		if scan.BreakCount == 0 {
+			fmt.Println("no breaks: every row verifies against the chain")
+		} else {
+			fmt.Printf("breaks: %d (seq %d..%d), %d acknowledged\n",
+				scan.BreakCount, scan.FirstSeq, scan.LastSeq, scan.AcknowledgedCount)
+			fmt.Printf("  %d have no actor_id, consistent with the pre-0106 foreign key; %d are not explained by that\n",
+				scan.LostAttributionCount, scan.BreakCount-scan.LostAttributionCount)
+			fmt.Printf("  %d have a broken prev_hash link (rows removed, inserted or reordered)\n", scan.UnlinkedCount)
+			for i, b := range scan.Breaks {
+				if i >= 10 {
+					fmt.Printf("  ... and %d more in the sample\n", len(scan.Breaks)-10)
+					break
+				}
+				fmt.Printf("  seq %-7d %-28s actor=%-20s lost_actor_id=%-5t unlinked=%t\n",
+					b.Seq, b.Action, b.ActorName, b.LostAttribution, b.Unlinked)
+			}
+			if scan.Truncated {
+				fmt.Printf("  (sample capped at %d; the counts above are exact)\n", len(scan.Breaks))
+			}
+			if verbose {
+				// The breaks WITHOUT the foreign-key fingerprint are the ones worth a
+				// human's time: the others have a known cause, these do not.
+				shown := 0
+				for _, b := range scan.Breaks {
+					if b.LostAttribution || shown >= 5 {
+						continue
+					}
+					shown++
+					fmt.Printf("\n--- unexplained break at seq %d (%s) alg=%d\n", b.Seq, b.Action, b.Alg)
+					fmt.Printf("    stored   %s\n    computed %s\n", b.StoredHash, b.ComputedHash)
+					fmt.Printf("    detail   %s\n", b.DetailJSON)
+					for _, k := range []string{"tenant_id", "actor_id", "actor_name", "target_kind", "target_id", "ip", "created_at"} {
+						fmt.Printf("    %-12s %q\n", k, b.Fields[k])
+					}
+				}
+			}
+		}
+		if scan.WeakFromSeq != 0 {
+			fmt.Printf("weak tail: %d keyless row(s) from seq %d\n", scan.WeakCount, scan.WeakFromSeq)
 		}
 
 	case "wg-peers":

@@ -803,6 +803,69 @@ is emailed again. See [Notifications](#notifications) to enable delivery.
 **Audit → Verify integrity** recomputes the hash chain; any tampering with a historical row
 makes verification fail and reports the first broken sequence number.
 
+### When the chain is broken
+
+A break is permanent. Nothing can make an altered row verify again — anything that could
+would be the forgery the chain exists to detect — so the goal is not to clear the verdict
+but to establish what happened and keep future tampering visible.
+
+**Diagnose** (on the broken verdict) walks the whole chain and reports every break at once,
+which the verdict deliberately does not: it stops at the first. The scan answers three
+questions:
+
+- **How many, and where.** A count and a sequence span.
+- **Do the rows still link?** A row's hash covers its own fields; `prev_hash` covers the row
+  before it. Losing a *column* breaks one row's own hash. Removing, inserting or reordering
+  *rows* breaks the **links**. Zero broken links across thousands of failing rows is
+  meaningful evidence that the sequence is whole.
+- **Does anything have a known cause?** A break on a row with no `actor_id` is consistent
+  with the defect fixed in migration 0106, described below. A break on a row that still has
+  its actor is not explained by anything, and is the one to investigate first.
+
+### Acknowledging a break
+
+A verdict that can only ever say BROKEN stops being read, and then a real break arrives at an
+indicator everybody has learned to ignore. So a break can be **acknowledged**: someone with
+`System.Configure` records what they investigated and what they found. This repairs nothing.
+The rows stay exactly as they are and are reported for ever, with the note — and verification
+carries on **past** them, which is the point: a new break can no longer hide behind an old one.
+
+Acknowledgements cannot be forged from the database. Each one names the audit event that
+recorded it and is honoured only while that event is present and itself verifies as part of
+the chain, which needs `PROV_AUDIT_HMAC_KEY`. An entry inserted straight into Postgres
+accounts for nothing.
+
+Compliance evidence packs report acknowledged rows as **PASS WITH EXCEPTIONS**, never as
+intact, and list each exception with its count, who recorded it, when, and the note.
+
+### One event that broke thousands of rows
+
+`audit_events.actor_id` used to carry `ON DELETE SET NULL`, and that column is part of what
+the hash covers. Deleting a user — routine offboarding, behind `User.Delete` — therefore
+rewrote every event that user had ever caused, and the chain reported broken at the first of
+them, permanently. Migration **0106** drops the constraint, so no deletion can do this again;
+the rows already affected cannot be recovered, because the actor IDs are gone.
+
+The scale is why a bulk acknowledgement exists. The first production chain examined after the
+fix had **3,054 broken rows out of 5,521** — 55% of the log — from a handful of accounts
+deleted over three months. Acknowledging those one at a time is 3,054 attestations about a
+single event, each appending an audit event of its own.
+
+So a **span** can be acknowledged in one action, under three constraints:
+
+- Only breaks with **no `actor_id`** and an **intact link** are covered. A row that kept its
+  actor did not lose one, and a broken link means rows were removed or reordered; both keep
+  being reported individually, so the tool for a known cause cannot be aimed at an unknown one.
+- The number of breaks in the span is **measured and recorded** when it is acknowledged. If
+  the covered count ever exceeds it, the whole acknowledgement stops being honoured and every
+  break under it is reported again — a standing acknowledgement cannot absorb a break that
+  arrives later.
+- The same evidence rule as above: the chained event recording it must verify.
+
+`provctl audit-scan [--verbose]` performs the same read-only walk from the command line, and
+is the way to inspect a chain without a session (`--verbose` prints the stored and recomputed
+hashes for breaks with no known cause).
+
 ## Certificate revocation (enforced on hosts)
 
 Revocation is enforced end-to-end via OpenSSH KRLs:

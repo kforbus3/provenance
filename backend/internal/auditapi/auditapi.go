@@ -35,6 +35,12 @@ func Mount(r chi.Router, d *app.Deps) {
 		// that somebody investigated an integrity failure, so it sits behind the
 		// permission that governs the instance rather than Audit.View.
 		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/audit/verify/acknowledge", h.acknowledgeBreak)
+		// Diagnosis, and the bulk acknowledgement it exists to inform. The scan reads
+		// nothing the verdict does not already expose — where the breaks are and how
+		// many — but it walks the whole chain, so it sits behind the same permission as
+		// acknowledging rather than beside plain reading.
+		pr.With(d.Auth.RequirePermission("System.Configure")).Get("/audit/verify/scan", h.scanChain)
+		pr.With(d.Auth.RequirePermission("System.Configure")).Post("/audit/verify/acknowledge-range", h.acknowledgeRange)
 		pr.With(d.Auth.RequirePermission("Audit.Export")).Get("/audit/export", h.export)
 	})
 }
@@ -243,6 +249,9 @@ func (h *handler) verify(w http.ResponseWriter, r *http.Request) {
 	if len(res.Acknowledged) > 0 {
 		body["acknowledgedBreaks"] = res.Acknowledged
 	}
+	if len(res.AcknowledgedRanges) > 0 {
+		body["acknowledgedRanges"] = res.AcknowledgedRanges
+	}
 	if res.WeakFromSeq != 0 {
 		body["weakFromSeq"] = res.WeakFromSeq
 		body["weakCount"] = res.WeakCount
@@ -365,5 +374,130 @@ func (h *handler) acknowledgeBreak(w http.ResponseWriter, r *http.Request) {
 		"brokenAtSeq":  after.BrokenAtSeq,
 		"note": "the break is permanent and will always be reported; verification now " +
 			"continues past it, so a later break is still visible",
+	})
+}
+
+// scanChain enumerates every break in the chain instead of stopping at the first.
+//
+// The daily verdict answers "has anything been altered". Once that answer is yes,
+// the next questions are how much, where, and whether it looks like one event or
+// many — and the only honest way to answer them is to walk the whole chain at once.
+// Acknowledging breaks one at a time to see what surfaces behind them is not a
+// diagnosis; on the first production chain examined this way it would have been
+// 3,054 attestations, each appending an audit event of its own.
+func (h *handler) scanChain(w http.ResponseWriter, r *http.Request) {
+	scan, err := h.d.Store.ScanAuditChain(tenant.WithBypass(r.Context()))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not scan audit chain")
+		return
+	}
+	body := map[string]any{
+		"rows":              scan.Rows,
+		"breakCount":        scan.BreakCount,
+		"acknowledgedCount": scan.AcknowledgedCount,
+		"firstSeq":          scan.FirstSeq,
+		"lastSeq":           scan.LastSeq,
+		"breaks":            scan.Breaks,
+		"truncated":         scan.Truncated,
+		// Named for what it is: consistency with a known cause, not proof of one. The
+		// original actor id is gone, so nothing can show what it was.
+		"noActorCount":  scan.LostAttributionCount,
+		"unlinkedCount": scan.UnlinkedCount,
+	}
+	if scan.BreakCount > 0 {
+		body["unexplainedCount"] = scan.BreakCount - scan.LostAttributionCount
+	}
+	if scan.WeakFromSeq != 0 {
+		body["weakFromSeq"] = scan.WeakFromSeq
+		body["weakCount"] = scan.WeakCount
+	}
+	httpx.WriteJSON(w, http.StatusOK, body)
+}
+
+// acknowledgeRange records that one investigated event accounts for every break in a
+// span. See migration 0107; the safeguards live here and in the verifier.
+func (h *handler) acknowledgeRange(w http.ResponseWriter, r *http.Request) {
+	var rq struct {
+		FromSeq int64  `json:"fromSeq"`
+		ToSeq   int64  `json:"toSeq"`
+		Note    string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if rq.FromSeq <= 0 || rq.ToSeq < rq.FromSeq {
+		httpx.WriteError(w, http.StatusBadRequest, "fromSeq and toSeq are required, with toSeq >= fromSeq")
+		return
+	}
+	if strings.TrimSpace(rq.Note) == "" {
+		httpx.WriteError(w, http.StatusBadRequest,
+			"a note is required: record what was investigated and what was found")
+		return
+	}
+	ctx := tenant.WithBypass(r.Context())
+
+	// The count is measured here, never taken from the request. It is the safeguard
+	// that stops the acknowledgement absorbing a break that arrives later, so a caller
+	// who could inflate it could defeat the whole mechanism.
+	scan, err := h.d.Store.ScanAuditChainRange(ctx, rq.FromSeq, rq.ToSeq)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not scan audit chain")
+		return
+	}
+	if scan.BreakCount == 0 {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf(
+			"no break in the chain between %d and %d. Acknowledging a span that does not "+
+				"break would pre-authorise a future alteration", rq.FromSeq, rq.ToSeq))
+		return
+	}
+	// A bulk acknowledgement covers ONE signature. Anything else in the span is a
+	// separate finding and has to be dealt with as one, so the tool for the known
+	// cause cannot be pointed at an unknown one.
+	if bad := scan.BreakCount - scan.LostAttributionCount; bad > 0 {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf(
+			"%d break(s) between %d and %d still have an actor_id, so they were not caused by "+
+				"the deleted-user defect this covers; acknowledge those individually",
+			bad, rq.FromSeq, rq.ToSeq))
+		return
+	}
+	if scan.UnlinkedCount > 0 {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf(
+			"%d break(s) between %d and %d have a broken prev_hash link, which means rows were "+
+				"removed, inserted or reordered rather than a column being lost; that cannot be "+
+				"acknowledged in bulk", scan.UnlinkedCount, rq.FromSeq, rq.ToSeq))
+		return
+	}
+
+	p := auth.MustPrincipal(r)
+	ev := models.AuditEvent{
+		Action:     "audit.chain_break_range_acknowledged",
+		TargetKind: "audit_chain",
+		TargetID:   fmt.Sprintf("%d-%d", rq.FromSeq, rq.ToSeq),
+		Detail: map[string]any{
+			"fromSeq": rq.FromSeq, "toSeq": rq.ToSeq,
+			"coveredCount": scan.BreakCount, "note": rq.Note,
+		},
+	}
+	httpx.Audit(r, h.d.Store, ev)
+	evidence, err := h.d.Store.LatestAuditSeq(ctx)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not record the acknowledgement")
+		return
+	}
+	var by *uuid.UUID
+	var byName string
+	if p != nil {
+		by = &p.UserID
+		byName = p.Username
+	}
+	if err := h.d.Store.AcknowledgeAuditChainRange(ctx, rq.FromSeq, rq.ToSeq,
+		scan.BreakCount, evidence, by, byName, strings.TrimSpace(rq.Note)); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not record the acknowledgement")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"fromSeq": rq.FromSeq, "toSeq": rq.ToSeq, "coveredCount": scan.BreakCount,
+		"evidenceSeq": evidence,
 	})
 }

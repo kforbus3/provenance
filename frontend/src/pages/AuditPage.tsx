@@ -10,6 +10,7 @@ import {
   listAudit, listAuditActions, verifyAudit,
   type AuditFilter, type VerifyResult,
 } from "../api/audit";
+import { AuditChainVerdict } from "./AuditChainVerdict";
 
 // Render an audit event's detail map as compact, readable "key: value" pairs.
 // Generic across every action; for approval decisions it surfaces the requester,
@@ -84,13 +85,7 @@ export function AuditPage() {
         </Button>
       </Stack>
 
-      {verifyMut.data && (
-        <Alert severity={verifyMut.data.intact ? "success" : "error"} sx={{ mb: 2 }}>
-          {verifyMut.data.intact
-            ? "Audit chain is intact."
-            : `Audit chain broken at sequence ${verifyMut.data.brokenAtSeq}.`}
-        </Alert>
-      )}
+      {verifyMut.data && <AuditChainVerdict result={verifyMut.data} />}
       {verifyMut.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>Could not verify the audit chain.</Alert>
       )}

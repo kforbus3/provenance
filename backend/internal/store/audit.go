@@ -114,6 +114,27 @@ func auditMAC(alg int16, key []byte, prev, canonical string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// auditExpectedHash is the hash a stored row must carry if nothing about it has
+// changed: the MAC of the previous row's hash and this row's canonical record, in
+// whichever algorithm the row itself names.
+//
+// It is shared by every walk of the chain rather than written out at each one.
+// Verification and enumeration disagreeing about how a row hashes would be the
+// worst possible bug here — one of them would call an untouched row altered, or an
+// altered row fine — and the only way to be sure they agree is for there to be one
+// of it.
+func auditExpectedHash(key []byte, prev string, alg int16, seq int64, createdAt time.Time,
+	tenantID, actorID, actorName, action, tk, tid, ip string, detailJSON []byte) string {
+	var canonical string
+	if alg == auditAlgHMAC {
+		canonical = auditCanonicalHMAC(seq, createdAt, tenantID,
+			actorID, actorName, action, tk, tid, ip, detailJSON)
+	} else {
+		canonical = auditCanonicalLegacy(actorID, actorName, action, tk, tid, ip, detailJSON)
+	}
+	return auditMAC(alg, key, prev, canonical)
+}
+
 // AppendAudit writes a tamper-evident audit event. Each event's hash chains to the
 // previous event's hash. With a configured AuditHMACKey the hash is
 // HMAC-SHA256(key, prev_hash || canonical(event)) over a canonical record that binds
@@ -316,6 +337,10 @@ type AuditChainResult struct {
 	// not news, and verification continues past them so a LATER break is still
 	// visible. A chain that can only ever say BROKEN is one people stop reading.
 	Acknowledged []AcknowledgedBreak
+	// AcknowledgedRanges are bulk acknowledgements: one investigated event that broke
+	// many rows at once, recorded once instead of once per row. Like Acknowledged they
+	// repair nothing and are reported for ever, with the count they cover.
+	AcknowledgedRanges []AcknowledgedRange
 	// WeakFromSeq is the first keyless row written AFTER the chain was keyed. From
 	// there the tail is not tamper-evident: a party with database write access can
 	// append or rebuild keyless rows and they verify, because each row names its
@@ -323,6 +348,22 @@ type AuditChainResult struct {
 	WeakFromSeq int64
 	// WeakCount is how many such rows there are.
 	WeakCount int
+}
+
+// AcknowledgedRange is a bulk acknowledgement covering every break in a span of
+// sequence numbers that carries one known signature. See migration 0107.
+type AcknowledgedRange struct {
+	FromSeq int64 `json:"fromSeq"`
+	ToSeq   int64 `json:"toSeq"`
+	// Covered is how many breaks it actually accounts for right now, and CoveredCount
+	// is how many were there when it was investigated. The acknowledgement stops being
+	// honoured if Covered ever exceeds CoveredCount, so the two being equal is part of
+	// the report rather than an internal detail.
+	Covered      int       `json:"covered"`
+	CoveredCount int       `json:"coveredCount"`
+	By           string    `json:"by"`
+	Note         string    `json:"note"`
+	At           time.Time `json:"at"`
 }
 
 // AcknowledgedBreak is a break in the chain that was investigated and recorded.
@@ -356,6 +397,36 @@ func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, e
 		}
 		ar.Close()
 	}
+	// Range acknowledgements, loaded the same way and honoured under the same rule:
+	// only while the chained event that recorded one is present and verifies.
+	type ackRange struct {
+		id           int64
+		from, to     int64
+		coveredCount int
+		evidenceSeq  int64
+		by, note     string
+		at           time.Time
+	}
+	var ranges []ackRange
+	rangeEvidence := map[int64]int64{} // evidence seq -> range id
+	if rr, rerr := s.pool.Query(ctx, `
+		SELECT id, from_seq, to_seq, covered_count, evidence_seq,
+		       COALESCE(acknowledged_name,''), COALESCE(note,''), acknowledged_at
+		FROM audit_chain_break_ranges ORDER BY from_seq`); rerr == nil {
+		for rr.Next() {
+			var g ackRange
+			if rr.Scan(&g.id, &g.from, &g.to, &g.coveredCount, &g.evidenceSeq,
+				&g.by, &g.note, &g.at) == nil {
+				ranges = append(ranges, g)
+				rangeEvidence[g.evidenceSeq] = g.id
+			}
+		}
+		rr.Close()
+	}
+	rangeHits := map[int64]int{}    // range id -> breaks it covered on this walk
+	rangeFirst := map[int64]int64{} // range id -> lowest such break
+	verifiedRangeEvidence := map[int64]bool{}
+
 	// A break is only reported as acknowledged once its evidence row has been walked
 	// and verified, so this collects them and they are moved across at the end.
 	pending := map[int64]AcknowledgedBreak{}
@@ -387,31 +458,62 @@ func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, e
 			return out, err
 		}
 		detailJSON, _ := json.Marshal(detail)
-		var canonical string
-		if alg == auditAlgHMAC {
-			canonical = auditCanonicalHMAC(seq, createdAt, tenantID,
-				nilUUID(actorID), actorName, action, tk, tid, ip, detailJSON)
-		} else {
-			canonical = auditCanonicalLegacy(nilUUID(actorID), actorName, action, tk, tid, ip, detailJSON)
-		}
-		want := auditMAC(alg, key, prev, canonical)
+		want := auditExpectedHash(key, prev, alg, seq, createdAt, tenantID,
+			nilUUID(actorID), actorName, action, tk, tid, ip, detailJSON)
 		// Constant-time compare on the hash; prev_hash linkage must also match.
 		if prevH != prev || !hmac.Equal([]byte(h), []byte(want)) {
 			ack, ok := acks[seq]
 			if !ok {
-				out.BrokenAtSeq = seq
-				return out, nil
+				// A range acknowledgement may account for it, but only if this break
+				// carries the signature that range was allowed to cover: the actor id
+				// gone, and the link to the previous row still intact. A row that still
+				// has its actor id did not lose one, and a broken LINK means rows were
+				// removed, inserted or reordered — neither looks like the defect a bulk
+				// acknowledgement is for, so neither can hide inside one.
+				covered := false
+				if actorID == nil && prevH == prev {
+					for _, g := range ranges {
+						if seq >= g.from && seq <= g.to {
+							rangeHits[g.id]++
+							if rangeFirst[g.id] == 0 || seq < rangeFirst[g.id] {
+								rangeFirst[g.id] = seq
+							}
+							covered = true
+							break
+						}
+					}
+				}
+				if !covered {
+					// Record the first unacknowledged break and keep walking.
+					//
+					// This used to return here. Stopping made the verdict correct and the
+					// report useless: a new break meant the walk never reached the rows
+					// that make existing acknowledgements trustworthy, so a chain with one
+					// fresh break reported nothing about the 3,000 already accounted for,
+					// and the weak-tail check silently stopped running. The verdict is the
+					// same value either way — the first unacknowledged break — so there is
+					// nothing to lose by finishing the walk.
+					if out.BrokenAtSeq == 0 {
+						out.BrokenAtSeq = seq
+					}
+				}
+			} else {
+				// Accounted for: resume from this row's own recorded hash and keep
+				// checking. Nothing here is repaired — the row stays exactly as it is and
+				// this break is reported for ever — but the rows after it are still
+				// verified, so a new break cannot hide behind an old one.
+				pending[seq] = ack
 			}
-			// Accounted for: resume from this row's own recorded hash and keep
-			// checking. Nothing here is repaired — the row stays exactly as it is and
-			// this break is reported for ever — but the rows after it are still
-			// verified, so a new break cannot hide behind an old one.
-			pending[seq] = ack
 			prev = h
 			if alg == auditAlgHMAC {
 				seenKeyed = true
 			}
 			continue
+		}
+		if rid, ok := rangeEvidence[seq]; ok {
+			// Same rule as below, for a range: the acknowledgement is trustworthy only
+			// because the event recording it verifies as part of this chain.
+			verifiedRangeEvidence[rid] = true
 		}
 		if b, ok := evidence[seq]; ok {
 			// This row IS an acknowledgement, and it has just verified as part of the
@@ -462,6 +564,30 @@ func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, e
 	sort.Slice(out.Acknowledged, func(i, j int) bool {
 		return out.Acknowledged[i].BrokenAtSeq < out.Acknowledged[j].BrokenAtSeq
 	})
+	// Ranges are honoured only if their evidence verified AND they are covering no more
+	// breaks than were investigated. The count is the safeguard that stops a range
+	// becoming an open licence: a break that appears inside an already-acknowledged span
+	// after the fact pushes the total past what was recorded, and the whole
+	// acknowledgement stops being honoured rather than quietly absorbing it.
+	for _, g := range ranges {
+		hits := rangeHits[g.id]
+		if hits == 0 {
+			continue
+		}
+		if !verifiedRangeEvidence[g.id] || hits > g.coveredCount {
+			if out.BrokenAtSeq == 0 || rangeFirst[g.id] < out.BrokenAtSeq {
+				out.BrokenAtSeq = rangeFirst[g.id]
+			}
+			continue
+		}
+		out.AcknowledgedRanges = append(out.AcknowledgedRanges, AcknowledgedRange{
+			FromSeq: g.from, ToSeq: g.to, Covered: hits, CoveredCount: g.coveredCount,
+			By: g.by, Note: g.note, At: g.at,
+		})
+	}
+	sort.Slice(out.AcknowledgedRanges, func(i, j int) bool {
+		return out.AcknowledgedRanges[i].FromSeq < out.AcknowledgedRanges[j].FromSeq
+	})
 	return out, nil
 }
 
@@ -493,6 +619,19 @@ func jsonOrEmpty(m map[string]any) []byte {
 // caller through the ordinary audited path so that it is part of the chain. The
 // verifier honours an acknowledgement only when that event verifies, which is what
 // stops a party with database write access from simply inserting one here.
+// AcknowledgeAuditChainRange records a bulk acknowledgement. See migration 0107 for
+// why one exists and what keeps it honest; coveredCount is the safeguard, and the
+// caller must have counted it from the same walk the verifier performs.
+func (s *Store) AcknowledgeAuditChainRange(ctx context.Context, fromSeq, toSeq int64,
+	coveredCount int, evidenceSeq int64, by *uuid.UUID, byName, note string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO audit_chain_break_ranges
+			(from_seq, to_seq, covered_count, evidence_seq, acknowledged_by, acknowledged_name, note)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		fromSeq, toSeq, coveredCount, evidenceSeq, by, byName, note)
+	return err
+}
+
 func (s *Store) AcknowledgeAuditChainBreak(ctx context.Context, brokenAtSeq, evidenceSeq int64,
 	by *uuid.UUID, byName, note string) error {
 	_, err := s.pool.Exec(ctx, `

@@ -43,10 +43,27 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 	// under bypass so it sees every event: the hash chain is a single global
 	// sequence, and a tenant-scoped read would hide other tenants' rows and falsely
 	// report the chain broken.
-	intact, brokenAt, err := st.VerifyAuditChain(tenant.WithBypass(ctx))
+	chain, err := st.VerifyAuditChainDetail(tenant.WithBypass(ctx))
 	if err != nil {
 		return nil, err
 	}
+	intact := chain.BrokenAtSeq == 0
+	brokenAt := chain.BrokenAtSeq
+	// Acknowledged breaks are rows that DO NOT verify. They have an investigated cause
+	// recorded against them, which is why the verdict is no longer "broken" — but the
+	// rows are still altered or missing, and a pack that printed a plain PASS over them
+	// would be the one misleading document in a compliance file.
+	//
+	// The case is not hypothetical: the foreign key dropped in migration 0106 nulled
+	// actor_id on every event of any deleted user, and the first production chain
+	// examined afterwards had 3,054 such rows out of 5,521. Acknowledging them is
+	// correct and necessary — otherwise a real break can never be seen behind them —
+	// and reporting the result as "cryptographically intact" would not be.
+	excepted := 0
+	for _, g := range chain.AcknowledgedRanges {
+		excepted += g.Covered
+	}
+	excepted += len(chain.Acknowledged)
 
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(20, 20, 20)
@@ -100,19 +117,29 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 
 	// --- audit integrity attestation (the differentiator) ---
 	h2("Audit-Log Integrity Attestation")
-	if intact {
-		pdf.SetFillColor(232, 245, 233) // green tint
-		pdf.SetTextColor(27, 94, 32)
-		pdf.SetFont("Helvetica", "B", 12)
-		pdf.CellFormat(0, 9, "PASS  -  the audit chain is cryptographically intact", "", 1, "L", true, 0, "")
-	} else {
-		pdf.SetFillColor(253, 236, 234) // red tint
-		pdf.SetTextColor(150, 30, 20)
-		pdf.SetFont("Helvetica", "B", 12)
-		pdf.CellFormat(0, 9, fmt.Sprintf("FAIL  -  the audit chain is broken at sequence %d", brokenAt), "", 1, "L", true, 0, "")
-	}
+	headline, tone := chainAttestation(intact, excepted, brokenAt)
+	pdf.SetFillColor(tone.fillR, tone.fillG, tone.fillB)
+	pdf.SetTextColor(tone.textR, tone.textG, tone.textB)
+	pdf.SetFont("Helvetica", "B", 12)
+	pdf.CellFormat(0, 9, headline, "", 1, "L", true, 0, "")
 	pdf.Ln(1)
-	if intact {
+	if intact && excepted > 0 {
+		note("Every recorded event hashes forward from its predecessor as H(previous_hash || event). " +
+			"A full genesis-to-latest verification found no UNEXPLAINED alteration: every row that " +
+			"does not verify has an investigated cause recorded against it, and verification " +
+			"continues past those rows, so a new alteration would still be detected. The affected " +
+			"rows are listed below and are not repaired - nothing can make an altered row verify " +
+			"again. Each exception should be read before this pack is relied upon as evidence.")
+		pdf.Ln(1)
+		for _, g := range chain.AcknowledgedRanges {
+			note(fmt.Sprintf("Sequences %d-%d: %d row(s), recorded by %s on %s. %s",
+				g.FromSeq, g.ToSeq, g.Covered, g.By, g.At.Format("2006-01-02"), g.Note))
+		}
+		for _, b := range chain.Acknowledged {
+			note(fmt.Sprintf("Sequence %d: recorded by %s on %s. %s",
+				b.BrokenAtSeq, b.By, b.At.Format("2006-01-02"), b.Note))
+		}
+	} else if intact {
 		note("Every recorded event hashes forward from its predecessor as H(previous_hash || event). " +
 			"A full genesis-to-latest verification found no altered or missing rows, so the access, " +
 			"certificate, scan, and command records summarized below are demonstrably tamper-evident.")
@@ -164,3 +191,34 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 }
 
 // --- summary helpers over ReportTable rows (string cells) ---
+
+// attestationTone is the colour of the attestation banner.
+type attestationTone struct {
+	fillR, fillG, fillB int
+	textR, textG, textB int
+}
+
+// chainAttestation is the one sentence a compliance reader will quote, so it is a
+// function of its own with a test rather than three branches inside a page of PDF
+// drawing calls.
+//
+// The middle case is the one that matters. A chain can have rows that do not verify
+// AND no unexplained alteration: each failing row has an investigated cause recorded
+// against it, which is what lets verification continue past them so a new alteration
+// is still visible. Reporting that as "cryptographically intact" would be false, and
+// reporting it as FAIL would make every pack from a deployment that ever deleted a
+// user unusable. It gets its own verdict, with the count in it.
+func chainAttestation(intact bool, excepted int, brokenAt int64) (string, attestationTone) {
+	green := attestationTone{232, 245, 233, 27, 94, 32}
+	amber := attestationTone{255, 243, 224, 120, 70, 10}
+	red := attestationTone{253, 236, 234, 150, 30, 20}
+	switch {
+	case intact && excepted > 0:
+		return fmt.Sprintf("PASS WITH EXCEPTIONS  -  %d row(s) do not verify, with a recorded cause",
+			excepted), amber
+	case intact:
+		return "PASS  -  the audit chain is cryptographically intact", green
+	default:
+		return fmt.Sprintf("FAIL  -  the audit chain is broken at sequence %d", brokenAt), red
+	}
+}
