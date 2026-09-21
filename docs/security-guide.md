@@ -14,6 +14,48 @@ and operational recommendations.
   able to bypass access control.
 - **Network isolation.** Managed hosts must not be directly reachable.
 
+## RDP tunnel: who may claim a session
+
+Each RDP session opens an ephemeral TCP listener on the backend and has guacd connect
+back to it (`PROV_RDP_PROXY_HOST`). The listener must bind all interfaces, because guacd
+runs in its own container and reaches the backend across the Docker network.
+
+**The backend accepts that connection only from the address `PROV_GUACD_ADDR` resolves
+to.** Anything else is refused and logged at ERROR, and the listener keeps waiting for
+the real guacd until its deadline — so a rogue connection can neither take the session
+nor deny it.
+
+This matters because the alternative is severe: the connection that claims the tunnel
+receives a live RDP session to a managed host with the brokered credential already
+injected. Whoever wins the race sees the password and the desktop.
+
+The check is by source address, so it is defence in depth rather than authentication.
+It stops any other workload on the network from racing for the session; it does not stop
+something that has already compromised guacd itself, or that can spoof guacd's address
+on the bridge.
+
+**The shipped compose puts every service on one `prov` bridge network**, so the backend's
+ephemeral listener currently shares a network with the runner, scanner, builder and proxy
+sidecars. For a deployment where those workloads are less trusted than guacd, put guacd
+and the backend on a network of their own:
+
+```yaml
+networks:
+  prov:
+    driver: bridge
+  guac:            # backend <-> guacd only
+    driver: bridge
+
+services:
+  backend:
+    networks: [prov, guac]
+  guacd:
+    networks: [guac]
+```
+
+Changing an existing deployment's network topology recreates containers, so apply it
+during a maintenance window rather than as part of an in-place upgrade.
+
 ## 1. Ephemeral, in-RAM SSH identities
 
 - On login, the **Issuer** generates a fresh `ssh-ed25519` keypair in an

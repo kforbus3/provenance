@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,7 +161,16 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not reach the host over RDP: %w", err)
 	}
-	//nolint:gosec // ephemeral single-use per-session proxy (30s accept deadline, closed after one conn) that the separate guacd container must reach cross-network via RDPProxyHost
+	// Who may claim this tunnel. Resolved BEFORE the listener exists, so a session is
+	// never opened that would accept from anyone: if the guacd address cannot be
+	// resolved the session fails here rather than proxying to whoever turns up.
+	allowedPeers, err := expectedProxyPeers(h.d.Cfg.GuacdAddr)
+	if err != nil {
+		rawConn.Close()
+		_ = jumpClient.Close()
+		return nil, fmt.Errorf("could not determine which peer may claim the RDP tunnel: %w", err)
+	}
+	//nolint:gosec // ephemeral single-use per-session proxy (30s accept deadline, closed after one conn) that the separate guacd container must reach cross-network via RDPProxyHost; the accepted peer is checked against GuacdAddr
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		rawConn.Close()
@@ -167,7 +178,7 @@ func (h *handler) connectSession(r *http.Request) (guac.Tunnel, error) {
 		return nil, fmt.Errorf("could not open tunnel: %w", err)
 	}
 	proxyPort := ln.Addr().(*net.TCPAddr).Port
-	go proxyOnce(ln, rawConn, jumpClient)
+	go proxyOnce(ln, rawConn, jumpClient, allowedPeers, h.d.Log)
 
 	// Configure guacd to connect RDP to our ephemeral proxy.
 	cfg := guac.NewGuacamoleConfiguration()
@@ -412,23 +423,110 @@ func queryInt(r *http.Request, key string, def int) int {
 	return def
 }
 
-// proxyOnce accepts a single connection (from guacd) on ln and pipes it to the
-// jump-host tunnel, tearing everything down when either side closes. If guacd never
-// connects (e.g. handshake failed), the accept deadline prevents a leak.
-func proxyOnce(ln net.Listener, target net.Conn, jump io.Closer) {
+// expectedProxyPeers resolves the addresses the guacd sidecar may connect back from.
+//
+// The ephemeral RDP tunnel has to listen on all interfaces, because guacd runs in a
+// separate container and reaches this backend over the shared Docker network (see
+// RDPProxyHost). That is what makes the peer check necessary rather than optional:
+// whoever connects first gets an authenticated RDP session to a managed host, with
+// the brokered credential injected into it.
+//
+// The answer is not a new secret to distribute. The backend dials guacd itself, at
+// this very address, to drive the session — so the only party that should ever call
+// back is the host named by GuacdAddr.
+func expectedProxyPeers(guacdAddr string) ([]net.IP, error) {
+	host, _, err := net.SplitHostPort(guacdAddr)
+	if err != nil {
+		host = guacdAddr
+	}
+	if host == "" {
+		return nil, fmt.Errorf("no guacd address configured")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	names, err := net.LookupHost(host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve guacd host %q: %w", host, err)
+	}
+	var ips []net.IP
+	for _, n := range names {
+		if ip := net.ParseIP(n); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("guacd host %q resolved to nothing usable", host)
+	}
+	return ips, nil
+}
+
+// peerAllowed reports whether addr is one of the expected guacd addresses.
+func peerAllowed(addr net.Addr, allowed []net.IP) bool {
+	ta, ok := addr.(*net.TCPAddr)
+	if !ok || ta.IP == nil {
+		return false
+	}
+	for _, ip := range allowed {
+		if ip.Equal(ta.IP) {
+			return true
+		}
+	}
+	return false
+}
+
+// proxyOnce accepts guacd's connection on ln and pipes it to the jump-host tunnel,
+// tearing everything down when either side closes. If guacd never connects (e.g. the
+// handshake failed), the accept deadline prevents a leak.
+//
+// It accepts from guacd and nobody else. The listener is on an ephemeral port on all
+// interfaces, and it used to hand the session to whoever connected first — so any
+// other container sharing the network could race guacd for it, and win by simply
+// connecting faster. The prize is a live RDP session to a managed host with the
+// brokered credential injected: the attacker sees the password and the desktop. For a
+// system whose job is to hold credentials so people do not have to, that is the wrong
+// way round.
+//
+// A refused connection does not end the session. The deadline still applies, so a
+// losing racer costs the real guacd its remaining seconds and nothing more.
+func proxyOnce(ln net.Listener, target net.Conn, jump io.Closer, allowed []net.IP, log *slog.Logger) {
 	defer target.Close()
 	defer jump.Close()
+	deadline := time.Now().Add(30 * time.Second)
 	if l, ok := ln.(*net.TCPListener); ok {
-		_ = l.SetDeadline(time.Now().Add(30 * time.Second))
+		_ = l.SetDeadline(deadline)
 	}
-	guacdConn, err := ln.Accept()
+	var guacdConn net.Conn
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			_ = ln.Close()
+			return
+		}
+		if peerAllowed(c.RemoteAddr(), allowed) {
+			guacdConn = c
+			break
+		}
+		// Loud: on a correctly isolated deployment this never happens, so it means
+		// either the network is shared with something it should not be, or somebody
+		// is trying to take the session.
+		log.Error("rdp tunnel: refused a connection from an unexpected peer",
+			"peer", c.RemoteAddr().String(), "expected", ipsString(allowed))
+		_ = c.Close()
+	}
 	_ = ln.Close()
-	if err != nil {
-		return
-	}
 	defer guacdConn.Close()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(target, guacdConn); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(guacdConn, target); done <- struct{}{} }()
 	<-done
+}
+
+// ipsString renders the expected peers for a log line.
+func ipsString(ips []net.IP) string {
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, ip.String())
+	}
+	return strings.Join(out, ",")
 }
