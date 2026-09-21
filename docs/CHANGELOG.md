@@ -5,6 +5,45 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v1.9.11 — 2026-09-20
+
+Everything accumulated since 1.9.10, released rather than held for 2.0.0 because
+several of these are silent failures that a deployment cannot see for itself. The
+2.0.0 entry below now covers only what is still unreleased.
+
+**A/B updates could never install.** RAUC mounts a verity bundle through
+device-mapper; nothing else in these images uses it, so nothing loaded it. Every
+update on every machine this builder images failed at the last step — after
+downloading the whole bundle and verifying its signature — with
+`Failed to open /dev/mapper/control`, which reads as a problem with the bundle.
+
+**No imaged machine could register under multi-tenancy.** The heartbeat answered
+200 while row-level security refused the insert, because a machine has no session
+and therefore no tenant. Machines never appeared on the Machines page and no
+rollout could target one, while each was told every five minutes that it had
+checked in.
+
+**Deleting a user rewrote that user's audit history.** `audit_events.actor_id`
+carried `ON DELETE SET NULL` and is part of the hashed record, so offboarding
+somebody broke the hash chain permanently and every compliance evidence pack
+afterwards reported the log as possibly altered.
+
+**Vulnerability scanning stored nothing under multi-tenancy**, and SSO group
+mappings onto a role that does not exist granted nothing — both silently. See the
+1.9.10 notes' shape: a tenant-less context and a write that matched nothing.
+
+**The audit-collector token was stored and returned in plaintext**, and sealing it
+then dropped it from every forwarded event until that was caught too.
+
+**The Updates page now shows what can be upgraded** rather than every image the
+fleet runs, and the provisioning preflight no longer refuses the only correct DHCP
+configuration there is.
+
+Full detail for each is in the commit it landed in; the 2.0.0 section below carries
+the long-form account of the ones found by testing.
+
+---
+
 ## Unreleased — for v2.0.0
 
 ### Identity providers
