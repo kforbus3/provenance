@@ -56,14 +56,32 @@ jobs:
             # context is the repository root (see frontend/Dockerfile).
             context: .
             dockerfile: ./frontend/Dockerfile
+          # The three sidecars below ship in every .provup bundle
+          # (BUNDLE_COMPONENTS in the Makefile) but were not built, signed or
+          # scanned here -- so the signed, SBOM'd surface was two of the five
+          # images an operator actually installs. A sidecar is not a lesser
+          # target: ansible-runner executes playbooks as root on every managed
+          # host, and prov-updater replaces the running stack.
+          - name: grype-scanner
+            image: ghcr.io/kforbus3/provenance-grype-scanner
+            context: ./deploy/grype-scanner
+            dockerfile: ./deploy/grype-scanner/Dockerfile
+          - name: ansible-runner
+            image: ghcr.io/kforbus3/provenance-ansible-runner
+            context: ./deploy/ansible-runner
+            dockerfile: ./deploy/ansible-runner/Dockerfile
+          - name: prov-updater
+            image: ghcr.io/kforbus3/provenance-prov-updater
+            context: ./backend
+            dockerfile: ./backend/Dockerfile.updater
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -71,7 +89,7 @@ jobs:
 
       - name: Derive tags and labels
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ matrix.image }}
           # The git tag (e.g. 0.70.5, stripped of the leading `v`) and `latest`.
@@ -81,7 +99,7 @@ jobs:
 
       - name: Build and push ${{ matrix.name }}
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -89,13 +107,21 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
+          # Record how the image was built. mode=max captures the build arguments and
+          # the base-image chain, which is the part an auditor asks about.
+          #
+          # Note for whoever enables Actions: this turns the pushed reference into an
+          # image index carrying an attestation manifest, so `steps.build.outputs.digest`
+          # below names that index rather than a bare manifest. cosign signs it and the
+          # SBOM step describes it, which is what we want -- but neither has been
+          # exercised, because these workflows have never run on this repository.
+          provenance: mode=max
 
       # Generate an SBOM for the pushed image (by digest, so it describes exactly
       # what was published). anchore/sbom-action wraps syft; it writes the SBOM
       # to a file we hand to cosign below and also uploads it as a build artifact.
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
           format: spdx-json
@@ -103,7 +129,7 @@ jobs:
           artifact-name: sbom-${{ matrix.name }}.spdx.json
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       # Keyless signing: cosign obtains a short-lived certificate from Fulcio
       # using the workflow's OIDC identity (id-token: write) and records the
