@@ -5,6 +5,7 @@ package models
 
 import (
 	"encoding/json"
+	"github.com/kforbus3/provenance/backend/internal/hosttrust"
 	"strings"
 	"time"
 
@@ -269,9 +270,13 @@ type Host struct {
 	CredentialID *uuid.UUID `json:"credentialId,omitempty"`
 	// Protocol is how Provenance reaches the host: ssh (default; terminal/SFTP) or rdp
 	// (Windows desktop brokered through guacd, on RDPPort).
-	Protocol   string     `json:"protocol"`
-	RDPPort    int        `json:"rdpPort"`
-	RDPOptions RDPOptions `json:"rdpOptions"`
+	Protocol string `json:"protocol"`
+	// AccessPosture is what this host's access path actually guarantees, derived from
+	// AuthMethod, Protocol and WGAddress rather than stored. Computed on read, so it
+	// cannot describe how the host used to be configured. See internal/hosttrust.
+	AccessPosture *hosttrust.Posture `json:"accessPosture,omitempty"`
+	RDPPort       int                `json:"rdpPort"`
+	RDPOptions    RDPOptions         `json:"rdpOptions"`
 	// Options are generic per-host device options (JSONB). Currently: marking a host
 	// as a RouterOS API device so a playbook run tunnels its API port through the jump.
 	Options   HostOptions `json:"options"`

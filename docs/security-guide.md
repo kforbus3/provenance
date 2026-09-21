@@ -14,6 +14,60 @@ and operational recommendations.
   able to bypass access control.
 - **Network isolation.** Managed hosts must not be directly reachable.
 
+## Host access paths, and what each one gives up
+
+Provenance offers several ways to make a host reachable. They exist for real reasons —
+a host on the jump host's LAN does not need an overlay, and a box that cannot be made to
+trust the CA still needs a vaulted password — but they are **not equally strong**, and
+the choice is made once at enrollment and then easy to forget.
+
+Every host record therefore carries a derived `accessPosture`: its tier, what it
+guarantees, and what it gives up. It is computed from the host's own `authMethod`,
+`protocol` and overlay address on every read, so it cannot describe how a host used to
+be configured. Compliance evidence packs report the fleet broken down by tier.
+
+| Tier | Credential to the host | Reachability | Per-session credential | Revoke by certificate | Confined to overlay |
+|---|---|---|---|---|---|
+| `brokered-overlay` | certificate minted per session, per host | overlay only | yes | yes | yes |
+| `brokered-direct` | certificate minted per session, per host | management address | yes | yes | **no** |
+| `vaulted-overlay` | standing credential from the vault | overlay only | **no** | **no** | yes |
+| `vaulted-direct` | standing credential from the vault | management address | **no** | **no** | **no** |
+
+**What "vaulted" costs.** The hop to the jump host still uses the session's ephemeral
+certificate; the final hop to the managed host presents a stored secret shared by every
+user and every session. Ending one person's access means **rotating that credential**,
+which affects everyone, rather than revoking one certificate serial into the KRL. The
+operator still never sees the secret — injection happens inside the gateway — but the
+revocation story is different, and that difference is what this table exists to make
+visible.
+
+**What "direct" costs.** The host has no overlay address, so strict overlay mode cannot
+hold connections to a tunnel: anything that can route to the management address can
+reach the host, and Provenance is not what stops it. A session that falls back from an
+overlay address to a direct one logs at WARN (see above).
+
+**Windows hosts are always vaulted.** There is no SSH certificate for a desktop session:
+RDP authenticates with the vaulted credential and WinRM with NTLM. A Windows host row
+may still carry `authMethod: prov_cert` — that is the column default — so the posture is
+derived from the protocol, not from that column.
+
+### Which to allow in production
+
+This is a policy decision, and Provenance does not make it for you. As a starting point:
+
+- **`brokered-overlay`** — the design the product is built around. Prefer it.
+- **`brokered-direct`** — reasonable where the network already segments the host
+  (the jump host's own LAN, or the machine running Provenance itself). Enrolled with
+  `skipWireGuard`.
+- **`vaulted-overlay`** — necessary for Windows, and for appliances that cannot trust
+  the CA. Accept it deliberately, and rotate the credential on operator departure.
+- **`vaulted-direct`** — both compromises at once. Worth justifying per host rather than
+  accepting as a default.
+
+Enabling **strict overlay mode** (Settings → overlay) refuses the direct fallback for any
+host that has an overlay address, which converts a silent `*-direct` session into a
+refused one.
+
 ## RDP tunnel: who may claim a session
 
 Each RDP session opens an ephemeral TCP listener on the backend and has guacd connect

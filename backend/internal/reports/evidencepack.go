@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/kforbus3/provenance/backend/internal/hosttrust"
 	"strconv"
 	"time"
 
@@ -155,6 +156,40 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 	kv("Distinct users", strconv.Itoa(sum.SessionUsers))
 	kv("Distinct hosts reached", strconv.Itoa(sum.SessionHosts))
 
+	// --- how hosts are actually reached ---
+	//
+	// A pack that reports only session counts implies every session was equally well
+	// protected. They are not: a host reached with a standing vaulted credential on
+	// its management address gives up the per-session certificate AND the tunnel, and
+	// until this section existed nothing in the evidence said which hosts those were.
+	// The posture is derived from each host record, so it cannot describe a
+	// configuration the fleet has since moved off.
+	h2("Host Access Paths")
+	if hosts, herr := st.ListHosts(tenant.WithBypass(ctx), 100000, 0); herr == nil && len(hosts) > 0 {
+		counts := map[hosttrust.Tier]int{}
+		for _, h := range hosts {
+			if h.AccessPosture != nil {
+				counts[h.AccessPosture.Tier]++
+			}
+		}
+		for _, t := range hosttrust.All() {
+			kv(tierLabel(t), fmt.Sprintf("%d host(s)", counts[t]))
+		}
+		if weak := counts[hosttrust.TierVaultedDirect] + counts[hosttrust.TierVaultedOverlay]; weak > 0 {
+			note(fmt.Sprintf("%d host(s) authenticate with a standing credential held in the "+
+				"vault rather than a certificate minted for each session. Ending one person's "+
+				"access to those hosts means rotating that credential, not revoking a "+
+				"certificate serial.", weak))
+		}
+		if direct := counts[hosttrust.TierBrokeredDirect] + counts[hosttrust.TierVaultedDirect]; direct > 0 {
+			note(fmt.Sprintf("%d host(s) are reachable on their management address rather than "+
+				"only through the overlay, so strict overlay mode cannot confine connections "+
+				"to them.", direct))
+		}
+	} else {
+		note("No hosts are enrolled, or the inventory could not be read.")
+	}
+
 	// --- certificate issuance ---
 	h2("Certificate Issuance (ephemeral SSH credentials)")
 	kv("Certificates issued", strconv.Itoa(sum.CertsIssued))
@@ -221,4 +256,20 @@ func chainAttestation(intact bool, excepted int, brokenAt int64) (string, attest
 	default:
 		return fmt.Sprintf("FAIL  -  the audit chain is broken at sequence %d", brokenAt), red
 	}
+}
+
+// tierLabel renders an access tier for a compliance reader, who should not have to
+// know the product's internal vocabulary to read its evidence.
+func tierLabel(t hosttrust.Tier) string {
+	switch t {
+	case hosttrust.TierBrokeredOverlay:
+		return "Per-session certificate, overlay only"
+	case hosttrust.TierBrokeredDirect:
+		return "Per-session certificate, management address"
+	case hosttrust.TierVaultedOverlay:
+		return "Standing vaulted credential, overlay only"
+	case hosttrust.TierVaultedDirect:
+		return "Standing vaulted credential, management address"
+	}
+	return string(t)
 }

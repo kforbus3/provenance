@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kforbus3/provenance/backend/internal/hosttrust"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,10 @@ func scanHost(row pgx.Row) (*models.Host, error) {
 	if len(hostOpts) > 0 {
 		_ = json.Unmarshal(hostOpts, &h.Options)
 	}
+	// Derived here rather than at each API handler, so no path that returns a host can
+	// forget it -- which is the same class of mistake the posture exists to surface.
+	p := hosttrust.Assess(h.AuthMethod, h.Protocol, h.WGAddress)
+	h.AccessPosture = &p
 	return &h, nil
 }
 
