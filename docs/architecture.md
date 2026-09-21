@@ -112,13 +112,16 @@ manage `authorized_keys` per user.
 
 ### 2. Login and ephemeral identity issuance
 1. `POST /api/v1/auth/login` verifies the password, then `CreateSession` mints:
-   - a short-lived **access JWT** (default 15m, HMAC-signed),
-   - a rotating **refresh token** (HttpOnly cookie, default 30d), and
+   - a short-lived **access JWT** (`PROV_ACCESS_TOKEN_TTL`, default `15m`, HMAC-signed),
+   - a rotating **refresh token** (HttpOnly cookie, `PROV_REFRESH_TOKEN_TTL`,
+     default `30d`), and
    - a **CSRF token** (double-submit cookie, readable by JS).
 2. A session hook fires: the **Issuer** mints an ephemeral `ssh-ed25519` keypair
    in the **Identity Vault** (RAM only) and signs a short-lived user certificate
-   (default 7d, principals `fleet` + username). Only certificate *metadata* is
-   persisted in `ssh_certificates`; the private key never touches disk or the DB.
+   (`PROV_USER_CERT_TTL`, default `12h`). Per-host certificates carry the `prov`
+   principal plus the username; `fleet` is still accepted for hosts enrolled before
+   the rename. Only certificate *metadata* is persisted in `ssh_certificates`; the
+   private key never touches disk or the DB.
 3. On `POST /api/v1/auth/logout` the session's ephemeral key is zeroized and its
    certificates revoked.
 
@@ -173,9 +176,12 @@ separate **`ansible-runner`** sidecar container (`deploy/ansible-runner`, a smal
 FastAPI service). The `playbook` module authors and stores playbooks, asks the
 runner to `--syntax-check` / lint YAML, and orchestrates runs:
 
-1. On a run, the backend mints a short-lived ephemeral key + user certificate
-   for the privileged `fleet` principal (via `Issuer.SystemKeyMaterial`, default
-   2h TTL) — the same in-RAM, never-persisted identity model used for terminals.
+1. On a run, the backend mints a short-lived ephemeral key + user certificate for
+   the privileged `prov` principal (via `Issuer.SystemKeyMaterial`). Its TTL is the
+   run's own timeout plus a 15-minute margin, so with `PROV_PLAYBOOK_TIMEOUT` at its
+   default of `30m` the certificate lives 45 minutes — it is deliberately tied to the
+   work rather than fixed. The same in-RAM, never-persisted identity model is used for
+   terminals.
 2. It resolves each target's jump-reachable address (WireGuard tunnel IP, or the
    direct address for skip-WireGuard hosts) and POSTs the playbook, inventory,
    ephemeral certificate, and jump-host coordinates to the runner.
@@ -267,8 +273,9 @@ responses, request decoding, ID parsing, and best-effort audit writes.
   private key itself is stored encrypted at rest (`ca_keys.private_enc`,
   encrypted with `PROV_CA_PASSPHRASE`) and never leaves the backend.
 
-- **Short-lived certificates + KRL.** User certificates are short-lived (default
-  7d) and auto-renewed ~24h before expiry by a background loop. Every certificate
+- **Short-lived certificates + KRL.** User certificates are short-lived
+  (`PROV_USER_CERT_TTL`, default `12h`) and renewed by a background loop
+  `PROV_CERT_RENEW_BEFORE` (default `3h`) ahead of expiry. Every certificate
   has a unique, never-reused serial (`ssh_cert_serial_seq`). Revocation is
   recorded in `cert_revocations` and exposed as a Key Revocation List via
   `GET /api/v1/certificates/krl`. CA rotation is a single API call.

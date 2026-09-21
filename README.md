@@ -1,183 +1,104 @@
 # Provenance
 
-**Privileged access management and OS lifecycle for Linux fleets, in one place.**
+**Privileged access management and OS lifecycle for Linux fleets.**
 
-Provenance covers a machine's whole life: it **builds** the operating system a
-machine runs, **puts it on the disk** over PXE, **updates it** in staged
-rollouts, and gives operators secure, audited **browser SSH access** to it for
-everything in between. Two halves that are usually two products, deliberately
-one — because each is the answer to the other's hardest problem, and the seam
-between them is where the interesting failures live (see
-[docs/imaging.md](docs/imaging.md)).
-
-The access half gives operators secure, audited SSH access to Linux fleets
-**from the browser** — hundreds of hosts on the default configuration, scaling to thousands with a
-wider overlay subnet (`PROV_WG_SUBNET`) and tuned monitor concurrency — with no SSH
-client, VPN, WireGuard, keys, or
-certificates on the user side. The browser talks only to the backend over HTTPS/WebSocket;
-the **backend is the sole SSH client** and brokers every connection through a jump host and
-WireGuard overlay to managed hosts.
+Provenance gives operators secure, audited browser access to Linux hosts and
+manages the operating systems those hosts run. Its core workflow is simple:
+enroll a host, grant a person time-bounded access, and broker their session
+without putting an SSH key, VPN, or certificate in their browser.
 
 ```
-Browser ──HTTPS/WS──> React SPA ──REST/WS──> Go Backend ──SSH──> Jump Host ──WireGuard──> Managed Hosts
-                                                  │
-                                   ┌──────────────┴───────────────┐
-                                   │ SSH CA · ephemeral identities │
-                                   │ RBAC · JIT approvals · audit  │
-                                   └───────────────────────────────┘
+Browser ──HTTPS/WSS──> Provenance ──SSH──> Jump host ──Overlay──> Managed hosts
+                               │
+                  SSH CA · RBAC · JIT access · audit trail
 ```
 
-## Why it's different
+The backend is the only SSH client. It creates a new Ed25519 keypair in memory
+for each login, signs a short-lived SSH certificate, and discards the private
+key when the session ends. Managed hosts trust the Provenance SSH CA; operators
+never receive the underlying credential or network access.
 
-- **Ephemeral identities.** Every login mints a brand-new Ed25519 keypair **in backend RAM**
-  and signs a short-lived (12-hour) OpenSSH user certificate. Private keys never touch disk,
-  the database, cookies, or the browser, and are zeroized on logout/idle. Certificates
-  auto-renew ~24h before expiry and are revoked on session end.
-- **Internal SSH Certificate Authority.** The CA private key is generated in-process,
-  encrypted at rest (AES-256-GCM), and never leaves the backend. Supports rotation and
-  revocation (KRL).
-- **Backend-only SSH.** The browser exchanges terminal bytes over a WebSocket; it never
-  speaks SSH, holds keys, or gets VPN connectivity.
-- **Defense in depth.** Argon2id passwords, JWT access + rotating refresh tokens, CSRF
-  double-submit, account lockout, fine-grained RBAC enforced server-side, group-based host
-  authorization, just-in-time approvals, and a **hash-chained tamper-evident audit log**.
+## What it is for
 
-## Features
+Start with browser-based, controlled access to Linux fleets:
 
-| Area | Capability |
-|------|-----------|
-| Access | Browser SSH terminal (xterm.js), multi-tab, full PTY, session recording & replay; **live session shadowing** (read-only, audited four-eyes viewing of an active session); **real-time dashboard** (quick-connect, live "who's connected to which host"); **Hosts/Terminals group filter** |
-| Identity | Self-contained auth, Argon2id, MFA (TOTP + WebAuthn passkeys) with **one-time recovery codes** — optional or **enforced** globally/per-user, first-run bootstrap wizard; **single sign-on (OIDC + LDAP/AD)** with auto-provisioning and group→role mapping; **service accounts + API tokens** (`flt_…` bearer, hashed, expiring/revocable) for REST automation |
-| AuthZ | RBAC (built-in + custom roles), host groups **and direct user→host grants**, **dynamic host groups** (membership from a rule over host attributes), **root vs login-only host access** (`Host.Sudo`), just-in-time temporary access with auto-expiry |
-| Hosts | Inventory + **quick-connect Terminals launcher**, live SSH health monitoring, **per-host pending package updates**, automated enrollment (password / private key / **SSH agent** / **no-install ssh-pipe** / **direct "skip-WireGuard" host**) |
-| CA | **Unique ephemeral cert per (user, host)**, CA rotation, revocation, lifecycle API |
-| Automation | **Ansible playbook management** (author, lint/syntax-check, run via an isolated `ansible-runner` sidecar); **scheduling** of recurring scans, playbook runs & vulnerability scans |
-| Hardening | Per-IP rate limiting, idle/absolute session reaper, live-session termination, internet-exposure guide |
-| Compliance | One-click **OpenSCAP** security scans per host (auto-installs scanner; CIS/STIG/… profiles) with in-UI HTML reports + offline export; **CVE vulnerability scanning** via an **Anchore Grype** sidecar (no agent on hosts; CVSS-scored findings, fleet roll-up, online/offline CVE-DB updates) |
-| Audit | Hash-chained audit with integrity verification + export; full auth event log; **audit forwarding to a SIEM** (syslog / HTTP JSON); **CSV compliance reports** (access / audit / certificate / scan / vulnerability) on demand or on a **weekly/monthly schedule** |
-| Resilience | **Encrypted database backups** + retention policy and **break-glass recovery** runbook |
-| Notifications | Outbound notifications on key events: **email (SMTP)**, **webhook** (Slack / Discord / Microsoft Teams / generic JSON), and severity-gated **PagerDuty + Opsgenie** incident channels |
-| Assistant | AI assistant aware of host inventory/metrics, **security scans, playbook runs, and pending updates**; **multi-turn conversations**, **fleet insights** ("what's wrong with the fleet?" + disk-runway projections), and scheduled **health digests** |
-| Imaging | **A/B OS image builder** (GRUB + RAUC dual-root), **PXE/iPXE netboot imaging**, **signed update bundles**, **SBOMs** (SPDX + CycloneDX), optional **Secure Boot** and LUKS |
-| OS updates | **Staged rollouts** (canary → soak → batches → failure budget → maintenance window) over a **pull** control plane, with reach-out as the fast path: check-in-on-demand, direct install over SSH for machines with no route home, and **attested reports** for machines that cannot speak for themselves |
-| Ops | Prometheus metrics, structured logs, health/ready endpoints, **System Health dashboard**, **CA-key rotation reminders**, **app-wide display timezone**, Docker/K8s/Helm/systemd artifacts |
+- Terminal and SFTP sessions, recording/replay, and read-only live shadowing.
+- RBAC, host-scoped access, just-in-time approvals, MFA/passkeys, and SSO.
+- A built-in SSH CA with certificate rotation, revocation, and an auditable,
+  HMAC-keyed event trail.
+- Host inventory, health checks, package-update visibility, vulnerability and
+  compliance scans, and safely isolated Ansible automation.
 
-## Quick start
+The same control plane also supports the host lifecycle: A/B image builds,
+PXE/iPXE provisioning, signed update bundles, and staged OS rollouts. These
+features are optional; a deployment can use Provenance solely as a PAM gateway.
+See [imaging.md](docs/imaging.md) for how the lifecycle and access paths fit
+together.
 
-Requires Docker + Docker Compose. No local Go/Node/Postgres toolchain needed.
+## Trust boundaries
+
+The default production path is browser → backend → jump host → WireGuard overlay
+→ managed host. The browser only speaks HTTPS/WebSocket to Provenance.
+
+Provenance also supports direct, no-install, and SSH-agent-assisted enrollment
+for constrained environments. Those paths trade deployment convenience against
+the default overlay boundary; choose them deliberately and document the policy
+for the fleet. The [host enrollment guide](docs/host-enrollment-guide.md)
+explains each option.
+
+## Try it locally
+
+Requires Docker and Docker Compose. No local Go, Node, or Postgres toolchain is
+needed.
 
 ```bash
-make up        # builds & starts Postgres, Redis, backend, frontend, and the SSH test fabric
+make up
 ```
 
-Then open the frontend (http://localhost:5173). On first run you'll be guided through the
-**bootstrap wizard** to create the initial Super Administrator; the wizard then permanently
-self-disables.
-
-That gets Provenance running. It manages nothing until hosts are in it, so the next
-three steps are the ones that matter — enroll your hosts, add your people, and stand
-up log collection. Roughly half an hour, in order, with what each step buys you:
-[Make it useful](docs/installation.md#8-make-it-useful--the-order-to-do-things-in).
-For a production install rather than a local try-out, start at
-[Installation](docs/installation.md).
-
-Useful targets:
+Open <http://localhost:5173> and complete the one-time bootstrap wizard to
+create the first Super Administrator. The default stack includes a small SSH test
+fabric; use `make up-app` when you only want the application stack.
 
 ```bash
-make up-app    # app stack only (no SSH test fabric)
-make test      # backend + frontend tests
-make logs      # tail logs
-make down      # stop;  make clean  # stop + remove volumes
+make test       # backend + frontend tests
+make logs       # tail service logs
+make down       # stop services; volumes remain
 ```
+
+For a production deployment, begin with the
+[installation guide](docs/installation.md), then follow its
+[Make it useful](docs/installation.md#8-make-it-useful--the-order-to-do-things-in)
+sequence: enroll hosts, add people, configure log collection, and harden the
+deployment.
+
+## Documentation
+
+| If you want to… | Start here |
+| --- | --- |
+| Understand the data flows and security model | [Architecture](docs/architecture.md) and [Security guide](docs/security-guide.md) |
+| Install, operate, or expose Provenance | [Installation](docs/installation.md), [Deployment](docs/deployment.md), and [Operations](docs/operations.md) |
+| Enroll hosts and define access | [Host enrollment](docs/host-enrollment-guide.md), [Admin guide](docs/admin-guide.md), and [Access policies](docs/access-policies.md) |
+| Integrate or automate it | [API reference](docs/api.md) and [Automation](docs/automation.md) |
+| Plan recovery or manage the SSH CA | [Disaster recovery](docs/disaster-recovery.md), [Break-glass recovery](docs/break-glass.md), and [Certificate lifecycle](docs/certificate-lifecycle.md) |
+| Build images and roll out OS updates | [Imaging and updates](docs/imaging.md) |
+| Develop or contribute | [Developer guide](docs/developer-guide.md) and [Contributing](CONTRIBUTING.md) |
+
+The [documentation index](docs/README.md) has the complete reference, including
+database, Kubernetes, database-broker, federation, high-availability, and
+integration guides.
 
 ## Repository layout
 
 ```
-backend/    Go API server + SSH gateway (chi, pgx, x/crypto/ssh, gorilla/websocket)
-frontend/   React + TypeScript + Vite + MUI + xterm.js + React Query + Zustand
-builder/    A/B image builder (debootstrap, GRUB, RAUC, SBOM, Secure Boot) — shell
-imager/     the netboot imager that writes an image to a machine's disk
-server/     PXE/iPXE + artefact provisioning server for the imaging segment
-overlay.d/  image profiles layered into a build
-deploy/     docker-compose (app + test fabric), k8s manifests, Helm chart, systemd units
-docs/       architecture, API, schema, admin/user/developer/security/DR guides
-scripts/    orchestration + dev helpers; scripts/imaging/ is the boot-test suite
+backend/    Go API server and SSH gateway
+frontend/   React application
+builder/    A/B image builder and signed update bundles
+imager/     PXE/iPXE netboot imager
+server/     provisioning services for the imaging segment
+deploy/     Compose, Kubernetes, Helm, and systemd deployment artifacts
+docs/       operator, security, API, and developer documentation
 ```
-
-The Go module path, the binary names and the `PROV_*` environment prefix are
-unchanged from this codebase's earlier life. Renaming them would be a migration
-for every existing deployment in exchange for nothing.
-
-## Architecture & docs
-
-- [docs/architecture.md](docs/architecture.md) — components, data flows, security model
-- [docs/imaging.md](docs/imaging.md) — building images, staged rollouts, and why the two halves are one program
-- [docs/deployment.md](docs/deployment.md) — deploy the whole system · [docs/internet-exposure.md](docs/internet-exposure.md) — internet-facing
-- [docs/api.md](docs/api.md) — REST API reference · [docs/database.md](docs/database.md) — schema reference
-- [docs/security-guide.md](docs/security-guide.md) · [docs/certificate-lifecycle.md](docs/certificate-lifecycle.md)
-- [docs/admin-guide.md](docs/admin-guide.md) · [docs/user-guide.md](docs/user-guide.md) · [docs/host-enrollment-guide.md](docs/host-enrollment-guide.md)
-- [docs/imaging.md](docs/imaging.md) — OS images and updates, driven from here (Flipside)
-
-## Status
-
-Working and verified end-to-end (see `git log` for the milestone history):
-
-- Auth (Argon2id, JWT + rotating refresh, CSRF, lockout), **MFA (TOTP + WebAuthn passkeys)
-  with self-service one-time recovery codes, optional or enforced** globally/per-user,
-  first-run bootstrap
-- **Service accounts + API tokens** — non-human identities (no password, RBAC-scoped) with
-  `flt_…` bearer tokens (SHA-256-hashed, shown once, optional expiry, revocable) for REST
-  automation; tokens can't open the terminal/SFTP WebSocket
-- **Single sign-on** — **OIDC** (Okta/Azure AD/Google/Keycloak/Authentik, auth-code + PKCE,
-  JWKS-verified ID tokens) and **LDAP/Active Directory** (service-account lookup + user-bind),
-  with auto-provisioning and **group→role mapping**; provider secrets sealed at rest
-- RBAC + host groups + **direct user→host grants** + **just-in-time approvals** with auto-expiry;
-  **dynamic host groups** whose membership is materialized from a rule over stable host
-  attributes (environment / tags / OS / hostname)
-- Host inventory + **quick-connect Terminals launcher** with **group filter** and **per-host
-  pending package updates**; **enroll hosts five ways** — SSH password, SSH private key,
-  **forwarded SSH agent** (key stays local), a **no-install ssh-pipe** script, or a **direct
-  "skip-WireGuard" host** (for hosts on the jump host's LAN or the box running Provenance itself).
-  WireGuard-routed methods install CA trust + WireGuard and verify per-user cert login
-- Internal SSH **CA + ephemeral certificates, unique per (user, host)** (in-RAM keys, 12-hour,
-  auto-renew, revoke via distributed KRL)
-- Backend-only **browser SSH terminal** (xterm.js) through jump host + WireGuard
-- **Session recording** (asciicast v2) + replay + offline export, plus **live session
-  shadowing** — read-only, real-time viewing of an active session for four-eyes oversight
-  (input stays one-way; watching is itself audited)
-- **Live host monitoring** (authenticated SSH health checks, no ICMP) with WebSocket push
-- **Audited SFTP** file transfer (browse/upload/download/drag-and-drop, progress, cancel)
-- **OpenSCAP** security scans + remediation, and **Ansible playbook management** (author,
-  lint/syntax-check, run) executed through an isolated `ansible-runner` sidecar
-- **CVE vulnerability scanning** — a **Grype** sidecar matches each host's installed packages
-  against a CVE database (nothing installed on managed hosts; package DBs are read over SSH),
-  with CVSS-scored findings (installed vs. fixed version), a fleet roll-up, and **online or
-  offline (air-gapped) CVE-database updates**
-- **Scheduling** of recurring scans, playbook runs & vulnerability scans; **outbound
-  notifications** — email + webhook (Slack / Discord / **Microsoft Teams** / generic JSON) and
-  severity-gated **PagerDuty + Opsgenie** incident channels
-- **CSV compliance reports** (access / audit / certificate / scan / vulnerability) over a date
-  range, on demand or delivered on a **weekly/monthly schedule** as email attachments
-- **Encrypted database backups** + retention policy and a **break-glass recovery** runbook
-- **Hardening for internet exposure:** per-IP rate limiting, idle/absolute session reaper,
-  live-session termination on revoke, hardened production config + reverse-proxy guide
-- Hash-chained **tamper-evident audit** with integrity verification, plus **audit forwarding**
-  to a SIEM (syslog RFC 5424 or HTTP JSON; the local chain stays authoritative)
-- **AI assistant** aware of inventory, metrics, scans, playbook runs, and pending updates, with
-  **multi-turn conversation memory** (follow-up questions), **fleet insights** ("what's wrong
-  with the fleet?", low-disk / high-load / pending-update detection + disk-runway projections),
-  and scheduled **fleet-health digests**
-- Admin suite (users/roles/groups/settings), **System Health dashboard** with **CA-key
-  rotation reminders** (`PROV_CA_ROTATE_AFTER`), **app-wide display timezone**, Prometheus
-  metrics, health/ready
-- Docker Compose + local SSH test fabric; K8s manifests, Helm chart, systemd units
-
-Documented for incremental deepening: distributed tracing (OTel), SAML SSO.
-
-See [docs/deployment.md](docs/deployment.md) to deploy and [docs/operations.md](docs/operations.md)
-for day-to-day flows (enroll, connect, transfer, MFA).
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). See the [LICENSE](LICENSE)
-and [NOTICE](NOTICE) files for details.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
