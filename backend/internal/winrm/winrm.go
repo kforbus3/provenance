@@ -114,7 +114,48 @@ func Collect(ctx context.Context, dial DialFunc, host, user, pass string, ports 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no winrm ports configured")
 	}
-	return nil, lastErr
+	return nil, explainFailure(lastErr, ports)
+}
+
+// explainFailure names the cause of the one WinRM failure whose error text says
+// nothing about it.
+//
+// Windows refuses an NTLM session without message encryption when the WinRM service
+// has AllowUnencrypted=false, and answers 401 with a text/plain body, which this
+// client surfaces as "http response error: 401 - invalid content type". Nothing in
+// that mentions encryption, the port, or what to change — and the configuration it
+// objects to is the Windows DEFAULT, so it is what a host set up with a plain
+// `Enable-PSRemoting` does. The client cannot satisfy it either: it does not implement
+// WinRM message encryption over HTTP.
+//
+// Measured on a stock Windows Server 2025 host: with AllowUnencrypted=false, 5985
+// returns that 401; flip it to true and the identical call succeeds. So the honest
+// advice is an HTTPS listener, not the flag — turning the flag on sends every command
+// and its output across the network in clear text.
+func explainFailure(err error, ports []int) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "401") {
+		return err
+	}
+	triedHTTPS := false
+	for _, p := range ports {
+		if p == 5986 {
+			triedHTTPS = true
+		}
+	}
+	hint := "the host rejected the connection over HTTP (5985). Windows refuses an " +
+		"unencrypted WinRM session unless AllowUnencrypted is true, and false is the " +
+		"default, so this is what a host configured with a plain Enable-PSRemoting does. " +
+		"Configure an HTTPS listener on 5986 instead (a self-signed certificate is " +
+		"accepted); setting AllowUnencrypted=true would send commands and their output " +
+		"in clear text"
+	if triedHTTPS {
+		hint = "HTTPS (5986) did not answer and " + hint
+	}
+	return fmt.Errorf("%s — or the credentials were refused: %w", hint, err)
 }
 
 // RunScript executes a PowerShell script on a Windows host over WinRM and returns its
@@ -161,7 +202,7 @@ func RunScript(ctx context.Context, dial DialFunc, host, user, pass string, port
 	cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(script)
 	stdout, stderr, code, err = c.RunWithContextWithString(ctx, cmd, "")
 	if err != nil {
-		return stdout, stderr, -1, err
+		return stdout, stderr, -1, explainFailure(err, []int{port})
 	}
 	return stdout, stderr, code, nil
 }

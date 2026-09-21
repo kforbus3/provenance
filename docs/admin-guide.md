@@ -961,8 +961,22 @@ session ends** (SSH recordings are encrypted as they are written). See the
 collected over **WinRM (PowerShell remoting)** instead — the monitor authenticates with
 the host's attached **open-policy** vault credential and tunnels to WinRM through the
 jump host (best-effort, refreshed like other inventory). Requires WinRM enabled on the
-host (`Enable-PSRemoting`, firewall open to the jump host) and reachability on
-`PROV_RDP_WINRM_PORTS` (default `5986` then `5985`). Toggle with
+host **with an HTTPS listener on 5986** (the enrollment script sets one up; see the
+[Host Enrollment Guide](./host-enrollment-guide.md)) and the firewall open to the jump
+host, plus reachability on `PROV_RDP_WINRM_PORTS` (default `5986` then `5985`).
+
+> **`Enable-PSRemoting` alone is not enough, and 5985 is not a working fallback.** A
+> plain `Enable-PSRemoting` creates only an HTTP listener on 5985, and Windows defaults
+> the WinRM service's `AllowUnencrypted` to **false** — it then refuses an NTLM session
+> that carries no message encryption, which is what this client speaks. Fact collection
+> fails with `http response error: 401 - invalid content type`, which names neither the
+> cause nor the fix (Provenance now adds an explanation to that error). Measured on a
+> stock Windows Server 2025 host: with `AllowUnencrypted=false` port 5985 returns that
+> 401; set it to true and the identical call succeeds. **Do not set it to true** — it
+> sends every command and its output across the network in clear text. Configure the
+> HTTPS listener instead; a self-signed certificate is accepted.
+
+Toggle with
 `PROV_RDP_COLLECT_FACTS` (default on). SSH-only fields (kernel, SSH version, WireGuard,
 apt/dnf updates) are hidden for RDP hosts.
 
