@@ -426,6 +426,22 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		"multiTenancy":    h.svc.cfg.MultiTenancy,
 		"isProviderAdmin": p.IsProviderAdmin(),
 		"tenantId":        p.TenantID,
+		// Which optional subsystems this deployment actually has. The sidebar hides the
+		// entries that cannot work, because a permanent link to a page whose only
+		// content explains that nobody deployed the thing is clutter with a permission
+		// check on it.
+		//
+		// Only DEPLOYMENT-level absence belongs here. "Configured but empty" is not the
+		// same as "not available": hiding Databases because none are registered would
+		// remove the only route to registering the first one.
+		"features": map[string]bool{
+			// Imaging needs the builder-runner sidecar (the imaging compose profile).
+			// Without it there is nothing that can build an image or serve PXE.
+			"imaging": h.svc.cfg.BuilderRunnerURL != "",
+			// The Logs page searches an Aldgate collector. config.go already says
+			// "Empty disables the Logs page"; this is what makes that true in the UI.
+			"logs": h.svc.cfg.AldgateURL != "",
+		},
 	})
 }
 

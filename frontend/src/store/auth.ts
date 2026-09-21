@@ -13,6 +13,9 @@ interface AuthState {
   // Multi-tenancy.
   multiTenancy: boolean;
   isProviderAdmin: boolean;
+  // Which optional subsystems this deployment actually has, from /auth/me. Absent
+  // until the session loads; the sidebar treats unknown as "do not advertise".
+  features: Record<string, boolean>;
   tenantId: string | null;
   activeTenant: string | null; // the customer tenant a provider admin switched into (null = own)
   switchTenant: (id: string | null) => void;
@@ -45,6 +48,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   loaded: false,
   multiTenancy: false,
   isProviderAdmin: false,
+  features: {},
   tenantId: null,
   activeTenant: getActiveTenant(),
 
@@ -102,6 +106,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         accessToken: null,
         isSuperAdmin: false,
         multiTenancy: false,
+        features: {},
         isProviderAdmin: false,
         tenantId: null,
         activeTenant: null,
@@ -136,6 +141,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         isSuperAdmin: res.isSuperAdmin,
         multiTenancy: !!res.multiTenancy,
         isProviderAdmin: !!res.isProviderAdmin,
+        features: res.features ?? {},
         tenantId: res.tenantId ?? null,
         activeTenant: res.isProviderAdmin ? getActiveTenant() : null,
         loaded: true,

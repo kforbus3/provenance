@@ -88,6 +88,14 @@ interface NavItem {
   // is every deployment, and the permission is granted by default — so the first
   // thing a new operator sees in the sidebar is a feature that does nothing.
   assistantOnly?: boolean;
+  // Hidden unless this deployment actually has the subsystem (from /auth/me
+  // `features`). A permanent link to a page whose only content explains that nobody
+  // deployed the thing is clutter with a permission check on it.
+  //
+  // Only DEPLOYMENT-level absence belongs here. "Configured but empty" is not the
+  // same as "not available" — hiding Databases because none are registered would
+  // remove the only route to registering the first one.
+  feature?: string;
 }
 
 // Shown above the sections, always. These are the entry points rather than
@@ -132,7 +140,7 @@ export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { to: "/terminals", label: "Terminals", icon: <TerminalIcon />, perm: "Host.Connect" },
       { to: "/databases", label: "Databases", icon: <StorageIcon />, perm: "Database.Connect" },
       { to: "/kubernetes", label: "Kubernetes", icon: <HubIcon />, perm: "Kubernetes.Access" },
-      { to: "/logs", label: "Logs", icon: <ArticleIcon />, perm: "Logs.View" },
+      { to: "/logs", label: "Logs", icon: <ArticleIcon />, perm: "Logs.View", feature: "logs" },
       { to: "/sessions", label: "Session Replay", icon: <HistoryIcon />, perm: "Session.Replay" },
     ],
   },
@@ -148,7 +156,7 @@ export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     // How a machine comes to exist here at all: imaged, or enrolled.
     title: "Provisioning",
     items: [
-      { to: "/imaging", label: "Imaging", icon: <AlbumIcon />, perm: "Imaging.View" },
+      { to: "/imaging", label: "Imaging", icon: <AlbumIcon />, perm: "Imaging.View", feature: "imaging" },
       { to: "/enrollment", label: "Enrollment", icon: <CloudUploadIcon />, perm: "Host.Enroll" },
     ],
   },
@@ -276,6 +284,7 @@ export function AppLayout() {
     retry: false,
   });
   const assistantConfigured = assistantSettings?.enabled === true;
+  const features = useAuthStore((s) => s.features);
   const mode = useUIStore((s) => s.mode);
   const toggleMode = useUIStore((s) => s.toggleMode);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -288,6 +297,19 @@ export function AppLayout() {
   const collapsed = useUIStore((s) => s.navCollapsed);
   const toggleNavSection = useUIStore((s) => s.toggleNavSection);
 
+  // Is the subsystem behind this entry present in this deployment?
+  //
+  // Hidden only when the backend says it is absent. An older backend sends no
+  // `features` at all, and hiding working pages because a field was missing is a
+  // worse failure than showing one that explains itself — so absence means
+  // "unknown", not "off". (Ask goes the other way: its status endpoint always
+  // answers on a current backend, and a link that appears and then vanishes is
+  // worse than one that appears a moment late.)
+  //
+  // A function rather than an inline clause: written inline it needed a `||`, which
+  // binds looser than the `&&` chain around it and quietly made EVERY entry visible.
+  const deployed = (f?: string) => f === undefined || features[f] !== false;
+
   // Shown only if the user could actually open it. The sidebar has always
   // mirrored the routes' own permission checks rather than keeping a second
   // list, so a route that gains a permission cannot leave a dead link behind.
@@ -295,7 +317,8 @@ export function AppLayout() {
     (!item.perm || has(item.perm)) &&
     (!item.providerOnly || showProvider) &&
     (!item.hubOnly || isHub) &&
-    (!item.assistantOnly || assistantConfigured);
+    (!item.assistantOnly || assistantConfigured) &&
+    deployed(item.feature);
 
   // "/" would prefix-match every path, so it alone is matched exactly.
   const isSelected = (to: string) =>

@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AppLayout } from "./AppLayout";
 import { useAuthStore } from "../store/auth";
 import { useUIStore } from "../store/ui";
@@ -23,6 +23,7 @@ function renderNav(permissions: string[], path = "/") {
   useAuthStore.setState({
     user: { id: "1", username: "alice" }, permissions,
     isSuperAdmin: false, loaded: true, restore: vi.fn(),
+    features: navFeatures,
   } as never);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -37,6 +38,10 @@ function renderNav(permissions: string[], path = "/") {
     </QueryClientProvider>,
   );
 }
+
+// Set by the feature tests below; every other test runs with both subsystems present
+// so this change cannot quietly hide entries the older tests assert on.
+let navFeatures: Record<string, boolean> = { imaging: true, logs: true };
 
 describe("sidebar sections", () => {
   beforeEach(() => {
@@ -136,5 +141,51 @@ describe("the Ask item follows the assistant's configuration", () => {
     (assistantStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ enabled: true });
     renderNav(["Host.View"]);
     expect(screen.queryByRole("link", { name: /Ask/ })).not.toBeInTheDocument();
+  });
+});
+
+// A page whose subsystem was never deployed should not be in the menu.
+//
+// Imaging needs the builder-runner sidecar (the imaging compose profile) and Logs
+// needs an Aldgate collector. config.go already says of the collector: "Empty disables
+// the Logs page". It disabled the page and left the link, so the menu advertised two
+// destinations whose only content is an explanation that nobody deployed the thing.
+describe("entries for subsystems this deployment does not have", () => {
+  beforeEach(() => {
+    useUIStore.setState({ navCollapsed: [], sidebarOpen: true } as never);
+    navFeatures = { imaging: true, logs: true };
+    vi.clearAllMocks();
+    (assistantStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ enabled: false });
+  });
+  afterEach(() => { navFeatures = { imaging: true, logs: true }; });
+
+  it("hides Imaging when the builder-runner is not deployed", () => {
+    navFeatures = { imaging: false, logs: true };
+    renderNav(["Imaging.View", "Logs.View"]);
+    expect(screen.queryByRole("link", { name: /Imaging/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Logs/ })).toBeInTheDocument();
+  });
+
+  it("hides Logs when no collector is configured", () => {
+    navFeatures = { imaging: true, logs: false };
+    renderNav(["Imaging.View", "Logs.View"]);
+    expect(screen.queryByRole("link", { name: /Logs/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Imaging/ })).toBeInTheDocument();
+  });
+
+  it("shows both when both are deployed", () => {
+    renderNav(["Imaging.View", "Logs.View"]);
+    expect(screen.getByRole("link", { name: /Imaging/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Logs/ })).toBeInTheDocument();
+  });
+
+  // An older backend sends no `features` at all. Hiding everything would be a worse
+  // failure than showing it, so absence must not be read as "off" for a deployment
+  // that simply predates the field — but a KNOWN-false must still hide.
+  it("does not hide entries when the backend reports no features at all", () => {
+    navFeatures = {};
+    renderNav(["Imaging.View", "Logs.View"]);
+    expect(screen.getByRole("link", { name: /Imaging/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Logs/ })).toBeInTheDocument();
   });
 });

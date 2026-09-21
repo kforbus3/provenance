@@ -105,6 +105,11 @@ export interface MeResponse {
   multiTenancy?: boolean;
   isProviderAdmin?: boolean;
   tenantId?: string;
+  /** Which optional subsystems this deployment actually has — e.g. `imaging`
+   *  (builder-runner sidecar) and `logs` (an Aldgate collector). The sidebar hides
+   *  entries whose subsystem is absent, so a page that cannot work is not advertised.
+   *  Absent on an older backend, which the store reads as "nothing known". */
+  features?: Record<string, boolean>;
 }
 
 export interface BootstrapStatus {
