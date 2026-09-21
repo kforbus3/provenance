@@ -52,7 +52,7 @@ import { useAppName, useDocumentTitle } from "../api/branding";
 import { getTimezone } from "../api/timezone";
 import { useFleetEvents } from "../api/events";
 import { listTenants } from "../api/tenants";
-import { listAssistantApprovals } from "../api/assistant";
+import { assistantStatus, listAssistantApprovals } from "../api/assistant";
 import { setDisplayTimezone } from "../lib/datetime";
 
 const DRAWER_WIDTH = 232;
@@ -81,6 +81,13 @@ interface NavItem {
   perm?: string;
   providerOnly?: boolean;
   hubOnly?: boolean;
+  // Hidden until the AI assistant is actually configured. Unlike the flags above,
+  // which describe who you are, this describes whether the destination exists: with
+  // no model server set up, Ask is a permanent link to a page whose only content is
+  // an explanation that an administrator has not set it up. On a fresh install that
+  // is every deployment, and the permission is granted by default — so the first
+  // thing a new operator sees in the sidebar is a feature that does nothing.
+  assistantOnly?: boolean;
 }
 
 // Shown above the sections, always. These are the entry points rather than
@@ -90,7 +97,7 @@ export const NAV_TOP: NavItem[] = [
   { to: "/tenants", label: "Tenants", icon: <ApartmentIcon />, providerOnly: true },
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/sites", label: "Sites", icon: <HubIcon />, perm: "Federation.Manage", hubOnly: true },
-  { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use" },
+  { to: "/ask", label: "Ask", icon: <SmartToyIcon />, perm: "Assistant.Use", assistantOnly: true },
 ];
 
 // Personal, not administrative: what is waiting for you, your own sign-in
@@ -256,6 +263,19 @@ export function AppLayout() {
     enabled: has("Assistant.Approve"),
     refetchInterval: 60000,
   });
+  // Is the assistant set up at all? Asked only of users who could open it, and only
+  // to decide whether the link is worth showing. While the answer is unknown the item
+  // stays hidden: showing it and removing it a moment later is worse than showing it
+  // slightly late, and an unreachable status endpoint is not a reason to advertise a
+  // feature that may not exist.
+  const { data: assistantSettings } = useQuery({
+    queryKey: ["assistant-configured-nav"],
+    queryFn: assistantStatus,
+    enabled: has("Assistant.Use"),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const assistantConfigured = assistantSettings?.enabled === true;
   const mode = useUIStore((s) => s.mode);
   const toggleMode = useUIStore((s) => s.toggleMode);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -274,7 +294,8 @@ export function AppLayout() {
   const visible = (item: NavItem) =>
     (!item.perm || has(item.perm)) &&
     (!item.providerOnly || showProvider) &&
-    (!item.hubOnly || isHub);
+    (!item.hubOnly || isHub) &&
+    (!item.assistantOnly || assistantConfigured);
 
   // "/" would prefix-match every path, so it alone is matched exactly.
   const isSelected = (to: string) =>

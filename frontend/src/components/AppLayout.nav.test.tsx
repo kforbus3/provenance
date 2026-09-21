@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -12,7 +12,12 @@ import { useUIStore } from "../store/ui";
 // must not appear when the user can open nothing inside it, and the section
 // holding the current page must be open when the page loads.
 
-vi.mock("../api/assistant", () => ({ listAssistantApprovals: vi.fn().mockResolvedValue([]) }));
+vi.mock("../api/assistant", () => ({
+  listAssistantApprovals: vi.fn().mockResolvedValue([]),
+  assistantStatus: vi.fn(),
+}));
+
+import { assistantStatus } from "../api/assistant";
 
 function renderNav(permissions: string[], path = "/") {
   useAuthStore.setState({
@@ -93,3 +98,43 @@ describe("sidebar sections", () => {
 // `node:fs` import passes vitest and then fails `tsc -b` in the production
 // image build, which is how it got caught. Reading files is what the Python
 // checks already do, so that is where a check that reads a file belongs.
+
+// Ask is a link to a page that cannot do anything until somebody points the assistant
+// at a model server. `Assistant.Use` is granted by default and the setting defaults to
+// off, so on a fresh install every operator saw a sidebar entry whose whole content was
+// an explanation that an administrator had not set it up.
+describe("the Ask item follows the assistant's configuration", () => {
+  beforeEach(() => {
+    useUIStore.setState({ navCollapsed: [], sidebarOpen: true } as never);
+    vi.clearAllMocks();
+  });
+
+  it("is hidden when the assistant is not configured", async () => {
+    (assistantStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ enabled: false });
+    renderNav(["Assistant.Use"]);
+    await waitFor(() => expect(assistantStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("link", { name: /Ask/ })).not.toBeInTheDocument();
+  });
+
+  it("appears once it is configured", async () => {
+    (assistantStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ enabled: true });
+    renderNav(["Assistant.Use"]);
+    await waitFor(() => expect(screen.getByRole("link", { name: /Ask/ })).toBeInTheDocument());
+  });
+
+  // An unreachable or failing status endpoint must not advertise the feature: not
+  // knowing whether it exists is not a reason to link to it.
+  it("stays hidden when the status cannot be read", async () => {
+    (assistantStatus as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("nope"));
+    renderNav(["Assistant.Use"]);
+    await waitFor(() => expect(assistantStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("link", { name: /Ask/ })).not.toBeInTheDocument();
+  });
+
+  // And it is never shown to somebody who could not open it anyway.
+  it("is hidden without the permission even when configured", async () => {
+    (assistantStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ enabled: true });
+    renderNav(["Host.View"]);
+    expect(screen.queryByRole("link", { name: /Ask/ })).not.toBeInTheDocument();
+  });
+});

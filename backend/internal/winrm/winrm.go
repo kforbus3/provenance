@@ -87,7 +87,7 @@ func Collect(ctx context.Context, dial DialFunc, host, user, pass string, ports 
 	if includeUpdates {
 		script += updatesScript
 	}
-	cmd := "powershell.exe -NonInteractive -NoProfile -EncodedCommand " + encodePS(script)
+	cmd := "powershell.exe -NonInteractive -NoProfile -EncodedCommand " + encodePS(quietProgress(script))
 	var lastErr error
 	for _, port := range ports {
 		ep := &winrm.Endpoint{Host: host, Port: port, HTTPS: port == 5986, Insecure: true, Timeout: 20 * time.Second}
@@ -199,7 +199,7 @@ func RunScript(ctx context.Context, dial DialFunc, host, user, pass string, port
 	if err != nil {
 		return "", "", -1, err
 	}
-	cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(script)
+	cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(quietProgress(script))
 	stdout, stderr, code, err = c.RunWithContextWithString(ctx, cmd, "")
 	if err != nil {
 		return stdout, stderr, -1, explainFailure(err, []int{port})
@@ -396,6 +396,28 @@ func parseFacts(out string) *Facts {
 		f.OSVersion = strings.TrimSpace(ver + " (Build " + build + ")")
 	}
 	return f
+}
+
+// quietProgress prefixes a script so PowerShell's progress stream does not come back
+// as stderr.
+//
+// Remoting serialises the progress stream as CLIXML, and PowerShell emits progress
+// records for ordinary things — "Preparing modules for first use" fires on the first
+// Get-CimInstance in a fresh session. Those arrive on stderr, so a script that ran
+// perfectly returns several hundred bytes of
+//
+//	#< CLIXML
+//	<Objs Version="1.1.0.1" ...><Obj S="progress">...
+//
+// under a "[stderr]" heading in the run output. Nothing went wrong, but an operator
+// reading a wall of XML on a successful run has no way to know that, and the next
+// genuine warning is buried in it.
+//
+// Silencing the stream at the source is better than filtering it afterwards: the
+// records are never generated, so nothing has to guess which CLIXML is noise and which
+// is a real warning the script wrote.
+func quietProgress(script string) string {
+	return "$ProgressPreference = 'SilentlyContinue'\n" + script
 }
 
 // encodePS UTF-16LE-encodes a PowerShell script and base64s it for -EncodedCommand,
