@@ -5,46 +5,83 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v1.9.11 — 2026-09-20
+## v2.0.0 — 2026-09-21
 
-Everything accumulated since 1.9.10, released rather than held for 2.0.0 because
-several of these are silent failures that a deployment cannot see for itself. The
-2.0.0 entry below now covers only what is still unreleased.
+The go-to-market release. Everything below was found by using the product rather than
+by reading it: a live Windows Server 2025 host, a real PXE client, real identity
+providers, and a production audit chain three months old.
 
-**A/B updates could never install.** RAUC mounts a verity bundle through
-device-mapper; nothing else in these images uses it, so nothing loaded it. Every
-update on every machine this builder images failed at the last step — after
-downloading the whole bundle and verifying its signature — with
-`Failed to open /dev/mapper/control`, which reads as a problem with the bundle.
+The version number is a fresh start. Tags v2.0.0 through v2.1.0 existed on the remote
+from the Moorgate era, carried over when the repositories merged; none had a release
+attached, and they were removed so the line reads 1.9.11 -> 2.0.0.
 
-**No imaged machine could register under multi-tenancy.** The heartbeat answered
-200 while row-level security refused the insert, because a machine has no session
-and therefore no tenant. Machines never appeared on the Machines page and no
-rollout could target one, while each was told every five minutes that it had
-checked in.
+### Windows
 
-**Deleting a user rewrote that user's audit history.** `audit_events.actor_id`
-carried `ON DELETE SET NULL` and is part of the hashed record, so offboarding
-somebody broke the hash chain permanently and every compliance evidence pack
-afterwards reported the log as possibly altered.
+Four defects, each of which alone stops a Windows deployment working, and all four
+invisible until somebody ran the product's own script through the product's own
+automation against a real Windows host.
 
-**Vulnerability scanning stored nothing under multi-tenancy**, and SSO group
-mappings onto a role that does not exist granted nothing — both silently. See the
-1.9.10 notes' shape: a tenant-less context and a write that matched nothing.
+**No PowerShell script over about 3 KB could run.** `-EncodedCommand` is base64 of
+UTF-16LE, roughly 2.7 characters per source character, against cmd.exe's 8191-character
+limit. Provenance's OWN 5,385-byte Windows enrollment script encoded to a
+14,434-character command line and the host refused it with "The command line is too
+long." Large scripts now upload in chunks and run from a file.
 
-**The audit-collector token was stored and returned in plaintext**, and sealing it
-then dropped it from every forwarded event until that was caught too.
+**The enrollment script could not derive its own public key**, so no Windows host could
+join the overlay at all. `wg.exe pubkey` reads the key from stdin and rejects anything
+after it, including a carriage return; PowerShell's native pipeline appends CRLF. The
+script stopped at step 2 with "Trailing characters found after key" -- on a key that was
+perfectly well formed -- before writing a config or installing anything.
 
-**The Updates page now shows what can be upgraded** rather than every image the
-fleet runs, and the provisioning preflight no longer refuses the only correct DHCP
-configuration there is.
+**Fetching an enrollment script took the host out of management.** The script must
+contain the overlay address the host will hold, so fetching one assigns that address
+immediately -- but the host does not join the overlay until somebody runs the script and
+pastes the key back, which is commonly the next day. In between, fact collection,
+vulnerability scanning and automations all dialled an address with no route behind it
+and failed with "No route to host" against a host answering normally on its ordinary
+address.
 
-Full detail for each is in the commit it landed in; the 2.0.0 section below carries
-the long-form account of the ones found by testing.
+**A successful script run reported a wall of XML as stderr.** Remoting serialises
+PowerShell's progress stream as CLIXML, and "Preparing modules for first use" fires on
+the first Get-CimInstance in a fresh session, so every run ended with several hundred
+bytes of `<Objs Version="1.1.0.1">` under a "[stderr]" heading. Silenced at the source.
 
----
+Also: a WinRM failure now names its cause. Windows defaults the WinRM service's
+`AllowUnencrypted` to false and refuses an unencrypted NTLM session, which is what this
+client speaks -- so port 5985 never works on a host in its default configuration, and
+the only signal was `401 - invalid content type`. The documented setup step
+(`Enable-PSRemoting` alone) produced exactly that; the admin guide no longer implies it
+is sufficient, and says not to turn the flag on.
 
-## Unreleased — for v2.0.0
+### Audit integrity
+
+**A broken audit chain could only be diagnosed by acknowledging it one row at a time**,
+and the scale made that impossible. The `ON DELETE SET NULL` foreign key dropped in
+1.9.11 nulled `actor_id` -- a column the hash covers -- on every event of every deleted
+user. The first production chain examined after that fix had **3,054 broken rows out of
+5,521**: 55% of the log, from a handful of accounts deleted over three months. Until
+that is accounted for the chain cannot report a NEW alteration, because the verdict
+never gets past the oldest old one.
+
+Verification now enumerates: one read-only walk reports every break, with the two facts
+that separate a lost column from a rewritten log -- whether the row still has an actor
+id, and whether its `prev_hash` still links. The second is evidence rather than
+inference, and that production chain had zero broken links. A span of breaks can then be
+acknowledged in one audited action, under constraints that keep it from becoming a way
+to hide an edit.
+
+**Compliance evidence packs would have called such a chain "cryptographically intact".**
+Acknowledging a break deliberately makes the verdict stop saying "broken", and both the
+pack and the Audit page read only that boolean. Packs now report PASS WITH EXCEPTIONS
+with the count, who recorded each exception, when, and their note.
+
+### Vulnerability scanning
+
+**A Windows scan with no MSRC mapping reported a host as clean.** Two scans of the same
+host, minutes apart: without the mapping, 2 findings and zero of every severity; with
+it, 681 findings including 63 critical. A scan that cannot assess what it found now says
+so, and names how many updates it could not match.
+
 
 ### Audit integrity
 
@@ -182,6 +219,45 @@ both read it), and 43 British spellings of the enrollment verb against a checker
 always been in the gate — which, being a checker for exactly that word, also declines to let
 this sentence name the spelling it rejects. `test_dhcp_preflight.py` had never run at all: it was written as pytest among
 plain scripts and was not in the target's list.
+
+---
+
+## v1.9.11 — 2026-09-20
+
+Everything accumulated since 1.9.10, released rather than held for 2.0.0 because
+several of these are silent failures that a deployment cannot see for itself. The
+2.0.0 entry below now covers only what is still unreleased.
+
+**A/B updates could never install.** RAUC mounts a verity bundle through
+device-mapper; nothing else in these images uses it, so nothing loaded it. Every
+update on every machine this builder images failed at the last step — after
+downloading the whole bundle and verifying its signature — with
+`Failed to open /dev/mapper/control`, which reads as a problem with the bundle.
+
+**No imaged machine could register under multi-tenancy.** The heartbeat answered
+200 while row-level security refused the insert, because a machine has no session
+and therefore no tenant. Machines never appeared on the Machines page and no
+rollout could target one, while each was told every five minutes that it had
+checked in.
+
+**Deleting a user rewrote that user's audit history.** `audit_events.actor_id`
+carried `ON DELETE SET NULL` and is part of the hashed record, so offboarding
+somebody broke the hash chain permanently and every compliance evidence pack
+afterwards reported the log as possibly altered.
+
+**Vulnerability scanning stored nothing under multi-tenancy**, and SSO group
+mappings onto a role that does not exist granted nothing — both silently. See the
+1.9.10 notes' shape: a tenant-less context and a write that matched nothing.
+
+**The audit-collector token was stored and returned in plaintext**, and sealing it
+then dropped it from every forwarded event until that was caught too.
+
+**The Updates page now shows what can be upgraded** rather than every image the
+fleet runs, and the provisioning preflight no longer refuses the only correct DHCP
+configuration there is.
+
+Full detail for each is in the commit it landed in; the 2.0.0 section below carries
+the long-form account of the ones found by testing.
 
 ---
 
