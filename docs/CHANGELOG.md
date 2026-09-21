@@ -7,9 +7,9 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ## v2.0.0 — 2026-09-21
 
-The go-to-market release. Everything below was found by using the product rather than
-by reading it: a live Windows Server 2025 host, a real PXE client, real identity
-providers, and a production audit chain three months old.
+Everything below was found by using the product rather than by reading it: a live
+Windows Server 2025 host, a real PXE client, real identity providers, and a production
+audit chain three months old.
 
 The version number is a fresh start. Tags v2.0.0 through v2.1.0 existed on the remote
 from the Moorgate era, carried over when the repositories merged; none had a release
