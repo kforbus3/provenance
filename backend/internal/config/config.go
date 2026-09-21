@@ -275,6 +275,17 @@ type Config struct {
 	// recordings at rest with AES-256-GCM. Empty leaves recordings as plaintext on
 	// disk (legacy behavior); a warning is emitted in production.
 	RecordingEncryptionKey []byte
+	// RecordingAllowPlaintext (PROV_RECORDING_ALLOW_PLAINTEXT) is the explicit,
+	// recorded decision to record sessions unencrypted outside development. Without
+	// it a non-development environment refuses to start with no recording key, the
+	// same way it refuses to start with no JWT or audit-chain secret.
+	//
+	// Session recordings are not metadata. A terminal recording contains whatever the
+	// operator typed and whatever came back: pasted passwords, tokens, database rows,
+	// key material. Writing them 0640 in plaintext gives anyone who can read that
+	// directory the contents of every privileged session — which is a larger prize
+	// than the credentials this product exists to keep out of their hands.
+	RecordingAllowPlaintext bool
 
 	// OpenSCAP scan report storage
 	ScanDir     string
@@ -590,6 +601,15 @@ func Load() (*Config, error) {
 	c.CAKeyPassphrase = []byte(env("PROV_CA_PASSPHRASE", ""))
 	c.AuditHMACKey = []byte(env("PROV_AUDIT_HMAC_KEY", ""))
 	c.RecordingEncryptionKey = []byte(env("PROV_RECORDING_KEY", ""))
+	c.RecordingAllowPlaintext = envBool("PROV_RECORDING_ALLOW_PLAINTEXT", false)
+	if c.RecordingAllowPlaintext && len(c.RecordingEncryptionKey) == 0 {
+		// Said once, at every start, because the choice is invisible afterwards: the
+		// recordings look identical either way until somebody opens one.
+		slog.Warn("session recordings are being written UNENCRYPTED",
+			"reason", "PROV_RECORDING_ALLOW_PLAINTEXT=true and no PROV_RECORDING_KEY",
+			"contents", "recordings hold pasted credentials and command output from privileged sessions",
+			"fix", "set PROV_RECORDING_KEY to a 32-byte hex value and restart")
+	}
 
 	// External KMS / HSM backend (default "local" = no wrapping, behavior unchanged).
 	c.KMSProvider = env("PROV_KMS_PROVIDER", "local")
@@ -719,6 +739,15 @@ func (c *Config) validate() error {
 		// party with only database write access cannot forge a valid chain.
 		if len(c.AuditHMACKey) < 32 {
 			missing = append(missing, "PROV_AUDIT_HMAC_KEY (>=32 bytes)")
+		}
+		// Session recordings hold the contents of privileged sessions, so outside
+		// development they are encrypted at rest or the operator says, explicitly and
+		// on the record, that they should not be. Bundle upgrades generate the key
+		// automatically (ConfigAdditions), so this is reached only by a deployment
+		// upgraded some other way.
+		if len(c.RecordingEncryptionKey) == 0 && !c.RecordingAllowPlaintext {
+			missing = append(missing, "PROV_RECORDING_KEY (>=32 bytes) — or set "+
+				"PROV_RECORDING_ALLOW_PLAINTEXT=true to record privileged sessions unencrypted")
 		}
 		// Authenticate the backend to the Ansible runner sidecar so nothing else on the
 		// container network can submit playbooks (remote code execution).

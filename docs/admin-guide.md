@@ -37,6 +37,7 @@ Set these in `.env` (generate with `openssl rand -hex 32`). In `production`
 | `PROV_CSRF_SECRET` | ≥ 16 bytes — CSRF double-submit |
 | `PROV_CA_PASSPHRASE` | ≥ 16 bytes — encrypts the CA private key at rest |
 | `PROV_AUDIT_HMAC_KEY` | ≥ 32 bytes — keys the tamper-evident audit chain |
+| `PROV_RECORDING_KEY` | ≥ 32 bytes — encrypts session recordings at rest. Required unless `PROV_RECORDING_ALLOW_PLAINTEXT=true`; upgrade bundles generate one automatically |
 | `PROV_ANSIBLE_RUNNER_TOKEN` | ≥ 16 bytes — backend ⇄ `ansible-runner` shared secret (**must match** on the sidecar) |
 | `PROV_COOKIE_SECURE` | `true` when served over HTTPS |
 | `PROV_PUBLIC_URL` | your external base URL (cookies/CORS, **and the `server:` in every generated kubeconfig**) |

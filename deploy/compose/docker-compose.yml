@@ -144,6 +144,7 @@ services:
       # production (unset = recordings stored unencrypted; the backend warns). Must be
       # >=32 bytes if set. `openssl rand -hex 32`.
       PROV_RECORDING_KEY: ${PROV_RECORDING_KEY:-${FLEET_RECORDING_KEY:-}}
+      PROV_RECORDING_ALLOW_PLAINTEXT: ${PROV_RECORDING_ALLOW_PLAINTEXT:-false}
       # External KMS/HSM for master-key protection (optional; default local). See docs/kms.md.
       PROV_KMS_PROVIDER: ${PROV_KMS_PROVIDER:-${FLEET_KMS_PROVIDER:-local}}
       PROV_KMS_KEY_ID: ${PROV_KMS_KEY_ID:-${FLEET_KMS_KEY_ID:-}}
