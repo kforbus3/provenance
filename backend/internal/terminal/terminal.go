@@ -241,6 +241,20 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 			break
 		}
 	}
+	// A host that HAS an overlay address but was reached on its direct one has just
+	// bypassed the segmentation an operator may believe is being enforced. The audit
+	// event below records `overlay: false` per session, which answers the question
+	// afterwards if somebody thinks to ask it; this says it at the moment it happens,
+	// where log collection can alert on it.
+	//
+	// Not an error: falling back is the documented behaviour unless strict overlay
+	// mode is on (Settings -> overlay). It is the invisibility that was the problem.
+	if connectedAddr != "" && host.WGAddress != "" && connectedAddr != host.WGAddress {
+		h.d.Log.Warn("terminal reached a host OUTSIDE its overlay",
+			"host", host.Hostname, "used", connectedAddr, "overlay", host.WGAddress,
+			"user", p.Username,
+			"fix", "enable strict overlay mode to refuse this fallback instead")
+	}
 	if err != nil || gwConn == nil {
 		if err == nil {
 			err = fmt.Errorf("no reachable address for host")
