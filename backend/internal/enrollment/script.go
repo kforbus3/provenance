@@ -233,8 +233,30 @@ $wg      = "$wgDir\wg.exe"
 $wgquick = "$wgDir\wireguard.exe"
 
 # 2. Generate a fresh WireGuard keypair.
+#
+# wg.exe reads the private key from STDIN and rejects anything after it -- including a
+# carriage return. PowerShell's native-command pipeline terminates what it writes with
+# CRLF, so the obvious
+#
+#   $pub = ($priv | & $wg pubkey).Trim()
+#
+# fails with "wg.exe: Trailing characters found after key", and enrollment stops before
+# it has written anything at all. Measured on Windows Server 2025 with PowerShell 5.1:
+# piping fails every time, a file holding the bare key succeeds every time.
+#
+# So the key goes through a file with no trailing CR, locked to SYSTEM+Administrators
+# and deleted immediately. It is the same secret that is about to be written into the
+# tunnel config a few lines below, and it exists for the length of one command.
 $priv = (& $wg genkey).Trim()
-$pub  = ($priv | & $wg pubkey).Trim()
+$keyFile = Join-Path $env:TEMP ("prov-wgkey-" + [guid]::NewGuid().ToString("N"))
+try {
+  [IO.File]::WriteAllText($keyFile, $priv, (New-Object Text.ASCIIEncoding))
+  icacls $keyFile /inheritance:r /grant:r "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+  $pub = (cmd.exe /c ('"' + $wg + '" pubkey < "' + $keyFile + '"')).Trim()
+} finally {
+  Remove-Item -LiteralPath $keyFile -Force -ErrorAction SilentlyContinue
+}
+if (-not $pub) { throw "could not derive the WireGuard public key from wg.exe" }
 
 # 3. Write the tunnel config. A fixed ListenPort lets the jump host reach this
 #    host directly (e.g. on a shared LAN) exactly as it does a Linux host, so the

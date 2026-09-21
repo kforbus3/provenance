@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -87,7 +88,7 @@ func Collect(ctx context.Context, dial DialFunc, host, user, pass string, ports 
 	if includeUpdates {
 		script += updatesScript
 	}
-	cmd := "powershell.exe -NonInteractive -NoProfile -EncodedCommand " + encodePS(quietProgress(script))
+	cmd := psDirect(script)
 	var lastErr error
 	for _, port := range ports {
 		ep := &winrm.Endpoint{Host: host, Port: port, HTTPS: port == 5986, Insecure: true, Timeout: 20 * time.Second}
@@ -199,8 +200,11 @@ func RunScript(ctx context.Context, dial DialFunc, host, user, pass string, port
 	if err != nil {
 		return "", "", -1, err
 	}
-	cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(quietProgress(script))
-	stdout, stderr, code, err = c.RunWithContextWithString(ctx, cmd, "")
+	if !fitsCommandLine(script) {
+		stdout, stderr, code, err = runLarge(ctx, c, script)
+	} else {
+		stdout, stderr, code, err = c.RunWithContextWithString(ctx, psDirect(script), "")
+	}
 	if err != nil {
 		return stdout, stderr, -1, explainFailure(err, []int{port})
 	}
@@ -396,6 +400,102 @@ func parseFacts(out string) *Facts {
 		f.OSVersion = strings.TrimSpace(ver + " (Build " + build + ")")
 	}
 	return f
+}
+
+// maxCommandLine is the ceiling a WinRM command string has to fit under.
+//
+// The remote end runs it through cmd.exe, whose limit is 8191 characters, and the
+// failure is a bare "The command line is too long." on stderr with exit 1 — nothing
+// about scripts, encoding or size. 7500 leaves room for the powershell.exe prefix.
+const maxCommandLine = 7500
+
+// chunkChars is how much base64 goes in one upload command. Each chunk is wrapped in a
+// short PowerShell statement and then encoded at ~2.7x, so 2400 keeps every command
+// comfortably inside maxCommandLine.
+const chunkChars = 2400
+
+// psDirect is the command line for a script small enough to travel on it.
+func psDirect(script string) string {
+	return "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " +
+		encodePS(quietProgress(script))
+}
+
+// fitsCommandLine reports whether a script can be sent the simple way.
+func fitsCommandLine(script string) bool { return len(psDirect(script)) <= maxCommandLine }
+
+// runner is the subset of the winrm client these helpers need, so they can be tested
+// without a Windows host.
+type runner interface {
+	RunWithContextWithString(ctx context.Context, cmd, stdin string) (string, string, int, error)
+}
+
+// runLarge uploads a script in chunks and runs it from a file.
+//
+// -EncodedCommand is base64 of UTF-16LE, about 2.7 characters per source character,
+// against cmd.exe's 8191-character limit — so every PowerShell script over roughly 3 KB
+// failed. That included this product's OWN Windows enrollment script: 5,385 bytes,
+// encoding to a 14,434-character command line, which a live Windows Server 2025 host
+// refused with "The command line is too long."
+//
+// Two other routes were tried and rejected against that same host, which is why this
+// one looks laborious:
+//
+//   - Reading the script from stdin and running it in place leaves the process's stdin
+//     consumed, and PowerShell splices what remains into any native command the script
+//     pipes to. The enrollment script does exactly that (`$priv | & wg.exe pubkey`) and
+//     the host answered "wg.exe: Trailing characters found after key" on a key that was
+//     perfectly well formed.
+//   - Writing the file and running it via `cmd /c "powershell -File ... < NUL"` nests a
+//     shell inside the WinRM shell and hung without ever returning.
+//
+// Uploading the script and running it plainly has neither problem: nothing touches
+// stdin, and nothing nests.
+func runLarge(ctx context.Context, c runner, script string) (stdout, stderr string, code int, err error) {
+	name := fmt.Sprintf("prov-%d-%d.ps1", time.Now().UnixNano(), os.Getpid())
+	b64Path := `$env:TEMP\` + name + ".b64"
+	psPath := `$env:TEMP\` + name
+
+	enc := base64.StdEncoding.EncodeToString([]byte(quietProgress(script)))
+	for i := 0; i < len(enc); i += chunkChars {
+		end := i + chunkChars
+		if end > len(enc) {
+			end = len(enc)
+		}
+		op := "Add-Content"
+		if i == 0 {
+			op = "Set-Content"
+		}
+		// Base64 is ASCII and quote-free, so single quotes need no escaping.
+		up := fmt.Sprintf(`%s -LiteralPath "%s" -Value '%s' -Encoding ascii -NoNewline`,
+			op, b64Path, enc[i:end])
+		cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(up)
+		if len(cmd) > maxCommandLine {
+			return "", "", -1, fmt.Errorf("internal: upload chunk command is %d chars", len(cmd))
+		}
+		if _, se, rc, rerr := c.RunWithContextWithString(ctx, cmd, ""); rerr != nil || rc != 0 {
+			return "", se, rc, orUploadErr(rerr, rc, se)
+		}
+	}
+
+	// Decode, run, and clean up whatever happens — a failed script must not leave its
+	// source sitting in TEMP.
+	final := fmt.Sprintf(`$b = "%s"; $p = "%s"
+try {
+  [IO.File]::WriteAllBytes($p, [Convert]::FromBase64String([IO.File]::ReadAllText($b)))
+  & $p
+  exit $LASTEXITCODE
+} finally {
+  Remove-Item -LiteralPath $b, $p -Force -ErrorAction SilentlyContinue
+}`, b64Path, psPath)
+	cmd := "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePS(final)
+	return c.RunWithContextWithString(ctx, cmd, "")
+}
+
+func orUploadErr(err error, code int, stderr string) error {
+	if err != nil {
+		return fmt.Errorf("uploading the script to the host: %w", err)
+	}
+	return fmt.Errorf("uploading the script to the host failed (exit %d): %s", code, strings.TrimSpace(stderr))
 }
 
 // quietProgress prefixes a script so PowerShell's progress stream does not come back
