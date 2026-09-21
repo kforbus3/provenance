@@ -555,6 +555,11 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
               : ""}
           </Typography>
         )}
+        {scan?.warning ? (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            <strong>This scan could not assess everything it found.</strong> {scan.warning}
+          </Alert>
+        ) : null}
         {kernelRows.length > 0 && (
           <Alert severity="info" sx={{ mt: 1 }}>
             <strong>{kernelRows.length} of these are Linux kernel CVEs.</strong> They are listed against{" "}

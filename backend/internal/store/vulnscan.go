@@ -24,6 +24,9 @@ type VulnSummary struct {
 	// because most distro CVEs are never-fixed or not-yet-fixed.
 	FixableCritical, FixableHigh, FixableMedium int
 	FixableMaxCVSS                              float64
+	// Warning describes a condition that makes these counts understate the host's
+	// exposure, on a scan that nevertheless completed. See migration 0108.
+	Warning string
 }
 
 // CreateVulnScan inserts a pending vulnerability scan and returns its id.
@@ -57,11 +60,13 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 			UPDATE vuln_scans SET status='completed', finished_at=now(), db_built_at=$2,
 			  total=$3, critical=$4, high=$5, medium=$6, low=$7, negligible=$8, unknown=$9, max_cvss=$10,
 			  fixable=$11, wont_fix=$12,
-			  fixable_critical=$13, fixable_high=$14, fixable_medium=$15, fixable_max_cvss=$16
+			  fixable_critical=$13, fixable_high=$14, fixable_medium=$15, fixable_max_cvss=$16,
+			  warning=$17
 			WHERE id=$1`,
 			id, dbBuilt, sum.Total, sum.Critical, sum.High, sum.Medium, sum.Low, sum.Negligible, sum.Unknown, sum.MaxCVSS,
 			sum.Fixable, sum.WontFix,
-			sum.FixableCritical, sum.FixableHigh, sum.FixableMedium, sum.FixableMaxCVSS); err != nil {
+			sum.FixableCritical, sum.FixableHigh, sum.FixableMedium, sum.FixableMaxCVSS,
+			sum.Warning); err != nil {
 			return err
 		}
 		for _, f := range findings {
@@ -80,14 +85,14 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 const vulnScanCols = `vs.id, vs.host_id, COALESCE(h.hostname,''), vs.requester, vs.scheduled, vs.status,
 	vs.error, vs.db_built_at, vs.total, vs.critical, vs.high, vs.medium, vs.low, vs.negligible, vs.unknown,
 	vs.fixable, vs.wont_fix, vs.max_cvss, vs.fixable_critical, vs.fixable_high, vs.fixable_medium,
-	vs.fixable_max_cvss, vs.started_at, vs.finished_at, vs.created_at`
+	vs.fixable_max_cvss, vs.started_at, vs.finished_at, vs.created_at, COALESCE(vs.warning,'')`
 
 func scanVulnScan(row interface{ Scan(...any) error }) (*models.VulnScan, error) {
 	var v models.VulnScan
 	if err := row.Scan(&v.ID, &v.HostID, &v.Hostname, &v.Requester, &v.Scheduled, &v.Status,
 		&v.Error, &v.DBBuiltAt, &v.Total, &v.Critical, &v.High, &v.Medium, &v.Low, &v.Negligible, &v.Unknown,
 		&v.Fixable, &v.WontFix, &v.MaxCVSS, &v.FixableCritical, &v.FixableHigh, &v.FixableMedium,
-		&v.FixableMaxCVSS, &v.StartedAt, &v.FinishedAt, &v.CreatedAt); err != nil {
+		&v.FixableMaxCVSS, &v.StartedAt, &v.FinishedAt, &v.CreatedAt, &v.Warning); err != nil {
 		return nil, err
 	}
 	return &v, nil

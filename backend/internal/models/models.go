@@ -847,13 +847,18 @@ type AccessReviewItem struct {
 // source package fans out across many binary packages, so counting rows inflated
 // every total. VulnFinding rows stay per CVE-on-package for the drill-down.
 type VulnScan struct {
-	ID         uuid.UUID  `json:"id"`
-	HostID     uuid.UUID  `json:"hostId"`
-	Hostname   string     `json:"hostname,omitempty"`
-	Requester  string     `json:"requester"`
-	Scheduled  bool       `json:"scheduled"`
-	Status     string     `json:"status"`
-	Error      string     `json:"error,omitempty"`
+	ID        uuid.UUID `json:"id"`
+	HostID    uuid.UUID `json:"hostId"`
+	Hostname  string    `json:"hostname,omitempty"`
+	Requester string    `json:"requester"`
+	Scheduled bool      `json:"scheduled"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	// Warning is set on a scan that COMPLETED but whose numbers understate what is
+	// there — e.g. a Windows scan run with no MSRC mapping imported, which reports the
+	// missing updates with no CVEs and therefore zero of every severity. Distinct from
+	// Error, which means the scan produced nothing at all.
+	Warning    string     `json:"warning,omitempty"`
 	DBBuiltAt  *time.Time `json:"dbBuiltAt,omitempty"`
 	Total      int        `json:"total"`
 	Critical   int        `json:"critical"`

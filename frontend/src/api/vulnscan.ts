@@ -19,6 +19,11 @@ export interface VulnScan {
   scheduled: boolean;
   status: string; // pending|running|completed|failed
   error?: string;
+  // Set on a scan that COMPLETED but whose counts understate the host — e.g. a Windows
+  // scan run with no MSRC mapping, where the missing updates resolve to no CVEs and
+  // every severity total is therefore zero. Not the same as `error`, which means the
+  // scan produced nothing.
+  warning?: string;
   dbBuiltAt?: string;
   total: number;
   critical: number;

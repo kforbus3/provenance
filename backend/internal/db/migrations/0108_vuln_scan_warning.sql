@@ -1,0 +1,21 @@
+-- A completed scan that could not assess what it found.
+--
+-- Windows vulnerabilities are the CVEs remediated by a host's missing security
+-- updates, resolved KB -> CVE -> severity through the MSRC mapping. When that mapping
+-- has not been imported, the scan still succeeds: it reports the missing KBs, with no
+-- CVEs, severity "Unknown", and therefore zero critical, zero high, zero medium.
+--
+-- Measured on a real Windows Server 2025 host with two missing security updates:
+--
+--   MSRC not imported:  total 2    critical 0  high 0   (severity Unknown)
+--   MSRC imported:      total 681  critical 63 high 618
+--
+-- The first reads as a host with two minor issues. It is the same host, with 63
+-- critical vulnerabilities, and nothing in the result said the assessment had not been
+-- made -- the "0 critical" was the absence of data rendered as good news. The MSRC
+-- status is visible on a settings page, which is not where anybody reads a scan.
+--
+-- So a scan can carry a warning: it completed, its findings are real, and something
+-- about the conditions means the numbers understate what is there. Separate from
+-- `error`, which means the scan did not complete and has no findings at all.
+ALTER TABLE vuln_scans ADD COLUMN IF NOT EXISTS warning TEXT NOT NULL DEFAULT '';

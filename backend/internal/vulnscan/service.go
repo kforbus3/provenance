@@ -89,18 +89,22 @@ func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host) 
 	// Windows. Instead, a host's vulnerabilities are the CVEs remediated by its
 	// missing security updates — collected over WinRM from the Windows Update Agent.
 	if h.Protocol == "rdp" {
-		findings, err := s.collectWindows(ctx, scanID, h)
+		findings, warning, err := s.collectWindows(ctx, scanID, h)
 		if err != nil {
 			fail("collect windows updates: " + err.Error())
 			return
 		}
 		sum, findings := summarize(findings)
+		sum.Warning = warning
 		if err := s.store.CompleteVulnScan(ctx, scanID, sum, findings, nil); err != nil {
 			fail("store findings: " + err.Error())
 			return
 		}
 		s.log.Info("vuln scan completed (windows)", "host", h.Hostname, "total", sum.Total,
 			"critical", sum.Critical, "high", sum.High)
+		if sum.Warning != "" {
+			s.log.Warn("vuln scan incomplete assessment", "host", h.Hostname, "warning", sum.Warning)
+		}
 		s.notify(ctx, h, sum)
 		return
 	}
@@ -209,34 +213,36 @@ func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, inventor
 // remediates (the host is exposed to those CVEs until it's installed). Authenticated
 // with the host's open-policy vault credential (scans are unattended), tunneled
 // through the jump host.
-func (s *Service) collectWindows(ctx context.Context, scanID uuid.UUID, h *models.Host) ([]models.VulnFinding, error) {
+// collectWindows returns the host's findings and, where the assessment could not
+// actually be made, a warning describing why the numbers understate it.
+func (s *Service) collectWindows(ctx context.Context, scanID uuid.UUID, h *models.Host) ([]models.VulnFinding, string, error) {
 	signer, err := s.issuer.SystemSigner(ctx, s.issuer.SystemHostPrincipals(h.ID), 24*time.Hour)
 	if err != nil {
-		return nil, fmt.Errorf("system signer: %w", err)
+		return nil, "", fmt.Errorf("system signer: %w", err)
 	}
 	jump, err := s.gw.DialJumpWithSigner(ctx, signer)
 	if err != nil {
-		return nil, fmt.Errorf("dial jump host: %w", err)
+		return nil, "", fmt.Errorf("dial jump host: %w", err)
 	}
 	defer jump.Close()
 
 	key, err := s.cfg.VaultKey()
 	if err != nil {
-		return nil, fmt.Errorf("vault key: %w", err)
+		return nil, "", fmt.Errorf("vault key: %w", err)
 	}
 	user, pass, err := credinject.PasswordForSystem(ctx, s.store, key, s.cfg.ExtSecret(), h)
 	if err != nil {
-		return nil, fmt.Errorf("credential: %w", err)
+		return nil, "", fmt.Errorf("credential: %w", err)
 	}
 	cands := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
 	if len(cands) == 0 {
-		return nil, fmt.Errorf("host has no address")
+		return nil, "", fmt.Errorf("host has no address")
 	}
 	dial := func(_ /*network*/, addr string) (net.Conn, error) { return jump.DialContext(ctx, "tcp", addr) }
 
 	updates, err := winrm.CollectUpdates(ctx, dial, cands[0], user, pass, s.cfg.RDPWinRMPorts, 5*time.Minute)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// Look up the missing KBs in the MSRC mapping (if loaded) for authoritative CVE
@@ -259,9 +265,17 @@ func (s *Service) collectWindows(ctx context.Context, scanID uuid.UUID, h *model
 	}
 
 	var findings []models.VulnFinding
+	// How many security updates the MSRC mapping could not resolve. A KB with no
+	// mapping still produces a finding, but with no CVEs and severity Unknown — so a
+	// scan whose whole result is unmapped KBs reports zero of every severity, which
+	// reads as a healthy host rather than an unassessed one.
+	unmapped := 0
 	seen := map[string]bool{}
 	for _, u := range updates {
 		entries := msrcEntriesFor(u, msrcMap)
+		if len(entries) == 0 && (u.Security || u.Severity != "" || len(u.CVEs) > 0) {
+			unmapped++
+		}
 		// Only vulnerability-relevant updates: an MSRC mapping, security category, an
 		// MSRC severity, or a CVE list. Skip ordinary feature/driver updates.
 		if len(entries) == 0 && !u.Security && u.Severity == "" && len(u.CVEs) == 0 {
@@ -349,7 +363,7 @@ func (s *Service) collectWindows(ctx context.Context, scanID uuid.UUID, h *model
 		s.log.Debug("vuln scan: software collect", "host", h.Hostname, "err", serr)
 	}
 
-	return findings, nil
+	return findings, windowsWarning(unmapped), nil
 }
 
 // splitKBNumbers turns a WUA KB field ("KB5099536" or "KB5099536;KB123") into its
@@ -717,4 +731,22 @@ func (b *capBuffer) Write(p []byte) (int, error) {
 		b.truncated = true
 	}
 	return len(p), nil
+}
+
+// windowsWarning describes a Windows scan that completed without being able to assess
+// what it found.
+//
+// "0 critical" normally means a host is clean. On a scan whose missing updates could
+// not be matched to CVEs it means the question was never answered, and the two are
+// indistinguishable in the numbers — so the scan has to say which one it is. The count
+// is included because it is what makes the warning checkable: an operator can see
+// whether it covers everything found or only part of it.
+func windowsWarning(unmapped int) string {
+	if unmapped <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d missing security update(s) could not be matched to CVEs: the "+
+		"MSRC mapping has no entry for them, so their severity is unknown and they are "+
+		"NOT counted in the critical/high/medium totals. Import or update the MSRC data "+
+		"(Vulnerabilities -> Vulnerability data) and scan again.", unmapped)
 }
