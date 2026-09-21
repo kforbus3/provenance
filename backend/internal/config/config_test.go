@@ -5,13 +5,14 @@ import "testing"
 func TestValidateSecretsFailClosed(t *testing.T) {
 	good := func() *Config {
 		return &Config{
-			Environment:        "production",
-			DatabaseURL:        "postgres://x",
-			JWTSecret:          []byte("0123456789012345678901234567890123"), // >=32
-			CSRFSecret:         []byte("0123456789012345"),                   // >=16
-			CAKeyPassphrase:    []byte("0123456789012345"),                   // >=16
-			AuditHMACKey:       []byte("0123456789012345678901234567890123"), // >=32
-			AnsibleRunnerToken: "0123456789012345",                           // >=16
+			Environment:            "production",
+			DatabaseURL:            "postgres://x",
+			JWTSecret:              []byte("0123456789012345678901234567890123"), // >=32
+			CSRFSecret:             []byte("0123456789012345"),                   // >=16
+			CAKeyPassphrase:        []byte("0123456789012345"),                   // >=16
+			AuditHMACKey:           []byte("0123456789012345678901234567890123"), // >=32
+			RecordingEncryptionKey: []byte("0123456789012345678901234567890123"), // >=32
+			AnsibleRunnerToken:     "0123456789012345",                           // >=16
 			// Load() always sets one; a hand-built Config must too, because
 			// production now refuses to boot still pointing at localhost. That
 			// check exists because the value silently drives CORS, the WebAuthn
@@ -61,15 +62,16 @@ func TestValidateSecretsFailClosed(t *testing.T) {
 func TestProductionRefusesMisleadingPublicURLAndInsecureCookies(t *testing.T) {
 	base := func() *Config {
 		return &Config{
-			Environment:        "production",
-			DatabaseURL:        "postgres://x",
-			JWTSecret:          []byte("0123456789012345678901234567890123"),
-			CSRFSecret:         []byte("0123456789012345"),
-			CAKeyPassphrase:    []byte("0123456789012345"),
-			AuditHMACKey:       []byte("0123456789012345678901234567890123"),
-			AnsibleRunnerToken: "0123456789012345",
-			PublicURL:          "https://provenance.example.com",
-			CookieSecure:       true,
+			Environment:            "production",
+			DatabaseURL:            "postgres://x",
+			JWTSecret:              []byte("0123456789012345678901234567890123"),
+			CSRFSecret:             []byte("0123456789012345"),
+			CAKeyPassphrase:        []byte("0123456789012345"),
+			AuditHMACKey:           []byte("0123456789012345678901234567890123"),
+			RecordingEncryptionKey: []byte("0123456789012345678901234567890123"),
+			AnsibleRunnerToken:     "0123456789012345",
+			PublicURL:              "https://provenance.example.com",
+			CookieSecure:           true,
 		}
 	}
 
