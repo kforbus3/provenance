@@ -5,6 +5,49 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.10 — 2026-09-22
+
+Two defects in 2.0.9's revocation fix, found by checking the fleet afterwards instead of
+trusting the release. 2.0.9 took enforcement from **0 hosts to 16 of 17**; this is the
+seventeenth, and the reason it was reported softly.
+
+### A drop-in that exists is not a drop-in sshd reads
+
+Enrolment writes `/etc/ssh/sshd_config.d/00-prov.conf` unconditionally — including on a
+host whose `sshd_config` has no `Include`, where the file then sits inert and the real
+directives live in the main config. The install script chose its target by asking whether
+that file **existed**, so on such a host it wrote `RevokedKeys` somewhere sshd never opens.
+Everything downstream looked healthy: the file was there, the list was current, the push
+succeeded.
+
+The target is now the file sshd actually reads — the drop-in only when `sshd_config`
+includes that directory. And if the assertion afterwards shows the directive still is not
+in effect, the script **falls back to the main config and asks again**, validating and
+rolling back exactly as the first attempt does. A host built that way now repairs itself
+instead of staying unenforced for ever.
+
+### "sshd disagrees" is not "sshd could not be asked"
+
+The verification collapsed two different answers. On the affected host `sshd -T` ran
+perfectly well and said `revokedkeys none` — conclusive evidence of the fault — but because
+the directive was present in the file that had just been written, the script reported
+**written-but-unconfirmed** rather than **not enforced**. The softer of the two answers,
+when the evidence was available and definite.
+
+The two are now distinguished by whether `sshd -T` itself succeeded. A negative answer from
+a working `sshd -T` is reported as not enforced, which is what it is.
+
+### Upgrading
+
+Nothing to do. The next KRL distribution repairs any affected host by itself. To confirm,
+on any managed host:
+
+```sh
+sudo sshd -T | grep revokedkeys     # expect: revokedkeys /etc/ssh/prov_krl
+```
+
+---
+
 ## v2.0.9 — 2026-09-22
 
 ### Certificate revocation was distributed to every host and enforced on none

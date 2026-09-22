@@ -42,9 +42,16 @@ func InstallScript(b64 string) string {
 	return fmt.Sprintf(`set -e
 printf '%%s' '%s' | base64 -d > /etc/ssh/prov_krl
 chmod 644 /etc/ssh/prov_krl
-# Prefer the drop-in; fall back to the main config on a host that has no Include.
+# Choose the file sshd actually READS, not merely one that exists. Enrolment writes
+# 00-prov.conf unconditionally, so on a host whose sshd_config has no Include the
+# drop-in is present and inert -- and testing only for the file put the directive in a
+# file sshd never opens, on the one host in the fleet built that way.
 DROP=/etc/ssh/sshd_config.d/00-prov.conf
-if [ -f "$DROP" ]; then TARGET="$DROP"; else TARGET=/etc/ssh/sshd_config; fi
+if [ -f "$DROP" ] && grep -qE '^[[:space:]]*Include[[:space:]]+.*sshd_config\.d' /etc/ssh/sshd_config; then
+  TARGET="$DROP"
+else
+  TARGET=/etc/ssh/sshd_config
+fi
 if ! grep -q '^RevokedKeys' "$TARGET"; then
   echo 'RevokedKeys /etc/ssh/prov_krl' >> "$TARGET"
 fi
@@ -55,13 +62,40 @@ if ! sshd -t 2>/dev/null; then
 fi
 ( systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null ) || true
 # Ask sshd what it will actually enforce, rather than trusting what we just wrote.
-if sshd -T 2>/dev/null | grep -qi '^revokedkeys[[:space:]][[:space:]]*/etc/ssh/prov_krl'; then
-  echo %s
-elif grep -qs '^RevokedKeys /etc/ssh/prov_krl' "$TARGET"; then
+#
+# Separate "sshd disagrees" from "sshd could not be asked". Collapsing them reported a
+# host that plainly said "revokedkeys none" as merely unconfirmed, which is the softer
+# of the two answers and the wrong one -- the evidence was available and conclusive.
+if SSHD_T=$(sshd -T 2>/dev/null); then
+  if printf '%%s\n' "$SSHD_T" | grep -qi '^revokedkeys[[:space:]][[:space:]]*/etc/ssh/prov_krl'; then
+    echo %s
+    exit 0
+  fi
+  # sshd ran and does not have it. If the drop-in was the target, it is not being read;
+  # fall back to the main config and ask again rather than reporting a guess.
+  if [ "$TARGET" != /etc/ssh/sshd_config ]; then
+    if ! grep -q '^RevokedKeys' /etc/ssh/sshd_config; then
+      echo 'RevokedKeys /etc/ssh/prov_krl' >> /etc/ssh/sshd_config
+    fi
+    if ! sshd -t 2>/dev/null; then
+      sed -i '\#^RevokedKeys /etc/ssh/prov_krl#d' /etc/ssh/sshd_config
+      echo "%s sshd config rejected on fallback"; exit 1
+    fi
+    ( systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null ) || true
+    if sshd -T 2>/dev/null | grep -qi '^revokedkeys[[:space:]][[:space:]]*/etc/ssh/prov_krl'; then
+      echo %s
+      exit 0
+    fi
+  fi
+  echo %s; exit 1
+fi
+# sshd -T could not be run at all (no host keys, unparseable config). The directive is
+# in the file we edited, which is weaker evidence -- say so rather than claiming more.
+if grep -qs '^RevokedKeys /etc/ssh/prov_krl' "$TARGET"; then
   echo %s
 else
   echo %s; exit 1
-fi`, b64, RolledBack, Enforced, PresentUnverified, NotEnforced)
+fi`, b64, RolledBack, Enforced, RolledBack, Enforced, NotEnforced, PresentUnverified, NotEnforced)
 }
 
 // InstallCommand wraps InstallScript in a root shell, quoted, for callers that run one

@@ -111,3 +111,69 @@ func TestInstallCommandQuotingIsLossless(t *testing.T) {
 		t.Errorf("quoting is not lossless.\n got: %q\nwant: %q", string(out), want)
 	}
 }
+
+// A drop-in file that exists is not a drop-in file sshd reads. Enrolment writes
+// 00-prov.conf unconditionally, so on a host whose sshd_config has no Include the
+// drop-in sits there inert — and choosing the target by file existence alone put the
+// directive somewhere sshd never opens, while every check downstream looked healthy.
+func TestInstallScriptPicksTheFileSSHDActuallyReads(t *testing.T) {
+	s := InstallScript("QUJD")
+	if !strings.Contains(s, "Include") {
+		t.Error("target selection does not check for an Include of sshd_config.d, so it " +
+			"can write the directive into a drop-in sshd never reads")
+	}
+	// The existence test alone must not be what decides it.
+	idx := strings.Index(s, `[ -f "$DROP" ]`)
+	if idx < 0 {
+		t.Fatal("expected the drop-in existence check to still be part of the condition")
+	}
+	line := s[idx:]
+	if nl := strings.IndexByte(line, '\n'); nl > 0 {
+		line = line[:nl]
+	}
+	if !strings.Contains(line, "Include") {
+		t.Errorf("the drop-in is chosen on existence alone: %q", line)
+	}
+}
+
+// "sshd disagrees" and "sshd could not be asked" are different answers, and collapsing
+// them reported a host that plainly said `revokedkeys none` as merely unconfirmed — the
+// softer of the two, when the evidence was conclusive.
+func TestInstallScriptSeparatesDisagreementFromUnreadable(t *testing.T) {
+	s := InstallScript("QUJD")
+	if !strings.Contains(s, "if SSHD_T=$(sshd -T 2>/dev/null); then") {
+		t.Fatal("the script does not capture sshd -T separately, so it cannot tell a " +
+			"failed invocation from a negative answer")
+	}
+	// The unverified branch must be reachable ONLY when sshd -T could not run, i.e.
+	// after the closing of the successful-invocation branch.
+	ran := strings.Index(s, "if SSHD_T=$(sshd -T")
+	notEnforced := strings.Index(s, "echo "+NotEnforced)
+	unverified := strings.Index(s, "echo "+PresentUnverified)
+	if notEnforced < 0 || unverified < 0 {
+		t.Fatal("both outcomes must be reachable")
+	}
+	if !(ran < notEnforced && notEnforced < unverified) {
+		t.Errorf("expected the conclusive not-enforced answer inside the sshd -T branch, "+
+			"before the unreadable fallback: ran=%d notEnforced=%d unverified=%d",
+			ran, notEnforced, unverified)
+	}
+}
+
+// When the drop-in turns out not to be read, the script must correct itself rather than
+// report a guess — the fallback is what makes a host like that self-heal.
+func TestInstallScriptFallsBackToTheMainConfig(t *testing.T) {
+	s := InstallScript("QUJD")
+	if !strings.Contains(s, `if [ "$TARGET" != /etc/ssh/sshd_config ]; then`) {
+		t.Error("no fallback: a host whose drop-in is not read stays unenforced forever")
+	}
+	// The fallback must validate and roll back like the first attempt does.
+	fb := strings.Index(s, `if [ "$TARGET" != /etc/ssh/sshd_config ]; then`)
+	if fb < 0 {
+		t.FailNow()
+	}
+	tail := s[fb:]
+	if !strings.Contains(tail, "sshd -t") || !strings.Contains(tail, "sed -i") {
+		t.Error("the fallback appends to the main config without validating or rolling back")
+	}
+}
