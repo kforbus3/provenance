@@ -121,3 +121,36 @@ func TestBootstrapScriptRootGuardNamesTheTTYForm(t *testing.T) {
 		t.Errorf("root guard should point at the `ssh -t` form, got:\n%s", script)
 	}
 }
+
+// The trust installer writes the sshd drop-in with `cat >` — a truncating write — while
+// the RevokedKeys directive is APPENDED to that same file by the revocation step. So
+// re-installing trust (a re-enrolment, the account rename, a login-account migration)
+// silently disabled certificate revocation: the hourly KRL push kept refreshing a file no
+// sshd read, and `sshd -T` reported "revokedkeys none" fleet-wide.
+func TestTrustInstallCarriesTheRevocationDirectiveForward(t *testing.T) {
+	svc := &Service{cfg: &config.Config{}}
+	script := svc.caTrustScript("prov", "ssh-ed25519 AAAA test", uuid.New())
+
+	drop := strings.Index(script, "cat > /etc/ssh/sshd_config.d/00-prov.conf")
+	// Must name the DROP-IN specifically. An earlier version of this test matched the
+	// main-config fallback branch instead, so deleting the drop-in carry-forward — the
+	// actual bug — still passed.
+	carry := strings.Index(script,
+		"echo 'RevokedKeys /etc/ssh/prov_krl' >> /etc/ssh/sshd_config.d/00-prov.conf")
+	if drop < 0 {
+		t.Skip("drop-in writer not found in this script body")
+	}
+	if carry < 0 {
+		t.Fatal("the truncating drop-in write does not restore RevokedKeys, so installing " +
+			"trust disables revocation and nothing adds it back")
+	}
+	if carry < drop {
+		t.Error("the directive is restored before the file is truncated, so it is lost again")
+	}
+	// Only when the KRL is actually on disk: RevokedKeys naming a missing file makes
+	// sshd -t fail, which is why the directive is not written unconditionally.
+	if !strings.Contains(script, "[ -f /etc/ssh/prov_krl ]") {
+		t.Error("the directive is restored without checking the KRL exists; sshd -t would " +
+			"fail on a host that has never received one")
+	}
+}

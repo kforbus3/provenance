@@ -484,10 +484,19 @@ func (s *Service) Enroll(ctx context.Context, sessionID uuid.UUID, host *models.
 		serials, _ := s.store.RevokedSerials(ctx)
 		if krlBytes, kerr := krl.Build(caKeys, serials); kerr == nil {
 			b64 := base64.StdEncoding.EncodeToString(krlBytes)
-			if out, err := priv(s.krlInstallScript(b64)); err != nil || !strings.Contains(out, "KRL_OK") {
+			out, err := priv(s.krlInstallScript(b64))
+			switch {
+			case err != nil || strings.Contains(out, krl.NotEnforced) || strings.Contains(out, krl.RolledBack):
 				step("configure_revocation", "warning", orErr(err, out).Error())
-			} else {
+			case strings.Contains(out, krl.PresentUnverified):
+				// The directive is in the file but sshd could not be asked to confirm.
+				// Not an error, and not "enforced" either — say which.
+				step("configure_revocation", "warning",
+					fmt.Sprintf("RevokedKeys written but sshd -T could not confirm it (%d revoked)", len(serials)))
+			case strings.Contains(out, krl.Enforced):
 				step("configure_revocation", "ok", fmt.Sprintf("RevokedKeys enforced (%d revoked)", len(serials)))
+			default:
+				step("configure_revocation", "warning", "unrecognised KRL install result: "+oneLine(out))
 			}
 		} else {
 			step("configure_revocation", "skipped", "could not build KRL: "+kerr.Error())
@@ -1026,27 +1035,11 @@ func hadWireGuard(host *models.Host) bool {
 	return hasOverlayState(host)
 }
 
-// krlInstallScript writes the KRL and enables the RevokedKeys directive, rolling
-// back the directive if sshd rejects the resulting config.
+// krlInstallScript writes the KRL and makes sshd enforce it. The script is shared with
+// the fleet-wide distribution loop (api.Server.distributeKRL) so enrolling and refreshing
+// cannot drift apart — they did, and the drift is why no host enforced the list.
 func (s *Service) krlInstallScript(b64 string) string {
-	return fmt.Sprintf(`set -e
-printf '%%s' '%s' | base64 -d > /etc/ssh/prov_krl
-chmod 644 /etc/ssh/prov_krl
-DROP=/etc/ssh/sshd_config.d/00-prov.conf
-if [ -f "$DROP" ]; then
-  grep -q '^RevokedKeys' "$DROP" || echo 'RevokedKeys /etc/ssh/prov_krl' >> "$DROP"
-  TARGET="$DROP"
-else
-  grep -q '^RevokedKeys' /etc/ssh/sshd_config || echo 'RevokedKeys /etc/ssh/prov_krl' >> /etc/ssh/sshd_config
-  TARGET=/etc/ssh/sshd_config
-fi
-if ! sshd -t 2>/dev/null; then
-  # Roll back the directive so we never lock the host out.
-  sed -i '\#^RevokedKeys /etc/ssh/prov_krl#d' "$TARGET"
-  echo "KRL_ROLLBACK sshd config rejected"; exit 1
-fi
-( systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || service ssh reload 2>/dev/null || pkill -HUP sshd 2>/dev/null ) || true
-echo KRL_OK`, b64)
+	return krl.InstallScript(b64)
 }
 
 // jumpPeerScript renders the script that adds the host as a peer on the jump host.
@@ -1442,8 +1435,20 @@ PubkeyAuthentication yes
 TrustedUserCAKeys /etc/ssh/prov_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%%u
 SSHEOF
+# Carry the revocation directive forward. It is appended to THIS file by the KRL step,
+# and this is a truncating write -- so rewriting trust used to silently disable
+# revocation, leaving the host with a freshly pushed KRL that no sshd read. Only when
+# the KRL is actually present: RevokedKeys naming a missing file makes sshd -t fail.
+if [ -f /etc/ssh/prov_krl ]; then
+  if ! grep -q '^RevokedKeys' /etc/ssh/sshd_config.d/00-prov.conf; then
+    echo 'RevokedKeys /etc/ssh/prov_krl' >> /etc/ssh/sshd_config.d/00-prov.conf
+  fi
+fi
 if ! grep -q 'sshd_config.d' /etc/ssh/sshd_config 2>/dev/null && ! grep -q 'TrustedUserCAKeys /etc/ssh/prov_ca.pub' /etc/ssh/sshd_config 2>/dev/null; then
   { echo ''; echo '# Provenance'; echo 'PubkeyAuthentication yes'; echo 'TrustedUserCAKeys /etc/ssh/prov_ca.pub'; echo 'AuthorizedPrincipalsFile /etc/ssh/auth_principals/%%u'; } >> /etc/ssh/sshd_config
+  if [ -f /etc/ssh/prov_krl ] && ! grep -q '^RevokedKeys' /etc/ssh/sshd_config; then
+    echo 'RevokedKeys /etc/ssh/prov_krl' >> /etc/ssh/sshd_config
+  fi
 fi
 mkdir -p /run/sshd
 sshd -t

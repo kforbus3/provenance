@@ -5,6 +5,59 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.9 — 2026-09-22
+
+### Certificate revocation was distributed to every host and enforced on none
+
+`sshd -T` — sshd's own effective configuration — reported **`revokedkeys none`** on every
+host, while `/etc/ssh/prov_krl` was present, valid, and refreshed hourly with the complete
+serial list. The revocation list was being delivered and verified, and nothing read it.
+Any certificate revoked within its remaining lifetime still authenticated, fleet-wide.
+
+Three pieces, none wrong on its own:
+
+- The sshd drop-in is written with a **truncating** `cat >`, carrying three directives.
+- `RevokedKeys /etc/ssh/prov_krl` is **appended** to that same file, and only by the
+  revocation step of enrolment.
+- The hourly distribution pushed **the file only**, on the assumption the directive was
+  already there.
+
+So the directive survived exactly until anything re-installed trust — a re-enrolment, the
+account rename, a login-account migration — after which the list kept arriving at a host
+that no longer consulted it. Nothing reported a problem, because nothing was checking the
+right thing.
+
+### What changed
+
+**Distribution now installs the directive as well as the list**, using the same script
+enrolment uses, so the two cannot drift apart again. That makes it **self-healing**: a host
+that lost the directive regains it on the next push, with no re-enrolment and no operator
+action. The directive is added only once the list is on disk, validated with `sshd -t`
+before anything is reloaded, and rolled back if sshd rejects it — a host is never locked out
+to enforce revocation.
+
+**The check is now a positive assertion about enforcement.** The push previously counted a
+host as done when the file was verified on disk, under a comment calling that "the one
+failure this must not hide". File presence was never the property that mattered. It now
+asks `sshd -T` what will actually be enforced, and reports three distinguishable outcomes:
+enforced, written-but-unconfirmed, and not-enforced. The middle one is counted as installed
+and logged as unproven, because saying "enforced" when you do not know is how this started.
+
+**Installing trust no longer disables revocation.** The truncating write carries the
+directive forward when the list is present — and only then, since `RevokedKeys` naming a
+missing file makes `sshd -t` fail.
+
+### Upgrading
+
+Nothing to do. The next KRL distribution repairs every host by itself; there is no need to
+re-enrol anything. To confirm afterwards, on any managed host:
+
+```sh
+sudo sshd -T | grep revokedkeys     # expect: revokedkeys /etc/ssh/prov_krl
+```
+
+---
+
 ## v2.0.8 — 2026-09-22
 
 Three defects in the login-account migration, found by asking whether the action was

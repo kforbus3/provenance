@@ -606,7 +606,13 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 		return 0, 0, fmt.Errorf("list hosts: %w", err)
 	}
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
-	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/prov_krl >/dev/null && sudo chmod 644 /etc/ssh/prov_krl && echo OK"
+	// Ensure the directive as well as the file, using the SAME script enrolment uses.
+	// Pushing only the file is how the fleet ended up with a correct, hourly-refreshed
+	// KRL that no sshd read: the directive is appended to the sshd drop-in, and the trust
+	// installer rewrites that drop-in wholesale, so any re-install dropped it. Doing both
+	// here makes distribution self-healing — a host that lost the directive regains it on
+	// the next push, with no re-enrolment.
+	cmd := krl.InstallCommand(b64)
 	// Kept small: each push opens a fresh SSH connection to the jump host, so a
 	// large fan-out would trip its sshd MaxStartups limit (as the monitor sweep
 	// did) and drop pushes. Revocation is infrequent, so modest parallelism is fine.
@@ -656,10 +662,19 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 				out, rerr := sess.CombinedOutput(cmd)
 				sess.Close()
 				conn.Close()
-				if rerr == nil && strings.Contains(string(out), "OK") {
+				txt := string(out)
+				switch {
+				case rerr == nil && strings.Contains(txt, krl.Enforced):
 					atomic.AddInt64(&pushed, 1)
-				} else {
-					miss(h, "install KRL", rerr, strings.TrimSpace(string(out)))
+				case rerr == nil && strings.Contains(txt, krl.PresentUnverified):
+					// The directive is written but sshd would not confirm it. Counted as
+					// pushed — the list IS installed — but said out loud, because the
+					// property we care about is unproven on this host.
+					atomic.AddInt64(&pushed, 1)
+					s.Log.Warn("KRL installed but enforcement unconfirmed; sshd -T could not be read",
+						"host", h.Hostname, "hostID", h.ID, "output", strings.Join(strings.Fields(txt), " "))
+				default:
+					miss(h, "install KRL", rerr, strings.TrimSpace(txt))
 				}
 				return
 			}
