@@ -229,3 +229,76 @@ func TestRetireKeepsTheCurrentCATrustOnAHostWithNoDropInInclude(t *testing.T) {
 		t.Error("checks CA trust after validating/reloading rather than before")
 	}
 }
+
+// Retiring the superseded account is deliberately a SECOND pass, run once the fleet is
+// verified healthy on the new account. But by then every host is already on the target,
+// and the "already on the target" early return used to fire before RemoveOld was ever
+// looked at — so the retirement pass became unreachable across the whole fleet at exactly
+// the moment it was meant to run, stranding the old accounts with no supported way off.
+//
+// "Nothing to migrate" is not "nothing to do".
+func TestRetireStillRunsWhenAlreadyOnTheTargetAccount(t *testing.T) {
+	svc := &Service{}
+	// current="fleet" has no superseded account, so this reaches the retire path and
+	// stops there without needing a host to dial — which is the point: it must get PAST
+	// the early return.
+	res, err := svc.MigrateLoginAccount(context.Background(),
+		&models.Host{Hostname: "h", SSHUser: "fleet"},
+		MigrateOptions{User: "fleet", RemoveOld: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(res.Steps, "; ")
+	if strings.Contains(joined, "nothing to do") {
+		t.Errorf("took the no-op path with RemoveOld set: %v\n"+
+			"the retirement pass is unreachable again", res.Steps)
+	}
+	if !strings.Contains(joined, "nothing to retire") {
+		t.Errorf("steps = %v, want it to have reached the retire path", res.Steps)
+	}
+}
+
+// Without RemoveOld the no-op must stay a no-op: the adopt-only sweep runs over every
+// host including ones already moved, and must not become a round trip.
+func TestAlreadyOnTargetStaysANoOpWithoutRemoveOld(t *testing.T) {
+	svc := &Service{}
+	res, err := svc.MigrateLoginAccount(context.Background(),
+		&models.Host{Hostname: "h", SSHUser: "prov"}, MigrateOptions{User: "prov"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Steps) == 0 || !strings.Contains(res.Steps[0], "nothing to do") {
+		t.Errorf("steps = %v, want the no-op", res.Steps)
+	}
+}
+
+// The retire path is the DESTRUCTIVE half, so it must carry the same control-plane guard
+// as a migration. A guard that only covers the gentler caller is not a guard — and this
+// is the exact shape of the sweep that deleted the operators' own account on the
+// Provenance host.
+func TestRetireOnAControlPlaneHostIsRefusedWithoutConfirmation(t *testing.T) {
+	svc := &Service{cfg: &config.Config{}}
+	host := &models.Host{Hostname: "sshman", SSHUser: "prov", Tags: []string{"control-plane"}}
+
+	_, err := svc.MigrateLoginAccount(context.Background(), host,
+		MigrateOptions{User: "prov", RemoveOld: true})
+	if err == nil {
+		t.Fatal("retiring on a control-plane host was allowed without confirmation")
+	}
+	if !strings.Contains(err.Error(), "control plane") {
+		t.Errorf("error = %v, want it to name the control plane", err)
+	}
+}
+
+// supersededAccount is a pair, not a history: the rename had exactly two names, and
+// inventing a chain would mean deleting accounts nobody asked about.
+func TestSupersededAccountIsOnlyTheRenamePair(t *testing.T) {
+	if got := supersededAccount("prov"); got != "fleet" {
+		t.Errorf("supersededAccount(prov) = %q, want fleet", got)
+	}
+	for _, in := range []string{"fleet", "root", "admin", "svc-prov", ""} {
+		if got := supersededAccount(in); got != "" {
+			t.Errorf("supersededAccount(%q) = %q, want empty", in, got)
+		}
+	}
+}

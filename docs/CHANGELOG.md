@@ -5,6 +5,53 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.8 — 2026-09-22
+
+Three defects in the login-account migration, found by asking whether the action was
+still worth keeping once the fleet-wide rename it was built for had finished.
+
+### Retiring the superseded account had become impossible
+
+Retiring the old account is deliberately a **second pass**, run once the fleet is verified
+healthy on the new one. But the "already on the target account" early return fired before
+`removeOld` was ever looked at — so the moment every host had been migrated, which is
+exactly when the retirement pass is meant to run, it short-circuited on all of them. The
+old accounts were stranded on every host with no supported way to remove them.
+
+Nothing to migrate is not the same as nothing to do. A host already on the target now
+retires its superseded account, and the destructive half carries the **same control-plane
+guard** as a migration — a guard that covers only the gentler caller is not a guard.
+
+An absent old account is treated as success, not an error: a fleet-wide retirement pass
+necessarily includes hosts enrolled after the rename that never had one.
+
+### The target account could not be chosen
+
+The service has always accepted any account name — *"It is not specific to the rename: it
+takes any target account name, so an operator who wants a different one gets the same
+verified path."* The UI never sent one. Every call therefore targeted the default, which
+made the action a no-op on any fleet already there, and left an operator who wanted a
+different account name with no way to ask for it.
+
+The bulk action now prompts for the account, validated against the same pattern the
+service enforces before the name reaches `useradd` on a managed host.
+
+### A migration could time out and lose its own audit record
+
+The handler ran on the request context, capped at 60 seconds by the router, while the
+migration makes at least two SSH round trips per address plus a verification login. Worse,
+the audit writes used that same context: on a request that had already expired, the record
+of an account change that *did* happen failed to write. It now runs detached, as enrolling
+has since 2.0.6.
+
+### Deploy notes
+
+Nothing to do. No migrations and no configuration additions. If you have hosts still
+carrying a superseded account, **Bulk actions → Retire the superseded account** now works
+on a fleet that has already been migrated.
+
+---
+
 ## v2.0.7 — 2026-09-22
 
 ### Times written by the server disagreed with times rendered by the browser

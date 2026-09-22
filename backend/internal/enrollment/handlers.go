@@ -265,16 +265,22 @@ func (h *handler) migrateLoginAccount(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; defaults to adopt-only, current default account
 
 	actor := p.UserID
-	res, err := h.svc.MigrateLoginAccount(r.Context(), host, req)
+	// Same detach as enrolling, for the same reason: this makes at least two SSH round
+	// trips per address plus a verification login, and the router caps a request at 60s.
+	// It also covers the audit writes below — on a request that had already expired they
+	// would fail too, losing the record of an account change that did happen.
+	ctx, cancel := detachEnrollment(r)
+	defer cancel()
+	res, err := h.svc.MigrateLoginAccount(ctx, host, req)
 	if err != nil {
-		_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+		_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
 			ActorID: &actor, Action: "host.login_account_migrate_failed", TargetKind: "host",
 			TargetID: hostID.String(), Detail: map[string]any{"error": err.Error()},
 		})
 		httpx.WriteError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: &actor, Action: "host.login_account_migrated", TargetKind: "host",
 		TargetID: hostID.String(),
 		Detail: map[string]any{"from": res.From, "to": res.To, "migrated": res.Migrated,

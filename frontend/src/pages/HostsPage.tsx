@@ -137,6 +137,11 @@ export function enrolLoggingMessage(res: LogEnrolResult): { text: string; sticky
 
 // Toolbar combines quick search with the New Host action and a bulk-delete
 // button that appears only while rows are selected.
+// Mirrors accountName in backend/internal/enrollment/migrateaccount.go, which bounds
+// what may be passed to useradd/userdel on a managed host. Checked here for the operator's
+// benefit only — the backend rejects independently.
+export const ACCOUNT_RE = /^[a-z_][a-z0-9_-]{0,30}$/;
+
 type BulkAction = "scan" | "refresh" | "maintenance" | "tags" | "sendLogs" | "migrateAccount" | "retireOldAccount";
 
 interface ToolbarProps {
@@ -590,8 +595,15 @@ export function HostsPage() {
   // Which half of the account migration the menu asked for. A ref, not state: the
   // mutation reads it when it runs and must not need a re-render first.
   const bulkRemoveOldRef = useRef(false);
+  // Read inside the mutation, which runs after the dialog has closed.
+  const bulkAccountRef = useRef("prov");
   const [bulkMaintOpen, setBulkMaintOpen] = useState(false);
   const [retireOpen, setRetireOpen] = useState(false);
+  // The account to migrate ONTO. The backend has always accepted any name; this field
+  // was missing, which left the action able to target only the default — and therefore a
+  // no-op on a fleet already there.
+  const [migrateOpen, setMigrateOpen] = useState(false);
+  const [migrateAccount, setMigrateAccount] = useState("prov");
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
 
   const selectedIds = selection.map(String);
@@ -641,7 +653,7 @@ export function HostsPage() {
         setBulkSticky(true);
         setBulkMsg(`Migrating login account ${i + 1}/${total}: ${name}…`);
         try {
-          const r = await migrateLoginAccount(id, { removeOld });
+          const r = await migrateLoginAccount(id, { user: bulkAccountRef.current, removeOld });
           results.push({
             host: r.host || name,
             ok: true,
@@ -695,7 +707,7 @@ export function HostsPage() {
     else if (action === "refresh") bulkRefreshMut.mutate();
     else if (action === "maintenance") setBulkMaintOpen(true);
     else if (action === "tags") setBulkTagsOpen(true);
-    else if (action === "migrateAccount") { bulkRemoveOldRef.current = false; bulkMigrateAccountMut.mutate(); }
+    else if (action === "migrateAccount") { setMigrateAccount("prov"); setMigrateOpen(true); }
     else if (action === "retireOldAccount") setRetireOpen(true);
   };
 
@@ -1117,7 +1129,40 @@ export function HostsPage() {
           what else stands on these hosts belongs in the decision: losing access
           to a host that carries fourteen others is not the same as losing access
           to a leaf. */}
-      <Dialog open={retireOpen} onClose={() => setRetireOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={migrateOpen} onClose={() => setMigrateOpen(false)} maxWidth="sm" fullWidth>
+          <DialogTitle>Migrate login account on {selectedIds.length} host(s)</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              Creates the account, proves a certificate login as it, then records it — in that
+              order. The account each host uses now is left in place, so a failure at any point
+              leaves the host reachable exactly as it is. Hosts already on this account are skipped.
+            </Typography>
+            <TextField
+              autoFocus
+              fullWidth
+              label="Account"
+              value={migrateAccount}
+              onChange={(e) => setMigrateAccount(e.target.value)}
+              error={migrateAccount !== "" && !ACCOUNT_RE.test(migrateAccount)}
+              helperText="Lowercase letter or underscore first, then letters, digits, underscore or hyphen."
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setMigrateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!ACCOUNT_RE.test(migrateAccount)}
+              onClick={() => {
+                setMigrateOpen(false);
+                bulkRemoveOldRef.current = false;
+                bulkAccountRef.current = migrateAccount;
+                bulkMigrateAccountMut.mutate();
+              }}
+            >
+              Migrate
+            </Button>
+          </DialogActions>
+        </Dialog>
+        <Dialog open={retireOpen} onClose={() => setRetireOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Retire the superseded account on {selectedIds.length} host(s)?</DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
@@ -1133,6 +1178,7 @@ export function HostsPage() {
             onClick={() => {
               setRetireOpen(false);
               bulkRemoveOldRef.current = true;
+                bulkAccountRef.current = "prov";
               bulkMigrateAccountMut.mutate();
             }}
           >

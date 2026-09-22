@@ -86,8 +86,23 @@ func (s *Service) MigrateLoginAccount(ctx context.Context, host *models.Host, op
 	}
 	res := &MigrateResult{Host: host.Hostname, From: oldUser, To: newUser}
 	if oldUser == newUser {
-		res.Steps = append(res.Steps, "already on "+newUser+"; nothing to do")
-		return res, nil
+		// Already on the target account. Returning here UNCONDITIONALLY made the
+		// retirement pass unreachable: retiring the superseded account is deliberately
+		// a second pass run once the fleet is verified healthy on the new one, but by
+		// then every host is already on the target and short-circuits here — so the old
+		// accounts were stranded on every host with no supported way to remove them.
+		//
+		// Nothing to migrate is not the same as nothing to do.
+		if !opts.RemoveOld {
+			res.Steps = append(res.Steps, "already on "+newUser+"; nothing to do")
+			return res, nil
+		}
+		// Retiring is the destructive half, so it carries the same control-plane guard
+		// as a migration. Skipping it here would reopen the hole that guard closed.
+		if err := s.controlPlaneGuard(host, opts.ConfirmControlPlane); err != nil {
+			return nil, err
+		}
+		return s.retireSuperseded(ctx, host, newUser, res)
 	}
 	// Never remove an account Provenance did not create. The migration's last step
 	// deletes the old account outright, so this is the difference between retiring
@@ -108,11 +123,8 @@ func (s *Service) MigrateLoginAccount(ctx context.Context, host *models.Host, op
 	// the Provenance host, replaced its login account, and deleted the account its
 	// operators connect with. controlplane.Is is the same check scan remediation
 	// uses, not a second implementation of it.
-	if controlplane.Is(host, s.cfg) && !opts.ConfirmControlPlane {
-		return nil, fmt.Errorf("%s is part of Provenance's own control plane; "+
-			"migrating its login account can sever access to the whole fleet. "+
-			"Confirm explicitly for this host, one at a time, with a way back in that "+
-			"does not depend on Provenance", host.Hostname)
+	if err := s.controlPlaneGuard(host, opts.ConfirmControlPlane); err != nil {
+		return nil, err
 	}
 
 	caKeys, err := s.store.ListActiveCAPublicKeys(ctx, "user")
@@ -299,4 +311,77 @@ func provenanceManagedAccount(name string) bool {
 		return true
 	}
 	return false
+}
+
+// controlPlaneGuard refuses an account change on a host Provenance's own access depends
+// on unless the caller confirmed it explicitly.
+//
+// Shared by the migration and the retire-only path rather than written twice: the
+// retire path is the destructive one, and a guard that only covers the gentler caller
+// is not a guard.
+func (s *Service) controlPlaneGuard(host *models.Host, confirmed bool) error {
+	if !controlplane.Is(host, s.cfg) || confirmed {
+		return nil
+	}
+	return fmt.Errorf("%s is part of Provenance's own control plane; "+
+		"migrating its login account can sever access to the whole fleet. "+
+		"Confirm explicitly for this host, one at a time, with a way back in that "+
+		"does not depend on Provenance", host.Hostname)
+}
+
+// supersededAccount names the provenance-managed account a host used before it moved to
+// current. The rename had exactly two names, so this is a pair and not a history.
+func supersededAccount(current string) string {
+	if current == "prov" {
+		return "fleet"
+	}
+	return ""
+}
+
+// retireSuperseded removes the old account from a host that has ALREADY been migrated —
+// the second pass the migration's RemoveOld comment describes, reachable on a fleet that
+// is fully on the new account.
+//
+// It connects as the CURRENT account, so a failure to reach the host leaves everything
+// as it was rather than deleting the account it arrived on.
+func (s *Service) retireSuperseded(ctx context.Context, host *models.Host, current string, res *MigrateResult) (*MigrateResult, error) {
+	old := supersededAccount(current)
+	if old == "" {
+		res.Steps = append(res.Steps, "no superseded account is defined for "+current+"; nothing to retire")
+		return res, nil
+	}
+	var lastErr error
+	for _, addr := range dedupeAddrs(host.WGAddress, host.Address, host.Hostname) {
+		conn, derr := s.gw.DialSystemForHost(ctx, host.ID, addr, host.SSHPort, current)
+		if derr != nil {
+			lastErr = derr
+			continue
+		}
+		// Absent is success, not an error: a fleet-wide retirement pass necessarily
+		// includes hosts enrolled after the rename, which never had the old account.
+		out, rerr := run(conn.Client, "id -u "+shellQuote(old)+" >/dev/null 2>&1 && echo PRESENT || echo ABSENT")
+		if rerr == nil && strings.Contains(out, "ABSENT") {
+			conn.Close()
+			res.Steps = append(res.Steps, old+" is not present; nothing to retire")
+			return res, nil
+		}
+		out, rerr = run(conn.Client, "sudo sh -c "+shellQuote(retireAccountScript(old)))
+		conn.Close()
+		if rerr != nil || !strings.Contains(out, "RETIRE_OK") {
+			res.OldAccountLeft = true
+			res.Steps = append(res.Steps, "WARNING: could not fully remove "+old+": "+oneLine(strings.TrimSpace(out)))
+			s.log.Warn("retiring the superseded login account left artefacts behind",
+				"host", host.Hostname, "old", old, "err", orErr(rerr, out))
+			return res, nil
+		}
+		res.Steps = append(res.Steps, "removed "+old+" and its sudoers/CA/sshd artefacts")
+		res.Migrated = true
+		s.log.Info("retired superseded login account",
+			"host", host.Hostname, "old", old, "current", current, "addr", addr)
+		return res, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no reachable address")
+	}
+	return nil, fmt.Errorf("connect as %s to retire %s: %w", current, old, lastErr)
 }
