@@ -5,6 +5,61 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.5 — 2026-09-22
+
+Housekeeping. Nothing in this release changes behaviour: in production Go code it
+touches only comments and embedded documentation, and the rest is licence text and
+test fixtures. It is worth publishing because both changes are obligations rather
+than improvements.
+
+### Third-party software is documented, and the GPL parts carry a source offer
+
+Provenance distributes Ansible (GPL-3.0-or-later) in binary form — it is installed into
+the `ansible-runner` image, which ships inside every `.provup` bundle. That carries an
+obligation to offer the corresponding source, and nothing in the repository did:
+`NOTICE` was 25 lines and never mentioned it. The obligation attaches to
+**distribution**, not to how this project is licensed or whether anyone pays for it. An
+Apache-2.0 project that ships GPL binaries owes the same offer as a commercial one.
+
+`THIRD-PARTY-LICENSES.md` now carries that offer, and an audit rather than an assertion
+— produced with `go-licenses` and `license-checker` against the current lockfiles:
+
+| | |
+|---|---|
+| backend | 40 Apache-2.0, 26 MIT, 22 BSD-3-Clause, 4 BSD-2-Clause, 4 MPL-2.0, 1 ISC |
+| frontend | 237 MIT, 4 ISC, 3 BSD-3-Clause, 1 OFL-1.1 |
+
+No GPL, LGPL or AGPL code is compiled into any Provenance binary, which is worth having
+written down somewhere a reader can check.
+
+### The source no longer describes somebody's real network
+
+Test fixtures, comments and documentation had been written from a working homelab, so
+the repository described an actual topology: a dynamic-DNS name that resolves to a home
+IP address, an internal domain, a LAN subnet, a PXE lab subnet, and the hostnames of
+specific machines. All of it now uses addresses and names that belong to nobody.
+
+Two mistakes in the first attempt are worth recording, because both are easy to repeat
+and neither was visible by reading the diff — the test suite caught them:
+
+- Addresses were mapped to the **RFC 5737 documentation ranges** (`192.0.2.0/24`). Those
+  are reserved for documentation but they are **not private**, and a test asserts that an
+  Ollama URL on a private address stays inside the network — so the judgement "does fleet
+  data leave this network" silently flipped to yes. The mapping is private-to-private now,
+  which keeps every such judgement intact while still being nobody's real subnet.
+- One hostname was also a **Go identifier**, so an identifier-unsafe replacement produced
+  `expected type, found '-'`. Replacement names are identifier-safe.
+
+`Aldgate` is deliberately unchanged: it names a real integration and the
+`PROV_ALDGATE_URL` setting, so renaming it would be a breaking change rather than a scrub.
+
+### Deploy notes
+
+Nothing to do. No migrations, no configuration additions, no behaviour changes. Installs
+from any earlier version, as every bundle does.
+
+---
+
 ## v2.0.4 — 2026-09-21
 
 All of this came from one question about the audit page: whether acknowledged breaks
