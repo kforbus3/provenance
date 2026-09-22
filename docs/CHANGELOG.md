@@ -5,6 +5,66 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.4 — 2026-09-21
+
+All of this came from one question about the audit page: whether acknowledged breaks
+would be displayed for ever. The honest answer was "until those rows leave the
+database, and retention is the only legitimate way that happens" — so retention was
+checked, and it did not work.
+
+### Retention can shorten the chain without it looking tampered with
+
+`PruneAuditEventsBefore`'s own comment claimed "the rows that remain still verify
+forward from the new oldest entry". They do not. Verification walks from `prev=""` and
+compares each row's `prev_hash` to the previous row's hash, so the oldest **surviving**
+row still points at a hash that is gone. Measured: pruning two of six rows reported
+`intact=false` at the first survivor, as an **unlinked** break — the signature of rows
+being removed.
+
+So anyone who enabled `PROV_AUDIT_RETENTION` got a chain that declared itself broken
+for ever, and the only way to clear old damaged history was to create a fresh permanent
+break that looked like tampering.
+
+A prune now **declares its boundary**: the sequence it stopped at and the hash the new
+first row carries, written in the same transaction as the delete. Verification seeds its
+walk from that hash instead of `""`.
+
+What keeps that from being a hole is the rule the acknowledgement mechanism already
+uses: the boundary is honoured only while a chained audit event backs it, written *after*
+the delete so it survives into the retained chain and chains from the last survivor —
+forging one needs `PROV_AUDIT_HMAC_KEY`. Three tests are attempts to misuse it. A
+declared prune verifies; the same prune before its evidence lands still reports the
+break; a deletion straight from the table still breaks the chain; and a boundary naming
+an event that was never written accounts for nothing.
+
+### You can now look at the sequence the panel names
+
+The integrity panel said "broken at sequence 2" and "not tamper-evident from sequence
+3389", and there was no sequence filter anywhere — being told which event to
+investigate and given no way to retrieve it. The audit list now takes `seq`, `seqFrom`
+and `seqTo`, there is a **Sequence** box in the filters, and every sequence the panel
+mentions is a link that jumps to it.
+
+### Proportionate wording
+
+An operator who had investigated a break and recorded its cause was shown the same
+amber as one with an unexplained break, under a heading that led with the negative. It
+now reads **"No tampering detected — with N recorded exceptions"**, and the keyless-row
+panel explains that a count which stays put is a fact about the past while one that
+grows is happening now.
+
+The exceptions themselves still never disappear: a chain with unverifiable rows must not
+present itself as whole.
+
+### An acknowledgement's note can be corrected
+
+It was write-once by accident — a plain `INSERT` with nothing unique about the span, so
+a correction added a second row the verifier ignored. The attempt appeared to succeed
+and changed nothing. The note is what a compliance reader sees in an evidence pack, and
+the first one somebody writes is often the weakest: written at the moment of discovery,
+before the cause is established. Amending now writes a new chained audit event, so every
+version of the note survives in the log while the honoured record points at the latest.
+
 ## v2.0.3 — 2026-09-21
 
 Security and correctness fixes from an external code review. Every finding was
