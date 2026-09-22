@@ -5,6 +5,59 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.6 — 2026-09-22
+
+### Switching a host's overlay transport could not succeed
+
+Moving a host from WireGuard to OpenVPN failed with `configure_overlay: openvpn tunnel
+is not carrying traffic: context deadline exceeded`, and left the host holding **both**
+transports.
+
+Nothing was wrong with the tunnel. The OpenVPN server accepted the client, pushed its
+address, learned the route and negotiated a data channel — and the address was reachable
+from the jump host moments later. What failed was the clock.
+
+Enrollment runs synchronously inside its HTTP request, and the router caps every request
+at 60 seconds. The overlay verification alone is allowed 90 seconds, because a tunnel
+that is legitimately re-establishing is indistinguishable from a dead one for up to a
+minute and the window has to cover the server's pushed `ping-restart`. So the cap always
+won: the verification could never reach its own verdict. Worse, the steps before it —
+provisioning the jump server, then the host — routinely consume most of the 60s, leaving
+the check a few seconds in practice.
+
+Two consequences, and the second is why this mattered more than a retry:
+
+- The error surfaced was the context's, not the step's. `context deadline exceeded`
+  replaced a diagnosis that names the address, the port, the elapsed time and the two
+  things that actually cause it.
+- **The WireGuard teardown is gated on that verification** — deliberately, so a failed
+  switch leaves a host on a transport that works. A verification that could not pass
+  therefore meant a switch that could never complete, with the host on both transports
+  and its recorded address moved to the new overlay's subnet.
+
+An enrollment now runs on a context detached from the request, with a budget of its own
+that is asserted to exceed the longest step inside it. The two numbers are constants that
+a test ties together, so a future change to either cannot silently recreate this.
+
+The WebSocket agent-enrollment path had the same defect for the same reason — hijacking
+the connection does not stop the router's timeout cancelling `r.Context()` underneath it.
+
+Detaching a context is where this codebase has been bitten before, so the two paths do it
+differently on purpose. The HTTP route passes through authentication, so its context
+already carries the resolved tenant — including a provider admin's tenant switch — and it
+keeps that, dropping only the cancellation. The WebSocket route never passes through
+authentication, so it starts from a background context and re-establishes the tenant
+explicitly. Either one written the other way sends the enrollment to the wrong tenant, or
+has row-level security deny the host lookup and report the host as missing.
+
+### Deploy notes
+
+Nothing to do. No migrations, no configuration additions, no behaviour change outside
+enrollment. If you have a host stuck on both transports from this bug, re-run the
+transport switch — it will now complete and tear down the old tunnel.
+
+---
+
 ## v2.0.5 — 2026-09-22
 
 Housekeeping. Nothing in this release changes behaviour: in production Go code it

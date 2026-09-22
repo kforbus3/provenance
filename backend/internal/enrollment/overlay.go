@@ -85,6 +85,14 @@ func (s *Service) enrollCertOverlay(
 	return overlayIP, nil
 }
 
+// overlayVerifyWindow is how long the tunnel gets to start carrying traffic before the
+// switch is called a failure. It is a property of OpenVPN's reconnect behaviour (it has
+// to cover the server's pushed ping-restart), not a guess — so whatever context an
+// enrollment runs under MUST allow at least this long, or the cap decides the outcome
+// instead of the tunnel. enrollmentBudget is what guarantees that; TestEnrollmentBudget
+// CoversOverlayVerify pins the relationship.
+const overlayVerifyWindow = 90 * time.Second
+
 // verifyOverlayReachable dials the host's overlay address FROM the jump host, which is
 // the path every Provenance session takes. It is deliberately narrow: no management-address
 // fallback, no hostname, nothing that can succeed while the overlay is dead.
@@ -103,7 +111,7 @@ func (s *Service) verifyOverlayReachable(ctx context.Context, jumpClient *ssh.Cl
 	if port <= 0 {
 		port = 22
 	}
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(overlayVerifyWindow)
 	var lastErr error
 	for {
 		// Bounded per attempt: a black-holed overlay address does not refuse the
@@ -127,11 +135,11 @@ func (s *Service) verifyOverlayReachable(ctx context.Context, jumpClient *ssh.Cl
 		}
 	}
 	return fmt.Errorf(
-		"no route from the jump host to %s:%d after 90s (%v). The host holds the address but nothing "+
+		"no route from the jump host to %s:%d after %s (%v). The host holds the address but nothing "+
 			"answers on it: the client may still be re-connecting (restarting the jump host drops every "+
 			"tunnel, and the device keeps its address meanwhile), or the host's overlay firewall is "+
 			"dropping the jump host — check peer isolation rules on its tunnel device",
-		overlayIP, port, lastErr)
+		overlayIP, port, overlayVerifyWindow, lastErr)
 }
 
 // overlayPlan is one transport's address plan: the subnet its hosts are numbered

@@ -1,9 +1,11 @@
 package enrollment
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -56,6 +58,35 @@ type enrollReq struct {
 	Overlay       string `json:"overlay"`       // "" (default) | wireguard | openvpn
 }
 
+// enrollmentBudget bounds one whole enrollment run.
+//
+// It exists because enrollment is executed synchronously inside the HTTP request, and
+// the router caps every request at 60s (api.Server: middleware.Timeout). The sum of
+// enrollment's own per-step budgets is larger than that cap — the overlay verification
+// alone waits up to 90s for the tunnel to carry traffic — so the cap, not the step,
+// decided the outcome: the request context died mid-verify and the failure surfaced as
+// the bare "context deadline exceeded" instead of the step's own diagnosis, while the
+// tunnel it was waiting for came up moments later. A host switching transports was then
+// left holding both, because the WireGuard teardown is gated on that verification.
+//
+// Provisioning a host also legitimately takes minutes (package installs over SSH), so
+// the budget is generous rather than tight: it is a backstop against a wedged run, not
+// a performance target.
+const enrollmentBudget = 10 * time.Minute
+
+// detachEnrollment returns the context an enrollment runs under: the request's values
+// but none of its cancellation, plus an explicit deadline of its own.
+//
+// Deliberately NOT context.Background() + Auth.TenantScope here, which is the pattern
+// the WebSocket paths use. This route passes through RequireAuth, so its context
+// already carries the tenant the middleware resolved — including a provider admin's
+// X-Prov-Tenant switch. TenantScope would re-pin it to the principal's HOME tenant and
+// silently move the enrollment to the wrong tenant. WithoutCancel keeps the resolved
+// value and drops only the deadline, which is the single thing wrong with it.
+func detachEnrollment(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), enrollmentBudget)
+}
+
 func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 	p := auth.MustPrincipal(r)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -85,7 +116,9 @@ func (h *handler) enroll(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "overlay must be one of: wireguard, openvpn")
 		return
 	}
-	res, err := h.svc.Enroll(r.Context(), p.SessionID, host, &p.UserID, EnrollParams{
+	ctx, cancel := detachEnrollment(r)
+	defer cancel()
+	res, err := h.svc.Enroll(ctx, p.SessionID, host, &p.UserID, EnrollParams{
 		Method: req.Method, BootstrapUser: req.BootstrapUser, Password: req.Password,
 		PrivateKey: req.PrivateKey, KeyPassphrase: req.KeyPassphrase,
 		SudoPassword: req.SudoPassword, WGEndpoint: req.WGEndpoint, ViaJump: req.ViaJump,

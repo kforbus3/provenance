@@ -1,6 +1,7 @@
 package enrollment
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -52,6 +53,15 @@ func (h *handler) enrollAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	// Bypasses RequireAuth — scope to the caller's tenant so the host lookup and
 	// enrollment writes aren't RLS-denied under multi-tenancy.
+	//
+	// Detach from the request at the same time. This handler hijacks the connection,
+	// but the router's 60s middleware.Timeout still cancels r.Context() underneath it,
+	// which would abort an enrollment mid-step for a socket that is perfectly healthy.
+	// Background() rather than WithoutCancel(r.Context()) is right here precisely
+	// because TenantScope re-establishes the tenant on the line below: this path never
+	// went through RequireAuth, so the request context has no tenant to preserve.
+	ctx, cancelEnroll := context.WithTimeout(context.Background(), enrollmentBudget)
+	defer cancelEnroll()
 	ctx = h.d.Auth.TenantScope(ctx, principal)
 	hostID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
