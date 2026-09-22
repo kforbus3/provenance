@@ -954,10 +954,46 @@ func (s *Server) pruneAudit(ctx context.Context) {
 	if ret <= 0 {
 		return
 	}
-	if n, err := s.Store.PruneAuditEventsBefore(ctx, time.Now().Add(-ret)); err != nil {
+	n, err := s.Store.PruneAuditEventsBefore(ctx, time.Now().Add(-ret))
+	if err != nil {
 		s.Log.Warn("prune audit events", "err", err)
-	} else if n > 0 {
-		s.Log.Info("pruned audit events", "rows", n, "retention", ret.String())
+		s.Jobs.Record("audit-retention", err)
+		return
+	}
+	if n == 0 {
+		s.Jobs.Record("audit-retention", nil)
+		return
+	}
+	s.Log.Info("pruned audit events", "rows", n, "retention", ret.String())
+
+	// Declare the boundary the prune left behind, by writing an audit event into the
+	// RETAINED chain and pointing the boundary record at it.
+	//
+	// Without this the chain reports an unlinked break at the oldest surviving row
+	// for ever -- correctly, because rows were removed and nothing said so. The event
+	// is what separates a retention policy from a quiet deletion: it chains from the
+	// last survivor, so forging one needs the HMAC key.
+	ev, aerr := s.Store.AppendAudit(ctx, models.AuditEvent{
+		ActorName: "system", Action: "audit.retention_pruned",
+		TargetKind: "audit_chain",
+		Detail: map[string]any{
+			"rowsRemoved": n, "retention": ret.String(),
+			"note": "the chain begins at the next sequence; earlier events were removed by retention policy",
+		},
+	})
+	if aerr != nil || ev == nil {
+		// The rows are already gone, so say plainly that the chain will now report a
+		// break until somebody looks. Better than a silent half-done state.
+		s.Log.Error("pruned audit events but could NOT record the boundary; verification "+
+			"will report a break at the oldest surviving row", "rows", n, "err", aerr)
+		s.Jobs.Record("audit-retention", fmt.Errorf("boundary not recorded: %w", aerr))
+		return
+	}
+	if derr := s.Store.DeclareAuditPrune(ctx, ev.Seq); derr != nil {
+		s.Log.Error("pruned audit events but could not attach the boundary evidence",
+			"rows", n, "evidenceSeq", ev.Seq, "err", derr)
+		s.Jobs.Record("audit-retention", derr)
+		return
 	}
 	s.Jobs.Record("audit-retention", nil)
 }

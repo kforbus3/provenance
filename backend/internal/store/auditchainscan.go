@@ -129,7 +129,9 @@ func (s *Store) scanAuditChain(ctx context.Context, fromSeq, toSeq int64) (Audit
 	}
 	defer rows.Close()
 
-	prev := ""
+	// Same boundary rule as VerifyAuditChainDetail: a declared retention prune is not
+	// a break. See prunedBoundary.
+	prev := s.prunedBoundary(ctx)
 	seenKeyed := false
 	for rows.Next() {
 		var (

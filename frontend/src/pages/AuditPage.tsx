@@ -36,6 +36,8 @@ export function AuditPage() {
   // `from`/`to` hold <input type="datetime-local"> values (local wall-clock).
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // Verification names sequence numbers; this is how you go and look at one.
+  const [seq, setSeq] = useState("");
   const [filter, setFilter] = useState<AuditFilter>({ limit: 100 });
 
   const { data: events = [], isLoading } = useQuery({
@@ -57,13 +59,15 @@ export function AuditPage() {
 
   // Apply reads the current control values (passed explicitly so the dropdown can
   // apply the freshly-selected value without waiting for a state flush).
-  const apply = (a = action, an = actorName, fr = from, t = to) => {
+  const apply = (a = action, an = actorName, fr = from, t = to, sq = seq) => {
+    const n = Number.parseInt(sq, 10);
     setFilter({
       limit: 100,
       action: a || undefined,
       actorName: an || undefined,
       from: toRFC3339(fr),
       to: toRFC3339(t),
+      seq: Number.isFinite(n) && n > 0 ? n : undefined,
     });
   };
 
@@ -72,7 +76,19 @@ export function AuditPage() {
     setActorName("");
     setFrom("");
     setTo("");
-    apply("", "", "", "");
+    setSeq("");
+    apply("", "", "", "", "");
+  };
+
+  // Jump straight to one sequence — used by the integrity panel, which names the
+  // sequences it is complaining about and previously left you no way to see them.
+  const showSequence = (n: number) => {
+    setAction("");
+    setActorName("");
+    setFrom("");
+    setTo("");
+    setSeq(String(n));
+    apply("", "", "", "", String(n));
   };
 
   return (
@@ -85,12 +101,21 @@ export function AuditPage() {
         </Button>
       </Stack>
 
-      {verifyMut.data && <AuditChainVerdict result={verifyMut.data} />}
+      {verifyMut.data && (
+        <AuditChainVerdict result={verifyMut.data} onShowSequence={showSequence} />
+      )}
       {verifyMut.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>Could not verify the audit chain.</Alert>
       )}
 
       <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mb: 2 }}>
+        <TextField
+          label="Sequence" size="small" sx={{ width: 130 }} value={seq}
+          placeholder="e.g. 3389"
+          onChange={(e) => setSeq(e.target.value.replace(/[^0-9]/g, ""))}
+          onKeyDown={(e) => { if (e.key === "Enter") apply(); }}
+          helperText="one event"
+        />
         <TextField
           select label="Action" size="small" sx={{ minWidth: 200 }}
           value={action}

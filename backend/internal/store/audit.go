@@ -280,10 +280,18 @@ type AuditFilter struct {
 	ActorID   *uuid.UUID
 	ActorName string
 	// From/To bound created_at (inclusive); nil means unbounded on that end.
-	From   *time.Time
-	To     *time.Time
-	Limit  int
-	Offset int
+	From *time.Time
+	To   *time.Time
+	// SeqFrom/SeqTo bound the sequence number (inclusive); nil means unbounded.
+	//
+	// Verification names sequences -- "broken at sequence 2", "not tamper-evident from
+	// sequence 3389" -- and until this existed there was no way to go and look at the
+	// row it named. Being told which event to investigate and having no means to
+	// retrieve it is a strange place for an audit tool to leave somebody.
+	SeqFrom *int64
+	SeqTo   *int64
+	Limit   int
+	Offset  int
 }
 
 // ListAudit returns audit events matching the filter, newest first.
@@ -303,8 +311,10 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]models.AuditEve
 		  AND ($3='' OR actor_name ILIKE '%'||$3||'%')
 		  AND ($6::timestamptz IS NULL OR created_at >= $6)
 		  AND ($7::timestamptz IS NULL OR created_at <= $7)
+		  AND ($8::bigint IS NULL OR seq >= $8)
+		  AND ($9::bigint IS NULL OR seq <= $9)
 		ORDER BY seq DESC LIMIT $4 OFFSET $5`,
-		f.Action, f.ActorID, f.ActorName, f.Limit, f.Offset, f.From, f.To)
+		f.Action, f.ActorID, f.ActorName, f.Limit, f.Offset, f.From, f.To, f.SeqFrom, f.SeqTo)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +485,15 @@ func (s *Store) VerifyAuditChainDetail(ctx context.Context) (AuditChainResult, e
 		return out, qerr
 	}
 	defer rows.Close()
-	prev := ""
+	// Where the chain legitimately begins.
+	//
+	// "" is right for a chain that still has its genesis row. After a retention prune
+	// the oldest surviving row points at a hash that is no longer present, which is
+	// indistinguishable from somebody deleting the start of the log -- because it is
+	// the same act, differing only in whether it was declared. So a declared boundary
+	// seeds the walk, and only when the audit event backing it verifies further down
+	// the chain (see migration 0110); an undeclared deletion still breaks.
+	prev := s.prunedBoundary(ctx)
 	seenKeyed := false
 	for rows.Next() {
 		var (
@@ -660,10 +678,22 @@ func jsonOrEmpty(m map[string]any) []byte {
 // caller must have counted it from the same walk the verifier performs.
 func (s *Store) AcknowledgeAuditChainRange(ctx context.Context, fromSeq, toSeq int64,
 	coveredCount int, evidenceSeq int64, by *uuid.UUID, byName, note string) error {
+	// Upsert, so the note can be corrected. It used to be a plain INSERT with nothing
+	// unique about the span, which meant a correction quietly added a row the verifier
+	// ignored -- see migration 0109. The amendment is itself a chained audit event, so
+	// every version of the note survives in the log while this row holds the current
+	// one.
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO audit_chain_break_ranges
 			(from_seq, to_seq, covered_count, evidence_seq, acknowledged_by, acknowledged_name, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (from_seq, to_seq) DO UPDATE
+		   SET covered_count = EXCLUDED.covered_count,
+		       evidence_seq = EXCLUDED.evidence_seq,
+		       acknowledged_by = EXCLUDED.acknowledged_by,
+		       acknowledged_name = EXCLUDED.acknowledged_name,
+		       note = EXCLUDED.note,
+		       acknowledged_at = now()`,
 		fromSeq, toSeq, coveredCount, evidenceSeq, by, byName, note)
 	return err
 }
@@ -689,4 +719,29 @@ func (s *Store) LatestAuditSeq(ctx context.Context) (int64, error) {
 	var seq int64
 	err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(seq),0) FROM audit_events`).Scan(&seq)
 	return seq, err
+}
+
+// prunedBoundary returns the hash the oldest surviving row should chain to, or "" when
+// the chain still has its genesis row.
+//
+// Only a boundary whose evidence event is present is offered. The event itself is
+// verified during the walk like any other row -- it is part of the retained chain --
+// so a boundary inserted straight into the database points at an event that either
+// does not exist or does not verify, and the break is reported as though the boundary
+// were never declared.
+func (s *Store) prunedBoundary(ctx context.Context) string {
+	var hash string
+	var evidenceSeq int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT boundary_hash, evidence_seq FROM audit_chain_prunes
+		WHERE evidence_seq > 0 ORDER BY through_seq DESC LIMIT 1`).Scan(&hash, &evidenceSeq)
+	if err != nil {
+		return ""
+	}
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM audit_events WHERE seq = $1)`, evidenceSeq).Scan(&exists); err != nil || !exists {
+		return ""
+	}
+	return hash
 }

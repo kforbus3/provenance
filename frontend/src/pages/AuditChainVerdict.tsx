@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Alert, AlertTitle, Box, Button, Dialog, DialogActions, DialogContent,
-  DialogContentText, DialogTitle, Stack, TextField, Typography,
+  DialogContentText, DialogTitle, Link, Stack, TextField, Typography,
 } from "@mui/material";
 import { useMutation } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
@@ -23,7 +23,23 @@ import {
 // So: a chain with recorded exceptions gets its own verdict that counts them, a
 // diagnosis that enumerates breaks instead of revealing them one acknowledgement at a
 // time, and the bulk acknowledgement that diagnosis exists to inform.
-export function AuditChainVerdict({ result }: { result: VerifyResult }) {
+export function AuditChainVerdict({
+  result,
+  onShowSequence,
+}: {
+  result: VerifyResult;
+  // Naming a sequence and offering no way to see it is a strange place for an audit
+  // tool to leave somebody, so every sequence this panel mentions is clickable.
+  onShowSequence?: (seq: number) => void;
+}) {
+  const seqLink = (n: number) =>
+    onShowSequence ? (
+      <Link component="button" type="button" underline="hover"
+        onClick={() => onShowSequence(n)}>{n}</Link>
+    ) : (
+      <>{n}</>
+    );
+
   const has = useAuthStore((s) => s.has);
   const mayAcknowledge = has("System.Configure");
   const [scan, setScan] = useState<ChainScan | null>(null);
@@ -60,7 +76,7 @@ export function AuditChainVerdict({ result }: { result: VerifyResult }) {
     <Box sx={{ mb: 2 }}>
       {!result.intact && (
         <Alert severity="error" sx={{ mb: 1 }}>
-          <AlertTitle>Audit chain broken at sequence {result.brokenAtSeq}</AlertTitle>
+          <AlertTitle>Audit chain broken at sequence {seqLink(result.brokenAtSeq)}</AlertTitle>
           A row on or after this sequence has been altered, or removed. Nothing can make
           an altered row verify again — the next step is to establish what happened.
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
@@ -77,34 +93,52 @@ export function AuditChainVerdict({ result }: { result: VerifyResult }) {
       )}
 
       {result.intact && excepted > 0 && (
-        <Alert severity="warning" sx={{ mb: 1 }}>
+        // severity="info", not "warning". The state being described is "checked,
+        // explained, and being watched" — an operator who has done the work should not
+        // be shown the same colour as an operator who has an unexplained break. The
+        // exceptions stay listed for ever, because a chain with unverifiable rows must
+        // never present itself as whole; what changes is that this is no longer an
+        // open question.
+        <Alert severity="info" sx={{ mb: 1 }}>
           <AlertTitle>
-            No unexplained alteration — {excepted.toLocaleString()} row(s) do not verify
+            No tampering detected — with {excepted.toLocaleString()} recorded exception
+            {excepted === 1 ? "" : "s"}
           </AlertTitle>
-          Every row that fails to verify has an investigated cause recorded against it,
-          and verification continues past them, so a new alteration would still be
-          detected. The rows are not repaired and never will be.
+          Verification found nothing unaccounted for. Every row that cannot be verified
+          has an investigated cause recorded against it, and checking continues past
+          those rows — so a new alteration would still be caught. Those rows stay listed
+          because they can never be verified again, not because anything is outstanding.
           {ranges.map((g) => (
             <Typography key={`${g.fromSeq}-${g.toSeq}`} variant="body2" sx={{ mt: 1 }}>
-              <strong>Sequences {g.fromSeq}–{g.toSeq}</strong>{" "}
+              <strong>Sequences {seqLink(g.fromSeq)}–{seqLink(g.toSeq)}</strong>{" "}
               ({g.covered.toLocaleString()} rows) — {g.by}, {formatDateTime(g.at)}: {g.note}
             </Typography>
           ))}
           {singles.map((b) => (
             <Typography key={b.brokenAtSeq} variant="body2" sx={{ mt: 1 }}>
-              <strong>Sequence {b.brokenAtSeq}</strong> — {b.by}, {formatDateTime(b.at)}: {b.note}
+              <strong>Sequence {seqLink(b.brokenAtSeq)}</strong> — {b.by}, {formatDateTime(b.at)}: {b.note}
             </Typography>
           ))}
         </Alert>
       )}
 
       {result.weakFromSeq ? (
-        <Alert severity="warning" sx={{ mb: 1 }}>
+        <Alert severity="info" sx={{ mb: 1 }}>
           <AlertTitle>
-            Tail not tamper-evident from sequence {result.weakFromSeq}
+            {result.weakCount} row{result.weakCount === 1 ? "" : "s"} written without the
+            chain key, from sequence {seqLink(result.weakFromSeq)}
           </AlertTitle>
-          {result.weakCount} row(s) were written without the chain key. From that point a
-          party with database write access could append or rebuild rows that still verify.
+          A row written while no <code>PROV_AUDIT_HMAC_KEY</code> was configured is hashed
+          without it, so its integrity rests on plain SHA-256 rather than on the key.
+          Anything appended in the same form would also verify — which is why this is
+          reported rather than ignored. It is counted here, so a number that stays put is
+          a fact about the past; a number that grows is happening now.
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            The usual cause is a command-line tool run without the key in its environment.
+            Provenance now refuses to append in that state, so this count should not
+            increase. It cannot be cleared: the rows exist and rewriting them is the
+            forgery this chain is built to detect.
+          </Typography>
         </Alert>
       ) : null}
 
@@ -118,7 +152,7 @@ export function AuditChainVerdict({ result }: { result: VerifyResult }) {
             {scan.breakCount.toLocaleString()} of {scan.rows.toLocaleString()} rows do not verify
           </AlertTitle>
           <Typography variant="body2">
-            {scan.breakCount > 0 && <>Sequences {scan.firstSeq}–{scan.lastSeq}. </>}
+            {scan.breakCount > 0 && <>Sequences {seqLink(scan.firstSeq)}–{seqLink(scan.lastSeq)}. </>}
             {scan.noActorCount.toLocaleString()} have no actor, which is consistent with
             accounts having been deleted while the pre-0106 foreign key nulled that
             column — the rows lost a field rather than being edited, though a hash cannot

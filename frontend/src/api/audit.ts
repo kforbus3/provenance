@@ -28,6 +28,11 @@ export interface AuditFilter {
   to?: string;
   limit?: number;
   offset?: number;
+  /** Pin one event by sequence number. */
+  seq?: number;
+  /** Bound a span of sequence numbers (inclusive). */
+  seqFrom?: number;
+  seqTo?: number;
 }
 
 // A break somebody investigated and recorded. It is STILL a break — the row is

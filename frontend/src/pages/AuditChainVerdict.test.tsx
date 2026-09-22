@@ -52,7 +52,9 @@ describe("AuditChainVerdict", () => {
   it("does not call a chain with acknowledged breaks intact", () => {
     renderVerdict({ intact: true, brokenAtSeq: 0, acknowledgedRanges: [RANGE] });
     expect(screen.queryByText("Audit chain is intact.")).not.toBeInTheDocument();
-    expect(screen.getByText(/3,054 row\(s\) do not verify/)).toBeInTheDocument();
+    // The count must appear: an operator who has done the investigation should see a
+    // calm, accurate statement of scale, not an alarm and not a clean bill of health.
+    expect(screen.getByText(/3,054 recorded exceptions/)).toBeInTheDocument();
     // And the recorded account of why is on screen, not hidden behind a click: it is
     // the only thing that distinguishes this from an unexplained break.
     expect(screen.getByText(/nulled actor_id before 0106/)).toBeInTheDocument();

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5"
 	"time"
 )
 
@@ -20,17 +21,84 @@ func (s *Store) PruneAuthEventsBefore(ctx context.Context, cutoff time.Time) (in
 	return tag.RowsAffected(), nil
 }
 
-// PruneAuditEventsBefore deletes audit-chain rows older than cutoff. The rows
-// that remain still verify forward from the new oldest entry, but a genesis-to-
-// now verification then only covers the retained window — so this is gated by a
-// separate, opt-in knob (audit retention 0 keeps the whole chain) and is never
-// driven by the operational-activity window.
+// PruneAuditEventsBefore deletes audit-chain rows older than cutoff and DECLARES the
+// boundary it left behind, so verification can tell a retention policy apart from a
+// quiet deletion.
+//
+// This comment used to claim "the rows that remain still verify forward from the new
+// oldest entry". They do not. Verification walks from prev="" and compares each row's
+// prev_hash to the previous row's hash, so the first retained row still points at a
+// hash that is no longer present — which reads as an UNLINKED break, the signature of
+// rows being removed. Measured, not reasoned: pruning two of six rows reported
+// intact=false at the first survivor. Anyone who enabled PROV_AUDIT_RETENTION got a
+// chain that declared itself broken for ever.
+//
+// So the prune records where it stopped and which hash the new first row chains to,
+// backed by an audit event the CALLER writes afterwards (see DeclareAuditPrune). An
+// undeclared deletion still breaks the chain, because writing the boundary row alone
+// is not enough: verification honours it only when its evidence event verifies, which
+// needs the HMAC key.
+//
+// A genesis-to-now verification then covers only the retained window, which is the
+// real cost of retention and why it is opt-in (0 keeps the whole chain).
 func (s *Store) PruneAuditEventsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM audit_events WHERE created_at < $1`, cutoff)
+	var removed int64
+	var throughSeq int64
+	var boundary string
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		// The highest sequence about to go, and the hash the first survivor carries.
+		err := tx.QueryRow(ctx, `
+			SELECT COALESCE(MAX(seq), 0) FROM audit_events WHERE created_at < $1`, cutoff).Scan(&throughSeq)
+		if err != nil {
+			return err
+		}
+		if throughSeq == 0 {
+			return nil // nothing to prune
+		}
+		// prev_hash of the first row that will remain. Taken BEFORE the delete, so a
+		// concurrent append cannot change which row that is.
+		err = tx.QueryRow(ctx, `
+			SELECT prev_hash FROM audit_events WHERE seq > $1 ORDER BY seq LIMIT 1`, throughSeq).Scan(&boundary)
+		if err == pgx.ErrNoRows {
+			// Pruning everything: there is no survivor to anchor, so there is no
+			// boundary to declare and the next append starts a fresh chain.
+			boundary = ""
+		} else if err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE created_at < $1`, cutoff)
+		if err != nil {
+			return err
+		}
+		removed = tag.RowsAffected()
+		if removed == 0 || boundary == "" {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO audit_chain_prunes (through_seq, boundary_hash, rows_removed, evidence_seq, cutoff)
+			VALUES ($1,$2,$3,0,$4)`, throughSeq, boundary, removed, cutoff)
+		return err
+	})
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return removed, nil
+}
+
+// DeclareAuditPrune attaches the chained audit event that makes the most recent prune
+// boundary trustworthy.
+//
+// Written after the delete so the event survives into the retained chain, and kept
+// separate from the delete itself because the event has to chain from the last
+// SURVIVING row. Until it lands the boundary is unbacked and the chain still reports
+// the break — which is the correct state: a prune nobody could evidence is
+// indistinguishable from a deletion nobody declared.
+func (s *Store) DeclareAuditPrune(ctx context.Context, evidenceSeq int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE audit_chain_prunes SET evidence_seq = $1
+		WHERE id = (SELECT id FROM audit_chain_prunes ORDER BY id DESC LIMIT 1)
+		  AND evidence_seq = 0`, evidenceSeq)
+	return changed(tag, err)
 }
 
 // PruneSFTPTransfersBefore deletes file-transfer records older than cutoff.

@@ -204,6 +204,31 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		f.To = &t
 	}
+	// seq pins one event; seqFrom/seqTo bound a span. Verification reports sequence
+	// numbers, so this is how an operator gets from "broken at sequence 2" to the row.
+	if v := r.URL.Query().Get("seq"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid seq")
+			return
+		}
+		f.SeqFrom, f.SeqTo = &n, &n
+	}
+	for _, b := range []struct {
+		param string
+		dst   **int64
+	}{{"seqFrom", &f.SeqFrom}, {"seqTo", &f.SeqTo}} {
+		v := r.URL.Query().Get(b.param)
+		if v == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid "+b.param)
+			return
+		}
+		*b.dst = &n
+	}
 	events, err := h.d.Store.ListAudit(r.Context(), f)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not list audit events")

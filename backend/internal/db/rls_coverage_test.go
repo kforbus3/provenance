@@ -55,6 +55,8 @@ var rlsGlobalAllowlist = map[string]string{
 
 	"audit_chain_break_ranges": "bulk acknowledgements covering every break in a span of the audit hash chain, for one event that broke many rows at once — the pre-0106 foreign key nulled actor_id on every event of any deleted user, 3,054 rows of 5,521 in the first production chain examined. Global for the same reason as audit_chain_breaks above: the chain is one sequence across every tenant, so a span of it is not a tenant's property, and a per-tenant range would be a range acknowledgement that only some rows of the chain honour (0107).",
 
+	"audit_chain_prunes": "declared retention boundaries in the audit hash chain: where a prune stopped and which hash the oldest surviving row chains to. Global for the same reason as the two tables above -- the chain is one sequence across every tenant, so where it BEGINS is a property of the chain and not of a tenant. A per-tenant boundary would be a chain start that only some rows agree about (0110).",
+
 	// --- SSH certificate authority (one fleet-wide CA) ---
 	"ca_keys":          "the fleet-wide SSH certificate-authority keypair(s); single shared CA, not tenant data (0001).",
 	"cert_revocations": "revocation list (by serial) for the single fleet-wide SSH CA; one global CRL (0001).",
