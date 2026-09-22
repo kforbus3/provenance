@@ -1248,8 +1248,13 @@ func (s *Server) buildRouter() chi.Router {
 // a no-op for them.
 func bodyLimitMW(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Suffix, not substring. Both of these are terminal path segments, and
+		// strings.Contains lifted the body cap for ANY path that merely contained the
+		// fragment — so a request to /api/v1/hosts/x/sftp/list/sftp/upload (which
+		// routes nowhere) was exempt, and any future route with one of these as an
+		// interior segment would be exempted silently.
 		p := r.URL.Path
-		bigUpload := strings.Contains(p, "/sftp/upload") || strings.Contains(p, "/system/upgrade/preview")
+		bigUpload := strings.HasSuffix(p, "/sftp/upload") || strings.HasSuffix(p, "/system/upgrade/preview")
 		if r.Body != nil && !bigUpload {
 			r.Body = http.MaxBytesReader(w, r.Body, 8<<20) // 8 MiB is ample for JSON
 		}

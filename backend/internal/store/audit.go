@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/kforbus3/provenance/backend/internal/metrics"
 	"log/slog"
 	"sort"
 	"sync"
@@ -244,6 +245,21 @@ func (s *Store) AppendAudit(ctx context.Context, e models.AuditEvent) (*models.A
 		return nil
 	})
 	if err != nil {
+		// Loud here, once, rather than at each of the ~76 call sites that write an
+		// audit event and discard the error.
+		//
+		// This is the only place a dropped event can be surfaced. Verification detects
+		// MODIFICATION: an altered row no longer matches its hash. A write that never
+		// landed leaves no gap at all, because the next row chains from the last one
+		// that succeeded -- so a database hiccup can make a session start, a credential
+		// issuance or a login vanish in a way VerifyAuditChain can never see, and the
+		// chain will keep reporting itself intact.
+		//
+		// Callers still choose whether to fail the operation; what they no longer get
+		// to choose is whether anybody finds out.
+		metrics.AuditWriteFailures.WithLabelValues(e.Action).Inc()
+		slog.Error("audit event was NOT recorded",
+			"action", e.Action, "actor", e.ActorName, "target", e.TargetID, "err", err)
 		return nil, err
 	}
 	// Forward to syslog/SIEM (best-effort, off the request path). Merge the

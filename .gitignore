@@ -9,6 +9,11 @@
 # Built command binaries (produced by `go build ./cmd/...` in backend/)
 /backend/provctl
 /backend/provd
+# The old Fleet-era name for provctl. A 22 MB arm64 build of it was tracked for
+# months while its two siblings above were ignored, so every clone carried a binary
+# nobody could run on a Linux server and nobody needed on a Mac.
+/backend/fleetctl
+/backend/fleet-updater
 /backend/prov-enroll-agent
 
 # Node

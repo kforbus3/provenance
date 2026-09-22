@@ -35,6 +35,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 )
@@ -157,6 +158,10 @@ func readHead(f *os.File, n int) ([]byte, error) {
 	return head, nil
 }
 
+// maxFrameLen bounds a single encrypted frame. See frameReader.next: the length is
+// read from the file, so it must not be trusted to size an allocation.
+const maxFrameLen = 8 << 20 // 8 MiB
+
 // frameReader decrypts a framed recording on the fly.
 type frameReader struct {
 	f   *os.File
@@ -193,6 +198,17 @@ func (r *frameReader) next() error {
 		return err
 	}
 	n := int(binary.BigEndian.Uint32(lenBuf[:]))
+	// A length taken from the file decides an allocation, so it is bounded. Without
+	// this, four corrupt bytes ask for up to 4 GiB: a truncated recording from a
+	// crashed session, a bit-flip on disk, or a deliberately edited file turns
+	// "replay this session" into an out-of-memory kill of the backend.
+	//
+	// Frames are single asciicast lines. maxFrameLen is far above anything a terminal
+	// produces and far below anything that matters, and exceeding it means the file is
+	// not what it claims rather than that the session was unusually chatty.
+	if n < 0 || n > maxFrameLen {
+		return fmt.Errorf("recording frame claims %d bytes (limit %d): file is corrupt or not a recording", n, maxFrameLen)
+	}
 	frame := make([]byte, recNonceLen+n)
 	if _, err := io.ReadFull(r.br, frame); err != nil {
 		if err == io.ErrUnexpectedEOF {

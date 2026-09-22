@@ -286,6 +286,19 @@ type Config struct {
 	// directory the contents of every privileged session — which is a larger prize
 	// than the credentials this product exists to keep out of their hands.
 	RecordingAllowPlaintext bool
+	// AllowUnrecordedSessions (PROV_ALLOW_UNRECORDED_SESSIONS) lets a privileged
+	// session proceed when its recording could not be started.
+	//
+	// The default is to refuse it. A product whose promise is audited privileged
+	// access should not quietly hand somebody a root shell it cannot record: a full
+	// disk, a permissions mistake, or a database that would not accept the session row
+	// all produced exactly that, with no log line and nothing in the audit trail to
+	// say the session was unrecorded.
+	//
+	// Refusing has a real cost -- a disk-full condition stops privileged access -- so
+	// the escape hatch exists, and taking it is counted and audited per session rather
+	// than being the silent default.
+	AllowUnrecordedSessions bool
 
 	// OpenSCAP scan report storage
 	ScanDir     string
@@ -602,6 +615,7 @@ func Load() (*Config, error) {
 	c.AuditHMACKey = []byte(env("PROV_AUDIT_HMAC_KEY", ""))
 	c.RecordingEncryptionKey = []byte(env("PROV_RECORDING_KEY", ""))
 	c.RecordingAllowPlaintext = envBool("PROV_RECORDING_ALLOW_PLAINTEXT", false)
+	c.AllowUnrecordedSessions = envBool("PROV_ALLOW_UNRECORDED_SESSIONS", false)
 	if c.RecordingAllowPlaintext && len(c.RecordingEncryptionKey) == 0 {
 		// Said once, at every start, because the choice is invisible afterwards: the
 		// recordings look identical either way until somebody opens one.

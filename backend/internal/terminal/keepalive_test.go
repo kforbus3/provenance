@@ -54,3 +54,39 @@ func TestTheKeepAliveOutlivesTheRequestContext(t *testing.T) {
 		t.Error("touchCtx is not built from context.Background() with a tenant scope")
 	}
 }
+
+// Every session in the history read as a clean close, whatever happened.
+//
+// exitCode was a literal 0 and nothing asked the remote end for its exit status. That
+// is not just a misleading column: EndSSHSession derives the session STATUS from it
+// (CASE WHEN $2=0 THEN 'closed' ELSE 'error' END), so a shell that died on a
+// non-zero exit was filed identically to one the user closed politely.
+func TestTheRemoteExitStatusIsActuallyAsked(t *testing.T) {
+	src, err := os.ReadFile("terminal.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	if !strings.Contains(body, "session.Wait()") {
+		t.Error("nothing asks the remote end for its exit status, so exit_code and the " +
+			"derived session status are the same value for every session ever recorded")
+	}
+	if !strings.Contains(body, "ssh.ExitError") {
+		t.Error("the exit status is not read out of the SSH error, so a non-zero exit is " +
+			"still recorded as a clean close")
+	}
+	// Order matters: Wait closes the pipes, so asking before the pumps have drained
+	// would trade a wrong exit code for lost output.
+	iDone := strings.Index(body, "<-done")
+	iWait := strings.Index(body, "session.Wait()")
+	if iDone < 0 || iWait < 0 || iWait < iDone {
+		t.Error("the exit status is awaited before the output pumps have drained; Session.Wait " +
+			"closes the pipes, so this would truncate the end of the recording")
+	}
+	// And a shell nobody exited from must still read as closed, not as an error.
+	if !strings.Contains(body, "No status reported; leave 0 so the session still records as closed.") {
+		t.Error("the no-status case is not handled explicitly; an interactive session the " +
+			"client merely disconnected from would be filed as an error")
+	}
+}

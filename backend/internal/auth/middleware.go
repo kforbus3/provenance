@@ -142,14 +142,23 @@ func (s *Service) RequirePrivilegedPermission(perm string) func(http.Handler) ht
 	}
 }
 
-// CSRF note: there is intentionally no CSRF-enforcing middleware. State-changing
-// API calls authenticate with a Bearer access token in the Authorization header,
-// which a cross-site attacker cannot forge (the browser never attaches it
-// automatically); the only cookie-authenticated endpoints (refresh/logout) use a
-// SameSite=Strict cookie, so the browser won't send it on a cross-site request.
-// A readable double-submit token is still issued (prov_csrf cookie + login
-// response) so explicit double-submit enforcement can be layered on later without
-// re-plumbing, but it is not required by the current design.
+// CSRF note: enforcement lives in api.csrfProtect, wired across the whole /api/v1
+// tree (see registerRoutes). It is a double-submit check — the prov_csrf cookie must
+// match the X-CSRF-Token header — and it applies exactly where it can matter:
+//
+//   - safe methods pass through;
+//   - a request carrying an Authorization: Bearer header passes through, since a
+//     cross-site attacker cannot forge one (the browser never attaches it);
+//   - a request with no refresh cookie passes through, because there is no ambient
+//     session to ride on (login, bootstrap and SSO callbacks authenticate from the
+//     request body);
+//   - everything else must present the matching token.
+//
+// This comment used to say there was "intentionally no CSRF-enforcing middleware",
+// which described the design before that middleware was written. It was wrong in the
+// most expensive direction a comment can be wrong: it told a reader auditing the
+// defences that a control was deliberately absent when it was in fact present, which
+// invites both a redundant reimplementation and a false finding in a security review.
 
 // WSToken extracts the access token from a WebSocket upgrade request. Browsers
 // cannot set an Authorization header on a WebSocket, so the token is carried in the

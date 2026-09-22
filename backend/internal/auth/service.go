@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
@@ -334,7 +335,14 @@ func (s *Service) Refresh(ctx context.Context, sessionID uuid.UUID, presentedRef
 	if err != nil {
 		return nil, err
 	}
-	csrf, _ := NewCSRFToken()
+	// Propagated, not discarded: a crypto/rand failure here produced an EMPTY token
+	// that was then set as the prov_csrf cookie, so the double-submit check would
+	// compare "" against "" and pass for anyone. CreateSession already treats this as
+	// fatal; refresh has to as well.
+	csrf, err := NewCSRFToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate CSRF token: %w", err)
+	}
 	return &Tokens{
 		Access: access, Refresh: newRefresh, CSRF: csrf, RefreshHash: newHash,
 		AccessExpiry: time.Now().Add(s.cfg.AccessTokenTTL), Session: sess,

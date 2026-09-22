@@ -19,13 +19,16 @@ import (
 // Recorder writes one asciicast v2 file. It is safe for concurrent writes from
 // the input/output relay goroutines.
 type Recorder struct {
-	mu     sync.Mutex
-	f      *os.File
-	hasher hash.Hash
-	start  time.Time
-	path   string
-	bytes  int64
-	closed bool
+	// dropped counts frames that never reached the file, so a truncated recording can
+	// say so instead of presenting itself as complete.
+	dropped int
+	mu      sync.Mutex
+	f       *os.File
+	hasher  hash.Hash
+	start   time.Time
+	path    string
+	bytes   int64
+	closed  bool
 	// gcm is non-nil when the recording is encrypted at rest; each line is written as
 	// a framed AES-256-GCM chunk (see crypto.go). Nil keeps legacy plaintext.
 	gcm cipher.AEAD
@@ -112,16 +115,48 @@ func (r *Recorder) writeLineLocked(line []byte) {
 	if r.gcm != nil {
 		frame, err := sealFrame(r.gcm, line)
 		if err != nil {
-			slog.Warn("recorder: seal frame failed; dropping line", "path", r.path, "err", err)
+			r.noteDropped("seal frame failed", err)
 			return
 		}
-		n, _ := r.f.Write(frame)
+		n, werr := r.f.Write(frame)
 		r.bytes += int64(n)
+		if werr != nil {
+			r.noteDropped("write failed", werr)
+		}
 		return
 	}
-	n, _ := r.f.Write(line)
+	n, werr := r.f.Write(line)
 	r.bytes += int64(n)
+	if werr != nil {
+		r.noteDropped("write failed", werr)
+	}
 }
+
+// noteDropped records that the recording is missing content.
+//
+// A dropped frame used to be invisible: the encrypted path logged a warning and the
+// plaintext path said nothing at all, and either way the recording went on to get a
+// SHA-256 and a database row like any other. A truncated recording that presents
+// itself as complete is worse than a missing one -- somebody reviewing the session
+// sees a coherent transcript and has no way to know that the interesting part is the
+// bit that did not get written.
+//
+// Logged once per recording, because a full disk produces one of these per frame, and
+// ten thousand identical lines is how the one that mattered gets lost.
+func (r *Recorder) noteDropped(what string, err error) {
+	r.dropped++
+	if r.dropped == 1 {
+		slog.Error("session recording is INCOMPLETE: content was dropped",
+			"path", r.path, "what", what, "err", err)
+	}
+}
+
+// Truncated reports whether any content failed to reach the file, so a caller can
+// mark the stored recording as incomplete rather than presenting it as whole.
+func (r *Recorder) Truncated() bool { return r != nil && r.dropped > 0 }
+
+// DroppedFrames is how many writes were lost.
+func (r *Recorder) DroppedFrames() int { return r.dropped }
 
 // Result is the finalized recording metadata.
 type Result struct {

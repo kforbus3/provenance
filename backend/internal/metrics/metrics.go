@@ -32,6 +32,29 @@ var (
 		Help: "Total SSH certificates issued.",
 	}, []string{"kind"})
 
+	// AuditWriteFailures counts audit-chain appends that failed.
+	//
+	// This exists because the hash chain cannot reveal a dropped event. Verification
+	// detects MODIFICATION -- an altered row no longer matches its hash -- but a write
+	// that never landed leaves no gap, because the next row chains from the last one
+	// that succeeded. So a database hiccup can make a session start, a credential
+	// issuance or a login vanish in a way VerifyAuditChain can never see.
+	//
+	// A counter is the only thing that can surface that. Alert on any increase.
+	AuditWriteFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "prov_audit_write_failures_total",
+		Help: "Audit-chain appends that failed. The chain cannot show these as gaps; alert on any increase.",
+	}, []string{"action"})
+
+	// SessionsUnrecorded counts privileged sessions that proceeded without a recording.
+	//
+	// Only reachable when an operator has explicitly allowed it; the default is to
+	// refuse the session instead.
+	SessionsUnrecorded = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "prov_sessions_unrecorded_total",
+		Help: "Privileged sessions that proceeded with no session recording.",
+	}, []string{"protocol", "reason"})
+
 	// HostsByStatus reflects host health counts.
 	HostsByStatus = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "prov_hosts_status",

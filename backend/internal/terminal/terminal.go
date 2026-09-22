@@ -6,6 +6,7 @@ package terminal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -320,11 +321,23 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 			Detail: map[string]any{"hostname": host.Hostname, "credentialId": injection.SecretID.String()},
 		})
 	}
-	rec, _ := h.d.Store.CreateSSHSession(ctx, store.SSHSessionInput{
+	// A session that cannot be recorded is refused, unless the operator has said
+	// otherwise. Both failures below used to be discarded, and they compound: when
+	// CreateSSHSession failed, sshSessionID stayed nil, which ALSO skipped the
+	// recording -- so one database hiccup produced a root shell with no session row,
+	// no recording, and not one line of log to say so.
+	rec, rerr := h.d.Store.CreateSSHSession(ctx, store.SSHSessionInput{
 		SessionID: &p.SessionID, UserID: &p.UserID, HostID: &host.ID,
 		Username: p.Username, Hostname: host.Hostname, CertSerial: certSerial,
 		ClientIP: clientIP,
 	})
+	if rerr != nil || rec == nil {
+		if !h.unrecordedAllowed(p, host, "session_record", rerr) {
+			sendErr("This session was refused: its session record could not be created, so it " +
+				"could not be audited or recorded. See the backend log.")
+			return
+		}
+	}
 	var sshSessionID uuid.UUID
 	if rec != nil {
 		sshSessionID = rec.ID
@@ -335,7 +348,15 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	startUnix := time.Now().Unix()
 	var capture *recorder.Recorder
 	if sshSessionID != uuid.Nil {
-		capture, _ = recorder.New(h.d.Cfg.RecordingDir, sshSessionID.String(), cols, rows, startUnix, h.d.Cfg.RecordingEncryptionKey)
+		var cerr error
+		capture, cerr = recorder.New(h.d.Cfg.RecordingDir, sshSessionID.String(), cols, rows, startUnix, h.d.Cfg.RecordingEncryptionKey)
+		if cerr != nil || capture == nil {
+			if !h.unrecordedAllowed(p, host, "recording_open", cerr) {
+				sendErr("This session was refused: its recording could not be started (check " +
+					"disk space and permissions on the recording directory). See the backend log.")
+				return
+			}
+		}
 	}
 
 	_, _ = h.d.Store.AppendAudit(ctx, models.AuditEvent{
@@ -554,6 +575,33 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	}()
 
 	<-done
+	// The remote shell's exit status, if it reported one.
+	//
+	// exitCode was hardcoded to 0 and nothing ever asked the remote end. That is not
+	// merely a misleading column: EndSSHSession derives the session STATUS from it
+	// (`CASE WHEN $2=0 THEN 'closed' ELSE 'error' END`), so every session in the
+	// history reads as a clean close no matter how it actually ended.
+	//
+	// Waited for only AFTER the pumps have drained, so reading the exit status cannot
+	// truncate output: Session.Wait closes the pipes when it returns. A short timeout
+	// because an interactive shell that the client simply disconnected from never
+	// reports one, and that is not a failure -- it keeps the previous meaning of 0
+	// ("closed") for exactly the case that produced it before.
+	exitCode := 0
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- session.Wait() }()
+	select {
+	case werr := <-waitDone:
+		var ee *ssh.ExitError
+		switch {
+		case werr == nil:
+			exitCode = 0
+		case errors.As(werr, &ee):
+			exitCode = ee.ExitStatus()
+		}
+	case <-time.After(2 * time.Second):
+		// No status reported; leave 0 so the session still records as closed.
+	}
 	_ = session.Close()
 	if h.d.Watch != nil && sshSessionID != uuid.Nil {
 		h.d.Watch.Publish(sshSessionID, livesessions.Frame{Kind: "end"})
@@ -567,7 +615,6 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	fin, cancel := context.WithTimeout(h.d.Auth.TenantScope(context.Background(), p), 15*time.Second)
 	defer cancel()
 
-	exitCode := 0
 	if capture != nil {
 		res := capture.Close()
 		if _, err := h.d.Store.CreateRecording(fin, recordingInput(sshSessionID, res)); err != nil {
@@ -696,4 +743,33 @@ func overlayName(overlay string) string {
 		return o
 	}
 	return "WireGuard"
+}
+
+// unrecordedAllowed reports whether a session may proceed when it cannot be recorded,
+// and makes the decision visible either way.
+//
+// Refusing is the default because the alternative is worse than it looks: the session
+// still happens, the operator still gets root, and nothing anywhere says the recording
+// is missing. A log line alone is not enough -- the fact belongs in the audit trail,
+// where somebody reviewing that host's history will see it.
+func (h *handler) unrecordedAllowed(p *auth.Principal, host *models.Host, reason string, cause error) bool {
+	if !h.d.Cfg.AllowUnrecordedSessions {
+		h.d.Log.Error("refusing a privileged session that could not be recorded",
+			"reason", reason, "user", p.Username, "host", host.Hostname, "err", cause,
+			"override", "PROV_ALLOW_UNRECORDED_SESSIONS=true to allow it instead")
+		return false
+	}
+	metrics.SessionsUnrecorded.WithLabelValues("ssh", reason).Inc()
+	h.d.Log.Error("privileged session proceeding WITHOUT a recording",
+		"reason", reason, "user", p.Username, "host", host.Hostname, "err", cause,
+		"allowed_by", "PROV_ALLOW_UNRECORDED_SESSIONS")
+	// Detached: the point is that this lands even if the request context is going away.
+	actx, cancel := context.WithTimeout(h.d.Auth.TenantScope(context.Background(), p), 10*time.Second)
+	defer cancel()
+	_, _ = h.d.Store.AppendAudit(actx, models.AuditEvent{
+		ActorID: &p.UserID, ActorName: p.Username, Action: "session.unrecorded",
+		TargetKind: "host", TargetID: host.ID.String(),
+		Detail: map[string]any{"hostname": host.Hostname, "reason": reason},
+	})
+	return true
 }
