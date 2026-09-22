@@ -5,6 +5,89 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.3 — 2026-09-21
+
+Security and correctness fixes from an external code review. Every finding was
+verified against the code before being acted on; one did not survive checking and is
+noted below.
+
+**Read this before upgrading:** a privileged session whose recording cannot be started
+is now **refused** rather than proceeding unrecorded. Set
+`PROV_ALLOW_UNRECORDED_SESSIONS=true` if you would rather it proceed — taking that
+option is counted and written to the audit trail per session. `PROV_RECORDING_KEY`
+continues to be generated automatically on upgrade.
+
+### A revocation list built from a failed query
+
+`RevokedSerials` returns `(nil, error)` and the error was discarded, so a transient
+database failure left the serial list nil — and `krl.Build` is perfectly happy to
+produce a **valid, empty revocation list**, which then went to every enrolled host.
+Fleet-wide revocation enforcement erased, including a certificate revoked a moment
+earlier, with nothing logged. `AllHosts` had the same shape with a different ending:
+nil hosts meant the push loop ran over nothing and returned `pushed=0 failed=0
+err=nil`, which the caller reads as success and advances its hash, suppressing the
+retry for up to an hour.
+
+### Keep-alives and finalize writes on a dead context
+
+A global 60s request timeout applies to every route. WebSockets and transfer bodies
+survive it — the connection is hijacked — but `r.Context()` does not. So the terminal's
+per-minute keep-alive, which exists precisely so a busy-but-quiet terminal is not
+idle-reaped, failed from minute one and the session was force-closed underneath its
+user; and SFTP's keep-alive, completion record and audit event all failed on any
+transfer over a minute, so a ten-minute download finished with no record that it had
+happened. All four now use a detached, tenant-scoped context and log on failure.
+
+Worth stating plainly: the terminal bug was **masked** by the page polling host status
+every 30 seconds, since each authenticated request touches the session. That mask
+inverted the meaning of the idle TTL — it measured "tab closed", not "terminal idle".
+
+### Evidence that failed silently
+
+- **Audit writes.** ~76 call sites discard the error, and the chain cannot reveal a
+  dropped event: verification detects modification, while a write that never landed
+  leaves no gap, because the next row chains from the last one that succeeded.
+  `AppendAudit` now logs at ERROR and increments
+  `prov_audit_write_failures_total` — alert on any increase.
+- **Unrecorded sessions.** `CreateSSHSession` failing left the session id nil, which
+  *also* skipped the recording, so one database hiccup produced a root shell with no
+  session row, no recording and no log line.
+- **Truncated recordings.** Mid-session write failures were dropped and the recording
+  still got a SHA-256 and a database row. A transcript that presents itself as whole
+  is worse than a missing one.
+- **Exit codes.** `exitCode` was a literal `0` and nothing asked the remote end — and
+  `EndSSHSession` derives the session *status* from it, so **every session in the
+  history read as a clean close** however it ended. Now captured, after the output
+  pumps drain.
+
+### A keyless row in a keyed chain
+
+`provctl` now refuses to touch a keyed audit chain without `PROV_AUDIT_HMAC_KEY`.
+A CLI run without it appends a row the verifier re-derives keylessly, permanently
+marking the chain's tail as not tamper-evident from that sequence on. Sequence 3389 on
+one production chain is exactly that: a single keyless `recovery.create_admin` between
+two keyed rows, because that process had no key in its environment.
+
+### Smaller
+
+`Refresh` discarded `NewCSRFToken`'s error, so a `crypto/rand` failure set an **empty**
+`prov_csrf` cookie and the double-submit check compared `""` to `""` and passed. A
+recording frame's length was read from the file and used to size an allocation, so four
+corrupt bytes could ask for 4 GiB (now bounded). The request-body cap was lifted by
+substring match for any path merely *containing* `/sftp/upload`. And the CSRF comment
+in `auth/middleware.go` claimed there was "intentionally no CSRF-enforcing middleware"
+while `csrfProtect` has been wired across `/api/v1` — a comment asserting a control is
+deliberately absent when it is present invites both a redundant reimplementation and a
+false finding in a security review.
+
+**One finding did not hold.** The unbounded frame allocation exists in
+`frameReader.next()` but not at the second site reported; that one bounds-checks
+against the buffer first. Only the real one was changed.
+
+`backend/fleetctl`, a 22 MB binary tracked while both its siblings were ignored, is now
+untracked. The `sftp`, `terminal`, `recorder` and `provctl` packages have tests for the
+first time — which is exactly where these bugs lived.
+
 ## v2.0.2 — 2026-09-21
 
 **Each host now says what its access path gives up.** Provenance offers several ways to
