@@ -17,7 +17,7 @@ COPY frontend/ ./
 COPY docs/ /docs/
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.31-alpine AS runtime
 # nginx.conf is an envsubst template: the base image renders it into
 # /etc/nginx/conf.d/ at startup, substituting BACKEND_HOST (below) and the
 # resolver. Default targets the Compose service name; Kubernetes overrides
