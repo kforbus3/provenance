@@ -30,6 +30,19 @@ func scanSchedule(row interface{ Scan(...any) error }) (*models.Schedule, error)
 // scheduleLoc returns the configured display/scheduling timezone (settings key
 // "timezone", an IANA name), falling back to the server's local zone.
 func (s *Store) scheduleLoc(ctx context.Context) *time.Location {
+	return s.DisplayLocation(ctx)
+}
+
+// DisplayLocation resolves the operator's configured display timezone (settings key
+// "timezone", an IANA name), falling back to the server's local zone.
+//
+// Exported because anything that renders a time INTO TEXT on the server needs it, and
+// the resolution was previously copied per package. Prefer sending the instant and
+// letting the caller format it — the UI applies this same setting. Where the server
+// must produce the text itself (an HTML title, a PDF), format in this zone AND print
+// the zone, because the fallbacks differ: with no setting configured the UI uses the
+// BROWSER's zone and this uses the SERVER's, so an unlabelled time is a guess.
+func (s *Store) DisplayLocation(ctx context.Context) *time.Location {
 	if name := s.DisplayTimezone(ctx); name != "" {
 		if loc, lerr := time.LoadLocation(name); lerr == nil {
 			return loc

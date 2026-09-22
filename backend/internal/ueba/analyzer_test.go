@@ -1,6 +1,7 @@
 package ueba
 
 import (
+	"regexp"
 	"testing"
 	"time"
 
@@ -84,5 +85,77 @@ func TestActivitySpike(t *testing.T) {
 	}
 	if !hasType(Analyze(s, now, 24*time.Hour), "activity_spike") {
 		t.Error("expected activity_spike anomaly")
+	}
+}
+
+// TestDetailCarriesNoWallClock is the regression guard for a Behavior-page report: each
+// event's prose named a time that disagreed with the timestamp rendered beside it.
+//
+// Both came from the same instant. The prose was formatted server-side with no zone,
+// while the stamp goes through the UI's formatter, which applies the configured display
+// timezone (or the browser's) — so they differed by the server-to-viewer offset. A
+// timestamp belongs to whoever renders it; Anomaly.When carries the instant.
+//
+// This fails if any anomaly's Detail regains an embedded clock time.
+func TestDetailCarriesNoWallClock(t *testing.T) {
+	// A session at 23:00 UTC against a 09:00–16:00 baseline: off-hours fires, and a
+	// naive formatter would write "23:00" into the sentence.
+	now := time.Date(2026, 7, 20, 23, 30, 0, 0, time.UTC)
+	user, host, other := uuid.New(), uuid.New(), uuid.New()
+	s := baselineSessions(user, host, "10.0.0.1", minBaseline+2, now)
+	s = append(s, Session{
+		UserID: user, Username: "alice", HostID: other, Hostname: "db-01",
+		IP: "10.9.9.9", StartedAt: time.Date(2026, 7, 20, 23, 0, 0, 0, time.UTC),
+	})
+
+	got := Analyze(s, now, 24*time.Hour)
+	if len(got) == 0 {
+		t.Fatal("precondition: expected at least one anomaly to inspect")
+	}
+	if !hasType(got, "off_hours") {
+		t.Fatal("precondition: expected the off_hours anomaly, which is the one that named a time")
+	}
+
+	// Any HH:MM in the prose is the defect, whatever the zone it was rendered in.
+	clock := regexp.MustCompile(`\b([01]?\d|2[0-3]):[0-5]\d\b`)
+	for _, a := range got {
+		if m := clock.FindString(a.Detail); m != "" {
+			t.Errorf("anomaly %q embeds the wall-clock time %q in Detail: %q\n"+
+				"the viewer renders When in their own zone, so a time formatted here "+
+				"contradicts the stamp shown next to it", a.Type, m, a.Detail)
+		}
+		if a.When.IsZero() {
+			t.Errorf("anomaly %q has no When for the caller to render", a.Type)
+		}
+	}
+}
+
+// TestOffHoursDetectionIsZoneInvariant records why only the DISPLAY was wrong. The
+// baseline hours and the test against them are both derived from StartedAt, so moving
+// every session into another zone rotates all the hour buckets uniformly and cannot
+// change which hours count as usual. Detection needed no fix; had this failed, the
+// report would have been about wrong findings rather than wrong labels.
+func TestOffHoursDetectionIsZoneInvariant(t *testing.T) {
+	now := time.Date(2026, 7, 20, 23, 30, 0, 0, time.UTC)
+	user, host, other := uuid.New(), uuid.New(), uuid.New()
+	build := func(loc *time.Location) []Anomaly {
+		s := baselineSessions(user, host, "10.0.0.1", minBaseline+2, now)
+		s = append(s, Session{
+			UserID: user, Username: "alice", HostID: other, Hostname: "db-01",
+			IP: "10.9.9.9", StartedAt: time.Date(2026, 7, 20, 23, 0, 0, 0, time.UTC),
+		})
+		for i := range s {
+			s[i].StartedAt = s[i].StartedAt.In(loc)
+		}
+		return Analyze(s, now.In(loc), 24*time.Hour)
+	}
+	utc := build(time.UTC)
+	east := build(time.FixedZone("UTC-5", -5*3600))
+	if hasType(utc, "off_hours") != hasType(east, "off_hours") {
+		t.Errorf("off_hours detection changed with the zone: utc=%v shifted=%v",
+			hasType(utc, "off_hours"), hasType(east, "off_hours"))
+	}
+	if len(utc) != len(east) {
+		t.Errorf("anomaly count changed with the zone: utc=%d shifted=%d", len(utc), len(east))
 	}
 }

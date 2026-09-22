@@ -184,12 +184,26 @@ type AlreadyFailedError struct {
 	When     *time.Time `json:"when,omitempty"`
 	Hostname string     `json:"hostname,omitempty"`
 	Detail   string     `json:"detail,omitempty"`
+	// Loc is the zone Error() renders When in. Not serialised: the dialog receives
+	// When and formats it itself, in the viewer's zone.
+	Loc *time.Location `json:"-"`
 }
 
 func (e *AlreadyFailedError) Error() string {
+	// This message has to name the time: it reaches surfaces that render no structured
+	// field (a toast, a log line, an Ask answer), and an operator cannot act on "already
+	// failed" without knowing when. It previously did so in the SERVER's zone with no
+	// label — UTC in the shipped image — so it read hours away from the same instant in
+	// the refusal dialog, which renders When in the viewer's zone. Render in the
+	// configured display zone and PRINT the zone, so the two agree and the text is
+	// verifiable even when they cannot.
 	when := ""
 	if e.When != nil {
-		when = " at " + e.When.Format("15:04 on 2 Jan")
+		loc := e.Loc
+		if loc == nil {
+			loc = time.UTC
+		}
+		when = " at " + e.When.In(loc).Format("15:04 MST on 2 Jan")
 	}
 	return fmt.Sprintf("revision %d already failed on %s%s and the definition has not "+
 		"changed since, so deploying it again runs the same file and gets the same result. "+
@@ -202,13 +216,13 @@ func (e *AlreadyFailedError) Error() string {
 // Deployed is what the host CONFIRMED, so equality with Revision means there is nothing
 // new to send. A stack whose definition has been edited since has a higher Revision and
 // is not this case.
-func alreadyFailed(st *store.ContainerStack) *AlreadyFailedError {
+func alreadyFailed(st *store.ContainerStack, loc *time.Location) *AlreadyFailedError {
 	if st == nil || st.DeployState != DeployStateFailed || st.Deployed == nil || *st.Deployed != st.Revision {
 		return nil
 	}
 	return &AlreadyFailedError{
 		Revision: st.Revision, When: st.DeployedAt, Hostname: st.Hostname,
-		Detail: firstLine(st.DeployDetail),
+		Detail: firstLine(st.DeployDetail), Loc: loc,
 	}
 }
 

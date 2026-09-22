@@ -215,7 +215,7 @@ func TestAlreadyFailedRevision(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := alreadyFailed(&tc.st)
+			got := alreadyFailed(&tc.st, time.UTC)
 			if tc.want != (got != nil) {
 				t.Fatalf("alreadyFailed = %v, want refusal=%v", got, tc.want)
 			}
@@ -223,7 +223,9 @@ func TestAlreadyFailedRevision(t *testing.T) {
 				return
 			}
 			msg := got.Error()
-			for _, want := range []string{"revision 3", "identity", "02:50", "not changed"} {
+			// "UTC" because an unlabelled time is unverifiable — see
+			// TestAlreadyFailedErrorNamesItsZone.
+			for _, want := range []string{"revision 3", "identity", "02:50", "UTC", "not changed"} {
 				if !strings.Contains(msg, want) {
 					t.Errorf("the refusal does not mention %q — an operator cannot tell "+
 						"what already happened: %s", want, msg)
@@ -235,5 +237,50 @@ func TestAlreadyFailedRevision(t *testing.T) {
 				t.Errorf("detail is not the first line of the failure: %q", got.Detail)
 			}
 		})
+	}
+}
+
+// TestAlreadyFailedErrorNamesItsZone guards a timezone report. This message embedded
+// e.When.Format("15:04 on 2 Jan") — the SERVER's zone, unlabelled, UTC in the shipped
+// image — while the refusal dialog renders the same instant from the JSON `when` field
+// through the UI formatter, in the viewer's zone. The two disagreed by the offset.
+//
+// The time stays in the message, because it reaches surfaces that render no structured
+// field. It is now rendered in the configured display zone and names that zone.
+func TestAlreadyFailedErrorNamesItsZone(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	// 02:50 UTC on the 20th is 22:50 EDT on the 19th — a different clock AND a different
+	// day, which is why an unlabelled server-side rendering was worse than useless.
+	when := time.Date(2026, 9, 20, 2, 50, 0, 0, time.UTC)
+	e := &AlreadyFailedError{Revision: 14, When: &when, Hostname: "web-01", Loc: ny}
+
+	msg := e.Error()
+	if !strings.Contains(msg, "22:50") {
+		t.Errorf("message did not render in the display zone: %q (want 22:50 EDT)", msg)
+	}
+	if strings.Contains(msg, "02:50") {
+		t.Errorf("message still shows the server's UTC wall clock: %q", msg)
+	}
+	if !strings.Contains(msg, "EDT") {
+		t.Errorf("message does not name the zone it rendered in: %q", msg)
+	}
+	if !strings.Contains(msg, "19 Sep") {
+		t.Errorf("message kept the server-zone DATE: %q (want 19 Sep in EDT)", msg)
+	}
+	// The instant must still travel structurally for the dialog to format itself.
+	if e.When == nil || !e.When.Equal(when) {
+		t.Error("When must still carry the instant for the UI to render")
+	}
+}
+
+// A nil zone must not panic or silently invent one; it falls back to a labelled UTC.
+func TestAlreadyFailedErrorNilZoneIsLabelledUTC(t *testing.T) {
+	when := time.Date(2026, 9, 20, 2, 50, 0, 0, time.UTC)
+	e := &AlreadyFailedError{Revision: 1, When: &when, Hostname: "h", Loc: nil}
+	if msg := e.Error(); !strings.Contains(msg, "02:50 UTC") {
+		t.Errorf("nil zone should render a labelled UTC time, got %q", msg)
 	}
 }

@@ -146,7 +146,7 @@ func (s *Service) Preflight(ctx context.Context, stackID uuid.UUID, waive Waiver
 		}
 	}
 	if !waive.AlreadyFailed {
-		if f := alreadyFailed(st); f != nil {
+		if f := alreadyFailed(st, s.store.DisplayLocation(ctx)); f != nil {
 			return map[string]any{
 				"error":       f.Error(),
 				"code":        "revision_already_failed",
@@ -188,7 +188,7 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waiv
 		// Whole-project deploys only. A rollout narrowed to one service is a different
 		// input from the failed whole-project attempt, so the failure says nothing
 		// about it.
-		if failed := alreadyFailed(st); failed != nil {
+		if failed := alreadyFailed(st, s.store.DisplayLocation(ctx)); failed != nil {
 			return st, "", failed
 		}
 	}

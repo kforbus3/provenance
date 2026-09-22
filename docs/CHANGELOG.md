@@ -5,6 +5,54 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.7 — 2026-09-22
+
+### Times written by the server disagreed with times rendered by the browser
+
+On the **Behavior** page, the time named inside each event did not match the timestamp
+stamped beside it. Both came from the same instant. The difference was who formatted it.
+
+Every timestamp in the UI goes through one formatter, which applies the configured display
+timezone — or the browser's, when none is set. A time baked into a sentence on the server
+bypasses that and comes out in the server's own zone, which is **UTC** in the shipped
+image. With a display timezone of `America/New_York` the two readings sat four hours apart
+on the same card.
+
+Three places did this. None of them were wrong about *what* happened, only about when it
+looked like it happened:
+
+- **Behavior page.** `"connected at 14:30, an hour outside their usual pattern"` sat beside
+  a stamp reading 10:30. The sentence no longer names a time at all: the event already
+  carries the instant, the page already renders it, and the assistant receives it too.
+  Nothing is lost by saying it once, correctly.
+- **Session recording player.** The page title is built on the server, so it cannot defer
+  to the UI formatter. It now renders in the configured display zone **and prints that
+  zone**, so it agrees with the same session's row in the Sessions list.
+- **"Revision already failed" deploy refusal.** This one kept its time, because the
+  message reaches surfaces that render no structured field — a toast, a log line, an Ask
+  answer — and "already failed" is not actionable without a when. It is now rendered in the
+  configured display zone and names it. Previously it could be wrong by a whole **day**:
+  02:50 UTC on the 20th is 22:50 on the *19th* in New York.
+
+Where a time is a label beside a structured timestamp, the server no longer writes it.
+Where the server must produce the text itself, it renders in the configured zone and prints
+the zone — because the fallbacks differ, and an unlabelled time is a guess: with no zone
+configured the browser uses the viewer's and the server uses its own.
+
+Detection was never affected, and there is now a test saying so. The off-hours baseline and
+the check against it are both derived from the same timestamps, so moving them to another
+zone rotates every hour bucket uniformly and cannot change which hours count as usual. The
+findings were right; only their labels were wrong.
+
+The timezone resolution had been copied into three packages. There is now one exported
+resolver on the store, and the scheduler's private copy delegates to it.
+
+### Deploy notes
+
+Nothing to do. No migrations and no configuration additions.
+
+---
+
 ## v2.0.6 — 2026-09-22
 
 ### Switching a host's overlay transport could not succeed

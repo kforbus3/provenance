@@ -176,10 +176,28 @@ func (h *handler) playerRecording(w http.ResponseWriter, r *http.Request) {
 	sess, _ := h.d.Store.GetSSHSession(r.Context(), id)
 	title := "Provenance session"
 	if sess != nil {
-		title = sess.Username + "@" + sess.Hostname + " · " + sess.StartedAt.Format("2006-01-02 15:04:05")
+		title = playerTitle(sess.Username, sess.Hostname, sess.StartedAt,
+			h.d.Store.DisplayLocation(r.Context()))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, renderPlayerHTML(title, string(cast)))
+}
+
+// playerTitle names a recording for the player page's <title>.
+//
+// The server renders this text itself, so it cannot defer to the UI formatter that every
+// other timestamp in the product goes through. Two rules follow, and the title broke both:
+// render in the operator's configured display zone, and PRINT that zone. Unlabelled and
+// in the server's own zone (UTC in the shipped image), this read four hours away from the
+// same session's row in the Sessions list, which the browser renders in the viewer's zone.
+//
+// Printing the zone matters even when they agree, because the fallbacks differ: with no
+// timezone configured the UI uses the BROWSER's zone and DisplayLocation the SERVER's.
+func playerTitle(username, hostname string, startedAt time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return username + "@" + hostname + " · " + startedAt.In(loc).Format("2006-01-02 15:04:05 MST")
 }
 
 // deleteRecording removes a session's recording (DB row + file).

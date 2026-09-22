@@ -96,8 +96,17 @@ func analyzeUser(sessions []Session, now, cutoff time.Time) []Anomaly {
 		if !hours[s.StartedAt.Hour()] {
 			out = append(out, Anomaly{
 				UserID: u.UserID, Username: u.Username, Type: "off_hours", Severity: "warning",
-				Title:  "Access at an unusual hour",
-				Detail: fmt.Sprintf("%s connected at %s, an hour outside their usual pattern.", u.Username, s.StartedAt.Format("15:04")),
+				Title: "Access at an unusual hour",
+				// No wall-clock time in this sentence. It used to read "connected at
+				// 14:30", formatted here — while the timestamp rendered beside it on the
+				// Behavior page goes through the UI's formatter, which applies the
+				// configured display timezone (or the browser's). The two disagreed by
+				// the offset between the server and the viewer, from the SAME instant.
+				// Formatting here in the configured zone would still not fix it: when no
+				// zone is configured the UI falls back to the BROWSER's local zone and
+				// the server to its own. The timestamp is the caller's to render; When
+				// carries it, and the assistant receives it too.
+				Detail: fmt.Sprintf("%s connected at an hour outside their usual pattern.", u.Username),
 				Host:   s.Hostname, When: s.StartedAt,
 			})
 		}
