@@ -7,7 +7,7 @@
 # repo-root docs/ (scripts/build-help.mjs), so docs/ must be present in the image
 # — hence the repo-root context and the `COPY docs/` below.
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
