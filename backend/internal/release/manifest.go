@@ -257,3 +257,45 @@ func sign(n int) int {
 		return 0
 	}
 }
+
+// BaselineConfigAdditions are the settings every bundle must carry, because the
+// backend it installs refuses to start without them.
+//
+// Config additions are applied PER BUNDLE, not cumulatively: the updater merges the
+// manifest of the release being installed and nothing else. So a setting introduced
+// as a requirement in one release has to be re-declared by every release after it,
+// or a deployment that skips the intervening version never receives it.
+//
+// That is not hypothetical. PROV_RECORDING_KEY became required in 2.0.1, whose bundle
+// generated one. minFromVersion is 0.0.0, so a 2.0.0 or 1.9.x deployment may upgrade
+// straight to a later release — and if that release had not re-declared the key, the
+// upgrade would have installed a backend that refuses to boot, on a deployment that
+// was working a minute earlier.
+//
+// Keeping the list here rather than in each release command means the next person to
+// cut a release cannot omit it by not knowing about it. Anything added to
+// Config.validate()'s production requirements belongs here too.
+var BaselineConfigAdditions = []ConfigAddition{
+	{
+		Key:      "PROV_RECORDING_KEY",
+		Generate: "secret",
+		Comment:  "encrypts session recordings at rest; required since 2.0.1",
+	},
+}
+
+// MergeBaselineConfigAdditions returns extra plus every baseline addition it does not
+// already declare, so an explicit --config-secret for the same key wins and is not
+// duplicated.
+func MergeBaselineConfigAdditions(extra []ConfigAddition) []ConfigAddition {
+	seen := map[string]bool{}
+	for _, a := range extra {
+		seen[a.Key] = true
+	}
+	out := append([]ConfigAddition(nil), extra...)
+	for _, a := range BaselineConfigAdditions {
+		if !seen[a.Key] {
+			out = append(out, a)
+		}
+	}
+	return out
+}

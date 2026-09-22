@@ -134,6 +134,11 @@ bundle: ## Build + sign a .provup upgrade bundle (needs BUNDLE_VERSION, BUNDLE_F
 	@#   BUNDLE_CONFIG_ADDS="PROV_Z=value"        literal value, if absent
 	@#
 	@# Both are additive and never overwrite a value an operator has set.
+	@#
+	@# You do not need to pass a setting that a PREVIOUS release made required:
+	@# release.BaselineConfigAdditions is merged into every manifest, because
+	@# additions apply per bundle rather than cumulatively and minFromVersion is
+	@# 0.0.0 -- a deployment may skip the release that introduced the requirement.
 	@test -f $(BUNDLE_KEY_ABS) || (echo "missing $(BUNDLE_KEY_ABS) — run: docker run --rm -v \$$PWD/backend:/app -w /app golang:1.26 go run ./cmd/provctl release keygen"; exit 1)
 	PROV_VERSION=$(BUNDLE_VERSION) DOCKER_DEFAULT_PLATFORM=$(BUNDLE_PLATFORM) $(COMPOSE_SINGLE) build $(subst $(comma), ,$(BUNDLE_COMPONENTS))
 	@for c in $(subst $(comma), ,$(BUNDLE_COMPONENTS)); do \

@@ -250,7 +250,7 @@ func releaseBuild(args []string) error {
 		Lineage:        release.Lineage,
 		MinFromVersion: *from, Components: splitCSV(*components), Images: images,
 		Migrations: splitCSV(*migrations), MigrationCompatibility: compat, Notes: *notes,
-		ConfigAdditions: configAdditions,
+		ConfigAdditions: release.MergeBaselineConfigAdditions(configAdditions),
 	}
 	if err := m.Validate(); err != nil {
 		return err

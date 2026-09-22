@@ -5,6 +5,43 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.2 — 2026-09-21
+
+**Each host now says what its access path gives up.** Provenance offers several ways to
+make a host reachable — a per-session certificate over the overlay, `skipWireGuard` for
+a host on the jump host's LAN, a vaulted password for a box that cannot trust the CA —
+and they are not equally strong. Nothing showed an operator which one they had; the
+hosts looked identical in the list. That is how a convenient onboarding route becomes
+the production security posture without anybody deciding it should be.
+
+Every host record carries a derived `accessPosture`: its tier, whether the credential
+is minted per session, whether ending access means revoking a certificate or rotating a
+shared secret, and whether the host can be confined to the overlay. Weaker tiers carry
+a plain-words list of what they gave up. It is derived on read, never stored, so it
+cannot describe how a host used to be configured — and evidence packs now report the
+fleet by tier, because a pack listing only session counts implies every session was
+equally well protected. The full matrix is in the security guide.
+
+Two things worth knowing: **Windows hosts are always vaulted** (there is no SSH
+certificate for a desktop session, and a Windows host row still carries
+`authMethod: prov_cert` because that is the column default), and a test reads the
+store's own list of accepted auth methods so the matrix cannot go quietly stale.
+
+**Menu entries for subsystems you do not have are gone.** Imaging needs the
+builder-runner sidecar and the Logs page needs an Aldgate collector; `config.go`
+already said "Empty disables the Logs page", and it disabled the page while leaving the
+link. Only deployment-level absence hides an entry — Databases and Kubernetes stay
+visible when empty, because hiding them would remove the only route to registering the
+first one.
+
+**Every bundle now carries the settings its backend requires.** Config additions apply
+per bundle rather than cumulatively, and `minFromVersion` is `0.0.0`, so a 2.0.0
+deployment could have upgraded straight past 2.0.1 — the release that made
+`PROV_RECORDING_KEY` required and generated one — and installed a backend that refused
+to boot. A baseline list is merged into every manifest, and a test fails if a new
+production requirement is not classified as generated, operator-supplied, or
+conditional.
+
 ## v2.0.1 — 2026-09-21
 
 Security fixes from an external audit, plus documentation drift found by an external
