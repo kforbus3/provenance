@@ -9,11 +9,11 @@ import (
 )
 
 var (
-	nas    = uuid.New()
-	hypervisor  = uuid.New()
-	guestA = uuid.New()
-	guestB = uuid.New()
-	guestC = uuid.New()
+	nas        = uuid.New()
+	hypervisor = uuid.New()
+	guestA     = uuid.New()
+	guestB     = uuid.New()
+	guestC     = uuid.New()
 )
 
 func edge(dependent uuid.UUID, dependentName string, on uuid.UUID, onName, kind string) store.HostDependencyEdge {

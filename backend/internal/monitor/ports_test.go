@@ -84,13 +84,13 @@ func TestListeningPortsFromNetstat(t *testing.T) {
 // The distinction the whole feature exists for.
 func TestOnlyLoopbackIsUnexposed(t *testing.T) {
 	for addr, want := range map[string]bool{
-		"127.0.0.1":  false,
-		"127.0.0.53": false, // systemd-resolved
-		"::1":        false,
-		"[::1]":      false,
-		"0.0.0.0":    true,
-		"[::]":       true,
-		"*":          true,
+		"127.0.0.1":   false,
+		"127.0.0.53":  false, // systemd-resolved
+		"::1":         false,
+		"[::1]":       false,
+		"0.0.0.0":     true,
+		"[::]":        true,
+		"*":           true,
 		"10.10.0.208": true, // one NIC is still a network
 	} {
 		if got := isExposed(addr); got != want {

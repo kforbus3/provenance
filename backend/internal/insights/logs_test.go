@@ -85,7 +85,7 @@ func TestLogInsightsMatchHostsAndRespectAccess(t *testing.T) {
 	id := uuid.New()
 	hosts := []models.Host{{ID: id, Hostname: "hypervisor.example.com"}}
 	svc.logs = &fakeRates{rates: []logsbroker.HostErrorRate{
-		rate("hypervisor", 120, 167),      // the short name of a host we can see
+		rate("hypervisor", 120, 167), // the short name of a host we can see
 		rate("coreswitch", 300, 200), // a sender with no host record
 	}}
 

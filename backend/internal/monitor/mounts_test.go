@@ -10,7 +10,7 @@ func TestMountServerPerFilesystem(t *testing.T) {
 	cases := map[string]string{
 		"nas:/tank/media":         "nas",
 		"NAS.example.com:/export": "nas.example.com",
-		"10.10.0.9:/tank/vm":       "10.10.0.9",
+		"10.10.0.9:/tank/vm":      "10.10.0.9",
 		"[fd00::1]:/export":       "fd00::1",
 		"//nas/share":             "nas",
 		`\\nas\share`:             "nas",

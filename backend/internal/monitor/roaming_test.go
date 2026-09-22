@@ -21,7 +21,7 @@ import (
 func TestOverlayAddressIsTriedBeforeTheLANAddress(t *testing.T) {
 	h := &models.Host{
 		Hostname:  "laptop-1",
-		Address:   "10.10.0.51",   // where it lived when it was enrolled
+		Address:   "10.10.0.51",  // where it lived when it was enrolled
 		WGAddress: "10.100.0.42", // where it lives wherever it goes
 	}
 
