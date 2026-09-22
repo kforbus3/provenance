@@ -5,6 +5,7 @@ package sftp
 
 import (
 	"archive/tar"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,13 +160,30 @@ func (h *handler) dial(r *http.Request, p *auth.Principal, host *models.Host) (*
 	return nil, lastErr
 }
 
+// detached returns a context for writes that must land even though the request is
+// over: the keep-alive touch during a long transfer, and the completion + audit rows
+// written when it finishes.
+//
+// r.Context() is wrong for all three. A global 60s request timeout is applied to every
+// route, so on any transfer longer than a minute the touch this file exists to perform
+// failed with "context deadline exceeded" -- discarded by a `_` -- and the completion
+// record and audit event at the end failed the same way. A ten-minute download
+// therefore finished with no record that it had happened. A client that disconnects
+// cancels the same context, so this would be wrong even without the timeout.
+//
+// Tenant-scoped, or the write is RLS-denied under multi-tenancy. Same pattern as the
+// RDP handler's finalize path.
+func (h *handler) detached(p *auth.Principal) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(h.d.Auth.TenantScope(context.Background(), p), 20*time.Second)
+}
+
 // sessionToucher returns a throttled function that bumps the session's
 // last_seen_at (idle-clock), at most once per minute. A single transfer is ONE
 // HTTP request, so RequireAuth touches last_seen_at only at the start; a
 // multi-GB up/download that outlasts SessionIdleTTL would otherwise be reaped
 // mid-flight and its connection force-closed. Keep the session warm while data
 // is actually moving. Baseline at now(): RequireAuth just touched at the start.
-func (h *handler) sessionToucher(r *http.Request, sessionID uuid.UUID) func() {
+func (h *handler) sessionToucher(p *auth.Principal) func() {
 	const touchInterval = time.Minute
 	last := time.Now()
 	return func() {
@@ -177,7 +195,12 @@ func (h *handler) sessionToucher(r *http.Request, sessionID uuid.UUID) func() {
 			return
 		}
 		last = now
-		_ = h.d.Store.TouchSession(r.Context(), sessionID)
+		ctx, cancel := h.detached(p)
+		defer cancel()
+		if err := h.d.Store.TouchSession(ctx, p.SessionID); err != nil {
+			h.d.Log.Warn("sftp: could not keep the session alive during a transfer",
+				"session", p.SessionID, "err", err)
+		}
 	}
 }
 
@@ -267,9 +290,9 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Length")
 	}
-	n, _ := io.Copy(w, &touchReader{r: f, touch: h.sessionToucher(r, p.SessionID)})
-	h.finishTransfer(r, rec, n)
-	h.audit(r, p, "sftp.download", host.ID, remote, n)
+	n, _ := io.Copy(w, &touchReader{r: f, touch: h.sessionToucher(p)})
+	h.finishTransfer(p, rec, n)
+	h.audit(p, "sftp.download", host.ID, remote, n)
 }
 
 // downloadDir streams a remote directory as a tar archive (recursive). Files are
@@ -292,7 +315,7 @@ func (h *handler) downloadDir(w http.ResponseWriter, r *http.Request) {
 
 	tw := tar.NewWriter(w)
 	defer tw.Close()
-	touch := h.sessionToucher(r, p.SessionID)
+	touch := h.sessionToucher(p)
 	var total int64
 	walker := client.Walk(root)
 	for walker.Step() {
@@ -320,7 +343,7 @@ func (h *handler) downloadDir(w http.ResponseWriter, r *http.Request) {
 		_ = f.Close()
 		total += n
 	}
-	h.audit(r, p, "sftp.download_dir", host.ID, root, total)
+	h.audit(p, "sftp.download_dir", host.ID, root, total)
 }
 
 func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +393,7 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 	if limit := h.d.Cfg.MaxUploadBytes; limit > 0 {
 		body = http.MaxBytesReader(w, r.Body, limit)
 	}
-	n, cerr := io.Copy(dst, &touchReader{r: body, touch: h.sessionToucher(r, p.SessionID)})
+	n, cerr := io.Copy(dst, &touchReader{r: body, touch: h.sessionToucher(p)})
 	if cerr != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(cerr, &mbe) {
@@ -402,8 +425,8 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 		h.d.Log.Warn("sftp upload: remote file close slow; responding anyway",
 			"host", host.Hostname, "remote", remote, "bytes", n)
 	}
-	h.finishTransfer(r, rec, n)
-	h.audit(r, p, "sftp.upload", host.ID, remote, n)
+	h.finishTransfer(p, rec, n)
+	h.audit(p, "sftp.upload", host.ID, remote, n)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": remote, "size": n})
 }
 
@@ -457,7 +480,7 @@ func (h *handler) readText(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusUnsupportedMediaType, "file appears to be binary, not text")
 		return
 	}
-	h.audit(r, p, "sftp.read", host.ID, remote, int64(len(data)))
+	h.audit(p, "sftp.read", host.ID, remote, int64(len(data)))
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": remote, "content": string(data), "size": len(data)})
 }
 
@@ -524,8 +547,8 @@ func (h *handler) writeText(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = client.Chmod(rq.Path, mode) // best-effort: keep original permissions
 
-	h.finishTransfer(r, mustRecord(h, r, p, host, rq.Path), int64(len(rq.Content)))
-	h.audit(r, p, "sftp.edit", host.ID, rq.Path, int64(len(rq.Content)))
+	h.finishTransfer(p, mustRecord(h, r, p, host, rq.Path), int64(len(rq.Content)))
+	h.audit(p, "sftp.edit", host.ID, rq.Path, int64(len(rq.Content)))
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": rq.Path, "size": len(rq.Content), "backup": backupPath})
 }
 
@@ -594,19 +617,32 @@ func (h *handler) transfers(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"transfers": list})
 }
 
-func (h *handler) finishTransfer(r *http.Request, rec *store.SFTPTransfer, n int64) {
+func (h *handler) finishTransfer(p *auth.Principal, rec *store.SFTPTransfer, n int64) {
 	if rec == nil {
 		return
 	}
-	_ = h.d.Store.CompleteSFTPTransfer(r.Context(), rec.ID, n, "completed")
+	ctx, cancel := h.detached(p)
+	defer cancel()
+	if err := h.d.Store.CompleteSFTPTransfer(ctx, rec.ID, n, "completed"); err != nil {
+		h.d.Log.Error("sftp: transfer completed but its record was not updated",
+			"transfer", rec.ID, "bytes", n, "err", err)
+	}
 }
 
-func (h *handler) audit(r *http.Request, p *auth.Principal, action string, hostID uuid.UUID, remote string, n int64) {
-	_, _ = h.d.Store.AppendAudit(r.Context(), models.AuditEvent{
+func (h *handler) audit(p *auth.Principal, action string, hostID uuid.UUID, remote string, n int64) {
+	ctx, cancel := h.detached(p)
+	defer cancel()
+	if _, err := h.d.Store.AppendAudit(ctx, models.AuditEvent{
 		ActorID: &p.UserID, ActorName: p.Username, Action: action,
 		TargetKind: "host", TargetID: hostID.String(),
 		Detail: map[string]any{"path": remote, "bytes": n},
-	})
+	}); err != nil {
+		// A file moved off a managed host with no record of it. The chain cannot show
+		// this as a gap -- the next row chains from the last one that succeeded -- so
+		// the log is the only place it can surface.
+		h.d.Log.Error("sftp: transfer happened but was not audited",
+			"action", action, "host", hostID, "path", remote, "bytes", n, "err", err)
+	}
 }
 
 func dedupe(in []string) []string {

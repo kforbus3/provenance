@@ -513,8 +513,25 @@ func (s *Server) krlLoop(ctx context.Context) {
 		if !krl.Available() {
 			return
 		}
-		caKeys, _ := s.Store.ListActiveCAPublicKeys(ctx, "user")
-		serials, _ := s.Store.RevokedSerials(ctx)
+		// A KRL built from a FAILED query is the dangerous case, not an obvious one.
+		// RevokedSerials returns (nil, err); ignoring the error left serials nil, and
+		// krl.Build is perfectly happy to produce a valid EMPTY revocation list, which
+		// then went out to every host — erasing fleet-wide revocation enforcement,
+		// including the certificate revoked a moment earlier. Silently.
+		//
+		// The verification half of this loop is careful (a host counts as pushed only
+		// on a confirmed OK, and lastHash does not advance on partial failure); the
+		// loading half threw its errors away.
+		caKeys, err := s.Store.ListActiveCAPublicKeys(ctx, "user")
+		if err != nil {
+			s.Jobs.Record("krl-distribution", fmt.Errorf("read CA public keys: %w", err))
+			return
+		}
+		serials, err := s.Store.RevokedSerials(ctx)
+		if err != nil {
+			s.Jobs.Record("krl-distribution", fmt.Errorf("read revoked serials: %w", err))
+			return
+		}
 		krlBytes, err := krl.Build(caKeys, serials)
 		if err != nil {
 			s.Jobs.Record("krl-distribution", err)
@@ -565,8 +582,15 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 	}
 	// Drop KRL entries for certificates that have already expired (keeps it small).
 	_, _ = s.Store.PruneExpiredRevocations(ctx, time.Now().Add(-s.Cfg.UserCertTTL))
-	caKeys, _ := s.Store.ListActiveCAPublicKeys(ctx, "user")
-	serials, _ := s.Store.RevokedSerials(ctx)
+	caKeys, err := s.Store.ListActiveCAPublicKeys(ctx, "user")
+	if err != nil {
+		return 0, 0, fmt.Errorf("read CA public keys: %w", err)
+	}
+	// See krlLoop: a nil serial list from a failed query builds a valid EMPTY KRL.
+	serials, err := s.Store.RevokedSerials(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read revoked serials: %w", err)
+	}
 	krlBytes, err := krl.Build(caKeys, serials)
 	if err != nil {
 		return 0, 0, err
@@ -574,7 +598,13 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 	// Reach every enrolled host, not just the first page — a revoked cert must be
 	// rejected fleet-wide. Push in parallel with a bounded pool so revocation
 	// propagates promptly even on a large fleet without stampeding the jump host.
-	hosts, _ := s.Store.AllHosts(ctx)
+	// Ignoring this error reported pushed=0 failed=0 err=nil — a complete success over
+	// no hosts — which let the caller advance lastHash and suppress the retry for up to
+	// an hour, with the fleet still holding the previous list.
+	hosts, err := s.Store.AllHosts(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list hosts: %w", err)
+	}
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
 	cmd := "echo " + b64 + " | base64 -d | sudo tee /etc/ssh/prov_krl >/dev/null && sudo chmod 644 /etc/ssh/prov_krl && echo OK"
 	// Kept small: each push opens a fresh SSH connection to the jump host, so a

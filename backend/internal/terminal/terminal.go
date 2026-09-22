@@ -426,6 +426,9 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 	// WS-connect auth already touched.
 	const touchInterval = time.Minute
 	lastTouchNano := time.Now().UnixNano()
+	// Survives the request context, scoped to the caller's tenant so the write is not
+	// RLS-denied under multi-tenancy.
+	touchCtx := h.d.Auth.TenantScope(context.Background(), p)
 	touchSession := func() {
 		if h.d.Store == nil {
 			return
@@ -438,7 +441,23 @@ func (h *handler) run(ctx context.Context, ws WSTransport, p *auth.Principal, ho
 		if !atomic.CompareAndSwapInt64(&lastTouchNano, prev, now) {
 			return // another goroutine claimed this window
 		}
-		_ = h.d.Store.TouchSession(ctx, p.SessionID)
+		// Detached, not the request context. This touch exists to stop an active but
+		// quiet terminal being idle-reaped -- and the request context is dead long
+		// before it matters: a global 60s request timeout is applied to every route,
+		// and the WebSocket is hijacked so the connection outlives it. Every touch
+		// after the first minute therefore failed with "context deadline exceeded",
+		// discarded by the `_`, and a terminal with no other HTTP traffic was
+		// force-closed at the idle TTL while somebody was typing in it.
+		//
+		// A client disconnect cancels the request context too, so this would be wrong
+		// even without the global timeout. Same pattern as buildCommandGuard's dctx
+		// and the RDP handler's finalize path.
+		tctx, cancel := context.WithTimeout(touchCtx, 10*time.Second)
+		defer cancel()
+		if err := h.d.Store.TouchSession(tctx, p.SessionID); err != nil {
+			h.d.Log.Warn("terminal: could not keep the session alive",
+				"session", p.SessionID, "err", err)
+		}
 	}
 
 	// SSH stdout/stderr -> WebSocket (and recording).

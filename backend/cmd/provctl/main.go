@@ -70,6 +70,40 @@ Reads PROV_DATABASE_URL (and PROV_CA_PASSPHRASE for rotate-ca) from the environm
 `)
 }
 
+// requireAuditKey refuses to touch a keyed audit chain without the key that keys it.
+//
+// AppendAudit falls back to keyless SHA-256 (hash_alg=1) when no key is configured,
+// and every row names its own algorithm — so a CLI run without PROV_AUDIT_HMAC_KEY in
+// its environment appends a row the verifier re-derives keylessly. That row verifies,
+// and permanently marks the chain's tail as not tamper-evident from its sequence on.
+//
+// This happened. On one production chain sequence 3389 is exactly that: a single
+// keyless `recovery.create_admin`, written by the CLI between two keyed rows from the
+// backend, because the process had no key in its environment. The same command run
+// later with the key produced a keyed row. One missing variable, one permanently
+// weakened chain, and the only signal at the time was a line on stderr that nobody
+// was reading.
+//
+// Verification needs the key just as badly, in the other direction: without it, every
+// keyed row re-derives wrongly and the scan reports a chain broken from its first
+// keyed event — a false alarm that looks exactly like a catastrophe.
+func requireAuditKey(ctx context.Context, st *store.Store, what string) error {
+	keyed, err := st.AuditChainIsKeyed(ctx)
+	if err != nil {
+		return fmt.Errorf("check whether the audit chain is keyed: %w", err)
+	}
+	if !keyed || len(os.Getenv("PROV_AUDIT_HMAC_KEY")) > 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing to %s: this deployment's audit chain is keyed, but "+
+		"PROV_AUDIT_HMAC_KEY is not set in this process's environment.\n"+
+		"Appending without it writes a keyless row that permanently marks the chain's "+
+		"tail as not tamper-evident; verifying without it reports every keyed row as "+
+		"broken.\nPass the same value the backend uses, e.g.\n"+
+		"  docker inspect provenance-backend-1 --format "+
+		"'{{range .Config.Env}}{{println .}}{{end}}' | grep PROV_AUDIT_HMAC_KEY", what)
+}
+
 func run(cmd string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -147,6 +181,10 @@ func run(cmd string, args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: provctl create-admin <username> <password> [email]")
 		}
+		// Checked before the account is created, so a refusal leaves nothing behind.
+		if err := requireAuditKey(ctx, st, "create an administrator"); err != nil {
+			return err
+		}
 		email := ""
 		if len(args) >= 3 {
 			email = args[2]
@@ -176,6 +214,10 @@ func run(cmd string, args []string) error {
 	case "reset-mfa":
 		if len(args) < 1 {
 			return fmt.Errorf("usage: provctl reset-mfa <username>")
+		}
+		// Also appends a recovery audit row; same reasoning as create-admin.
+		if err := requireAuditKey(ctx, st, "reset a user's MFA"); err != nil {
+			return err
 		}
 		u, err := st.GetUserByUsername(ctx, args[0])
 		if err != nil {
@@ -265,6 +307,11 @@ func run(cmd string, args []string) error {
 		}
 
 	case "audit-scan":
+		// Without the key every keyed row re-derives wrongly, so the scan would report
+		// the chain broken from its first keyed event — a false catastrophe.
+		if err := requireAuditKey(ctx, st, "scan the audit chain"); err != nil {
+			return err
+		}
 		verbose := false
 		for _, a := range args {
 			if a == "--verbose" || a == "-v" {

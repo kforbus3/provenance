@@ -101,6 +101,26 @@ func TestDeletingAUserDoesNotBreakTheAuditChain(t *testing.T) {
 			"here on reports the log as possibly altered", brokenAt)
 	}
 
+	// The actor_id itself must survive. This is the column the foreign key used to
+	// null, and the chain hashes it -- so "the chain still verifies" and "the rows are
+	// unchanged" are the same statement here, but only this assertion says which rows
+	// and which column. Without it the test would still pass on a future change that
+	// dropped attribution in some way the hash does not cover.
+	var rows0, withActor int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*), count(actor_id) FROM audit_events WHERE actor_name = $1`,
+		u.Username).Scan(&rows0, &withActor); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if rows0 == 0 {
+		t.Fatalf("no audit rows remain for %q at all", u.Username)
+	}
+	if withActor != rows0 {
+		t.Errorf("%d of %d audit rows for the deleted user lost their actor_id. Deleting an "+
+			"account must not rewrite what that account did: the history is evidence about "+
+			"the person, and it outlives their access.", rows0-withActor, rows0)
+	}
+
 	// And the row still says who did it, which is the whole reason actor_name is
 	// stored beside actor_id.
 	rows, err := s.ListAudit(ctx, AuditFilter{Limit: 50})

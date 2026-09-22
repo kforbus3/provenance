@@ -135,6 +135,26 @@ func auditExpectedHash(key []byte, prev string, alg int16, seq int64, createdAt 
 	return auditMAC(alg, key, prev, canonical)
 }
 
+// AuditChainIsKeyed reports whether this chain already contains a keyed row.
+//
+// It exists so a process can refuse to append a KEYLESS row to a chain that has
+// moved past that. Each row names its own algorithm and the verifier re-derives
+// hash_alg=1 rows with plain SHA-256, so a keyless row after keying verifies -- and
+// permanently marks the tail as not tamper-evident from that sequence on.
+//
+// That is not a hypothetical either. On one production chain, sequence 3389 is a
+// single keyless row: `create-admin` run from the CLI without PROV_AUDIT_HMAC_KEY in
+// its environment, between two keyed rows written by the backend. The same command
+// run later WITH the key in the environment produced a keyed row. One missing
+// variable, one permanently weakened chain, and the only signal at the time was a
+// warning on the CLI's stderr.
+func (s *Store) AuditChainIsKeyed(ctx context.Context) (bool, error) {
+	var keyed bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM audit_events WHERE hash_alg = $1)`, auditAlgHMAC).Scan(&keyed)
+	return keyed, err
+}
+
 // AppendAudit writes a tamper-evident audit event. Each event's hash chains to the
 // previous event's hash. With a configured AuditHMACKey the hash is
 // HMAC-SHA256(key, prev_hash || canonical(event)) over a canonical record that binds
