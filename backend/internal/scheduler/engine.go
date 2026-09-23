@@ -26,7 +26,16 @@ import (
 // scanFanoutLimit bounds how many host scans a scheduled fire runs at once. A
 // schedule targeting a large group would otherwise launch one SSH scan per host
 // simultaneously through the single jump host, a resource storm on both ends.
-const scanFanoutLimit = 16
+//
+// It must stay BELOW the jump host's sshd MaxStartups start value (OpenSSH default
+// 10:30:100): from the 10th connection still mid-handshake, sshd drops a share of
+// new ones. At 16, a daily scan of a 14-host group had six connections dropped at
+// 01:00 on 2026-09-23 and lost one host's scan outright. The rest of Provenance keeps
+// dialling the jump host while a scan runs, so this leaves it headroom rather than
+// sitting at the edge; 8 matches the cap on manually started scans. The jump dial
+// also retries a dropped connection (sshgw.dialJump) -- that covers a burst from
+// elsewhere, this keeps the scheduler from being the burst.
+const scanFanoutLimit = 8
 
 // Engine ticks on an interval and fires due schedules.
 type Engine struct {
