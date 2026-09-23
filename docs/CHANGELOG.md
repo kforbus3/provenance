@@ -5,6 +5,45 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.11 — 2026-09-23
+
+A scheduled vulnerability scan lost a host because the jump host turned its connection away,
+and nothing retried it.
+
+### The scheduler was the burst the jump host throttles
+
+Every connection Provenance makes to a managed host goes through the one jump host, and
+OpenSSH's `sshd` refuses new connections once too many are still mid-handshake
+(`MaxStartups`, default `10:30:100`: from the 10th, it drops a growing share). A scheduled
+scan of a host group started **up to 16 scans at once**. On the first nightly run of the
+daily scan of a 14-host group, the jump host logged six connections dropped "past
+MaxStartups", and one host's scan failed outright:
+
+```
+collect packages: dial host: dial jump host: ssh: handshake failed: ... connection reset by peer
+```
+
+Scheduled scans now run **at most 8 at a time**, the same cap manually started scans have
+always had, which leaves the jump host headroom for everything else Provenance dials while
+a scan runs. A test fails if the limit is raised to the jump host's `MaxStartups` start.
+
+### A dropped connection is retried
+
+Every jump-host connection — scans, terminals, playbooks, WinRM tunnels — now retries a
+connection the jump host dropped before the SSH handshake, up to three times over about
+three seconds, jittered so connections dropped together do not return together.
+
+Only that case is retried. A refused certificate, a host-key mismatch or an unreachable
+jump host is an answer rather than a throttle, and still fails at once. The tests reproduce
+the real arrangement: a listener that drops connections the way `sshd` does past
+`MaxStartups`, in front of a real SSH server the retry then authenticates against.
+
+### Upgrading
+
+Nothing to do.
+
+---
+
 ## v2.0.10 — 2026-09-22
 
 Two defects in 2.0.9's revocation fix, found by checking the fleet afterwards instead of

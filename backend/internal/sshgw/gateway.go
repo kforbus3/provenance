@@ -115,7 +115,7 @@ func (g *Gateway) dialWithSigners(ctx context.Context, jumpSigner, hostSigner ss
 		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
 	})
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, jumpCfg)
+	jumpClient, err := g.dialJump(ctx, jumpCfg)
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)
 	}
@@ -280,7 +280,7 @@ func (g *Gateway) DialPasswordViaJump(ctx context.Context, sessionID, host strin
 	if signer == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
+	jumpClient, err := g.dialJump(ctx, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: g.hostKeyCallback(),
@@ -431,7 +431,7 @@ func (g *Gateway) DialAuthViaJump(ctx context.Context, sessionID, host string, p
 	if jumpSigner == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
+	jumpClient, err := g.dialJump(ctx, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: g.hostKeyCallback(),
@@ -474,7 +474,7 @@ func (g *Gateway) DialRawViaJump(ctx context.Context, sessionID, host string, po
 	if jumpSigner == nil {
 		return nil, nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
+	jumpClient, err := g.dialJump(ctx, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: g.hostKeyCallback(),
@@ -504,7 +504,7 @@ func (g *Gateway) DialKeyViaJump(ctx context.Context, sessionID, host string, po
 	if jumpSigner == nil {
 		return nil, fmt.Errorf("session credential unavailable")
 	}
-	jumpClient, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
+	jumpClient, err := g.dialJump(ctx, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(jumpSigner)},
 		HostKeyCallback: g.hostKeyCallback(),
@@ -582,7 +582,7 @@ func (g *Gateway) DialJumpWithSigner(ctx context.Context, signer ssh.Signer) (*s
 	if signer == nil {
 		return nil, fmt.Errorf("nil signer")
 	}
-	client, err := ssh.Dial("tcp", g.cfg.JumpHost, g.pin(&ssh.ClientConfig{
+	client, err := g.dialJump(ctx, g.pin(&ssh.ClientConfig{
 		User:            g.cfg.JumpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: g.hostKeyCallback(),
