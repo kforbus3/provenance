@@ -57,7 +57,9 @@ const (
 	minSweepGap = 2 * time.Second
 
 	// defaultMonitorConcurrency is the worker-pool size when unconfigured. Each
-	// probe opens one pre-auth SSH connection to the jump host; OpenSSH's default
+	// probe opens one pre-auth SSH connection to the jump host -- one, however many
+	// addresses it races, because they share it (see probe; until v2.0.12 each
+	// address opened its own, which is what made this arithmetic wrong); OpenSSH's default
 	// MaxStartups is 10:30:100 (random pre-auth drops begin at 10 concurrent), so
 	// 6 leaves headroom for interactive terminals and KRL pushes that also transit
 	// the jump host.
@@ -627,16 +629,15 @@ func probesWithoutLogin(h *models.Host) bool {
 // password now reads as online, because it IS online. That is what this field
 // claims, and the terminal, a command run or a playbook will say otherwise the
 // moment anyone actually uses the credential.
-func (m *Monitor) bannerProbe(ctx context.Context, h *models.Host, addr string) (int, error) {
+//
+// It runs over the probe's jump connection rather than opening its own: see probe.
+func bannerProbe(ctx context.Context, jump *ssh.Client, h *models.Host, addr string) (int, error) {
 	start := time.Now()
-	tunnel, jump, err := m.gw.DialSystemRawViaJump(ctx, h.ID, addr, h.SSHPort)
+	tunnel, _, err := sshgw.TunnelOverJump(ctx, jump, addr, h.SSHPort)
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		_ = tunnel.Close()
-		_ = jump.Close()
-	}()
+	defer func() { _ = tunnel.Close() }()
 	// The server speaks first in SSH, so there is nothing to send. A short
 	// deadline: a device that completes the handshake and then says nothing is
 	// not healthy, and must not hold a worker slot waiting.
@@ -683,13 +684,37 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	// Racing them costs at most two extra dials for a host that is up, which is
 	// the cheap case, and turns the expensive case from the SUM of the timeouts
 	// into the MAX of them.
+	//
+	// The race runs inside ONE jump-host connection. It used to open a jump
+	// connection per address, so each probe cost two or three pre-auth handshakes
+	// at the jump host, and six probes at a time put up to twelve in flight
+	// against an sshd that starts refusing at ten (MaxStartups 10:30:100). On
+	// 2026-09-24 the jump host was dropping about forty connections an hour, all
+	// of them the monitor's, every one inside a 30-second sweep. Over a shared
+	// connection an extra address costs a channel, not a handshake -- and the
+	// bare hostname the jump host cannot resolve costs nothing but a refusal.
+	//
+	// The jump hop presents the same system certificate every path already used
+	// for it; only the host hop differs between a CA host and a vaulted one.
 	candidates := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
 	var conn *sshgw.Conn
 	var dialErr error
 	var usedAddr string
 	// Tracked apart from conn because a banner probe succeeds without one.
 	reached := false
-	{
+	jump, jerr := m.gw.DialJumpWithSigner(ctx, signer)
+	if jerr != nil {
+		dialErr = jerr
+	} else {
+		// Closed when the probe returns, after the chosen session (deferred later,
+		// so closed first). Also closed if the probe's deadline passes first: that
+		// is what bounds a host that accepts the tunnel and then stalls its SSH
+		// handshake, which no per-dial timeout covers.
+		defer func() { _ = jump.Close() }()
+		stop := context.AfterFunc(ctx, func() { _ = jump.Close() })
+		defer stop()
+	}
+	if jerr == nil {
 		type result = probeResult
 		// Cancelled as soon as one succeeds, so the losing dials stop rather than
 		// running on in the background holding jump-host slots.
@@ -705,13 +730,13 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 				case probesWithoutLogin(h):
 					// Liveness without a login; see bannerProbe. No connection to
 					// hand back, because there is nothing this probe would run.
-					lat, berr := m.bannerProbe(dctx, h, addr)
+					lat, berr := bannerProbe(dctx, jump, h, addr)
 					results <- result{nil, addr, lat, berr}
 					return
 				case inj != nil:
-					c, err = m.gw.DialSystemAuthViaJump(dctx, h.ID, addr, h.SSHPort, loginUser, inj.Auth)
+					c, err = m.gw.DialOverJump(dctx, jump, addr, h.SSHPort, loginUser, inj.Auth)
 				default:
-					c, err = m.gw.DialWithSigner(dctx, signer, addr, h.SSHPort, loginUser)
+					c, err = m.gw.DialOverJump(dctx, jump, addr, h.SSHPort, loginUser, ssh.PublicKeys(signer))
 				}
 				results <- result{c, addr, int(time.Since(start).Milliseconds()), err}
 			}(addr)
