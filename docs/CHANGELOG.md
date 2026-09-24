@@ -5,6 +5,41 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.12 — 2026-09-24
+
+The host monitor was the steady source of the jump host's dropped connections: about forty an
+hour, every hour, before and after 2.0.11.
+
+### One jump-host connection per probe, however many addresses it races
+
+Every 30 seconds the monitor probes each host, six at a time. A probe tries all of a host's
+addresses at once — overlay address, LAN address, hostname — and takes the first that answers.
+Each of those attempts opened **its own** connection to the jump host, so a host with two
+addresses cost two SSH handshakes and a sweep put up to twelve in flight. The jump host's `sshd`
+starts refusing new connections at ten still mid-handshake (`MaxStartups 10:30:100`). The jump
+host's own log named every connection in the bursts as the monitor's: about **3,500 connections an
+hour**, in bursts of roughly 35 per sweep and up to 15 in a single second.
+
+A probe now opens one jump-host connection and races the addresses as tunnels inside it. An extra
+address costs a channel rather than a handshake, and a hostname the jump host cannot resolve — the
+access point's bare `wap` — costs a refused channel instead of a wasted connection. Peak handshakes
+fall back to the six the concurrency limit was always meant to allow.
+
+Nothing else about a probe changes: the overlay address is still preferred when it answers, and a
+jump host that cannot be reached is still reported as the reason. The shared connection is also
+closed if the probe's deadline passes, which now bounds a host that accepts the tunnel and then
+stalls its SSH handshake.
+
+2.0.11's retry had already absorbed every one of these drops, so no host was reported offline
+because of them. This removes the cause.
+
+### Upgrading
+
+Nothing to do. Reported latency now measures the hop to the host alone rather than including a
+fresh jump-host handshake, so expect it to read lower.
+
+---
+
 ## v2.0.11 — 2026-09-23
 
 A scheduled vulnerability scan lost a host because the jump host turned its connection away,
