@@ -47,10 +47,13 @@ type Schedule struct {
 	LastOutcome string `json:"lastOutcome,omitempty"`
 	// LastRunTotal and LastRunOK count the records the last firing launched and
 	// how many completed -- "16 of 17", which a verdict alone cannot say.
-	LastRunTotal int       `json:"lastRunTotal"`
-	LastRunOK    int       `json:"lastRunOk"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	LastRunTotal int `json:"lastRunTotal"`
+	LastRunOK    int `json:"lastRunOk"`
+	// TargetMissing is computed: the host or group this schedule targets has been
+	// deleted. Deleting it disables the schedule; this says why.
+	TargetMissing bool      `json:"targetMissing"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // ScanSchedulePayload is the Payload for a scan schedule.

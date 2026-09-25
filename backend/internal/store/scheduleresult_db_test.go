@@ -136,3 +136,34 @@ func TestACVERefreshReportsItsResultOnItsOwnFiring(t *testing.T) {
 		t.Fatalf("a failed refresh read %q", got.LastOutcome)
 	}
 }
+
+// The Windows scan schedule for winserv1 outlived its host by two months, still
+// naming it. Deleting a host must stop the schedules aimed at it, and the list must
+// say their target is gone.
+func TestDeletingAHostStopsTheSchedulesAimedAtIt(t *testing.T) {
+	s, _, ctx := scheduleTestStore(t)
+	h, err := s.CreateHost(ctx, HostInput{Hostname: "gone-" + uuid.NewString()[:8]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hid := h.ID
+	sc, err := s.CreateSchedule(ctx, &models.Schedule{Name: "orphan-" + uuid.NewString()[:8], Kind: "vulnscan", Enabled: true,
+		TargetKind: "host", TargetID: &hid, TargetName: h.Hostname,
+		Recurrence: models.Recurrence{Type: "weekly", Weekday: 1, TimeOfDay: "02:30"}, Payload: []byte("{}")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findSchedule(t, s, ctx, sc.ID); !got.Enabled || got.TargetMissing {
+		t.Fatalf("before the delete: enabled=%v missing=%v", got.Enabled, got.TargetMissing)
+	}
+	if err := s.DeleteHost(ctx, hid); err != nil {
+		t.Fatal(err)
+	}
+	got := findSchedule(t, s, ctx, sc.ID)
+	if got.Enabled || got.NextRunAt != nil {
+		t.Fatalf("a schedule aimed at a deleted host is still armed: enabled=%v next=%v", got.Enabled, got.NextRunAt)
+	}
+	if !got.TargetMissing {
+		t.Fatal("the list does not say the target is gone")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"time"
 
 	"github.com/google/uuid"
@@ -293,7 +294,8 @@ func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 				ELSE false
 			END AS running,
 			`+lastOutcomeSQL+`,
-			`+lastRunCountsSQL+`
+			`+lastRunCountsSQL+`,
+			`+targetMissingSQL+`
 		FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -306,7 +308,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Kind, &sc.Enabled, &sc.TargetKind, &sc.TargetID,
 			&sc.TargetName, &rec, &payload, &sc.Requester, &sc.LastRunAt, &sc.LastStatus,
 			&sc.NextRunAt, &sc.CreatedAt, &sc.UpdatedAt, &sc.Running, &sc.LastOutcome,
-			&sc.LastRunTotal, &sc.LastRunOK); err != nil {
+			&sc.LastRunTotal, &sc.LastRunOK, &sc.TargetMissing); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(rec, &sc.Recurrence)
@@ -375,6 +377,21 @@ func (s *Store) MarkScheduleFired(ctx context.Context, id uuid.UUID, firedAt tim
 		 WHERE id=$1`, id, firedAt, status, nextPtr, idsOrEmpty(runIDs))
 	return err
 }
+
+// disableSchedulesTargeting stops every schedule aimed at a host or group being
+// deleted, inside the deletion's transaction.
+func disableSchedulesTargeting(ctx context.Context, tx pgx.Tx, kind string, id uuid.UUID) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE schedules SET enabled=false, next_run_at=NULL, updated_at=now()
+		  WHERE target_kind=$1 AND target_id=$2`, kind, id)
+	return err
+}
+
+// targetMissingSQL flags a schedule whose host or group no longer exists.
+const targetMissingSQL = `CASE target_kind
+				WHEN 'host' THEN target_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM hosts t WHERE t.id = schedules.target_id)
+				WHEN 'group' THEN target_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM groups t WHERE t.id = schedules.target_id)
+				ELSE false END AS target_missing`
 
 // RecordScheduleResult writes the outcome of work a firing started in the
 // background (a CVE-database refresh) onto that firing. It matches on the firing's

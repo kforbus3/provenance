@@ -133,7 +133,16 @@ export function SchedulesPage() {
                 </TableCell>
                 <TableCell>{s.name}</TableCell>
                 <TableCell><Chip size="small" label={s.kind} /></TableCell>
-                <TableCell>{s.targetName} <Typography component="span" variant="caption" color="text.secondary">({s.targetKind})</Typography></TableCell>
+                <TableCell>
+                  {s.targetName} <Typography component="span" variant="caption" color="text.secondary">({s.targetKind})</Typography>
+                  {s.targetMissing && (
+                    // The host or group was deleted. Deleting it disabled this schedule;
+                    // without this the row went on naming a host that no longer exists.
+                    <Tooltip title={`This ${s.targetKind} no longer exists, so the schedule was disabled. Point it at another target or delete it.`}>
+                      <Chip size="small" color="error" variant="outlined" label={`${s.targetKind} deleted`} sx={{ ml: 1 }} />
+                    </Tooltip>
+                  )}
+                </TableCell>
                 <TableCell>{recurrenceText(s.recurrence)}</TableCell>
                 <TableCell sx={{ color: "text.secondary" }}>
                   {s.enabled && s.nextRunAt

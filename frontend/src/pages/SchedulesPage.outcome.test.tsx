@@ -61,6 +61,11 @@ describe("what a schedule's last run actually did", () => {
     expect(await screen.findByText("failed")).toBeInTheDocument();
   });
 
+  it("says when the schedule's target has been deleted", async () => {
+    renderWith([sched({ id: "g", kind: "vulnscan", name: "VulnScanWindows", targetKind: "host", targetName: "winserv1", enabled: false, targetMissing: true })]);
+    expect(await screen.findByText("host deleted")).toBeInTheDocument();
+  });
+
   it("says skipped rather than inventing a verdict", async () => {
     renderWith([sched({ id: "d", lastStatus: "skipped: no hosts" })]);
     expect(await screen.findByText(/skipped: no hosts/)).toBeInTheDocument();
