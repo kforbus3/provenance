@@ -810,9 +810,14 @@ func TestAdoptionKeepsTheFileVerbatim(t *testing.T) {
 	}
 }
 
-func TestAContainerWithNoComposeLabelsFallsBackToTheStackMessage(t *testing.T) {
+func TestAContainerWithNoComposeLabelsIsReportedAsUnmanageable(t *testing.T) {
 	// A plain `docker run` container. Recreating it means reproducing run
 	// arguments nobody recorded, so it is reported rather than guessed at.
+	//
+	// Skipped, not failed, as an orphan is: nothing was done to the host, and failing
+	// it halts a fleet-wide rollout on its budget for something a rollout can never
+	// fix. It used to fail with "this is a version change rather than a rebuild" --
+	// false for a rebuild, and it told the operator to adopt a file that does not exist.
 	f, rid, ids := inPlaceFixture("1.24", "1.24")
 	f.containers[ids] = []models.Container{{
 		Name: "web", Image: "nginx:1.24", Repository: "nginx", Tag: "1.24",
@@ -820,11 +825,16 @@ func TestAContainerWithNoComposeLabelsFallsBackToTheStackMessage(t *testing.T) {
 	newEngine(f, &fakeDeployer{}, &fakeRunner{out: runningNew}).Tick(context.Background())
 
 	h := f.hosts[rid][0]
-	if h.State != store.UpdateHostFailed {
-		t.Fatalf("state = %q, want failed", h.State)
+	if h.State != store.UpdateHostSkipped {
+		t.Fatalf("state = %q (%q), want skipped", h.State, h.Error)
 	}
-	if !strings.Contains(h.Error, "no Provenance-managed stack") {
-		t.Errorf("got %q", h.Error)
+	for _, want := range []string{"web", "not started by docker compose"} {
+		if !strings.Contains(h.Error, want) {
+			t.Errorf("host row is missing %q: %q", want, h.Error)
+		}
+	}
+	if strings.Contains(h.Error, "version change") {
+		t.Errorf("a rebuild described as a version change: %q", h.Error)
 	}
 }
 
@@ -947,12 +957,16 @@ func TestTheFirstFailingImageStopsThatHost(t *testing.T) {
 	// Continuing would apply later updates on top of a host already known to be
 	// in a state nobody intended.
 	f, rid, ids := multiFixture()
-	f.containers[ids[0]] = []models.Container{
-		{Name: "web", Repository: "nginx", Tag: "1.24"}, // no compose labels: cannot update
-		{Name: "cache", Repository: "redis", Tag: "7", ComposeDir: "/opt/a", ComposeService: "cache"},
-	}
 	f.containers[ids[1]] = nil
-	newEngine(f, &fakeDeployer{}, &fakeRunner{out: verifyAll}).Tick(context.Background())
+	// The nginx update genuinely fails on the host (a deploy error, not a container
+	// the rollout cannot manage -- that is a skip; see the unmanageable tests).
+	run := &fakeRunner{respond: func(script string) (string, int, bool) {
+		if strings.Contains(script, "'web'") || strings.Contains(script, " web") {
+			return "Error response from daemon: pull access denied\n", 1, true
+		}
+		return verifyAll, 0, false
+	}}
+	newEngine(f, &fakeDeployer{}, run).Tick(context.Background())
 
 	var failed int
 	for _, h := range f.hosts[rid] {
@@ -1303,7 +1317,12 @@ func TestASupersededHostSaysSoRatherThanClaimingItRanNothing(t *testing.T) {
 	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
 	// The host runs nginx:1.24, but its compose already names a newer tag than
 	// this rollout's target: the rollout's premise has expired for this host.
+	// The container belongs to that stack -- its compose directory is the stack's
+	// path -- which is what makes the stack's newer tag about it.
 	f.stacks[ids[0]][0].Compose = "services:\n  web:\n    image: nginx:1.30\n"
+	f.stacks[ids[0]][0].Path = "/opt/stacks/web"
+	f.containers[ids[0]][0].ComposeDir = "/opt/stacks/web"
+	f.containers[ids[0]][0].ComposeService = "web"
 
 	newEngine(f, &fakeDeployer{}, &fakeRunner{out: runningNew}).Tick(context.Background())
 
@@ -1849,5 +1868,64 @@ func TestAnOrphanContainerIsReportedAsAnOrphanNotASupersession(t *testing.T) {
 		if !strings.Contains(h.Error, want) {
 			t.Errorf("host row is missing %q, so the reason is only in the log: %q", want, h.Error)
 		}
+	}
+}
+
+// The rebuild of nginx:alpine on `repo`, as it was. Two containers run nginx there:
+// prov-releases on nginx:alpine, started with `docker run` and in no compose project,
+// and aptly-repo on nginx:1.31-alpine, in the managed aptlywebui stack. The rollout
+// said the host "was already past every image in this rollout … its compose files
+// name newer tags" -- because the aptlywebui stack names nginx at another tag -- and
+// completed, while prov-releases stayed on the old image. That stack is not where the
+// container being rebuilt came from, and nothing about it is ahead of anything.
+func TestAnUnrelatedStackPinningTheSameRepositoryIsNotASupersession(t *testing.T) {
+	f, rid, ids := fixture(1, store.UpdateRollout{Canary: 1, BatchSize: 1})
+	h := ids[0]
+	f.rollouts[0].Repository, f.rollouts[0].FromTag, f.rollouts[0].ToTag = "nginx", "alpine", "alpine"
+	for i := range f.images[rid] {
+		f.images[rid][i].Repository = "nginx"
+		f.images[rid][i].FromTag, f.images[rid][i].ToTag = "alpine", "alpine"
+	}
+	f.stacks[h] = []store.ContainerStack{{
+		ID: uuid.New(), HostID: h, Name: "aptlywebui", Path: "/root/aptlywebui", Enabled: true,
+		Compose: "services:\n  aptly-repo:\n    image: nginx:1.31-alpine\n",
+	}}
+	f.containers[h] = []models.Container{
+		{Name: "prov-releases", Image: "nginx:alpine", Repository: "nginx", Tag: "alpine", State: "running"},
+		{Name: "aptly-repo", Image: "nginx:1.31-alpine", Repository: "nginx", Tag: "1.31-alpine", State: "running",
+			ComposeDir: "/root/aptlywebui", ComposeProject: "aptlywebui", ComposeService: "aptly-repo"},
+	}
+	newEngine(f, &fakeDeployer{}, &fakeRunner{}).Tick(context.Background())
+
+	got := f.hosts[rid][0]
+	if strings.Contains(got.Error, "already past") {
+		t.Fatalf("reported as already past the rollout: %q\n"+
+			"prov-releases is still on the old image; the stack that names another nginx tag "+
+			"is not the one it came from.", got.Error)
+	}
+	if got.State != store.UpdateHostSkipped {
+		t.Fatalf("state = %q (%q), want skipped: a rollout cannot recreate a docker-run container, "+
+			"which is not a failure to halt a fleet on", got.State, got.Error)
+	}
+	for _, want := range []string{"prov-releases", "not started by docker compose", "cannot fix it"} {
+		if !strings.Contains(got.Error, want) {
+			t.Errorf("host row is missing %q: %q", want, got.Error)
+		}
+	}
+}
+
+// And the case the check exists for still holds: the stack that owns the container
+// has been re-pinned past the rollout's target.
+func TestTheOwningStackRepinnedPastTheTargetIsStillASupersession(t *testing.T) {
+	stacks := []store.ContainerStack{{Path: "/opt/stacks/web", Enabled: true,
+		Compose: "services:\n  web:\n    image: nginx:1.29-alpine\n"}}
+	containers := []models.Container{{Repository: "nginx", Tag: "1.27-alpine", ComposeDir: "/opt/stacks/web/"}}
+	im := store.RolloutImage{Repository: "nginx", FromTag: "1.27-alpine", ToTag: "1.28-alpine"}
+	if !superseded(stacks, containers, im) {
+		t.Fatal("the container's own stack names a newer tag: that is a supersession")
+	}
+	containers[0].ComposeDir = "/opt/stacks/other"
+	if superseded(stacks, containers, im) {
+		t.Fatal("a stack the container does not belong to cannot supersede it")
 	}
 }

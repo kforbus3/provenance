@@ -34,6 +34,19 @@ The Certificates page shows which key signs, which is pending, and which hosts h
 the new one and why. Each host's confirmed trust is now recorded, and a host that falls behind is
 retried outside rotations too. `provctl rotate-ca` starts a rotation the server finishes.
 
+### A rebuild rollout no longer says a host is "already past" it because of an unrelated stack
+
+A rebuild of `nginx:alpine` on `repo` reported the host "already past every image in this rollout
+… its compose files name newer tags", and completed. The container running `nginx:alpine` there,
+`prov-releases`, was started with `docker run` and belongs to no stack; the stack that "named a
+newer tag" was `aptlywebui`, pinning `nginx:1.31-alpine` for its own, different container. The image
+stayed outdated while the rollout said it was done.
+
+Only the stack a container actually belongs to can now mark it as moved past a rollout. A rebuild of
+a container that no compose project started is reported as something a rollout cannot fix — naming
+the container and what to do — and skipped rather than failed, as an orphaned container already
+was. It used to fail with "this is a version change rather than a rebuild", which was false.
+
 ### Upgrading
 
 Migration 0112 marks the current CA key as the signing key and adds per-host trust columns;
