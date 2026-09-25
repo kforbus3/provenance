@@ -42,6 +42,10 @@ type Monitor struct {
 	nfy    *notify.Service
 
 	interval time.Duration
+
+	// unresolvable remembers hostnames that definitely do not resolve; see
+	// probeCandidates. Zero value is ready to use.
+	unresolvable unresolvableNames
 }
 
 // Sweep cadence and worker-pool tuning.
@@ -696,7 +700,7 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	//
 	// The jump hop presents the same system certificate every path already used
 	// for it; only the host hop differs between a CA host and a vaulted one.
-	candidates := dedupe([]string{h.WGAddress, h.Address, h.Hostname})
+	candidates := m.probeCandidates(ctx, h)
 	var conn *sshgw.Conn
 	var dialErr error
 	var usedAddr string
