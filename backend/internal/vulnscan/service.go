@@ -41,11 +41,67 @@ import (
 // /var/lib/rpm is a symlink on some distros (openSUSE). The scanner sidecar
 // refuses archives containing links (a path-traversal guard), so dereferencing
 // here is required for those hosts to scan at all.
+//
+// A host with neither database says so instead of sending an archive of
+// /etc/os-release alone. That archive used to scan "successfully": grype found no
+// packages, so it found no vulnerabilities, and an OpenWrt router or a Slackware
+// box read as fully patched. See noPackageDBMarker.
 const collectScript = `set -e
 FILES="etc/os-release"
 [ -f /var/lib/dpkg/status ] && FILES="$FILES var/lib/dpkg/status"
 [ -d /var/lib/rpm ] && FILES="$FILES var/lib/rpm"
+if [ "$FILES" = "etc/os-release" ]; then
+  echo "` + noPackageDBMarker + `$( . /etc/os-release 2>/dev/null; echo "${ID:-unknown}")"
+  exit 0
+fi
 sudo tar czhf - -C / $FILES 2>/dev/null | base64 | tr -d '\n'`
+
+// noPackageDBMarker prefixes collectScript's answer on a host with no dpkg or rpm
+// database, followed by the os-release ID. It cannot be mistaken for the archive:
+// base64 has no colon.
+const noPackageDBMarker = "PROV_NO_PKGDB:"
+
+// staleDBAfter is how old the CVE database may be before a scan says its results
+// are out of date. Upstream publishes daily and the refresh runs daily, so a healthy
+// database is never much more than a day old; this is one missed refresh.
+const staleDBAfter = 36 * time.Hour
+
+// decodeCollected turns collectScript's output into the package archive, or into
+// the reason there is none.
+func decodeCollected(out string) ([]byte, error) {
+	out = strings.TrimSpace(out)
+	if id, ok := strings.CutPrefix(out, noPackageDBMarker); ok {
+		if id == "" {
+			id = "unknown"
+		}
+		return nil, fmt.Errorf("cannot assess this host: it has no dpkg or rpm package database (OS %q). "+
+			"Vulnerability scans cover Debian/Ubuntu and RPM-based systems; a result of zero findings here "+
+			"would mean nothing was checked, not that nothing is vulnerable", id)
+	}
+	raw, err := base64.StdEncoding.DecodeString(out)
+	if err != nil {
+		return nil, fmt.Errorf("decode package archive: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("no package data collected (unsupported OS?)")
+	}
+	return raw, nil
+}
+
+// staleDBWarning says so when the CVE database a scan used is older than it should
+// be. The refresh is its own schedule, and when it fails every scan after it quietly
+// matches against old data -- complete, and missing whatever was published since.
+func staleDBWarning(built *time.Time, now time.Time) string {
+	if built == nil {
+		return ""
+	}
+	age := now.Sub(*built)
+	if age <= staleDBAfter {
+		return ""
+	}
+	return fmt.Sprintf("The CVE database this scan used was built %.0f hours ago. The daily refresh "+
+		"may be failing, so vulnerabilities published since then are not in these results.", age.Hours())
+}
 
 const maxCollectBytes = 128 << 20 // base64 of a host's package DBs; rpm DB can be a few MB
 
@@ -125,6 +181,7 @@ func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host) 
 	if t, err := time.Parse(time.RFC3339, result.DBBuilt); err == nil {
 		dbBuilt = &t
 	}
+	sum.Warning = staleDBWarning(dbBuilt, time.Now())
 	if err := s.store.CompleteVulnScan(ctx, scanID, sum, findings, dbBuilt); err != nil {
 		fail("store findings: " + err.Error())
 		return
@@ -137,6 +194,9 @@ func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host) 
 
 	s.log.Info("vuln scan completed", "host", h.Hostname, "total", sum.Total,
 		"critical", sum.Critical, "high", sum.High, "maxCvss", sum.MaxCVSS)
+	if sum.Warning != "" {
+		s.log.Warn("vuln scan incomplete assessment", "host", h.Hostname, "warning", sum.Warning)
+	}
 	s.notify(ctx, h, sum)
 }
 
@@ -189,12 +249,9 @@ func (s *Service) collect(ctx context.Context, h *models.Host) ([]byte, inventor
 	if err != nil {
 		return nil, inv, err
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	raw, err := decodeCollected(b64)
 	if err != nil {
-		return nil, inv, fmt.Errorf("decode package archive: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, inv, fmt.Errorf("no package data collected (unsupported OS?)")
+		return nil, inv, err
 	}
 
 	if out, ierr := runCapture(ctx, conn, inventoryScript); ierr != nil {
