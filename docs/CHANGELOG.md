@@ -5,6 +5,60 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.13 — 2026-09-24
+
+Six things this week's work turned up, each of which let a problem go unseen.
+
+### A stack changed on its host is drift
+
+Drift compared revision numbers: the stored revision against the one the host last confirmed.
+A change made **on the host** leaves both at the same number, so it was invisible — and the next
+Deploy re-applied the stored copy over it. That is how Keycloak went down on 2026-09-20, and on
+2026-09-24 its stored copy was still the plain-HTTP file it had been moved off two days before,
+both sides reading revision 5.
+
+Every ten minutes, alongside the container list, the monitor now reads each managed stack's
+`docker-compose.yml` and stores a **hash** of it (never the contents, which can hold credentials).
+A deployed stack whose file on the host no longer matches the stored copy shows **changed on host**
+on the Containers page, counts as drift, and warns that deploying would overwrite the change.
+Trailing whitespace is ignored: the stored copy lacks the final newline a deploy writes.
+
+### Schedules say how a batch went, and notify when it did not
+
+- A scan record that no longer exists counts as a failure. Clearing the failures list deleted
+  the only record of one host's failed scan, and its schedule then read *completed*.
+- Batches show counts: **failed 16/17**.
+- A CVE-database refresh now reports **completed** or **failed** on its own firing instead of
+  reading *started* for ever.
+- A new notification, **Scheduled scan or CVE-database refresh failed**, names every host that
+  failed and why. Route it in **Settings → Notifications**.
+
+### A scan that cannot assess a host fails instead of reading clean
+
+A host with neither a dpkg nor an rpm database — OpenWrt, Alpine, Slackware — used to scan
+"successfully" with zero findings, because nothing had been checked. It now fails, and says so.
+A scan whose CVE database is more than 36 hours old carries a warning naming its age.
+
+### Deleting a host or group stops its schedules
+
+Schedules aimed at a deleted host or group are disabled in the same transaction, and flagged
+**host deleted** on the Schedules page. A Windows scan schedule had outlived its host by two months.
+
+### Smaller
+
+- Security scans record when they **start**. Every scan's start time was written as it finished,
+  so every duration read zero and a running scan never showed as running.
+- The monitor no longer tries a hostname DNS says does not exist when the host has another address
+  (the access point's `wap`). A timeout keeps it, and a hostname that is the only address is kept.
+
+### Upgrading
+
+Migration 0111 adds three columns to `container_stacks`; it applies automatically. Stack file
+hashes appear within ten minutes. To be told about failed scheduled work, enable the new
+notification in Settings.
+
+---
+
 ## v2.0.12 — 2026-09-24
 
 The host monitor was the steady source of the jump host's dropped connections: about forty an
