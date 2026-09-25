@@ -233,6 +233,16 @@ func parseContainers(out string) ([]models.Container, string, string) {
 			break
 		}
 	}
+	// An answered check with nothing running is an EMPTY list, never nil. Both
+	// writers read nil as "not collected" and keep the previous list -- which is
+	// right for a host that could not be asked, and wrong for one that said
+	// "nothing". The difference was invisible until a host's last container
+	// stopped: coder's crash-looping docker-frontend-1 was stopped on 2026-09-25,
+	// and Provenance went on reporting it "restarting in a loop" every sweep,
+	// because the empty answer kept the list that still had it.
+	if out2 == nil {
+		out2 = []models.Container{}
+	}
 	return out2, ContainersOK, ""
 }
 

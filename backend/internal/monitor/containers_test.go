@@ -297,3 +297,22 @@ func TestParseContainersOnALocallyBuiltImage(t *testing.T) {
 		t.Errorf("a locally built image gained a digest: %+v", containers[0])
 	}
 }
+
+// "Asked, and nothing is running" must reach the store as an empty list, not nil:
+// the store reads nil as "not collected" and keeps the previous list. coder's
+// crash-looping frontend was stopped and Provenance went on reporting it
+// restarting, because the host's empty answer kept the list that still had it.
+// Counting zero, as the test above does, cannot tell the two apart.
+func TestAnEmptyAnswerIsAnEmptyListNotNothing(t *testing.T) {
+	got, status, _ := parseContainers("::OK::\n::IMAGES::\n")
+	if status != ContainersOK {
+		t.Fatalf("status %q", status)
+	}
+	if got == nil {
+		t.Fatal("an answered check with nothing running returned nil, which the store keeps the old list for")
+	}
+	// And a host that could not be asked still returns nil, so its last list stays.
+	if got, _, _ := parseContainers("ssh: connection reset"); got != nil {
+		t.Fatalf("an unanswered check must not produce a list, got %v", got)
+	}
+}

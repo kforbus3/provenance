@@ -5,6 +5,27 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.15 — 2026-09-25
+
+### A host's last stopped container stops being listed
+
+When the last running container on a host stopped, Provenance kept listing it — as whatever it
+was last seen doing. A crash-looping container on `coder` was stopped, and the Containers page went
+on reporting it "restarting in a loop" on every sweep.
+
+A check that could not reach Docker must keep the last list, so both inventory writes keep it when
+they are given no list at all. An answered check with nothing running produced that same "no list"
+rather than an empty one, so it was treated as a failed check. It now produces an empty list, which
+replaces the old one; a check that could not ask still keeps it.
+
+The same applies to update rollouts, which choose what to update from this list.
+
+### Upgrading
+
+Nothing to do. Stale entries clear on each host's next container check, within ten minutes.
+
+---
+
 ## v2.0.14 — 2026-09-25
 
 ### SAML metadata publishes the signing certificate
