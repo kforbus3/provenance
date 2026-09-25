@@ -452,9 +452,24 @@ container-e2e-run:
 	cd backend && PROVENANCE_E2E_DOCKER=1 go test ./internal/containerupdate/ -run E2E -count=1
 
 .PHONY: lint
-lint: fmt-check ## Run gofmt check + Go vet
+lint: fmt-check ## Run gofmt, go vet, and the same golangci-lint + staticcheck CI runs
 	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26-alpine \
 	  sh -c "apk add --no-cache git >/dev/null && GOFLAGS=-mod=mod go vet ./..."
+	@# The versions below are the ones CI pins (.github/workflows/ci.yml and
+	@# security.yml). CI ran `latest` of both, so every new linter release could add
+	@# rules and fail a build nobody had changed -- and because this target ran only
+	@# gofmt and vet, CI failed for days on findings no local run could see. Change
+	@# a version here and in the workflows together.
+	@for m in backend sdk terraform-provider-provenance; do \
+	  echo "golangci-lint $(GOLANGCI_LINT_VERSION): $$m"; \
+	  docker run --rm -v $(PWD):/src -w /src/$$m golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) \
+	    golangci-lint run --timeout=10m ./... || exit 1; \
+	done
+	docker run --rm -v $(PWD)/backend:/src -w /src golang:1.26 \
+	  sh -c "go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) && staticcheck ./..."
+
+GOLANGCI_LINT_VERSION ?= v2.14.0
+STATICCHECK_VERSION ?= v0.8.1
 
 .PHONY: fmt-check
 fmt-check: ## Fail if any Go file needs gofmt (CI enforces this; catch it before pushing)

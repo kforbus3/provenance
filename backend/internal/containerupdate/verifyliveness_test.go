@@ -25,9 +25,6 @@ func TestAContainerThatIsRestartingIsNotVerified(t *testing.T) {
 	}).Tick(context.Background())
 
 	h := f.hosts[rid][0]
-	if h.State != store.UpdateHostVerified {
-		// expected path
-	}
 	if h.State == store.UpdateHostVerified {
 		t.Fatalf("a crash-looping container was recorded as verified — the exact failure this guards")
 	}

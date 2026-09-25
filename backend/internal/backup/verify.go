@@ -116,7 +116,8 @@ func (s *Service) Verify(ctx context.Context, name string) (*VerifyResult, error
 
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	dec := exec.CommandContext(cctx, "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2",
+	// Fixed argv, no shell; path is s.Path(name) -- see Restore.
+	dec := exec.CommandContext(cctx, "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", //nolint:gosec // G702: argv exec, validated path
 		"-pass", "env:PROV_BK_PASS", "-in", path)
 	dec.Env = append(os.Environ(), "PROV_BK_PASS="+pass)
 	out, err := dec.StdoutPipe()

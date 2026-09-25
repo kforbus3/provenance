@@ -152,7 +152,9 @@ func (s *Service) Restore(ctx context.Context, name string, opt RestoreOptions) 
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
 
-	dec := exec.CommandContext(cctx, "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2",
+	// Fixed argv, no shell; path is s.Path(name), which rejects separators and any
+	// name without the backup prefix, and it is the operand of -in, never an option.
+	dec := exec.CommandContext(cctx, "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", //nolint:gosec // G702: argv exec, validated path
 		"-pass", "env:PROV_BK_PASS", "-in", path)
 	dec.Env = append(os.Environ(), "PROV_BK_PASS="+pass)
 	// ON_ERROR_STOP so a failure partway is a failure, not a database restored up to

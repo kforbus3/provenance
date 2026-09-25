@@ -51,7 +51,9 @@ func (d *execDocker) hostProjectDir(ctx context.Context) string {
 }
 
 func (d *execDocker) run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	// A fixed program and an argument vector: no shell, so nothing in args is ever
+	// interpreted as a command. gosec's taint rule cannot tell the two apart.
+	cmd := exec.CommandContext(ctx, "docker", args...) //nolint:gosec // G702: argv exec, no shell
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

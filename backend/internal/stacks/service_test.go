@@ -1,25 +1,11 @@
 package stacks
 
 import (
-	"context"
 	"strings"
 	"testing"
 
-	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
-
-type fakeRunner struct {
-	script string
-	out    string
-	code   int
-	failed bool
-}
-
-func (f *fakeRunner) RunScript(_ context.Context, script string, _ *models.Host) (string, int, bool) {
-	f.script = script
-	return f.out, f.code, f.failed
-}
 
 // Drift is the question neither half of the old setup could answer.
 //
