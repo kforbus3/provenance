@@ -436,7 +436,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 			continue
 		}
 		ran++
-		if superseded(stacks, im) {
+		if superseded(stacks, containers, im) {
 			past++
 			e.log.Info("update rollout: host has moved past this image",
 				"host", hostID, "repository", im.Repository, "from", im.FromTag)
@@ -584,12 +584,51 @@ func (e *Engine) reconcileStackPath(ctx context.Context, st *store.ContainerStac
 	}
 }
 
+// unmanagedRunning names the containers on a host running repo:tag that no compose
+// project owns.
+func unmanagedRunning(ctx context.Context, st Store, hostID uuid.UUID, repo, tag string) []string {
+	containers, err := st.HostContainers(ctx, hostID)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, c := range containers {
+		if c.Repository == repo && c.Tag == tag && c.ComposeDir == "" {
+			names = append(names, c.Name)
+		}
+	}
+	return names
+}
+
 // superseded reports that a host's own compose files name this repository at some
 // other tag, so the rollout's premise has expired for it.
-func superseded(stacks []store.ContainerStack, im store.RolloutImage) bool {
+//
+// Only a stack the rolled-out container belongs to can say that. A rebuild of
+// nginx:alpine on `repo` was reported as "already past every image in this
+// rollout" because an unrelated stack on the same host -- aptlywebui, pinning
+// nginx:1.31-alpine for its own repo server -- names nginx at another tag. The
+// container actually running nginx:alpine (prov-releases, started with docker run)
+// belonged to no stack at all, and was left on the old image while the rollout said
+// completed. So while a container is running the from-tag, only stacks whose
+// directory is that container's compose directory count; with none running it (a
+// rollout arriving after the service was re-pinned), any stack still does.
+func superseded(stacks []store.ContainerStack, containers []models.Container, im store.RolloutImage) bool {
+	owners := map[string]bool{}
+	running := false
+	for _, c := range containers {
+		if c.Repository == im.Repository && c.Tag == im.FromTag {
+			running = true
+			if c.ComposeDir != "" {
+				owners[strings.TrimRight(c.ComposeDir, "/")] = true
+			}
+		}
+	}
 	for i := range stacks {
 		st := &stacks[i]
 		if !st.Enabled || strings.TrimSpace(st.Compose) == "" {
+			continue
+		}
+		if running && !owners[strings.TrimRight(st.Path, "/")] {
 			continue
 		}
 		if composeSupersedes(st.Compose, im.Repository, im.FromTag, im.ToTag) {
@@ -616,6 +655,20 @@ func (e *Engine) applyOne(ctx context.Context, r store.UpdateRollout, hostID uui
 				return ierr
 			}
 			return e.verifyInPlace(ctx, r, hostID)
+		}
+		// A rebuild of a container no compose project started. There is nothing to
+		// recreate it FROM: `docker run` keeps no file of its options. Said
+		// precisely, because the message this reached before -- "this is a version
+		// change rather than a rebuild" -- was false about a rebuild, and told the
+		// operator to adopt a compose file that does not exist.
+		if r.FromTag == r.ToTag {
+			if names := unmanagedRunning(ctx, e.store, hostID, r.Repository, r.FromTag); len(names) > 0 {
+				return fmt.Errorf("%w: %s runs %s:%s but was not started by docker compose, so a "+
+					"rollout has no project to recreate it from. Pull the rebuilt image and re-create "+
+					"the container by hand with its original options, or move it into a compose file "+
+					"so rollouts can update it", errUnmanageable, strings.Join(names, ", "),
+					r.Repository, r.FromTag)
+			}
 		}
 
 		// A version bump. The new version has to be written into the compose file,
