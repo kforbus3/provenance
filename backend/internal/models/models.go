@@ -198,7 +198,7 @@ const ConsoleTokenNamePrefix = "Headlamp console for "
 // revoked in the same breath but read very differently in a token list -- and a
 // name that says "Headlamp" for a log console is the kind of small lie that
 // wastes an hour later.
-const LogConsoleTokenNamePrefix = "Log console for "
+const LogConsoleTokenNamePrefix = "Log console for " //nolint:gosec // G101: a display-name prefix, not a credential
 
 // Role is a named collection of permissions.
 type Role struct {

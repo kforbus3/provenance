@@ -64,7 +64,8 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: staticcheck
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
+          # Pinned, and matched by `make lint` -- see ci.yml's golangci-lint note.
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
           staticcheck ./...
 
   codeql:

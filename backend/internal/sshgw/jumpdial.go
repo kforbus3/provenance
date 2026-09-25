@@ -46,7 +46,7 @@ func (g *Gateway) dialJump(ctx context.Context, cfg *ssh.ClientConfig) (*ssh.Cli
 			return nil, err
 		}
 		wait := jumpDialBackoff[attempt]
-		wait += time.Duration(rand.Int64N(int64(wait)/2 + 1))
+		wait += time.Duration(rand.Int64N(int64(wait)/2 + 1)) //nolint:gosec // G404: retry jitter, not a secret
 		if g.log != nil {
 			g.log.Debug("jump host dropped the connection before the handshake; retrying",
 				"attempt", attempt+1, "wait", wait, "err", err)

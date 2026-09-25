@@ -963,7 +963,7 @@ func (e *Engine) targetStack(ctx context.Context, r store.UpdateRollout, hostID 
 		"no Provenance-managed stack on this host names %s:%s, and this is a version "+
 			"change rather than a rebuild — the new version has to be written into a "+
 			"compose file, so adopt this host's compose file as a stack to make it "+
-			"updatable. Rebuilds of the same tag do not need that.",
+			"updatable. Rebuilds of the same tag do not need that",
 		r.Repository, r.FromTag)
 }
 
@@ -1114,12 +1114,8 @@ func parseVerifyOutput(out string) []runningContainer {
 	return got
 }
 
-// verify reads back what the host is actually running.
-func (e *Engine) verify(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) error {
-	return e.verifyRunning(ctx, r, hostID, false, "", nil)
-}
-
-// verifyDeployed is verify plus the services this deploy actually named, which
+// verifyDeployed reads back what the host is actually running, plus the services
+// this deploy actually named, which
 // is the only way to see a container whose image names no repository. See
 // verifyservices.go.
 func (e *Engine) verifyDeployed(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID,

@@ -95,10 +95,13 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 		actor = p.Username
 	}
 	h.audit(r, "system.upgrade_apply", map[string]any{"version": m.Version, "migrationCompatibility": m.MigrationCompatibility})
-	// Apply runs beyond the request lifetime (it restarts the backend), so use a
-	// background context; status is polled from the updater.
+	// Apply runs beyond the request lifetime (it restarts the backend), so it must
+	// not be cancelled with the request -- but it keeps the request's values. A bare
+	// context.Background() drops the tenant scope and principal with the deadline,
+	// and work detached that way has been refused by row security before.
+	actx := context.WithoutCancel(r.Context())
 	go func() {
-		if err := h.svc.Apply(context.Background(), h.svc.stagedPath(), actor); err != nil {
+		if err := h.svc.Apply(actx, h.svc.stagedPath(), actor); err != nil {
 			h.svc.log.Warn("upgrade apply failed", "err", err)
 		}
 	}()

@@ -47,7 +47,10 @@ func writeHeadlampClusters(ctx context.Context, st interface {
 	// Written whole and replaced atomically: Headlamp may read this at any
 	// moment, and a half-written kubeconfig is worse than a stale one.
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(renderHeadlampConfig(publicURL, clusters)), 0o644); err != nil {
+	// World-readable on purpose: it holds cluster server URLs only -- no user, no
+	// token (see renderHeadlampConfig) -- and the Headlamp container reads it from
+	// a shared volume as a different uid.
+	if err := os.WriteFile(tmp, []byte(renderHeadlampConfig(publicURL, clusters)), 0o644); err != nil { //nolint:gosec // G306: no secrets, read by another uid
 		return err
 	}
 	return os.Rename(tmp, path)

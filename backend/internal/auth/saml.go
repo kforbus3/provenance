@@ -536,11 +536,14 @@ func (h *Handler) samlSLO(w http.ResponseWriter, r *http.Request) {
 // to describe.
 func spMetadata(sp *saml2.SAMLServiceProvider) (*types.EntityDescriptor, error) {
 	var keys []types.KeyDescriptor
-	if sp.GetSigningKey() != nil {
-		certBytes, err := sp.GetSigningCertBytes()
-		if err != nil {
-			return nil, err
-		}
+	// Asked through GetSigningCertBytes, which sees a key installed with
+	// SetSPSigningKeyStore. This used to ask GetSigningKey, which does not -- the
+	// library documents it as wrong once SetSPSigningKeyStore is used, and that is
+	// the only way this SP installs a key. So with a key configured, metadata said
+	// AuthnRequestsSigned=true and published no certificate to check them with: an
+	// IdP that trusts SP metadata could not verify a single request. golangci-lint
+	// found it as a deprecation warning.
+	if certBytes, err := sp.GetSigningCertBytes(); err == nil && len(certBytes) > 0 {
 		keys = append(keys, types.KeyDescriptor{
 			Use: "signing",
 			KeyInfo: dsigtypes.KeyInfo{
