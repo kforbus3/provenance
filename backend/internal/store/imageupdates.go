@@ -268,6 +268,9 @@ type ImageUpdateHost struct {
 type ImageUpdateRow struct {
 	ImageUpdate
 	Hosts []ImageUpdateHost `json:"hosts"`
+	// Rebuild says what a rebuilt tag changed. Only on rows whose status is
+	// "moved" and where some host runs an older build.
+	Rebuild *RebuildDiff `json:"rebuild,omitempty"`
 }
 
 // ImageUpdatesWithHosts returns every checked image together with the hosts
@@ -324,7 +327,54 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) (
 		return nil, err
 	}
 
-	return assembleImageRows(tracked, checked, byImage), nil
+	out := assembleImageRows(tracked, checked, byImage)
+	if err := s.attachRebuildDiffs(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// attachRebuildDiffs compares, for every rebuilt tag, the build most of its hosts run
+// with the build the tag points at now. One query for every digest involved.
+func (s *Store) attachRebuildDiffs(ctx context.Context, rows []ImageUpdateRow) error {
+	type pair struct{ from, to string }
+	pairs := map[int]pair{}
+	others := map[int]int{}
+	var digests []string
+	for i := range rows {
+		r := &rows[i]
+		if r.Status != "moved" || r.Digest == "" {
+			continue
+		}
+		from, n := mostCommonStale(r.Hosts)
+		if from == "" {
+			continue
+		}
+		pairs[i] = pair{from, r.Digest}
+		others[i] = n
+		digests = append(digests, from, r.Digest)
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	scans, err := s.ContainerImageScanDetails(ctx, digests)
+	if err != nil {
+		return err
+	}
+	for i, p := range pairs {
+		from, haveFrom := scans[p.from]
+		to, haveTo := scans[p.to]
+		if !haveFrom {
+			from.Digest = p.from
+		}
+		if !haveTo {
+			to.Digest = p.to
+		}
+		d := DiffRebuild(from, to, haveFrom, haveTo)
+		d.OtherRunning = others[i]
+		rows[i].Rebuild = &d
+	}
+	return nil
 }
 
 // assembleImageRows decides which rows an operator is shown, and therefore which

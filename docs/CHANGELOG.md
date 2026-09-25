@@ -5,6 +5,36 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.17 — 2026-09-25
+
+### A rebuilt image says what the rebuild changed
+
+A tag republished under the same version shows on the Updates page as **rebuilt**, which said the
+bytes differ and nothing about how. Most rebuilds carry base-image security fixes that never get a
+version number of their own; some change nothing installed at all — `nginx:alpine` on 2026-09-22 had
+the same 71 packages at the same versions as the build it replaced. The two looked identical.
+
+The image scanner now records every installed package in each image it scans (from the same grype
+run, so no extra pull), and both builds of every rebuilt tag are scanned first. A rebuilt row now
+reads **rebuilt — no package changes**, **rebuilt — fixes N vulnerabilities**, or **rebuilt — N
+packages changed**, and its tooltip lists what changed and the vulnerability counts before and after.
+Until both builds have been scanned it says **comparing** and which one is still missing — never "no
+changes".
+
+### The CVE database status loads instantly
+
+The Vulnerabilities page's CVE database line waited for `grype db status`, which re-verifies the whole
+~2GB database on every call: 6–8 seconds, on every page load. The scanner now caches that answer
+against the database file's size and modification time, recomputes it the moment the file changes,
+and clears it on every update or import.
+
+### Upgrading
+
+Migration 0113 adds a package column to image scans. Existing scans are redone once to collect
+packages, rebuilt images first; comparisons appear within a scan pass of the upgrade.
+
+---
+
 ## v2.0.16 — 2026-09-25
 
 ### A CA rotation that nothing loses access to, and that can finish

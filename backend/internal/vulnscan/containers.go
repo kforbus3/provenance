@@ -53,6 +53,15 @@ func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int)
 	// image into a vulnerable one without anybody touching the image.
 	dbBuilt := s.currentDBBuilt(ctx)
 
+	// Both builds of every rebuilt image go first, and are scanned even when no host
+	// runs the new one yet: the comparison the Updates page shows for a rebuild needs
+	// the package list of each, and at this batch size the whole fleet takes days.
+	rebuilds, rerr := s.store.RebuildImageRefs(ctx)
+	if rerr != nil {
+		s.log.Warn("container scan: listing rebuilt images", "err", rerr)
+	}
+	refs = prioritise(rebuilds, refs)
+
 	stale, err := s.store.StaleContainerImages(ctx, refs, dbBuilt, containerScanMaxAge)
 	if err != nil {
 		s.log.Warn("container scan: selecting stale images", "err", err)
@@ -78,6 +87,7 @@ func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int)
 		} else {
 			rec.Findings = res.Findings
 			rec.DBBuilt = res.DBBuilt
+			rec.Packages = res.Packages
 			for _, f := range res.Findings {
 				switch strings.ToLower(f.Severity) {
 				case "critical":
@@ -121,6 +131,8 @@ func (s *Service) currentDBBuilt(ctx context.Context) string {
 type imageScanResult struct {
 	Findings []models.VulnFinding `json:"findings"`
 	DBBuilt  string               `json:"dbBuilt"`
+	// Packages is every installed package (nil from a scanner that predates it).
+	Packages []store.ImagePackage `json:"packages"`
 }
 
 // scanImage asks the sidecar to scan one digest-pinned reference.
@@ -154,4 +166,22 @@ func (s *Service) scanImage(ctx context.Context, ref string) (*imageScanResult, 
 		return nil, fmt.Errorf("parse scanner response: %w", err)
 	}
 	return &out, nil
+}
+
+// prioritise puts first before rest, dropping any digest already present. Order is
+// kept because StaleContainerImages keeps it, and the batch cut is taken from the
+// front.
+func prioritise(first, rest []store.ImageRef) []store.ImageRef {
+	seen := map[string]bool{}
+	out := make([]store.ImageRef, 0, len(first)+len(rest))
+	for _, list := range [][]store.ImageRef{first, rest} {
+		for _, r := range list {
+			if r.Digest == "" || seen[r.Digest] {
+				continue
+			}
+			seen[r.Digest] = true
+			out = append(out, r)
+		}
+	}
+	return out
 }

@@ -1,0 +1,11 @@
+-- The packages in each scanned image, so a rebuild can say what it changed.
+--
+-- A tag republished under the same version -- nginx:alpine, rebuilt by its
+-- maintainers -- shows as "rebuilt" and nothing more. On 2026-09-25 one such rebuild
+-- turned out to contain the identical 71 packages at identical versions as the build
+-- it replaced, and there was no way to tell that from one that patched OpenSSL
+-- without logging into a host and diffing `apk info` by hand.
+--
+-- NULL means the list was not collected (a scan from before this column, or a
+-- scanner that did not return one) -- never "the image has no packages".
+ALTER TABLE container_image_scans ADD COLUMN IF NOT EXISTS packages jsonb;

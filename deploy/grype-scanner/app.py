@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 
 from fastapi import FastAPI, Request
@@ -295,6 +296,41 @@ async def scan_sbom(request: Request):
 IMAGE_REF = re.compile(r"^[a-zA-Z0-9._:/-]{1,255}@sha256:[a-f0-9]{64}$")
 
 
+def _packages_from_cyclonedx(doc: dict) -> list:
+    """The image's installed packages, from grype's CycloneDX report.
+
+    Needed to say what a rebuild changed. A tag rebuilt under the same version --
+    nginx:alpine republished with the same nginx -- is reported by the registry as
+    "rebuilt" and nothing more, so an operator cannot tell a rebuild that patched
+    OpenSSL from one that changed nothing at all. The package list of each build is
+    what tells them apart.
+
+    grype's JSON report lists only packages with a vulnerability; its CycloneDX
+    report lists every component, including one per FILE (over a thousand in a small
+    image), which are dropped here. The operating system is kept as a package of type
+    "os", because a base-image bump is exactly the kind of change a rebuild carries.
+    """
+    out = []
+    seen = set()
+    for c in doc.get("components") or []:
+        props = {p.get("name"): p.get("value") for p in (c.get("properties") or [])}
+        kind = props.get("syft:package:type") or ""
+        if c.get("type") == "operating-system":
+            kind = "os"
+        elif c.get("type") == "file" or not kind:
+            continue
+        name, version = (c.get("name") or "").strip(), (c.get("version") or "").strip()
+        if not name or not version:
+            continue
+        key = (kind, name, version)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "version": version, "type": kind})
+    out.sort(key=lambda p: (p["type"], p["name"], p["version"]))
+    return out
+
+
 @app.post("/scan-image")
 async def scan_image(request: Request):
     """Scan a container image by digest-pinned reference.
@@ -316,10 +352,27 @@ async def scan_image(request: Request):
             {"error": "image must be a digest-pinned reference (repo@sha256:...)"},
             status_code=400,
         )
+    # One pull, two reports: the findings on stdout, and the full component list to a
+    # file (see _packages_from_cyclonedx). Scanning twice would pull the image twice.
+    fd, cdx_path = tempfile.mkstemp(suffix=".cdx.json", dir=SCAN_TMP_ROOT)
+    os.close(fd)
     try:
-        proc = await _run_grype(["grype", f"registry:{ref}", "-o", "json"], SCAN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return JSONResponse({"error": "scan timed out"}, status_code=504)
+        try:
+            proc = await _run_grype(["grype", f"registry:{ref}", "-o", "json",
+                                     "-o", f"cyclonedx-json={cdx_path}"], SCAN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return JSONResponse({"error": "scan timed out"}, status_code=504)
+        packages = None
+        try:
+            with open(cdx_path, encoding="utf-8") as f:
+                packages = _packages_from_cyclonedx(json.load(f))
+        except (OSError, json.JSONDecodeError):
+            packages = None  # absent is "not collected", never "no packages"
+    finally:
+        try:
+            os.unlink(cdx_path)
+        except OSError:
+            pass
     if proc.returncode != 0:
         # Surfaced rather than flattened to "scan failed": the three things that
         # go wrong here -- no such image, no credentials, rate limited -- have
@@ -328,21 +381,77 @@ async def scan_image(request: Request):
         return JSONResponse(
             {"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=502)
     try:
-        return JSONResponse(_normalize(json.loads(proc.stdout)))
+        out = _normalize(json.loads(proc.stdout))
     except json.JSONDecodeError:
         return JSONResponse({"error": "could not parse grype output"}, status_code=500)
+    if packages is not None:
+        out["packages"] = packages
+    return JSONResponse(out)
+
+
+DB_CACHE_DIR = os.environ.get("GRYPE_DB_CACHE_DIR", os.path.expanduser("~/.cache/grype/db"))
+
+# `grype db status` re-verifies the whole database file -- about 2GB -- on every call,
+# which took 6-8 seconds on production, and the Vulnerabilities page waited for it on
+# every load. Its answer can only change when the database file does, so it is
+# cached against that file's size and modification time: correct until the file
+# changes, and recomputed the moment it does. An update or import clears it outright.
+_status_cache = {"key": None, "text": None}
+_status_lock = threading.Lock()
+
+
+def _db_file_key():
+    """Size and mtime of every vulnerability.db under the cache dir, or None."""
+    key = []
+    for root, _dirs, files in os.walk(DB_CACHE_DIR):
+        for name in files:
+            if name == "vulnerability.db" or name.endswith(".json"):
+                try:
+                    st = os.stat(os.path.join(root, name))
+                except OSError:
+                    continue
+                key.append((os.path.join(root, name), st.st_size, st.st_mtime_ns))
+    return tuple(sorted(key)) or None
+
+
+def _db_status_text() -> str:
+    key = _db_file_key()
+    with _status_lock:
+        if key is not None and _status_cache["key"] == key and _status_cache["text"] is not None:
+            return _status_cache["text"]
+    proc = subprocess.run(["grype", "db", "status"], capture_output=True, env=BASE_ENV, timeout=60)
+    text = (proc.stdout + proc.stderr).decode(errors="replace")
+    with _status_lock:
+        # Cached only when the file did not change while it was being checked, and
+        # only a successful answer: a failure is retried, not remembered.
+        if proc.returncode == 0 and key is not None and _db_file_key() == key:
+            _status_cache["key"], _status_cache["text"] = key, text
+    return text
+
+
+def _forget_db_status():
+    with _status_lock:
+        _status_cache["key"], _status_cache["text"] = None, None
+
+
+@app.on_event("startup")
+def _warm_db_status():
+    # Off the event loop and off the request: the first page load after a restart
+    # should not be the one that pays for the check.
+    threading.Thread(target=_db_status_text, daemon=True).start()
 
 
 @app.get("/db/status")
 def db_status():
-    proc = subprocess.run(["grype", "db", "status"], capture_output=True, env=BASE_ENV, timeout=60)
-    return PlainTextResponse((proc.stdout + proc.stderr).decode(errors="replace"))
+    return PlainTextResponse(_db_status_text())
 
 
 @app.post("/db/update")
 def db_update():
     env = {**BASE_ENV, "GRYPE_DB_AUTO_UPDATE": "true"}
+    _forget_db_status()
     proc = subprocess.run(["grype", "db", "update"], capture_output=True, env=env, timeout=DB_TIMEOUT)
+    _forget_db_status()
     ok = proc.returncode == 0
     return JSONResponse(
         {"ok": ok, "output": (proc.stdout + proc.stderr).decode(errors="replace")[:4000]},
@@ -361,7 +470,9 @@ async def db_import(request: Request):
         f.write(body)
         path = f.name
     try:
+        _forget_db_status()
         proc = subprocess.run(["grype", "db", "import", path], capture_output=True, env=BASE_ENV, timeout=DB_TIMEOUT)
+        _forget_db_status()
     finally:
         os.remove(path)
     ok = proc.returncode == 0
