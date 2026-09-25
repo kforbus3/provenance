@@ -8,8 +8,8 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listContainerUpdates, checkContainerUpdates,
-  type ImageUpdate, type ImageUpdateHost,
+  listContainerUpdates, checkContainerUpdates, rebuildChangedNothing,
+  type ImageUpdate, type ImageUpdateHost, type RebuildDiff,
 } from "../api/containerUpdates";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
@@ -97,6 +97,47 @@ export function verdictOf(u: ImageUpdate, all: ImageUpdate[] = []): Verdict {
   return "current";
 }
 
+// What a rebuilt tag changed. "rebuilt" alone said the bytes differ and nothing
+// about how: a base-image security fix and a republish that installs the same 71
+// packages at the same versions (nginx:alpine, 2026-09-22) read the same.
+export function RebuiltChip({ d }: { d?: RebuildDiff }) {
+  const generic = "The tag points at different bytes than these hosts are running — usually a rebuild of the same version.";
+  if (!d) {
+    return <Tooltip title={generic}><Chip label="rebuilt" size="small" color="info" /></Tooltip>;
+  }
+  if (!d.ready) {
+    return (
+      <Tooltip title={`${generic} Comparing the two builds: ${d.reason ?? "not scanned yet"}.`}>
+        <Chip label="rebuilt — comparing…" size="small" color="info" variant="outlined" />
+      </Tooltip>
+    );
+  }
+  const others = d.otherRunning ? ` Compared with the build most of these hosts run; ${d.otherRunning} other older build(s) are also running.` : "";
+  if (rebuildChangedNothing(d)) {
+    return (
+      <Tooltip title={`The new build installs the same packages at the same versions as the one these hosts run, and changes no vulnerability finding. Updating gains nothing today.${others}`}>
+        <Chip label="rebuilt — no package changes" size="small" variant="outlined" />
+      </Tooltip>
+    );
+  }
+  const lines: string[] = [];
+  for (const c of d.changed.slice(0, 12)) lines.push(`${c.name} ${c.from} → ${c.to}`);
+  if (d.changed.length > 12) lines.push(`…and ${d.changed.length - 12} more changed`);
+  if (d.added.length) lines.push(`added: ${d.added.slice(0, 8).map((p) => p.name).join(", ")}${d.added.length > 8 ? "…" : ""}`);
+  if (d.removed.length) lines.push(`removed: ${d.removed.slice(0, 8).map((p) => p.name).join(", ")}${d.removed.length > 8 ? "…" : ""}`);
+  lines.push(`vulnerabilities: ${d.before.total} → ${d.after.total} (critical ${d.before.critical} → ${d.after.critical}, high ${d.before.high} → ${d.after.high}); ${d.fixed} fixed, ${d.introduced} new`);
+  if (d.dbDiffers) lines.push("the two builds were scanned against different CVE database builds, so part of that difference may be the data");
+  const pkgCount = d.changed.length + d.added.length + d.removed.length;
+  const label = d.fixed > 0
+    ? `rebuilt — fixes ${d.fixed} vulnerabilit${d.fixed === 1 ? "y" : "ies"}`
+    : `rebuilt — ${pkgCount} package${pkgCount === 1 ? "" : "s"} changed`;
+  return (
+    <Tooltip title={<Box component="span" sx={{ whiteSpace: "pre-line" }}>{lines.join("\n") + others}</Box>}>
+      <Chip label={label} size="small" color={d.fixed > 0 ? "warning" : "info"} />
+    </Tooltip>
+  );
+}
+
 function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
   const superseded = supersededBy(u, all);
   switch (verdictOf(u, all)) {
@@ -121,11 +162,7 @@ function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
         </Tooltip>
       );
     case "moved":
-      return (
-        <Tooltip title="The tag points at different bytes than these hosts are running — usually a rebuild of the same version.">
-          <Chip label="rebuilt" size="small" color="info" />
-        </Tooltip>
-      );
+      return <RebuiltChip d={u.rebuild} />;
     case "unknown":
       return (
         <Tooltip title={u.note ?? ""}>

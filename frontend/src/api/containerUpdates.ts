@@ -59,6 +59,34 @@ export interface ImageUpdate {
   // until the next check pass prunes them — so the type says so and callers go
   // through hostsOf().
   hosts: ImageUpdateHost[] | null;
+  // What a rebuilt tag changed: the build most hosts run against the one the tag
+  // points at now. Only on "moved" rows with a host on an older build.
+  rebuild?: RebuildDiff;
+}
+
+export interface RebuildPackage { name: string; version: string; type: string }
+export interface RebuildDiff {
+  // False until both builds are scanned with package lists; reason says which not.
+  ready: boolean;
+  reason?: string;
+  fromDigest: string;
+  toDigest: string;
+  otherRunning?: number;
+  changed: { name: string; type: string; from: string; to: string }[];
+  added: RebuildPackage[];
+  removed: RebuildPackage[];
+  before: { critical: number; high: number; total: number };
+  after: { critical: number; high: number; total: number };
+  fixed: number;
+  introduced: number;
+  dbDiffers?: boolean;
+}
+
+// A rebuild that installs exactly what the running build does and changes no
+// vulnerability finding: updating to it gains nothing today.
+export function rebuildChangedNothing(d?: RebuildDiff): boolean {
+  return !!d && d.ready && d.changed.length === 0 && d.added.length === 0 &&
+    d.removed.length === 0 && d.fixed === 0 && d.introduced === 0;
 }
 
 export async function listContainerUpdates(): Promise<ImageUpdate[]> {

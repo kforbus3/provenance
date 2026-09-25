@@ -7,7 +7,8 @@ a multi-hundred-megabyte vulnerability database, which is an integration concern
 The parsing is what silently returns the wrong thing.
 """
 
-from app import _best_cvss, _normalize, _source_package
+import app as appmod
+from app import _best_cvss, _normalize, _packages_from_cyclonedx, _source_package
 
 
 # Debian ships the kernel's userspace helpers from the `linux` source package, so
@@ -190,3 +191,57 @@ def test_sweep_ignores_anything_it_did_not_create(tmp_path):
     _sweep_scan_temp(root=root, max_age=3600)
 
     assert os.path.exists(other), "deleted a directory belonging to something else"
+
+
+def test_packages_from_cyclonedx_keeps_packages_and_the_os_and_drops_files():
+    doc = {"components": [
+        {"type": "library", "name": "openssl", "version": "3.5.8-r0",
+         "properties": [{"name": "syft:package:type", "value": "apk"}]},
+        {"type": "library", "name": "busybox", "version": "1.37.0-r31",
+         "properties": [{"name": "syft:package:type", "value": "apk"}]},
+        {"type": "operating-system", "name": "alpine", "version": "3.24.2"},
+        {"type": "file", "name": "/usr/bin/nginx"},
+        {"type": "library", "name": "no-version",
+         "properties": [{"name": "syft:package:type", "value": "apk"}]},
+        {"type": "library", "name": "openssl", "version": "3.5.8-r0",
+         "properties": [{"name": "syft:package:type", "value": "apk"}]},
+    ]}
+    got = _packages_from_cyclonedx(doc)
+    assert got == [
+        {"name": "busybox", "version": "1.37.0-r31", "type": "apk"},
+        {"name": "openssl", "version": "3.5.8-r0", "type": "apk"},
+        {"name": "alpine", "version": "3.24.2", "type": "os"},
+    ]
+
+
+def test_packages_from_cyclonedx_of_an_empty_report_is_empty():
+    assert _packages_from_cyclonedx({}) == []
+
+
+def test_db_status_is_cached_until_the_database_file_changes(tmp_path, monkeypatch):
+    # grype db status re-verifies a ~2GB file: 6-8 seconds a call on production.
+    db = tmp_path / "6" / "vulnerability.db"
+    db.parent.mkdir()
+    db.write_bytes(b"v1")
+    monkeypatch.setattr(appmod, "DB_CACHE_DIR", str(tmp_path))
+    appmod._forget_db_status()
+    calls = []
+
+    class Done:
+        def __init__(self, out):
+            self.returncode, self.stdout, self.stderr = 0, out, b""
+
+    def fake_run(args, **kw):
+        calls.append(args)
+        return Done(("Built: %d" % len(calls)).encode())
+
+    monkeypatch.setattr(appmod.subprocess, "run", fake_run)
+    first = appmod._db_status_text()
+    assert appmod._db_status_text() == first and len(calls) == 1, "an unchanged database must not be re-checked"
+
+    db.write_bytes(b"v2 -- a new database")
+    assert appmod._db_status_text() != first and len(calls) == 2, "a changed database must be re-checked"
+
+    appmod._forget_db_status()
+    appmod._db_status_text()
+    assert len(calls) == 3, "an update or import clears the cached answer"
