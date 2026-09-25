@@ -24,6 +24,11 @@ export interface ContainerStack {
   deployedAt?: string;
   createdAt: string;
   updatedAt: string;
+  // The compose file on the host no longer matches the stored copy, at the same
+  // revision: changed on the host. A Deploy would overwrite that change.
+  hostDiffers?: boolean;
+  hostCheckedAt?: string;
+  hostCheckError?: string;
 }
 
 export interface StackRevision {

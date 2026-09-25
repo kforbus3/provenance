@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -28,6 +30,48 @@ type ContainerStack struct {
 	DeployedAt   *time.Time `json:"deployedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
+	// What the compose file on the host said when the monitor last read it: a hash
+	// only (ComposeHash), never the contents. See migration 0111.
+	HostComposeSHA string     `json:"-"`
+	HostCheckedAt  *time.Time `json:"hostCheckedAt,omitempty"`
+	HostCheckError string     `json:"hostCheckError,omitempty"`
+	// HostDiffers is computed: the stack is deployed at its current revision, the
+	// host's file was read since that deploy, and it is not the stored copy. A Deploy
+	// now would overwrite whatever was changed there.
+	HostDiffers bool `json:"hostDiffers"`
+}
+
+// ComposeHash is the hash a compose file is compared by, on either side.
+//
+// Trailing whitespace is ignored because the two sides disagree about it and it
+// changes nothing: the stored copy has no final newline and the deploy writes one,
+// so hashing the bytes as they stand would call every stack on the fleet drifted.
+func ComposeHash(compose string) string {
+	sum := sha256.Sum256([]byte(strings.TrimRight(compose, " \t\r\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// hostDiffers decides HostDiffers; see the field.
+func hostDiffers(st *ContainerStack) bool {
+	if st.HostCheckedAt == nil || st.HostCheckError != "" || st.HostComposeSHA == "" {
+		return false
+	}
+	if st.Deployed == nil || *st.Deployed != st.Revision || st.DeployState != "deployed" {
+		return false // not yet deployed: the difference is expected, and drift already says so
+	}
+	if st.DeployedAt != nil && !st.HostCheckedAt.After(*st.DeployedAt) {
+		return false // read before the deploy wrote the file
+	}
+	return st.HostComposeSHA != ComposeHash(st.Compose)
+}
+
+// RecordStackHostFile stores what the host's compose file hashed to, or why it could
+// not be read.
+func (s *Store) RecordStackHostFile(ctx context.Context, stackID uuid.UUID, sha, readErr string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE container_stacks SET host_compose_sha=$2, host_check_error=$3, host_checked_at=now() WHERE id=$1`,
+		stackID, sha, readErr)
+	return changed(tag, err)
 }
 
 // StackRevision is one recorded change to a stack: what it became, who changed
@@ -176,7 +220,8 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 
 const stackCols = `s.id, s.host_id, COALESCE(h.hostname,''), s.name, s.compose, s.path,
 	s.revision, s.enabled, d.revision, COALESCE(d.state,''), COALESCE(d.detail,''),
-	d.applied_at, s.created_at, s.updated_at`
+	d.applied_at, s.created_at, s.updated_at,
+	s.host_compose_sha, s.host_checked_at, s.host_check_error`
 
 const stackFrom = `container_stacks s
 	LEFT JOIN hosts h ON h.id = s.host_id
@@ -186,9 +231,11 @@ func scanStack(row pgx.Row) (*ContainerStack, error) {
 	var st ContainerStack
 	if err := row.Scan(&st.ID, &st.HostID, &st.Hostname, &st.Name, &st.Compose, &st.Path,
 		&st.Revision, &st.Enabled, &st.Deployed, &st.DeployState, &st.DeployDetail,
-		&st.DeployedAt, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		&st.DeployedAt, &st.CreatedAt, &st.UpdatedAt,
+		&st.HostComposeSHA, &st.HostCheckedAt, &st.HostCheckError); err != nil {
 		return nil, mapNotFound(err)
 	}
+	st.HostDiffers = hostDiffers(&st)
 	return &st, nil
 }
 

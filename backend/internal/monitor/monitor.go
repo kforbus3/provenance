@@ -826,6 +826,8 @@ func (m *Monitor) probe(ctx context.Context, signer ssh.Signer, inj *credinject.
 	// forward, so carrying containers through it would keep the inventory refresh
 	// perpetually not-due.
 	if containersStale(h.Inventory) {
+		// Stack files on the same cadence; see checkStackFiles.
+		m.checkStackFiles(ctx, conn, h)
 		var c models.HostInventory
 		collectContainers(conn, &c)
 		if err := m.store.UpdateHostContainers(ctx, h.ID, c); err != nil {

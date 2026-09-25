@@ -42,6 +42,10 @@ func TestDriftComparesIntendedAgainstConfirmed(t *testing.T) {
 			store.ContainerStack{Revision: 3, Deployed: rev(3), DeployState: "failed", Enabled: true}, true},
 		{"in sync",
 			store.ContainerStack{Revision: 3, Deployed: rev(3), DeployState: "deployed", Enabled: true}, false},
+		// Keycloak on 2026-09-24: both sides said revision 5, the host ran TLS, the
+		// stored copy was the old plain-HTTP file.
+		{"changed on the host at the same revision",
+			store.ContainerStack{Revision: 5, Deployed: rev(5), DeployState: "deployed", Enabled: true, HostDiffers: true}, true},
 		{"disabled stacks are not drift",
 			store.ContainerStack{Revision: 3, Deployed: rev(1), DeployState: "deployed", Enabled: false}, false},
 	}
