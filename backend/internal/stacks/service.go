@@ -352,7 +352,10 @@ func driftsFrom(st store.ContainerStack) bool {
 	if st.DeployState == DeployStateDeploying {
 		return false
 	}
-	return st.Deployed == nil || *st.Deployed != st.Revision || st.DeployState == DeployStateFailed
+	// A file changed on the host at the same revision. The numbers agree and the
+	// host is not running what Provenance holds -- and the next Deploy would put the
+	// stored copy back over whatever was changed there. See store.hostDiffers.
+	return st.Deployed == nil || *st.Deployed != st.Revision || st.DeployState == DeployStateFailed || st.HostDiffers
 }
 
 // refreshContainers re-collects one host's running containers, immediately.

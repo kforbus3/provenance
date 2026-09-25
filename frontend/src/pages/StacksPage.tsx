@@ -63,6 +63,16 @@ function DeployState({ s }: { s: ContainerStack }) {
       </Tooltip>
     );
   }
+  if (s.hostDiffers) {
+    // Same revision on both sides, different file. Revision numbers alone could not
+    // see this, and a Deploy re-applied the stored copy over a fix made on the host:
+    // Keycloak went down that way.
+    return (
+      <Tooltip title="The compose file on the host is not the stored copy, though both say this revision. It was changed on the host. Deploying now would overwrite that change: copy the host's file into Edit first if it should stay.">
+        <Chip label={`changed on host (r${s.deployedRevision})`} size="small" color="error" />
+      </Tooltip>
+    );
+  }
   if (s.deployState === "rolled_back") {
     return <Chip label={`rolled back to r${s.deployedRevision}`} size="small" color="warning" />;
   }
@@ -126,8 +136,9 @@ export function StacksPage() {
 
   const drifted = useMemo(
     () => stacks.filter((s) => s.enabled && (s.deployedRevision == null
-      || s.deployedRevision !== s.revision || s.deployState === "failed")),
+      || s.deployedRevision !== s.revision || s.deployState === "failed" || s.hostDiffers)),
     [stacks]);
+  const changedOnHost = drifted.filter((s) => s.hostDiffers).length;
 
   return (
     <Box>
@@ -182,6 +193,9 @@ export function StacksPage() {
         <Alert severity="warning" sx={{ mb: 2 }}>
           {drifted.length} stack{drifted.length > 1 ? "s are" : " is"} not running the
           revision {drifted.length > 1 ? "they" : "it"} should be.
+          {changedOnHost > 0 && (
+            <> {changedOnHost} of them {changedOnHost > 1 ? "were" : "was"} changed on the host: deploying would overwrite that change.</>
+          )}
         </Alert>
       )}
 
