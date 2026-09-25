@@ -127,6 +127,12 @@ jobs:
           format: spdx-json
           output-file: sbom-${{ matrix.name }}.spdx.json
           artifact-name: sbom-${{ matrix.name }}.spdx.json
+          # Never attach it to the GitHub release. Releases are published by hand
+          # (make bundle + gh release create), and this job has contents: read, so once
+          # the release exists the upload fails -- "Resource not accessible by
+          # integration" -- which failed a re-run of v2.0.16. The SBOM is published
+          # where it is verifiable instead: attested to the image below.
+          upload-release-assets: false
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
@@ -137,9 +143,16 @@ jobs:
       - name: Sign image (keyless)
         env:
           COSIGN_EXPERIMENTAL: "1"
+        # Retried: keyless signing needs Fulcio and Rekor, and a brief Sigstore outage
+        # failed the v2.0.16 grype-scanner job ("getting key from Fulcio") after its
+        # image had already been built and pushed.
         run: |
-          cosign sign --yes \
-            "${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+          for i in 1 2 3 4; do
+            cosign sign --yes "${{ matrix.image }}@${{ steps.build.outputs.digest }}" && exit 0
+            echo "cosign sign failed (attempt $i); retrying in $((i * 20))s" >&2
+            sleep $((i * 20))
+          done
+          exit 1
 
       # Attach the SBOM to the image as a keyless attestation. Consumers can
       # verify both the signature and the SBOM against the workflow identity
@@ -148,7 +161,12 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
-          cosign attest --yes \
-            --predicate "sbom-${{ matrix.name }}.spdx.json" \
-            --type spdxjson \
-            "${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+          for i in 1 2 3 4; do
+            cosign attest --yes \
+              --predicate "sbom-${{ matrix.name }}.spdx.json" \
+              --type spdxjson \
+              "${{ matrix.image }}@${{ steps.build.outputs.digest }}" && exit 0
+            echo "cosign attest failed (attempt $i); retrying in $((i * 20))s" >&2
+            sleep $((i * 20))
+          done
+          exit 1
