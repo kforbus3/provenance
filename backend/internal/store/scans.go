@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,10 +34,31 @@ func (s *Store) CreateHostScan(ctx context.Context, hostID uuid.UUID, requestedB
 	return scanScan(row)
 }
 
-// StartHostScan marks a scan running and records the resolved profile/benchmark.
+// MarkHostScanRunning records that a scan has begun, before anything touches the
+// host. Until this existed the only write before completion was StartHostScan, which
+// can only run once oscap has finished -- it records the profile oscap resolved -- so
+// every scan's started_at equalled its finished_at, every duration read zero, and a
+// scan in progress never showed as running.
+//
+// It moves only a pending scan: one already failed or completed stays as it is.
+func (s *Store) MarkHostScanRunning(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE host_scans SET status='running', started_at=now() WHERE id=$1 AND status='pending'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("host scan %s is not pending", id)
+	}
+	return nil
+}
+
+// StartHostScan records the profile/benchmark oscap resolved. It keeps the start
+// time MarkHostScanRunning set, and sets one only if that never ran.
 func (s *Store) StartHostScan(ctx context.Context, id uuid.UUID, profile, profileTitle, benchmark string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE host_scans SET status='running', profile=$2, profile_title=$3, benchmark=$4, started_at=now()
+		`UPDATE host_scans SET status='running', profile=$2, profile_title=$3, benchmark=$4,
+		        started_at=COALESCE(started_at, now())
 		 WHERE id=$1`, id, profile, profileTitle, benchmark)
 	return err
 }

@@ -212,6 +212,11 @@ func (s *Service) Run(parent context.Context, scanID uuid.UUID, h *models.Host, 
 		fail("invalid profile id")
 		return
 	}
+	// Before the dial, so the start time is when the scan started and the scan shows
+	// as running while it runs. A failure here is only a lost timestamp.
+	if err := s.store.MarkHostScanRunning(ctx, scanID); err != nil {
+		s.log.Warn("host scan: could not record the start", "host", h.Hostname, "scan", scanID, "err", err)
+	}
 	conn, err := s.dial(ctx, h)
 	if err != nil {
 		fail("connect: " + err.Error())
