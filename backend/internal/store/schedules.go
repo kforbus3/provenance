@@ -239,9 +239,13 @@ func (s *Store) GetSchedule(ctx context.Context, id uuid.UUID) (*models.Schedule
 // question does not.
 var lastOutcomeSQL = func() string {
 	frag := func(kind, table, alias string) string {
+		// A launched record that no longer exists counts as a failure. Clearing
+		// the failures list deletes failed records, and a batch whose one failure
+		// had been cleared used to read "completed".
 		return `WHEN kind='` + kind + `' THEN (
 			SELECT CASE
-				WHEN count(*) = 0 THEN ''
+				WHEN cardinality(schedules.last_run_ids) = 0 THEN ''
+				WHEN count(*) < cardinality(schedules.last_run_ids) THEN 'failed'
 				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('failed','error','cancelled','interrupted','rolled_back')) > 0 THEN 'failed'
 				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('pending','running','started')) > 0 THEN 'running'
 				ELSE 'completed'
@@ -253,8 +257,25 @@ var lastOutcomeSQL = func() string {
 		frag("playbook", "playbook_runs", "pr") + " " +
 		frag("vulnscan", "vuln_scans", "vs") + " " +
 		frag("script", "winscript_runs", "ws") + " " +
+		// A CVE refresh creates no record; the refresh writes its result onto the
+		// firing (vulnDBRefresh), and "started" while it is still downloading.
+		`WHEN kind='vulndb' THEN CASE
+			WHEN last_status = 'completed' THEN 'completed'
+			WHEN last_status LIKE 'failed%' THEN 'failed'
+			WHEN last_status = 'started' THEN 'running'
+			ELSE '' END ` +
 		"ELSE '' END AS last_outcome"
 }()
+
+// lastRunCountsSQL counts the records the last firing launched and how many of
+// them completed, so the page can say "16 of 17" rather than only a verdict.
+var lastRunCountsSQL = `cardinality(last_run_ids) AS last_run_total,
+			(CASE kind
+				WHEN 'scan' THEN (SELECT count(*) FROM host_scans x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
+				WHEN 'vulnscan' THEN (SELECT count(*) FROM vuln_scans x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
+				WHEN 'playbook' THEN (SELECT count(*) FROM playbook_runs x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
+				WHEN 'script' THEN (SELECT count(*) FROM winscript_runs x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
+				ELSE 0 END) AS last_run_ok`
 
 func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 	// `running` is derived from the launched records: a scan schedule is running
@@ -271,7 +292,8 @@ func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 					WHERE pr.id = ANY(schedules.last_run_ids) AND pr.status IN ('pending','running'))
 				ELSE false
 			END AS running,
-			`+lastOutcomeSQL+`
+			`+lastOutcomeSQL+`,
+			`+lastRunCountsSQL+`
 		FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -283,7 +305,8 @@ func (s *Store) ListSchedules(ctx context.Context) ([]*models.Schedule, error) {
 		var rec, payload []byte
 		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Kind, &sc.Enabled, &sc.TargetKind, &sc.TargetID,
 			&sc.TargetName, &rec, &payload, &sc.Requester, &sc.LastRunAt, &sc.LastStatus,
-			&sc.NextRunAt, &sc.CreatedAt, &sc.UpdatedAt, &sc.Running, &sc.LastOutcome); err != nil {
+			&sc.NextRunAt, &sc.CreatedAt, &sc.UpdatedAt, &sc.Running, &sc.LastOutcome,
+			&sc.LastRunTotal, &sc.LastRunOK); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(rec, &sc.Recurrence)
@@ -351,6 +374,56 @@ func (s *Store) MarkScheduleFired(ctx context.Context, id uuid.UUID, firedAt tim
 		`UPDATE schedules SET last_run_at=$2, last_status=$3, next_run_at=$4, last_run_ids=$5, updated_at=now()
 		 WHERE id=$1`, id, firedAt, status, nextPtr, idsOrEmpty(runIDs))
 	return err
+}
+
+// RecordScheduleResult writes the outcome of work a firing started in the
+// background (a CVE-database refresh) onto that firing. It matches on the firing's
+// time so a slow result cannot overwrite a newer firing's status; matched reports
+// whether it did.
+func (s *Store) RecordScheduleResult(ctx context.Context, id uuid.UUID, firedAt time.Time, status string) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE schedules SET last_status=$3, updated_at=now() WHERE id=$1 AND last_run_at=$2`,
+		id, firedAt, status)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ScheduledRunFailure is one scan in a scheduled batch that did not complete.
+type ScheduledRunFailure struct{ Host, Error string }
+
+// FailedScheduledRuns reports which of a batch's scans failed, with the host and
+// reason, and how many of the ids no longer have a record at all.
+func (s *Store) FailedScheduledRuns(ctx context.Context, kind string, ids []uuid.UUID) ([]ScheduledRunFailure, int, error) {
+	table := map[string]string{"scan": "host_scans", "vulnscan": "vuln_scans"}[kind]
+	if table == "" {
+		return nil, 0, fmt.Errorf("no batch outcome for kind %q", kind)
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT coalesce(h.hostname, ''), x.status, x.error
+		  FROM `+table+` x LEFT JOIN hosts h ON h.id = x.host_id
+		 WHERE x.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []ScheduledRunFailure
+	found := 0
+	for rows.Next() {
+		var host, status, reason string
+		if err := rows.Scan(&host, &status, &reason); err != nil {
+			return nil, 0, err
+		}
+		found++
+		if status != "completed" {
+			if reason == "" {
+				reason = status
+			}
+			out = append(out, ScheduledRunFailure{Host: host, Error: reason})
+		}
+	}
+	return out, len(ids) - found, rows.Err()
 }
 
 // MarkScheduleRun records a manual ("run now") execution: it stamps the last-run

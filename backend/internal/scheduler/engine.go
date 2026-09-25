@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/msrc"
+	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/playbook"
 	"github.com/kforbus3/provenance/backend/internal/scan"
 	"github.com/kforbus3/provenance/backend/internal/store"
@@ -39,18 +41,20 @@ const scanFanoutLimit = 8
 
 // Engine ticks on an interval and fires due schedules.
 type Engine struct {
-	store     *store.Store
-	scans     *scan.Service
-	vuln      *vulnscan.Service
-	msrc      *msrc.Service
-	playbook  *playbook.Service
+	store    *store.Store
+	scans    *scan.Service
+	vuln     *vulnscan.Service
+	msrc     *msrc.Service
+	playbook *playbook.Service
+	// nfy reports scheduled work that failed. Nil in tests; every use checks.
+	nfy       *notify.Service
 	winscript *winscript.Service
 	log       *slog.Logger
 	scanSem   chan struct{}
 }
 
-func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, ms *msrc.Service, pb *playbook.Service, ws *winscript.Service, log *slog.Logger) *Engine {
-	return &Engine{store: st, scans: scans, vuln: vuln, msrc: ms, playbook: pb, winscript: ws, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
+func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, ms *msrc.Service, pb *playbook.Service, ws *winscript.Service, nfy *notify.Service, log *slog.Logger) *Engine {
+	return &Engine{store: st, scans: scans, vuln: vuln, msrc: ms, playbook: pb, winscript: ws, nfy: nfy, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
 }
 
 // Run drives the scheduler loop until ctx is cancelled, checking once a minute.
@@ -76,10 +80,13 @@ func (e *Engine) tick(ctx context.Context) {
 		return
 	}
 	for _, sc := range due {
-		status, ids := e.Fire(ctx, sc)
+		status, ids, then := e.Fire(ctx, sc)
 		next := e.store.ScheduleNextRun(ctx, sc.Recurrence)
 		if err := e.store.MarkScheduleFired(ctx, sc.ID, now, status, next, ids); err != nil {
 			e.log.Warn("scheduler: mark fired", "schedule", sc.ID, "err", err)
+		}
+		if then != nil {
+			then(now)
 		}
 	}
 }
@@ -88,60 +95,47 @@ func (e *Engine) tick(ctx context.Context) {
 // returns a short status string recorded as last_status, plus the IDs of the
 // scan/playbook-run records it created so callers can track in-progress state;
 // the produced scan/run carries the real outcome.
-func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.UUID) {
+//
+// The third result, when not nil, must be called once the firing has been
+// recorded, with the time it was recorded under. It starts work that reports its
+// outcome back onto the schedule row -- which it can only do after the row names
+// this firing, or the record of the firing would overwrite the outcome.
+func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.UUID, func(firedAt time.Time)) {
 	// vulndb refreshes the CVE databases (grype + MSRC); it has no host target.
 	if sc.Kind == "vulndb" {
-		return e.fireVulnDB(), nil
+		return "started", nil, e.vulnDBRefresh(ctx, sc)
 	}
 	hosts, err := e.resolveHosts(ctx, sc)
 	if err != nil {
 		e.log.Warn("scheduler: resolve hosts", "schedule", sc.ID, "err", err)
-		return "error: " + err.Error(), nil
+		return "error: " + err.Error(), nil, nil
 	}
 	if len(hosts) == 0 {
-		return "skipped: no hosts", nil
+		return "skipped: no hosts", nil, nil
 	}
 	switch sc.Kind {
 	case "scan":
-		return e.fireScan(ctx, sc, hosts)
+		status, ids, wait := e.fireScan(ctx, sc, hosts)
+		return status, ids, e.reportWhenDone(ctx, sc, "scan", ids, wait)
 	case "vulnscan":
-		return e.fireVulnScan(ctx, sc, hosts)
+		status, ids, wait := e.fireVulnScan(ctx, sc, hosts)
+		return status, ids, e.reportWhenDone(ctx, sc, "vulnscan", ids, wait)
 	case "playbook":
-		return e.firePlaybook(ctx, sc, hosts)
+		status, ids := e.firePlaybook(ctx, sc, hosts)
+		return status, ids, nil
 	case "script":
-		return e.fireScript(ctx, sc, hosts)
+		status, ids := e.fireScript(ctx, sc, hosts)
+		return status, ids, nil
 	default:
-		return "error: unknown kind", nil
+		return "error: unknown kind", nil, nil
 	}
-}
-
-// fireVulnDB refreshes the CVE databases online: the grype vulnerability DB and the
-// MSRC (Windows) mapping. Runs in the background (a DB download can take minutes) so
-// it doesn't block the scheduler tick; the outcome is logged.
-func (e *Engine) fireVulnDB() string {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-		defer cancel()
-		if _, err := e.vuln.DBUpdate(ctx); err != nil {
-			e.log.Warn("scheduled vulndb: grype update", "err", err)
-		} else {
-			e.log.Info("scheduled vulndb: grype DB updated")
-		}
-		if e.msrc != nil {
-			if n, err := e.msrc.UpdateOnline(ctx); err != nil {
-				e.log.Warn("scheduled vulndb: msrc update", "err", err)
-			} else {
-				e.log.Info("scheduled vulndb: msrc updated", "entries", n)
-			}
-		}
-	}()
-	return "started"
 }
 
 // fireVulnScan launches a vulnerability scan per target host, bounded by the same
 // fan-out cap as compliance scans.
-func (e *Engine) fireVulnScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {
+func (e *Engine) fireVulnScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID, func()) {
 	var ids []uuid.UUID
+	var wg sync.WaitGroup
 	for _, h := range hosts {
 		id, err := e.store.CreateVulnScan(ctx, h.ID, nil, sc.Requester, true)
 		if err != nil {
@@ -149,16 +143,18 @@ func (e *Engine) fireVulnScan(ctx context.Context, sc *models.Schedule, hosts []
 			continue
 		}
 		ids = append(ids, id)
+		wg.Add(1)
 		go func(scanID uuid.UUID, host *models.Host) {
+			defer wg.Done()
 			e.scanSem <- struct{}{}
 			defer func() { <-e.scanSem }()
 			e.vuln.Run(context.WithoutCancel(ctx), scanID, host)
 		}(id, h)
 	}
 	if len(ids) == 0 {
-		return "error: no scans created", nil
+		return "error: no scans created", nil, nil
 	}
-	return "started", ids
+	return "started", ids, wg.Wait
 }
 
 func (e *Engine) resolveHosts(ctx context.Context, sc *models.Schedule) ([]*models.Host, error) {
@@ -183,7 +179,7 @@ func (e *Engine) resolveHosts(ctx context.Context, sc *models.Schedule) ([]*mode
 	return []*models.Host{h}, nil
 }
 
-func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {
+func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID, func()) {
 	var p models.ScanSchedulePayload
 	_ = json.Unmarshal(sc.Payload, &p)
 	skip := p.SkipRules
@@ -191,6 +187,7 @@ func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*mod
 		skip = append(append([]string{}, scan.ExpensiveFSRules...), skip...)
 	}
 	var ids []uuid.UUID
+	var wg sync.WaitGroup
 	for _, h := range hosts {
 		rec, err := e.store.CreateHostScan(ctx, h.ID, nil, sc.Requester, p.Profile, true)
 		if err != nil {
@@ -200,16 +197,18 @@ func (e *Engine) fireScan(ctx context.Context, sc *models.Schedule, hosts []*mod
 		ids = append(ids, rec.ID)
 		// Launch immediately but gate concurrency on scanSem: extra hosts queue
 		// rather than all dialing the jump host at once. Fire still returns promptly.
+		wg.Add(1)
 		go func(scanID uuid.UUID, host *models.Host) {
+			defer wg.Done()
 			e.scanSem <- struct{}{}
 			defer func() { <-e.scanSem }()
 			e.scans.Run(context.WithoutCancel(ctx), scanID, host, p.Profile, skip)
 		}(rec.ID, h)
 	}
 	if len(ids) == 0 {
-		return "error: no scans created", nil
+		return "error: no scans created", nil, nil
 	}
-	return "started", ids
+	return "started", ids, wg.Wait
 }
 
 func (e *Engine) firePlaybook(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID) {

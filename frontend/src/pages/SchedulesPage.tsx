@@ -49,10 +49,14 @@ function LastRun({ s }: { s: Schedule }) {
     return <>{`${when} (${s.lastStatus})`}</>;
   }
   const color = s.lastOutcome === "failed" ? "error" : s.lastOutcome === "running" ? "info" : "success";
+  // "failed 16/17", not just "failed": one host out of seventeen and every host are
+  // different mornings. Only for batches -- a single run's count adds nothing.
+  const total = s.lastRunTotal ?? 0;
+  const label = total > 1 ? `${s.lastOutcome} ${s.lastRunOk ?? 0}/${total}` : s.lastOutcome;
   return (
     <Tooltip title={`Fired: ${s.lastStatus}`}>
       <span>
-        {when} <Chip size="small" variant="outlined" color={color} label={s.lastOutcome} />
+        {when} <Chip size="small" variant="outlined" color={color} label={label} />
       </span>
     </Tooltip>
   );

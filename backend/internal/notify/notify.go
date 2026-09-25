@@ -46,6 +46,11 @@ const (
 	// noticing a red chip.
 	EventContainerRolloutHalted = "container.rollout.halted"
 	EventStackDeployFailed      = "container.stack.failed"
+	// Scheduled scans and CVE-database refreshes that did not work. A scheduled
+	// vulnerability scan lost a host one night and the only trace by morning was a
+	// line in the backend log: the failed record had been cleared and the schedule
+	// said "started".
+	EventScheduleFailed = "schedule.failed"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -74,6 +79,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventRolloutHalted, "OS update rollout halted on its failure budget"},
 	{EventContainerRolloutHalted, "Container update rollout halted on its failure budget"},
 	{EventStackDeployFailed, "Managed stack failed to deploy"},
+	{EventScheduleFailed, "Scheduled scan or CVE-database refresh failed"},
 }
 
 const settingKey = "notifications"
