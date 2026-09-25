@@ -287,7 +287,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// up" that would drift from the one an operator uses by hand.
 	s.updateEngine = containerupdate.New(st, s.stacks, s.commandSvc, log)
 	s.updateEngine.SetNotifier(s.Notify)
-	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, log)
+	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, s.Notify, log)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
 	s.auditFwd = auditfwd.New(st, cfg, log)

@@ -28,6 +28,10 @@ export interface Schedule {
   // "failed", "running", or absent when it produced nothing. This is the answer to
   // "did it work".
   lastOutcome?: "completed" | "failed" | "running" | "";
+  // How many records the last firing launched, and how many completed. A launched
+  // record that has since been deleted counts against lastRunOk.
+  lastRunTotal?: number;
+  lastRunOk?: number;
   nextRunAt?: string;
   running?: boolean;
   createdAt: string;

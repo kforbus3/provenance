@@ -44,9 +44,13 @@ type Schedule struct {
 	// reads "started" forever: one that failed six nights running looks exactly like
 	// one that worked, on the page an operator opens to find out which. This is the
 	// answer to "did it work", derived from the runs themselves.
-	LastOutcome string    `json:"lastOutcome,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	LastOutcome string `json:"lastOutcome,omitempty"`
+	// LastRunTotal and LastRunOK count the records the last firing launched and
+	// how many completed -- "16 of 17", which a verdict alone cannot say.
+	LastRunTotal int       `json:"lastRunTotal"`
+	LastRunOK    int       `json:"lastRunOk"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // ScanSchedulePayload is the Payload for a scan schedule.

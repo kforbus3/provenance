@@ -48,6 +48,19 @@ describe("what a schedule's last run actually did", () => {
     expect(await screen.findByText(/\(started\)/)).toBeInTheDocument();
   });
 
+  it("says how many hosts of a batch worked", async () => {
+    // One host of seventeen failing and every host failing are different mornings.
+    // The night gitlab's scan failed, nothing on this page said so.
+    renderWith([sched({ id: "e", kind: "vulnscan", name: "VulnScan", lastOutcome: "failed", lastRunTotal: 17, lastRunOk: 16 })]);
+    expect(await screen.findByText("failed 16/17")).toBeInTheDocument();
+  });
+
+  it("shows a CVE refresh's own result once it reports one", async () => {
+    // The refresh writes its result onto the firing; the backend derives the verdict.
+    renderWith([sched({ id: "f", kind: "vulndb", name: "VulnDBUpdate", lastStatus: "failed: grype database: timeout", lastOutcome: "failed", lastRunTotal: 0 })]);
+    expect(await screen.findByText("failed")).toBeInTheDocument();
+  });
+
   it("says skipped rather than inventing a verdict", async () => {
     renderWith([sched({ id: "d", lastStatus: "skipped: no hosts" })]);
     expect(await screen.findByText(/skipped: no hosts/)).toBeInTheDocument();
