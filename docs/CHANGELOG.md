@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.14 — 2026-09-25
+
+### SAML metadata publishes the signing certificate
+
+With an SP signing key configured, Provenance signs its AuthnRequests — and its metadata said so
+(`AuthnRequestsSigned="true"`) while publishing **no certificate** to verify them with. The check
+asked the SAML library's `GetSigningKey`, which cannot see a key installed the way Provenance
+installs it (`SetSPSigningKeyStore`); the library documents it as wrong in exactly that case. An
+identity provider that configures itself from Provenance's metadata could not verify a single
+request. The metadata now carries the certificate whenever a key is configured.
+
+If an IdP was set up from Provenance's metadata while a signing key was configured, re-import the
+metadata after upgrading. Without a signing key nothing changes.
+
+### Also
+
+- Applying an upgrade keeps the request's values rather than starting from a bare background
+  context, which drops the tenant scope.
+- CI passes again. The linters CI runs are pinned (golangci-lint v2.14.0, staticcheck v0.8.1)
+  instead of `latest`, and `make lint` runs the same versions locally.
+
+### Upgrading
+
+Nothing to do, apart from the metadata re-import above if it applies.
+
+---
+
 ## v2.0.13 — 2026-09-24
 
 Six things this week's work turned up, each of which let a problem go unseen.
