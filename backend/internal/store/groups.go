@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"github.com/jackc/pgx/v5"
 	"strings"
 
 	"github.com/google/uuid"
@@ -206,9 +207,15 @@ func (s *Store) CreateGroup(ctx context.Context, name, description string) (*mod
 
 // DeleteGroup removes a group.
 func (s *Store) DeleteGroup(ctx context.Context, id uuid.UUID) error {
-	// Matching nothing is a failure, not a no-op: a group reported deleted still carries whatever it granted.
-	tag, err := s.pool.Exec(ctx, `DELETE FROM groups WHERE id=$1`, id)
-	return changed(tag, err)
+	return s.tx(ctx, func(tx pgx.Tx) error {
+		// Matching nothing is a failure, not a no-op: a group reported deleted still carries whatever it granted.
+		tag, err := tx.Exec(ctx, `DELETE FROM groups WHERE id=$1`, id)
+		if err := changed(tag, err); err != nil {
+			return err
+		}
+		// Schedules aimed at the group stop with it; see DeleteHost.
+		return disableSchedulesTargeting(ctx, tx, "group", id)
+	})
 }
 
 // AddUserToGroup adds a user to a group.

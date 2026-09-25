@@ -32,6 +32,8 @@ export interface Schedule {
   // record that has since been deleted counts against lastRunOk.
   lastRunTotal?: number;
   lastRunOk?: number;
+  // The targeted host or group has been deleted (and the schedule disabled with it).
+  targetMissing?: boolean;
   nextRunAt?: string;
   running?: boolean;
   createdAt: string;

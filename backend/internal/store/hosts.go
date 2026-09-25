@@ -529,6 +529,13 @@ func (s *Store) DeleteHost(ctx context.Context, id uuid.UUID) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM hosts WHERE id=$1`, id); err != nil {
 			return err
 		}
+		// A schedule aimed at this host would otherwise go on firing at nothing: the
+		// Windows scan schedule for winserv1 outlived its host by two months, still
+		// naming it. Disabled rather than deleted -- what it did, and to what, is
+		// history an operator may want -- and flagged in the list (target_missing).
+		if err := disableSchedulesTargeting(ctx, tx, "host", id); err != nil {
+			return err
+		}
 		if len(ids) > 0 {
 			if _, err := tx.Exec(ctx, `DELETE FROM ssh_host_keys WHERE host = ANY($1)`, ids); err != nil {
 				return err
