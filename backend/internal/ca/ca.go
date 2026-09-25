@@ -34,6 +34,11 @@ type CA struct {
 	mu     sync.RWMutex
 	signer ssh.Signer // active user-CA signer, held only in RAM
 	caID   string     // active ca_keys.id
+	// A rotation's key: trusted (pushed to hosts) but not signing until promoted.
+	// Held so the jump host's trust in it can be proved with a real login before
+	// anything is signed with it. Nil when no rotation is pending.
+	pending   ssh.Signer
+	pendingID string
 }
 
 // New constructs a CA bound to the store and at-rest encryption passphrase.
@@ -50,7 +55,7 @@ func New(st *store.Store, cfg *config.Config) *CA {
 func (c *CA) EnsureUserCA(ctx context.Context) error {
 	rec, priv, err := c.store.GetActiveCAKey(ctx, "user")
 	if errors.Is(err, store.ErrNotFound) {
-		return c.generate(ctx)
+		return c.generate(ctx, true)
 	}
 	if err != nil {
 		return err
@@ -81,6 +86,9 @@ func (c *CA) EnsureUserCA(ctx context.Context) error {
 	c.mu.Lock()
 	c.signer, c.caID = signer, rec.ID.String()
 	c.mu.Unlock()
+	if err := c.loadPending(ctx); err != nil {
+		return err
+	}
 	// Opportunistically upgrade the CA-key envelope to match the active KDF profile:
 	// legacy(SHA-256)/argon2id -> argon2id normally, and legacy/argon2id -> PBKDF2
 	// under FIPS. Gated behind the opt-in flag because the upgraded blob can't be read
@@ -134,7 +142,7 @@ func (c *CA) ResealActiveKey(ctx context.Context) (bool, error) {
 
 // generate creates a fresh user CA of the profile's key type (Ed25519 by default,
 // ECDSA P-256 under FIPS), encrypts the private key, and stores it.
-func (c *CA) generate(ctx context.Context) error {
+func (c *CA) generate(ctx context.Context, signing bool) error {
 	priv, err := c.profile.GenerateSigningKey()
 	if err != nil {
 		return err
@@ -151,20 +159,134 @@ func (c *CA) generate(ctx context.Context) error {
 	authorized := string(ssh.MarshalAuthorizedKey(sshPub))
 	// The algorithm string (ssh-ed25519 / ecdsa-sha2-nistp256) is taken from the key
 	// itself, so the stored CA record reflects whichever type the profile generated.
-	rec, err := c.store.InsertCAKey(ctx, "user", sshPub.Type(), authorized, enc, ssh.FingerprintSHA256(sshPub))
+	rec, err := c.store.InsertCAKey(ctx, "user", sshPub.Type(), authorized, enc, ssh.FingerprintSHA256(sshPub), signing)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
-	c.signer, c.caID = signer, rec.ID.String()
+	if signing {
+		c.signer, c.caID = signer, rec.ID.String()
+	} else {
+		c.pending, c.pendingID = signer, rec.ID.String()
+	}
 	c.mu.Unlock()
 	return nil
 }
 
-// Rotate generates a new active CA while leaving the previous one active too, so
-// hosts that trust either key keep working until the old key is retired.
+// ErrRotationPending is returned by Rotate while a previous rotation's key has not
+// been promoted yet. A second pending key would be a third trusted key, with no
+// answer to which of the two new ones should win.
+var ErrRotationPending = errors.New("a CA rotation is already in progress: its new key is trusted but not signing yet")
+
+// Rotate generates a new CA key that is TRUSTED but does not sign yet.
+//
+// It used to become the signer the moment it existed, before anything trusted it:
+// every certificate issued from then on was signed by a key the jump host would not
+// learn for up to five minutes, and that a host which missed the trust push would
+// never learn. Now the key is pushed first and signs only once Promote is called,
+// which the caller does when every host and the jump host have confirmed it. Until
+// then the previous key goes on signing, and nothing about reachability changes.
 func (c *CA) Rotate(ctx context.Context) error {
-	return c.generate(ctx)
+	c.mu.RLock()
+	busy := c.pending != nil
+	c.mu.RUnlock()
+	if busy {
+		return ErrRotationPending
+	}
+	if _, _, err := c.store.GetPendingCAKey(ctx, "user"); err == nil {
+		return ErrRotationPending
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	return c.generate(ctx, false)
+}
+
+// loadPending loads a rotation's key from the store (a rotation started before a
+// restart, or by provctl in another process).
+func (c *CA) loadPending(ctx context.Context) error {
+	rec, priv, err := c.store.GetPendingCAKey(ctx, "user")
+	if errors.Is(err, store.ErrNotFound) {
+		c.mu.Lock()
+		c.pending, c.pendingID = nil, ""
+		c.mu.Unlock()
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	signer, err := c.decryptSigner(priv)
+	if err != nil {
+		return fmt.Errorf("load pending CA key: %w", err)
+	}
+	c.mu.Lock()
+	c.pending, c.pendingID = signer, rec.ID.String()
+	c.mu.Unlock()
+	return nil
+}
+
+// Refresh re-reads which key signs and which is pending, so a change made by another
+// process (provctl rotate-ca, another instance) is picked up.
+func (c *CA) Refresh(ctx context.Context) error {
+	rec, priv, err := c.store.GetActiveCAKey(ctx, "user")
+	if err != nil {
+		return err
+	}
+	c.mu.RLock()
+	same := rec.ID.String() == c.caID
+	c.mu.RUnlock()
+	if !same {
+		signer, err := c.decryptSigner(priv)
+		if err != nil {
+			return fmt.Errorf("load signing CA key: %w", err)
+		}
+		c.mu.Lock()
+		c.signer, c.caID = signer, rec.ID.String()
+		c.mu.Unlock()
+	}
+	return c.loadPending(ctx)
+}
+
+// Promote makes the pending key the signer. The previous key stays trusted, so
+// certificates it already signed keep working, until it is retired.
+func (c *CA) Promote(ctx context.Context) error {
+	c.mu.RLock()
+	pending, id := c.pending, c.pendingID
+	c.mu.RUnlock()
+	if pending == nil {
+		return errors.New("no CA rotation is pending")
+	}
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		return err
+	}
+	if err := c.store.PromoteCAKey(ctx, uid); err != nil {
+		return fmt.Errorf("promote CA key: %w", err)
+	}
+	c.mu.Lock()
+	c.signer, c.caID = pending, id
+	c.pending, c.pendingID = nil, ""
+	c.mu.Unlock()
+	return nil
+}
+
+// PendingID is the pending rotation key's id, or "".
+func (c *CA) PendingID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.pendingID
+}
+
+// SignWithPending signs a user certificate with the PENDING key. It exists for one
+// purpose: proving the jump host trusts that key with a real login before it signs
+// anything that matters.
+func (c *CA) SignWithPending(pub ssh.PublicKey, keyID string, principals []string, serial uint64, validFor time.Duration) (*ssh.Certificate, error) {
+	c.mu.RLock()
+	pending := c.pending
+	c.mu.RUnlock()
+	if pending == nil {
+		return nil, errors.New("no CA rotation is pending")
+	}
+	return signUser(pending, pub, keyID, principals, serial, validFor)
 }
 
 // SignUserCertificate signs pub as a user certificate with the given identity.
@@ -183,6 +305,10 @@ func (c *CA) SignUserCertificate(pub ssh.PublicKey, keyID string, principals []s
 	if signer == nil {
 		return nil, errors.New("user CA not initialized")
 	}
+	return signUser(signer, pub, keyID, principals, serial, validFor)
+}
+
+func signUser(signer ssh.Signer, pub ssh.PublicKey, keyID string, principals []string, serial uint64, validFor time.Duration) (*ssh.Certificate, error) {
 	now := time.Now()
 	cert := &ssh.Certificate{
 		Key:             pub,

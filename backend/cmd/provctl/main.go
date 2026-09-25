@@ -48,7 +48,7 @@ Usage:
   provctl create-admin <username> <password> [email]   Create a Super Administrator (recovery)
   provctl reset-mfa <username>                          Remove all of a user's MFA factors
   provctl enable-user <username>                        Re-enable and unlock a disabled account
-  provctl rotate-ca                                     Generate a new active user CA
+  provctl rotate-ca                                     Start a user CA rotation (the server promotes it)
   provctl list-users                                    List accounts
   provctl audit-scan                                    Enumerate every break in the audit chain (read-only)
   provctl support-bundle [--out FILE] [--anonymise]      Write a support bundle about this instance (--anonymise masks hostnames + IPs)
@@ -256,37 +256,21 @@ func run(cmd string, args []string) error {
 		if err := caMgr.Rotate(ctx); err != nil {
 			return err
 		}
-		fmt.Printf("rotated user CA; new active id %s\n", caMgr.ActiveID())
-		// The rotation is half the operation, and the half that is not done here is
-		// the one that decides whether the fleet stays reachable.
-		//
-		// A managed host trusts the CA through TrustedUserCAKeys, written during
-		// enrollment. Rotating mints a new key and retires the old one — but nothing
-		// tells the hosts, so every one of them still trusts only the key that is on
-		// its way out. Certificates signed by the new CA are rejected, and the failure
-		// does not arrive at rotation time: it arrives later, fleet-wide, when the old
-		// certificates expire. Saying only "rotated" invites exactly that.
+		fmt.Printf("started a user CA rotation; new key %s is TRUSTED but not signing yet\n", caMgr.PendingID())
+		fmt.Printf("the current key %s keeps signing until the new one is promoted\n", caMgr.ActiveID())
+		// Nothing loses access from this command. The key it made is trusted, not
+		// signing: the running server's rotation reconcile pushes it to every host,
+		// proves the jump host accepts it, and only then promotes it -- within a few
+		// minutes. Watch it with GET /api/v1/certificates/ca/rotation.
 		fmt.Println()
-		fmt.Println("  NEXT STEP — REQUIRED from this command. Rotating through the API")
-		fmt.Println("  (POST /api/v1/certificates/ca/rotate, or Settings -> Certificates)")
-		fmt.Println("  distributes the new key to every enrolled host and reports which took it.")
-		fmt.Println("  provctl runs outside the server and cannot reach the hosts, so after")
-		fmt.Println("  rotating HERE the distribution is still owed.")
-		fmt.Println()
-		fmt.Println("  Managed hosts do not learn this key by themselves.")
-		fmt.Println("  Each host trusts the CA through TrustedUserCAKeys, written at enrollment,")
-		fmt.Println("  and still trusts only the PREVIOUS key. Until a host is given the new one,")
-		fmt.Println("  certificates signed by it are rejected — and because already-issued")
-		fmt.Println("  certificates keep working until they expire, nothing looks wrong until they do.")
-		fmt.Println()
-		fmt.Println("  Re-enroll each managed host (Hosts -> select -> Enroll, or the enrollment API);")
-		fmt.Println("  that rewrites TrustedUserCAKeys with the current key. Verify with:")
-		fmt.Println("      ssh-keygen -lf /etc/ssh/prov_ca.pub      # on the host")
-		fmt.Println("      GET /api/v1/certificates/ca              # activeUserCA here")
-		fmt.Println("  The two fingerprints must match.")
+		fmt.Println("  The running Provenance server finishes this rotation by itself: within a")
+		fmt.Println("  few minutes it pushes the new key to every enrolled host, confirms the jump")
+		fmt.Println("  host trusts it, and makes it the signing key. Nothing loses access meanwhile.")
+		fmt.Println("  Progress: Certificates page, or GET /api/v1/certificates/ca/rotation.")
+		fmt.Println("  Afterwards, retire the previous key there to stop trusting it.")
 		if pub := caMgr.PublicKeyAuthorized(); pub != "" {
 			fmt.Println()
-			fmt.Println("  New active user CA public key:")
+			fmt.Println("  Current signing user CA public key:")
 			fmt.Printf("      %s\n", strings.TrimSpace(pub))
 		}
 

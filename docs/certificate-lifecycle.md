@@ -100,19 +100,31 @@ certificates are rejected even before they expire.
 
 ## 6. CA rotation
 
-Rotate the signing key when required (policy, suspected compromise):
+Rotate the signing key when required (policy, suspected compromise). A rotation
+has three steps, and each waits for the one before it to be confirmed by the hosts
+that must honour it, so nothing loses access at any point:
 
-```
-POST /api/v1/certificates/ca/rotate   ->   { "status": "rotated", "activeCa": "<id>" }
-```
+1. **Trusted.** `POST /api/v1/certificates/ca/rotate` (or **Rotate CA** on the
+   Certificates page, or `provctl rotate-ca`) creates a new key that is trusted but
+   does **not** sign. Both keys are pushed to every enrolled SSH host's
+   `TrustedUserCAKeys`, and each host's read-back is recorded. The current key keeps
+   signing.
+2. **Signing.** The new key is promoted — becomes the signer — once every enrolled SSH
+   host confirms it **and** the jump host accepts a real login with a certificate it
+   signed (the jump host learns the CA by polling, so publishing it is not proof).
+   A background reconcile retries hosts that missed the push and promotes the key by
+   itself, usually within five minutes. `POST /certificates/ca/promote` checks now;
+   `?force=true` promotes past hosts that are gone for good (they refuse new logins
+   until they take the key). Force never skips the jump host.
+3. **Retired.** `POST /certificates/ca/{id}/retire` stops trusting the previous key.
+   It is refused while a rotation is pending or while any host does not confirm the
+   signing key. Every certificate the retired key signed stops working, including
+   sessions started before the rotation. Retiring a pending key abandons the rotation.
 
-- A new CA key is generated and marked active; the previous key is retired
-  (`ca_keys.retired_at`) but **kept** so already-issued certificates still verify
-  until they expire.
-- The action is audited (`certificate.ca_rotate`).
-- **Post-rotation:** distribute the new `activeUserCA` public key to all managed
-  hosts' `TrustedUserCAKeys`. Until a host trusts the new CA, certificates signed
-  by it will be rejected. New logins automatically use the new active CA.
+`GET /certificates/ca/rotation` reports where a rotation stands: which key signs,
+which is pending, whether the jump host trusts it, and every host's confirmed state.
+Every step is audited: `certificate.ca_rotate`, `certificate.ca_promote`
+(with `forced`), `certificate.ca_retire`.
 
 Inspect CA state any time:
 
@@ -144,7 +156,7 @@ metadata recorded in `ssh_certificates`, revocable by serial. Operators with
         |
         +--> revoke by serial ----> cert_revocations ----> KRL (sshd RevokedKeys)
         |
-        +--> CA rotate ----> old CA retired (kept for verify), new CA active
+        +--> CA rotate --> new key trusted --> promoted once all hosts + jump host confirm --> old key retired
         |
         v
  logout / expiry ── ephemeral key zeroized, session certs revoked

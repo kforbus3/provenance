@@ -66,6 +66,19 @@ func (i *Issuer) SystemSigner(ctx context.Context, principals []string, ttl time
 	return certSigner, nil
 }
 
+// FlushSystemCache drops every cached system certificate, so the next SystemSigner
+// call signs a fresh one with the current CA key.
+//
+// Needed after a CA key is retired. These certificates live for up to a day, and a
+// cached one signed by the retired key is refused by every host once the new trust
+// file lands -- the monitor, scans and playbooks would go dark for as long as the
+// cache held it.
+func FlushSystemCache() {
+	systemCacheMu.Lock()
+	defer systemCacheMu.Unlock()
+	systemCache = map[string]*systemHolder{}
+}
+
 // SystemHostPrincipals returns the principal set a system worker should use to
 // authenticate to a specific host. It always includes the fleet-wide "fleet"
 // principal for the jump-host hop; in lockdown mode it also includes the host's

@@ -5,6 +5,43 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.16 — 2026-09-25
+
+### A CA rotation that nothing loses access to, and that can finish
+
+**Rotate CA** used to make the new key the signer the moment it existed, push it to the hosts
+once, and never retire anything. So:
+
+- **new logins failed for up to five minutes** — every connection goes through the jump host, and
+  it learns the CA by polling every five minutes, while every new certificate was already signed by
+  the new key;
+- **a host that missed the one push dropped out within a day**, once its cached old-key
+  certificates expired, and nothing retried it;
+- **the old key could never be retired** — `RetireCAKey` existed and nothing called it — so a
+  rotation for a suspected compromise left the compromised key trusted on every host for ever.
+
+A rotation now has three steps, each confirmed before the next:
+
+1. **Trusted** — the new key is created and pushed to every host; the current key keeps signing.
+2. **Signing** — it is promoted only when every enrolled SSH host confirms it **and** the jump host
+   accepts a real login with a certificate it signed. A background reconcile retries hosts that
+   missed the push and promotes by itself, usually within five minutes. **Promote anyway** is there
+   for hosts that are gone for good; it never skips the jump host.
+3. **Retired** — a new **Retire** action stops trusting the previous key, refused while anything
+   still depends on it. After a rotation for a suspected compromise, retire the old key.
+
+The Certificates page shows which key signs, which is pending, and which hosts have not confirmed
+the new one and why. Each host's confirmed trust is now recorded, and a host that falls behind is
+retried outside rotations too. `provctl rotate-ca` starts a rotation the server finishes.
+
+### Upgrading
+
+Migration 0112 marks the current CA key as the signing key and adds per-host trust columns;
+nothing changes until a rotation is started. Hosts show "not confirmed" until the first reconcile
+(within a few minutes of starting) records them.
+
+---
+
 ## v2.0.15 — 2026-09-25
 
 ### A host's last stopped container stops being listed

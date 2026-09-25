@@ -2,6 +2,11 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"github.com/jackc/pgx/v5/pgconn"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,38 +22,74 @@ func (s *Store) NextCertSerial(ctx context.Context) (uint64, error) {
 	return uint64(serial), err
 }
 
+const caCols = `id, kind, algo, public_key, fingerprint, active, created_at, retired_at, signing_since`
+
+func scanCA(row pgx.Row, c *models.CACert, extra ...any) error {
+	return row.Scan(append([]any{&c.ID, &c.Kind, &c.Algo, &c.PublicKey, &c.Fingerprint, &c.Active,
+		&c.CreatedAt, &c.RetiredAt, &c.SigningSince}, extra...)...)
+}
+
 // InsertCAKey stores a CA keypair (private material already encrypted).
-func (s *Store) InsertCAKey(ctx context.Context, kind, algo, publicKey string, privateEnc []byte, fingerprint string) (*models.CACert, error) {
+//
+// signing says whether it signs from the moment it exists. Only the first key does:
+// a rotation's key is inserted trusted-but-not-signing and promoted later
+// (PromoteCAKey), once everything that must trust it does. See migration 0112.
+func (s *Store) InsertCAKey(ctx context.Context, kind, algo, publicKey string, privateEnc []byte, fingerprint string, signing bool) (*models.CACert, error) {
 	var c models.CACert
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO ca_keys (kind, algo, public_key, private_enc, fingerprint)
-		VALUES ($1,$2,$3,$4,$5)
-		RETURNING id, kind, algo, public_key, fingerprint, active, created_at, retired_at`,
-		kind, algo, publicKey, privateEnc, fingerprint).
-		Scan(&c.ID, &c.Kind, &c.Algo, &c.PublicKey, &c.Fingerprint, &c.Active, &c.CreatedAt, &c.RetiredAt)
+	err := scanCA(s.pool.QueryRow(ctx, `
+		INSERT INTO ca_keys (kind, algo, public_key, private_enc, fingerprint, signing_since)
+		VALUES ($1,$2,$3,$4,$5, CASE WHEN $6 THEN now() END)
+		RETURNING `+caCols,
+		kind, algo, publicKey, privateEnc, fingerprint, signing), &c)
 	return &c, err
 }
 
-// GetActiveCAKey returns the active CA of a kind plus its encrypted private key.
+// GetActiveCAKey returns the SIGNING CA of a kind plus its encrypted private key: the
+// active key promoted most recently. A rotation's pending key is active (trusted)
+// but not this.
 func (s *Store) GetActiveCAKey(ctx context.Context, kind string) (*models.CACert, []byte, error) {
 	var c models.CACert
 	var priv []byte
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, kind, algo, public_key, private_enc, fingerprint, active, created_at, retired_at
-		FROM ca_keys WHERE kind=$1 AND active=true ORDER BY created_at DESC LIMIT 1`, kind).
-		Scan(&c.ID, &c.Kind, &c.Algo, &c.PublicKey, &priv, &c.Fingerprint, &c.Active, &c.CreatedAt, &c.RetiredAt)
+	err := scanCA(s.pool.QueryRow(ctx, `
+		SELECT `+caCols+`, private_enc
+		FROM ca_keys WHERE kind=$1 AND active AND signing_since IS NOT NULL
+		ORDER BY signing_since DESC LIMIT 1`, kind), &c, &priv)
 	if err != nil {
 		return nil, nil, mapNotFound(err)
 	}
 	return &c, priv, nil
 }
 
-// ActiveCACreatedAt returns when the active CA key of a kind was created (for
+// GetPendingCAKey returns a rotation's key that is trusted but not yet signing.
+func (s *Store) GetPendingCAKey(ctx context.Context, kind string) (*models.CACert, []byte, error) {
+	var c models.CACert
+	var priv []byte
+	err := scanCA(s.pool.QueryRow(ctx, `
+		SELECT `+caCols+`, private_enc
+		FROM ca_keys WHERE kind=$1 AND active AND signing_since IS NULL
+		ORDER BY created_at DESC LIMIT 1`, kind), &c, &priv)
+	if err != nil {
+		return nil, nil, mapNotFound(err)
+	}
+	return &c, priv, nil
+}
+
+// PromoteCAKey makes a pending key the signer.
+func (s *Store) PromoteCAKey(ctx context.Context, id uuid.UUID) error {
+	// Matching nothing is a failure: a key reported promoted that is not would leave
+	// the old one signing while the operator believes the rotation finished.
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE ca_keys SET signing_since=now() WHERE id=$1 AND active AND signing_since IS NULL`, id)
+	return changed(tag, err)
+}
+
+// ActiveCACreatedAt returns when the signing CA key of a kind was created (for
 // rotation-age checks), without fetching private material.
 func (s *Store) ActiveCACreatedAt(ctx context.Context, kind string) (time.Time, error) {
 	var t time.Time
 	err := s.pool.QueryRow(ctx,
-		`SELECT created_at FROM ca_keys WHERE kind=$1 AND active=true ORDER BY created_at DESC LIMIT 1`, kind).
+		`SELECT created_at FROM ca_keys WHERE kind=$1 AND active AND signing_since IS NOT NULL
+		 ORDER BY signing_since DESC LIMIT 1`, kind).
 		Scan(&t)
 	if err != nil {
 		return time.Time{}, mapNotFound(err)
@@ -58,9 +99,7 @@ func (s *Store) ActiveCACreatedAt(ctx context.Context, kind string) (time.Time, 
 
 // ListCAKeys returns CA metadata (no private material).
 func (s *Store) ListCAKeys(ctx context.Context) ([]models.CACert, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, kind, algo, public_key, fingerprint, active, created_at, retired_at
-		FROM ca_keys ORDER BY created_at DESC`)
+	rows, err := s.pool.Query(ctx, `SELECT `+caCols+` FROM ca_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +107,7 @@ func (s *Store) ListCAKeys(ctx context.Context) ([]models.CACert, error) {
 	var out []models.CACert
 	for rows.Next() {
 		var c models.CACert
-		if err := rows.Scan(&c.ID, &c.Kind, &c.Algo, &c.PublicKey, &c.Fingerprint, &c.Active, &c.CreatedAt, &c.RetiredAt); err != nil {
+		if err := scanCA(rows, &c); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -82,11 +121,81 @@ func (s *Store) ListActiveCAPublicKeys(ctx context.Context, kind string) ([]stri
 	return s.scanStrings(ctx, `SELECT public_key FROM ca_keys WHERE kind=$1 AND active=true`, kind)
 }
 
-// RetireCAKey marks a CA inactive.
+// RetireCAKey marks a CA inactive, so it stops being trusted at the next push. It
+// refuses the signing key: retiring that would leave nothing to sign with.
 func (s *Store) RetireCAKey(ctx context.Context, id uuid.UUID) error {
 	// Matching nothing is a failure, not a no-op: a CA key reported retired still signs.
-	tag, err := s.pool.Exec(ctx, `UPDATE ca_keys SET active=false, retired_at=now() WHERE id=$1`, id)
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE ca_keys SET active=false, retired_at=now()
+		 WHERE id=$1 AND active
+		   AND id <> (SELECT id FROM ca_keys k WHERE k.kind=ca_keys.kind AND k.active AND k.signing_since IS NOT NULL
+		              ORDER BY k.signing_since DESC LIMIT 1)`, id)
 	return changed(tag, err)
+}
+
+// CATrustHash is the identity of a set of trusted CA keys: what a host is recorded as
+// confirming, and what "in sync" is compared against. Order and whitespace do not
+// change what sshd trusts, so neither changes the hash.
+func CATrustHash(keys []string) string {
+	norm := make([]string, 0, len(keys))
+	for _, k := range keys {
+		f := strings.Fields(k)
+		if len(f) >= 2 {
+			norm = append(norm, f[0]+" "+f[1])
+		}
+	}
+	sort.Strings(norm)
+	sum := sha256.Sum256([]byte(strings.Join(norm, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// RecordHostCATrust stores the outcome of pushing CA trust to a host: on success the
+// hash it confirmed; on failure why, leaving the last confirmed hash in place.
+func (s *Store) RecordHostCATrust(ctx context.Context, hostID uuid.UUID, hash, failure string) error {
+	var tag pgconn.CommandTag
+	var err error
+	if failure == "" {
+		tag, err = s.pool.Exec(ctx, `UPDATE hosts SET ca_trust_hash=$2, ca_trust_confirmed_at=now(),
+			ca_trust_error='', ca_trust_attempted_at=now() WHERE id=$1`, hostID, hash)
+	} else {
+		tag, err = s.pool.Exec(ctx, `UPDATE hosts SET ca_trust_error=$2, ca_trust_attempted_at=now()
+			WHERE id=$1`, hostID, failure)
+	}
+	return changed(tag, err)
+}
+
+// HostCATrust is what one host has confirmed about CA trust.
+type HostCATrust struct {
+	HostID      uuid.UUID  `json:"hostId"`
+	Hostname    string     `json:"hostname"`
+	Hash        string     `json:"-"`
+	InSync      bool       `json:"inSync"`
+	ConfirmedAt *time.Time `json:"confirmedAt,omitempty"`
+	AttemptedAt *time.Time `json:"attemptedAt,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+
+// HostsCATrust lists every enrolled SSH host with what it has confirmed, and whether
+// that is the current trusted set (want). Windows hosts are not listed: they do not
+// authenticate with the SSH CA.
+func (s *Store) HostsCATrust(ctx context.Context, want string) ([]HostCATrust, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, hostname, ca_trust_hash, ca_trust_confirmed_at, ca_trust_attempted_at, ca_trust_error
+		  FROM hosts WHERE enrolled AND protocol <> 'rdp' ORDER BY hostname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HostCATrust
+	for rows.Next() {
+		var h HostCATrust
+		if err := rows.Scan(&h.HostID, &h.Hostname, &h.Hash, &h.ConfirmedAt, &h.AttemptedAt, &h.Error); err != nil {
+			return nil, err
+		}
+		h.InSync = h.Hash != "" && h.Hash == want
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // InsertCertificateParams carries issued-certificate metadata.

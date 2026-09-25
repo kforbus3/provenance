@@ -148,9 +148,11 @@ during a maintenance window rather than as part of an in-place upgrade.
   `ssh_cert_serial_seq`, enabling precise revocation.
 - **Revocation** is recorded in `cert_revocations` and published as a Key
   Revocation List via `GET /api/v1/certificates/krl`.
-- **CA rotation** is a single API call (`POST /api/v1/certificates/ca/rotate`);
-  the previous CA is retired (`ca_keys.retired_at`) but kept for verification of
-  already-issued certs. See [certificate-lifecycle.md](./certificate-lifecycle.md).
+- **CA rotation** is trusted first, signing second, retired last: the new key signs
+  only once every host and the jump host confirm it, and the previous key is retired
+  explicitly (`POST /api/v1/certificates/ca/{id}/retire`) once nothing depends on it.
+  Until retired, a key stays trusted — so after a rotation for a suspected compromise,
+  **retire the old key**. See [certificate-lifecycle.md](./certificate-lifecycle.md).
 
 ## 3. HMAC-keyed, tamper-evident audit
 

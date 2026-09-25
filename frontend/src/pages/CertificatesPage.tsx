@@ -8,9 +8,9 @@ import BlockIcon from "@mui/icons-material/Block";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listCAs, listCertificates, revokeCertificate, rotateCA,
+  getCARotation, listCAs, listCertificates, promoteCA, retireCA, revokeCertificate, rotateCA,
 } from "../api/certificates";
-import type { RevokeResult } from "../api/certificates";
+import type { CACert, CARotationStatus, RevokeResult } from "../api/certificates";
 import { useAuthStore } from "../store/auth";
 import { formatDateTime } from "../lib/datetime";
 
@@ -28,10 +28,30 @@ export function CertificatesPage() {
   const { data: caData } = useQuery({ queryKey: ["cas"], queryFn: listCAs });
   const { data: certs = [] } = useQuery({ queryKey: ["certs"], queryFn: () => listCertificates() });
 
-  const rotate = useMutation({
-    mutationFn: rotateCA,
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["cas"] }); },
+  // A rotation is trusted first and signs second, so it spans minutes; poll while one
+  // is pending so the page shows it finishing.
+  const { data: rotation } = useQuery({
+    queryKey: ["ca-rotation"], queryFn: getCARotation, enabled: canManage,
+    refetchInterval: (q) => ((q.state.data as CARotationStatus | undefined)?.pendingId ? 30_000 : false),
   });
+  const [caResult, setCaResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const caDone = (st: CARotationStatus) => {
+    setCaResult({ ok: true, text: st.note ?? (st.promoted ? "The new key is signing." : "Done.") });
+    void qc.invalidateQueries({ queryKey: ["cas"] });
+    void qc.invalidateQueries({ queryKey: ["ca-rotation"] });
+  };
+  const caFailed = (e: unknown) => setCaResult({ ok: false,
+    text: (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "That did not work." });
+  const rotate = useMutation({ mutationFn: rotateCA, onSuccess: caDone, onError: caFailed });
+  const promote = useMutation({ mutationFn: promoteCA, onSuccess: caDone, onError: caFailed });
+  const retire = useMutation({ mutationFn: retireCA, onSuccess: caDone, onError: caFailed });
+  const caState = (ca: CACert): { label: string; color: "success" | "info" | "warning" | "default" } => {
+    if (!ca.active) return { label: "retired", color: "default" };
+    if (ca.id === rotation?.signingId) return { label: "signing", color: "success" };
+    if (!ca.signingSince) return { label: "pending — trusted, not signing yet", color: "info" };
+    return { label: "trusted — no longer signing", color: "warning" };
+  };
+  const notConfirming = (rotation?.hosts ?? []).filter((h) => !h.inSync);
   // A revocation is only enforced on hosts that installed the updated KRL. Hosts
   // that did not still honor the certificate, so that count is surfaced as a
   // warning rather than left to the server log.
@@ -62,13 +82,56 @@ export function CertificatesPage() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Certificate Management</Typography>
         {canManage && (
           <Button
-            startIcon={<AutorenewIcon />} variant="outlined" disabled={rotate.isPending}
-            onClick={() => { if (window.confirm("Rotate the user CA? New + existing CAs both stay trusted until the old one is retired.")) rotate.mutate(); }}
+            startIcon={<AutorenewIcon />} variant="outlined"
+            onClick={() => { if (window.confirm(
+              "Start a CA rotation?\n\nA new key is created and pushed to every host. It starts signing only once every " +
+              "host and the jump host confirm they trust it — usually within five minutes. The current key keeps signing " +
+              "until then, so nothing loses access. Afterwards, retire the old key here.")) rotate.mutate(); }}
+            disabled={rotate.isPending || !!rotation?.pendingId}
           >
-            {rotate.isPending ? "Rotating…" : "Rotate CA"}
+            {rotate.isPending ? "Rotating…" : rotation?.pendingId ? "Rotation in progress" : "Rotate CA"}
           </Button>
         )}
       </Stack>
+
+      {caResult && (
+        <Alert severity={caResult.ok ? "info" : "error"} sx={{ mb: 2 }} onClose={() => setCaResult(null)}>{caResult.text}</Alert>
+      )}
+      {rotation?.pendingId && (
+        <Alert severity="info" sx={{ mb: 2 }}
+          action={canManage && (
+            <Stack direction="row" spacing={1}>
+              <Button size="small" disabled={promote.isPending} onClick={() => promote.mutate(false)}>Check now</Button>
+              {notConfirming.length > 0 && (
+                <Button size="small" color="warning" disabled={promote.isPending}
+                  onClick={() => { if (window.confirm(
+                    `Promote the new key without these hosts?\n\n${notConfirming.map((h) => h.hostname).join(", ")}\n\n` +
+                    "They will refuse new logins until they take the new key. Use this only for hosts that are gone for good.",
+                  )) promote.mutate(true); }}>
+                  Promote anyway
+                </Button>
+              )}
+            </Stack>
+          )}>
+          Rotation in progress: {(rotation.hosts.length - rotation.outOfSync)} of {rotation.hosts.length} hosts
+          confirm the new key{rotation.jumpTrustsPending === undefined ? "" :
+            rotation.jumpTrustsPending ? ", and the jump host trusts it" : ", but the jump host does not yet"}.
+          The current key keeps signing until everything trusts the new one; Provenance retries and promotes it by itself.
+          {notConfirming.length > 0 && (
+            <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2 }}>
+              {notConfirming.map((h) => (
+                <li key={h.hostId}>{h.hostname}{h.error ? ` — ${h.error}` : " — not yet confirmed"}</li>
+              ))}
+            </Box>
+          )}
+        </Alert>
+      )}
+      {!rotation?.pendingId && notConfirming.length > 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {notConfirming.length} host{notConfirming.length === 1 ? " does" : "s do"} not confirm the current CA keys:{" "}
+          {notConfirming.map((h) => h.hostname).join(", ")}. Provenance retries every few minutes.
+        </Alert>
+      )}
 
       <Typography variant="h6" sx={{ mb: 1 }}>Certificate Authorities</Typography>
       <TableContainer component={Paper} variant="outlined" sx={{ mb: 4 }}>
@@ -80,6 +143,7 @@ export function CertificatesPage() {
               <TableCell>Fingerprint</TableCell>
               <TableCell>State</TableCell>
               <TableCell>Created</TableCell>
+              <TableCell />
             </TableRow>
           </TableHead>
           <TableBody>
@@ -89,13 +153,25 @@ export function CertificatesPage() {
                 <TableCell>{ca.algo}</TableCell>
                 <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>{ca.fingerprint}</TableCell>
                 <TableCell>
-                  <Chip size="small" label={ca.active ? "active" : "retired"} color={ca.active ? "success" : "default"} />
+                  <Chip size="small" label={caState(ca).label} color={caState(ca).color} />
                 </TableCell>
                 <TableCell>{fmt(ca.createdAt)}</TableCell>
+                <TableCell align="right">
+                  {canManage && ca.active && ca.id !== rotation?.signingId && (
+                    <Button size="small" color={ca.signingSince ? "warning" : "inherit"} disabled={retire.isPending}
+                      onClick={() => { if (window.confirm(ca.signingSince
+                        ? "Retire this key?\n\nHosts stop trusting it, so every certificate it signed stops working — " +
+                          "including sessions started before the rotation, which will need to sign in again."
+                        : "Abandon this rotation?\n\nThe new key is retired before it ever signs. The current key carries on.",
+                      )) retire.mutate(ca.id); }}>
+                      {ca.signingSince ? "Retire" : "Abandon rotation"}
+                    </Button>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
             {caData && caData.cas.length === 0 && (
-              <TableRow><TableCell colSpan={5}>No CA yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={6}>No CA yet.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
