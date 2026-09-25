@@ -997,6 +997,9 @@ timeout so one slow dependency can't stall the report.
 | GET | `/api/v1/certificates` | `Certificate.Manage` |
 | GET | `/api/v1/certificates/ca` | `Certificate.Manage` |
 | POST | `/api/v1/certificates/ca/rotate` | `Certificate.Manage` |
+| GET | `/api/v1/certificates/ca/rotation` | `Certificate.Manage` |
+| POST | `/api/v1/certificates/ca/promote` | `Certificate.Manage` |
+| POST | `/api/v1/certificates/ca/{id}/retire` | `Certificate.Manage` |
 | GET | `/api/v1/certificates/krl` | `Certificate.Manage` |
 | POST | `/api/v1/certificates/{serial}/revoke` | `Certificate.Manage` |
 
@@ -1011,7 +1014,17 @@ jump host polls this to self-trust the CA.
   "activeUserCA": "ssh-ed25519 AAAA… fleet-user-ca" }
 ```
 
-**`POST /certificates/ca/rotate`** → `{ "status": "rotated", "activeCa": "<id>" }`
+**`POST /certificates/ca/rotate`**, **`GET /certificates/ca/rotation`**,
+**`POST /certificates/ca/promote[?force=true]`**, **`POST /certificates/ca/{id}/retire`**
+→ the rotation status:
+```json
+{ "signingId": "<id>", "pendingId": "<id>", "jumpTrustsPending": false,
+  "hosts": [ { "hostname": "vhost", "inSync": true } ], "outOfSync": 0,
+  "promoted": false, "note": "…" }
+```
+`rotate` returns `409` while a rotation is pending; `retire` returns `409` for the
+signing key, while a rotation is pending, or while a host does not confirm the signing
+key. See [certificate-lifecycle.md](./certificate-lifecycle.md) §6.
 
 **`POST /certificates/{serial}/revoke`** → `{ "reason": "compromised" }` →
 `{ "status": "revoked" }`

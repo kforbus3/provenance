@@ -599,6 +599,9 @@ type CACert struct {
 	Active      bool       `json:"active"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	RetiredAt   *time.Time `json:"retiredAt,omitempty"`
+	// SigningSince is when this key started signing. Nil on an active key means a
+	// rotation's key that is trusted but not signing yet (see migration 0112).
+	SigningSince *time.Time `json:"signingSince,omitempty"`
 }
 
 // SSHCertificate is issued-certificate metadata (no private key persisted).

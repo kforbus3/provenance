@@ -25,6 +25,31 @@ export interface CACert {
   active: boolean;
   createdAt: string;
   retiredAt?: string;
+  // When this key started signing. Absent on an active key: a rotation's key that is
+  // trusted but not signing yet.
+  signingSince?: string;
+}
+
+// What one enrolled SSH host has confirmed about CA trust.
+export interface HostCATrust {
+  hostId: string;
+  hostname: string;
+  inSync: boolean;
+  confirmedAt?: string;
+  attemptedAt?: string;
+  error?: string;
+}
+
+// Where a CA rotation stands. A new key is trusted first and signs only once every
+// host and the jump host confirm it; the previous key signs until then.
+export interface CARotationStatus {
+  signingId: string;
+  pendingId?: string;
+  jumpTrustsPending?: boolean;
+  hosts: HostCATrust[];
+  outOfSync: number;
+  promoted?: boolean;
+  note?: string;
 }
 
 export async function listCertificates(limit = 200): Promise<SSHCertificate[]> {
@@ -37,8 +62,27 @@ export async function listCAs(): Promise<{ cas: CACert[]; activeUserCA: string }
   return data;
 }
 
-export async function rotateCA(): Promise<void> {
-  await api.post("/api/v1/certificates/ca/rotate");
+export async function rotateCA(): Promise<CARotationStatus> {
+  const { data } = await api.post<CARotationStatus>("/api/v1/certificates/ca/rotate");
+  return data;
+}
+
+export async function getCARotation(): Promise<CARotationStatus> {
+  const { data } = await api.get<CARotationStatus>("/api/v1/certificates/ca/rotation");
+  return data;
+}
+
+// Re-check a pending rotation now; force promotes past hosts that do not confirm the
+// new key (never past the jump host).
+export async function promoteCA(force: boolean): Promise<CARotationStatus> {
+  const { data } = await api.post<CARotationStatus>(`/api/v1/certificates/ca/promote${force ? "?force=true" : ""}`);
+  return data;
+}
+
+// Stop trusting a CA key that no longer signs (or abandon a pending rotation).
+export async function retireCA(id: string): Promise<CARotationStatus> {
+  const { data } = await api.post<CARotationStatus>(`/api/v1/certificates/ca/${id}/retire`);
+  return data;
 }
 
 // A revocation only takes effect on hosts that actually installed the updated

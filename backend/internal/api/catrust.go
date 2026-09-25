@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/kforbus3/provenance/backend/internal/store"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +31,13 @@ import (
 // certificates issued before it are still valid, and a host that trusted only the new
 // key would reject them. The old key stops being written when it is retired.
 func (s *Server) distributeCATrust(ctx context.Context) (int, int, error) {
+	return s.pushCATrust(ctx, false)
+}
+
+// pushCATrust writes the active CA keys to enrolled SSH hosts -- every one, or with
+// onlyStale just those whose last confirmed set is not the current one -- and records
+// what each host confirmed, which is what the rotation gates read.
+func (s *Server) pushCATrust(ctx context.Context, onlyStale bool) (int, int, error) {
 	caKeys, err := s.Store.ListActiveCAPublicKeys(ctx, "user")
 	if err != nil {
 		return 0, 0, fmt.Errorf("read the active CA keys: %w", err)
@@ -64,20 +73,52 @@ func (s *Server) distributeCATrust(ctx context.Context) (int, int, error) {
 		"sudo mv /etc/ssh/prov_ca.pub.new /etc/ssh/prov_ca.pub; " +
 		"grep -q '" + fingerprint + "' /etc/ssh/prov_ca.pub && echo OK"
 
-	hosts, _ := s.Store.AllHosts(ctx)
+	want := store.CATrustHash(keys)
+	hosts, err := s.Store.AllHosts(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list hosts: %w", err)
+	}
+	var stale map[uuid.UUID]bool
+	if onlyStale {
+		states, err := s.Store.HostsCATrust(ctx, want)
+		if err != nil {
+			return 0, 0, fmt.Errorf("read host CA trust: %w", err)
+		}
+		stale = map[uuid.UUID]bool{}
+		for _, st := range states {
+			if !st.InSync {
+				stale[st.HostID] = true
+			}
+		}
+	}
 	const concurrency = 8
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	var pushed, failed int64
 	miss := func(h models.Host, reason string, err error, out string) {
 		atomic.AddInt64(&failed, 1)
+		why := reason
+		if err != nil {
+			why += ": " + err.Error()
+		}
+		if out != "" {
+			why += " (" + out + ")"
+		}
+		if len(why) > 400 {
+			why = why[:400]
+		}
+		_ = s.Store.RecordHostCATrust(context.WithoutCancel(ctx), h.ID, "", why)
 		s.Log.Warn("CA trust push failed; this host does not trust the current CA and will "+
 			"reject certificates issued by it",
 			"host", h.Hostname, "hostID", h.ID, "reason", reason, "err", err, "output", out)
 	}
 	for i := range hosts {
 		h := hosts[i]
-		if !h.Enrolled {
+		// Windows hosts do not authenticate with the SSH CA; there is nothing to push.
+		if !h.Enrolled || h.Protocol == "rdp" {
+			continue
+		}
+		if onlyStale && !stale[h.ID] {
 			continue
 		}
 		wg.Add(1)
@@ -108,6 +149,7 @@ func (s *Server) distributeCATrust(ctx context.Context) (int, int, error) {
 				conn.Close()
 				if rerr == nil && strings.Contains(string(out), "OK") {
 					atomic.AddInt64(&pushed, 1)
+					_ = s.Store.RecordHostCATrust(context.WithoutCancel(ctx), h.ID, want, "")
 				} else {
 					miss(h, "install CA trust", rerr, strings.TrimSpace(string(out)))
 				}
@@ -118,8 +160,9 @@ func (s *Server) distributeCATrust(ctx context.Context) (int, int, error) {
 	}
 	wg.Wait()
 	if failed > 0 {
-		// Error, not Info: every host in this count will reject certificates signed by
-		// the current CA once the ones it already holds expire.
+		// Error, not Info: a host in this count does not trust every active key. The
+		// background reconcile retries it; until it takes the set, a pending rotation
+		// cannot be promoted over it.
 		s.Log.Error("CA trust distribution incomplete", "pushed", pushed, "failed", failed,
 			"activeKeys", len(keys))
 	} else {

@@ -4,7 +4,7 @@ package certificates
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,6 +32,9 @@ func Mount(r chi.Router, d *app.Deps, caMgr *ca.CA) {
 		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Get("/certificates", h.list)
 		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Get("/certificates/ca", h.listCA)
 		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Post("/certificates/ca/rotate", h.rotate)
+		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Get("/certificates/ca/rotation", h.rotationStatus)
+		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Post("/certificates/ca/promote", h.promote)
+		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Post("/certificates/ca/{id}/retire", h.retire)
 		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Get("/certificates/krl", h.krl)
 		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Post("/certificates/krl/distribute", h.distribute)
 		pr.With(d.Auth.RequirePermission("Certificate.Manage")).Post("/certificates/{serial}/revoke", h.revoke)
@@ -78,39 +81,99 @@ func (h *handler) listCA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) rotate(w http.ResponseWriter, r *http.Request) {
+	// The new key is created TRUSTED, not signing. The previous key goes on signing
+	// until every host and the jump host confirm the new one, so a rotation no longer
+	// has a window in which new certificates are signed by a key nothing trusts yet.
 	if err := h.ca.Rotate(r.Context()); err != nil {
+		if errors.Is(err, ca.ErrRotationPending) {
+			httpx.WriteError(w, http.StatusConflict, err.Error())
+			return
+		}
 		httpx.WriteError(w, http.StatusInternalServerError, "rotation failed")
 		return
 	}
-	h.audit(r, "certificate.ca_rotate", h.ca.ActiveID(), nil)
-
-	// Finish the job. A rotation that stops here leaves every host trusting only the
-	// retiring key: certificates signed by the new one are rejected, and because the
-	// certificates already issued keep working until they expire, nothing looks wrong
-	// until they do — fleet-wide, at once, hours or days later.
-	//
-	// The distribution is reported rather than assumed, because a host that did not
-	// take it is a host that will stop accepting logins, and the operator has a window
-	// to fix it only if they know which.
-	pushed, failed := 0, 0
+	h.audit(r, "certificate.ca_rotate", h.ca.PendingID(), map[string]any{"signing": h.ca.ActiveID()})
+	if h.d.CALifecycle == nil {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"status": "pending", "pendingId": h.ca.PendingID(),
+			"note": "The new key is trusted but not signing. No lifecycle is configured to push and promote it."})
+		return
+	}
+	// Push to every host now, then try to promote. The jump host usually has not
+	// fetched the new key yet, so this normally returns "pending"; the background
+	// reconcile promotes it within minutes, and the previous key signs until then.
 	if h.d.DistributeCATrust != nil {
-		pushed, failed, _ = h.d.DistributeCATrust(r.Context())
-		h.audit(r, "certificate.ca_trust_distributed", h.ca.ActiveID(),
+		pushed, failed, _ := h.d.DistributeCATrust(r.Context())
+		h.audit(r, "certificate.ca_trust_distributed", h.ca.PendingID(),
 			map[string]any{"pushed": pushed, "failed": failed})
 	}
-	res := map[string]any{
-		"status": "rotated", "activeCa": h.ca.ActiveID(),
-		"trustPushed": pushed, "trustFailed": failed,
+	st, err := h.d.CALifecycle.Advance(r.Context(), false)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "rotation started, but checking it failed: "+err.Error())
+		return
 	}
-	if h.d.DistributeCATrust == nil {
-		res["note"] = "CA trust was NOT distributed: every enrolled host still trusts only " +
-			"the previous key and will reject new certificates. Re-enroll them."
-	} else if failed > 0 {
-		res["note"] = fmt.Sprintf("%d host(s) did not take the new CA and will reject "+
-			"certificates signed by it once their current ones expire — see the log for which, "+
-			"then re-run distribution or re-enroll them", failed)
+	if st.Promoted {
+		h.audit(r, "certificate.ca_promote", st.SigningID, map[string]any{"forced": false})
 	}
-	httpx.WriteJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, st)
+}
+
+func (h *handler) rotationStatus(w http.ResponseWriter, r *http.Request) {
+	if h.d.CALifecycle == nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "CA lifecycle not configured")
+		return
+	}
+	st, err := h.d.CALifecycle.Status(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the rotation: "+err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, st)
+}
+
+// promote re-checks a pending rotation now instead of waiting for the reconcile.
+// force=true promotes even though some hosts do not confirm the new key -- for hosts
+// that are gone for good -- and they will refuse new logins until they take it. It
+// never skips the jump host: without it nothing is reachable.
+func (h *handler) promote(w http.ResponseWriter, r *http.Request) {
+	if h.d.CALifecycle == nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "CA lifecycle not configured")
+		return
+	}
+	force := r.URL.Query().Get("force") == "true"
+	st, err := h.d.CALifecycle.Advance(r.Context(), force)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if st.Promoted {
+		h.audit(r, "certificate.ca_promote", st.SigningID, map[string]any{"forced": force, "hostsNotConfirming": st.OutOfSync})
+	}
+	httpx.WriteJSON(w, http.StatusOK, st)
+}
+
+// retire stops trusting a CA key. There was no way to do this: RetireCAKey existed
+// and nothing called it, so every key ever created stayed trusted on every host.
+func (h *handler) retire(w http.ResponseWriter, r *http.Request) {
+	if h.d.CALifecycle == nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "CA lifecycle not configured")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid CA id")
+		return
+	}
+	st, err := h.d.CALifecycle.Retire(r.Context(), id)
+	if err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, app.ErrCAKeyInUse) {
+			code = http.StatusConflict
+		}
+		httpx.WriteError(w, code, err.Error())
+		return
+	}
+	h.audit(r, "certificate.ca_retire", id.String(), map[string]any{"hostsNotConfirming": st.OutOfSync})
+	httpx.WriteJSON(w, http.StatusOK, st)
 }
 
 func (h *handler) revoke(w http.ResponseWriter, r *http.Request) {

@@ -351,6 +351,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 		AccessPolicy: accesspolicy.NewEnforcer(s.Store, s.Log)}
 	s.deps.DistributeKRL = s.distributeKRL
 	s.deps.DistributeCATrust = s.distributeCATrust
+	s.deps.CALifecycle = caLifecycle{s: s}
 
 	// Multi-site federation is mode-gated: standalone builds no service and mounts no
 	// routes, so its behavior is entirely unchanged.
@@ -412,6 +413,7 @@ func (s *Server) InitBackground(ctx context.Context) error {
 	go s.reportSched.Run(ctx, s.isLeader)
 	go s.dynamicGroupLoop(ctx)
 	go s.krlLoop(ctx)
+	go s.caRotationLoop(ctx)
 	go s.vaultRotationLoop(ctx)
 	go s.containerScanLoop(ctx)
 	go s.imageUpdateLoop(ctx)

@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -62,6 +63,10 @@ type Deps struct {
 	// enrollment, so without this a rotated fleet is one certificate lifetime away
 	// from locking itself out.
 	DistributeCATrust func(ctx context.Context) (pushed, failed int, err error)
+
+	// CALifecycle drives a CA rotation through trusted -> signing -> old key retired
+	// (set by the server; nil in tests).
+	CALifecycle CALifecycle
 
 	// ForgetHostKeys drops cached SSH host-key pins for the given dial identities
 	// (set by the server; nil in tests). Deleting the ssh_host_keys rows is not
@@ -124,4 +129,36 @@ type Dialer interface {
 	// HostCredentialSerial returns the serial of the per-host certificate bound
 	// to a (session, host) pair, so it can be revoked when access is removed.
 	HostCredentialSerial(sessionID, hostID uuid.UUID) (uint64, bool)
+}
+
+// CARotationStatus is where a CA rotation stands.
+type CARotationStatus struct {
+	SigningID string `json:"signingId"`
+	// PendingID is a rotation's key that is trusted but not signing yet, or "".
+	PendingID string `json:"pendingId,omitempty"`
+	// JumpTrustsPending is whether the jump host accepted a login with a certificate
+	// signed by the pending key. Nil when nothing is pending or it was not checked.
+	JumpTrustsPending *bool `json:"jumpTrustsPending,omitempty"`
+	// Hosts is every enrolled SSH host and whether it confirms the current key set.
+	Hosts     []store.HostCATrust `json:"hosts"`
+	OutOfSync int                 `json:"outOfSync"`
+	// Promoted is true when this call made the pending key the signer.
+	Promoted bool   `json:"promoted,omitempty"`
+	Note     string `json:"note,omitempty"`
+}
+
+// ErrCAKeyInUse is returned when retiring a CA key would lock something out.
+var ErrCAKeyInUse = errors.New("CA key still needed")
+
+// CALifecycle is the rotation machinery the certificate handlers drive.
+type CALifecycle interface {
+	// Status reports the rotation without changing anything.
+	Status(ctx context.Context) (*CARotationStatus, error)
+	// Advance pushes trust to every host that does not confirm the current key set,
+	// then promotes a pending key if every host and the jump host trust it -- or,
+	// with force, if only the jump host does.
+	Advance(ctx context.Context, force bool) (*CARotationStatus, error)
+	// Retire stops trusting a key that no longer signs, once everything trusts the
+	// one that does.
+	Retire(ctx context.Context, id uuid.UUID) (*CARotationStatus, error)
 }
