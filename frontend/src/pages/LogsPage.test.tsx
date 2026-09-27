@@ -116,6 +116,40 @@ describe("LogsPage", () => {
     });
   });
 
+  // keith hit this: pick a host, Search, and later Search again for newer lines —
+  // nothing changed, because the results were cached by their (unchanged) filters.
+  // Only a full reload showed the new lines, and it also cleared the chosen host.
+  it("fetches new lines when Search is clicked again with the same filters", async () => {
+    renderPage();
+    const picker = await screen.findByLabelText("Host");
+    fireEvent.focus(picker);
+    fireEvent.change(picker, { target: { value: "k3s" } });
+    // The host list loads asynchronously; Enter before the option exists selects nothing.
+    await screen.findByRole("option", { name: /k3s/ });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: /^Search$/ }));
+    await waitFor(() => {
+      const calls = vi.mocked(logsApi.searchLogs).mock.calls;
+      expect(calls[calls.length - 1]?.[0]?.host).toBe("k3s");
+    });
+    expect(await screen.findByText("connection refused")).toBeInTheDocument();
+
+    // A newer line arrives at the collector.
+    vi.mocked(logsApi.searchLogs).mockResolvedValue({
+      total: 2, entries: [entry({ message: "a brand new line" }), entry()],
+      byHost: [{ key: "k3s", count: 2 }], bySeverity: [{ key: "error", count: 2 }], tookMs: 3,
+    });
+    const before = vi.mocked(logsApi.searchLogs).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: /^Search$/ }));
+
+    await waitFor(() =>
+      expect(vi.mocked(logsApi.searchLogs).mock.calls.length).toBeGreaterThan(before));
+    expect(await screen.findByText("a brand new line")).toBeInTheDocument();
+    // And the host filter is still the one that was chosen.
+    const calls = vi.mocked(logsApi.searchLogs).mock.calls;
+    expect(calls[calls.length - 1]?.[0]?.host).toBe("k3s");
+  });
+
   // The empty state has to say what it means: leaving it blank searches everything.
   it("says that an empty host filter means all hosts", async () => {
     renderPage();

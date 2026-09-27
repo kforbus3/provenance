@@ -102,14 +102,21 @@ export function LogsPage() {
     retry: false,
   });
 
-  const run = () =>
-    setApplied({
+  // Search always goes to the collector. Results are cached by their filters, so
+  // clicking Search with the same filters as last time used to change nothing and
+  // show the cached page — new log lines only appeared after a full reload, which
+  // also threw away the chosen host. Unchanged filters therefore refetch.
+  const run = () => {
+    const next: LogQuery = {
       q: text.trim() || undefined,
       host: host || undefined,
       minSeverity: minSeverity || undefined,
       since,
       limit: 200,
-    });
+    };
+    if (JSON.stringify(next) === JSON.stringify(applied)) void results.refetch();
+    else setApplied(next);
+  };
 
   const err = (results.error as { response?: { data?: { error?: string } } })?.response?.data?.error;
 
