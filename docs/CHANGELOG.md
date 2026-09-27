@@ -5,6 +5,36 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.18 — 2026-09-27
+
+### A changed host key can be re-trusted from any host's details
+
+When a host is rebuilt or replaced its SSH host key changes, and the gateway refuses it against
+the key it pinned on first contact. The only way to clear that pin was a button in the offline
+alert of the host's details — which appears only when the health check itself hits the
+mismatch. A host checked without SSH (network gear such as a switch) stays **online** while
+every terminal session fails with "does not match the pinned key", and there was nothing to
+click. Replacing the core switch did exactly that.
+
+Every SSH host's details dialog now has an **SSH host key** section listing the pinned key(s) —
+type, fingerprint, the address it was pinned under, and whether it was pinned on first use or
+pre-seeded — and, for holders of **Host.Enroll**, **Trust new key…** behind a confirmation that
+says to verify the new key first (`ssh-keyscan <host> | ssh-keygen -lf -`). Clearing is audited
+as `host.host_key_cleared` with the fingerprint that stopped being trusted. The mismatch error
+now names where the control is.
+
+### Logs: Search always fetches fresh results
+
+Results were cached by their filters, so clicking **Search** again with the same filters showed
+the cached page; newer lines appeared only after reloading the whole page, which also cleared
+the chosen host. Search now re-queries the collector every time.
+
+### Upgrading
+
+No migrations and no configuration changes.
+
+---
+
 ## v2.0.17 — 2026-09-25
 
 ### A rebuilt image says what the rebuild changed
