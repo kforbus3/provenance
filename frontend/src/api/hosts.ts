@@ -302,6 +302,13 @@ export interface HostKeyPin {
   fingerprint: string;
 }
 
+// listHostKeyPins returns the host-key pins held for a host (one per identity it
+// is dialed as), so an operator can see what they would stop trusting.
+export async function listHostKeyPins(id: string): Promise<HostKeyPin[]> {
+  const { data } = await api.get<{ pins: HostKeyPin[] }>(`/api/v1/hosts/${id}/host-key`);
+  return data.pins ?? [];
+}
+
 // clearHostKeyPins drops every pin for a host so the next connection re-pins the
 // key it now presents — the remedy after a legitimate rebuild.
 export async function clearHostKeyPins(id: string): Promise<number> {
