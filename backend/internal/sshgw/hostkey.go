@@ -103,7 +103,10 @@ func (v *hostKeyVerifier) compare(id, pinned, presented string, key ssh.PublicKe
 		v.log.Warn("SSH host key mismatch — refusing connection (possible MITM or host rebuilt)",
 			"host", id, "keyType", key.Type())
 	}
-	return fmt.Errorf("host key for %s does not match the pinned key (possible MITM, or the host was rebuilt — remove its pin to re-trust)", id)
+	// The remedy is named where it lives: the bare "remove its pin" left operators
+	// hunting for a control that, for a host still reported online, was not shown.
+	return fmt.Errorf("host key for %s does not match the pinned key (possible MITM, or the host was rebuilt — "+
+		"if it was, re-trust it: Hosts → the host's details (ⓘ) → SSH host key → Trust new key)", id)
 }
 
 // HostKeyID is the identity a host is pinned under: the dialed address,

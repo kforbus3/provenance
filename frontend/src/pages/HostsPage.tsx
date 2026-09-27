@@ -30,7 +30,7 @@ import {
   addHostGroup, addHostUser, createHost, deleteHost, enrollHost, finishEnroll,
   getHost, getHostAccess, listHosts, listHostSoftware, nextWGAddress, refreshHostFacts,
   removeHostGroup, removeHostUser, updateHost, setHostMaintenance, clearHostMaintenance, maintenanceActive,
-  clearHostKeyPins, hostKeyMismatch,
+  clearHostKeyPins, listHostKeyPins, hostKeyMismatch,
   bulkRefreshHosts, bulkHostMaintenance, bulkHostTags, bulkEnrolLogging, listContainerImages,
   type LogEnrolResult,
 } from "../api/hosts";
@@ -1742,6 +1742,90 @@ function AbUpdatesSection({ host }: { host: Host }) {
   );
 }
 
+// HostKeySection shows the SSH host key(s) the gateway has pinned for a host and
+// offers to re-trust it after a rebuild or replacement. The offline alert offers
+// the same remedy, but only when the health check itself hit the mismatch — a
+// host checked without SSH (a switch probed by TCP) stays "online" while every
+// terminal session fails on the old pin, and had no way to clear it in the UI.
+function HostKeySection({ host, offlineRemedyShown }: { host: Host; offlineRemedyShown: boolean }) {
+  const has = useAuthStore((s) => s.has);
+  const canClear = has("Host.Enroll");
+  const qc = useQueryClient();
+  const { data: pins, isError } = useQuery({
+    queryKey: ["host-key-pins", host.id],
+    queryFn: () => listHostKeyPins(host.id),
+  });
+  const [confirming, setConfirming] = useState(false);
+  const clear = useMutation({
+    mutationFn: () => clearHostKeyPins(host.id),
+    onSuccess: () => {
+      setConfirming(false);
+      qc.invalidateQueries({ queryKey: ["host-key-pins", host.id] });
+      qc.invalidateQueries({ queryKey: ["host", host.id] });
+      qc.invalidateQueries({ queryKey: ["hosts"] });
+    },
+  });
+  if (!pins && !isError) return null;
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="overline" color="text.secondary">SSH host key</Typography>
+      {isError ? (
+        <Typography variant="body2" color="text.secondary">Could not read the pinned keys.</Typography>
+      ) : pins!.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          No key pinned — the next connection pins the key the host presents.
+        </Typography>
+      ) : (
+        <Stack spacing={0.25}>
+          {pins!.map((p) => (
+            <Typography key={`${p.host}-${p.keyType}`} variant="body2" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+              {p.keyType} {p.fingerprint}{" "}
+              <Typography component="span" variant="caption" color="text.secondary" sx={{ fontFamily: "inherit" }}>
+                ({p.host} · {p.source === "pinned" ? "pre-seeded" : "first use"})
+              </Typography>
+            </Typography>
+          ))}
+        </Stack>
+      )}
+      {!offlineRemedyShown && canClear && Boolean(pins?.length) && !confirming && !clear.isSuccess && (
+        <Button size="small" sx={{ mt: 0.5, px: 0 }} onClick={() => setConfirming(true)}>
+          Trust new key…
+        </Button>
+      )}
+      {confirming && (
+        <Alert
+          severity="warning"
+          sx={{ mt: 1 }}
+          action={
+            <Stack direction="row" spacing={0.5}>
+              <Button color="inherit" size="small" onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button color="inherit" size="small" disabled={clear.isPending} onClick={() => clear.mutate()}>
+                {clear.isPending ? "Clearing…" : "Trust new key"}
+              </Button>
+            </Stack>
+          }
+        >
+          <Typography variant="body2">
+            Only if this host was rebuilt or replaced: the next connection pins whatever key it
+            presents. Confirm it is really your host first
+            (<code>ssh-keyscan {host.hostname} | ssh-keygen -lf -</code>).
+          </Typography>
+        </Alert>
+      )}
+      {clear.isSuccess && (
+        <Typography variant="caption" color="success.main" sx={{ display: "block", mt: 0.5 }}>
+          Cleared {clear.data} pin{clear.data === 1 ? "" : "s"} — the next connection pins the key the host presents now.
+        </Typography>
+      )}
+      {clear.isError && (
+        <Typography variant="caption" color="error.main" sx={{ display: "block", mt: 0.5 }}>
+          Could not clear the pin: {(clear.error as Error).message}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 // HostDetailsDialog shows collected facts about a host (distro, kernel, CPU,
 // memory) plus live status. It fetches the single host on demand — so the list
 // payload stays light at scale — and seeds from the row for an instant render,
@@ -2012,6 +2096,12 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
         {/* A/B machines take updates as RAUC bundles through a rollout, which can
             only see hosts that have a machine record. RDP hosts never do. */}
         {!isRDP && h && <AbUpdatesSection host={h} />}
+        {/* The re-trust remedy must not depend on the health check: a host whose
+            check does not use SSH (network gear probed another way) stays
+            "online" while every terminal session is refused on the old pin. */}
+        {!isRDP && h && (
+          <HostKeySection host={h} offlineRemedyShown={keyMismatch && Boolean(st?.lastError) && st?.status !== "online"} />
+        )}
         {/* Why a host is offline was recorded all along but never shown, so the UI
             said "offline" and nothing else. A host-key mismatch — what a rebuilt
             host looks like — additionally gets its one-click remedy here. */}
