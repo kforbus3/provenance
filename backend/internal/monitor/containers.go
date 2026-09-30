@@ -295,8 +295,20 @@ func splitImageRef(ref string) (repo, tag string) {
 	if isImageID(ref) {
 		return "", ""
 	}
+	// A digest-pinned reference carries no tag, and must not be given one.
+	//
+	// This used to fall through to "latest" below. questarr, pinned in its compose
+	// file to ghcr.io/doezer/questarr@sha256:9e17... because the newer :dev build
+	// crash-loops, was then checked against :latest, found "behind", and offered as
+	// a latest -> latest rebuild. The rollout re-applied the compose file -- the
+	// pin -- changed nothing, and failed verification with "no container on this
+	// host is running ghcr.io/doezer/questarr:latest", which was true: nothing ever
+	// ran that tag. A digest is an exact, immutable choice; there is no newer
+	// version of it to offer. The repository is kept, so inventory and
+	// vulnerability scans still know what it is; the empty tag is what keeps it
+	// off the Updates page and out of rollouts, which both select on a tag.
 	if i := strings.LastIndex(ref, "@"); i >= 0 {
-		ref = ref[:i] // a digest-pinned reference carries no tag
+		return ref[:i], ""
 	}
 	slash := strings.LastIndex(ref, "/")
 	colon := strings.LastIndex(ref, ":")

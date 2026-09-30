@@ -82,8 +82,9 @@ func TestSplitImageRef(t *testing.T) {
 		// "5000/app" — wrong, and nobody notices until it is their registry.
 		{"registry.example.com:5000/app", "registry.example.com:5000/app", "latest"},
 		{"registry.example.com:5000/app:1.4", "registry.example.com:5000/app", "1.4"},
-		// A digest-pinned reference carries no tag.
-		{"nginx@sha256:abcd", "nginx", "latest"},
+		// A digest-pinned reference carries no tag -- and is not "latest".
+		{"nginx@sha256:abcd", "nginx", ""},
+		{"registry.example.com:5000/app@sha256:abcd", "registry.example.com:5000/app", ""},
 	} {
 		repo, tag := splitImageRef(c.ref)
 		if repo != c.repo || tag != c.tag {
@@ -314,5 +315,33 @@ func TestAnEmptyAnswerIsAnEmptyListNotNothing(t *testing.T) {
 	// And a host that could not be asked still returns nil, so its last list stays.
 	if got, _, _ := parseContainers("ssh: connection reset"); got != nil {
 		t.Fatalf("an unanswered check must not produce a list, got %v", got)
+	}
+}
+
+// The production line that produced a latest -> latest rebuild nobody could apply:
+// questarr pinned by digest in its compose file, deliberately, because the newer
+// build crash-loops. It must keep its repository and digest -- inventory and scans
+// need both -- and carry no tag, which is what keeps it off the Updates page.
+func TestADigestPinnedContainerIsNotTrackedAsLatest(t *testing.T) {
+	const pinned = "ghcr.io/doezer/questarr@sha256:9e179255fa24f2b553c81261d793d8edd1fc9f32cf029c9282dbe760a88b7b78"
+	out := "::OK::\n" +
+		"0123456789abcdef\tquestarr\t" + pinned + "\trunning\tUp 45 hours\t0.0.0.0:5000->5000/tcp\n" +
+		"::IMAGES::\n" +
+		pinned + "\t" + pinned + ",\n"
+
+	got, status, _ := parseContainers(out)
+	if status != ContainersOK || len(got) != 1 {
+		t.Fatalf("status %q, %d containers", status, len(got))
+	}
+	c := got[0]
+	if c.Repository != "ghcr.io/doezer/questarr" {
+		t.Errorf("repository = %q", c.Repository)
+	}
+	if c.Tag != "" {
+		t.Errorf("tag = %q, want empty: a digest pin is not %q, and tracking it as such "+
+			"offers a rebuild the compose file will never apply", c.Tag, c.Tag)
+	}
+	if c.Digest == "" {
+		t.Error("the digest was dropped; scans are keyed on it")
 	}
 }
