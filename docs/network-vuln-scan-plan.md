@@ -156,6 +156,7 @@ Other rules:
   assistant tools (`tools_compliance.go`).
 
 **Phase 3 — ranges and sites.**
+- fingerprintx and the targeted UDP probe set for unmanaged devices (see Decision 1).
 - The CIDR target UI and API, plus the Terraform provider resource.
 - A federation site sidecar and ingest.
 - A "new service appeared" notification, using the diff between scans. This is
@@ -184,7 +185,25 @@ Other rules:
 
 ## Decisions (to confirm)
 
-1. naabu + nuclei (MIT) rather than nmap (NPSL). **Recommended: naabu + nuclei.**
+1. **DECIDED: naabu + nuclei (MIT), plus fingerprintx (Apache-2.0) in Phase 3.**
+   How this compares with nmap:
+   - **Vulnerability detection: nuclei is better.** Templates verify behaviour.
+     nmap's `vulners` maps banners to CVEs and misfires on backported distro
+     packages.
+   - **TLS/SSH weakness and TCP discovery: about equal.**
+   - **Service identification: nmap `-sV` is better.** On managed hosts this does
+     not matter, because the host's own listener list names the process and
+     package, which is more accurate than a banner. On unmanaged devices it does.
+   - **UDP: nmap is better.** Managed hosts are covered by `ss`; unmanaged
+     devices are not.
+
+   Phase 3 closes the last two gaps. fingerprintx identifies services on ports
+   nuclei cannot place, and a targeted UDP probe set (SNMP including community
+   `public`/`private`, NTP mode 6/7, SSDP, TFTP, IPMI) covers the UDP findings
+   that matter on network gear. The accepted loss is the long tail of nmap's
+   ~12k service signatures. nmap is still excluded on licence grounds, because
+   the NPSL restricts redistribution inside a product and `.provup` bundles ship
+   the images.
 2. Scan **both** the LAN address and the overlay address, tagged by path. *(Revised: the first draft
    scanned only `Address`, which left roaming/NATed hosts with no coverage.)*
 3. The port inventory is the host's own listener list plus a full TCP scan.
