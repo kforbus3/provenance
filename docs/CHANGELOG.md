@@ -5,6 +5,22 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.0.19 — 2026-09-30
+
+### A container pinned by digest is no longer offered as a `latest` rebuild
+
+A compose service pinned to an exact image digest (`image: repo@sha256:…`), usually done on
+purpose to hold back a broken release, was recorded in inventory under the tag `latest`. The
+Updates page then compared it with the registry's `:latest` and offered a `latest → latest`
+rebuild. Any rollout of it failed with *"deployed, but no container on this host is running
+repo:latest"*: the deploy re-applied the pin, so nothing changed.
+
+A digest-pinned container now keeps its repository and digest (inventory and vulnerability
+scans are unaffected) but has no tag, so it stays off the Updates page and out of rollouts.
+Existing phantom rows clear after the next inventory pass.
+
+---
+
 ## v2.0.18 — 2026-09-27
 
 ### A changed host key can be re-trusted from any host's details
