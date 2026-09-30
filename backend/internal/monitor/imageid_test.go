@@ -36,7 +36,7 @@ func TestRealReferencesStillParse(t *testing.T) {
 		{"ghcr.io/linuxserver/faster-whisper:gpu-v3.8.1-ls66",
 			"ghcr.io/linuxserver/faster-whisper", "gpu-v3.8.1-ls66"},
 		{"postgres@sha256:60b1fa07833c70ab67b7f8c0289bbaf780e7bcbf51f0ce1072be69ab1994d76b",
-			"postgres", "latest"},
+			"postgres", ""},
 		// A repository that merely LOOKS hexadecimal, and a tag of the right
 		// length: neither is an image ID.
 		{"abcdef/beef:cafe", "abcdef/beef", "cafe"},
