@@ -22,6 +22,7 @@ kubectl apply -f deploy/k8s/
 | `31-frontend.yaml`        | Frontend Deployment + Service                               |
 | `32-ansible-runner.yaml`  | Ansible-runner sidecar Deployment + Service                 |
 | `33-grype-scanner.yaml`   | Grype-scanner sidecar Deployment + Service + DB PVC         |
+| `34-net-scanner.yaml`     | Network-scanner sidecar Deployment + Service + templates PVC |
 | `40-ingress.yaml`         | TLS Ingress (host + cert-manager)                           |
 
 ### Shared storage (required for >1 replica)

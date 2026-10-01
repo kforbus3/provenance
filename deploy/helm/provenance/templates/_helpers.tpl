@@ -74,6 +74,10 @@ Resource name helpers per component.
 {{- printf "%s-ansible-runner" (include "provenance.fullname" .) -}}
 {{- end -}}
 
+{{- define "provenance.netScanner.fullname" -}}
+{{- printf "%s-net-scanner" (include "provenance.fullname" .) -}}
+{{- end -}}
+
 {{- define "provenance.grypeScanner.fullname" -}}
 {{- printf "%s-grype-scanner" (include "provenance.fullname" .) -}}
 {{- end -}}

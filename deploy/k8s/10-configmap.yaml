@@ -31,3 +31,4 @@ data:
   # Internal sidecar endpoints (see 32-ansible-runner.yaml / 33-grype-scanner.yaml).
   PROV_ANSIBLE_RUNNER_URL: "http://prov-ansible-runner:8000"
   PROV_GRYPE_SCANNER_URL: "http://prov-grype-scanner:8000"
+  PROV_NETSCAN_URL: "http://prov-net-scanner:8001"

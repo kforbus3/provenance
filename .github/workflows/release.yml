@@ -66,6 +66,10 @@ jobs:
             image: ghcr.io/kforbus3/provenance-grype-scanner
             context: ./deploy/grype-scanner
             dockerfile: ./deploy/grype-scanner/Dockerfile
+          - name: net-scanner
+            image: ghcr.io/kforbus3/provenance-net-scanner
+            context: ./deploy/net-scanner
+            dockerfile: ./deploy/net-scanner/Dockerfile
           - name: ansible-runner
             image: ghcr.io/kforbus3/provenance-ansible-runner
             context: ./deploy/ansible-runner

@@ -22,6 +22,32 @@ services:
   backend:
     environment:
       PROV_SSH_INSECURE_HOST_KEYS: "true"
+      # The fabric's scanner shares the fabric jump host's namespace, as in production.
+      PROV_NETSCAN_URL: ${PROV_NETSCAN_URL:-http://jumphost:8001}
+      PROV_NETSCAN_TOKEN: ${PROV_NETSCAN_TOKEN:-dev-netscan-token}
+
+  net-scanner:
+    network_mode: "service:jumphost"
+    networks: !reset []
+    depends_on:
+      - jumphost
+    environment:
+      NETSCAN_TOKEN: ${PROV_NETSCAN_TOKEN:-dev-netscan-token}
+      NETSCAN_OVERLAY_CIDR: 10.100.0.0/24
+      NETSCAN_REQUIRE_OVERLAY: "1"
+
+  # A deliberately weak target, so a network scan has something it MUST find. A test
+  # against hosts with nothing wrong with them proves nothing: an empty result is
+  # what a broken scanner returns too. Not enrolled; scan it as an address range
+  # (172.30.0.40/32) or with `make netscan-e2e`.
+  weak-target:
+    build:
+      context: ../testfabric/weak
+      dockerfile: Dockerfile
+    networks:
+      prov:
+        ipv4_address: 172.30.0.40
+    restart: unless-stopped
 
   jumphost:
     build:

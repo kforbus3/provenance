@@ -72,6 +72,10 @@ redeploy-single: env ## Update every locally built app service in place, leaving
 	@# because nothing rebuilt it. That is how a sidecar-cleanup fix shipped to a
 	@# 27-hour-old container. If a service is built here, it belongs in this list.
 	$(COMPOSE_SINGLE) up -d --build backend frontend grype-scanner ansible-runner prov-updater builder-runner dockerproxy
+	@# net-scanner shares the jump host's network namespace and so depends on it.
+	@# --no-deps is what keeps that dependency from recreating the jump host -- the
+	@# exact overlay blip this target exists to avoid -- when its config has drifted.
+	$(COMPOSE_SINGLE) up -d --build --no-deps net-scanner
 	@echo "App services updated. The jump host and overlay were left running, so hosts stay reachable."
 	@# This target deliberately does not touch the jump host — which means a release
 	@# that changes its ports, volumes or entrypoint (e.g. publishing the OpenVPN port)
@@ -115,7 +119,7 @@ BUNDLE_OUT     ?= provenance-$(BUNDLE_VERSION).provup
 # the whole build is thrown away at the final write. The signing key lives outside the
 # repo and so, usually, does the bundle.
 BUNDLE_OUT_ABS := $(abspath $(BUNDLE_OUT))
-BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,ansible-runner,prov-updater
+BUNDLE_COMPONENTS ?= backend,frontend,grype-scanner,net-scanner,ansible-runner,prov-updater
 # Bundles deploy to servers, so pin the image platform regardless of the build
 # host's architecture (an Apple Silicon Mac otherwise emits arm64 images that
 # crash-loop with 'exec format error' on an amd64 host and get rolled back).
@@ -285,7 +289,7 @@ enroll-agent-all: ## Cross-compile the bridge for macOS/Linux/Windows (operators
 	@echo "  Windows x86_64:      prov-enroll-agent-windows-amd64.exe"
 
 .PHONY: test
-test: backend-test frontend-typecheck frontend-test scanner-test imaging-test container-e2e store-queries ## Run all tests
+test: backend-test frontend-typecheck frontend-test scanner-test netscan-test imaging-test container-e2e store-queries ## Run all tests
 
 .PHONY: smoke
 smoke: ## Build a real initramfs + bootloader and check what is actually in them (rpm, ~8 min)
@@ -389,6 +393,16 @@ frontend-test: ## Run frontend unit tests
 scanner-test: ## Run grype-scanner sidecar unit tests (parsing only; no grype/DB needed)
 	docker run --rm -v $(PWD)/deploy/grype-scanner:/src -w /src python:3.13-alpine \
 	  sh -c "pip install -q pytest fastapi && python -m pytest -q"
+
+.PHONY: netscan-test
+netscan-test: ## Run net-scanner sidecar unit tests (parsers + safety policy; no tools or templates needed)
+	docker run --rm -v $(PWD)/deploy/net-scanner:/src -w /src python:3.13-alpine \
+	  sh -c "pip install -q pytest fastapi httpx && python -m pytest -q"
+
+.PHONY: netscan-e2e
+netscan-e2e: ## Scan the deliberately weak target with the real net-scanner image; fails unless every planted weakness is found
+	@# Needs internet for the template download, or NETSCAN_TEMPLATES_TGZ=<offline archive>.
+	./scripts/netscan-e2e.sh
 
 .PHONY: imaging-test
 imaging-test: ## Run the imaging sidecars' unit tests (socket-proxy rules, runner auth, preflight)

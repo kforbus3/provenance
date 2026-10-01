@@ -1,0 +1,147 @@
+{{- if .Values.netScanner.enabled -}}
+# Network vulnerability scanner (naabu + fingerprintx + nuclei). Reaches managed hosts
+# at the addresses the backend gives it, so in Kubernetes it covers whatever the pod
+# network routes to -- typically hosts' LAN addresses. Overlay addresses are reachable
+# only from the jump host's network namespace (the single-server compose layout).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "provenance.netScanner.fullname" . }}
+  labels:
+    {{- include "provenance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: net-scanner
+spec:
+  selector:
+    {{- include "provenance.selectorLabels" (dict "context" . "component" "net-scanner") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "provenance.netScanner.fullname" . }}
+  labels:
+    {{- include "provenance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: net-scanner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "provenance.selectorLabels" (dict "context" . "component" "net-scanner") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "provenance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: net-scanner
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: net-scanner
+          image: "{{ .Values.netScanner.image.repository }}:{{ default .Chart.AppVersion .Values.netScanner.image.tag }}"
+          imagePullPolicy: {{ .Values.netScanner.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            # The pod has one interface; listen on it.
+            - name: NETSCAN_BIND
+              value: "0.0.0.0"
+            - name: NETSCAN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "provenance.secretName" . }}
+                  key: PROV_NETSCAN_TOKEN
+                  optional: true
+            - name: NETSCAN_PORT_RATE
+              value: {{ .Values.netScanner.portRate | quote }}
+            - name: NETSCAN_NUCLEI_RATE
+              value: {{ .Values.netScanner.nucleiRate | quote }}
+            - name: NETSCAN_CONCURRENCY
+              value: {{ .Values.netScanner.concurrency | quote }}
+            - name: NETSCAN_TIMEOUT
+              value: {{ .Values.netScanner.timeout | quote }}
+            - name: TMPDIR
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.netScanner.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Immutable root fs. Templates persist on the PVC; nuclei's config and
+            # caches, and scan scratch space, go to emptyDirs.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: templates
+              mountPath: /home/scanner/nuclei-templates
+            - name: tmp
+              mountPath: /tmp
+            - name: nuclei-config
+              mountPath: /home/scanner/.config
+            - name: nuclei-cache
+              mountPath: /home/scanner/.cache
+            - name: pdcp
+              mountPath: /home/scanner/.pdcp
+      volumes:
+        - name: templates
+          {{- if .Values.netScanner.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "provenance.netScanner.fullname" . }}-templates
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: nuclei-config
+          emptyDir: {}
+        - name: nuclei-cache
+          emptyDir: {}
+        - name: pdcp
+          emptyDir: {}
+{{- if .Values.netScanner.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "provenance.netScanner.fullname" . }}-templates
+  labels:
+    {{- include "provenance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: net-scanner
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.netScanner.persistence.storageClass }}
+  storageClassName: {{ .Values.netScanner.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.netScanner.persistence.size | quote }}
+{{- end }}
+{{- end }}

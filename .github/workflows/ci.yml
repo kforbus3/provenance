@@ -144,7 +144,7 @@ jobs:
       - run: npm run lint
 
   sidecars:
-    name: Sidecars (builder-runner · dockerproxy)
+    name: Sidecars (builder-runner · dockerproxy · net-scanner)
     runs-on: ubuntu-latest
     # Blocking, and worth blocking on. Both of these sit in front of the Docker
     # socket: the proxy IS the allowlist, and the runner's token is the only
@@ -166,3 +166,10 @@ jobs:
       # daemon-backed half lives in scripts/imaging/test-docker-proxy.sh.
       - name: Docker proxy rules
         run: python deploy/dockerproxy/test_rules.py
+      # The net-scanner connects to every managed host. Its tests pin the safety
+      # policy -- no credential guessing, no disruptive or code-executing checks, on
+      # every pass -- and that the API refuses a missing or wrong token.
+      - name: Net-scanner parsers and safety policy
+        run: |
+          pip install -r deploy/net-scanner/requirements.txt pytest httpx
+          cd deploy/net-scanner && python -m pytest -q
