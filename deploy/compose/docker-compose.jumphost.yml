@@ -61,6 +61,32 @@ services:
     networks: [prov]
     restart: unless-stopped
 
+  # The network scanner runs INSIDE the jump host's network namespace, which is where
+  # the overlay tunnel interfaces live. That is the only place an overlay address
+  # (PROV_WG_SUBNET / PROV_OVPN_SUBNET) can be reached from, and a roaming host
+  # behind NAT has no other address the scanner could use.
+  #
+  # Two consequences an operator should know:
+  #   * recreating the jump host means recreating this container too; compose does
+  #     that within one `up`, and /healthz fails (overlay "no-route") if it is ever
+  #     left holding a dead namespace -- restart it.
+  #   * the namespace also holds the tunnel every managed host is connected to, so
+  #     the API binds the container-network address only, and requires the token.
+  net-scanner:
+    network_mode: "service:jumphost"
+    networks: !reset []
+    depends_on:
+      - jumphost
+    environment:
+      NETSCAN_OVERLAY_CIDR: ${PROV_WG_SUBNET:-${FLEET_WG_SUBNET:-10.100.0.0/24}},${PROV_OVPN_SUBNET:-${FLEET_OVPN_SUBNET:-10.101.0.0/24}}
+      NETSCAN_REQUIRE_OVERLAY: "1"
+
+  backend:
+    environment:
+      # The scanner answers at the jump host's address now that it shares its
+      # network namespace.
+      PROV_NETSCAN_URL: ${PROV_NETSCAN_URL:-http://jumphost:8001}
+
 volumes:
   jump_wg:
   jump_ovpn:

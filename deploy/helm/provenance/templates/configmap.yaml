@@ -15,4 +15,7 @@ data:
   {{- end }}
   {{- if .Values.grypeScanner.enabled }}
   PROV_GRYPE_SCANNER_URL: {{ printf "http://%s:8000" (include "provenance.grypeScanner.fullname" .) | quote }}
+  {{- if .Values.netScanner.enabled }}
+  PROV_NETSCAN_URL: {{ printf "http://%s:8001" (include "provenance.netScanner.fullname" .) | quote }}
+  {{- end }}
   {{- end }}

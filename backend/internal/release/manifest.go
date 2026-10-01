@@ -281,6 +281,15 @@ var BaselineConfigAdditions = []ConfigAddition{
 		Generate: "secret",
 		Comment:  "encrypts session recordings at rest; required since 2.0.1",
 	},
+	// Not required to boot -- network scans report themselves unconfigured without
+	// it -- but generated here so an upgraded deployment has the feature working
+	// rather than discovering a setting to add. The compose file hands the same .env
+	// value to both the backend and the net-scanner.
+	{
+		Key:      "PROV_NETSCAN_TOKEN",
+		Generate: "secret",
+		Comment:  "authenticates the backend to the net-scanner sidecar (network scans)",
+	},
 }
 
 // MergeBaselineConfigAdditions returns extra plus every baseline addition it does not

@@ -114,6 +114,9 @@ secrets:
   ansibleRunnerToken: "REPLACE_WITH_OPENSSL_RAND_HEX_32"
   # Encrypts session recordings at rest (optional but recommended, >=32 bytes).
   recordingKey: "REPLACE_WITH_OPENSSL_RAND_HEX_32"
+  # Shared secret between the backend and the net-scanner. Network scans are
+  # unavailable until it is set (`openssl rand -hex 32`).
+  netscanToken: ""
 
 # -- PostgreSQL (in-chart single primary) ------------------------------------
 postgres:
@@ -189,6 +192,32 @@ grypeScanner:
     limits:
       cpu: 2000m
       memory: 2Gi
+
+# -- Network vulnerability scanner (net-scanner) -----------------------------
+# naabu + fingerprintx + nuclei, run against managed hosts' addresses. Nuclei
+# templates are fetched at runtime (online update or offline import) and persisted
+# on a PVC. Requires secrets.netscanToken. Build/push from deploy/net-scanner.
+netScanner:
+  enabled: true
+  image:
+    repository: ghcr.io/kforbus3/provenance-net-scanner
+    tag: ""            # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+  portRate: 1000       # packets/second for the TCP port sweep
+  nucleiRate: 100      # requests/second nuclei sends to one address
+  concurrency: 2       # addresses scanned at once
+  timeout: 1800        # per-address wall-clock cap, seconds
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+    limits:
+      cpu: "2000m"
+      memory: "1Gi"
 
 # -- Redis (in-chart) --------------------------------------------------------
 # NOTE: the app does NOT use Redis (PROV_REDIS_URL is parsed and ignored). This is

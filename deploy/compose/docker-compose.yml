@@ -215,6 +215,15 @@ services:
       # sidecar reads the SAME value below. `openssl rand -hex 32`.
       PROV_ANSIBLE_RUNNER_TOKEN: ${PROV_ANSIBLE_RUNNER_TOKEN:-${FLEET_ANSIBLE_RUNNER_TOKEN:-}}
       PROV_GRYPE_SCANNER_URL: ${PROV_GRYPE_SCANNER_URL:-${FLEET_GRYPE_SCANNER_URL:-http://grype-scanner:8000}}
+      # Network vulnerability scanning (docs/admin-guide.md, "Network scans"). The
+      # single-server layout overrides the URL to reach the scanner inside the jump
+      # host's network namespace (docker-compose.jumphost.yml).
+      PROV_NETSCAN_URL: ${PROV_NETSCAN_URL:-http://net-scanner:8001}
+      # Shared secret the backend sends (X-Netscan-Token) to the net-scanner. Network
+      # scans are unavailable until it is set; the sidecar refuses every request
+      # without it. `openssl rand -hex 32`.
+      PROV_NETSCAN_TOKEN: ${PROV_NETSCAN_TOKEN:-}
+      PROV_NETSCAN_TIMEOUT: ${PROV_NETSCAN_TIMEOUT:-}
       # Image building (docs/imaging.md). Empty by default and the whole build
       # path is simply absent: the sidecar needs the Docker socket and a lot of
       # disk, and a fleet that consumes images somebody else builds should not
@@ -554,6 +563,46 @@ services:
           memory: 128M
     networks: [prov]
 
+  # Network vulnerability scanner sidecar: port discovery (naabu), service
+  # identification (fingerprintx) and nuclei checks, against the addresses the
+  # backend hands it. Unlike grype-scanner it DOES connect to managed hosts -- that
+  # is the point -- so it holds no credentials and runs no credential-guessing
+  # checks. Nuclei templates are fetched at runtime (online update or offline
+  # import) and persisted in the netscan-templates volume.
+  #
+  # Here it sits on the internal network and can scan whatever that network
+  # routes to (managed hosts' LAN addresses). The single-server overlay moves it
+  # into the jump host's network namespace so it can reach overlay addresses too.
+  net-scanner:
+    build:
+      context: ../net-scanner
+      dockerfile: Dockerfile
+    image: provenance-net-scanner
+    restart: unless-stopped
+    environment:
+      # Must match the backend's PROV_NETSCAN_TOKEN.
+      NETSCAN_TOKEN: ${PROV_NETSCAN_TOKEN:-}
+      # Packets per second for the TCP port sweep (all 65535 ports of one address
+      # take a little over a minute at 1000).
+      NETSCAN_PORT_RATE: ${NETSCAN_PORT_RATE:-1000}
+      # Requests per second nuclei sends to one address.
+      NETSCAN_NUCLEI_RATE: ${NETSCAN_NUCLEI_RATE:-100}
+      # Addresses scanned at once.
+      NETSCAN_CONCURRENCY: ${NETSCAN_CONCURRENCY:-2}
+      # Per-address wall-clock cap, seconds.
+      NETSCAN_TIMEOUT: ${NETSCAN_TIMEOUT:-1800}
+    volumes:
+      - netscan-templates:/home/scanner/nuclei-templates
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    networks: [prov]
+
   # Privileged upgrade sidecar (in-UI upgrade system). It holds the Docker socket so
   # it can swap the app images when an operator applies a signed .provup bundle. It
   # independently re-verifies every bundle's signature, so it never trusts the
@@ -672,6 +721,7 @@ volumes:
   scap-content:
   backups:
   grype-db:
+  netscan-templates: # nuclei templates for the net-scanner
   rdp-drive:
   updates: # staged upgrade bundles, shared between backend and prov-updater
   dockerproxy: # the allowlisted socket the builder runner talks to
