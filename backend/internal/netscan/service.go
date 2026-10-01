@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -107,46 +106,42 @@ type overlayState struct {
 	why  string
 }
 
-// planPaths decides where a host is scanned from: its LAN address and its overlay
-// address, each once. Pure apart from resolve, so the decisions are testable.
+// planPaths decides where a host is scanned from: ONE address.
+//
+// The overlay address when the host has one. That is the path Provenance itself
+// reaches the host on, and scanning the LAN address as well mostly repeated the same
+// results under a second heading. A host with no overlay address -- not enrolled, or
+// never given one -- is scanned at its LAN address (or resolved hostname), and so is
+// every host in a deployment whose scanner cannot reach the overlay by design
+// (ov.skip: Kubernetes, an external jump host).
+//
+// An overlay the scanner SHOULD reach but cannot (ov.ok false, ov.skip false) is
+// recorded as unreachable on the overlay -- not quietly swapped for a LAN scan, which
+// would hide a broken scanner behind results from a different path.
+//
+// Pure apart from resolve, so the decisions are testable.
 func planPaths(ctx context.Context, h *models.Host, resolve func(context.Context, string) (string, error),
 	ov overlayState) []target {
-	var out []target
-
-	overlayIP := ""
-	if h.WGAddress != "" && h.Enrolled {
-		overlayIP = strings.TrimSpace(h.WGAddress)
-		// ov.skip: not scanned, and not a failure either; see overlayState.
-		switch {
-		case ov.ok:
-			out = append(out, target{Path: models.NetPathOverlay, Addr: overlayIP})
-		case !ov.skip:
-			out = append(out, target{Path: models.NetPathOverlay, Addr: overlayIP, Unreachable: ov.why})
+	if h.WGAddress != "" && h.Enrolled && !ov.skip {
+		addr := strings.TrimSpace(h.WGAddress)
+		if ov.ok {
+			return []target{{Path: models.NetPathOverlay, Addr: addr}}
 		}
+		return []target{{Path: models.NetPathOverlay, Addr: addr, Unreachable: ov.why}}
 	}
 
 	lan := strings.TrimSpace(h.Address)
 	if lan == "" {
 		lan = strings.TrimSpace(h.Hostname)
 	}
-	switch {
-	case lan == "":
-		out = append(out, target{Path: models.NetPathLAN, Unreachable: "the host has no address or hostname to scan"})
-	default:
-		ip, err := resolve(ctx, lan)
-		switch {
-		case err != nil:
-			out = append(out, target{Path: models.NetPathLAN, Addr: lan,
-				Unreachable: fmt.Sprintf("could not resolve %q: %v", lan, err)})
-		case ip == overlayIP:
-			// The host's only address IS its overlay address; one scan covers it.
-		default:
-			out = append(out, target{Path: models.NetPathLAN, Addr: ip})
-		}
+	if lan == "" {
+		return []target{{Path: models.NetPathLAN, Unreachable: "the host has no overlay address, address or hostname to scan"}}
 	}
-	// LAN first: it is what most readers mean by "this host".
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Path == models.NetPathLAN && out[j].Path != models.NetPathLAN })
-	return out
+	ip, err := resolve(ctx, lan)
+	if err != nil {
+		return []target{{Path: models.NetPathLAN, Addr: lan, Unreachable: fmt.Sprintf("could not resolve %q: %v", lan, err)}}
+	}
+	return []target{{Path: models.NetPathLAN, Addr: ip}}
 }
 
 // jumpAddrs are the jump host's addresses, which scans skip by default.
@@ -192,9 +187,9 @@ func (s *Service) overlay(ctx context.Context) overlayState {
 	case "ok":
 		return overlayState{ok: true}
 	case "not-configured":
-		return overlayState{skip: true, why: "Overlay address not scanned: the network scanner does not run " +
-			"in the jump host's network namespace in this deployment, so overlay addresses cannot be reached " +
-			"from it (the single-server layout, docker-compose.jumphost.yml, places it there)."}
+		return overlayState{skip: true, why: "Scanned at the LAN address rather than the overlay address: the " +
+			"network scanner does not run in the jump host's network namespace in this deployment, so overlay " +
+			"addresses cannot be reached from it (the single-server layout, docker-compose.jumphost.yml, places it there)."}
 	default:
 		return overlayState{why: "the network scanner has no route to the overlay. If the jump host was " +
 			"recreated, restart the net-scanner container so it rejoins the jump host's network namespace."}

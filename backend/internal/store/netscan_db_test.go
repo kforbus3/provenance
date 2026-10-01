@@ -18,11 +18,13 @@ func TestNetScanRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := uuid.New()
-	lan, err := s.CreateNetScan(ctx, run, &h.ID, nil, "10.9.0.5", models.NetPathLAN, nil, "test", false)
+	// The overlay scan first, then the LAN scan: the host's latest scan is the LAN one.
+	ov, err := s.CreateNetScan(ctx, run, &h.ID, nil, "10.100.0.9", models.NetPathOverlay, nil, "test", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ov, err := s.CreateNetScan(ctx, run, &h.ID, nil, "10.100.0.9", models.NetPathOverlay, nil, "test", false)
+	time.Sleep(10 * time.Millisecond)
+	lan, err := s.CreateNetScan(ctx, run, &h.ID, nil, "10.9.0.5", models.NetPathLAN, nil, "test", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +88,9 @@ func TestNetScanRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(perHost) != 2 {
-		t.Fatalf("want one scan per path, got %d", len(perHost))
+	// One current scan per host, whichever path it used: the later one.
+	if len(perHost) != 1 || perHost[0].ID != lan {
+		t.Fatalf("want only the latest (LAN) scan, got %+v", perHost)
 	}
 
 	exposed, err := s.ExposedServices(ctx)
@@ -230,5 +233,34 @@ func TestLatestVulnCVEsForHost(t *testing.T) {
 	cves, ok, err := s.LatestVulnCVEsForHost(ctx, h.ID)
 	if err != nil || !ok || !cves["CVE-2025-49844"] {
 		t.Fatalf("cves = %v ok=%v err=%v", cves, ok, err)
+	}
+}
+
+// The roll-up and the exposure table agree on "latest": when a host's newest scan
+// did not answer, the table does not keep listing what an older scan saw.
+func TestExposedServicesFollowTheLatestScanEvenWhenUnreachable(t *testing.T) {
+	s, _, ctx := scheduleTestStore(t)
+	h, err := s.CreateHost(ctx, HostInput{Hostname: "dark-" + uuid.NewString()[:8]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := s.CreateNetScan(ctx, uuid.New(), &h.ID, nil, "10.9.1.5", models.NetPathOverlay, nil, "t", false)
+	if err := s.CompleteNetScan(ctx, old, NetScanResult{Status: models.NetScanCompleted,
+		Services: []models.NetService{{Port: 22, Proto: "tcp"}}}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	cur, _ := s.CreateNetScan(ctx, uuid.New(), &h.ID, nil, "10.9.1.5", models.NetPathOverlay, nil, "t", false)
+	if err := s.CompleteNetScan(ctx, cur, NetScanResult{Status: models.NetScanUnreachable, Reason: "dark"}); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := s.ExposedServices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ex {
+		if e.HostID != nil && *e.HostID == h.ID {
+			t.Fatalf("stale service from an older scan listed: %+v", e)
+		}
 	}
 }

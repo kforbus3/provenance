@@ -55,9 +55,9 @@ func (s *Service) runNetworkExposure(ctx context.Context, raw json.RawMessage, w
 				tableTimePtr(v.FinishedAt)})
 		}
 		return tbl, map[string]any{"count": len(scans), "scans": scans, "unreachable": unreachable,
-			"note": "One row per address and path. 'lan' is what the host's own network can reach; 'overlay' " +
-				"is what the jump host can reach. An unreachable row was NOT assessed and says nothing about " +
-				"what that address exposes. 'Unexpected' ports answered but are not bound on the host."}
+			"note": "One row per host (scanned on its overlay address, or its LAN address when it has none) " +
+				"and per range address. An unreachable row was NOT assessed and says nothing about what that " +
+				"address exposes. 'Unexpected' ports answered but are not bound on the host."}
 	}
 
 	host, err := s.store.HostByHostname(ctx, hostname)

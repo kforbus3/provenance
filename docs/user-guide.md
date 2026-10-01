@@ -287,8 +287,9 @@ findings first.
 ### What your hosts expose on the network
 
 The **Network exposure** page shows the other side: what each host answers on when
-something on the network knocks. Each host is checked on its normal address and on
-its overlay (tunnel) address, every port, without logging in to anything.
+something on the network knocks. Each host is checked on its overlay (tunnel) address
+— or its normal address if it has no tunnel — every port, without logging in to
+anything.
 
 - **Exposed services** lists every port that answered, what is running there, and
   any problems found — old TLS versions, weak SSH settings, a database that needs

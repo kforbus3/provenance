@@ -5,9 +5,9 @@ import { api } from "./client";
 // EXPOSES -- which ports answer, from which path, what is serving on them, and
 // whether that service is vulnerable or misconfigured.
 //
-// A managed host is scanned on each path it has: its LAN address (what its network
-// can reach) and its overlay address (what the jump host can reach). Range scans
-// cover devices Provenance does not manage.
+// A managed host is scanned on its overlay address -- the path Provenance reaches it
+// on -- or, when it has none, its LAN address. Range scans cover devices Provenance
+// does not manage.
 
 export type NetPath = "lan" | "overlay" | "range";
 
@@ -285,32 +285,6 @@ export function pathLabel(p: NetPath | string): string {
     default:
       return p;
   }
-}
-
-// overlayOnly finds services a host exposes on its overlay path but not on its LAN
-// path: something the host trusts the jump host -- and so whoever controls it --
-// with, which its own network cannot reach. Only for hosts scanned on BOTH paths;
-// a host with no LAN scan says nothing about what its LAN exposes.
-export function overlayOnly(services: ExposedService[]): Set<string> {
-  const lan = new Map<string, Set<string>>();
-  const hasOverlay = new Set<string>();
-  for (const s of services) {
-    const host = s.hostId ?? s.target;
-    if (s.path === "lan") {
-      if (!lan.has(host)) lan.set(host, new Set());
-      lan.get(host)!.add(`${s.proto}/${s.port}`);
-    } else if (s.path === "overlay") {
-      hasOverlay.add(host);
-    }
-  }
-  const out = new Set<string>();
-  for (const s of services) {
-    const host = s.hostId ?? s.target;
-    if (s.path === "overlay" && hasOverlay.has(host) && lan.has(host) && !lan.get(host)!.has(`${s.proto}/${s.port}`)) {
-      out.add(`${s.scanId}:${s.proto}/${s.port}`);
-    }
-  }
-  return out;
 }
 
 // listeningNotReachable is the host's exposed sockets that no scan path reached --

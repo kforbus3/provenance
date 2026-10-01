@@ -1169,14 +1169,17 @@ templates), plus IPMI/BMC and SSDP UDP probes. The backend authenticates to it w
 feature reports itself unconfigured and nothing else is affected. Upgrade bundles
 generate the token automatically.
 
-**Two paths per host.** Each managed host is scanned on its **LAN address** (what
-anything on its network can reach) and its **overlay address** (what the jump host —
-and so whoever controls it — can reach). A roaming host behind NAT is often
-reachable *only* over the overlay. In the single-server layout
+**One address per host: the overlay first.** Each managed host is scanned on its
+**overlay address** — the path Provenance itself reaches it on, and often the only
+one for a roaming host behind NAT. A host with no overlay address (not enrolled, or
+never given one) is scanned on its **LAN address**, or its hostname resolved. Scanning
+both mostly listed the same results twice. In the single-server layout
 (`docker-compose.jumphost.yml`) the scanner runs **inside the jump host's network
 namespace** so overlay addresses are reachable; elsewhere (Kubernetes, an external
-jump host) overlay paths are skipped and each scan carries a note saying so. A
-service exposed on the overlay but not the LAN is flagged **overlay-only**.
+jump host) hosts are scanned on their LAN address and each scan carries a note
+saying so. If the scanner should reach the overlay and cannot, the scan is recorded
+**unreachable** on the overlay rather than quietly replaced with a LAN scan. The
+roll-up shows each host's latest scan, whichever path it used.
 
 **Unreachable is not clean.** An address that does not answer is recorded as
 **unreachable** with a reason, never as "0 findings". In a scheduled scan it counts

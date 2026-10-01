@@ -241,3 +241,7 @@ is mostly UI, API and federation plumbing.
   the existing transparent site proxy, like package scans. No new ingest messages.
 - **Ranges** found live addresses with the top 1,000 ports, then scan each address's
   full range — a full sweep of every address in a /22 would take most of a day.
+- **One path per host (v2.1.3).** Scanning both the LAN and overlay addresses was the
+  original design; in production the two results were nearly identical and listed
+  twice. A host is now scanned on its overlay address, or its LAN address when it has
+  none. The overlay-only comparison went with it.

@@ -5,6 +5,20 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.1.3 — 2026-10-01
+
+### Network scans use the overlay address, falling back to the LAN address
+
+Each host was scanned on both its LAN and overlay addresses, and the two results were
+nearly always the same — listed twice. A host is now scanned once: on its overlay
+address when it has one, otherwise its LAN address (or resolved hostname). The roll-up
+and the exposed-services table show each host's latest scan, so a host's earlier LAN
+scan drops out once it is scanned on the overlay. The "Overlay-only" filter, which
+compared the two, is gone. A scanner that should reach the overlay and cannot still
+records the host unreachable rather than scanning its LAN address in its place.
+
+---
+
 ## v2.1.2 — 2026-10-01
 
 ### Network scans of managed hosts run about three times faster

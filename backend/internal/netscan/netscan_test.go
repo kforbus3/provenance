@@ -34,34 +34,43 @@ func paths(ts []target) string {
 	return strings.Join(p, ",")
 }
 
-// An enrolled host with both addresses is scanned on both, LAN first.
-func TestPlanScansBothPaths(t *testing.T) {
+// A host on the overlay is scanned there, and only there: the LAN scan mostly
+// repeated the same results under a second heading.
+func TestHostWithOverlayIsScannedOnTheOverlayOnly(t *testing.T) {
 	h := &models.Host{Hostname: "web", Address: "10.0.2.50", WGAddress: "10.100.0.21", Enrolled: true}
-	got := paths(planPaths(context.Background(), h, fakeResolve(nil), overlayState{ok: true}))
-	if got != "lan=10.0.2.50,overlay=10.100.0.21" {
+	if got := paths(planPaths(context.Background(), h, fakeResolve(nil), overlayState{ok: true})); got != "overlay=10.100.0.21" {
 		t.Fatalf("got %s", got)
 	}
 }
 
-// A roaming host behind NAT is reachable only over the overlay. When the scanner
-// cannot reach the overlay, that path must be RECORDED as unreachable -- dropping it
-// would leave the host looking covered by a LAN scan of an address nothing answers on.
-func TestOverlayRecordedUnreachableWhenScannerHasNoRoute(t *testing.T) {
+// No overlay address: the LAN address is the fallback.
+func TestHostWithoutOverlayFallsBackToLAN(t *testing.T) {
+	h := &models.Host{Hostname: "wap", Address: "10.0.2.220"}
+	if got := paths(planPaths(context.Background(), h, fakeResolve(nil), overlayState{ok: true})); got != "lan=10.0.2.220" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+// When the scanner SHOULD reach the overlay and cannot, that is recorded against the
+// overlay -- a LAN scan in its place would hide a broken scanner behind results from
+// a different path.
+func TestBrokenOverlayIsUnreachableNotSwappedForLAN(t *testing.T) {
 	h := &models.Host{Hostname: "laptop", Address: "192.168.1.20", WGAddress: "10.100.0.30", Enrolled: true}
 	ts := planPaths(context.Background(), h, fakeResolve(nil), overlayState{why: "no route"})
-	if got := paths(ts); got != "lan=192.168.1.20,overlay=10.100.0.30!" {
+	if got := paths(ts); got != "overlay=10.100.0.30!" {
 		t.Fatalf("got %s", got)
 	}
 }
 
 // An overlay address assigned at enrollment but never joined is not a path yet.
-func TestUnenrolledHostHasNoOverlayPath(t *testing.T) {
+func TestUnenrolledHostIsScannedOnLAN(t *testing.T) {
 	h := &models.Host{Hostname: "new", Address: "10.0.2.60", WGAddress: "10.100.0.40", Enrolled: false}
 	if got := paths(planPaths(context.Background(), h, fakeResolve(nil), overlayState{ok: true})); got != "lan=10.0.2.60" {
 		t.Fatalf("got %s", got)
 	}
 }
 
+// Most production hosts record no LAN address at all: the hostname is resolved.
 func TestHostnameResolvedWhenNoAddress(t *testing.T) {
 	h := &models.Host{Hostname: "nas.homenet.com"}
 	got := paths(planPaths(context.Background(), h, fakeResolve(map[string]string{"nas.homenet.com": "10.0.2.6"}), overlayState{}))
@@ -75,14 +84,6 @@ func TestUnresolvableNameIsUnreachableNotSkipped(t *testing.T) {
 	ts := planPaths(context.Background(), h, fakeResolve(nil), overlayState{})
 	if len(ts) != 1 || ts[0].Unreachable == "" || !strings.Contains(ts[0].Unreachable, "resolve") {
 		t.Fatalf("got %+v", ts)
-	}
-}
-
-// A host whose only address is its overlay address is scanned once.
-func TestLANEqualToOverlayScannedOnce(t *testing.T) {
-	h := &models.Host{Hostname: "x", Address: "10.100.0.21", WGAddress: "10.100.0.21", Enrolled: true}
-	if got := paths(planPaths(context.Background(), h, fakeResolve(nil), overlayState{ok: true})); got != "overlay=10.100.0.21" {
-		t.Fatalf("got %s", got)
 	}
 }
 
@@ -322,9 +323,10 @@ func TestListenerScriptRunsUnderSudoWhenAllowed(t *testing.T) {
 	}
 }
 
-// A deployment whose scanner cannot reach the overlay by design does not record an
-// unreachable overlay scan for every host every night.
-func TestOverlaySkippedWhenDeploymentCannotReachIt(t *testing.T) {
+// A deployment whose scanner cannot reach the overlay by design scans the LAN
+// address instead, rather than recording an unreachable overlay for every host every
+// night.
+func TestLANUsedWhenDeploymentCannotReachTheOverlay(t *testing.T) {
 	h := &models.Host{Hostname: "web", Address: "10.0.2.50", WGAddress: "10.100.0.21", Enrolled: true}
 	if got := paths(planPaths(context.Background(), h, fakeResolve(nil), overlayState{skip: true, why: "k8s"})); got != "lan=10.0.2.50" {
 		t.Fatalf("got %s", got)
