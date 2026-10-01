@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/netscan"
 	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -40,6 +41,18 @@ func (e *Engine) vulnDBRefresh(ctx context.Context, sc *models.Schedule) func(ti
 				problems = append(problems, "grype database: "+err.Error())
 			} else {
 				e.log.Info("scheduled vulndb: grype DB updated")
+			}
+			// The network scanner's nuclei templates are vulnerability data too, and
+			// go stale the same way. Only where network scanning is configured: a
+			// deployment without it should not see a nightly failure for a feature it
+			// does not run.
+			if e.net != nil && e.net.Configured() {
+				if st, err := e.net.TemplatesUpdate(rctx); err != nil {
+					e.log.Warn("scheduled vulndb: nuclei templates", "err", err)
+					problems = append(problems, "network-scan templates: "+err.Error())
+				} else {
+					e.log.Info("scheduled vulndb: nuclei templates updated", "version", st.Version)
+				}
 			}
 			if e.msrc != nil {
 				if n, err := e.msrc.UpdateOnline(rctx); err != nil {
@@ -94,8 +107,11 @@ func (e *Engine) reportWhenDone(ctx context.Context, sc *models.Schedule, kind s
 // then each host and its reason.
 func batchFailureMessage(sc *models.Schedule, kind string, total int, failures []store.ScheduledRunFailure, missing int) (string, string) {
 	what := "Security scan"
-	if kind == "vulnscan" {
+	switch kind {
+	case "vulnscan":
 		what = "Vulnerability scan"
+	case "netscan":
+		what = "Network scan"
 	}
 	bad := len(failures) + missing
 	title := fmt.Sprintf("%s: %d of %d hosts failed (%s)", what, bad, total, sc.Name)
@@ -141,4 +157,54 @@ func trunc(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// fireNetRanges scans every enabled network range. Like vulndb it creates no record
+// up front -- addresses become scans as discovery finds them -- so the outcome is
+// written onto the firing when every range has finished.
+func (e *Engine) fireNetRanges(ctx context.Context, sc *models.Schedule) (string, []uuid.UUID, func(time.Time)) {
+	if e.net == nil {
+		return "error: network scanning is not available", nil, nil
+	}
+	if !e.net.Configured() {
+		return "error: " + netscan.ErrNotConfigured.Error(), nil, nil
+	}
+	ranges, err := e.store.ListNetScanRanges(ctx)
+	if err != nil {
+		return "error: " + err.Error(), nil, nil
+	}
+	var enabled []models.NetScanRange
+	for _, r := range ranges {
+		if r.Enabled {
+			enabled = append(enabled, r)
+		}
+	}
+	if len(enabled) == 0 {
+		return "skipped: no enabled network ranges", nil, nil
+	}
+	base := context.WithoutCancel(ctx)
+	return "started", nil, func(firedAt time.Time) {
+		go func() {
+			var problems []string
+			// One range at a time: each already scans addresses concurrently, and the
+			// sidecar is shared with every host scan.
+			for i := range enabled {
+				r := enabled[i]
+				_, wait, err := e.net.StartRange(base, &r, nil, sc.Requester, true)
+				if err == nil {
+					err = wait()
+				}
+				if err != nil {
+					problems = append(problems, r.Name+": "+err.Error())
+				}
+			}
+			result := "completed"
+			if len(problems) > 0 {
+				result = trunc("failed: "+strings.Join(problems, "; "), 480)
+				e.notifyFailure(base, sc, fmt.Sprintf("Network range scan failed (%s)", sc.Name),
+					"The scheduled scan of network ranges did not complete for:\n\n"+strings.Join(problems, "\n"))
+			}
+			e.recordResult(base, sc, firedAt, result)
+		}()
+	}
 }

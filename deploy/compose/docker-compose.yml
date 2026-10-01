@@ -224,6 +224,9 @@ services:
       # without it. `openssl rand -hex 32`.
       PROV_NETSCAN_TOKEN: ${PROV_NETSCAN_TOKEN:-}
       PROV_NETSCAN_TIMEOUT: ${PROV_NETSCAN_TIMEOUT:-}
+      # Lets network scans target the jump host (off: its sshd drops connections
+      # past MaxStartups, and a scan's SSH checks compete with the fleet's own).
+      PROV_NETSCAN_INCLUDE_JUMPHOST: ${PROV_NETSCAN_INCLUDE_JUMPHOST:-}
       # Image building (docs/imaging.md). Empty by default and the whole build
       # path is simply absent: the sidecar needs the Docker socket and a lot of
       # disk, and a fleet that consumes images somebody else builds should not

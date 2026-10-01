@@ -18,6 +18,7 @@ func TestTheOutcomeCoversEveryKindThatProducesRuns(t *testing.T) {
 		"playbook": "playbook_runs",
 		"vulnscan": "vuln_scans",
 		"script":   "winscript_runs",
+		"netscan":  "net_scans",
 	} {
 		if !strings.Contains(sql, "kind='"+kind+"'") {
 			t.Errorf("no outcome branch for kind %q: its schedules will show no verdict", kind)
@@ -50,7 +51,8 @@ func TestFailedOutweighsInFlightWhichOutweighsCompleted(t *testing.T) {
 	// Every status that means "it did not work" has to be in the failed set. Each
 	// table has its own vocabulary: playbook runs use "interrupted", enrollment uses
 	// "rolled_back".
-	for _, s := range []string{"'failed'", "'error'", "'cancelled'", "'interrupted'"} {
+	// net_scans uses "unreachable": an address that never answered was not assessed.
+	for _, s := range []string{"'failed'", "'error'", "'cancelled'", "'interrupted'", "'unreachable'"} {
 		if !strings.Contains(sql[failed:running], s) {
 			t.Errorf("%s is not counted as a failure", s)
 		}

@@ -95,6 +95,14 @@ func TestStoreQueriesParse(t *testing.T) {
 		{"MarkStackDeploying", func() error { return s.MarkStackDeploying(ctx, id) }},
 		{"PruneImageUpdates", func() error { return s.PruneImageUpdates(ctx, []TrackedImage{{Repository: "a/b", Tag: "1"}}) }},
 		{"UnhealthyContainers", func() error { _, err := s.UnhealthyContainers(ctx); return err }},
+		{"ListNetScans", func() error { _, err := s.ListNetScans(ctx, &id, &id, 10); return err }},
+		{"LatestNetScans", func() error { _, err := s.LatestNetScans(ctx); return err }},
+		{"LatestNetScansForHost", func() error { _, err := s.LatestNetScansForHost(ctx, id); return err }},
+		{"ExposedServices", func() error { _, err := s.ExposedServices(ctx); return err }},
+		{"PreviousNetPorts", func() error { _, _, err := s.PreviousNetPorts(ctx, id); return err }},
+		{"ListNetScanRanges", func() error { _, err := s.ListNetScanRanges(ctx); return err }},
+		{"HostIDsByAddress", func() error { _, err := s.HostIDsByAddress(ctx); return err }},
+		{"LatestVulnCVEsForHost", func() error { _, _, err := s.LatestVulnCVEsForHost(ctx, id); return err }},
 	}
 
 	for _, c := range cases {
@@ -114,7 +122,8 @@ func TestStoreQueriesParse(t *testing.T) {
 	for _, m := range []string{
 		"DiscoveredProjects", "ImageUpdates", "ImageUpdatesWithHosts", "TrackedImages",
 		"EnabledStackComposes", "LastCheckedAt", "ListStacks", "ListUpdateRollouts",
-		"UnhealthyContainers",
+		"UnhealthyContainers", "ListNetScans", "LatestNetScans", "LatestNetScansForHost",
+		"ExposedServices", "PreviousNetPorts", "ListNetScanRanges", "LatestVulnCVEsForHost",
 	} {
 		if !covered[m] {
 			t.Errorf("%s is not exercised here", m)

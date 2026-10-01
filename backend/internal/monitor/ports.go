@@ -44,6 +44,10 @@ func collectListeningPorts(conn *sshgw.Conn, inv *models.HostInventory) {
 	inv.PortsCheckedAt = &now
 }
 
+// ParseListeningPorts is parseListeningPorts for other packages: network scanning
+// collects the same listener list at scan time and must read it the same way.
+func ParseListeningPorts(out string) []models.ListeningPort { return parseListeningPorts(out) }
+
 // parseListeningPorts reads `ss -lntupH` or `netstat -lntup` output.
 //
 // Split out from the collection so it can be tested against real output from

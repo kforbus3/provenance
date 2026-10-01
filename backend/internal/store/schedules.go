@@ -247,7 +247,7 @@ var lastOutcomeSQL = func() string {
 			SELECT CASE
 				WHEN cardinality(schedules.last_run_ids) = 0 THEN ''
 				WHEN count(*) < cardinality(schedules.last_run_ids) THEN 'failed'
-				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('failed','error','cancelled','interrupted','rolled_back')) > 0 THEN 'failed'
+				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('failed','error','cancelled','interrupted','rolled_back','unreachable')) > 0 THEN 'failed'
 				WHEN count(*) FILTER (WHERE ` + alias + `.status IN ('pending','running','started')) > 0 THEN 'running'
 				ELSE 'completed'
 			END
@@ -257,10 +257,11 @@ var lastOutcomeSQL = func() string {
 		frag("scan", "host_scans", "hs") + " " +
 		frag("playbook", "playbook_runs", "pr") + " " +
 		frag("vulnscan", "vuln_scans", "vs") + " " +
+		frag("netscan", "net_scans", "ns") + " " +
 		frag("script", "winscript_runs", "ws") + " " +
 		// A CVE refresh creates no record; the refresh writes its result onto the
 		// firing (vulnDBRefresh), and "started" while it is still downloading.
-		`WHEN kind='vulndb' THEN CASE
+		`WHEN kind IN ('vulndb','netrange') THEN CASE
 			WHEN last_status = 'completed' THEN 'completed'
 			WHEN last_status LIKE 'failed%' THEN 'failed'
 			WHEN last_status = 'started' THEN 'running'
@@ -274,6 +275,7 @@ var lastRunCountsSQL = `cardinality(last_run_ids) AS last_run_total,
 			(CASE kind
 				WHEN 'scan' THEN (SELECT count(*) FROM host_scans x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
 				WHEN 'vulnscan' THEN (SELECT count(*) FROM vuln_scans x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
+				WHEN 'netscan' THEN (SELECT count(*) FROM net_scans x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
 				WHEN 'playbook' THEN (SELECT count(*) FROM playbook_runs x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
 				WHEN 'script' THEN (SELECT count(*) FROM winscript_runs x WHERE x.id = ANY(schedules.last_run_ids) AND x.status = 'completed')
 				ELSE 0 END) AS last_run_ok`
@@ -413,12 +415,19 @@ type ScheduledRunFailure struct{ Host, Error string }
 // FailedScheduledRuns reports which of a batch's scans failed, with the host and
 // reason, and how many of the ids no longer have a record at all.
 func (s *Store) FailedScheduledRuns(ctx context.Context, kind string, ids []uuid.UUID) ([]ScheduledRunFailure, int, error) {
-	table := map[string]string{"scan": "host_scans", "vulnscan": "vuln_scans"}[kind]
+	table := map[string]string{"scan": "host_scans", "vulnscan": "vuln_scans", "netscan": "net_scans"}[kind]
 	if table == "" {
 		return nil, 0, fmt.Errorf("no batch outcome for kind %q", kind)
 	}
+	// A network scan is per address and path, and an unreachable one carries its
+	// explanation in reason rather than error; name both in the failure.
+	hostExpr, errExpr := "coalesce(h.hostname, '')", "x.error"
+	if kind == "netscan" {
+		hostExpr = "coalesce(h.hostname, x.target) || ' (' || x.path || ')'"
+		errExpr = "CASE WHEN x.error <> '' THEN x.error ELSE x.reason END"
+	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT coalesce(h.hostname, ''), x.status, x.error
+		SELECT `+hostExpr+`, x.status, `+errExpr+`
 		  FROM `+table+` x LEFT JOIN hosts h ON h.id = x.host_id
 		 WHERE x.id = ANY($1)`, ids)
 	if err != nil {

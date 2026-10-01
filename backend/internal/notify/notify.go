@@ -51,6 +51,11 @@ const (
 	// line in the backend log: the failed record had been cleared and the schedule
 	// said "started".
 	EventScheduleFailed = "schedule.failed"
+	// A network scan found a port answering that the previous scan of the same
+	// address did not, or a critical/high network finding. "Something new is
+	// listening" is often the most useful thing a network scan can say, and nobody
+	// reads a scan history page to find it.
+	EventNetExposure = "netscan.exposure"
 )
 
 // AllEventTypes is the catalogue surfaced in the settings UI (key + label). The
@@ -80,6 +85,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventContainerRolloutHalted, "Container update rollout halted on its failure budget"},
 	{EventStackDeployFailed, "Managed stack failed to deploy"},
 	{EventScheduleFailed, "Scheduled scan or CVE-database refresh failed"},
+	{EventNetExposure, "Network scan found a new open port or a serious exposure"},
 }
 
 const settingKey = "notifications"
