@@ -28,6 +28,7 @@ import (
 type fakeSidecar struct {
 	mu      sync.Mutex
 	targets []string
+	rates   map[string]int
 	overlay string
 	results map[string]any
 	found   []string // what /discover reports
@@ -50,6 +51,10 @@ func (f *fakeSidecar) handler(t *testing.T, token string) http.Handler {
 			_ = json.Unmarshal(b, &req)
 			f.mu.Lock()
 			f.targets = append(f.targets, req.Target)
+			if f.rates == nil {
+				f.rates = map[string]int{}
+			}
+			f.rates[req.Target] = req.NucleiRate
 			res, ok := f.results[req.Target]
 			f.mu.Unlock()
 			if !ok {
@@ -82,7 +87,7 @@ func testService(t *testing.T, sidecarURL, token string) (*Service, *store.Store
 		t.Fatal(err)
 	}
 	st := store.New(pool)
-	cfg := &config.Config{NetScanURL: sidecarURL, NetScanToken: token, NetScanTimeout: time.Minute,
+	cfg := &config.Config{NetScanURL: sidecarURL, NetScanToken: token, NetScanTimeout: time.Minute, NetScanHostRate: 300,
 		WGJumpIP: "10.100.0.1", JumpHost: "jumphost:22"}
 	svc := New(st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, nil)
 	svc.resolve = fakeResolve(map[string]string{"jumphost": "172.30.0.10"})
@@ -153,6 +158,10 @@ func TestStartHostsEndToEnd(t *testing.T) {
 	if strings.Join(fs.targets, ",") != lanIP+","+ovIP {
 		t.Fatalf("sidecar asked for %v", fs.targets)
 	}
+	// A managed host is scanned at the host rate.
+	if fs.rates[lanIP] != 300 || fs.rates[ovIP] != 300 {
+		t.Fatalf("host scans asked for rates %v, want 300", fs.rates)
+	}
 }
 
 // With a wrong token every scan fails with a message that names the cause.
@@ -222,5 +231,12 @@ func TestRangeScanAttachesKnownHosts(t *testing.T) {
 	}
 	if len(scans) != 1 || scans[0].Target != addr(7) || scans[0].HostID == nil || *scans[0].HostID != h.ID {
 		t.Fatalf("range scans = %+v", scans)
+	}
+	// A range address may be a printer: it keeps the sidecar's default rate, even
+	// when it turns out to be a known host.
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if r := fs.rates[addr(7)]; r != 0 {
+		t.Fatalf("range scan asked for rate %d, want the sidecar default (0)", r)
 	}
 }

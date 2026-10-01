@@ -408,8 +408,12 @@ type Config struct {
 	// its sshd drops connections past MaxStartups, and a scan's SSH checks arriving
 	// alongside the fleet's own connections is how hosts go briefly unreachable.
 	NetScanIncludeJumpHost bool
-	MSRCAPIURL             string // Microsoft Security Update Guide API (Windows CVE mapping)
-	MSRCMonths             int    // how many recent MSRC releases an online update fetches
+	// NetScanHostRate is the nuclei request rate (per second) asked for when scanning
+	// a managed host. Range scans keep the sidecar's lower default: an unmanaged
+	// address may be a printer. The sidecar clamps it (NETSCAN_NUCLEI_RATE_MAX).
+	NetScanHostRate int
+	MSRCAPIURL      string // Microsoft Security Update Guide API (Windows CVE mapping)
+	MSRCMonths      int    // how many recent MSRC releases an online update fetches
 
 	// CARotateAfter is how old the active SSH CA key may get before Provenance sends a
 	// rotation-reminder notification (the CA never auto-expires; rotation is
@@ -594,6 +598,7 @@ func Load() (*Config, error) {
 		NetScanToken:           env("PROV_NETSCAN_TOKEN", ""),
 		NetScanTimeout:         envDuration("PROV_NETSCAN_TIMEOUT", 45*time.Minute),
 		NetScanIncludeJumpHost: envBool("PROV_NETSCAN_INCLUDE_JUMPHOST", false),
+		NetScanHostRate:        envInt("PROV_NETSCAN_HOST_RATE", 300),
 		MSRCAPIURL:             env("PROV_MSRC_API_URL", "https://api.msrc.microsoft.com"),
 		MSRCMonths:             envInt("PROV_MSRC_MONTHS", 12),
 		CARotateAfter:          envDuration("PROV_CA_ROTATE_AFTER", 365*24*time.Hour),

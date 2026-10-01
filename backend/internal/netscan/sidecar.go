@@ -86,6 +86,8 @@ type scanRequest struct {
 	TCPPorts        any    `json:"tcpPorts"`
 	UDP             bool   `json:"udp"`
 	AliveProbePorts []int  `json:"aliveProbePorts,omitempty"`
+	// NucleiRate is 0 to take the sidecar's default.
+	NucleiRate int `json:"nucleiRate,omitempty"`
 }
 
 func (c *sidecar) scan(ctx context.Context, r scanRequest) (*sidecarResult, error) {

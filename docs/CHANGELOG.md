@@ -5,6 +5,18 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.1.2 — 2026-10-01
+
+### Network scans of managed hosts run about three times faster
+
+The first production scan of a host serving six web ports took 15 minutes per path, most
+of it in web checks held to 100 requests a second — a limit chosen for printers and IoT
+devices on a range scan, not for servers. Managed hosts are now scanned at 300 requests a
+second (`PROV_NETSCAN_HOST_RATE`); range scans keep the scanner's own default of 100. The
+scanner caps whatever is asked for at `NETSCAN_NUCLEI_RATE_MAX` (500).
+
+---
+
 ## v2.1.1 — 2026-09-30
 
 ### Network scanner templates now update online

@@ -445,3 +445,15 @@ def test_update_that_installs_nothing_is_a_failure(monkeypatch, tmp_path):
                         lambda *a, **k: sp.CompletedProcess(a, 0, b"banner only", b""))
     r = TestClient(appmod.app).post("/templates/update", headers={"X-Netscan-Token": "t"})
     assert r.status_code == 502 and r.json()["ok"] is False
+
+
+def test_nuclei_rate_is_clamped(monkeypatch):
+    monkeypatch.setattr(appmod, "NUCLEI_RATE", 100)
+    monkeypatch.setattr(appmod, "NUCLEI_RATE_MAX", 500)
+    assert appmod.nuclei_rate(None) == 100
+    assert appmod.nuclei_rate(300) == 300
+    assert appmod.nuclei_rate(10_000) == 500
+    assert appmod.nuclei_rate(1) == 10
+    for bad in ("300", -5, True, 2.5):
+        with pytest.raises(ValueError):
+            appmod.nuclei_rate(bad)

@@ -324,7 +324,14 @@ func (s *Service) scanOne(ctx context.Context, r row, h *models.Host, listeners 
 	}
 	sctx, cancel := context.WithTimeout(ctx, s.cfg.NetScanTimeout+time.Minute)
 	defer cancel()
-	res, err := s.sc.scan(sctx, scanRequest{Target: r.t.Addr, TCPPorts: "full", UDP: true, AliveProbePorts: probe})
+	req := scanRequest{Target: r.t.Addr, TCPPorts: "full", UDP: true, AliveProbePorts: probe}
+	// A managed host is a server that can take a brisker rate; at the sidecar's
+	// default, a host serving six web ports took 15 minutes per path. Range
+	// addresses (h == nil) keep the default.
+	if h != nil {
+		req.NucleiRate = s.cfg.NetScanHostRate
+	}
+	res, err := s.sc.scan(sctx, req)
 	if err != nil {
 		s.log.Warn("netscan failed", "target", label, "path", r.t.Path, "err", err)
 		if ferr := s.store.FailNetScan(ctx, r.id, err.Error()); ferr != nil {
