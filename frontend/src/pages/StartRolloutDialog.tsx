@@ -8,9 +8,11 @@ import { createRollout, type ImageUpdate, type RolloutImage } from "../api/conta
 
 // Starting a staged rollout of one image update.
 //
-// The defaults are cautious rather than fast: one host first, a fifteen-minute
-// soak, and a halt on the first failure. The cost of being slow is waiting; the
-// cost of being fast is every host on a broken image at the same moment.
+// The defaults are cautious rather than fast: one canary host per image, a
+// five-minute soak at the end of which the canary is re-checked (still running,
+// not unhealthy, not restarted), and a halt on the first failure. Canary and soak
+// are per image, so an image on a single host never waits, and in a multi-image
+// rollout a host waits only on the images it is receiving.
 
 const errMsg = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
@@ -36,7 +38,7 @@ export function StartRolloutDialog({
 }) {
   const [canary, setCanary] = useState(1);
   const [batchSize, setBatchSize] = useState(5);
-  const [soakSeconds, setSoakSeconds] = useState(900);
+  const [soakSeconds, setSoakSeconds] = useState(300);
   const [maxFailures, setMaxFailures] = useState(1);
   const [windowStart, setWindowStart] = useState("");
   const [windowEnd, setWindowEnd] = useState("");
@@ -150,7 +152,7 @@ export function StartRolloutDialog({
           <TextField
             select label="Soak" size="small" value={soakSeconds}
             onChange={(e) => setSoakSeconds(Number(e.target.value))}
-            helperText="How long the canaries must run before the fleet follows."
+            helperText="Per image: how long its canary must run, then pass a re-check (running, healthy, not restarted), before that image's other hosts follow."
           >
             {SOAKS.map((s) => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
           </TextField>

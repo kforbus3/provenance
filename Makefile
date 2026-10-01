@@ -192,7 +192,7 @@ test-db: ## Run the database-backed tests against a throwaway PostgreSQL
 	         echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
 	         apt-get update -qq >/dev/null && apt-get install -y -qq postgresql-client-16 >/dev/null && \
 	         go run ./cmd/provctl migrate-db "$$PROV_TEST_DATABASE_URL" && \
-	         go test ./internal/store/ -run "EverySQLStatement|StoreQueriesParse|AssigningARoleThatDoesNotExist|DeletingAUserDoesNotBreak|RangeAcknowledgement|ScanRecognises|RetentionPrune|UndeclaredDeletion|FabricatedBoundary|AHostScanRecordsWhenItStarted|VanishedFailureIsNotCompleted|CVERefreshReportsItsResult|DeletingAHostStopsTheSchedules|WhoseContainersStoppedStopsListing|HostCATrustIsRecordedPerHost|ImagePackagesAreStored|NetScan|LatestVulnCVEsForHost|TheOutcomeCovers" -v && \
+	         go test ./internal/store/ -run "EverySQLStatement|StoreQueriesParse|AssigningARoleThatDoesNotExist|DeletingAUserDoesNotBreak|RangeAcknowledgement|ScanRecognises|RetentionPrune|UndeclaredDeletion|FabricatedBoundary|AHostScanRecordsWhenItStarted|VanishedFailureIsNotCompleted|CVERefreshReportsItsResult|DeletingAHostStopsTheSchedules|WhoseContainersStoppedStopsListing|HostCATrustIsRecordedPerHost|ImagePackagesAreStored|NetScan|LatestVulnCVEsForHost|TheOutcomeCovers|RolloutImageSoakStamps" -v && \
 	         go test ./internal/netscan/ -run "EndToEnd|WrongToken|RangeScanAttaches" -v && \
 	         go test ./internal/backup/ -run RestoreOverAMigratedDatabase -v && \
 	         go test ./internal/ca/ -run CARotationIsTrustedFirst -v'

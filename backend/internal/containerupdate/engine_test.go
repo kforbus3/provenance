@@ -38,6 +38,54 @@ type fakeStore struct {
 	canaryAt   *time.Time
 	claimFail  map[uuid.UUID]bool
 	refreshed  []uuid.UUID // hosts whose containers were re-read after a change
+	// Per-image pacing stamps, keyed "rollout|repository|fromTag", laid over
+	// whatever RolloutImages returns -- as the real columns would be.
+	imgCanary  map[string]time.Time
+	imgChecked map[string]time.Time
+}
+
+func imgKey(rollout uuid.UUID, repo, from string) string {
+	return rollout.String() + "|" + repo + "|" + from
+}
+
+func (f *fakeStore) StampRolloutImageCanaryDone(_ context.Context, rollout uuid.UUID, repo, from string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.imgCanary == nil {
+		f.imgCanary = map[string]time.Time{}
+	}
+	if _, ok := f.imgCanary[imgKey(rollout, repo, from)]; !ok {
+		f.imgCanary[imgKey(rollout, repo, from)] = at
+	}
+	return nil
+}
+
+func (f *fakeStore) MarkRolloutImageSoakChecked(_ context.Context, rollout uuid.UUID, repo, from string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.imgChecked == nil {
+		f.imgChecked = map[string]time.Time{}
+	}
+	f.imgChecked[imgKey(rollout, repo, from)] = at
+	return nil
+}
+
+// withStamps lays the per-image pacing stamps over a list of images. Caller holds mu.
+func (f *fakeStore) withStamps(id uuid.UUID, in []store.RolloutImage) []store.RolloutImage {
+	out := make([]store.RolloutImage, len(in))
+	copy(out, in)
+	for i := range out {
+		k := imgKey(id, out[i].Repository, out[i].FromTag)
+		if t, ok := f.imgCanary[k]; ok {
+			t := t
+			out[i].CanaryDoneAt = &t
+		}
+		if t, ok := f.imgChecked[k]; ok {
+			t := t
+			out[i].SoakCheckedAt = &t
+		}
+	}
+	return out
 }
 
 // ActiveUpdateRollouts returns only RUNNING rollouts, like the real query.
@@ -163,15 +211,15 @@ func (f *fakeStore) RolloutImages(_ context.Context, id uuid.UUID) ([]store.Roll
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if im, ok := f.images[id]; ok {
-		return im, nil
+		return f.withStamps(id, im), nil
 	}
 	// Default: the rollout's own columns, the single-image case.
 	for _, r := range f.rollouts {
 		if r.ID == id {
-			return []store.RolloutImage{{
+			return f.withStamps(id, []store.RolloutImage{{
 				Repository: r.Repository, FromTag: r.FromTag,
 				ToTag: r.ToTag, TargetDigest: r.TargetDigest,
-			}}, nil
+			}}), nil
 		}
 	}
 	return nil, nil
@@ -859,9 +907,10 @@ func TestAnAdoptedStackStillWinsOverInPlace(t *testing.T) {
 // --- one rollout, many images ---------------------------------------------
 //
 // "Update everything that has something available" was otherwise one rollout per
-// image, started by hand, each pacing itself independently — so ten images meant
-// ten canaries on ten different hosts at once, which is not a canary at all.
-// Pacing applies to the whole operation or it does not apply.
+// image, started by hand, each pacing itself independently -- with no limit on how
+// many hosts moved at once across them. One rollout gives one batch size over the
+// whole operation. Canary and soak are per image within it (see imageProgress):
+// a host waits only on the images it is about to receive.
 
 // multiFixture: two hosts, three images between them.
 func multiFixture() (*fakeStore, uuid.UUID, []uuid.UUID) {
@@ -1927,5 +1976,147 @@ func TestTheOwningStackRepinnedPastTheTargetIsStillASupersession(t *testing.T) {
 	containers[0].ComposeDir = "/opt/stacks/other"
 	if superseded(stacks, containers, im) {
 		t.Fatal("a stack the container does not belong to cannot supersede it")
+	}
+}
+
+// --- per-image canary and soak ------------------------------------------------
+
+// fleetFixture: four hosts. nginx runs on two of them; redis and caddy on one each.
+func fleetFixture(strategy store.UpdateRollout) (*fakeStore, uuid.UUID, []uuid.UUID) {
+	f, rid, ids := fixture(4, strategy)
+	f.images[rid] = []store.RolloutImage{
+		{Repository: "nginx", FromTag: "1.24", ToTag: "1.24", TargetDigest: "sha256:n"},
+		{Repository: "redis", FromTag: "7", ToTag: "7", TargetDigest: "sha256:r"},
+		{Repository: "caddy", FromTag: "2", ToTag: "2", TargetDigest: "sha256:c"},
+	}
+	run := func(name, repo, tag, dir string) []models.Container {
+		return []models.Container{{Name: name, Repository: repo, Tag: tag, ComposeDir: dir, ComposeService: name}}
+	}
+	f.containers[ids[0]] = run("web", "nginx", "1.24", "/opt/a")
+	f.containers[ids[1]] = run("web", "nginx", "1.24", "/opt/b")
+	f.containers[ids[2]] = run("cache", "redis", "7", "/opt/c")
+	f.containers[ids[3]] = run("proxy", "caddy", "2", "/opt/d")
+	for _, id := range ids {
+		f.stacks[id] = nil
+	}
+	return f, rid, ids
+}
+
+const verifyFleet = "::OK::\n" +
+	"nginx:1.24\tweb\trunning\tnginx@sha256:n\t\t0\n" +
+	"redis:7\tcache\trunning\tredis@sha256:r\t\t0\n" +
+	"caddy:2\tproxy\trunning\tcaddy@sha256:c\thealthy\t0\n"
+
+func states(f *fakeStore, rid uuid.UUID, ids []uuid.UUID) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	by := map[uuid.UUID]string{}
+	for _, h := range f.hosts[rid] {
+		by[h.HostID] = h.State
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = by[id]
+	}
+	return out
+}
+
+// The "Update All" case. The first host's image soaking must not hold back hosts
+// running OTHER images: each of those is its own image's canary, and an image on a
+// single host has nothing to wait for at all.
+func TestUnrelatedImagesDoNotWaitForTheFirstHostsSoak(t *testing.T) {
+	f, rid, ids := fleetFixture(store.UpdateRollout{Canary: 1, BatchSize: 5, SoakSeconds: 900})
+	e := newEngine(f, &fakeDeployer{}, &fakeRunner{out: verifyFleet})
+	e.Tick(context.Background())
+
+	got := states(f, rid, ids)
+	// nginx's canary (host 0), redis's only host (2) and caddy's only host (3) go
+	// at once; nginx's second host (1) waits for nginx's soak.
+	want := []string{store.UpdateHostVerified, store.UpdateHostPending,
+		store.UpdateHostVerified, store.UpdateHostVerified}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("after the first tick: %v, want %v", got, want)
+		}
+	}
+}
+
+// Inside an image's soak its remaining hosts wait; once the soak runs out and its
+// canary passes the re-check, they go.
+func TestAnImagesSoakReleasesItsOwnHostsAfterTheRecheck(t *testing.T) {
+	f, rid, ids := fleetFixture(store.UpdateRollout{Canary: 1, BatchSize: 5, SoakSeconds: 300})
+	r := &fakeRunner{out: verifyFleet}
+	e := newEngine(f, &fakeDeployer{}, r)
+	start := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	e.now = func() time.Time { return start }
+	e.Tick(context.Background()) // canaries start and verify
+	e.now = func() time.Time { return start.Add(time.Minute) }
+	e.Tick(context.Background()) // stamps nginx's canary; the soak begins
+	if s := states(f, rid, ids)[1]; s != store.UpdateHostPending {
+		t.Fatalf("nginx's second host is %q inside the soak, want pending", s)
+	}
+	e.now = func() time.Time { return start.Add(10 * time.Minute) }
+	e.Tick(context.Background())
+	if s := states(f, rid, ids)[1]; s != store.UpdateHostVerified {
+		t.Fatalf("nginx's second host is %q after the soak, want verified", s)
+	}
+	if f.imgChecked[imgKey(rid, "nginx", "1.24")].IsZero() {
+		t.Fatal("the soak was never re-checked, yet the hosts behind it were released")
+	}
+}
+
+// The point of a soak: a canary that came up and then fell over is caught before
+// the rest of its hosts get the image.
+func TestASoakRecheckThatFindsTroubleHaltsTheRollout(t *testing.T) {
+	for name, nginxLine := range map[string]string{
+		"restarted": "nginx:1.24\tweb\trunning\tnginx@sha256:n\t\t3\n",
+		"unhealthy": "nginx:1.24\tweb\trunning\tnginx@sha256:n\tunhealthy\t0\n",
+		"crashloop": "nginx:1.24\tweb\trestarting\tnginx@sha256:n\t\t9\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, rid, ids := fleetFixture(store.UpdateRollout{Canary: 1, BatchSize: 5, SoakSeconds: 300})
+			r := &fakeRunner{out: verifyFleet}
+			e := newEngine(f, &fakeDeployer{}, r)
+			start := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+			e.now = func() time.Time { return start }
+			e.Tick(context.Background())
+			e.now = func() time.Time { return start.Add(time.Minute) }
+			e.Tick(context.Background())
+
+			r.mu.Lock()
+			r.out = "::OK::\n" + nginxLine
+			r.mu.Unlock()
+			e.now = func() time.Time { return start.Add(10 * time.Minute) }
+			e.Tick(context.Background())
+
+			halted := ""
+			for _, s := range f.rolloutSet {
+				if strings.Contains(s, store.UpdateRolloutHalted) {
+					halted = s
+				}
+			}
+			if !strings.Contains(halted, "did not hold up through its 5m0s soak") {
+				t.Fatalf("not halted with a soak reason: %v", f.rolloutSet)
+			}
+			if s := states(f, rid, ids)[1]; s != store.UpdateHostSkipped {
+				t.Fatalf("nginx's second host is %q, want skipped (never given the image)", s)
+			}
+		})
+	}
+}
+
+// Health and restart count are read back but judged only at the end of a soak.
+func TestVerifyOutputCarriesHealthAndRestarts(t *testing.T) {
+	got := parseVerifyOutput("::OK::\nnginx:1.27\tweb\trunning\tnginx@sha256:x,\tunhealthy\t4\n" +
+		"redis:7\tcache\trunning\tredis@sha256:y,\n")
+	if len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].health != "unhealthy" || got[0].restarts != 4 {
+		t.Errorf("first = %+v", got[0])
+	}
+	// Older output without the columns: unknown, not zero and not unhealthy.
+	if got[1].health != "" || got[1].restarts != -1 {
+		t.Errorf("second = %+v", got[1])
 	}
 }

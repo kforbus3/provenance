@@ -143,3 +143,82 @@ func ParseHM(s string) (int, error) {
 func BudgetExceeded(s Strategy, failures int) bool {
 	return s.MaxFailures > 0 && failures >= s.MaxFailures
 }
+
+// ImageProgress is where one image stands within a rollout that covers several.
+//
+// Canary and soak are per IMAGE, not per rollout. A rollout covering every
+// available update used to prove the first host's images and then hold back every
+// other host for the soak -- including hosts running images the canary never
+// touched, which then went out unproven anyway once the soak expired. The pause
+// protected nothing it delayed.
+type ImageProgress struct {
+	Hosts    int // rollout hosts that run this image
+	Verified int // of those, how many have finished
+	Flying   int // and how many are mid-update
+	// When this image's canaries had all verified; nil until then.
+	CanaryDoneAt *time.Time
+	// Whether the canaries were re-checked, and passed, once the soak ran out.
+	SoakChecked bool
+}
+
+// ImageCanaries is how many of an image's hosts prove it before the rest follow.
+// An image running on fewer hosts than the canary count has no "rest": every one
+// of its hosts is a canary, and nothing waits on a soak.
+func ImageCanaries(s Strategy, p ImageProgress) int {
+	c := s.Canary
+	if c < 0 {
+		c = 0
+	}
+	if c > p.Hosts {
+		c = p.Hosts
+	}
+	return c
+}
+
+// SoakDue reports whether an image's soak has run out and its canaries are due to
+// be re-checked.
+func SoakDue(s Strategy, p ImageProgress, now time.Time) bool {
+	if s.SoakSeconds <= 0 || p.CanaryDoneAt == nil || p.SoakChecked {
+		return false
+	}
+	return now.Sub(*p.CanaryDoneAt) >= time.Duration(s.SoakSeconds)*time.Second
+}
+
+// ImageAdmits reports whether one more host running this image may start now.
+//
+// Yes while the image still has a free canary slot. Then no until every canary
+// has verified -- and, when there is a soak, until it has run out and the
+// canaries passed their re-check. After that, yes.
+func ImageAdmits(s Strategy, p ImageProgress, now time.Time) bool {
+	c := ImageCanaries(s, p)
+	if c == 0 {
+		return true
+	}
+	if p.Verified+p.Flying < c {
+		return true // a canary slot is free
+	}
+	if p.Verified < c {
+		return false // the canaries are still in flight (or one failed)
+	}
+	if s.SoakSeconds > 0 {
+		if p.CanaryDoneAt == nil || now.Sub(*p.CanaryDoneAt) < time.Duration(s.SoakSeconds)*time.Second {
+			return false
+		}
+		if !p.SoakChecked {
+			return false
+		}
+	}
+	return true
+}
+
+// HostAdmits reports whether a host may start: every image it would receive must
+// admit it. A host that runs none of the rollout's images (it will be skipped)
+// is admitted.
+func HostAdmits(s Strategy, images []ImageProgress, now time.Time) bool {
+	for _, p := range images {
+		if !ImageAdmits(s, p, now) {
+			return false
+		}
+	}
+	return true
+}

@@ -54,6 +54,10 @@ type RolloutImage struct {
 	FromTag      string `json:"fromTag"`
 	ToTag        string `json:"toTag"`
 	TargetDigest string `json:"targetDigest,omitempty"`
+	// Per-image pacing (0115): when this image's canaries had all verified, and
+	// when they passed their re-check at the end of the soak.
+	CanaryDoneAt  *time.Time `json:"canaryDoneAt,omitempty"`
+	SoakCheckedAt *time.Time `json:"soakCheckedAt,omitempty"`
 }
 
 // UpdateRolloutHost is one host's place in one rollout.
@@ -362,6 +366,32 @@ func (s *Store) StampUpdateRolloutCanaryDone(ctx context.Context, id uuid.UUID, 
 	return err
 }
 
+// StampRolloutImageCanaryDone records when one image's canaries had all verified.
+// Only the first time: re-stamping as later hosts verify would restart its soak.
+func (s *Store) StampRolloutImageCanaryDone(ctx context.Context, rollout uuid.UUID, repository, fromTag string, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE container_update_rollout_images SET canary_done_at = $4
+		WHERE rollout_id = $1 AND repository = $2 AND from_tag = $3 AND canary_done_at IS NULL`,
+		rollout, repository, fromTag, at)
+	return err
+}
+
+// MarkRolloutImageSoakChecked records that one image's canaries passed their
+// end-of-soak re-check, which releases the image's remaining hosts.
+func (s *Store) MarkRolloutImageSoakChecked(ctx context.Context, rollout uuid.UUID, repository, fromTag string, at time.Time) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE container_update_rollout_images SET soak_checked_at = $4
+		WHERE rollout_id = $1 AND repository = $2 AND from_tag = $3`,
+		rollout, repository, fromTag, at)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ResumeUpdateRollout restarts a halted or paused rollout, forgiving the
 // failures that stopped it.
 //
@@ -441,7 +471,7 @@ func (s *Store) StacksReferencingImage(ctx context.Context, hostID uuid.UUID) ([
 // RolloutImages returns every image a rollout covers.
 func (s *Store) RolloutImages(ctx context.Context, id uuid.UUID) ([]RolloutImage, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT repository, from_tag, to_tag, target_digest
+		SELECT repository, from_tag, to_tag, target_digest, canary_done_at, soak_checked_at
 		FROM container_update_rollout_images
 		WHERE rollout_id = $1
 		ORDER BY repository, from_tag`, id)
@@ -452,7 +482,8 @@ func (s *Store) RolloutImages(ctx context.Context, id uuid.UUID) ([]RolloutImage
 	out := []RolloutImage{}
 	for rows.Next() {
 		var im RolloutImage
-		if err := rows.Scan(&im.Repository, &im.FromTag, &im.ToTag, &im.TargetDigest); err != nil {
+		if err := rows.Scan(&im.Repository, &im.FromTag, &im.ToTag, &im.TargetDigest,
+			&im.CanaryDoneAt, &im.SoakCheckedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, im)

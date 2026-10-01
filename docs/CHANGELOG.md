@@ -5,6 +5,29 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.0 — 2026-10-01
+
+### Container rollouts: canary and soak per image, and the soak re-checks the canary
+
+**Update All no longer holds every host behind the first host's soak.** A
+multi-image rollout proved the first host's images and then made every other host
+wait out the soak — including hosts running images that canary never touched, which
+then went out unproven anyway. Canary and soak are now per image: a host waits only
+on the images it is receiving, and an image on a single host never waits.
+
+**The soak now does something.** It was a timer; nothing looked at the canary during
+it, so a container that crashed five minutes in was still pushed to every other
+host at fifteen. At the end of an image's soak its canaries are re-checked — still
+running, not unhealthy, not restarted since the deploy — and a canary that fell over
+halts the rollout before its other hosts get the image.
+
+**Default soak: 5 minutes** (was 15). The 0 / 15m / 1h / 4h choices remain.
+
+Rollouts already running when this is deployed restart their soak from the next
+tick, per image.
+
+---
+
 ## v2.1.4 — 2026-10-01
 
 ### Network gear is scanned at the gentle rate
