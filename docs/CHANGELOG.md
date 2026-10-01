@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.1.1 — 2026-09-30
+
+### Network scanner templates now update online
+
+*Update templates* (and the nightly CVE-data refresh) downloaded nothing: the update ran
+nuclei with its update check disabled, which also disables the download, and nuclei exits
+successfully either way. The scanner then reported no templates installed. The offline
+import was unaffected. Found while enabling network scanning in production.
+
+---
+
 ## v2.1.0 — 2026-09-30
 
 ### Network scanning: what hosts expose, not only what they have installed
