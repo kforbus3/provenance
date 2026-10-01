@@ -124,7 +124,7 @@ func TestBootstrapScriptRootGuardNamesTheTTYForm(t *testing.T) {
 
 // The trust installer writes the sshd drop-in with `cat >` — a truncating write — while
 // the RevokedKeys directive is APPENDED to that same file by the revocation step. So
-// re-installing trust (a re-enrolment, the account rename, a login-account migration)
+// re-installing trust (a re-enrollment, the account rename, a login-account migration)
 // silently disabled certificate revocation: the hourly KRL push kept refreshing a file no
 // sshd read, and `sshd -T` reported "revokedkeys none" fleet-wide.
 func TestTrustInstallCarriesTheRevocationDirectiveForward(t *testing.T) {

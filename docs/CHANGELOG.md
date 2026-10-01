@@ -315,7 +315,7 @@ seventeenth, and the reason it was reported softly.
 
 ### A drop-in that exists is not a drop-in sshd reads
 
-Enrolment writes `/etc/ssh/sshd_config.d/00-prov.conf` unconditionally — including on a
+Enrollment writes `/etc/ssh/sshd_config.d/00-prov.conf` unconditionally — including on a
 host whose `sshd_config` has no `Include`, where the file then sits inert and the real
 directives live in the main config. The install script chose its target by asking whether
 that file **existed**, so on such a host it wrote `RevokedKeys` somewhere sshd never opens.
@@ -363,11 +363,11 @@ Three pieces, none wrong on its own:
 
 - The sshd drop-in is written with a **truncating** `cat >`, carrying three directives.
 - `RevokedKeys /etc/ssh/prov_krl` is **appended** to that same file, and only by the
-  revocation step of enrolment.
+  revocation step of enrollment.
 - The hourly distribution pushed **the file only**, on the assumption the directive was
   already there.
 
-So the directive survived exactly until anything re-installed trust — a re-enrolment, the
+So the directive survived exactly until anything re-installed trust — a re-enrollment, the
 account rename, a login-account migration — after which the list kept arriving at a host
 that no longer consulted it. Nothing reported a problem, because nothing was checking the
 right thing.
@@ -375,8 +375,8 @@ right thing.
 ### What changed
 
 **Distribution now installs the directive as well as the list**, using the same script
-enrolment uses, so the two cannot drift apart again. That makes it **self-healing**: a host
-that lost the directive regains it on the next push, with no re-enrolment and no operator
+enrollment uses, so the two cannot drift apart again. That makes it **self-healing**: a host
+that lost the directive regains it on the next push, with no re-enrollment and no operator
 action. The directive is added only once the list is on disk, validated with `sshd -t`
 before anything is reloaded, and rolled back if sshd rejects it — a host is never locked out
 to enforce revocation.
@@ -395,7 +395,7 @@ missing file makes `sshd -t` fail.
 ### Upgrading
 
 Nothing to do. The next KRL distribution repairs every host by itself; there is no need to
-re-enrol anything. To confirm afterwards, on any managed host:
+re-enroll anything. To confirm afterwards, on any managed host:
 
 ```sh
 sudo sshd -T | grep revokedkeys     # expect: revokedkeys /etc/ssh/prov_krl
