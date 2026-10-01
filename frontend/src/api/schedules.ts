@@ -9,10 +9,14 @@ export interface Recurrence {
   weekday?: number; // 0=Sun … 6=Sat
 }
 
+// netscan: network scan of host(s); netrange: every enabled network range (no
+// target, like vulndb).
+export type ScheduleKind = "scan" | "vulnscan" | "netscan" | "netrange" | "playbook" | "script" | "vulndb";
+
 export interface Schedule {
   id: string;
   name: string;
-  kind: "scan" | "vulnscan" | "playbook" | "script" | "vulndb";
+  kind: ScheduleKind;
   enabled: boolean;
   targetKind: "host" | "group";
   targetId?: string;
@@ -42,7 +46,7 @@ export interface Schedule {
 
 export interface ScheduleInput {
   name: string;
-  kind: "scan" | "vulnscan" | "playbook" | "script" | "vulndb";
+  kind: ScheduleKind;
   enabled: boolean;
   targetKind: "host" | "group";
   targetId: string;

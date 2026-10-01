@@ -115,6 +115,10 @@ Key variables (full list in `.env.example`):
 | `PROV_VAULT_PASSPHRASE` | Encrypts stored credentials (the secrets vault) at rest (secretbox). **Required in production** to use the credential vault, and **must differ from `PROV_CA_PASSPHRASE`**; falls back to it in development only. Losing it makes stored credentials unrecoverable |
 | `PROV_ANSIBLE_RUNNER_URL` | Base URL of the `ansible-runner` sidecar (default `http://ansible-runner:8000`) |
 | `PROV_GRYPE_SCANNER_URL` | Base URL of the `grype-scanner` sidecar for CVE scans (default `http://grype-scanner:8000`) |
+| `PROV_NETSCAN_URL` | Base URL of the `net-scanner` sidecar for network scans (default `http://net-scanner:8001`; the single-server layout sets `http://jumphost:8001`, the scanner sharing the jump host's network namespace) |
+| `PROV_NETSCAN_TOKEN` | Shared secret sent to the net-scanner (`X-Netscan-Token`); the sidecar's `NETSCAN_TOKEN` must match. Network scans are unavailable until set; nothing else depends on it. Upgrade bundles generate it. `openssl rand -hex 32` |
+| `PROV_NETSCAN_TIMEOUT` | Per-address network-scan request timeout (default `45m`) |
+| `PROV_NETSCAN_INCLUDE_JUMPHOST` | Let network scans target the jump host (default `false`) |
 | `PROV_ACTIVITY_RETENTION` / `PROV_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
 | `PROV_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
 | `PROV_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted — also applies to marking an online host's overlay tunnel down (default `3`; `1` = flip on a single failure) |

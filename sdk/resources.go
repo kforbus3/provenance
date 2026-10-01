@@ -304,6 +304,135 @@ func (c *Client) GetVulnScan(ctx context.Context, id string) (VulnScanDetail, er
 	return d, err
 }
 
+// ---- Network scans ---------------------------------------------------------
+
+// NetScanStarted is one host whose network scan was started: one scan per path
+// (LAN address, overlay address) it has.
+type NetScanStarted struct {
+	HostID   string   `json:"hostId"`
+	Hostname string   `json:"hostname"`
+	RunID    string   `json:"runId"`
+	ScanIDs  []string `json:"scanIds"`
+}
+
+// NetScanSkipped is a host that was not scanned, and why (the jump host, by default).
+type NetScanSkipped struct {
+	HostID   string `json:"hostId"`
+	Hostname string `json:"hostname"`
+	Reason   string `json:"reason"`
+}
+
+// NetScanHosts starts network scans of hosts, by id, or of every host in a group
+// (requires Host.Scan). Exactly one of hostIDs or groupID should be set.
+func (c *Client) NetScanHosts(ctx context.Context, hostIDs []string, groupID string) ([]NetScanStarted, []NetScanSkipped, error) {
+	body := map[string]any{}
+	switch {
+	case groupID != "":
+		body["groupId"] = groupID
+	case len(hostIDs) == 1:
+		body["hostId"] = hostIDs[0]
+	default:
+		body["hostIds"] = hostIDs
+	}
+	var resp struct {
+		Started []NetScanStarted `json:"started"`
+		Skipped []NetScanSkipped `json:"skipped"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/net-scans", nil, body, &resp); err != nil {
+		return nil, nil, err
+	}
+	return resp.Started, resp.Skipped, nil
+}
+
+// LatestNetScans returns the latest network scan of every host-or-address and path,
+// worst first (requires Host.Scan). An "unreachable" scan was not assessed.
+func (c *Client) LatestNetScans(ctx context.Context) ([]NetScan, error) {
+	var resp struct {
+		Scans []NetScan `json:"scans"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/net-scans/latest", nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Scans, nil
+}
+
+// HostNetScans returns a host's latest network scan on each path, with services
+// and findings (requires Host.Scan).
+func (c *Client) HostNetScans(ctx context.Context, hostID string) ([]NetScan, error) {
+	var resp struct {
+		Scans []NetScan `json:"scans"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/net-scans/hosts/"+url.PathEscape(hostID), nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Scans, nil
+}
+
+// GetNetScan returns one network scan with its services and findings (requires Host.Scan).
+func (c *Client) GetNetScan(ctx context.Context, id string) (NetScan, error) {
+	var resp struct {
+		Scan NetScan `json:"scan"`
+	}
+	err := c.do(ctx, http.MethodGet, "/net-scans/"+url.PathEscape(id), nil, nil, &resp)
+	return resp.Scan, err
+}
+
+// ListNetScanRanges returns the operator-defined network ranges (requires Host.Scan).
+func (c *Client) ListNetScanRanges(ctx context.Context) ([]NetScanRange, error) {
+	var resp struct {
+		Ranges []NetScanRange `json:"ranges"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/net-scan-ranges", nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Ranges, nil
+}
+
+// GetNetScanRange returns one range by id. The API has no single-range read, so
+// this filters the list; a missing range is a 404 APIError.
+func (c *Client) GetNetScanRange(ctx context.Context, id string) (NetScanRange, error) {
+	rs, err := c.ListNetScanRanges(ctx)
+	if err != nil {
+		return NetScanRange{}, err
+	}
+	for _, r := range rs {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return NetScanRange{}, &APIError{StatusCode: http.StatusNotFound, Message: "network range not found",
+		Method: http.MethodGet, Path: "/net-scan-ranges/" + id}
+}
+
+// CreateNetScanRange defines a range to scan for unmanaged devices (requires
+// System.Configure). At most 1024 addresses; loopback, link-local and multicast are refused.
+func (c *Client) CreateNetScanRange(ctx context.Context, in NetScanRangeInput) (NetScanRange, error) {
+	var r NetScanRange
+	err := c.do(ctx, http.MethodPost, "/net-scan-ranges", nil, in, &r)
+	return r, err
+}
+
+// UpdateNetScanRange replaces a range's fields (requires System.Configure).
+func (c *Client) UpdateNetScanRange(ctx context.Context, id string, in NetScanRangeInput) (NetScanRange, error) {
+	var r NetScanRange
+	err := c.do(ctx, http.MethodPut, "/net-scan-ranges/"+url.PathEscape(id), nil, in, &r)
+	return r, err
+}
+
+// DeleteNetScanRange removes a range; scans it produced are kept (requires System.Configure).
+func (c *Client) DeleteNetScanRange(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/net-scan-ranges/"+url.PathEscape(id), nil, nil, nil)
+}
+
+// ScanNetScanRange starts a scan of one range and returns its run id (requires Host.Scan).
+func (c *Client) ScanNetScanRange(ctx context.Context, id string) (string, error) {
+	var resp struct {
+		RunID string `json:"runId"`
+	}
+	err := c.do(ctx, http.MethodPost, "/net-scan-ranges/"+url.PathEscape(id)+"/scan", nil, nil, &resp)
+	return resp.RunID, err
+}
+
 // ---- Reports (CSV evidence) ------------------------------------------------
 
 // ReportKind identifies a schedulable/exportable CSV report.
@@ -315,6 +444,7 @@ const (
 	ReportCertificates    ReportKind = "certificates"
 	ReportScans           ReportKind = "scans"
 	ReportVulnerabilities ReportKind = "vulnerabilities"
+	ReportNetworkExposure ReportKind = "network-exposure"
 )
 
 // Report downloads a CSV evidence report of the given kind over an optional date

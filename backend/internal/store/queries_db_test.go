@@ -102,6 +102,11 @@ func TestStoreQueriesParse(t *testing.T) {
 		{"PreviousNetPorts", func() error { _, _, err := s.PreviousNetPorts(ctx, id); return err }},
 		{"ListNetScanRanges", func() error { _, err := s.ListNetScanRanges(ctx); return err }},
 		{"HostIDsByAddress", func() error { _, err := s.HostIDsByAddress(ctx); return err }},
+		{"ExportNetScanFindings", func() error {
+			_, err := s.ExportNetScanFindings(ctx, time.Now().Add(-time.Hour), time.Now())
+			return err
+		}},
+		{"LatestNetScansForAssistant", func() error { _, err := s.LatestNetScansForAssistant(ctx, id, false); return err }},
 		{"LatestVulnCVEsForHost", func() error { _, _, err := s.LatestVulnCVEsForHost(ctx, id); return err }},
 	}
 

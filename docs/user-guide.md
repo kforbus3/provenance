@@ -284,6 +284,23 @@ existing secure channel.
 Use the fixed-in version to plan updates: patch the highest-severity, highest-CVSS
 findings first.
 
+### What your hosts expose on the network
+
+The **Network exposure** page shows the other side: what each host answers on when
+something on the network knocks. Each host is checked on its normal address and on
+its overlay (tunnel) address, every port, without logging in to anything.
+
+- **Exposed services** lists every port that answered, what is running there, and
+  any problems found — old TLS versions, weak SSH settings, a database that needs
+  no password, a known vulnerable version.
+- **Unexpected** means a port answered but the host itself does not show anything
+  listening on it — usually a port forward. Worth a look.
+- **Unreachable** means the host did not answer at all. It was *not checked* —
+  that is not the same as safe.
+- On the Vulnerabilities page, findings marked **reachable** are the ones in
+  software actually serving a port the network can reach. Turn on **Reachable
+  only** to see just those — usually a much shorter list worth patching first.
+
 ---
 
 ## 9. Download reports

@@ -423,6 +423,24 @@ Findings are **severity-gated notified** (route them under Notifications) and
 audited. If a host shows no data, confirm the sidecar is up and the **CVE database
 is loaded** (below).
 
+## Network scans
+
+- **Not configured?** Set `PROV_NETSCAN_TOKEN` in `.env` (the compose file hands the
+  same value to the backend and the `net-scanner`), then `make redeploy-single`.
+- **Templates** — Network exposure page → *Update templates* (online) or *Import
+  offline* (a `.tar.gz` of the nuclei-templates repo). The `vulndb` schedule also
+  refreshes them nightly when network scanning is configured.
+- **"No route to the overlay"** — in the single-server layout the scanner shares the
+  jump host's network namespace. If the jump host was recreated without it, restart
+  it: `docker compose ... up -d --no-deps net-scanner` (`make redeploy-single` does
+  this). Its `/healthz` fails while the route is missing.
+- **Verify the scanner end to end** — `make netscan-e2e` scans a deliberately weak
+  target on a private Docker network and fails unless every planted weakness is
+  found.
+- A full scan is a few minutes per address and path; scheduled group scans are
+  bounded (4 hosts at once in the backend, `NETSCAN_CONCURRENCY` addresses at once
+  in the sidecar).
+
 ## CVE database (online & offline)
 
 The scanner needs a CVE database, persisted in the `grype-db` volume. Manage it from

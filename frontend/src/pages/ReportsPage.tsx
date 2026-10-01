@@ -13,6 +13,7 @@ const REPORTS: Array<{ kind: ReportKind; title: string; desc: string }> = [
   { kind: "certificates", title: "Certificate issuance", desc: "SSH certificates the CA issued — serial, principal, subject, validity window, and revocation." },
   { kind: "scans", title: "Scan posture", desc: "Security-scan results over time — profile, score, and pass/fail counts per host." },
   { kind: "vulnerabilities", title: "Vulnerabilities", desc: "Every CVE finding from vulnerability scans — host, package, installed vs. fixed version, severity, and CVSS score." },
+  { kind: "network-exposure", title: "Network exposure", desc: "Every finding from network scans — host, address, path (LAN/overlay/range), check, severity, port and CVEs — plus each address that could not be assessed, with the reason." },
 ];
 
 function isoDaysAgo(days: number): string {

@@ -546,6 +546,18 @@ var tools = []toolDef{{
 }, {
 	Type: "function",
 	Function: toolFunction{
+		Name:        "network_exposure",
+		Description: "Network scan results: what hosts EXPOSE on the network, as opposed to what is installed. With a hostname it returns that host's latest network scan on each path (LAN address and overlay address): every port that answered with its service and the process behind it, ports that answered but that the host does not account for ('unexpected' — a port forward or NAT rule), and each vulnerability or misconfiguration found (deprecated TLS, weak SSH, unauthenticated databases, exposed panels, CVEs) with whether the host's package scan confirms the CVE. WITHOUT a hostname it returns the fleet roll-up: latest scan per host and path with open-port and finding counts, worst first, including addresses that could not be reached (not assessed — never clean). Use for 'what ports are open on <host>', 'what is exposed on the network', 'which hosts have weak TLS', 'is <host> reachable over the overlay', 'what changed on the network'. DISTINCT from vulnerabilities (installed-package CVEs). Requires the Host.Scan permission.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostname": map[string]any{"type": "string", "description": "exact hostname for per-port detail; omit for the fleet roll-up"},
+			},
+		},
+	},
+}, {
+	Type: "function",
+	Function: toolFunction{
 		Name:        "list_users",
 		Description: "List Provenance user ACCOUNTS with their roles, authentication source (local/oidc/ldap/saml), whether Provenance MFA is enrolled, disabled state, super-admin flag, and last login. Use for account/identity questions: 'who are the administrators', 'what role does bob have', 'which accounts have no MFA', 'who is disabled', 'who hasn't logged in'. Filters: usernameContains, role (exact role name), withoutMfa (only local accounts missing a confirmed factor), disabledOnly. Requires the User.Edit permission. NOTE: for who can ACCESS a specific host, this is not it — that is host access, not an account list.",
 		Parameters: map[string]any{

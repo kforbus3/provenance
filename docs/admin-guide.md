@@ -1150,6 +1150,109 @@ self-managed DB of any age is usable.
 | Online update | `POST /vuln-scans/db/update` (`System.Configure`) |
 | Offline import | `POST /vuln-scans/db/import` (`System.Configure`) — archive upload |
 
+### Network scanning (exposure)
+
+Package scanning answers *what is installed and vulnerable*. **Network scanning**
+answers what it cannot see: *what each host exposes* — which ports answer from the
+network, what is serving on them, and whether that service is vulnerable or
+misconfigured (deprecated TLS, weak SSH algorithms, an unauthenticated Redis, an
+exposed admin panel, a CVE in a network-facing service). It is the Nessus-style
+half of vulnerability management, on the **Network exposure** page.
+
+**Architecture.** A **net-scanner sidecar** (compose service `net-scanner`,
+`PROV_NETSCAN_URL`) runs three MIT/Apache-licensed tools against the addresses the
+backend gives it: **naabu** (a TCP connect sweep of all 65,535 ports — no raw
+sockets, no added capabilities), **fingerprintx** (service identification), and
+**nuclei** (vulnerability and misconfiguration checks from the community
+templates), plus IPMI/BMC and SSDP UDP probes. The backend authenticates to it with
+**`PROV_NETSCAN_TOKEN`**, which must be the same value for both; without it the
+feature reports itself unconfigured and nothing else is affected. Upgrade bundles
+generate the token automatically.
+
+**Two paths per host.** Each managed host is scanned on its **LAN address** (what
+anything on its network can reach) and its **overlay address** (what the jump host —
+and so whoever controls it — can reach). A roaming host behind NAT is often
+reachable *only* over the overlay. In the single-server layout
+(`docker-compose.jumphost.yml`) the scanner runs **inside the jump host's network
+namespace** so overlay addresses are reachable; elsewhere (Kubernetes, an external
+jump host) overlay paths are skipped and each scan carries a note saying so. A
+service exposed on the overlay but not the LAN is flagged **overlay-only**.
+
+**Unreachable is not clean.** An address that does not answer is recorded as
+**unreachable** with a reason, never as "0 findings". In a scheduled scan it counts
+as a failed host.
+
+**The host's own view.** At scan time Provenance reads the host's listening sockets
+(`ss` over SSH, under `sudo -n` where allowed; `Get-NetTCPConnection` over WinRM on
+Windows), with the package that owns each listening binary and the packages of the
+libraries it has loaded. Comparing that with what the network reached gives:
+
+- **Unexpected** — a port that answered but that no socket on the host is bound to:
+  a port forward, a NAT rule (Docker with `userland-proxy` off publishes this way),
+  or something not showing in `ss`.
+- **Listening but not reachable** — the firewall doing its job; shown so that absence
+  from the exposure list is not mistaken for "not listening".
+
+Neither is possible for a host whose listener list could not be collected (not
+enrolled, no SSH), and the scan says so.
+
+**Correlation with package scans.** On the Vulnerabilities page, a CVE in a package
+that **owns or is loaded by** a process listening on a reachable port is marked
+**reachable** (with every endpoint and path), and a "Reachable only" filter reduces
+thousands of package CVEs to the ones an attacker can get to. In the other
+direction, a network finding whose CVE the package scan also reports is
+**confirmed**; one the package scan — which knows the real, possibly backported,
+version — does not report is **banner-only**, most likely a false positive.
+
+**Safety policy (not configurable).** Nothing that guesses credentials is ever run:
+the `bruteforce` and `default-login` tags, the default-login template directories,
+and any template that iterates a username or password wordlist (found by reading
+the templates, so new ones are excluded the day they arrive) are all excluded.
+Nothing tagged `dos`, `fuzz` or `intrusive` runs; nothing that executes code,
+drives a browser, reads files or queries third parties (`code`, `headless`, `file`,
+`dns`, `whois`) runs; out-of-band callbacks are off. Traffic identifies itself as
+`Provenance-NetScan/1`. Several configuration weaknesses nuclei grades `info`
+(deprecated TLS, insecure ciphers, obsolete SSH) are raised to findings by a
+reviewable policy table in `deploy/net-scanner/app.py`.
+
+**The jump host** is excluded by default (`PROV_NETSCAN_INCLUDE_JUMPHOST`): its sshd
+drops connections past `MaxStartups`, and a scan's SSH checks compete with the
+fleet's own connections.
+
+**Network ranges** cover devices Provenance does not manage — switches, printers,
+appliances, the gateway. Define them on the Network exposure page (`System.Configure`;
+at most 1,024 addresses, loopback/link-local/multicast refused). A range scan finds
+live addresses with the common ports, then scans each like a host (without a
+listener list). An address that matches a managed host is attached to it.
+
+**Templates** are fetched at runtime and persisted in the `netscan-templates`
+volume: **Update templates** (needs internet) or **Import offline** (a `.tar.gz` of
+the nuclei-templates repository) on the Network exposure page. The nightly
+**CVE-database refresh** schedule (`vulndb`) refreshes them too when network
+scanning is configured; templates older than 36 hours are flagged stale.
+
+**Scheduling and alerts.** Schedule kinds `netscan` (a host or group) and
+`netrange` (every enabled range). The `netscan.exposure` notification fires when a
+port answers that did not on the previous scan of the same address and path, or on
+a critical/high network finding. Network findings are in the **Network exposure**
+CSV report and the PDF evidence pack, and the Ask assistant answers network
+questions through its `network_exposure` tool.
+
+**Limits, stated plainly.** nuclei's community templates cover the common,
+high-signal checks — far fewer than a commercial scanner's plugin set, with
+weaker coverage of vendor appliances and Windows/SMB internals. Checks are
+unauthenticated by design (the package scan is the authenticated half). A full
+scan takes a few minutes per address and path.
+
+| Action | Endpoint |
+|--------|----------|
+| Scan hosts / a group | `POST /net-scans` (`Host.Scan`) |
+| Fleet roll-up / exposed services | `GET /net-scans/latest`, `GET /net-scans/exposed` (`Host.Scan`) |
+| A host's latest scan per path | `GET /net-scans/hosts/{hostId}` (`Host.Scan`) |
+| Scanner status | `GET /net-scans/status` (`Host.Scan`) |
+| Update / import templates | `POST /net-scans/templates/update`, `/templates/import` (`System.Configure`) |
+| Ranges | `GET /net-scan-ranges` (`Host.Scan`); `POST/PUT/DELETE` (`System.Configure`); `POST /net-scan-ranges/{id}/scan` (`Host.Scan`) |
+
 ## 22. Provenance insights & health digests
 
 The local-LLM **Ask AI** assistant (§9, `assistant` setting) is backed by two

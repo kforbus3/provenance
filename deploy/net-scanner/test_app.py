@@ -311,3 +311,13 @@ def test_udp_probes_report_what_answered():
 
 def test_udp_probes_silent_target_reports_nothing():
     assert probes.run_udp_probes("10.0.0.7", exchange=lambda *a, **k: b"") == []
+
+
+# The JavaScript CVE templates carry the CVE only in their id; without picking it
+# up there, those findings could never be corroborated against the package scan.
+def test_cve_taken_from_template_id_when_classification_has_none():
+    findings, _ = parse_nuclei(_nuclei_line("CVE-2025-49844", "critical", port="6379",
+                                            template="javascript/cves/2025/CVE-2025-49844.yaml"))
+    assert findings[0]["cves"] == ["CVE-2025-49844"]
+    findings, _ = parse_nuclei(_nuclei_line("redis-lua-uaf", "critical", port="6379"))
+    assert findings[0]["cves"] == []

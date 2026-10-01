@@ -39,6 +39,9 @@ func Mount(r chi.Router, d *app.Deps) {
 		pr.Get("/reports/vulnerabilities.csv", h.csv("vulnerabilities", func(ctx context.Context, from, to time.Time) (*store.ReportTable, error) {
 			return h.d.Store.ExportVulnScanFindings(ctx, from, to)
 		}))
+		pr.Get("/reports/network-exposure.csv", h.csv("network-exposure", func(ctx context.Context, from, to time.Time) (*store.ReportTable, error) {
+			return h.d.Store.ExportNetScanFindings(ctx, from, to)
+		}))
 		// A single, human-readable PDF that bundles the above into an auditor-ready
 		// evidence pack, led by a tamper-evidence attestation of the audit chain.
 		pr.Get("/reports/evidence-pack.pdf", h.evidencePack)

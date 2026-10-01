@@ -54,3 +54,10 @@ output "ci_token" {
   value       = prov_service_account_token.ci.token
   sensitive   = true
 }
+
+# Scan the lab LAN for unmanaged devices (scheduled with a "netrange" schedule).
+resource "prov_network_range" "lab" {
+  name = "lab LAN"
+  cidr = "10.0.2.0/24"
+  note = "switches, printers, IoT"
+}

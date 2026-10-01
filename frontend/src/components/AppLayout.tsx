@@ -19,6 +19,7 @@ import GroupWorkIcon from "@mui/icons-material/GroupWork";
 import ApiIcon from "@mui/icons-material/Api";
 import AssessmentIcon from "@mui/icons-material/Assessment";
 import BugReportIcon from "@mui/icons-material/BugReport";
+import RadarIcon from "@mui/icons-material/Radar";
 import AlbumIcon from "@mui/icons-material/Album";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
@@ -164,6 +165,7 @@ export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     title: "Security",
     items: [
       { to: "/vulnerabilities", label: "Vulnerabilities", icon: <BugReportIcon />, perm: "Host.Scan" },
+      { to: "/network-exposure", label: "Network exposure", icon: <RadarIcon />, perm: "Host.Scan" },
       { to: "/vault", label: "Credentials", icon: <KeyIcon />, perm: "Credential.View" },
       { to: "/certificates", label: "Certificates", icon: <VpnKeyIcon />, perm: "Certificate.Manage" },
       { to: "/lifecycle", label: "Expiry & Rotation", icon: <HourglassBottomIcon />, perm: "System.Configure" },

@@ -1,7 +1,9 @@
 # Network Vulnerability Scanning (the "Nessus gap") — Plan
 
-Status: proposed. Adds a network-side scan next to the existing grype scans. It
-does not replace them.
+Status: **implemented** (sidecar PR #57, backend PR #58, UI/integrations and docs
+after). Operator documentation is in admin-guide.md, "Network scanning (exposure)";
+this file records the design and the decisions behind it. Where the build departed
+from the plan, it says so under *As built* at the end.
 
 Provenance's CVE coverage today comes from **inside** each host: package databases
 go to grype over SSH, and installed Windows apps go over WinRM to CPE and grype.
@@ -215,3 +217,27 @@ Other rules:
 Phase 1 is roughly the size of the container-scan work: a sidecar, one migration,
 one package and one UI tab. Phase 2 is a read-time join plus UI badges. Phase 3
 is mostly UI, API and federation plumbing.
+
+## As built (departures from the plan above)
+
+- **UDP:** nuclei's own JavaScript UDP templates (SNMP community, NTP mode 6, TFTP,
+  NetBIOS, mDNS, …) cover most of the planned probe set, so fingerprintx is used for
+  TCP service identification only, and the sidecar adds just two probes nuclei lacks:
+  IPMI/BMC (RMCP presence ping) and SSDP (unicast M-SEARCH).
+- **Default credentials are NOT checked.** The plan listed default-login among the
+  gaps. Every check that tries credentials — the `default-login`/`bruteforce` tags,
+  the default-login directories, and any template iterating a credential wordlist —
+  is excluded, because on a managed fleet those mean failed logins in every auth log
+  and locked accounts on Windows/LDAP. Unauthenticated-access checks (a Redis or
+  database answering with no credentials at all) still run.
+- **Overlay reach:** a deployment whose scanner cannot reach the overlay by design
+  (Kubernetes, external jump host) skips overlay paths with a per-scan note rather
+  than recording every host's overlay as unreachable every night. A scanner that
+  should reach it and cannot is still a recorded failure.
+- **Inside view:** collected at scan time (not the monitor's stored snapshot), with
+  the owning package of each listening binary AND of every library it has loaded.
+  That is what lets a libssl CVE be marked reachable through nginx on 443.
+- **Federation:** sites run their own scanner and scans; the hub sees them through
+  the existing transparent site proxy, like package scans. No new ingest messages.
+- **Ranges** found live addresses with the top 1,000 ports, then scan each address's
+  full range — a full sweep of every address in a /22 would take most of a day.
