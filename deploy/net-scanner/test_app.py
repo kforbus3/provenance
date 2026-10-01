@@ -358,3 +358,72 @@ def test_generic_http_pass_skips_detection_only_templates():
     assert "info" not in cmd[cmd.index("-severity") + 1].split(",")
     # tech detection must keep info: it is what -as selects templates from
     assert "-severity" not in nuclei_cmd("/l", "/t", "http-tech", [])
+
+
+# The jump host's own overlay address is local. Probing it -- the subnet's first
+# host, where the jump host sits by default -- reported a working overlay as having
+# no route, which marked the scanner unhealthy and every overlay scan unreachable.
+# These are the kernel's real answers inside the jump host's namespace.
+def _fake_routes(table):
+    def get(addr):
+        return table.get(addr, ("unicast", "eth0"))
+    return get
+
+
+def test_overlay_ok_when_first_host_is_the_jump_hosts_own_address(monkeypatch):
+    monkeypatch.setattr(appmod, "OVERLAY_CIDR", "10.100.0.0/24,10.101.0.0/24")
+    monkeypatch.setattr(appmod, "_route_dev", _fake_routes({
+        "10.100.0.1": ("local", "lo"),
+        "10.100.0.2": ("unicast", "wg0"),
+    }))
+    assert appmod.overlay_status() == "ok"
+
+
+def test_overlay_no_route_from_outside_the_jump_host(monkeypatch):
+    monkeypatch.setattr(appmod, "OVERLAY_CIDR", "10.100.0.0/24")
+    monkeypatch.setattr(appmod, "_route_dev", _fake_routes({}))  # everything via eth0
+    assert appmod.overlay_status() == "no-route"
+
+
+def test_overlay_not_configured(monkeypatch):
+    monkeypatch.setattr(appmod, "OVERLAY_CIDR", "")
+    assert appmod.overlay_status() == "not-configured"
+
+
+# A dark address must come back unreachable WITHOUT the 65,535-port sweep; one that
+# answers only on an uncommon port must still get the sweep.
+def _scan_with(monkeypatch, tmp_path, alive_up, quick_open):
+    calls = []
+
+    async def fake_run(args, timeout):
+        calls.append(args)
+        out = ""
+        if "-top-ports" in args and "100" in args and quick_open:
+            out = '{"ip":"10.0.0.9","port":%d,"protocol":"tcp"}' % quick_open
+        import subprocess as sp
+        return sp.CompletedProcess(args, 0, out.encode(), b"")
+
+    (tmp_path / "http").mkdir()
+    monkeypatch.setattr(appmod, "TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(appmod, "_run", fake_run)
+    monkeypatch.setattr(appmod, "alive", lambda t, p, timeout=3.0: (alive_up, "probe"))
+    import asyncio
+    res = asyncio.run(appmod.scan_target({"target": "10.0.0.9", "tcpPorts": "full", "aliveProbePorts": [22]}))
+    swept = any("-p" in c and "1-65535" in c for c in calls)
+    return res, swept
+
+
+def test_silent_address_skips_the_full_sweep(monkeypatch, tmp_path):
+    res, swept = _scan_with(monkeypatch, tmp_path, alive_up=False, quick_open=None)
+    assert res["reachable"] is False and "full port sweep was skipped" in res["reason"]
+    assert not swept
+
+
+def test_address_answering_only_on_a_common_port_is_still_swept(monkeypatch, tmp_path):
+    res, swept = _scan_with(monkeypatch, tmp_path, alive_up=False, quick_open=8443)
+    assert swept
+
+
+def test_address_refusing_on_its_own_port_is_swept(monkeypatch, tmp_path):
+    res, swept = _scan_with(monkeypatch, tmp_path, alive_up=True, quick_open=None)
+    assert swept

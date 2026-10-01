@@ -32,6 +32,7 @@ import asyncio
 import hmac
 import io
 import ipaddress
+import itertools
 import json
 import os
 import re
@@ -200,6 +201,15 @@ def naabu_cmd(target: str, ports: str, rate: int = PORT_RATE) -> list[str]:
         "-Pn",              # the caller already knows the address is a host
         "-verify",          # re-confirm each open port with a full connect
         "-rate", str(rate), "-c", "25", "-retries", "2", "-timeout", "1000",
+        "-json", "-silent", "-no-color", "-duc",
+    ]
+
+
+def quick_cmd(target: str, rate: int = PORT_RATE) -> list[str]:
+    """The 100 most common ports, briefly: is anything there at all?"""
+    return [
+        "naabu", "-host", target, "-top-ports", "100", "-s", "c", "-Pn",
+        "-rate", str(rate), "-c", "25", "-retries", "1", "-timeout", "800",
         "-json", "-silent", "-no-color", "-duc",
     ]
 
@@ -463,13 +473,15 @@ _META = ".prov-templates.json"
 _excluded_cache: dict = {"key": None, "list": []}
 
 
-def templates_present(d: str = TEMPLATES_DIR) -> bool:
+def templates_present(d: str | None = None) -> bool:
+    d = d or TEMPLATES_DIR
     return os.path.isdir(os.path.join(d, "http")) or os.path.isdir(os.path.join(d, "javascript"))
 
 
-def credential_templates(d: str = TEMPLATES_DIR) -> list[str]:
+def credential_templates(d: str | None = None) -> list[str]:
     """Templates that iterate a credential wordlist, found by reading them. Cached on
     the directory's metadata file, which every update and import rewrites."""
+    d = d or TEMPLATES_DIR
     meta = os.path.join(d, _META)
     try:
         key = os.stat(meta).st_mtime_ns
@@ -493,7 +505,8 @@ def credential_templates(d: str = TEMPLATES_DIR) -> list[str]:
     return _excluded_cache["list"]
 
 
-def read_templates_meta(d: str = TEMPLATES_DIR) -> dict:
+def read_templates_meta(d: str | None = None) -> dict:
+    d = d or TEMPLATES_DIR
     try:
         with open(os.path.join(d, _META)) as f:
             return json.load(f)
@@ -633,6 +646,30 @@ async def scan_target(body: dict) -> dict:
     tmp = tempfile.mkdtemp(prefix="prov-netscan-")
     try:
         phases: dict[str, float] = {}
+
+        # Silent addresses first. A full sweep of an address that answers nothing --
+        # an overlay peer whose tunnel is down, a host that is off -- waits out every
+        # one of 65,535 connects: 584s on the test fabric, for a result of
+        # "unreachable". If the host neither accepts nor refuses on its own known
+        # ports or the 100 most common ones, it is reported unreachable now, saying
+        # exactly what was tried.
+        t0 = time.monotonic()
+        up, why = await asyncio.to_thread(alive, target, probe_ports)
+        if not up:
+            qb = await _run(quick_cmd(target), min(_remaining(deadline), 120))
+            if not parse_naabu(qb.stdout.decode(errors="replace")):
+                phases["liveness"] = round(time.monotonic() - t0, 1)
+                return {
+                    "target": target, "reachable": False,
+                    "reason": (f"no response on the host's own ports ({', '.join(map(str, probe_ports))}) or the "
+                               "100 most common ports: unreachable from the scanner, or a firewall drops "
+                               "everything. The full port sweep was skipped."),
+                    "openPorts": [], "services": [], "findings": [], "detections": [],
+                    "templates": read_templates_meta(), "errors": [], "phases": phases,
+                    "durationSec": round(time.monotonic() - started, 1),
+                }
+        phases["liveness"] = round(time.monotonic() - t0, 1)
+
         t0 = time.monotonic()
         nb = await _run(naabu_cmd(target, ports), _remaining(deadline))
         open_ports = parse_naabu(nb.stdout.decode(errors="replace"))
@@ -716,14 +753,28 @@ async def scan_target(body: dict) -> dict:
 # --- overlay route -------------------------------------------------------------------
 
 
+def _route_dev(addr: str) -> tuple[str, str]:
+    """(route type, device) the kernel would use for addr."""
+    out = subprocess.run(["ip", "-j", "route", "get", addr], capture_output=True, timeout=5)
+    routes = json.loads(out.stdout or b"[]")
+    if not routes:
+        return "", ""
+    return routes[0].get("type", "unicast") or "unicast", routes[0].get("dev", "") or ""
+
+
 def overlay_status() -> str:
     """'ok', 'no-route' or 'not-configured'.
 
-    Checked by asking the kernel which device it would use for each overlay's first
-    host. Through the jump host's namespace that is a tunnel interface; anywhere else
-    it is the default route, which cannot reach the overlay at all. NETSCAN_OVERLAY_CIDR
-    may list several (WireGuard and OpenVPN); one routable overlay is enough, since a
-    deployment need not run both.
+    Asks the kernel which device it would use to reach an address on each overlay.
+    Through the jump host's namespace that is a tunnel interface; anywhere else it is
+    the default route, which cannot reach the overlay at all.
+
+    The address probed must not be the jump host's OWN overlay address: that one is
+    local (dev lo), and probing it -- as the first version did, with the subnet's
+    first host, which is where the jump host sits by default -- reported every
+    working deployment as having no route. So candidates that resolve as local are
+    skipped. One routable overlay is enough; a deployment need not run both
+    WireGuard and OpenVPN.
     """
     cidrs = [c.strip() for c in OVERLAY_CIDR.split(",") if c.strip()]
     if not cidrs:
@@ -731,14 +782,20 @@ def overlay_status() -> str:
     for c in cidrs:
         try:
             net = ipaddress.ip_network(c, strict=False)
-            probe = str(next(net.hosts()))
-            out = subprocess.run(["ip", "-j", "route", "get", probe], capture_output=True, timeout=5)
-            routes = json.loads(out.stdout or b"[]")
-            dev = (routes[0].get("dev") if routes else "") or ""
-        except Exception:  # noqa: BLE001 -- any failure means "cannot confirm this route"
+        except ValueError:
             continue
-        if dev.startswith(("wg", "tun")):
-            return "ok"
+        hosts = list(itertools.islice(net.hosts(), 2))
+        candidates = hosts + [net.broadcast_address - 1] if net.num_addresses > 4 else hosts
+        for probe in candidates:
+            try:
+                rtype, dev = _route_dev(str(probe))
+            except Exception:  # noqa: BLE001 -- any failure means "cannot confirm this route"
+                continue
+            if rtype == "local":
+                continue
+            if dev.startswith(("wg", "tun")):
+                return "ok"
+            break  # a non-local answer that is not a tunnel: this overlay is not routable here
     return "no-route"
 
 
