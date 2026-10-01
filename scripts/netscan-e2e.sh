@@ -49,6 +49,7 @@ r = json.load(open(sys.argv[1]))
 ids = {f["templateId"] for f in r["findings"]}
 ports = set(r["openPorts"])
 print("open ports:", sorted(ports))
+print("phases (s):", r.get("phases"), "total", r.get("durationSec"))
 print("findings:", sorted(ids))
 problems = []
 if not r["reachable"]:

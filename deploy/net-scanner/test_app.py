@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 import app as appmod
 import probes
 from app import (
-    http_targets, nuclei_cmd, parse_discover, parse_fingerprintx, parse_naabu,
+    http_targets, network_plan, nuclei_cmd, parse_discover, parse_fingerprintx, parse_naabu,
     parse_nuclei, port_spec, safe_extract, validate_cidr, validate_target,
 )
 
@@ -122,9 +122,10 @@ def test_duplicate_matches_collapse():
 
 # --- safety policy: must hold for EVERY pass -----------------------------------------
 
-@pytest.mark.parametrize("mode", ["tcp", "http-tech", "http-generic", "udp"])
-def test_every_pass_carries_the_exclusions(mode):
-    cmd = nuclei_cmd("/tmp/list", "/t", mode, ["/t/x/creds.yaml"])
+@pytest.mark.parametrize("mode,tags", [("tcp", None), ("tcp", ["redis"]), ("ssl", None),
+                                       ("http-tech", None), ("http-generic", None), ("udp", None)])
+def test_every_pass_carries_the_exclusions(mode, tags):
+    cmd = nuclei_cmd("/tmp/list", "/t", mode, ["/t/x/creds.yaml"], tags=tags)
     etags = cmd[cmd.index("-etags") + 1].split(",")
     for tag in ("dos", "fuzz", "intrusive", "bruteforce", "default-login"):
         assert tag in etags, f"{mode} pass does not exclude {tag}"
@@ -321,3 +322,39 @@ def test_cve_taken_from_template_id_when_classification_has_none():
     assert findings[0]["cves"] == ["CVE-2025-49844"]
     findings, _ = parse_nuclei(_nuclei_line("redis-lua-uaf", "critical", port="6379"))
     assert findings[0]["cves"] == []
+
+
+# Each identified service gets only its own templates; unidentified ports get
+# everything; TLS ports get the TLS checks; HTTP is left to the HTTP passes.
+def test_network_plan_targets_templates_by_service():
+    services = {
+        22: {"service": "ssh", "tls": False},
+        443: {"service": "https", "tls": True},
+        80: {"service": "http", "tls": False},
+        5432: {"service": "postgresql", "tls": False},
+        6379: {"service": "redis", "tls": False},
+        6380: {"service": "redis", "tls": True},
+        9999: {"service": "", "tls": False},
+    }
+    plan = network_plan("10.0.0.5", services)
+    assert ("tcp", ["10.0.0.5:5432"], ["postgresql", "postgres"]) in plan
+    assert ("tcp", ["10.0.0.5:6379", "10.0.0.5:6380"], ["redis"]) in plan
+    assert ("tcp", ["10.0.0.5:22"], ["ssh"]) in plan
+    assert ("tcp", ["10.0.0.5:9999"], None) in plan          # unknown: the full set
+    assert ("ssl", ["10.0.0.5:443", "10.0.0.5:6380"], None) in plan
+    for mode, targets, _ in plan:
+        assert "10.0.0.5:80" not in targets                  # HTTP has its own passes
+        assert not (mode == "tcp" and "10.0.0.5:443" in targets)
+
+
+def test_tagged_tcp_pass_narrows_by_tag():
+    cmd = nuclei_cmd("/l", "/t", "tcp", [], tags=["postgresql", "postgres"])
+    assert cmd[cmd.index("-tags") + 1] == "postgresql,postgres"
+    assert "-tags" not in nuclei_cmd("/l", "/t", "tcp", [])
+
+
+def test_generic_http_pass_skips_detection_only_templates():
+    cmd = nuclei_cmd("/l", "/t", "http-generic", [])
+    assert "info" not in cmd[cmd.index("-severity") + 1].split(",")
+    # tech detection must keep info: it is what -as selects templates from
+    assert "-severity" not in nuclei_cmd("/l", "/t", "http-tech", [])
