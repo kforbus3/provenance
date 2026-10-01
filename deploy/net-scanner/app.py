@@ -219,25 +219,37 @@ def fingerprintx_cmd(list_file: str) -> list[str]:
 
 
 def nuclei_cmd(list_file: str, templates_dir: str, mode: str, excluded_templates: list[str],
-               rate: int = NUCLEI_RATE) -> list[str]:
-    """One nuclei pass. mode is 'tcp', 'http-tech', 'http-generic' or 'udp'."""
+               rate: int = NUCLEI_RATE, tags: list[str] | None = None) -> list[str]:
+    """One nuclei pass. mode is 'tcp', 'ssl', 'http-tech', 'http-generic' or 'udp'.
+
+    tags narrows a tcp pass to one identified service's templates."""
     base = [
         "nuclei", "-l", list_file, "-jsonl", "-silent", "-no-color", "-duc",
         "-ni",              # no out-of-band callbacks to a third-party server
         "-omit-raw",
-        "-rl", str(rate), "-c", "25", "-bs", "25", "-timeout", "10", "-retries", "1",
+        "-rl", str(rate), "-c", "25", "-bs", "25",
+        "-timeout", "5" if mode in ("tcp", "ssl") else "10", "-retries", "1",
         "-H", f"User-Agent: {USER_AGENT}",
         "-etags", ",".join(EXCLUDED_TAGS),
         "-ept", ",".join(EXCLUDED_PROTOCOLS),
     ]
     excl = [os.path.join(templates_dir, d) for d in EXCLUDED_DIRS] + list(excluded_templates)
     if mode == "tcp":
-        sel = ["-t", templates_dir, "-pt", "tcp,javascript,ssl",
+        sel = ["-t", templates_dir, "-pt", "tcp,javascript",
                "-et", os.path.join(templates_dir, "javascript", "udp")]
+        if tags:
+            sel += ["-tags", ",".join(tags)]
+    elif mode == "ssl":
+        sel = ["-t", templates_dir, "-pt", "ssl"]
     elif mode == "http-tech":
         sel = ["-t", templates_dir, "-pt", "http", "-as"]
     elif mode == "http-generic":
-        sel = ["-t", templates_dir, "-pt", "http", "-tags", ",".join(HTTP_GENERIC_TAGS)]
+        # Only templates that can produce a FINDING. 43% of this set is info-level
+        # (1,580 of the 1,629 panel templates alone) -- product detections that the
+        # http-tech pass already makes -- and on the test target they were most of
+        # a 167-second pass that found nothing more.
+        sel = ["-t", templates_dir, "-pt", "http", "-tags", ",".join(HTTP_GENERIC_TAGS),
+               "-severity", "low,medium,high,critical,unknown"]
     elif mode == "udp":
         sel = ["-t", os.path.join(templates_dir, "javascript", "udp")]
     else:
@@ -245,6 +257,55 @@ def nuclei_cmd(list_file: str, templates_dir: str, mode: str, excluded_templates
     for e in excl:
         sel += ["-et", e]
     return base + sel
+
+
+# fingerprintx protocol names -> the template tags that cover them, where they
+# differ. Anything not listed is looked up by its own name.
+SERVICE_TAGS = {
+    "postgresql": ["postgresql", "postgres"],
+    "oracledb": ["oracle"],
+    "imap": ["imap", "mail"],
+    "pop3": ["pop3", "mail"],
+    "smtp": ["smtp", "mail"],
+    "mssql": ["mssql"],
+    "ldap": ["ldap"],
+    "rdp": ["rdp"],
+    "smb": ["smb"],
+}
+
+
+def network_plan(target: str, services: dict[int, dict]) -> list[tuple[str, list[str], list[str] | None]]:
+    """The non-HTTP nuclei passes for one address: (mode, targets, tags).
+
+    Every template against every port was 330s for three ports on the test target:
+    SSH checks waiting out timeouts on a Redis port, and so on. Instead each
+    identified service gets the templates tagged for it; TLS ports get the TLS
+    checks; ports fingerprintx could not identify still get everything, because an
+    unidentified service is exactly where a blind check earns its keep. HTTP ports
+    are left to the HTTP passes.
+    """
+    by_service: dict[str, list[str]] = {}
+    unknown: list[str] = []
+    tls: list[str] = []
+    for port, s in sorted(services.items()):
+        hp = hostport(target, port)
+        svc = (s.get("service") or "").lower()
+        if s.get("tls") or svc == "https":
+            tls.append(hp)
+        if svc in ("http", "https"):
+            continue
+        if svc:
+            by_service.setdefault(svc, []).append(hp)
+        else:
+            unknown.append(hp)
+    plan: list[tuple[str, list[str], list[str] | None]] = []
+    for svc, targets in sorted(by_service.items()):
+        plan.append(("tcp", targets, SERVICE_TAGS.get(svc, [svc])))
+    if unknown:
+        plan.append(("tcp", unknown, None))
+    if tls:
+        plan.append(("ssl", tls, None))
+    return plan
 
 
 # --- output parsers --------------------------------------------------------------
@@ -603,36 +664,37 @@ async def scan_target(body: dict) -> dict:
                                         "version": "", "tls": False, "cpes": []})
 
         excluded = credential_templates()
-        passes = []
+        passes: list[tuple[str, list[str], list[str] | None]] = []
         if open_ports:
-            passes.append(("tcp", [hostport(target, p) for p in open_ports]))
+            passes += network_plan(target, services)
             urls = http_targets(target, services)
             if urls:
-                passes.append(("http-tech", urls))
-                passes.append(("http-generic", urls))
+                passes.append(("http-tech", urls, None))
+                passes.append(("http-generic", urls, None))
         if want_udp:
-            passes.append(("udp", [target]))
+            passes.append(("udp", [target], None))
 
         findings, detections = [], []
-        for mode, targets in passes:
+        for i, (mode, targets, tags) in enumerate(passes):
+            label = f"{mode}:{'+'.join(tags)}" if tags else mode
             if _remaining(deadline) < 10:
-                result["errors"].append(f"time limit reached before the {mode} pass")
+                result["errors"].append(f"time limit reached before the {label} pass")
                 break
-            lst = os.path.join(tmp, f"{mode}.txt")
+            lst = os.path.join(tmp, f"pass{i}.txt")
             with open(lst, "w") as f:
                 f.write("\n".join(targets))
             t0 = time.monotonic()
             try:
-                nu = await _run(nuclei_cmd(lst, TEMPLATES_DIR, mode, excluded), _remaining(deadline))
-                phases[mode] = round(time.monotonic() - t0, 1)
+                nu = await _run(nuclei_cmd(lst, TEMPLATES_DIR, mode, excluded, tags=tags), _remaining(deadline))
+                phases[label] = round(time.monotonic() - t0, 1)
             except subprocess.TimeoutExpired:
-                result["errors"].append(f"{mode} pass timed out")
+                result["errors"].append(f"{label} pass timed out")
                 break
             f_, d_ = parse_nuclei(nu.stdout.decode(errors="replace"))
             findings += f_
             detections += d_
             if nu.returncode != 0 and not f_ and not d_:
-                result["errors"].append(f"{mode} pass: " + nu.stderr.decode(errors="replace")[-300:])
+                result["errors"].append(f"{label} pass: " + nu.stderr.decode(errors="replace")[-300:])
 
         if want_udp:
             t0 = time.monotonic()
