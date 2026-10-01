@@ -68,6 +68,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/monitor"
 	"github.com/kforbus3/provenance/backend/internal/msrc"
+	"github.com/kforbus3/provenance/backend/internal/netscan"
 	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/overlay"
 	"github.com/kforbus3/provenance/backend/internal/overlaypki"
@@ -135,6 +136,7 @@ type Server struct {
 	scanSvc      *scan.Service
 	imagingSvc   *imaging.Service
 	vulnScan     *vulnscan.Service
+	netScan      *netscan.Service
 	stacks       *stacks.Service
 	imageCheck   *registry.Checker
 	updateEngine *containerupdate.Engine
@@ -246,6 +248,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	// stops being accounted for. See docs/imaging.md.
 	s.imagingSvc = imaging.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.vulnScan = vulnscan.New(st, cfg, log, gateway, issuer, s.Notify)
+	s.netScan = netscan.New(st, cfg, log, gateway, issuer, s.Notify)
 	s.msrcSvc = msrc.New(st, cfg.MSRCAPIURL, cfg.MSRCMonths, log)
 	// Assistant action registry (propose→confirm→execute, plus approval for guarded
 	// actions); wired with the runner hooks it needs so this package reaches into
@@ -288,6 +291,7 @@ func NewServer(cfg *config.Config, db *pgxpool.Pool, log *slog.Logger, version s
 	s.updateEngine = containerupdate.New(st, s.stacks, s.commandSvc, log)
 	s.updateEngine.SetNotifier(s.Notify)
 	s.scheduler = scheduler.New(st, s.scanSvc, s.vulnScan, s.msrcSvc, s.playbookSvc, s.winscriptSvc, s.Notify, log)
+	s.scheduler.SetNetScan(s.netScan)
 	s.backups = backup.New(st, cfg, log)
 	s.upgradeSvc = upgrade.New(st, cfg, log, s.Hub, s.backups, version)
 	s.auditFwd = auditfwd.New(st, cfg, log)
@@ -475,6 +479,7 @@ func (s *Server) reconcileOrphanedWork(ctx context.Context) {
 	}
 	reconcile("orphaned scans", s.Store.FailStaleScans)
 	reconcile("orphaned vuln scans", s.Store.FailStaleVulnScans)
+	reconcile("orphaned network scans", s.Store.FailStaleNetScans)
 	reconcile("orphaned remediations", s.Store.FailStaleRemediations)
 	reconcile("orphaned playbook runs", s.Store.FailStalePlaybookRuns)
 	reconcile("stale command runs", s.Store.FailStaleCommandRuns)
@@ -1364,6 +1369,7 @@ func (s *Server) registerRoutes(r chi.Router) {
 	// OpenSCAP security/compliance scans (over the gateway, privileged signer).
 	scan.Mount(r, deps, s.scanSvc)
 	vulnscan.Mount(r, deps, s.vulnScan, s.msrcSvc)
+	netscan.Mount(r, deps, s.netScan)
 	stacks.Mount(r, deps, s.stacks)
 	registry.Mount(r, deps, s.imageCheck, s.Store)
 

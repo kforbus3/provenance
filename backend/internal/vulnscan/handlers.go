@@ -17,6 +17,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/msrc"
+	"github.com/kforbus3/provenance/backend/internal/netscan"
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
 
@@ -278,6 +279,9 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	// models.IsKernelSourceFinding), matched at THAT package's version — which is not
 	// necessarily the kernel the host booted.
 	kernel := annotateFindings(r.Context(), h.d.Store, scan.HostID, findings)
+	// Which of these a network scan found reachable: the package owns, or is loaded
+	// by, a process listening on a port the network answered on.
+	netscan.AnnotateVulnFindings(r.Context(), h.d.Store, scan.HostID, findings)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"scan": scan, "findings": findings, "kernelRelease": kernel,
 	})

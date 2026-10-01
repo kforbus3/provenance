@@ -49,6 +49,9 @@ func TestEveryBuiltServiceIsRedeployed(t *testing.T) {
 	// picks up `up-single`, which passes no service list at all (it rebuilds
 	// everything), and the test then reads as "nothing is covered" — which is how
 	// this test failed on a correct Makefile the first time it ran.
+	// Every build line in the recipe: net-scanner has one of its own, with
+	// --no-deps, because it shares the jump host's network namespace and a plain
+	// `up` of it could recreate the jump host.
 	var target string
 	inTarget := false
 	for _, l := range strings.Split(string(mk), "\n") {
@@ -57,18 +60,24 @@ func TestEveryBuiltServiceIsRedeployed(t *testing.T) {
 			continue
 		}
 		if inTarget {
-			if strings.Contains(l, "up -d --build") {
-				target = l
-				break
-			}
-			// A new target started before any build line: the recipe changed shape.
+			// The next target ends the recipe.
 			if len(l) > 0 && l[0] != '\t' && l[0] != ' ' && strings.Contains(l, ":") {
 				break
+			}
+			if strings.Contains(l, "up -d --build") {
+				target += l + "\n"
 			}
 		}
 	}
 	if target == "" {
 		t.Fatal("redeploy-single has no `up -d --build` line — the recipe changed shape")
+	}
+	// The line that rebuilds net-scanner must not be able to recreate the jump host.
+	for _, l := range strings.Split(target, "\n") {
+		if strings.Contains(l, "net-scanner") && !strings.Contains(l, "--no-deps") {
+			t.Error("net-scanner is redeployed without --no-deps: it depends on the jump host, so the " +
+				"same command can recreate the jump host and take every host offline")
+		}
 	}
 
 	for name := range built {

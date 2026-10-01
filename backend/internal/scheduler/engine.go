@@ -16,6 +16,7 @@ import (
 
 	"github.com/kforbus3/provenance/backend/internal/models"
 	"github.com/kforbus3/provenance/backend/internal/msrc"
+	"github.com/kforbus3/provenance/backend/internal/netscan"
 	"github.com/kforbus3/provenance/backend/internal/notify"
 	"github.com/kforbus3/provenance/backend/internal/playbook"
 	"github.com/kforbus3/provenance/backend/internal/scan"
@@ -44,6 +45,7 @@ type Engine struct {
 	store    *store.Store
 	scans    *scan.Service
 	vuln     *vulnscan.Service
+	net      *netscan.Service
 	msrc     *msrc.Service
 	playbook *playbook.Service
 	// nfy reports scheduled work that failed. Nil in tests; every use checks.
@@ -56,6 +58,11 @@ type Engine struct {
 func New(st *store.Store, scans *scan.Service, vuln *vulnscan.Service, ms *msrc.Service, pb *playbook.Service, ws *winscript.Service, nfy *notify.Service, log *slog.Logger) *Engine {
 	return &Engine{store: st, scans: scans, vuln: vuln, msrc: ms, playbook: pb, winscript: ws, nfy: nfy, log: log, scanSem: make(chan struct{}, scanFanoutLimit)}
 }
+
+// SetNetScan attaches the network scanner. Separate from New so the many existing
+// constructions of the engine (and its tests) are unaffected; nil disables the
+// netscan and netrange kinds, which then fail with a message rather than panic.
+func (e *Engine) SetNetScan(n *netscan.Service) { e.net = n }
 
 // Run drives the scheduler loop until ctx is cancelled, checking once a minute.
 func (e *Engine) Run(ctx context.Context) {
@@ -105,6 +112,10 @@ func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.
 	if sc.Kind == "vulndb" {
 		return "started", nil, e.vulnDBRefresh(ctx, sc)
 	}
+	// netrange scans every enabled network range; it has no host target either.
+	if sc.Kind == "netrange" {
+		return e.fireNetRanges(ctx, sc)
+	}
 	hosts, err := e.resolveHosts(ctx, sc)
 	if err != nil {
 		e.log.Warn("scheduler: resolve hosts", "schedule", sc.ID, "err", err)
@@ -120,6 +131,9 @@ func (e *Engine) Fire(ctx context.Context, sc *models.Schedule) (string, []uuid.
 	case "vulnscan":
 		status, ids, wait := e.fireVulnScan(ctx, sc, hosts)
 		return status, ids, e.reportWhenDone(ctx, sc, "vulnscan", ids, wait)
+	case "netscan":
+		status, ids, wait := e.fireNetScan(ctx, sc, hosts)
+		return status, ids, e.reportWhenDone(ctx, sc, "netscan", ids, wait)
 	case "playbook":
 		status, ids := e.firePlaybook(ctx, sc, hosts)
 		return status, ids, nil
@@ -155,6 +169,29 @@ func (e *Engine) fireVulnScan(ctx context.Context, sc *models.Schedule, hosts []
 		return "error: no scans created", nil, nil
 	}
 	return "started", ids, wg.Wait
+}
+
+// fireNetScan launches a network scan of each target host on each of its paths.
+// The service bounds its own fan-out.
+func (e *Engine) fireNetScan(ctx context.Context, sc *models.Schedule, hosts []*models.Host) (string, []uuid.UUID, func()) {
+	if e.net == nil {
+		return "error: network scanning is not available", nil, nil
+	}
+	started, skipped, wait, err := e.net.StartHosts(ctx, context.WithoutCancel(ctx), hosts, nil, sc.Requester, true)
+	if err != nil {
+		return "error: " + err.Error(), nil, nil
+	}
+	var ids []uuid.UUID
+	for _, st := range started {
+		ids = append(ids, st.ScanIDs...)
+	}
+	if len(ids) == 0 {
+		if len(skipped) > 0 {
+			return "skipped: " + skipped[0].Reason, nil, nil
+		}
+		return "error: no scans created", nil, nil
+	}
+	return "started", ids, wait
 }
 
 func (e *Engine) resolveHosts(ctx context.Context, sc *models.Schedule) ([]*models.Host, error) {

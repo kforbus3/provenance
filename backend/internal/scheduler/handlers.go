@@ -64,9 +64,16 @@ func (h *handler) toModel(r *http.Request, rq *scheduleReq) (*models.Schedule, s
 		return nil, "name is required", false
 	}
 	switch rq.Kind {
-	case "scan", "vulnscan", "playbook", "script", "vulndb":
+	case "scan", "vulnscan", "netscan", "netrange", "playbook", "script", "vulndb":
 	default:
-		return nil, "kind must be scan, vulnscan, playbook, script, or vulndb", false
+		return nil, "kind must be scan, vulnscan, netscan, netrange, playbook, script, or vulndb", false
+	}
+	// netrange scans every enabled network range; like vulndb it has no host target.
+	if rq.Kind == "netrange" {
+		return &models.Schedule{
+			Name: rq.Name, Kind: rq.Kind, Enabled: rq.Enabled, TargetKind: "none",
+			TargetName: "Network ranges", Recurrence: rq.Recurrence, Payload: rq.Payload,
+		}, "", true
 	}
 	// vulndb (CVE database refresh — grype + MSRC) is not host-targeted.
 	if rq.Kind == "vulndb" {

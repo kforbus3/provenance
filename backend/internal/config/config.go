@@ -395,8 +395,21 @@ type Config struct {
 	BuilderRunnerToken string
 
 	GrypeScannerURL string // vulnerability-scanner sidecar
-	MSRCAPIURL      string // Microsoft Security Update Guide API (Windows CVE mapping)
-	MSRCMonths      int    // how many recent MSRC releases an online update fetches
+	// Network vulnerability scanning (internal/netscan): the net-scanner sidecar's
+	// URL and the shared secret it requires (X-Netscan-Token). With no token the
+	// feature reports itself unconfigured rather than failing anything else.
+	NetScanURL   string
+	NetScanToken string
+	// NetScanTimeout bounds one address's scan request. A full TCP sweep plus the
+	// nuclei passes takes a few minutes; the margin covers queueing behind other
+	// addresses at the sidecar during a fleet-wide scan.
+	NetScanTimeout time.Duration
+	// NetScanIncludeJumpHost lets network scans target the jump host. Off by default:
+	// its sshd drops connections past MaxStartups, and a scan's SSH checks arriving
+	// alongside the fleet's own connections is how hosts go briefly unreachable.
+	NetScanIncludeJumpHost bool
+	MSRCAPIURL             string // Microsoft Security Update Guide API (Windows CVE mapping)
+	MSRCMonths             int    // how many recent MSRC releases an online update fetches
 
 	// CARotateAfter is how old the active SSH CA key may get before Provenance sends a
 	// rotation-reminder notification (the CA never auto-expires; rotation is
@@ -574,38 +587,42 @@ func Load() (*Config, error) {
 		// every deployment -- it needs the Docker socket and a lot of disk, and a
 		// fleet that consumes images someone else builds should not be made to
 		// run it, nor to invent a secret for a service it does not have.
-		BuilderRunnerURL:    strings.TrimRight(env("PROV_BUILDER_RUNNER_URL", ""), "/"),
-		BuilderRunnerToken:  env("PROV_BUILDER_RUNNER_TOKEN", ""),
-		GrypeScannerURL:     env("PROV_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
-		MSRCAPIURL:          env("PROV_MSRC_API_URL", "https://api.msrc.microsoft.com"),
-		MSRCMonths:          envInt("PROV_MSRC_MONTHS", 12),
-		CARotateAfter:       envDuration("PROV_CA_ROTATE_AFTER", 365*24*time.Hour),
-		BackupDir:           env("PROV_BACKUP_DIR", "/var/lib/prov/backups"),
-		BackupDatabaseURL:   env("PROV_BACKUP_DATABASE_URL", ""),
-		ReleaseTrustKeys:    env("PROV_RELEASE_TRUST_KEYS", ""),
-		UpdatesDir:          env("PROV_UPDATES_DIR", "/var/lib/prov/updates"),
-		UpdaterURL:          env("PROV_UPDATER_URL", "http://prov-updater:9000"),
-		UpdaterToken:        env("PROV_UPDATER_TOKEN", ""),
-		UpdateChannelURL:    env("PROV_UPDATE_CHANNEL_URL", ""),
-		BackupPassphrase:    env("PROV_BACKUP_PASSPHRASE", ""),
-		VaultPassphrase:     env("PROV_VAULT_PASSPHRASE", ""),
-		GuacdAddr:           env("PROV_GUACD_ADDR", "guacd:4822"),
-		RDPProxyHost:        env("PROV_RDP_PROXY_HOST", "backend"),
-		RDPDriveDir:         env("PROV_RDP_DRIVE_DIR", "/var/lib/prov/rdp-drive"),
-		RDPCollectFacts:     envBool("PROV_RDP_COLLECT_FACTS", true),
-		RDPWinRMPorts:       parseIntList(env("PROV_RDP_WINRM_PORTS", "5986,5985")),
-		MaxUploadBytes:      envInt64("PROV_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
-		LogLevel:            env("PROV_LOG_LEVEL", "info"),
-		LogFormat:           env("PROV_LOG_FORMAT", "json"),
-		OTLPEndpoint:        env("PROV_OTLP_ENDPOINT", ""),
-		TracingOn:           envBool("PROV_TRACING", false),
-		AllowBootstrap:      envBool("PROV_ALLOW_BOOTSTRAP", true),
-		Mode:                strings.ToLower(env("PROV_MODE", "standalone")),
-		HubURL:              env("PROV_HUB_URL", ""),
-		HubJoinToken:        env("PROV_HUB_JOIN_TOKEN", ""),
-		HubKeyFingerprint:   env("PROV_HUB_KEY_FINGERPRINT", ""),
-		FederationTransport: strings.ToLower(env("PROV_FEDERATION_TRANSPORT", "wss")),
-		Environment:         env("PROV_ENV", "development"),
+		BuilderRunnerURL:       strings.TrimRight(env("PROV_BUILDER_RUNNER_URL", ""), "/"),
+		BuilderRunnerToken:     env("PROV_BUILDER_RUNNER_TOKEN", ""),
+		GrypeScannerURL:        env("PROV_GRYPE_SCANNER_URL", "http://grype-scanner:8000"),
+		NetScanURL:             strings.TrimRight(env("PROV_NETSCAN_URL", "http://net-scanner:8001"), "/"),
+		NetScanToken:           env("PROV_NETSCAN_TOKEN", ""),
+		NetScanTimeout:         envDuration("PROV_NETSCAN_TIMEOUT", 45*time.Minute),
+		NetScanIncludeJumpHost: envBool("PROV_NETSCAN_INCLUDE_JUMPHOST", false),
+		MSRCAPIURL:             env("PROV_MSRC_API_URL", "https://api.msrc.microsoft.com"),
+		MSRCMonths:             envInt("PROV_MSRC_MONTHS", 12),
+		CARotateAfter:          envDuration("PROV_CA_ROTATE_AFTER", 365*24*time.Hour),
+		BackupDir:              env("PROV_BACKUP_DIR", "/var/lib/prov/backups"),
+		BackupDatabaseURL:      env("PROV_BACKUP_DATABASE_URL", ""),
+		ReleaseTrustKeys:       env("PROV_RELEASE_TRUST_KEYS", ""),
+		UpdatesDir:             env("PROV_UPDATES_DIR", "/var/lib/prov/updates"),
+		UpdaterURL:             env("PROV_UPDATER_URL", "http://prov-updater:9000"),
+		UpdaterToken:           env("PROV_UPDATER_TOKEN", ""),
+		UpdateChannelURL:       env("PROV_UPDATE_CHANNEL_URL", ""),
+		BackupPassphrase:       env("PROV_BACKUP_PASSPHRASE", ""),
+		VaultPassphrase:        env("PROV_VAULT_PASSPHRASE", ""),
+		GuacdAddr:              env("PROV_GUACD_ADDR", "guacd:4822"),
+		RDPProxyHost:           env("PROV_RDP_PROXY_HOST", "backend"),
+		RDPDriveDir:            env("PROV_RDP_DRIVE_DIR", "/var/lib/prov/rdp-drive"),
+		RDPCollectFacts:        envBool("PROV_RDP_COLLECT_FACTS", true),
+		RDPWinRMPorts:          parseIntList(env("PROV_RDP_WINRM_PORTS", "5986,5985")),
+		MaxUploadBytes:         envInt64("PROV_MAX_UPLOAD_BYTES", 5<<30), // 5 GiB default
+		LogLevel:               env("PROV_LOG_LEVEL", "info"),
+		LogFormat:              env("PROV_LOG_FORMAT", "json"),
+		OTLPEndpoint:           env("PROV_OTLP_ENDPOINT", ""),
+		TracingOn:              envBool("PROV_TRACING", false),
+		AllowBootstrap:         envBool("PROV_ALLOW_BOOTSTRAP", true),
+		Mode:                   strings.ToLower(env("PROV_MODE", "standalone")),
+		HubURL:                 env("PROV_HUB_URL", ""),
+		HubJoinToken:           env("PROV_HUB_JOIN_TOKEN", ""),
+		HubKeyFingerprint:      env("PROV_HUB_KEY_FINGERPRINT", ""),
+		FederationTransport:    strings.ToLower(env("PROV_FEDERATION_TRANSPORT", "wss")),
+		Environment:            env("PROV_ENV", "development"),
 	}
 
 	c.JWTSecret = []byte(env("PROV_JWT_SECRET", ""))

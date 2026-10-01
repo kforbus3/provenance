@@ -940,6 +940,10 @@ type VulnFinding struct {
 	// read time by cross-referencing the host's pending-update and obsolete-package
 	// inventory. Not persisted with the scan. Empty when it can't be determined.
 	Remediation string `json:"remediation,omitempty"`
+	// Exposure is set at read time when a network scan reached a port served by a
+	// process this package owns or is loaded into, or when a network check reported
+	// the same CVE on this host. Not persisted. See internal/netscan/correlate.go.
+	Exposure *NetExposure `json:"exposure,omitempty"`
 }
 
 // Fix states reported by the scanner, in order of how actionable they are.
