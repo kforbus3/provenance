@@ -409,8 +409,9 @@ type Config struct {
 	// alongside the fleet's own connections is how hosts go briefly unreachable.
 	NetScanIncludeJumpHost bool
 	// NetScanHostRate is the nuclei request rate (per second) asked for when scanning
-	// a managed host. Range scans keep the sidecar's lower default: an unmanaged
-	// address may be a printer. The sidecar clamps it (NETSCAN_NUCLEI_RATE_MAX).
+	// an ENROLLED host. Range scans and hosts that are recorded but not enrolled
+	// (switches, routers, access points) keep the sidecar's lower default. The sidecar
+	// clamps it (NETSCAN_NUCLEI_RATE_MAX).
 	NetScanHostRate int
 	MSRCAPIURL      string // Microsoft Security Update Guide API (Windows CVE mapping)
 	MSRCMonths      int    // how many recent MSRC releases an online update fetches

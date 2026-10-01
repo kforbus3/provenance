@@ -320,10 +320,13 @@ func (s *Service) scanOne(ctx context.Context, r row, h *models.Host, listeners 
 	sctx, cancel := context.WithTimeout(ctx, s.cfg.NetScanTimeout+time.Minute)
 	defer cancel()
 	req := scanRequest{Target: r.t.Addr, TCPPorts: "full", UDP: true, AliveProbePorts: probe}
-	// A managed host is a server that can take a brisker rate; at the sidecar's
-	// default, a host serving six web ports took 15 minutes per path. Range
-	// addresses (h == nil) keep the default.
-	if h != nil {
+	// An enrolled host is a server that can take a brisker rate; at the sidecar's
+	// default, a host serving six web ports took 15 minutes per path. Everything else
+	// keeps the sidecar's gentler default: range addresses (h == nil), and hosts that
+	// are recorded but not enrolled -- in practice switches, routers and access
+	// points, whose management plane (web UI, SSH) runs on a small CPU that 300
+	// requests a second can stall.
+	if h != nil && h.Enrolled {
 		req.NucleiRate = s.cfg.NetScanHostRate
 	}
 	res, err := s.sc.scan(sctx, req)
