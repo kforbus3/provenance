@@ -74,6 +74,9 @@ TEMPLATES_DIR = os.environ.get("NETSCAN_TEMPLATES_DIR", "/home/scanner/nuclei-te
 PORT_RATE = int(os.environ.get("NETSCAN_PORT_RATE", "1000"))
 # Requests per second nuclei may send to one target.
 NUCLEI_RATE = int(os.environ.get("NETSCAN_NUCLEI_RATE", "100"))
+# A caller may ask for a higher rate for an address it knows can take it -- a managed
+# server rather than a printer -- but never above this.
+NUCLEI_RATE_MAX = int(os.environ.get("NETSCAN_NUCLEI_RATE_MAX", "500"))
 # Addresses scanned at once. Each scan is a port sweep plus several nuclei passes.
 CONCURRENCY = int(os.environ.get("NETSCAN_CONCURRENCY", "2"))
 # Wall-clock cap for one address, end to end.
@@ -175,6 +178,15 @@ def validate_cidr(raw: str) -> ipaddress._BaseNetwork:
     if net.num_addresses > MAX_RANGE_ADDRESSES:
         raise ValueError(f"{net} is {net.num_addresses} addresses; the limit is {MAX_RANGE_ADDRESSES}")
     return net
+
+
+def nuclei_rate(raw) -> int:
+    """The request's nucleiRate, clamped to [10, NUCLEI_RATE_MAX]; the default when absent."""
+    if raw in (None, 0):
+        return NUCLEI_RATE
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+        raise ValueError(f"invalid nucleiRate: {raw!r}")
+    return max(10, min(raw, NUCLEI_RATE_MAX))
 
 
 def port_spec(tcp_ports) -> str:
@@ -647,6 +659,7 @@ async def scan_target(body: dict) -> dict:
     target = validate_target(body.get("target", ""))
     ports = port_spec(body.get("tcpPorts", "full"))
     want_udp = bool(body.get("udp"))
+    rate = nuclei_rate(body.get("nucleiRate"))
     probe_ports = [p for p in (body.get("aliveProbePorts") or [22, 80, 443, 3389, 5985, 5986])
                    if isinstance(p, int) and 1 <= p <= 65535][:10]
     if not templates_present():
@@ -733,7 +746,8 @@ async def scan_target(body: dict) -> dict:
                 f.write("\n".join(targets))
             t0 = time.monotonic()
             try:
-                nu = await _run(nuclei_cmd(lst, TEMPLATES_DIR, mode, excluded, tags=tags), _remaining(deadline))
+                nu = await _run(nuclei_cmd(lst, TEMPLATES_DIR, mode, excluded, rate=rate, tags=tags),
+                                _remaining(deadline))
                 phases[label] = round(time.monotonic() - t0, 1)
             except subprocess.TimeoutExpired:
                 result["errors"].append(f"{label} pass timed out")
@@ -844,6 +858,7 @@ async def scan(request: Request):
     try:
         validate_target(body.get("target", ""))
         port_spec(body.get("tcpPorts", "full"))
+        nuclei_rate(body.get("nucleiRate"))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     async with _scan_sem:

@@ -119,6 +119,7 @@ Key variables (full list in `.env.example`):
 | `PROV_NETSCAN_TOKEN` | Shared secret sent to the net-scanner (`X-Netscan-Token`); the sidecar's `NETSCAN_TOKEN` must match. Network scans are unavailable until set; nothing else depends on it. Upgrade bundles generate it. `openssl rand -hex 32` |
 | `PROV_NETSCAN_TIMEOUT` | Per-address network-scan request timeout (default `45m`) |
 | `PROV_NETSCAN_INCLUDE_JUMPHOST` | Let network scans target the jump host (default `false`) |
+| `PROV_NETSCAN_HOST_RATE` | nuclei requests/second when network-scanning a managed host (default `300`; range scans use the scanner's own, lower `NETSCAN_NUCLEI_RATE`, default `100`; capped by `NETSCAN_NUCLEI_RATE_MAX`, default `500`) |
 | `PROV_ACTIVITY_RETENTION` / `PROV_AUDIT_RETENTION` | Operational-history retention windows (`0` = keep forever) |
 | `PROV_MONITOR_CONCURRENCY` | Parallel host health checks (default `6`; keep under the jump host's sshd `MaxStartups`) |
 | `PROV_MONITOR_OFFLINE_CONFIRMATIONS` | Consecutive failed probes before an online host is marked offline and alerted — also applies to marking an online host's overlay tunnel down (default `3`; `1` = flip on a single failure) |
