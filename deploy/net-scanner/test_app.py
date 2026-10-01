@@ -427,3 +427,21 @@ def test_address_answering_only_on_a_common_port_is_still_swept(monkeypatch, tmp
 def test_address_refusing_on_its_own_port_is_swept(monkeypatch, tmp_path):
     res, swept = _scan_with(monkeypatch, tmp_path, alive_up=True, quick_open=None)
     assert swept
+
+
+def test_online_update_does_not_disable_itself():
+    cmd = appmod.update_cmd("/tmp/staging")
+    assert "-update-templates" in cmd and "-duc" not in cmd
+    assert cmd[cmd.index("-ud") + 1] == "/tmp/staging"
+
+
+# An update that exits 0 without installing anything must be reported as a failure,
+# not swapped in over the working templates.
+def test_update_that_installs_nothing_is_a_failure(monkeypatch, tmp_path):
+    import subprocess as sp
+    monkeypatch.setattr(appmod, "TOKEN", "t")
+    monkeypatch.setattr(appmod, "TEMPLATES_DIR", str(tmp_path / "live"))
+    monkeypatch.setattr(appmod.subprocess, "run",
+                        lambda *a, **k: sp.CompletedProcess(a, 0, b"banner only", b""))
+    r = TestClient(appmod.app).post("/templates/update", headers={"X-Netscan-Token": "t"})
+    assert r.status_code == 502 and r.json()["ok"] is False

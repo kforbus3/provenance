@@ -205,6 +205,17 @@ def naabu_cmd(target: str, ports: str, rate: int = PORT_RATE) -> list[str]:
     ]
 
 
+def update_cmd(staging: str) -> list[str]:
+    """Download the templates into staging.
+
+    No -duc here. -duc ("disable update check") also disables the template download
+    this command exists to do: nuclei prints its banner, downloads nothing and exits
+    0. The online update was shipped that way and never installed a template; the
+    offline import, which the end-to-end test used, was unaffected.
+    """
+    return ["nuclei", "-update-templates", "-ud", staging]
+
+
 def quick_cmd(target: str, rate: int = PORT_RATE) -> list[str]:
     """The 100 most common ports, briefly: is anything there at all?"""
     return [
@@ -871,8 +882,7 @@ def templates_update():
     with _templates_lock:
         staging = tempfile.mkdtemp(prefix="prov-templates-")
         try:
-            proc = subprocess.run(["nuclei", "-update-templates", "-ud", staging, "-duc"],
-                                  capture_output=True, timeout=TEMPLATES_TIMEOUT)
+            proc = subprocess.run(update_cmd(staging), capture_output=True, timeout=TEMPLATES_TIMEOUT)
             output = (proc.stdout + proc.stderr).decode(errors="replace")[-4000:]
             if proc.returncode != 0 or not templates_present(staging):
                 return JSONResponse({"ok": False, "output": output}, status_code=502)
