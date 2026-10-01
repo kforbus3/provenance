@@ -1,39 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listeningNotReachable, netSevColor, overlayOnly, type ExposedService, type NetScan } from "./netscan";
-
-function svc(p: Partial<ExposedService>): ExposedService {
-  return {
-    scanId: "s", target: "10.0.0.5", path: "lan", scannedAt: "2026-09-30T00:00:00Z", port: 22, proto: "tcp",
-    tls: false, unexpected: false, findings: 0, ...p,
-  };
-}
-
-describe("overlayOnly", () => {
-  it("flags a port answering on the overlay but not on the LAN", () => {
-    const s = [
-      svc({ hostId: "h1", scanId: "lan1", path: "lan", port: 22 }),
-      svc({ hostId: "h1", scanId: "ov1", path: "overlay", port: 22 }),
-      svc({ hostId: "h1", scanId: "ov1", path: "overlay", port: 5432 }),
-    ];
-    expect([...overlayOnly(s)]).toEqual(["ov1:tcp/5432"]);
-  });
-
-  // A host never scanned on its LAN says nothing about what its LAN exposes, so
-  // nothing on its overlay can be called overlay-ONLY.
-  it("says nothing for a host with no LAN scan", () => {
-    const s = [svc({ hostId: "h2", scanId: "ov2", path: "overlay", port: 5432 })];
-    expect(overlayOnly(s).size).toBe(0);
-  });
-
-  it("does not compare one host's overlay with another host's LAN", () => {
-    const s = [
-      svc({ hostId: "a", scanId: "la", path: "lan", port: 5432 }),
-      svc({ hostId: "b", scanId: "lb", path: "lan", port: 22 }),
-      svc({ hostId: "b", scanId: "ob", path: "overlay", port: 5432 }),
-    ];
-    expect([...overlayOnly(s)]).toEqual(["ob:tcp/5432"]);
-  });
-});
+import { listeningNotReachable, netSevColor, type NetScan } from "./netscan";
 
 function scan(p: Partial<NetScan>): NetScan {
   return {

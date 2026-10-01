@@ -320,18 +320,19 @@ func (s *Store) ListNetScans(ctx context.Context, hostID, rangeID *uuid.UUID, li
 	return collectNetScans(rows)
 }
 
-// LatestNetScans returns, for every address-and-path, its most recent finished scan
-// (completed or unreachable): the fleet roll-up. A managed host is keyed by host and
-// path, so a changed address does not leave its old one in the roll-up; anything
-// else is keyed by the address itself.
+// LatestNetScans returns the fleet roll-up: each managed host's most recent finished
+// host scan (completed or unreachable) on whichever path it was scanned -- overlay or
+// LAN, so a host moved onto the overlay stops showing its old LAN scan -- plus the
+// latest range scan of each address. A managed host is keyed by host, so a changed
+// address does not leave its old one behind; anything else by the address itself.
 func (s *Store) LatestNetScans(ctx context.Context) ([]models.NetScan, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+netScanCols+netScanFrom+`
 		WHERE ns.id IN (
-			SELECT DISTINCT ON (COALESCE(n2.host_id::text, n2.target), n2.path) n2.id
+			SELECT DISTINCT ON (COALESCE(n2.host_id::text, n2.target), n2.path = 'range') n2.id
 			FROM net_scans n2
 			WHERE n2.status IN ('completed','unreachable')
-			ORDER BY COALESCE(n2.host_id::text, n2.target), n2.path, n2.created_at DESC)
+			ORDER BY COALESCE(n2.host_id::text, n2.target), n2.path = 'range', n2.created_at DESC)
 		ORDER BY ns.critical DESC, ns.high DESC, ns.medium DESC, ns.unexpected DESC,
 		         COALESCE(h.hostname, ns.target), ns.path`)
 	if err != nil {
@@ -340,15 +341,15 @@ func (s *Store) LatestNetScans(ctx context.Context) ([]models.NetScan, error) {
 	return collectNetScans(rows)
 }
 
-// LatestNetScansForHost returns a host's most recent finished scan on each path,
-// with services and findings.
+// LatestNetScansForHost returns a host's most recent finished host scan (overlay or
+// LAN) and its most recent range scan, if any, with services and findings.
 func (s *Store) LatestNetScansForHost(ctx context.Context, hostID uuid.UUID) ([]models.NetScan, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+netScanCols+netScanFrom+`
 		WHERE ns.id IN (
-			SELECT DISTINCT ON (n2.path) n2.id FROM net_scans n2
+			SELECT DISTINCT ON (n2.path = 'range') n2.id FROM net_scans n2
 			WHERE n2.host_id=$1 AND n2.status IN ('completed','unreachable')
-			ORDER BY n2.path, n2.created_at DESC)
+			ORDER BY n2.path = 'range', n2.created_at DESC)
 		ORDER BY ns.path`, hostID)
 	if err != nil {
 		return nil, err
@@ -421,14 +422,16 @@ type ExposedService struct {
 	WorstSeverity string `json:"worstSeverity,omitempty"`
 }
 
-// ExposedServices lists every service that answered on the latest scan of each
-// address-and-path.
+// ExposedServices lists every service that answered on the latest scan of each host
+// (or range address) -- the same scans the roll-up shows.
 func (s *Store) ExposedServices(ctx context.Context) ([]ExposedService, error) {
 	rows, err := s.pool.Query(ctx, `
 		WITH latest AS (
-			SELECT DISTINCT ON (COALESCE(host_id::text, target), path) id
-			FROM net_scans WHERE status='completed'
-			ORDER BY COALESCE(host_id::text, target), path, created_at DESC)
+			SELECT DISTINCT ON (COALESCE(host_id::text, target), path = 'range') id
+			-- The same "latest" as the roll-up: a host whose newest scan did not answer
+			-- exposes nothing known now, rather than whatever an older scan saw.
+			FROM net_scans WHERE status IN ('completed','unreachable')
+			ORDER BY COALESCE(host_id::text, target), path = 'range', created_at DESC)
 		SELECT ns.id, ns.host_id, COALESCE(h.hostname,''), ns.target, ns.path, ns.created_at,
 		       sv.port, sv.proto, sv.service, sv.product, sv.version, sv.tls, sv.process, sv.unexpected,
 		       (SELECT count(*) FROM net_findings f WHERE f.scan_id=ns.id AND f.port=sv.port AND f.proto=sv.proto),
@@ -620,10 +623,10 @@ func (s *Store) LatestNetScansForAssistant(ctx context.Context, userID uuid.UUID
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+netScanCols+netScanFrom+`
 		WHERE ns.id IN (
-			SELECT DISTINCT ON (COALESCE(n2.host_id::text, n2.target), n2.path) n2.id
+			SELECT DISTINCT ON (COALESCE(n2.host_id::text, n2.target), n2.path = 'range') n2.id
 			FROM net_scans n2
 			WHERE n2.status IN ('completed','unreachable')
-			ORDER BY COALESCE(n2.host_id::text, n2.target), n2.path, n2.created_at DESC)`+sub+`
+			ORDER BY COALESCE(n2.host_id::text, n2.target), n2.path = 'range', n2.created_at DESC)`+sub+`
 		ORDER BY ns.critical DESC, ns.high DESC, ns.medium DESC, ns.unexpected DESC,
 		         COALESCE(h.hostname, ns.target), ns.path`, args...)
 	if err != nil {

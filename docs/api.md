@@ -673,8 +673,8 @@ viewing scans require `Host.Scan`; CVE-database management requires
 
 What hosts expose on the network, scanned by the **net-scanner** sidecar
 (`PROV_NETSCAN_URL`, authenticated with `PROV_NETSCAN_TOKEN`). Each managed host is
-scanned on each path it has — `lan` (its address) and `overlay` (its overlay
-address); range scans produce `range` rows. Scan `status` is `pending`, `running`,
+scanned on one path: `overlay` (its overlay address) when it has one, otherwise `lan`
+(its address or resolved hostname); range scans produce `range` rows. Scan `status` is `pending`, `running`,
 `completed`, `unreachable` (did not answer: **not assessed**) or `failed`. See the
 admin guide, "Network scanning (exposure)".
 
@@ -697,8 +697,8 @@ admin guide, "Network scanning (exposure)".
 | POST | `/api/v1/net-scan-ranges/{id}/scan` | `Host.Scan` |
 
 - **`POST /net-scans`** — `{ "hostId" }`, `{ "hostIds": [] }` or `{ "groupId" }` → `202 { "started": [{hostId, hostname, runId, scanIds}], "skipped": [{hostId, hostname, reason}] }`. The jump host is skipped unless `PROV_NETSCAN_INCLUDE_JUMPHOST`. `503` when the token is not configured.
-- **`GET /net-scans/latest`** — the latest finished scan of every host-or-address and path, worst first.
-- **`GET /net-scans/exposed`** — every service that answered on those scans: host, address, path, port, service, product/version, TLS, owning process, `unexpected`, finding count and worst severity.
+- **`GET /net-scans/latest`** — each host's latest finished scan (whichever path), and the latest scan of each range address, worst first.
+- **`GET /net-scans/exposed`** — every service that answered on those same scans: host, address, path, port, service, product/version, TLS, owning process, `unexpected`, finding count and worst severity.
 - **`GET /net-scans/hosts/{hostId}`** and **`GET /net-scans/{id}`** — scans with `services`, `findings` and the host's `listeners` (`listenersKnown: false` when they could not be collected). Findings carrying CVEs have `corroboration`: `confirmed` (the host's package scan reports the same CVE) or `banner-only` (it does not — likely a false positive).
 - **`GET /vuln-scans/{id}`** findings carry `exposure` when a network scan reached a port served by a process the package owns (`via: binary`) or is loaded into (`via: library`), or a network check reported the same CVE (`networkConfirmed`).
 - **Ranges** — `{ "name", "cidr", "note", "enabled" }`. The CIDR is stored as its network address; at most 1,024 addresses; loopback, link-local and multicast are refused. `enabled` is required on `PUT`.

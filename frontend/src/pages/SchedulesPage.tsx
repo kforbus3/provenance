@@ -323,7 +323,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
             onChange={(e) => setKind(e.target.value as ScheduleKind)}>
             <MenuItem value="scan">Compliance scan (OpenSCAP)</MenuItem>
             <MenuItem value="vulnscan">Vulnerability scan (Linux + Windows)</MenuItem>
-            <MenuItem value="netscan">Network scan (exposed services, LAN + overlay)</MenuItem>
+            <MenuItem value="netscan">Network scan (exposed services)</MenuItem>
             <MenuItem value="netrange">Network range scan (all enabled ranges)</MenuItem>
             <MenuItem value="playbook">Ansible playbook (Linux)</MenuItem>
             <MenuItem value="script">PowerShell script (Windows)</MenuItem>
@@ -389,7 +389,8 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
           )}
           {kind === "netscan" && (
             <Typography variant="body2" color="text.secondary">
-              Scans the target host(s) from the network on their LAN and overlay addresses: every TCP port,
+              Scans the target host(s) from the network on their overlay address (or LAN address when they have
+              none): every TCP port,
               service identification, and vulnerability and misconfiguration checks. An address that does not
               answer is reported as not assessed, and counts as a failure of the run.
             </Typography>

@@ -7,7 +7,7 @@ import { NetScanDialog, StatusChip } from "../pages/NetworkScansPage";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
 
-// HostNetworkExposure: this host's latest network scan on each path, from the host
+// HostNetworkExposure: this host's latest network scan (overlay, or LAN without one), from the host
 // details dialog. The listening-ports section above it is what the host SAYS it has
 // bound; this is what the network could actually reach.
 export default function HostNetworkExposure({ hostId }: { hostId: string }) {

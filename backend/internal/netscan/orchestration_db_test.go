@@ -94,15 +94,16 @@ func testService(t *testing.T, sidecarURL, token string) (*Service, *store.Store
 	return svc, st, ctx
 }
 
-// The whole path a scan takes: a host on both paths, one answering and one dark;
-// the jump host skipped; results stored with their status; the sidecar asked with
-// the token and the right addresses.
+// The whole path a scan takes: a host on the overlay is scanned at its overlay
+// address only; a host with no overlay address at its LAN address; the jump host is
+// skipped; results are stored with their status; the sidecar is asked with the token,
+// the right addresses and the host rate.
 func TestStartHostsEndToEnd(t *testing.T) {
 	n := int(uuid.New()[0])
-	lanIP, ovIP := fmt.Sprintf("10.88.%d.5", n), fmt.Sprintf("10.100.%d.77", n)
+	lanIP, ovIP, plainIP := fmt.Sprintf("10.88.%d.5", n), fmt.Sprintf("10.100.%d.77", n), fmt.Sprintf("10.88.%d.6", n)
 	fs := &fakeSidecar{overlay: "ok", results: map[string]any{
-		lanIP: map[string]any{
-			"target": lanIP, "reachable": true, "openPorts": []int{443},
+		ovIP: map[string]any{
+			"target": ovIP, "reachable": true, "openPorts": []int{443},
 			"services": []map[string]any{{"port": 443, "proto": "tcp", "service": "http", "tls": true}},
 			"findings": []map[string]any{{"templateId": "deprecated-tls", "name": "Deprecated TLS",
 				"severity": "medium", "port": 443, "proto": "tcp"}},
@@ -119,9 +120,13 @@ func TestStartHostsEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	web.Enrolled = true // on the overlay; listener collection has no gateway here and says so
+	plain, err := st.CreateHost(ctx, store.HostInput{Hostname: "plain-" + uuid.NewString()[:6], Address: plainIP})
+	if err != nil {
+		t.Fatal(err)
+	}
 	jump := &models.Host{ID: uuid.New(), Hostname: "jumphost", Address: "172.30.0.10"}
 
-	started, skipped, wait, err := svc.StartHosts(ctx, ctx, []*models.Host{web, jump}, nil, "test", false)
+	started, skipped, wait, err := svc.StartHosts(ctx, ctx, []*models.Host{web, plain, jump}, nil, "test", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,38 +134,78 @@ func TestStartHostsEndToEnd(t *testing.T) {
 	if len(skipped) != 1 || skipped[0].Hostname != "jumphost" {
 		t.Fatalf("skipped = %+v", skipped)
 	}
-	if len(started) != 1 || len(started[0].ScanIDs) != 2 {
-		t.Fatalf("started = %+v", started)
+	if len(started) != 2 || len(started[0].ScanIDs) != 1 || len(started[1].ScanIDs) != 1 {
+		t.Fatalf("started = %+v (want one scan per host)", started)
 	}
+
 	scans, err := st.LatestNetScansForHost(ctx, web.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	by := map[string]models.NetScan{}
-	for _, s := range scans {
-		by[s.Path] = s
+	if len(scans) != 1 || scans[0].Path != models.NetPathOverlay {
+		t.Fatalf("web scans = %+v", scans)
 	}
-	lan, ov := by[models.NetPathLAN], by[models.NetPathOverlay]
-	if lan.Status != models.NetScanCompleted || lan.Medium != 1 || lan.TemplatesVersion != "v10.4.9" {
-		t.Fatalf("lan = %+v", lan)
-	}
-	if lan.ListenersKnown {
-		t.Fatal("listeners reported known with no way to collect them")
-	}
-	if len(lan.Warnings) == 0 || !strings.Contains(lan.Warnings[0], "listener list") {
-		t.Fatalf("no warning about the missing listener list: %v", lan.Warnings)
-	}
-	if ov.Status != models.NetScanUnreachable || !strings.Contains(ov.Reason, "tunnel") {
+	ov := scans[0]
+	if ov.Status != models.NetScanCompleted || ov.Medium != 1 || ov.TemplatesVersion != "v10.4.9" {
 		t.Fatalf("overlay = %+v", ov)
 	}
+	if ov.ListenersKnown || len(ov.Warnings) == 0 || !strings.Contains(ov.Warnings[0], "listener list") {
+		t.Fatalf("listener warning missing: %+v", ov.Warnings)
+	}
+
+	ps, err := st.LatestNetScansForHost(ctx, plain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nothing answers at plainIP in the fake: recorded unreachable, on the LAN path.
+	if len(ps) != 1 || ps[0].Path != models.NetPathLAN || ps[0].Status != models.NetScanUnreachable {
+		t.Fatalf("plain scans = %+v", ps)
+	}
+
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	if strings.Join(fs.targets, ",") != lanIP+","+ovIP {
-		t.Fatalf("sidecar asked for %v", fs.targets)
+	if strings.Contains(strings.Join(fs.targets, ","), lanIP) {
+		t.Fatalf("the LAN address of an overlay host was scanned: %v", fs.targets)
 	}
-	// A managed host is scanned at the host rate.
-	if fs.rates[lanIP] != 300 || fs.rates[ovIP] != 300 {
+	if fs.rates[ovIP] != 300 || fs.rates[plainIP] != 300 {
 		t.Fatalf("host scans asked for rates %v, want 300", fs.rates)
+	}
+}
+
+// A host that was scanned on its LAN address before it joined the overlay must not
+// keep showing that old LAN scan once it is scanned on the overlay.
+func TestRollupShowsOnlyAHostsLatestPath(t *testing.T) {
+	svc, st, ctx := testService(t, "http://unused", "tok")
+	_ = svc
+	h, err := st.CreateHost(ctx, store.HostInput{Hostname: "moved-" + uuid.NewString()[:6]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := st.CreateNetScan(ctx, uuid.New(), &h.ID, nil, "10.0.2.9", models.NetPathLAN, nil, "t", false)
+	if err := st.CompleteNetScan(ctx, old, store.NetScanResult{Status: models.NetScanCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	cur, _ := st.CreateNetScan(ctx, uuid.New(), &h.ID, nil, "10.100.0.9", models.NetPathOverlay, nil, "t", false)
+	if err := st.CompleteNetScan(ctx, cur, store.NetScanResult{Status: models.NetScanCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := st.LatestNetScans(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []models.NetScan
+	for _, s := range all {
+		if s.HostID != nil && *s.HostID == h.ID {
+			mine = append(mine, s)
+		}
+	}
+	if len(mine) != 1 || mine[0].ID != cur {
+		t.Fatalf("roll-up for the host = %+v, want only the overlay scan", mine)
+	}
+	perHost, err := st.LatestNetScansForHost(ctx, h.ID)
+	if err != nil || len(perHost) != 1 || perHost[0].ID != cur {
+		t.Fatalf("host scans = %+v err=%v", perHost, err)
 	}
 }
 

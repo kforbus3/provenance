@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, Table,
@@ -20,7 +20,7 @@ import { listGroups } from "../api/admin";
 import {
   clearFailedNetScans, createNetScanRange, deleteNetScanRange, exposedServices, getNetScan,
   hostNetScans, latestNetScans, listNetScanRanges, listNetScans, listeningNotReachable,
-  netScanStatus, netSevColor, netTemplatesImport, netTemplatesUpdate, overlayOnly, pathLabel,
+  netScanStatus, netSevColor, netTemplatesImport, netTemplatesUpdate, pathLabel,
   scanNetScanRange, triggerNetScan, updateNetScanRange,
   type ExposedService, type NetFinding, type NetScan, type NetScanRange, type RangeInput,
   type SkippedHost,
@@ -119,9 +119,10 @@ export function NetworkScansPage() {
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h5">Network exposure</Typography>
           <Typography variant="body2" color="text.secondary">
-            What each host answers on from the network — every TCP port, on its LAN address and its overlay
-            address — what is serving there, and whether it is vulnerable or misconfigured. The other half of
-            the package scans on the Vulnerabilities page, which see what is installed but not what is reachable.
+            What each host answers on from the network — every TCP port, on its overlay address (or its LAN
+            address when it has none) — what is serving there, and whether it is vulnerable or misconfigured.
+            The other half of the package scans on the Vulnerabilities page, which see what is installed but not
+            what is reachable.
           </Typography>
         </Box>
         <Tooltip title="Refresh"><Button startIcon={<RefreshIcon />} onClick={refresh} sx={{ mr: 1 }}>Refresh</Button></Tooltip>
@@ -152,7 +153,7 @@ export function NetworkScansPage() {
 
       <Headline scans={rollup} />
 
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Latest scan per host and path</Typography>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Latest scan per host</Typography>
       <RollupTable scans={rollup} onOpen={setDetail} />
 
       <ExposedTable onOpen={setDetail} />
@@ -254,15 +255,12 @@ function ExposedTable({ onOpen }: { onOpen: (id: string) => void }) {
   const { data: services = [], isLoading } = useQuery({ queryKey: ["net-exposed"], queryFn: exposedServices });
   const [path, setPath] = useState<PathFilter>("all");
   const [unexpectedOnly, setUnexpectedOnly] = useState(false);
-  const [overlayOnlyOn, setOverlayOnlyOn] = useState(false);
   const [findingsOnly, setFindingsOnly] = useState(false);
   const [q, setQ] = useState("");
-  const ovOnly = useMemo(() => overlayOnly(services), [services]);
   const needle = q.trim().toLowerCase();
   const shown = services.filter((s) =>
     (path === "all" || s.path === path) &&
     (!unexpectedOnly || s.unexpected) &&
-    (!overlayOnlyOn || ovOnly.has(`${s.scanId}:${s.proto}/${s.port}`)) &&
     (!findingsOnly || s.findings > 0) &&
     (needle === "" || [s.hostname, s.target, s.service, s.product, s.process, String(s.port)]
       .some((v) => (v ?? "").toLowerCase().includes(needle))),
@@ -277,9 +275,6 @@ function ExposedTable({ onOpen }: { onOpen: (id: string) => void }) {
           ))}
         </ToggleButtonGroup>
         <FormControlLabel control={<Switch size="small" checked={unexpectedOnly} onChange={(e) => setUnexpectedOnly(e.target.checked)} />} label="Unexpected only" />
-        <Tooltip title="Answering on a host's overlay address but not on its LAN address: the host trusts the jump host — and so whoever controls it — with something its own network cannot reach.">
-          <FormControlLabel control={<Switch size="small" checked={overlayOnlyOn} onChange={(e) => setOverlayOnlyOn(e.target.checked)} />} label="Overlay-only" />
-        </Tooltip>
         <FormControlLabel control={<Switch size="small" checked={findingsOnly} onChange={(e) => setFindingsOnly(e.target.checked)} />} label="With findings" />
         <TextField size="small" placeholder="Filter host, service, process, port" value={q} onChange={(e) => setQ(e.target.value)} sx={{ minWidth: 260 }} />
         <Typography variant="caption" color="text.secondary">showing {shown.length} of {services.length}</Typography>
@@ -303,14 +298,7 @@ function ExposedTable({ onOpen }: { onOpen: (id: string) => void }) {
               <TableRow key={`${s.scanId}-${s.proto}-${s.port}`} hover sx={{ cursor: "pointer" }} onClick={() => onOpen(s.scanId)}>
                 <TableCell>{s.hostname || s.target}</TableCell>
                 <TableCell>
-                  <Stack direction="row" spacing={0.5}>
-                    <PathChip path={s.path} />
-                    {ovOnly.has(`${s.scanId}:${s.proto}/${s.port}`) && (
-                      <Tooltip title="Not reachable on this host's LAN address.">
-                        <Chip size="small" color="secondary" label="overlay-only" />
-                      </Tooltip>
-                    )}
-                  </Stack>
+                  <PathChip path={s.path} />
                 </TableCell>
                 <TableCell align="right"><code>{s.port}/{s.proto}</code></TableCell>
                 <TableCell>
@@ -461,8 +449,8 @@ function ScanDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (s
               onChange={(_, v) => setGroupId(v?.id ?? "")} renderInput={(p) => <TextField {...p} label="Group" />} />
           )}
           <Typography variant="caption" color="text.secondary">
-            Each host is scanned from the network on its LAN and overlay addresses: all 65,535 TCP ports, service
-            identification, and vulnerability and misconfiguration checks. Nothing that guesses credentials or could
+            Each host is scanned from the network on its overlay address — or its LAN address when it has none: all
+            65,535 TCP ports, service identification, and vulnerability and misconfiguration checks. Nothing that guesses credentials or could
             disrupt a service is ever run. Traffic identifies itself as Provenance-NetScan. The host's own listener list
             is read over SSH or WinRM to compare against.
           </Typography>
@@ -708,7 +696,7 @@ function FindingRow({ f }: { f: NetFinding }) {
 
 export function NetScanDialog({ scanId, onClose }: { scanId: string; onClose: () => void }) {
   const { data: scan, isLoading } = useQuery({ queryKey: ["net-scan", scanId], queryFn: () => getNetScan(scanId) });
-  // Every path of the same host, so "listening but not reachable" covers both.
+  // The host's latest scans, so "listening but not reachable" is measured against them.
   const { data: hostScans = [] } = useQuery({
     queryKey: ["net-host", scan?.hostId], queryFn: () => hostNetScans(scan!.hostId!), enabled: !!scan?.hostId,
   });
