@@ -64,7 +64,7 @@ func TestInstallScriptAssertsEnforcementNotFilePresence(t *testing.T) {
 }
 
 // A host that lost the directive must regain it from an ordinary push, with no
-// re-enrolment — that is what makes distribution self-healing across a fleet that has
+// re-enrollment — that is what makes distribution self-healing across a fleet that has
 // already drifted.
 func TestInstallScriptAddsTheDirectiveWhenAbsent(t *testing.T) {
 	s := InstallScript("QUJD")
@@ -112,7 +112,7 @@ func TestInstallCommandQuotingIsLossless(t *testing.T) {
 	}
 }
 
-// A drop-in file that exists is not a drop-in file sshd reads. Enrolment writes
+// A drop-in file that exists is not a drop-in file sshd reads. Enrollment writes
 // 00-prov.conf unconditionally, so on a host whose sshd_config has no Include the
 // drop-in sits there inert — and choosing the target by file existence alone put the
 // directive somewhere sshd never opens, while every check downstream looked healthy.

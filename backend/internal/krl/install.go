@@ -26,14 +26,14 @@ const (
 //
 // Both halves matter, and shipping only the first is how a fleet ends up with a correct,
 // freshly-pushed KRL on every host that no sshd reads. The RevokedKeys directive was
-// added once, at enrolment, by APPENDING to the sshd drop-in — while the trust installer
-// rewrites that same drop-in with `cat >`. So any later re-install (a re-enrolment, the
+// added once, at enrollment, by APPENDING to the sshd drop-in — while the trust installer
+// rewrites that same drop-in with `cat >`. So any later re-install (a re-enrollment, the
 // account rename, a login-account migration) silently dropped the directive, the hourly
 // distribution went on refreshing the file, and nothing noticed.
 //
 // The script therefore ensures the directive every time it pushes the list, which makes
 // distribution self-healing: a host that lost the directive regains it on the next push
-// without re-enrolment.
+// without re-enrollment.
 //
 // The final check is a POSITIVE assertion against `sshd -T`, sshd's own effective config,
 // not a test that a file exists. A config that enforces nothing is perfectly valid, so
@@ -42,7 +42,7 @@ func InstallScript(b64 string) string {
 	return fmt.Sprintf(`set -e
 printf '%%s' '%s' | base64 -d > /etc/ssh/prov_krl
 chmod 644 /etc/ssh/prov_krl
-# Choose the file sshd actually READS, not merely one that exists. Enrolment writes
+# Choose the file sshd actually READS, not merely one that exists. Enrollment writes
 # 00-prov.conf unconditionally, so on a host whose sshd_config has no Include the
 # drop-in is present and inert -- and testing only for the file put the directive in a
 # file sshd never opens, on the one host in the fleet built that way.

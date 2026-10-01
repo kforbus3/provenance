@@ -608,12 +608,12 @@ func (s *Server) distributeKRL(ctx context.Context) (int, int, error) {
 		return 0, 0, fmt.Errorf("list hosts: %w", err)
 	}
 	b64 := base64.StdEncoding.EncodeToString(krlBytes)
-	// Ensure the directive as well as the file, using the SAME script enrolment uses.
+	// Ensure the directive as well as the file, using the SAME script enrollment uses.
 	// Pushing only the file is how the fleet ended up with a correct, hourly-refreshed
 	// KRL that no sshd read: the directive is appended to the sshd drop-in, and the trust
 	// installer rewrites that drop-in wholesale, so any re-install dropped it. Doing both
 	// here makes distribution self-healing — a host that lost the directive regains it on
-	// the next push, with no re-enrolment.
+	// the next push, with no re-enrollment.
 	cmd := krl.InstallCommand(b64)
 	// Kept small: each push opens a fresh SSH connection to the jump host, so a
 	// large fan-out would trip its sshd MaxStartups limit (as the monitor sweep
