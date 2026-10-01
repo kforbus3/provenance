@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v2.1.0 — 2026-09-30
 
 ### Network scanning: what hosts expose, not only what they have installed
 
