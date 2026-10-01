@@ -207,6 +207,14 @@ func buildEvidencePack(ctx context.Context, st *store.Store, m packMeta) ([]byte
 	kv("Critical", strconv.Itoa(sum.VulnCritical))
 	kv("High", strconv.Itoa(sum.VulnHigh))
 
+	// --- network exposure ---
+	h2("Network Exposure (network scans)")
+	kv("Addresses and paths scanned", strconv.Itoa(sum.NetAddresses))
+	kv("Not assessed (unreachable)", strconv.Itoa(sum.NetUnreachable))
+	kv("Total findings", strconv.Itoa(sum.NetFindings))
+	kv("Critical", strconv.Itoa(sum.NetCritical))
+	kv("High", strconv.Itoa(sum.NetHigh))
+
 	// --- privileged command activity ---
 	h2("Privileged-Command Activity")
 	kv("Audited events in period", strconv.Itoa(sum.AuditEvents))

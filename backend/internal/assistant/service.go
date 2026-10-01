@@ -441,6 +441,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 				data.table = tbl
 			}
 			result = payload
+		case "network_exposure":
+			tbl, payload := s.runNetworkExposure(ctx, fargs, who)
+			if tbl != nil {
+				data.table = tbl
+			}
+			result = payload
 		case "compliance_scans":
 			tbl, payload := s.runComplianceScans(ctx, fargs, who)
 			if tbl != nil {
@@ -730,6 +736,12 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 					data.table = tbl
 				}
 				result = payload
+			case "network_exposure":
+				tbl, payload := s.runNetworkExposure(ctx, tc.Function.Arguments, who)
+				if tbl != nil {
+					data.table = tbl
+				}
+				result = payload
 			case "list_users":
 				tbl, payload := s.runListUsers(ctx, tc.Function.Arguments, who)
 				if tbl != nil {
@@ -899,6 +911,8 @@ func suggestionsFor(tool string) []string {
 		return []string{"What runs on a schedule, and when does it fire next?", "Any failed logins today?"}
 	case "vulnerabilities":
 		return []string{"Which hosts have security updates pending?", "Give me the latest compliance scan result for each host"}
+	case "network_exposure":
+		return []string{"Which hosts have critical vulnerabilities?", "Which hosts have security updates pending?"}
 	case "compliance_scans":
 		return []string{"Which hosts failed their compliance scan?", "Which hosts have never been scanned?", "Which hosts have critical vulnerabilities?"}
 	case "scan_findings":

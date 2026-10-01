@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import BlastRadiusWarning from "../components/BlastRadiusWarning";
 import HostDependencies from "../components/HostDependencies";
+import HostNetworkExposure from "../components/HostNetworkExposure";
 import { formatDateTime } from "../lib/datetime";
 import {
   Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -2093,6 +2094,7 @@ export function HostDetailsDialog({ host, onClose }: { host: Host | null; onClos
             </Typography>
           </Box>
         )}
+        {h && <HostNetworkExposure hostId={h.id} />}
         {/* A/B machines take updates as RAUC bundles through a rollout, which can
             only see hosts that have a machine record. RDP hosts never do. */}
         {!isRDP && h && <AbUpdatesSection host={h} />}

@@ -12,7 +12,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createSchedule, deleteSchedule, listSchedules, runScheduleNow, setScheduleEnabled,
-  updateSchedule, type Recurrence, type Schedule,
+  updateSchedule, type Recurrence, type Schedule, type ScheduleKind,
 } from "../api/schedules";
 import { listHosts, type Host } from "../api/hosts";
 import { listGroups, type Group } from "../api/admin";
@@ -225,8 +225,8 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
   const hosts = hostData?.hosts ?? [];
 
   const [name, setName] = useState(schedule?.name ?? "");
-  const [kind, setKind] = useState<"scan" | "vulnscan" | "playbook" | "script" | "vulndb">(schedule?.kind ?? "scan");
-  const needsTarget = kind !== "vulndb";
+  const [kind, setKind] = useState<ScheduleKind>(schedule?.kind ?? "scan");
+  const needsTarget = kind !== "vulndb" && kind !== "netrange";
   const [targetKind, setTargetKind] = useState<"host" | "group">(schedule?.targetKind ?? "host");
   const [host, setHost] = useState<Host | null>(null);
   const [group, setGroup] = useState<Group | null>(null);
@@ -293,7 +293,7 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
         ? { scriptId: script?.id ?? "" }
         : kind === "playbook"
           ? { playbookId: playbook?.id ?? "", checkMode, orderByTopology }
-          : {}; // vulnscan / vulndb carry no payload
+          : {}; // vulnscan / netscan / netrange / vulndb carry no payload
 
   const targetId = targetKind === "host" ? host?.id : group?.id;
   const payloadOk =
@@ -320,9 +320,11 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
           <TextField label="Name" size="small" value={name} onChange={(e) => setName(e.target.value)} autoFocus fullWidth />
 
           <TextField label="What to run" size="small" select value={kind}
-            onChange={(e) => setKind(e.target.value as "scan" | "vulnscan" | "playbook" | "script" | "vulndb")}>
+            onChange={(e) => setKind(e.target.value as ScheduleKind)}>
             <MenuItem value="scan">Compliance scan (OpenSCAP)</MenuItem>
             <MenuItem value="vulnscan">Vulnerability scan (Linux + Windows)</MenuItem>
+            <MenuItem value="netscan">Network scan (exposed services, LAN + overlay)</MenuItem>
+            <MenuItem value="netrange">Network range scan (all enabled ranges)</MenuItem>
             <MenuItem value="playbook">Ansible playbook (Linux)</MenuItem>
             <MenuItem value="script">PowerShell script (Windows)</MenuItem>
             <MenuItem value="vulndb">Vulnerability DB update (grype + MSRC)</MenuItem>
@@ -385,10 +387,24 @@ function ScheduleEditor({ schedule, onClose, onSaved }: { schedule: Schedule | n
               missing Microsoft updates (MSRC) + third-party apps. Uses the loaded CVE data.
             </Typography>
           )}
+          {kind === "netscan" && (
+            <Typography variant="body2" color="text.secondary">
+              Scans the target host(s) from the network on their LAN and overlay addresses: every TCP port,
+              service identification, and vulnerability and misconfiguration checks. An address that does not
+              answer is reported as not assessed, and counts as a failure of the run.
+            </Typography>
+          )}
+          {kind === "netrange" && (
+            <Typography variant="body2" color="text.secondary">
+              Scans every enabled network range (Network exposure → Network ranges) for devices that are not
+              managed hosts. No target.
+            </Typography>
+          )}
           {kind === "vulndb" && (
             <Typography variant="body2" color="text.secondary">
               Refreshes the CVE databases online — the grype vulnerability DB and the MSRC (Windows)
-              mapping. No target; runs for the whole fleet.
+              mapping — and, where network scanning is configured, the network scanner's checks. No target;
+              runs for the whole fleet.
             </Typography>
           )}
 

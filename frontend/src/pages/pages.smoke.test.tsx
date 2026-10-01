@@ -56,7 +56,7 @@ const ROUTED = new Set([
   "CertificatesPage", "CommandPolicyPage", "DashboardPage", "DatabasesPage",
   "DisasterRecoveryPage", "EnrollmentPage", "FilesPage", "GroupsPage",
   "HealthPage", "HelpPage", "HostsPage", "ImagingPage", "JobsPage",
-  "KubernetesPage", "LifecyclePage", "LoginPage", "RdpPage", "ReportsPage",
+  "KubernetesPage", "LifecyclePage", "LoginPage", "NetworkScansPage", "RdpPage", "ReportsPage",
   "RolesPage", "SchedulesPage", "SecurityPage", "ServiceAccountsPage",
   "SessionsPage", "SettingsPage", "SitesPage", "StacksPage", "TenantsPage",
   "TerminalPage", "TerminalsPage", "UsersPage", "VaultPage",

@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+### Network scanning: what hosts expose, not only what they have installed
+
+A new **Network exposure** page, backed by a `net-scanner` sidecar (naabu, fingerprintx,
+nuclei), scans each managed host from the network on its LAN address and its overlay
+address: every TCP port, what is serving there, and vulnerabilities and misconfigurations
+— deprecated TLS, weak SSH, unauthenticated databases, exposed panels, CVEs in
+network-facing services. An address that does not answer is reported **unreachable**, not
+clean. Ports that answer but that the host's own `ss` list does not account for are flagged
+**unexpected**. Network ranges cover unmanaged devices.
+
+The two halves of vulnerability scanning now inform each other: package-scan CVEs in
+software serving a reachable port are marked **reachable** (with a "Reachable only"
+filter), and network findings are **confirmed** or **banner-only** against the package
+scan.
+
+Nothing that guesses credentials, fuzzes, or could disrupt a service is ever run. New
+schedule kinds `netscan` and `netrange`; the `vulndb` refresh also refreshes the scanner's
+templates; a `netscan.exposure` notification; a Network exposure CSV report and an
+evidence-pack section; `prov netscan` CLI; `prov_network_range` Terraform resource.
+
+**Deploy:** set `PROV_NETSCAN_TOKEN` (upgrade bundles generate it) and run
+`make redeploy-single`; then install templates from the Network exposure page.
+
+---
+
 ## v2.0.19 — 2026-09-30
 
 ### A container pinned by digest is no longer offered as a `latest` rebuild

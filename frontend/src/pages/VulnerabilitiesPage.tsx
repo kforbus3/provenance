@@ -3,9 +3,10 @@ import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, FormControlLabel, MenuItem, Paper, Stack, Switch, Table,
   Snackbar, TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton,
-  ToggleButtonGroup, Tooltip, Typography,
+  ToggleButtonGroup, Tooltip, Typography, Link,
 } from "@mui/material";
 import SecurityIcon from "@mui/icons-material/Security";
+import { Link as RouterLink } from "react-router-dom";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDateTime } from "../lib/datetime";
@@ -16,7 +17,7 @@ import {
   triggerVulnScan, latestVulnScans, listVulnScans, getVulnScan, clearFailedVulnScans,
   downloadScanSbom, isKernelSourceFinding, vulnComponent,
   vulnDbStatus, vulnDbUpdate, vulnDbImport, msrcStatus, msrcUpdate, msrcImport, type VulnFinding,
-  type FixState, type VulnScan,
+  type FixState, type VulnScan, type VulnExposure,
 } from "../api/vulnscan";
 
 const SEV_COLOR: Record<string, "error" | "warning" | "info" | "default"> = {
@@ -65,7 +66,9 @@ export function VulnerabilitiesPage() {
           <Typography variant="body2" color="text.secondary">
             Linux hosts: match installed packages against a CVE database (Grype), scored by CVSS.
             Windows hosts: missing Microsoft security updates (via MSRC) plus curated third-party apps
-            (installed software → CPE → Grype/NVD).
+            (installed software → CPE → Grype/NVD). What hosts expose on the network is on the{" "}
+            <Link component={RouterLink} to="/network-exposure">Network exposure</Link> page; findings it can reach are
+            marked "reachable" here.
           </Typography>
         </Box>
         <Tooltip title="Refresh"><Button startIcon={<RefreshIcon />} onClick={refresh} sx={{ mr: 1 }}>Refresh</Button></Tooltip>
@@ -430,6 +433,29 @@ function RemediationChip({ value }: { value?: string }) {
   }
 }
 
+// ExposureChip says whether a network scan could reach this finding: through the
+// binary that serves a port, a library loaded into it, or a network check that
+// reported the same CVE. Absent means no network scan tied it to anything reachable
+// -- which, for a host never network-scanned, is "unknown", not "safe".
+function ExposureChip({ value }: { value?: VulnExposure }) {
+  if (!value) return <Typography variant="caption" color="text.secondary">—</Typography>;
+  const where = (value.endpoints ?? []).length
+    ? (value.endpoints ?? []).join(", ")
+    : `${value.port}/${value.proto}${value.process ? ` ${value.process}` : ""} (${value.paths.join(", ")})`;
+  const how = value.via === "binary"
+    ? "This package's binary is serving"
+    : value.via === "library"
+      ? "This library is loaded by a process serving"
+      : "A network check found this CVE on";
+  return (
+    <Tooltip title={`${how}: ${where}.${value.networkConfirmed ? " A network check also reported this CVE here." : ""}`}>
+      <Chip size="small" color={value.networkConfirmed ? "error" : "warning"}
+        variant={value.via === "library" ? "outlined" : "filled"}
+        label={value.networkConfirmed ? `reachable · confirmed` : `reachable :${value.port}`} />
+    </Tooltip>
+  );
+}
+
 // Scans recorded before fix_state existed carry no state; an explicit fixed version
 // is a fix regardless.
 function fixStateOf(f: VulnFinding): FixState {
@@ -482,6 +508,8 @@ function groupByComponent(findings: VulnFinding[]): GroupedFinding[] {
       continue;
     }
     if (!g.packages.includes(f.package)) g.packages.push(f.package);
+    // Exposed if any of its binaries is: the component is reachable through it.
+    if (!g.exposure && f.exposure) g.exposure = f.exposure;
     // Merge the way the backend's summary does, so the drill-down and the roll-up
     // cannot disagree: worst severity and score, most actionable fix state.
     if (f.cvssScore > g.cvssScore) g.cvssScore = f.cvssScore;
@@ -512,6 +540,7 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
   const [fixableOnly, setFixableOnly] = useState(false);
   const [hideWontFix, setHideWontFix] = useState(false);
   const [grouped, setGrouped] = useState(true);
+  const [reachableOnly, setReachableOnly] = useState(false);
   const [sevs, setSevs] = useState<string[]>(SEV_DEFAULT);
   const sevSet = new Set(sevs.map((s) => s.toLowerCase()));
   const rows: GroupedFinding[] = grouped
@@ -521,8 +550,10 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
     (f) =>
       sevSet.has((f.severity || "unknown").toLowerCase()) &&
       (!fixableOnly || fixStateOf(f) === "fixed") &&
-      (!hideWontFix || fixStateOf(f) !== "wont-fix"),
+      (!hideWontFix || fixStateOf(f) !== "wont-fix") &&
+      (!reachableOnly || !!f.exposure),
   );
+  const exposedCount = new Set(rows.filter((f) => f.exposure).map((f) => f.cve)).size;
   // The findings list is per CVE-on-package; the scan's total counts CVEs. Show both
   // so "72 CVEs / 154 rows" doesn't read as an inconsistency.
   const distinctShown = new Set(shown.map((f) => f.cve)).size;
@@ -581,6 +612,12 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
             control={<Switch size="small" checked={hideWontFix} onChange={(e) => setHideWontFix(e.target.checked)} />}
             label="Hide won't-fix"
           />
+          <Tooltip title="Only findings in a package that owns, or is loaded by, a process listening on a port a network scan reached — or whose CVE a network check confirmed. The short list of what an attacker can actually get to.">
+            <FormControlLabel
+              control={<Switch size="small" checked={reachableOnly} onChange={(e) => setReachableOnly(e.target.checked)} />}
+              label={`Reachable only${exposedCount > 0 ? ` (${exposedCount})` : ""}`}
+            />
+          </Tooltip>
           <Tooltip title="One row per CVE and source package instead of one per binary package. A source package builds many binaries and each repeats the same CVE, so ungrouped lists run roughly twice as long without saying anything more.">
             <FormControlLabel
               control={<Switch size="small" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />}
@@ -612,6 +649,7 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                 <TableCell>Installed</TableCell>
                 <TableCell>Fixed in</TableCell>
                 <TableCell>Fix</TableCell>
+                <TableCell>Exposure</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -642,10 +680,11 @@ function FindingsDialog({ scanId, onClose }: { scanId: string; onClose: () => vo
                   <TableCell><code>{f.installedVersion}</code></TableCell>
                   <TableCell>{f.fixedVersion ? <code>{f.fixedVersion}</code> : <FixStateChip value={fixStateOf(f)} />}</TableCell>
                   <TableCell><RemediationChip value={f.remediation} /></TableCell>
+                  <TableCell><ExposureChip value={f.exposure} /></TableCell>
                 </TableRow>
               ))}
               {!isLoading && shown.length === 0 && (
-                <TableRow><TableCell colSpan={7}>
+                <TableRow><TableCell colSpan={8}>
                   <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
                     {findings.length === 0 ? "No vulnerabilities found. 🎉" : "No findings match the current filters."}
                   </Typography>

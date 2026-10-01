@@ -69,6 +69,20 @@ export interface VulnFinding {
   // package installed but in no repo — purge it), "unavailable" (fix exists upstream but
   // not offered here: held / no-DSA / needs OS upgrade), or "" (undetermined).
   remediation?: string;
+  // Set when a network scan reached a port served by a process this package owns
+  // ("binary") or is loaded into ("library"), or when a network check reported the
+  // same CVE on this host ("network"). The short list of what is actually reachable.
+  exposure?: VulnExposure;
+}
+
+export interface VulnExposure {
+  port: number;
+  proto: string;
+  process?: string;
+  endpoints?: string[];
+  paths: string[];
+  via: "binary" | "library" | "network";
+  networkConfirmed: boolean;
 }
 
 // --- Component attribution ----------------------------------------------

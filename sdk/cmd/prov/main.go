@@ -83,6 +83,8 @@ func run(ctx context.Context, cmd string, args []string) error {
 		return cmdTokens(ctx, args)
 	case "vuln":
 		return cmdVuln(ctx, args)
+	case "netscan":
+		return cmdNetScan(ctx, args)
 	case "report":
 		return cmdReport(ctx, args)
 	default:
@@ -138,7 +140,10 @@ Commands:
   vuln scan --host <id> | --group <id>
   vuln list [--host <id>] | vuln latest
   vuln get <scanId>
-  report <access|audit|certificates|scans|vulnerabilities> [--from D] [--to D] [-o file.csv]
+  netscan scan --host <id> | --group <id>
+  netscan latest | netscan host <hostId> | netscan get <scanId>
+  netscan ranges | range-add --name N --cidr C [--note T] [--disabled] | range-delete <id> | range-scan <id>
+  report <access|audit|certificates|scans|vulnerabilities|network-exposure> [--from D] [--to D] [-o file.csv]
 
 Global flags:
   --json    output raw JSON instead of a table

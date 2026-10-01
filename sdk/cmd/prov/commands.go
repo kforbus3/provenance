@@ -522,7 +522,7 @@ func cmdVuln(ctx context.Context, args []string) error {
 
 func cmdReport(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("report: expected a kind (access|audit|certificates|scans|vulnerabilities)")
+		return errors.New("report: expected a kind (access|audit|certificates|scans|vulnerabilities|network-exposure)")
 	}
 	c, err := client()
 	if err != nil {

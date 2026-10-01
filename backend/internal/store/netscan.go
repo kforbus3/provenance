@@ -610,3 +610,24 @@ func (s *Store) LatestVulnCVEsForHost(ctx context.Context, hostID uuid.UUID) (cv
 	}
 	return cves, true, rows.Err()
 }
+
+// LatestNetScansForAssistant is LatestNetScans scoped to the caller's hosts. Range
+// scans of addresses no host claims are visible to super-admins only: there is no
+// host whose access could grant them.
+func (s *Store) LatestNetScansForAssistant(ctx context.Context, userID uuid.UUID, isSuperAdmin bool) ([]models.NetScan, error) {
+	args := []any{}
+	sub := accessibleHostsSubquery("ns.host_id", userID, isSuperAdmin, &args)
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+netScanCols+netScanFrom+`
+		WHERE ns.id IN (
+			SELECT DISTINCT ON (COALESCE(n2.host_id::text, n2.target), n2.path) n2.id
+			FROM net_scans n2
+			WHERE n2.status IN ('completed','unreachable')
+			ORDER BY COALESCE(n2.host_id::text, n2.target), n2.path, n2.created_at DESC)`+sub+`
+		ORDER BY ns.critical DESC, ns.high DESC, ns.medium DESC, ns.unexpected DESC,
+		         COALESCE(h.hostname, ns.target), ns.path`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return collectNetScans(rows)
+}

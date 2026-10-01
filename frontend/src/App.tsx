@@ -38,6 +38,7 @@ const ServiceAccountsPage = lazy(() => named(import("./pages/ServiceAccountsPage
 const ReportsPage = lazy(() => named(import("./pages/ReportsPage"), "ReportsPage"));
 const WatchSessionPage = lazy(() => named(import("./pages/WatchSessionPage"), "WatchSessionPage"));
 const VulnerabilitiesPage = lazy(() => named(import("./pages/VulnerabilitiesPage"), "VulnerabilitiesPage"));
+const NetworkScansPage = lazy(() => named(import("./pages/NetworkScansPage"), "NetworkScansPage"));
 const ImagingPage = lazy(() => named(import("./pages/ImagingPage"), "ImagingPage"));
 const HelpPage = lazy(() => named(import("./pages/HelpPage"), "HelpPage"));
 const AccessReviewsPage = lazy(() => named(import("./pages/AccessReviewsPage"), "AccessReviewsPage"));
@@ -168,6 +169,7 @@ export function App() {
               <Route path="disaster-recovery" element={<ProtectedRoute permission="DR.Manage"><DisasterRecoveryPage /></ProtectedRoute>} />
               <Route path="security" element={<SecurityPage />} />
               <Route path="vulnerabilities" element={<ProtectedRoute permission="Host.Scan"><VulnerabilitiesPage /></ProtectedRoute>} />
+              <Route path="network-exposure" element={<ProtectedRoute permission="Host.Scan"><NetworkScansPage /></ProtectedRoute>} />
               <Route path="imaging" element={<ProtectedRoute permission="Imaging.View"><ImagingPage /></ProtectedRoute>} />
               <Route path="jobs" element={<ProtectedRoute permission="System.Configure"><JobsPage /></ProtectedRoute>} />
               {/* The System Health UI lives at /system-health, not /health: nginx proxies

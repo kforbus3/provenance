@@ -220,3 +220,77 @@ type Identity struct {
 	Permissions  []string `json:"permissions"`
 	IsSuperAdmin bool     `json:"isSuperAdmin"`
 }
+
+// NetScan is one address scanned from the network on one path.
+type NetScan struct {
+	ID               string       `json:"id"`
+	RunID            string       `json:"runId"`
+	HostID           string       `json:"hostId,omitempty"`
+	Hostname         string       `json:"hostname,omitempty"`
+	RangeID          string       `json:"rangeId,omitempty"`
+	RangeName        string       `json:"rangeName,omitempty"`
+	Target           string       `json:"target"`
+	Path             string       `json:"path"`   // lan | overlay | range
+	Status           string       `json:"status"` // pending|running|completed|unreachable|failed
+	Error            string       `json:"error,omitempty"`
+	Reason           string       `json:"reason,omitempty"`
+	TemplatesVersion string       `json:"templatesVersion,omitempty"`
+	OpenPorts        int          `json:"openPorts"`
+	Total            int          `json:"total"`
+	Critical         int          `json:"critical"`
+	High             int          `json:"high"`
+	Medium           int          `json:"medium"`
+	Low              int          `json:"low"`
+	Unexpected       int          `json:"unexpected"`
+	ListenersKnown   bool         `json:"listenersKnown"`
+	Warnings         []string     `json:"warnings,omitempty"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	FinishedAt       *time.Time   `json:"finishedAt,omitempty"`
+	Services         []NetService `json:"services,omitempty"`
+	Findings         []NetFinding `json:"findings,omitempty"`
+}
+
+// NetService is what answered on one port.
+type NetService struct {
+	Port       int    `json:"port"`
+	Proto      string `json:"proto"`
+	Service    string `json:"service,omitempty"`
+	Product    string `json:"product,omitempty"`
+	Version    string `json:"version,omitempty"`
+	TLS        bool   `json:"tls"`
+	Process    string `json:"process,omitempty"`
+	Unexpected bool   `json:"unexpected"`
+}
+
+// NetFinding is a vulnerability or misconfiguration observed from the network.
+type NetFinding struct {
+	TemplateID    string   `json:"templateId"`
+	Name          string   `json:"name"`
+	Severity      string   `json:"severity"`
+	Port          int      `json:"port"`
+	Proto         string   `json:"proto"`
+	CVEs          []string `json:"cves,omitempty"`
+	CVSSScore     float64  `json:"cvssScore"`
+	Description   string   `json:"description,omitempty"`
+	Remediation   string   `json:"remediation,omitempty"`
+	Corroboration string   `json:"corroboration,omitempty"` // confirmed | banner-only
+}
+
+// NetScanRange is an operator-defined network range scanned for unmanaged devices.
+type NetScanRange struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	CIDR     string     `json:"cidr"`
+	Note     string     `json:"note"`
+	Enabled  bool       `json:"enabled"`
+	LastScan *time.Time `json:"lastScan,omitempty"`
+	LastLive int        `json:"lastLive"`
+}
+
+// NetScanRangeInput creates or updates a range. Enabled is required on update.
+type NetScanRangeInput struct {
+	Name    string `json:"name"`
+	CIDR    string `json:"cidr"`
+	Note    string `json:"note"`
+	Enabled *bool  `json:"enabled"`
+}

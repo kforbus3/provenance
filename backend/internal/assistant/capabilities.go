@@ -32,6 +32,7 @@ var capabilityCatalog = map[string]string{
 	"scan_findings":         "the individual benchmark rules a host is failing",
 	"recent_scans":          "the scan run log",
 	"vulnerabilities":       "CVE/vulnerability scan findings",
+	"network_exposure":      "network scans: open ports, exposed services and network-side vulnerabilities per host and path",
 	"windows_software":      "installed software on Windows hosts",
 	"recent_playbook_runs":  "Ansible playbook runs",
 	"list_schedules":        "what runs automatically and when it fires next",

@@ -135,6 +135,7 @@ SEVERITY_OVERRIDES = {
 }
 
 SEVERITIES = ["critical", "high", "medium", "low", "info", "unknown"]
+_CVE_ID = re.compile(r"cve-\d{4}-\d{4,}", re.I)
 
 
 def normalize_severity(template_id: str, sev: str) -> str:
@@ -351,6 +352,12 @@ def parse_nuclei(text: str) -> tuple[list[dict], list[dict]]:
             continue
         seen.add(key)
         sev = normalize_severity(tid, info.get("severity"))
+        cves = [c.upper() for c in _as_list(cls.get("cve-id"))]
+        # Many CVE templates (the JavaScript ones especially) name the CVE only in
+        # their id. Without it here the finding cannot be corroborated against the
+        # package scan, which is the whole point of carrying CVEs at all.
+        if not cves and _CVE_ID.fullmatch(tid):
+            cves = [tid.upper()]
         item = {
             "templateId": tid,
             "name": str(info.get("name") or tid)[:300],
@@ -358,7 +365,7 @@ def parse_nuclei(text: str) -> tuple[list[dict], list[dict]]:
             "port": port,
             "proto": "udp" if (d.get("template") or "").startswith("javascript/udp/") else "tcp",
             "matchedAt": str(matched)[:500],
-            "cves": [c.upper() for c in _as_list(cls.get("cve-id"))],
+            "cves": cves,
             "cwes": [c.upper() for c in _as_list(cls.get("cwe-id"))],
             "cvss": float(cls.get("cvss-score") or 0),
             "cvssVector": str(cls.get("cvss-metrics") or ""),
@@ -564,13 +571,16 @@ async def scan_target(body: dict) -> dict:
     deadline = started + SCAN_TIMEOUT
     tmp = tempfile.mkdtemp(prefix="prov-netscan-")
     try:
+        phases: dict[str, float] = {}
+        t0 = time.monotonic()
         nb = await _run(naabu_cmd(target, ports), _remaining(deadline))
         open_ports = parse_naabu(nb.stdout.decode(errors="replace"))
+        phases["ports"] = round(time.monotonic() - t0, 1)
 
         result = {
             "target": target, "reachable": True, "reason": "",
             "openPorts": open_ports, "services": [], "findings": [], "detections": [],
-            "templates": read_templates_meta(), "errors": [],
+            "templates": read_templates_meta(), "errors": [], "phases": phases,
         }
         if not open_ports:
             up, why = await asyncio.to_thread(alive, target, probe_ports)
@@ -584,7 +594,9 @@ async def scan_target(body: dict) -> dict:
             lst = os.path.join(tmp, "ports.txt")
             with open(lst, "w") as f:
                 f.write("\n".join(hostport(target, p) for p in open_ports))
+            t0 = time.monotonic()
             fx = await _run(fingerprintx_cmd(lst), min(_remaining(deadline), 300))
+            phases["fingerprint"] = round(time.monotonic() - t0, 1)
             services = parse_fingerprintx(fx.stdout.decode(errors="replace"))
             for p in open_ports:
                 services.setdefault(p, {"port": p, "proto": "tcp", "service": "", "product": "",
@@ -609,8 +621,10 @@ async def scan_target(body: dict) -> dict:
             lst = os.path.join(tmp, f"{mode}.txt")
             with open(lst, "w") as f:
                 f.write("\n".join(targets))
+            t0 = time.monotonic()
             try:
                 nu = await _run(nuclei_cmd(lst, TEMPLATES_DIR, mode, excluded), _remaining(deadline))
+                phases[mode] = round(time.monotonic() - t0, 1)
             except subprocess.TimeoutExpired:
                 result["errors"].append(f"{mode} pass timed out")
                 break
@@ -621,8 +635,10 @@ async def scan_target(body: dict) -> dict:
                 result["errors"].append(f"{mode} pass: " + nu.stderr.decode(errors="replace")[-300:])
 
         if want_udp:
+            t0 = time.monotonic()
             for f_ in await asyncio.to_thread(probes.run_udp_probes, target):
                 findings.append(f_)
+            phases["udp-probes"] = round(time.monotonic() - t0, 1)
 
         result["services"] = [services[p] for p in sorted(services)]
         rank = {s: i for i, s in enumerate(SEVERITIES)}

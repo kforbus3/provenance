@@ -157,6 +157,49 @@ func (s *Store) ExportVulnScanFindings(ctx context.Context, from, to time.Time) 
 	return t, rows.Err()
 }
 
+// ExportNetScanFindings returns the network-exposure report: every finding from
+// network scans created in [from, to), one row per address, path and finding, worst
+// first. Unreachable scans are included as rows of their own -- an address nobody
+// could assess must appear in an audit export, not vanish from it.
+func (s *Store) ExportNetScanFindings(ctx context.Context, from, to time.Time) (*ReportTable, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(h.hostname,''), ns.target, ns.path, ns.status, ns.created_at,
+		       COALESCE(f.template_id,''), COALESCE(f.name,''), COALESCE(f.severity,''),
+		       COALESCE(f.port,0), COALESCE(f.proto,''), COALESCE(array_to_string(f.cves, ' '),''),
+		       COALESCE(f.cvss_score,0), CASE WHEN ns.status='unreachable' THEN ns.reason ELSE '' END
+		FROM net_scans ns
+		LEFT JOIN hosts h ON h.id = ns.host_id
+		LEFT JOIN net_findings f ON f.scan_id = ns.id
+		WHERE ns.created_at >= $1 AND ns.created_at < $2 AND ns.status IN ('completed','unreachable')
+		  AND (f.id IS NOT NULL OR ns.status='unreachable')
+		ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
+		         WHEN 'low' THEN 3 ELSE 4 END, COALESCE(h.hostname, ns.target), ns.path, f.port`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	t := &ReportTable{Columns: []string{
+		"host", "address", "path", "status", "scanned_at", "check", "finding", "severity", "port", "proto",
+		"cves", "cvss", "not_assessed_reason"}}
+	for rows.Next() {
+		var host, target, path, status, tid, name, sev, proto, cves, reason string
+		var scanned time.Time
+		var port int
+		var cvss float64
+		if err := rows.Scan(&host, &target, &path, &status, &scanned, &tid, &name, &sev, &port, &proto,
+			&cves, &cvss, &reason); err != nil {
+			return nil, err
+		}
+		portS := ""
+		if port > 0 {
+			portS = fmt.Sprint(port)
+		}
+		t.Rows = append(t.Rows, []string{host, target, path, status, rfc(scanned), tid, name, sev, portS, proto,
+			cves, fmt.Sprintf("%.1f", cvss), reason})
+	}
+	return t, rows.Err()
+}
+
 // ExportScans returns the security-posture report: scans created in [from, to)
 // with their profile, score, and pass/fail counts.
 func (s *Store) ExportScans(ctx context.Context, from, to time.Time) (*ReportTable, error) {

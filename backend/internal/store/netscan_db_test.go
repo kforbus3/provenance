@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -101,6 +102,30 @@ func TestNetScanRoundTrip(t *testing.T) {
 	}
 	if len(mine) != 2 || mine[1].WorstSeverity != "high" || !mine[1].Unexpected {
 		t.Fatalf("exposed = %+v", mine)
+	}
+
+	// The audit export lists every finding AND the address nobody could assess.
+	tbl, err := s.ExportNetScanFindings(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lanRows, darkRows int
+	for _, r := range tbl.Rows {
+		if r[0] != h.Hostname {
+			continue
+		}
+		switch r[3] {
+		case models.NetScanCompleted:
+			lanRows++
+		case models.NetScanUnreachable:
+			darkRows++
+			if r[12] == "" {
+				t.Errorf("unreachable row has no reason: %v", r)
+			}
+		}
+	}
+	if lanRows != 2 || darkRows != 1 {
+		t.Fatalf("export rows: %d findings, %d unreachable (want 2, 1)", lanRows, darkRows)
 	}
 
 	// The first scan of a path has nothing to compare with; the next one does.

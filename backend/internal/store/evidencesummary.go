@@ -25,18 +25,26 @@ import (
 // disagree with the CSVs — that was the reason for reusing the export queries,
 // and it is preserved by matching their WHERE clauses exactly.
 type EvidenceSummary struct {
-	Sessions        int
-	SessionUsers    int
-	SessionHosts    int
-	CertsIssued     int
-	CertsRevoked    int
-	Scans           int
-	ScansCompleted  int
-	RulesPassed     int
-	RulesFailed     int
-	VulnFindings    int
-	VulnCritical    int
-	VulnHigh        int
+	Sessions       int
+	SessionUsers   int
+	SessionHosts   int
+	CertsIssued    int
+	CertsRevoked   int
+	Scans          int
+	ScansCompleted int
+	RulesPassed    int
+	RulesFailed    int
+	VulnFindings   int
+	VulnCritical   int
+	VulnHigh       int
+	// Network scans: findings on completed scans, and addresses that could not
+	// be assessed -- the second must be visible in an auditor's pack, or "0
+	// findings" reads as a clean bill of health for a network nobody reached.
+	NetFindings     int
+	NetCritical     int
+	NetHigh         int
+	NetAddresses    int
+	NetUnreachable  int
 	AuditEvents     int
 	CommandsFlagged int
 	CommandsBlocked int
@@ -84,6 +92,22 @@ func (s *Store) EvidenceSummaryFor(ctx context.Context, from, to time.Time) (*Ev
 		  JOIN vuln_scans vs ON vs.id = f.scan_id
 		 WHERE vs.created_at >= $1 AND vs.created_at < $2 AND vs.status='completed'`, from, to).
 		Scan(&e.VulnFindings, &e.VulnCritical, &e.VulnHigh); err != nil {
+		return nil, err
+	}
+
+	// Mirrors ExportNetScanFindings: completed and unreachable scans in the window.
+	if err := s.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM net_findings f JOIN net_scans ns ON ns.id = f.scan_id
+		         WHERE ns.created_at >= $1 AND ns.created_at < $2 AND ns.status='completed'),
+		       (SELECT count(*) FROM net_findings f JOIN net_scans ns ON ns.id = f.scan_id
+		         WHERE ns.created_at >= $1 AND ns.created_at < $2 AND ns.status='completed' AND f.severity='critical'),
+		       (SELECT count(*) FROM net_findings f JOIN net_scans ns ON ns.id = f.scan_id
+		         WHERE ns.created_at >= $1 AND ns.created_at < $2 AND ns.status='completed' AND f.severity='high'),
+		       (SELECT count(DISTINCT (COALESCE(host_id::text, target), path)) FROM net_scans
+		         WHERE created_at >= $1 AND created_at < $2 AND status IN ('completed','unreachable')),
+		       (SELECT count(*) FROM net_scans
+		         WHERE created_at >= $1 AND created_at < $2 AND status='unreachable')`, from, to).
+		Scan(&e.NetFindings, &e.NetCritical, &e.NetHigh, &e.NetAddresses, &e.NetUnreachable); err != nil {
 		return nil, err
 	}
 

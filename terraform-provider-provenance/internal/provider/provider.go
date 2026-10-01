@@ -102,6 +102,7 @@ func (p *provenanceProvider) Resources(_ context.Context) []func() resource.Reso
 		NewGroupResource,
 		NewServiceAccountResource,
 		NewServiceAccountTokenResource,
+		NewNetworkRangeResource,
 	}
 }
 
