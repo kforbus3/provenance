@@ -27,8 +27,13 @@ schedule kinds `netscan` and `netrange`; the `vulndb` refresh also refreshes the
 templates; a `netscan.exposure` notification; a Network exposure CSV report and an
 evidence-pack section; `prov netscan` CLI; `prov_network_range` Terraform resource.
 
-**Deploy:** set `PROV_NETSCAN_TOKEN` (upgrade bundles generate it) and run
-`make redeploy-single`; then install templates from the Network exposure page.
+**Deploy:** this release adds a compose service (`net-scanner`), so **update the
+checkout to v2.1.0 and run `make redeploy-single`** — the compose files are what put the
+scanner in the jump host's network namespace and hand the token to both sides.
+`PROV_NETSCAN_TOKEN` must be in `.env` (the upgrade bundle adds a generated one; otherwise
+`openssl rand -hex 32`). Installing the bundle in the UI alone, with the previous compose
+files, upgrades everything else but leaves network scanning reading "not configured".
+Then install templates from the Network exposure page.
 
 ---
 
