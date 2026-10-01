@@ -167,8 +167,10 @@ func TestStartHostsEndToEnd(t *testing.T) {
 	if strings.Contains(strings.Join(fs.targets, ","), lanIP) {
 		t.Fatalf("the LAN address of an overlay host was scanned: %v", fs.targets)
 	}
-	if fs.rates[ovIP] != 300 || fs.rates[plainIP] != 300 {
-		t.Fatalf("host scans asked for rates %v, want 300", fs.rates)
+	// The enrolled host is a server: the host rate. The unenrolled one is network
+	// gear as far as anyone knows: the sidecar's gentle default (0 = not asked).
+	if fs.rates[ovIP] != 300 || fs.rates[plainIP] != 0 {
+		t.Fatalf("rates = %v: want 300 for the enrolled host, 0 (default) for the unenrolled one", fs.rates)
 	}
 }
 

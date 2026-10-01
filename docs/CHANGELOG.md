@@ -5,6 +5,17 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.1.4 — 2026-10-01
+
+### Network gear is scanned at the gentle rate
+
+v2.1.2 scanned every Provenance host at 300 requests a second. Hosts that are recorded but
+not enrolled are, in practice, switches, routers and access points, whose web UI and SSH run
+on a small management CPU. They now get the scanner's gentler default (100 a second), like
+range scans; only enrolled hosts get `PROV_NETSCAN_HOST_RATE`.
+
+---
+
 ## v2.1.3 — 2026-10-01
 
 ### Network scans use the overlay address, falling back to the LAN address

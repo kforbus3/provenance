@@ -227,8 +227,9 @@ services:
       # Lets network scans target the jump host (off: its sshd drops connections
       # past MaxStartups, and a scan's SSH checks compete with the fleet's own).
       PROV_NETSCAN_INCLUDE_JUMPHOST: ${PROV_NETSCAN_INCLUDE_JUMPHOST:-}
-      # nuclei requests/second when scanning a managed host (default 300). Range
-      # scans keep the scanner's own NETSCAN_NUCLEI_RATE: they may hit a printer.
+      # nuclei requests/second when scanning an ENROLLED host (default 300). Range
+      # scans and unenrolled hosts (switches, routers, APs) keep the scanner's own,
+      # gentler NETSCAN_NUCLEI_RATE.
       PROV_NETSCAN_HOST_RATE: ${PROV_NETSCAN_HOST_RATE:-}
       # Image building (docs/imaging.md). Empty by default and the whole build
       # path is simply absent: the sidecar needs the Docker socket and a lot of
