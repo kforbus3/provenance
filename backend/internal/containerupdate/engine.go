@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,8 @@ type Store interface {
 	SetUpdateRolloutHostState(ctx context.Context, rollout, host uuid.UUID, state, errMsg string) error
 	SetUpdateRolloutState(ctx context.Context, id uuid.UUID, state, reason string) error
 	StampUpdateRolloutCanaryDone(ctx context.Context, id uuid.UUID, at time.Time) error
+	StampRolloutImageCanaryDone(ctx context.Context, rollout uuid.UUID, repository, fromTag string, at time.Time) error
+	MarkRolloutImageSoakChecked(ctx context.Context, rollout uuid.UUID, repository, fromTag string, at time.Time) error
 	ListStacks(ctx context.Context, hostID *uuid.UUID) ([]store.ContainerStack, error)
 	UpsertStack(ctx context.Context, in store.StackInput) (*store.ContainerStack, error)
 	GetHost(ctx context.Context, id uuid.UUID) (*models.Host, error)
@@ -201,42 +204,7 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		if why := firstFailure(hosts); why != "" {
 			reason += " First failure: " + why
 		}
-		if err := e.store.SetUpdateRolloutState(ctx, r.ID, store.UpdateRolloutHalted, reason); err != nil {
-			e.log.Warn("update rollout: halting", "rollout", r.ID, "err", err)
-		}
-		// Hosts that never got a turn are closed out rather than left pending.
-		//
-		// A halted rollout is never advanced again, so a pending row is a host
-		// waiting for something that will not happen -- and it reads as "queued,
-		// any moment now" on a page whose rollout stopped hours ago. One sat like
-		// that in production while the rollout beside it said halted.
-		//
-		// Skipped, not failed: nothing was attempted on them, and counting them as
-		// failures would misreport the blast radius of the thing that went wrong.
-		for _, h := range hosts {
-			if h.State != store.UpdateHostPending {
-				continue
-			}
-			if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, h.HostID, store.UpdateHostSkipped,
-				"the rollout halted before this host's turn; nothing was changed here"); err != nil {
-				e.log.Warn("update rollout: closing out a pending host", "host", h.HostID, "err", err)
-			}
-		}
-		e.log.Warn("update rollout halted", "rollout", r.ID,
-			"repository", r.Repository, "failed", failed, "reason", reason)
-		// Somebody is told. A halted rollout is a fleet-wide update that has
-		// stopped partway with hosts on two different versions, and until now the
-		// only way to learn about it was to open the page: one sat halted in
-		// production for hours with its second host pending, and was found by
-		// eye. The OS-image rollout has raised this event since imaging shipped.
-		if e.nfy != nil {
-			e.nfy.Notify(context.WithoutCancel(ctx), notify.Event{
-				Type:     notify.EventContainerRolloutHalted,
-				Severity: notify.SeverityError,
-				Title:    fmt.Sprintf("Container rollout halted: %s → %s", r.Repository, r.ToTag),
-				Body:     reason,
-			})
-		}
+		e.halt(ctx, r, hosts, reason)
 		return
 	}
 
@@ -247,34 +215,9 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		return
 	}
 
-	var window *pacing.Window
-	if r.WindowStart != nil && r.WindowEnd != nil {
-		days := make([]int, 0, len(r.WindowDays))
-		for _, d := range r.WindowDays {
-			days = append(days, int(d))
-		}
-		window = &pacing.Window{Start: *r.WindowStart, End: *r.WindowEnd, Days: days}
-	}
-	if !pacing.InWindow(window, now) {
-		return
-	}
-
-	capacity := pacing.Capacity(strategy, flying, verified, r.CanaryDoneAt, now)
-	if capacity <= 0 {
-		return
-	}
-
-	// Claim first, then apply concurrently. A batch size of five means five hosts
-	// moving at once -- applied one after another it would be an ordinary
-	// sequence with a cap, and a fleet of any size would take hours of wall clock
-	// to do what the operator asked to happen in one batch.
-	//
-	// Claiming is still serial and still conditional, so two overlapping ticks
-	// cannot both take the same host: for a compose file that means two writers
-	// racing on one path.
-	// The images this rollout covers, read once for the whole batch rather than
-	// per host: they do not change while it runs, and a rollout over a hundred
-	// hosts would otherwise ask a hundred times for the same answer.
+	// The images this rollout covers, read once for the whole tick rather than per
+	// host: they do not change while it runs, and a rollout over a hundred hosts
+	// would otherwise ask a hundred times for the same answer.
 	images, err := e.store.RolloutImages(ctx, r.ID)
 	if err != nil {
 		e.log.Warn("update rollout: listing images", "rollout", r.ID, "err", err)
@@ -289,6 +232,77 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		}}
 	}
 
+	// Canary and soak are per IMAGE. A rollout of every available update used to
+	// prove the first host's images and then hold every other host back for the
+	// soak -- including hosts running images that canary never touched, which went
+	// out unproven anyway once the soak ran out. Now each image has its own
+	// canaries and its own soak, a host waits only on the images it is about to
+	// receive, and an image running on a single host waits on nothing.
+	hostImgs, progress := e.imageProgress(ctx, hosts, images)
+	for i := range images {
+		p := &progress[i]
+		if c := pacing.ImageCanaries(strategy, *p); c > 0 && p.Verified >= c && p.CanaryDoneAt == nil {
+			if err := e.store.StampRolloutImageCanaryDone(ctx, r.ID, images[i].Repository, images[i].FromTag, now); err != nil {
+				e.log.Warn("update rollout: stamping image canary", "rollout", r.ID,
+					"repository", images[i].Repository, "err", err)
+			}
+			at := now
+			p.CanaryDoneAt = &at
+		}
+	}
+
+	// The soak earns its wait here. When an image's soak runs out, its canaries are
+	// read again: still on the target, still running, not unhealthy, not restarted
+	// since the deploy. A container that came up and then died -- a migration that
+	// fails on first real traffic, a crash a few minutes in -- passes the deploy-time
+	// check and fails this one, and the rest of that image's hosts never get it.
+	for i := range images {
+		if !pacing.SoakDue(strategy, progress[i], now) {
+			continue
+		}
+		if why := e.soakCheck(ctx, r, images[i], hosts, hostImgs, i); why != "" {
+			e.halt(ctx, r, hosts, why)
+			return
+		}
+		if err := e.store.MarkRolloutImageSoakChecked(ctx, r.ID, images[i].Repository, images[i].FromTag, now); err != nil {
+			e.log.Warn("update rollout: recording soak check", "rollout", r.ID,
+				"repository", images[i].Repository, "err", err)
+			continue
+		}
+		progress[i].SoakChecked = true
+	}
+
+	var window *pacing.Window
+	if r.WindowStart != nil && r.WindowEnd != nil {
+		days := make([]int, 0, len(r.WindowDays))
+		for _, d := range r.WindowDays {
+			days = append(days, int(d))
+		}
+		window = &pacing.Window{Start: *r.WindowStart, End: *r.WindowEnd, Days: days}
+	}
+	if !pacing.InWindow(window, now) {
+		return
+	}
+
+	// At most BatchSize hosts in flight at once, canaries included.
+	batch := r.BatchSize
+	if batch < 1 {
+		batch = 1
+	}
+	capacity := batch - flying
+	if capacity <= 0 {
+		return
+	}
+
+	// Claim first, then apply concurrently. A batch size of five means five hosts
+	// moving at once -- applied one after another it would be an ordinary
+	// sequence with a cap, and a fleet of any size would take hours of wall clock
+	// to do what the operator asked to happen in one batch.
+	//
+	// Claiming is still serial and still conditional, so two overlapping ticks
+	// cannot both take the same host: for a compose file that means two writers
+	// racing on one path.
+	//
 	// The attempt count is carried along with the host, because a failure that
 	// looks transient is retried by leaving the host pending -- and whether there
 	// is another attempt left to leave it for is exactly this number. Read here,
@@ -310,6 +324,13 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 			e.fail(ctx, r.ID, h.HostID, fmt.Sprintf("gave up after %d attempts", h.Attempts))
 			continue
 		}
+		mine := make([]pacing.ImageProgress, 0, len(hostImgs[h.HostID]))
+		for _, i := range hostImgs[h.HostID] {
+			mine = append(mine, progress[i])
+		}
+		if !pacing.HostAdmits(strategy, mine, now) {
+			continue // one of its images is still proving itself
+		}
 		got, err := e.store.ClaimUpdateRolloutHost(ctx, r.ID, h.HostID)
 		if err != nil {
 			e.log.Warn("update rollout: claiming host", "host", h.HostID, "err", err)
@@ -319,6 +340,11 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 			continue // somebody else took it
 		}
 		capacity--
+		// This host now holds a slot for each of its images, so the next host in
+		// this same tick sees the canary slots it has taken.
+		for _, i := range hostImgs[h.HostID] {
+			progress[i].Flying++
+		}
 		// The claim itself incremented attempts, so this is the number of attempts
 		// including the one about to run.
 		claimed = append(claimed, claim{host: h.HostID, attempts: h.Attempts + 1})
@@ -333,6 +359,156 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		}(c)
 	}
 	wg.Wait()
+}
+
+// halt stops a rollout with a reason an operator reads first, closes out the hosts
+// that never got a turn, and tells somebody. Shared by the failure budget and the
+// end-of-soak re-check, so both stop a rollout the same way.
+func (e *Engine) halt(ctx context.Context, r store.UpdateRollout, hosts []store.UpdateRolloutHost, reason string) {
+	if err := e.store.SetUpdateRolloutState(ctx, r.ID, store.UpdateRolloutHalted, reason); err != nil {
+		e.log.Warn("update rollout: halting", "rollout", r.ID, "err", err)
+	}
+	// Hosts that never got a turn are closed out rather than left pending.
+	//
+	// A halted rollout is never advanced again, so a pending row is a host
+	// waiting for something that will not happen -- and it reads as "queued,
+	// any moment now" on a page whose rollout stopped hours ago. One sat like
+	// that in production while the rollout beside it said halted.
+	//
+	// Skipped, not failed: nothing was attempted on them, and counting them as
+	// failures would misreport the blast radius of the thing that went wrong.
+	for _, h := range hosts {
+		if h.State != store.UpdateHostPending {
+			continue
+		}
+		if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, h.HostID, store.UpdateHostSkipped,
+			"the rollout halted before this host's turn; nothing was changed here"); err != nil {
+			e.log.Warn("update rollout: closing out a pending host", "host", h.HostID, "err", err)
+		}
+	}
+	e.log.Warn("update rollout halted", "rollout", r.ID,
+		"repository", r.Repository, "reason", reason)
+	// Somebody is told. A halted rollout is a fleet-wide update that has
+	// stopped partway with hosts on two different versions, and until now the
+	// only way to learn about it was to open the page: one sat halted in
+	// production for hours with its second host pending, and was found by
+	// eye. The OS-image rollout has raised this event since imaging shipped.
+	if e.nfy != nil {
+		e.nfy.Notify(context.WithoutCancel(ctx), notify.Event{
+			Type:     notify.EventContainerRolloutHalted,
+			Severity: notify.SeverityError,
+			Title:    fmt.Sprintf("Container rollout halted: %s → %s", r.Repository, r.ToTag),
+			Body:     reason,
+		})
+	}
+}
+
+// imageProgress works out which of the rollout's images each host runs, and where
+// each image stands: how many hosts run it, how many have verified, how many are
+// in flight, and its per-image canary and soak stamps.
+//
+// "Runs" is by repository, from what the host's inventory says it is running. A
+// verified host is running the TARGET tag by now, so matching the from-tag would
+// stop counting a canary the moment it succeeded. A skipped host does not count:
+// it either ran none of the images or had already moved past them.
+func (e *Engine) imageProgress(ctx context.Context, hosts []store.UpdateRolloutHost,
+	images []store.RolloutImage) (map[uuid.UUID][]int, []pacing.ImageProgress) {
+	byRepo := map[string][]int{}
+	for i, im := range images {
+		byRepo[im.Repository] = append(byRepo[im.Repository], i)
+	}
+	progress := make([]pacing.ImageProgress, len(images))
+	for i, im := range images {
+		progress[i].CanaryDoneAt = im.CanaryDoneAt
+		progress[i].SoakChecked = im.SoakCheckedAt != nil
+	}
+	hostImgs := map[uuid.UUID][]int{}
+	for _, h := range hosts {
+		if h.State == store.UpdateHostSkipped {
+			continue
+		}
+		containers, err := e.store.HostContainers(ctx, h.HostID)
+		if err != nil {
+			// Unknown: the host is admitted on no images and applyAll records why
+			// it cannot read the host, rather than the pacing guessing.
+			continue
+		}
+		seen := map[int]bool{}
+		for _, c := range containers {
+			for _, i := range byRepo[c.Repository] {
+				if !seen[i] {
+					seen[i] = true
+					hostImgs[h.HostID] = append(hostImgs[h.HostID], i)
+				}
+			}
+		}
+		for _, i := range hostImgs[h.HostID] {
+			p := &progress[i]
+			p.Hosts++
+			switch h.State {
+			case store.UpdateHostApplying:
+				p.Flying++
+			case store.UpdateHostVerified:
+				p.Verified++
+			}
+		}
+	}
+	return hostImgs, progress
+}
+
+// soakCheck re-reads one image on each of its canary hosts once its soak has run
+// out. It returns why the rollout must stop, or "" when the canaries held up.
+//
+// The canaries are the image's verified hosts. On each, every container on the
+// target tag must still be running, not unhealthy, and not restarted since the
+// deploy recreated it. A canary that no longer runs the target at all -- re-pinned
+// or removed by hand during the soak -- is passed over rather than failed: that is
+// somebody's decision, not the update misbehaving.
+func (e *Engine) soakCheck(ctx context.Context, r store.UpdateRollout, im store.RolloutImage,
+	hosts []store.UpdateRolloutHost, hostImgs map[uuid.UUID][]int, idx int) string {
+	want := im.Repository + ":" + im.ToTag
+	soak := time.Duration(r.SoakSeconds) * time.Second
+	for _, h := range hosts {
+		if h.State != store.UpdateHostVerified || !containsInt(hostImgs[h.HostID], idx) {
+			continue
+		}
+		host, err := e.store.GetHost(ctx, h.HostID)
+		if err != nil {
+			e.log.Warn("update rollout: soak check could not read host", "host", h.HostID, "err", err)
+			continue
+		}
+		out, _, failed := e.run.RunScript(ctx, hostexec.Privileged(verifyScript(im.Repository)), host)
+		if failed || !strings.Contains(out, "::OK::") {
+			return fmt.Sprintf("%s did not hold up through its %s soak on %s: could not read back what "+
+				"the host is running (%s)", want, soak, host.Hostname, trimOutput(out))
+		}
+		for _, c := range parseVerifyOutput(out) {
+			if c.ref != want {
+				continue
+			}
+			switch {
+			case !c.isRunning():
+				return fmt.Sprintf("%s did not hold up through its %s soak on %s: container %s is %s",
+					want, soak, host.Hostname, c.name, c.state)
+			case c.health == "unhealthy":
+				return fmt.Sprintf("%s did not hold up through its %s soak on %s: container %s is failing "+
+					"its healthcheck", want, soak, host.Hostname, c.name)
+			case c.restarts > 0:
+				return fmt.Sprintf("%s did not hold up through its %s soak on %s: container %s has restarted "+
+					"%d time(s) since it was deployed", want, soak, host.Hostname, c.name, c.restarts)
+			}
+		}
+	}
+	return ""
+}
+
+func containsInt(v []int, x int) bool {
+	for _, y := range v {
+		if y == x {
+			return true
+		}
+	}
+	return false
 }
 
 // applyAll moves one host onto every image in the rollout that it runs.
@@ -1052,7 +1228,9 @@ $_rt ps --no-trunc --format '{{.Image}}	{{.Names}}	{{.State}}' 2>/dev/null | whi
     *) continue ;;
   esac
   _d=$($_rt image inspect --format '{{range .RepoDigests}}{{.}},{{end}}' "$_i" 2>/dev/null)
-  echo "$_i	$_n	$_s	$_d"
+  _h=$($_rt inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$_n" 2>/dev/null)
+  _r=$($_rt inspect --format '{{.RestartCount}}' "$_n" 2>/dev/null)
+  echo "$_i	$_n	$_s	$_d	$_h	$_r"
 done
 `
 }
@@ -1078,6 +1256,12 @@ type runningContainer struct {
 	ref   string // repository:tag
 	name  string // container name
 	state string // docker/podman container state, e.g. "running", "restarting"
+	// health is the healthcheck verdict ("healthy", "unhealthy", "starting"), empty
+	// when the image defines none. restarts is how many times the runtime has
+	// restarted it, -1 when unknown. Neither is judged at deploy time -- a fresh
+	// container is still "starting" -- only at the end of a soak.
+	health   string
+	restarts int
 	// Every digest this image answers to, not the first one.
 	//
 	// RepoDigests is a LIST, and an image legitimately carries more than one entry:
@@ -1145,9 +1329,18 @@ func parseVerifyOutput(out string) []runningContainer {
 			continue
 		}
 		c := runningContainer{
-			ref:   strings.TrimSpace(parts[0]),
-			name:  strings.TrimSpace(parts[1]),
-			state: strings.ToLower(strings.TrimSpace(parts[2])),
+			ref:      strings.TrimSpace(parts[0]),
+			name:     strings.TrimSpace(parts[1]),
+			state:    strings.ToLower(strings.TrimSpace(parts[2])),
+			restarts: -1,
+		}
+		if len(parts) > 4 {
+			c.health = strings.ToLower(strings.TrimSpace(parts[4]))
+		}
+		if len(parts) > 5 {
+			if n, err := strconv.Atoi(strings.TrimSpace(parts[5])); err == nil {
+				c.restarts = n
+			}
 		}
 		if len(parts) > 3 {
 			// Comma-separated, and trailing-comma terminated by the template that

@@ -146,18 +146,33 @@ than all at once.
 
 Press **Roll out** on an update. You choose:
 
-- **canary hosts** — proved first, alone. The rest waits on them.
-- **soak** — how long the canaries must run before the fleet follows
-- **batch size** — how many hosts move at once after the soak
+- **canary hosts** — per image: how many of an image's hosts prove it first
+- **soak** — per image: how long its canaries must run before its other hosts follow
+- **batch size** — how many hosts move at once, canaries included
 - **failure budget** — stop after this many failures. **0 means no limit.**
 - **maintenance window** — optional, in server-local time
 
-The defaults are cautious rather than fast: one canary, a fifteen-minute soak,
-and a halt on the first failure. The cost of being slow is waiting. The cost of
-being fast is every host on a broken image at the same moment.
+The defaults: one canary per image, a five-minute soak, and a halt on the first
+failure.
 
-These are the same pacing rules image rollouts obey — literally the same code,
-so the two cannot drift.
+**Canary and soak are per image.** A rollout covering several images ("Update
+All") proves each image on its own canary host, and a host waits only on the
+images it is about to receive. An image that runs on a single host has nothing to
+wait for — its one host is its canary. Before this, the first host's images were
+proved and then *every* host waited out the soak, including hosts running images
+that canary never touched, which then went out unproven anyway.
+
+**The soak ends with a re-check.** When an image's soak runs out, its canaries are
+read again: every container on the target tag must still be running, not failing
+its healthcheck, and not restarted since the deploy recreated it. A container that
+came up and then fell over — a migration that fails on first real traffic, a crash
+a few minutes in — passes the deploy-time check and fails this one. The rollout
+halts with the reason, the image's other hosts are never given it, and the
+`container.rollout.halted` notification fires. The rollout's detail view shows each
+image's state: proving on its canary, soaking until a time, or soak passed.
+
+The window, batching and failure budget are the same pacing code image rollouts
+obey, so the two cannot drift.
 
 The hosts are chosen when the rollout is created, not rediscovered as it runs. A
 rollout whose membership changed underneath it could never be complete, and a

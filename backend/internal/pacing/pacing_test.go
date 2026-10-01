@@ -160,3 +160,88 @@ func TestParseHMRejectsOutOfRange(t *testing.T) {
 		t.Errorf("ParseHM(22:30) = %d, %v", got, err)
 	}
 }
+
+func TestImageCanariesCappedByHosts(t *testing.T) {
+	s := Strategy{Canary: 2}
+	if got := ImageCanaries(s, ImageProgress{Hosts: 1}); got != 1 {
+		t.Fatalf("got %d", got)
+	}
+	if got := ImageCanaries(s, ImageProgress{Hosts: 5}); got != 2 {
+		t.Fatalf("got %d", got)
+	}
+	if got := ImageCanaries(Strategy{Canary: -1}, ImageProgress{Hosts: 5}); got != 0 {
+		t.Fatalf("got %d", got)
+	}
+}
+
+func TestImageAdmitsPhases(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	s := Strategy{Canary: 1, BatchSize: 5, SoakSeconds: 300}
+	done := now.Add(-2 * time.Minute)
+	soaked := now.Add(-6 * time.Minute)
+	cases := []struct {
+		name string
+		p    ImageProgress
+		want bool
+	}{
+		{"canary slot free", ImageProgress{Hosts: 3}, true},
+		{"canary in flight", ImageProgress{Hosts: 3, Flying: 1}, false},
+		{"soaking", ImageProgress{Hosts: 3, Verified: 1, CanaryDoneAt: &done}, false},
+		{"soak over but not re-checked", ImageProgress{Hosts: 3, Verified: 1, CanaryDoneAt: &soaked}, false},
+		{"soak over and re-checked", ImageProgress{Hosts: 3, Verified: 1, CanaryDoneAt: &soaked, SoakChecked: true}, true},
+		{"verified but never stamped", ImageProgress{Hosts: 3, Verified: 1}, false},
+	}
+	for _, c := range cases {
+		if got := ImageAdmits(s, c.p, now); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+	// No soak: verified canaries are enough.
+	if !ImageAdmits(Strategy{Canary: 1}, ImageProgress{Hosts: 3, Verified: 1}, now) {
+		t.Error("without a soak, a verified canary must admit the rest")
+	}
+	// No canary: everything goes.
+	if !ImageAdmits(Strategy{Canary: 0, SoakSeconds: 300}, ImageProgress{Hosts: 3, Flying: 2}, now) {
+		t.Error("with no canary there is nothing to wait for")
+	}
+}
+
+// The case that motivated per-image pacing: an "Update All" rollout where the
+// first host's images soak, and a host running a DIFFERENT image must not wait.
+func TestUnrelatedImageDoesNotWaitForAnothersSoak(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	s := Strategy{Canary: 1, BatchSize: 5, SoakSeconds: 900}
+	done := now.Add(-1 * time.Minute)
+	soakingA := ImageProgress{Hosts: 3, Verified: 1, CanaryDoneAt: &done}
+	untouchedB := ImageProgress{Hosts: 2}
+	if HostAdmits(s, []ImageProgress{soakingA}, now) {
+		t.Error("a host running A must wait for A's soak")
+	}
+	if !HostAdmits(s, []ImageProgress{untouchedB}, now) {
+		t.Error("a host running only B must not wait for A's soak: it is B's canary")
+	}
+	if HostAdmits(s, []ImageProgress{soakingA, untouchedB}, now) {
+		t.Error("a host running A and B waits: one of its images is still soaking")
+	}
+	if !HostAdmits(s, nil, now) {
+		t.Error("a host running none of the images is admitted (it will be skipped)")
+	}
+}
+
+func TestSoakDue(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	s := Strategy{Canary: 1, SoakSeconds: 300}
+	early, late := now.Add(-time.Minute), now.Add(-10*time.Minute)
+	if SoakDue(s, ImageProgress{CanaryDoneAt: &early}, now) {
+		t.Error("not due before the soak runs out")
+	}
+	if !SoakDue(s, ImageProgress{CanaryDoneAt: &late}, now) {
+		t.Error("due once the soak runs out")
+	}
+	if SoakDue(s, ImageProgress{CanaryDoneAt: &late, SoakChecked: true}, now) {
+		t.Error("not due again once checked")
+	}
+	if SoakDue(Strategy{Canary: 1}, ImageProgress{CanaryDoneAt: &late}, now) {
+		t.Error("never due without a soak")
+	}
+}

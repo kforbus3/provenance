@@ -12,7 +12,7 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listRollouts, clearFinishedRollouts, getRollout, rolloutAction, type UpdateRollout,
+  listRollouts, clearFinishedRollouts, getRollout, rolloutAction, imageSoakStatus, type UpdateRollout,
 } from "../api/containerUpdates";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
@@ -183,6 +183,24 @@ function RolloutRow({ r, canRun, onMessage }: {
                     {counts.pending ? `, ${counts.pending} waiting` : ""}
                     {" "}of {total}
                   </Typography>
+                </Box>
+              )}
+              {(detail?.images?.length ?? 0) > 0 && (r.canary > 0) && (
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                    Each image is proven on its own canary{r.soakSeconds > 0 ? " and soaked" : ""} before
+                    its other hosts get it; a host waits only on the images it is receiving.
+                  </Typography>
+                  {detail!.images!.map((im) => (
+                    <Stack key={`${im.repository}:${im.fromTag}`} direction="row" spacing={1} alignItems="center">
+                      <Typography variant="body2" sx={{ fontFamily: "monospace", minWidth: 260 }}>
+                        {im.repository}:{im.fromTag}{im.toTag !== im.fromTag ? ` → ${im.toTag}` : ""}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {imageSoakStatus(im, r)}
+                      </Typography>
+                    </Stack>
+                  ))}
                 </Box>
               )}
               {hosts.map((h) => (

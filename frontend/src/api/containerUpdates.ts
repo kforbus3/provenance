@@ -152,6 +152,26 @@ export interface RolloutImage {
   fromTag: string;
   toTag: string;
   targetDigest?: string;
+  // Per-image pacing: when this image's canaries had all verified, and when they
+  // passed the re-check at the end of its soak (which releases its other hosts).
+  canaryDoneAt?: string;
+  soakCheckedAt?: string;
+}
+
+// imageSoakStatus describes where one image stands in its own canary and soak.
+// Canary and soak are per image: a host waits only on the images it receives.
+export function imageSoakStatus(
+  im: RolloutImage, r: { canary: number; soakSeconds: number }, now: Date = new Date(),
+): string {
+  if (r.canary <= 0) return "no canary";
+  if (!im.canaryDoneAt) return "proving on its canary";
+  if (r.soakSeconds <= 0) return "canary verified";
+  if (im.soakCheckedAt) return "soak passed";
+  const until = new Date(new Date(im.canaryDoneAt).getTime() + r.soakSeconds * 1000);
+  if (until > now) {
+    return `soaking until ${until.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  return "re-checking the canary";
 }
 
 export interface CreateRolloutRequest {
