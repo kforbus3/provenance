@@ -1180,7 +1180,12 @@ service exposed on the overlay but not the LAN is flagged **overlay-only**.
 
 **Unreachable is not clean.** An address that does not answer is recorded as
 **unreachable** with a reason, never as "0 findings". In a scheduled scan it counts
-as a failed host.
+as a failed host. Before the full sweep, the scanner checks that the address answers
+at all — on the host's own ports (its SSH, RDP or WinRM port) or the 100 most common
+ports, where a refused connection counts as an answer. An address silent on all of
+those is reported unreachable in seconds rather than after a sweep of 65,535 ports
+that would take ten minutes to say the same. The cost: a host that drops everything
+except one uncommon port reads as unreachable.
 
 **The host's own view.** At scan time Provenance reads the host's listening sockets
 (`ss` over SSH, under `sudo -n` where allowed; `Get-NetTCPConnection` over WinRM on
