@@ -425,6 +425,9 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			if tbl != nil {
 				data.table = tbl
 			}
+			// Built in code: the model turned a "low disk now" threshold row into a
+			// "will run out within 7 days" forecast that nothing had projected.
+			directAnswer = capacityDirectAnswer(payload)
 			result = payload
 		case "security_events":
 			tbl, payload := s.runSecurityEvents(ctx, fargs, who)

@@ -861,7 +861,11 @@ ML) from host status + metric history: offline hosts, low/critically-low disk,
 high memory/load, pending security updates, and a disk-runway projection
 (days-to-full with a confidence level from the trend fit). Results are scoped to
 the caller's accessible hosts; the same engine powers the Dashboard "Needs
-attention" card and the `prov_insights` assistant tool.
+attention" card and the `prov_insights` assistant tool. Disk insights also carry
+their facts as fields: `freePct` (on `disk`), `runwayDays` + `confidence` (on
+`disk-runway`, and on `disk` when that host is filling), and `trend` on `disk` —
+`filling`, `steady` (low but flat or recovering) or `unknown` (too little history).
+A runway insight appears only for hosts projected to fill within 14 days.
 
 **Scheduled health digests** — a daily/weekly fleet-health digest built from the
 same insights and delivered via notify (the `fleet.digest` event).
