@@ -200,8 +200,11 @@ action" below). You can ask about:
   record of hosts going offline and recovering, so it catches outages that already
   cleared — something the current-status view can't show you.
 - **Capacity outlook** — *"are any hosts going to run out of disk or memory this
-  week?"*. Ask projects disk runway and calls out anything trending toward full — and
-  tells you plainly when nothing is at risk.
+  week?"*. Ask projects disk runway (up to 14 days ahead) and keeps three answers
+  apart: hosts projected to fill inside the window you asked about, hosts filling but
+  later, and hosts that are only low right now — with whether their usage is steady or
+  still climbing. It tells you plainly when nothing is at risk. Memory is current use
+  only; it is not projected.
 - **Login security** — *"any failed logins or brute-force attempts?"*, *"any account
   lockouts or MFA failures?"*, drawn from the authentication event stream with a
   per-IP failure tally (requires `Audit.View`).

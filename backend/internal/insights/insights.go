@@ -41,6 +41,20 @@ const (
 	maxRunwayAnalyses = 50  // cap per-host history queries per computation
 )
 
+// RunwayHorizonDays is the furthest ahead a "Disk filling up" insight looks: a host
+// projected to fill later than this gets no runway insight at all. Anything that
+// answers "will a host run out within N days" for N beyond this must say so rather
+// than read the absence of an insight as "no".
+const RunwayHorizonDays = runwayWarnDays
+
+// Disk trends recorded on a low-disk insight, so "low on space now" is never
+// mistaken for "about to run out".
+const (
+	TrendFilling = "filling" // free space falling at a measurable rate (see RunwayDays)
+	TrendSteady  = "steady"  // flat or rising: low, but not heading toward full
+	TrendUnknown = "unknown" // not enough history to fit a trend
+)
+
 // Insight is one surfaced observation about a host.
 type Insight struct {
 	Severity string `json:"severity"` // critical|warning|info
@@ -49,6 +63,15 @@ type Insight struct {
 	Hostname string `json:"hostname"`
 	Title    string `json:"title"`
 	Detail   string `json:"detail"`
+
+	// Structured facts behind disk insights, so a consumer never has to parse them
+	// back out of Detail. FreePct is set on "disk"; RunwayDays and Confidence on
+	// "disk-runway", and on "disk" when that host's trend is filling; Trend on
+	// "disk" once its history has been analysed.
+	FreePct    *float64 `json:"freePct,omitempty"`
+	RunwayDays *float64 `json:"runwayDays,omitempty"`
+	Confidence string   `json:"confidence,omitempty"`
+	Trend      string   `json:"trend,omitempty"`
 }
 
 // Service computes insights from the store.
@@ -77,6 +100,7 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 		freePct  float64
 	}
 	var runwayCandidates []ref
+	lowDisk := map[uuid.UUID]int{} // host -> index of its "disk" insight in out
 
 	for i := range hosts {
 		h := hosts[i]
@@ -121,11 +145,17 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 			free := *m.MinDiskFreePct
 			switch {
 			case free <= diskCriticalPct:
-				out = append(out, insight(SeverityCritical, "disk", h.ID, h.Hostname,
-					"Disk almost full", fmt.Sprintf("Only %.0f%% free on the tightest filesystem.", free)))
+				lowDisk[h.ID] = len(out)
+				it := insight(SeverityCritical, "disk", h.ID, h.Hostname,
+					"Disk almost full", fmt.Sprintf("Only %.0f%% free on the tightest filesystem.", free))
+				it.FreePct = &free
+				out = append(out, it)
 			case free <= diskWarningPct:
-				out = append(out, insight(SeverityWarning, "disk", h.ID, h.Hostname,
-					"Low disk space", fmt.Sprintf("%.0f%% free on the tightest filesystem.", free)))
+				lowDisk[h.ID] = len(out)
+				it := insight(SeverityWarning, "disk", h.ID, h.Hostname,
+					"Low disk space", fmt.Sprintf("%.0f%% free on the tightest filesystem.", free))
+				it.FreePct = &free
+				out = append(out, it)
 			}
 			if free <= diskRunwayScanPct {
 				runwayCandidates = append(runwayCandidates, ref{h.ID, h.Hostname, free})
@@ -151,16 +181,26 @@ func (s *Service) Compute(ctx context.Context, userID uuid.UUID, isSuperAdmin bo
 			runwayCandidates = runwayCandidates[:maxRunwayAnalyses]
 		}
 		for _, c := range runwayCandidates {
-			days, conf, ok := s.diskRunwayDays(ctx, c.id)
-			if !ok || days > runwayWarnDays {
+			days, conf, trend := s.diskRunwayDays(ctx, c.id)
+			if i, low := lowDisk[c.id]; low {
+				out[i].Trend = trend
+				if trend == TrendFilling {
+					d := days
+					out[i].RunwayDays, out[i].Confidence = &d, conf
+				}
+			}
+			if trend != TrendFilling || days > runwayWarnDays {
 				continue
 			}
 			sev := SeverityWarning
 			if days <= runwayCritDays {
 				sev = SeverityCritical
 			}
-			out = append(out, insight(sev, "disk-runway", c.id, c.hostname,
-				"Disk filling up", fmt.Sprintf("At the recent rate, the tightest filesystem fills in ~%.0f day(s) (%s confidence).", days, conf)))
+			it := insight(sev, "disk-runway", c.id, c.hostname,
+				"Disk filling up", fmt.Sprintf("At the recent rate, the tightest filesystem fills in ~%.0f day(s) (%s confidence).", days, conf))
+			d := days
+			it.RunwayDays, it.Confidence = &d, conf
+			out = append(out, it)
 		}
 	}
 
@@ -193,35 +233,43 @@ func severityRank(s string) int {
 }
 
 // diskRunwayDays estimates days until the tightest filesystem fills, by fitting a
-// least-squares line to the last week of disk-free samples. It returns the
-// estimate, a confidence label derived from how well the line fits the data (R²:
-// a steady decline reads high, a noisy one low), and ok=false for a flat/rising
-// trend that isn't filling up at all.
-func (s *Service) diskRunwayDays(ctx context.Context, hostID uuid.UUID) (days float64, confidence string, ok bool) {
+// least-squares line to the last week of disk-free samples. See projectRunway.
+func (s *Service) diskRunwayDays(ctx context.Context, hostID uuid.UUID) (days float64, confidence, trend string) {
 	since := time.Now().Add(-7 * 24 * time.Hour)
 	pts, err := s.store.MetricHistory(ctx, hostID, since, time.Hour)
-	if err != nil || len(pts) < 4 {
-		return 0, "", false
+	if err != nil {
+		return 0, "", TrendUnknown
 	}
 	var xs, ys []float64
-	t0 := pts[0].Time
+	var t0 time.Time
 	for _, p := range pts {
 		if p.DiskFreePctAvg == nil {
 			continue
 		}
+		if len(xs) == 0 {
+			t0 = p.Time
+		}
 		xs = append(xs, p.Time.Sub(t0).Hours()/24)
 		ys = append(ys, *p.DiskFreePctAvg)
 	}
+	return projectRunway(xs, ys)
+}
+
+// projectRunway fits disk-free % (ys) over days (xs). It returns the trend --
+// TrendFilling, TrendSteady (flat or rising), or TrendUnknown (too few samples to
+// fit) -- and, when filling, the days until full and a confidence label derived
+// from how well the line fits (R²: a steady decline reads high, a noisy one low).
+func projectRunway(xs, ys []float64) (days float64, confidence, trend string) {
 	if len(xs) < 4 {
-		return 0, "", false
+		return 0, "", TrendUnknown
 	}
 	slope, intercept, r2, fit := linreg(xs, ys)
 	if !fit {
-		return 0, "", false
+		return 0, "", TrendUnknown
 	}
 	dailyDecline := -slope // positive when disk free is falling
 	if dailyDecline < minDailyDecline {
-		return 0, "", false // flat or rising: not filling up
+		return 0, "", TrendSteady
 	}
 	conf := "low"
 	switch {
@@ -233,9 +281,9 @@ func (s *Service) diskRunwayDays(ctx context.Context, hostID uuid.UUID) (days fl
 	lastX := xs[len(xs)-1]
 	projectedFree := slope*lastX + intercept
 	if projectedFree <= 0 {
-		return 0, conf, true // already effectively full
+		return 0, conf, TrendFilling // already effectively full
 	}
-	return projectedFree / dailyDecline, conf, true
+	return projectedFree / dailyDecline, conf, TrendFilling
 }
 
 // linreg returns the least-squares slope, intercept, and coefficient of

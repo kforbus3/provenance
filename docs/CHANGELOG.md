@@ -5,6 +5,32 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.1 — 2026-10-02
+
+### Ask: "low on disk" is no longer reported as "about to run out"
+
+Asked *"are any hosts going to run out of space?"*, Ask answered that nas was
+"projected to run out of disk space within 7 days". Nothing had projected that: nas
+was 13% free — a threshold warning — and its usage was flat. The model was handed the
+low-disk row next to a 7-day horizon and fused the two into a forecast.
+
+The capacity answer is now built in code and keeps three things apart:
+
+- hosts the disk-runway projection says will fill **inside** the window you asked about;
+- hosts that are filling, but **later** than that;
+- hosts that are merely **low right now**, each with what its trend actually is
+  (steady, filling slowly and roughly when, or not enough history to say).
+
+A question about more than 14 days is answered for 14 days, and says so: that is the
+furthest ahead the projection looks. Memory is reported as current use only — it has
+never been projected.
+
+Insights (`GET /api/v1/insights`) now carry these facts as fields as well as text:
+`freePct` on `disk`, `runwayDays` and `confidence` on `disk-runway`, and `trend` on
+`disk` (`filling` / `steady` / `unknown`).
+
+---
+
 ## v2.2.0 — 2026-10-01
 
 ### Container rollouts: canary and soak per image, and the soak re-checks the canary

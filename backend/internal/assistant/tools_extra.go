@@ -176,12 +176,7 @@ func (s *Service) runCapacityOutlook(ctx context.Context, raw json.RawMessage, w
 		subject = "memory"
 	}
 	if len(kept) == 0 {
-		return nil, map[string]any{
-			"count": 0, "horizonDays": days, "subject": subject, "atRisk": false,
-			"note": fmt.Sprintf("No host is low on %s or projected to run out within the next %d days. "+
-				"(The disk-runway projection flags any host below 50%% free that is trending toward full within ~14 days; none currently qualify. "+
-				"Memory is flagged when currently high.) Answer plainly that no host is at risk, and do NOT mention unrelated issues like pending updates.", subject, days),
-		}
+		return nil, map[string]any{"count": 0, "horizonDays": days, "subject": subject, "items": kept}
 	}
 	tbl := &AssistantTable{
 		Title:   "Capacity outlook",
@@ -190,7 +185,148 @@ func (s *Service) runCapacityOutlook(ctx context.Context, raw json.RawMessage, w
 	for _, it := range kept {
 		tbl.Rows = append(tbl.Rows, []string{it.Severity, it.Hostname, it.Title, it.Detail})
 	}
-	return tbl, map[string]any{"count": len(kept), "horizonDays": days, "subject": subject, "atRisk": true, "items": kept}
+	return tbl, map[string]any{"count": len(kept), "horizonDays": days, "subject": subject, "items": kept}
+}
+
+// capacityDirectAnswer builds the capacity answer in code. Left to the model, a
+// "Low disk space" row (a threshold: free space is low NOW) next to a 7-day horizon
+// was narrated as "projected to run out within 7 days" -- a forecast nothing had
+// made. So the answer keeps three things apart: hosts the runway projection says
+// will fill inside the window, hosts filling but later, and hosts that are merely
+// low right now (with what their trend actually is).
+func capacityDirectAnswer(payload any) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	items, ok := m["items"].([]insights.Insight)
+	if !ok {
+		return ""
+	}
+	days, _ := m["horizonDays"].(int)
+	subject, _ := m["subject"].(string)
+	return capacityAnswer(items, days, subject)
+}
+
+func capacityAnswer(items []insights.Insight, days int, subject string) string {
+	askDisk := subject != "memory"
+	askMem := subject != "disk"
+	horizon := days
+	capped := horizon > insights.RunwayHorizonDays
+	if capped {
+		horizon = insights.RunwayHorizonDays
+	}
+	window := fmt.Sprintf("within the next %d day%s", horizon, plural(horizon))
+	if capped {
+		window += fmt.Sprintf(" (the furthest ahead Provenance projects disk usage; you asked about %d)", days)
+	}
+
+	var soon, later, low, mem []insights.Insight
+	projected := map[string]bool{}
+	for _, it := range items {
+		switch it.Category {
+		case "disk-runway":
+			projected[it.HostID] = true
+			if it.RunwayDays != nil && *it.RunwayDays <= float64(horizon) {
+				soon = append(soon, it)
+			} else {
+				later = append(later, it)
+			}
+		case "disk":
+			low = append(low, it)
+		case "memory":
+			mem = append(mem, it)
+		}
+	}
+
+	var parts []string
+	if askDisk {
+		if len(soon) == 0 {
+			parts = append(parts, "No host is projected to run out of disk space "+window+".")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d host%s projected to run out of disk space %s: %s.",
+				len(soon), pluralIsAre(len(soon)), window, joinInsights(soon, runwayClause)))
+		}
+		if len(later) > 0 {
+			parts = append(parts, "Filling, but not within that window: "+joinInsights(later, runwayClause)+".")
+		}
+		if len(low) > 0 {
+			parts = append(parts, "Low on disk space right now: "+joinInsights(low, func(it insights.Insight) string {
+				return lowDiskClause(it, projected[it.HostID])
+			})+".")
+		} else if len(soon) == 0 && len(later) == 0 {
+			parts = append(parts, "No host is low on disk space right now either.")
+		}
+	}
+	if askMem {
+		if len(mem) == 0 {
+			parts = append(parts, "No host is short of memory right now.")
+		} else {
+			// Memory has no projection -- only its current level is known.
+			parts = append(parts, "High memory use right now (memory is not projected forward): "+
+				joinInsights(mem, func(it insights.Insight) string { return strings.TrimSuffix(it.Detail, ".") })+".")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func joinInsights(items []insights.Insight, clause func(insights.Insight) string) string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.Hostname + " (" + clause(it) + ")"
+	}
+	return strings.Join(out, "; ")
+}
+
+func runwayClause(it insights.Insight) string {
+	s := "fills in " + runwayDaysPhrase(it.RunwayDays) + " at the recent rate"
+	if it.Confidence != "" {
+		s += ", " + it.Confidence + " confidence"
+	}
+	return s
+}
+
+func runwayDaysPhrase(d *float64) string {
+	switch {
+	case d == nil:
+		return "an unknown number of days"
+	case *d <= 0:
+		return "no time -- it is effectively full"
+	case *d < 1:
+		return "less than a day"
+	case *d < 1.5:
+		return "~1 day"
+	default:
+		return fmt.Sprintf("~%.0f days", *d)
+	}
+}
+
+// lowDiskClause says how low a host is and what its trend actually is. A host that
+// also has a runway entry already had its projection stated, so it isn't repeated.
+func lowDiskClause(it insights.Insight, projected bool) string {
+	s := strings.TrimSuffix(it.Detail, ".")
+	if it.FreePct != nil {
+		s = fmt.Sprintf("%.0f%% free on its tightest filesystem", *it.FreePct)
+	}
+	if projected {
+		return s
+	}
+	switch it.Trend {
+	case insights.TrendSteady:
+		s += "; usage is steady, not trending toward full"
+	case insights.TrendFilling:
+		s += "; filling slowly -- " + runwayDaysPhrase(it.RunwayDays) + " at the recent rate"
+	case insights.TrendUnknown:
+		s += "; not enough recent history to project a trend"
+	}
+	return s
+}
+
+func pluralIsAre(n int) string {
+	if n == 1 {
+		return " is"
+	}
+	return "s are"
 }
 
 // ---------------------------------------------------------------------------

@@ -37,3 +37,23 @@ func TestSeverityRankOrdersCriticalFirst(t *testing.T) {
 		t.Fatal("severity ranking is not critical < warning < info")
 	}
 }
+
+func TestProjectRunwayTrends(t *testing.T) {
+	// Flat at 13% free for a week: low, but not filling (the nas case).
+	if _, _, trend := projectRunway([]float64{0, 1, 2, 3, 4, 5, 6}, []float64{13, 13, 13.1, 13, 12.98, 13, 13}); trend != TrendSteady {
+		t.Errorf("flat series: trend = %q, want %q", trend, TrendSteady)
+	}
+	// Too few samples to fit anything.
+	if _, _, trend := projectRunway([]float64{0, 1, 2}, []float64{20, 18, 16}); trend != TrendUnknown {
+		t.Errorf("3 samples: trend = %q, want %q", trend, TrendUnknown)
+	}
+	// Falling 2%/day, now at 12%: full in ~6 days, perfect fit.
+	days, conf, trend := projectRunway([]float64{0, 1, 2, 3, 4}, []float64{20, 18, 16, 14, 12})
+	if trend != TrendFilling || conf != "high" || math.Abs(days-6) > 1e-9 {
+		t.Errorf("falling series: days=%v conf=%q trend=%q, want 6 high filling", days, conf, trend)
+	}
+	// Already projected at or below zero: filling, zero days left.
+	if days, _, trend := projectRunway([]float64{0, 1, 2, 3}, []float64{6, 4, 2, 0}); trend != TrendFilling || days != 0 {
+		t.Errorf("exhausted series: days=%v trend=%q, want 0 filling", days, trend)
+	}
+}
