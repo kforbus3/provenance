@@ -245,3 +245,61 @@ def test_db_status_is_cached_until_the_database_file_changes(tmp_path, monkeypat
     appmod._forget_db_status()
     appmod._db_status_text()
     assert len(calls) == 3, "an update or import clears the cached answer"
+
+
+# --- memory: the OOM kills of 2026-10-02/03 ---------------------------------------
+#
+# grype cataloguing a large container image reached 1.9 GB RSS under a 2 GB container
+# limit shared with a second scan, the kernel killed it, and the backend recorded the
+# scan as `{"error":""}` -- because a SIGKILLed process writes nothing to stderr.
+
+def test_killed_grype_is_reported_as_a_kill_not_an_empty_error():
+    import subprocess as sp
+    msg = appmod._grype_failure(sp.CompletedProcess([], -9, b"", b""))
+    assert "SIGKILL" in msg and "memory" in msg
+    msg = appmod._grype_failure(sp.CompletedProcess([], -15, b"", b""))
+    assert "SIGTERM" in msg and "memory" not in msg
+    assert appmod._grype_failure(sp.CompletedProcess([], 1, b"", b"")) == "grype exited 1 with no output"
+    assert appmod._grype_failure(sp.CompletedProcess([], 1, b"", b"[0018] ERROR failed to catalog")) \
+        == "[0018] ERROR failed to catalog"
+
+
+def test_memory_budget_splits_the_cgroup_limit_across_concurrent_scans():
+    two_gb = 2 << 30
+    one = appmod.grype_memory_budget(two_gb, 1)
+    two = appmod.grype_memory_budget(two_gb, 2)
+    assert one == int(two_gb * 0.85) and two == one // 2
+    assert appmod.grype_memory_budget(None, 2) is None, "no cgroup limit, no GOMEMLIMIT"
+    assert appmod.grype_memory_budget(64 << 20, 1) is None, "a budget too small to run under is not set"
+
+
+def test_cgroup_limit_is_read_from_v2_then_v1(monkeypatch, tmp_path):
+    v2 = tmp_path / "memory.max"
+    v1 = tmp_path / "memory.limit_in_bytes"
+    monkeypatch.setattr(appmod, "CGROUP_MEMORY_MAX_FILES", (str(v2), str(v1)))
+    assert appmod._cgroup_memory_limit() is None
+    v1.write_text("9223372036854771712\n")          # cgroup v1's "unlimited"
+    assert appmod._cgroup_memory_limit() is None
+    v1.write_text("1073741824\n")
+    assert appmod._cgroup_memory_limit() == 1 << 30
+    v2.write_text("max\n")
+    assert appmod._cgroup_memory_limit() is None
+    v2.write_text("3221225472\n")
+    assert appmod._cgroup_memory_limit() == 3 << 30
+
+
+def test_every_grype_run_carries_the_memory_limit(monkeypatch, tmp_path):
+    import asyncio
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["env"] = kw.get("env", {})
+        import subprocess as sp
+        return sp.CompletedProcess(args, 0, b"{}", b"")
+
+    monkeypatch.setattr(appmod.subprocess, "run", fake_run)
+    monkeypatch.setattr(appmod, "SCAN_TMP_ROOT", str(tmp_path))
+    monkeypatch.setitem(appmod.BASE_ENV, "GOMEMLIMIT", "1300MiB")
+    asyncio.run(appmod._run_grype(["grype", "dir:/x", "-o", "json"], 10))
+    assert seen["env"]["GOMEMLIMIT"] == "1300MiB"
+    assert seen["env"]["GRYPE_DB_AUTO_UPDATE"] == "false"

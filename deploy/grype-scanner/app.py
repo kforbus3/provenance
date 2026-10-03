@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -126,6 +127,71 @@ MAX_DB_UPLOAD = int(os.environ.get("GRYPE_MAX_DB_BYTES", str(2 << 30)))         
 # Never auto-update mid-scan: DB refresh is explicit (so air-gapped works and scans
 # are deterministic).
 BASE_ENV = {**os.environ, "GRYPE_DB_AUTO_UPDATE": "false"}
+
+# The container's memory limit, as the cgroup reports it (v2 then v1); None when there
+# is none or it cannot be read.
+CGROUP_MEMORY_MAX_FILES = ("/sys/fs/cgroup/memory.max",
+                           "/sys/fs/cgroup/memory/memory.limit_in_bytes")
+
+
+def _cgroup_memory_limit() -> int | None:
+    for path in CGROUP_MEMORY_MAX_FILES:
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+        except OSError:
+            continue
+        if not raw.isdigit():
+            return None            # "max": unlimited
+        v = int(raw)
+        return v if v < 1 << 60 else None   # cgroup v1 writes a huge number for "none"
+    return None
+
+
+def grype_memory_budget(limit: int | None, concurrency: int, headroom: float = 0.15) -> int | None:
+    """Bytes each concurrent grype process may use before Go's GC works harder.
+
+    grype is a Go program and its heap grows to whatever the container allows unless
+    GOMEMLIMIT tells it otherwise. Cataloguing a large container image took one
+    process to 1.9 GB RSS under a 2 GB limit shared with a second scan and the
+    server itself, and the kernel killed it -- the scan was then recorded as
+    `{"error":""}` (see _grype_failure). The budget is the limit less headroom for
+    uvicorn and the page cache, split across the scans allowed to run at once. It
+    is a soft limit: Go collects garbage harder as it nears it and only then grows
+    past it, so a scan whose live data truly needs more still completes.
+    """
+    if not limit or concurrency < 1:
+        return None
+    budget = int(limit * (1 - headroom)) // concurrency
+    return budget if budget >= 256 << 20 else None   # below this grype just thrashes
+
+
+_explicit = os.environ.get("GRYPE_GOMEMLIMIT", "").strip()
+GOMEMLIMIT = _explicit or (lambda b: f"{b}" if b else "")(
+    grype_memory_budget(_cgroup_memory_limit(), max(1, SCAN_CONCURRENCY)))
+if GOMEMLIMIT:
+    BASE_ENV["GOMEMLIMIT"] = GOMEMLIMIT
+
+
+def _grype_failure(proc: subprocess.CompletedProcess) -> str:
+    """What to tell the backend when grype exits non-zero.
+
+    A process the kernel killed has NOTHING on stderr, and the scan was recorded as
+    an empty error (the infinity image on 2026-10-03). The exit status is always
+    known: a negative code is the signal, and SIGKILL inside a memory-limited
+    container is the OOM killer until proven otherwise."""
+    err = proc.stderr.decode(errors="replace").strip()[:2000]
+    rc = proc.returncode
+    if rc < 0:
+        try:
+            how = f"grype was killed by {signal.Signals(-rc).name}"
+        except ValueError:
+            how = f"grype was killed by signal {-rc}"
+        if -rc == signal.SIGKILL:
+            how += (" -- most likely the container's memory limit (out of memory); raise the "
+                    "grype-scanner memory limit or lower GRYPE_SCAN_CONCURRENCY")
+        return f"{how}: {err}" if err else how
+    return err or f"grype exited {rc} with no output"
 
 
 @app.get("/healthz")
@@ -245,7 +311,7 @@ async def scan(request: Request):
         except subprocess.TimeoutExpired:
             return JSONResponse({"error": "scan timed out"}, status_code=504)
         if proc.returncode != 0:
-            return JSONResponse({"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=500)
+            return JSONResponse({"error": _grype_failure(proc)}, status_code=500)
         try:
             return JSONResponse(_normalize(json.loads(proc.stdout)))
         except json.JSONDecodeError:
@@ -274,7 +340,7 @@ async def scan_sbom(request: Request):
     finally:
         os.remove(path)
     if proc.returncode != 0:
-        return JSONResponse({"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=500)
+        return JSONResponse({"error": _grype_failure(proc)}, status_code=500)
     try:
         return JSONResponse(_normalize(json.loads(proc.stdout)))
     except json.JSONDecodeError:
@@ -379,7 +445,7 @@ async def scan_image(request: Request):
         # three different answers, and an operator cannot pick one from a generic
         # failure.
         return JSONResponse(
-            {"error": proc.stderr.decode(errors="replace")[:2000]}, status_code=502)
+            {"error": _grype_failure(proc)}, status_code=502)
     try:
         out = _normalize(json.loads(proc.stdout))
     except json.JSONDecodeError:

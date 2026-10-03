@@ -556,15 +556,23 @@ services:
       GRYPE_SCAN_TIMEOUT: ${GRYPE_SCAN_TIMEOUT:-1200}
       # Wall-clock cap (seconds) for a grype DB update/import (the ~1 GB vuln DB).
       GRYPE_DB_TIMEOUT: ${GRYPE_DB_TIMEOUT:-900}
+      # Go soft memory limit handed to each grype process (GOMEMLIMIT syntax, e.g.
+      # 1200MiB). Empty = derived from the container's memory limit: 85% of it split
+      # across GRYPE_SCAN_CONCURRENCY. Set it only to override that arithmetic.
+      GRYPE_GOMEMLIMIT: ${GRYPE_GOMEMLIMIT:-}
     volumes:
       - grype-db:/home/scanner/.cache/grype
     deploy:
       resources:
         # grype loads the full ~1 GB vuln DB per scan and is CPU/memory-heavy; cap it
         # so a fleet-wide scan can't starve the backend. Raise on a beefier host.
+        # 3G, not 2G: cataloguing a large container image (an ML image with CUDA
+        # libraries) took one grype to 1.9 GB RSS, and with a second scan running
+        # the kernel killed it under 2G -- recorded as an empty scan error. Each
+        # grype also gets a GOMEMLIMIT (above) so it collects garbage before that.
         limits:
           cpus: "2.0"
-          memory: 2G
+          memory: ${GRYPE_MEMORY_LIMIT:-3G}
         reservations:
           cpus: "0.1"
           memory: 128M
