@@ -457,3 +457,37 @@ def test_nuclei_rate_is_clamped(monkeypatch):
     for bad in ("300", -5, True, 2.5):
         with pytest.raises(ValueError):
             appmod.nuclei_rate(bad)
+
+
+# The Grafana scan of 2026-10-01 recorded the warning "http-tech pass: " -- nuclei
+# died with nothing on stderr (it runs -silent) and the message said nothing. Whatever
+# happened, the exit status is always known and must be in the warning.
+def test_killed_nuclei_pass_names_the_signal(monkeypatch, tmp_path):
+    import subprocess as sp
+
+    async def fake_run(args, timeout):
+        if args[0] == "naabu":
+            return sp.CompletedProcess(args, 0, b'{"ip":"10.0.0.9","port":3000,"protocol":"tcp"}', b"")
+        if args[0] == "fingerprintx":
+            return sp.CompletedProcess(args, 0, b'{"host":"10.0.0.9","port":3000,"protocol":"http"}', b"")
+        if args[0] == "nuclei" and "-as" in args:
+            return sp.CompletedProcess(args, -9, b"", b"")      # SIGKILL, silent
+        return sp.CompletedProcess(args, 0, b"", b"")
+
+    (tmp_path / "http").mkdir()
+    monkeypatch.setattr(appmod, "TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(appmod, "_run", fake_run)
+    monkeypatch.setattr(appmod, "alive", lambda t, p, timeout=3.0: (True, "probe"))
+    import asyncio
+    res = asyncio.run(appmod.scan_target({"target": "10.0.0.9", "tcpPorts": [3000]}))
+    tech = [e for e in res["errors"] if e.startswith("http-tech pass: ")]
+    assert tech, res["errors"]
+    assert "SIGKILL" in tech[0] and "memory" in tech[0]
+    assert not tech[0].endswith(": ")
+
+
+def test_pass_failure_keeps_stderr_or_falls_back_to_stdout():
+    import subprocess as sp
+    assert appmod.pass_failure(sp.CompletedProcess([], 1, b"", b"[FTL] boom")) == "nuclei exited 1: [FTL] boom"
+    assert appmod.pass_failure(sp.CompletedProcess([], 2, b"partial json", b"")) == "nuclei exited 2: partial json"
+    assert appmod.pass_failure(sp.CompletedProcess([], 1, b"", b"")) == "nuclei exited 1: no output"
