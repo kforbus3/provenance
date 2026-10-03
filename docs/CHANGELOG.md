@@ -5,6 +5,38 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.2 — 2026-10-03
+
+### grype scanner: image scans no longer die silently under the memory limit
+
+The daily container-image sweep was losing scans. Cataloguing a large image (an ML
+image with CUDA libraries) took one grype process to 1.9 GB RSS; with a second scan
+running under the sidecar's 2 GB limit the kernel killed it, and the scan was recorded
+as `scan failed (502): {"error":""}` — a SIGKILLed process writes nothing to stderr,
+and the error was built from stderr alone. It happened on 2026-10-02 and 2026-10-03.
+
+- Each grype process now runs with a Go soft memory limit (`GOMEMLIMIT`) derived from
+  the container's cgroup limit: 85% of it split across `GRYPE_SCAN_CONCURRENCY`, so
+  grype collects garbage before the kernel has to act. Override with `GRYPE_GOMEMLIMIT`.
+- The compose and Kubernetes memory limits rise from 2G to 3G (`GRYPE_MEMORY_LIMIT`
+  in compose).
+- A grype that exits on a signal is reported as such — `grype was killed by SIGKILL —
+  most likely the container's memory limit…` — instead of an empty error.
+
+### net-scanner: a nuclei pass that produced nothing says why
+
+A Grafana network scan on 2026-10-01 stored the warning `scanner: http-tech pass: `
+with nothing after the colon. nuclei runs `-silent`, so a pass that dies without a
+`[FTL]` line leaves stderr empty. The warning now carries the exit status (or the
+killing signal, SIGKILL flagged as a likely memory-limit kill) and falls back to
+stdout. The pass itself succeeds when re-run; the cause of that death is unknown.
+
+**Deploy:** both sidecars are rebuilt by `make redeploy-single`. The grype memory
+limit change needs the compose file from this release (a bundle-only upgrade keeps the
+old limit).
+
+---
+
 ## v2.2.1 — 2026-10-02
 
 ### Ask: "low on disk" is no longer reported as "about to run out"
