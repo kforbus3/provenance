@@ -37,6 +37,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import tarfile
@@ -634,6 +635,31 @@ def _remaining(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
+def pass_failure(proc: subprocess.CompletedProcess) -> str:
+    """Why a nuclei pass produced nothing, for the scan's warnings.
+
+    nuclei runs with -silent, so a pass that dies without a [FTL] line leaves stderr
+    EMPTY -- the Grafana scan of 2026-10-01 recorded "http-tech pass: " and nothing
+    else. The exit status is the one fact always available: a negative code is the
+    signal that killed it (SIGKILL under the container's memory limit), and anything
+    on stdout is kept when stderr has nothing to say."""
+    err = proc.stderr.decode(errors="replace").strip()[-300:]
+    rc = proc.returncode
+    if rc < 0:
+        try:
+            how = f"killed by {signal.Signals(-rc).name}"
+        except ValueError:
+            how = f"killed by signal {-rc}"
+        if -rc == signal.SIGKILL:
+            how += " (out of memory under the container limit?)"
+    else:
+        how = f"nuclei exited {rc}"
+    if not err:
+        out = proc.stdout.decode(errors="replace").strip()[-300:]
+        err = out or "no output"
+    return f"{how}: {err}"
+
+
 def alive(target: str, ports: list[int], timeout: float = 3.0) -> tuple[bool, str]:
     """Whether the address answers at all, for a target with no open ports.
 
@@ -756,7 +782,7 @@ async def scan_target(body: dict) -> dict:
             findings += f_
             detections += d_
             if nu.returncode != 0 and not f_ and not d_:
-                result["errors"].append(f"{label} pass: " + nu.stderr.decode(errors="replace")[-300:])
+                result["errors"].append(f"{label} pass: " + pass_failure(nu))
 
         if want_udp:
             t0 = time.monotonic()
