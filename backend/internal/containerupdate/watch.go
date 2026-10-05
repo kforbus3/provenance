@@ -69,6 +69,9 @@ func (e *Engine) watch(ctx context.Context) {
 				c.name, host.Hostname, c.traces, w.CheckedAt.Local().Format("15:04 Jan 2"), c.trace)
 			break
 		}
+		if regression == "" {
+			regression = e.runVerifyCommands(ctx, host, w.HostID, w.Repository)
+		}
 		if err := e.store.SetRolloutWatchChecked(ctx, w.ID, now, regression); err != nil {
 			e.log.Warn("update rollout watch: recording", "watch", w.ID, "err", err)
 			continue
@@ -83,7 +86,7 @@ func (e *Engine) watch(ctx context.Context) {
 				Type:      notify.EventContainerRolloutRegression,
 				Severity:  notify.SeverityWarning,
 				Title:     fmt.Sprintf("Container update regression: %s on %s", want, host.Hostname),
-				Body:      regression + "\n\nThe container is running and passing its healthcheck, which is why nothing else has noticed. Check its logs, and pin the image back to its previous tag if the trace is the update's doing.",
+				Body:      regression + "\n\nThe container is running and passing its healthcheck, which is why nothing else has noticed. Check its logs, and pin the image back to its previous tag if this is the update's doing.",
 				DedupeKey: "rollout-watch:" + w.ID.String(),
 			})
 		}

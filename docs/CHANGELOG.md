@@ -26,9 +26,16 @@ found by the person whose assistant stopped answering, not by Provenance.
   notification (warning), naming the host, image, count and first line. An
   unreachable host keeps its cursor rather than skipping what it could not read.
 - Rollout detail view shows each watch: watching until when, clean, or the trace.
+- **A per-stack verify command.** Logs catch a program that crashes loudly, not one
+  that answers wrong or logs in another shape. A managed stack can now carry a shell
+  command that proves it works — exit 0 means working — run on the host in the
+  stack's directory under a two-minute timeout. The soak re-check runs it on each
+  canary and halts on failure; the watch runs it on every read. Only stacks naming
+  the updated image are asked. Set it in the stack editor.
 
-Deploy notes: migration 0116 adds `container_update_rollout_watches`. Enable the
-new event under Settings → Notifications; existing routes are untouched.
+Deploy notes: migration 0116 adds `container_update_rollout_watches`; 0117 adds
+`container_stacks.verify_command`. Enable the new event under Settings →
+Notifications; existing routes are untouched.
 
 ---
 

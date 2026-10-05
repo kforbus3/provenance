@@ -29,6 +29,13 @@ export interface ContainerStack {
   hostDiffers?: boolean;
   hostCheckedAt?: string;
   hostCheckError?: string;
+  // A shell command, run on the host in the stack's directory, that proves the
+  // stack WORKS: exit 0 means working. A rollout's soak re-check runs it on each
+  // canary and halts on failure; the post-rollout watch runs it on every read.
+  // Everything else a rollout can see describes the container; this exercises
+  // the service, which is the check that would have caught a container that was
+  // running, healthy and failing every request.
+  verifyCommand?: string;
 }
 
 export interface StackRevision {
@@ -68,6 +75,7 @@ export interface SaveStackInput {
   compose: string;
   path?: string;
   note?: string;
+  verifyCommand?: string;
 }
 
 // Saves the definition. Deliberately does NOT deploy: editing a compose file
