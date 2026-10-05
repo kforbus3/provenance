@@ -171,6 +171,27 @@ halts with the reason, the image's other hosts are never given it, and the
 `container.rollout.halted` notification fires. The rollout's detail view shows each
 image's state: proving on its canary, soaking until a time, or soak passed.
 
+**The re-check also reads the logs.** Running, healthy and never restarted is not
+the same as working. A container whose healthcheck is a port probe keeps passing
+while the program behind it fails every request it is given, and that is exactly
+what a speech-to-text image did on 2026-10-04: a library in the new build had
+dropped an argument the application still passed, every transcription died with a
+traceback, and every dashboard said healthy for four hours. So the re-check tails
+each canary container's logs from the moment it started and halts the rollout on
+the first error trace it finds: a Python traceback, a Go panic, an unhandled
+exception, a segfault. Not ordinary `ERROR` lines, which a proxy logs for every
+404; the pattern is narrow on purpose.
+
+**After the rollout, a watch.** The soak is minutes; the first real request may
+be hours away. Every container a rollout updates is watched for **24 hours**
+afterwards: its logs are read from a cursor every ten minutes, and the first error
+trace is recorded on the rollout's detail view and raised once as the
+`container.rollout.regression` notification, naming the host, the image, the
+count and the first line of the trace. The container is left running — it may be
+serving fine for most of what it does — and the message says what to check and
+how to pin it back. A host that cannot be reached keeps its cursor, so the logs
+it did not read are read next time rather than skipped.
+
 The window, batching and failure budget are the same pacing code image rollouts
 obey, so the two cannot drift.
 

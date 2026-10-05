@@ -46,6 +46,12 @@ const (
 	// noticing a red chip.
 	EventContainerRolloutHalted = "container.rollout.halted"
 	EventStackDeployFailed      = "container.stack.failed"
+	// A container a rollout updated has started logging error traces. The soak
+	// re-check sees running/healthy/restarts; a container that is up and failing
+	// every request it gets passes it, and on 2026-10-04 one did for hours while
+	// every dashboard said healthy. Raised once per container by the post-rollout
+	// watch, which tails its logs for a day after the update.
+	EventContainerRolloutRegression = "container.rollout.regression"
 	// Scheduled scans and CVE-database refreshes that did not work. A scheduled
 	// vulnerability scan lost a host one night and the only trace by morning was a
 	// line in the backend log: the failed record had been cleared and the schedule
@@ -84,6 +90,7 @@ var AllEventTypes = []struct{ Key, Label string }{
 	{EventRolloutHalted, "OS update rollout halted on its failure budget"},
 	{EventContainerRolloutHalted, "Container update rollout halted on its failure budget"},
 	{EventStackDeployFailed, "Managed stack failed to deploy"},
+	{EventContainerRolloutRegression, "Container logged error traces after an update"},
 	{EventScheduleFailed, "Scheduled scan or CVE-database refresh failed"},
 	{EventNetExposure, "Network scan found a new open port or a serious exposure"},
 }

@@ -5,6 +5,33 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.3 — 2026-10-05
+
+### Container rollouts: the soak reads the logs, and a 24-hour watch follows
+
+A rollout moved a speech-to-text image to a new build on 2026-10-04 at 19:39. The
+canary passed its soak — running, no healthcheck failure, zero restarts — and the
+rollout completed. The new build's PyAV had dropped an argument faster-whisper still
+passed, so every transcription died with a `TypeError`. The healthcheck was a port
+probe and kept answering; Docker, Home Assistant, the metrics exporter and the
+rollout all said healthy. Voice control was dead for four and a half hours and was
+found by the person whose assistant stopped answering, not by Provenance.
+
+- **The end-of-soak re-check now tails each canary container's logs** from the
+  moment it started and halts the rollout on an error trace: a Python traceback, a
+  Go panic, an unhandled exception, a segfault. Deliberately not `ERROR` lines.
+- **A post-rollout watch** on every updated container for 24 hours. Its logs are
+  read from a cursor every ten minutes; the first error trace is recorded on the
+  rollout's detail view and raised once as the new `container.rollout.regression`
+  notification (warning), naming the host, image, count and first line. An
+  unreachable host keeps its cursor rather than skipping what it could not read.
+- Rollout detail view shows each watch: watching until when, clean, or the trace.
+
+Deploy notes: migration 0116 adds `container_update_rollout_watches`. Enable the
+new event under Settings → Notifications; existing routes are untouched.
+
+---
+
 ## v2.2.2 — 2026-10-03
 
 ### grype scanner: image scans no longer die silently under the memory limit

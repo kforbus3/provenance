@@ -42,6 +42,11 @@ type Store interface {
 	RolloutImages(ctx context.Context, id uuid.UUID) ([]store.RolloutImage, error)
 	InvalidateImageCheck(ctx context.Context, repository, tag string) error
 	GetSetting(ctx context.Context, key string) (json.RawMessage, error)
+	// Post-rollout log watches. See watch.
+	CreateRolloutWatches(ctx context.Context, rollout, host uuid.UUID, images []store.RolloutImage,
+		from time.Time, window time.Duration) error
+	DueRolloutWatches(ctx context.Context, now time.Time, every time.Duration) ([]store.RolloutWatch, error)
+	SetRolloutWatchChecked(ctx context.Context, id uuid.UUID, at time.Time, regression string) error
 }
 
 // Deployer applies a stack to its host, pulling images first.
@@ -134,7 +139,8 @@ func (e *Engine) Run(ctx context.Context, leader func() bool) {
 	}
 }
 
-// Tick advances every running rollout by as much as its rules allow.
+// Tick advances every running rollout by as much as its rules allow, then reads
+// the logs of whatever recent rollouts left behind.
 func (e *Engine) Tick(ctx context.Context) {
 	rollouts, err := e.store.ActiveUpdateRollouts(ctx)
 	if err != nil {
@@ -147,6 +153,7 @@ func (e *Engine) Tick(ctx context.Context) {
 		}
 		e.advance(ctx, r)
 	}
+	e.watch(ctx)
 }
 
 func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
@@ -496,6 +503,10 @@ func (e *Engine) soakCheck(ctx context.Context, r store.UpdateRollout, im store.
 			case c.restarts > 0:
 				return fmt.Sprintf("%s did not hold up through its %s soak on %s: container %s has restarted "+
 					"%d time(s) since it was deployed", want, soak, host.Hostname, c.name, c.restarts)
+			case c.traces > 0:
+				return fmt.Sprintf("%s did not hold up through its %s soak on %s: container %s has logged "+
+					"%d error trace(s) since it was deployed; the first: %s",
+					want, soak, host.Hostname, c.name, c.traces, c.trace)
 			}
 		}
 	}
@@ -603,6 +614,9 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 
 	applied, ran, past := 0, 0, 0
 	var stuck []string
+	// The images that actually moved on this host: what the post-rollout watch
+	// reads the logs of. Not the stuck ones, and not the ones it was already past.
+	var landed []store.RolloutImage
 	for _, im := range images {
 		if ctx.Err() != nil {
 			return
@@ -668,6 +682,7 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 			return
 		}
 		applied++
+		landed = append(landed, im)
 	}
 
 	if applied == 0 {
@@ -708,6 +723,11 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	}
 	if err := e.store.SetUpdateRolloutHostState(ctx, r.ID, hostID, store.UpdateHostVerified, verifiedNote); err != nil {
 		e.log.Warn("update rollout: recording success", "host", hostID, "err", err)
+	}
+	// Verified is where a rollout stops looking at a host. The watch is what
+	// keeps looking: see watch.
+	if err := e.store.CreateRolloutWatches(ctx, r.ID, hostID, landed, e.now(), WatchWindow); err != nil {
+		e.log.Warn("update rollout: opening the post-rollout watch", "host", hostID, "err", err)
 	}
 	// The cached registry answers now describe what this host was running BEFORE
 	// the rollout. Dropped here, where every path that succeeds converges, rather
@@ -1214,8 +1234,31 @@ func (e *Engine) targetStack(ctx context.Context, r store.UpdateRollout, hostID 
 //   - a repository can be running in SEVERAL containers on one host. Reading a
 //     deduplicated image list cannot tell "every container moved" from "one of
 //     them moved and the others are untouched".
-func verifyScript(repo string) string {
+func verifyScript(repo string) string { return verifyScriptSince(repo, "") }
+
+// logTracePattern is what counts as an error trace in a container's logs: the
+// signatures of a crashed request or thread, not of a logged error.
+//
+// Deliberately NOT "ERROR" or "level=error": a reverse proxy logs an error line
+// for every 404, and a database logs one for every failed login probe, and a
+// watch that fired on those would be muted within a week. A Python traceback, a
+// Go panic, an unhandled exception or a segfault is something broken in the
+// program, whatever the program's log level calls it.
+const logTracePattern = `^Traceback \(most recent call last\)|^panic: |Unhandled exception|` +
+	`Exception in thread|Task exception was never retrieved|fatal error: |Segmentation fault`
+
+// verifyScriptSince is verifyScript with a log cursor: the error-trace columns
+// cover the container's logs from `since` (RFC 3339) onward, or from the moment
+// the container started when since is empty.
+//
+// The log columns exist because of a container that passed the whole soak and
+// failed every request it was given. Running, no healthcheck failure, zero
+// restarts: the healthcheck was a port probe, and the new image's library had
+// dropped an argument the application still passed. The traceback was in the
+// log the whole time.
+func verifyScriptSince(repo, since string) string {
 	return `
+_since=` + shellQuote(since) + `
 _rt=""
 if command -v docker >/dev/null 2>&1; then _rt=docker
 elif command -v podman >/dev/null 2>&1; then _rt=podman
@@ -1230,7 +1273,12 @@ $_rt ps --no-trunc --format '{{.Image}}	{{.Names}}	{{.State}}' 2>/dev/null | whi
   _d=$($_rt image inspect --format '{{range .RepoDigests}}{{.}},{{end}}' "$_i" 2>/dev/null)
   _h=$($_rt inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$_n" 2>/dev/null)
   _r=$($_rt inspect --format '{{.RestartCount}}' "$_n" 2>/dev/null)
-  echo "$_i	$_n	$_s	$_d	$_h	$_r"
+  _from="$_since"
+  if [ -z "$_from" ]; then _from=$($_rt inspect --format '{{.State.StartedAt}}' "$_n" 2>/dev/null); fi
+  _tl=$($_rt logs --since "$_from" --tail 5000 "$_n" 2>&1 | grep -E '` + logTracePattern + `' | tr '\t' ' ' | cut -c1-240)
+  _tc=$(printf '%s\n' "$_tl" | grep -c .)
+  _t=$(printf '%s\n' "$_tl" | head -n 1)
+  echo "$_i	$_n	$_s	$_d	$_h	$_r	$_tc	$_t"
 done
 `
 }
@@ -1262,6 +1310,11 @@ type runningContainer struct {
 	// container is still "starting" -- only at the end of a soak.
 	health   string
 	restarts int
+	// traces is how many error traces the container has logged since the script's
+	// cursor (see verifyScriptSince), -1 when the script could not say; trace is
+	// the first of them. Judged at the end of a soak and by the post-rollout watch.
+	traces int
+	trace  string
 	// Every digest this image answers to, not the first one.
 	//
 	// RepoDigests is a LIST, and an image legitimately carries more than one entry:
@@ -1333,6 +1386,15 @@ func parseVerifyOutput(out string) []runningContainer {
 			name:     strings.TrimSpace(parts[1]),
 			state:    strings.ToLower(strings.TrimSpace(parts[2])),
 			restarts: -1,
+			traces:   -1,
+		}
+		if len(parts) > 6 {
+			if n, err := strconv.Atoi(strings.TrimSpace(parts[6])); err == nil {
+				c.traces = n
+			}
+		}
+		if len(parts) > 7 {
+			c.trace = strings.TrimSpace(parts[7])
 		}
 		if len(parts) > 4 {
 			c.health = strings.ToLower(strings.TrimSpace(parts[4]))
