@@ -12,7 +12,8 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listRollouts, clearFinishedRollouts, getRollout, rolloutAction, imageSoakStatus, type UpdateRollout,
+  listRollouts, clearFinishedRollouts, getRollout, rolloutAction, imageSoakStatus, watchStatus,
+  type UpdateRollout,
 } from "../api/containerUpdates";
 import { formatDateTime } from "../lib/datetime";
 import { useAuthStore } from "../store/auth";
@@ -199,6 +200,34 @@ function RolloutRow({ r, canRun, onMessage }: {
                       <Typography variant="caption" color="text.secondary">
                         {imageSoakStatus(im, r)}
                       </Typography>
+                    </Stack>
+                  ))}
+                </Box>
+              )}
+              {(detail?.watches?.length ?? 0) > 0 && (
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                    After the update, each container's logs are watched for error traces for a day.
+                    A container that is running and passing its healthcheck can still be failing
+                    every request it gets; this is how you hear about it.
+                  </Typography>
+                  {detail!.watches!.map((w) => (
+                    <Stack key={w.id} direction="row" spacing={1} alignItems="flex-start">
+                      <Typography variant="body2" sx={{ minWidth: 160 }}>
+                        {w.hostname || w.hostId.slice(0, 8)}
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace", minWidth: 260 }}>
+                        {w.repository}:{w.toTag}
+                      </Typography>
+                      {w.regressionAt ? (
+                        <Typography variant="caption" color="error" sx={{ flex: 1, wordBreak: "break-word" }}>
+                          {w.regression}
+                        </Typography>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          {watchStatus(w)}
+                        </Typography>
+                      )}
                     </Stack>
                   ))}
                 </Box>

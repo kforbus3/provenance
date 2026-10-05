@@ -46,6 +46,9 @@ type UpdateRollout struct {
 	// Filled in by the service layer.
 	Hosts  []UpdateRolloutHost `json:"hosts,omitempty"`
 	Counts map[string]int      `json:"counts,omitempty"`
+	// Watches are the post-rollout log watches on every container this rollout
+	// updated (0116). Detail view only.
+	Watches []RolloutWatch `json:"watches,omitempty"`
 }
 
 // RolloutImage is one image a rollout covers.
@@ -258,6 +261,9 @@ func (s *Store) GetUpdateRollout(ctx context.Context, id uuid.UUID) (*UpdateRoll
 		return nil, err
 	}
 	if r.Images, err = s.RolloutImages(ctx, id); err != nil {
+		return nil, err
+	}
+	if r.Watches, err = s.RolloutWatches(ctx, id); err != nil {
 		return nil, err
 	}
 	r.Counts = map[string]int{}

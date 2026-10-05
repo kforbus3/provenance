@@ -145,6 +145,38 @@ export interface UpdateRollout {
   createdBy?: string;
   hosts?: UpdateRolloutHost[];
   counts?: Record<string, number>;
+  // Post-rollout log watches, detail view only: every container this rollout
+  // updated is watched for a day afterwards. See RolloutWatch.
+  watches?: RolloutWatch[];
+}
+
+// RolloutWatch is one updated container still being watched after its rollout.
+//
+// The soak re-check sees running, healthy and not restarted. A container that is
+// up and failing every request it gets passes it: on 2026-10-04 one did for hours
+// while every dashboard said healthy, because its healthcheck was a port probe
+// and the traceback only reached the log when real traffic arrived. The watch
+// tails the container's logs for error traces and reports the first one, once.
+export interface RolloutWatch {
+  id: string;
+  rolloutId: string;
+  hostId: string;
+  hostname?: string;
+  repository: string;
+  toTag: string;
+  startedAt: string;
+  expiresAt: string;
+  checkedAt: string;
+  regression?: string;
+  regressionAt?: string;
+}
+
+// watchStatus describes where one watch stands.
+export function watchStatus(w: RolloutWatch, now: Date = new Date()): string {
+  if (w.regressionAt) return "regression";
+  if (new Date(w.expiresAt) <= now) return "watched for a day, nothing logged";
+  const until = new Date(w.expiresAt);
+  return `watching logs until ${until.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
 }
 
 export interface RolloutImage {

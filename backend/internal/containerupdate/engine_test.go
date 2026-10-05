@@ -28,6 +28,7 @@ type fakeStore struct {
 	// reports the fake rather than the engine.
 	mu         sync.Mutex
 	rollouts   []store.UpdateRollout
+	watches    []store.RolloutWatch
 	hosts      map[uuid.UUID][]store.UpdateRolloutHost
 	stacks     map[uuid.UUID][]store.ContainerStack
 	containers map[uuid.UUID][]models.Container
