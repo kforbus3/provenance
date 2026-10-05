@@ -509,6 +509,11 @@ func (e *Engine) soakCheck(ctx context.Context, r store.UpdateRollout, im store.
 					want, soak, host.Hostname, c.name, c.traces, c.trace)
 			}
 		}
+		// Then the operator's own proof, if they gave one. After the read-back, so
+		// a container that is down is reported as down rather than as a failed curl.
+		if why := e.runVerifyCommands(ctx, host, h.HostID, im.Repository); why != "" {
+			return fmt.Sprintf("%s did not hold up through its %s soak: %s", want, soak, why)
+		}
 	}
 	return ""
 }

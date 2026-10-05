@@ -390,6 +390,7 @@ export function StackEditor({ open, stack, hosts, onClose, onSaved }: {
   const [compose, setCompose] = useState("");
   const [path, setPath] = useState("");
   const [note, setNote] = useState("");
+  const [verifyCommand, setVerifyCommand] = useState("");
   const [err, setErr] = useState("");
 
   // Reset when the dialog opens on a different stack.
@@ -401,6 +402,7 @@ export function StackEditor({ open, stack, hosts, onClose, onSaved }: {
     setName(stack?.name ?? "");
     setCompose(stack?.compose ?? "");
     setPath(stack?.path ?? "");
+    setVerifyCommand(stack?.verifyCommand ?? "");
     setNote("");
     setErr("");
   }
@@ -409,7 +411,7 @@ export function StackEditor({ open, stack, hosts, onClose, onSaved }: {
     // The path travels with the save. Leaving it out used to mean "no opinion",
     // which the server read as "put it under /opt/stacks" — quietly relocating an
     // adopted stack away from the directory holding its .env.
-    mutationFn: () => saveStack({ hostId, name, compose, path, note }),
+    mutationFn: () => saveStack({ hostId, name, compose, path, note, verifyCommand }),
     onSuccess: (s) => onSaved(`Saved ${s.name} (r${s.revision}) — not yet deployed`),
     onError: (e) => setErr(errMsg(e, "Could not save that stack.")),
   });
@@ -447,6 +449,17 @@ export function StackEditor({ open, stack, hosts, onClose, onSaved }: {
             onChange={(e) => setCompose(e.target.value)}
             InputProps={{ style: { fontFamily: "monospace", fontSize: 13 } }}
           />
+          <TextField size="small" label="Verify command (optional)" value={verifyCommand}
+                     onChange={(e) => setVerifyCommand(e.target.value)}
+                     placeholder="curl -fsS http://localhost:8080/health && docker exec app ./smoke"
+                     InputProps={{ style: { fontFamily: "monospace", fontSize: 13 } }}
+                     helperText={
+                       "Proves the stack WORKS, not just that it is up. Run on the host as root in " +
+                       "the stack's directory; exit 0 means working. A rollout runs it on each canary " +
+                       "at the end of the soak and halts if it fails, then on every read of the " +
+                       "24-hour watch. A container can be running, healthy and failing every request " +
+                       "it gets — this is the check that notices."
+                     } />
           <TextField size="small" label="What changed, and why" value={note}
                      onChange={(e) => setNote(e.target.value)}
                      helperText="Recorded with the revision — this is what replaces a commit message" />

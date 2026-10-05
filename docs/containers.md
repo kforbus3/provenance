@@ -192,6 +192,19 @@ serving fine for most of what it does — and the message says what to check and
 how to pin it back. A host that cannot be reached keeps its cursor, so the logs
 it did not read are read next time rather than skipped.
 
+**A verify command proves the stack works.** Everything above describes the
+container; none of it sends the service a request. On a managed stack you can
+set a **verify command**: a shell command run on the host, as root, in the
+stack's directory, where exit 0 means working. For the speech-to-text stack above
+that is a script which sends one utterance over the Wyoming protocol and checks
+that a transcript comes back. The soak re-check runs it on each canary and halts
+the rollout if it fails, with the command's output in the reason; the 24-hour
+watch runs it on every read and raises `container.rollout.regression` once. It
+runs under a two-minute timeout, so a service that accepts connections and never
+answers reads as a failure rather than stalling the rollout. Only stacks whose
+compose file names the image being updated are asked. Changing the command does
+not create a new stack revision: the revision history is the compose file's.
+
 The window, batching and failure budget are the same pacing code image rollouts
 obey, so the two cannot drift.
 

@@ -39,6 +39,10 @@ type ContainerStack struct {
 	// host's file was read since that deploy, and it is not the stored copy. A Deploy
 	// now would overwrite whatever was changed there.
 	HostDiffers bool `json:"hostDiffers"`
+	// VerifyCommand proves the stack works: a shell command run on the host in the
+	// stack's directory, exit 0 meaning working. Run by a rollout's soak re-check and
+	// by the post-rollout watch. Empty means none (0117).
+	VerifyCommand string `json:"verifyCommand,omitempty"`
 }
 
 // ComposeHash is the hash a compose file is compared by, on either side.
@@ -139,13 +143,16 @@ func resolveStackPath(inPath, prevPath, name string) string {
 
 // StackInput creates or updates a stack.
 type StackInput struct {
-	HostID     uuid.UUID
-	Name       string
-	Compose    string
-	Path       string
-	Note       string
-	AuthorID   *uuid.UUID
-	AuthorName string
+	HostID  uuid.UUID
+	Name    string
+	Compose string
+	Path    string
+	Note    string
+	// VerifyCommand is saved with the definition. Changing it alone is not a new
+	// revision: the revision history is the compose file's.
+	VerifyCommand string
+	AuthorID      *uuid.UUID
+	AuthorName    string
 }
 
 var ErrInvalidStackName = errors.New("a stack name may contain only letters, digits, dash, underscore and dot, and may not start with a dot")
@@ -163,26 +170,26 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 	inPath := strings.TrimSpace(in.Path)
 	var st ContainerStack
 	err := s.tx(ctx, func(tx pgx.Tx) error {
-		var prevCompose, prevPath string
+		var prevCompose, prevPath, prevVerify string
 		var id uuid.UUID
 		var rev int
 		err := tx.QueryRow(ctx,
-			`SELECT id, compose, path, revision FROM container_stacks WHERE host_id=$1 AND name=$2`,
-			in.HostID, in.Name).Scan(&id, &prevCompose, &prevPath, &rev)
+			`SELECT id, compose, path, revision, verify_command FROM container_stacks WHERE host_id=$1 AND name=$2`,
+			in.HostID, in.Name).Scan(&id, &prevCompose, &prevPath, &rev, &prevVerify)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			path := resolveStackPath(inPath, "", in.Name)
 			if err := tx.QueryRow(ctx, `
-				INSERT INTO container_stacks (host_id, name, compose, path, revision)
-				VALUES ($1,$2,$3,$4,1) RETURNING id, revision`,
-				in.HostID, in.Name, in.Compose, path).Scan(&id, &rev); err != nil {
+				INSERT INTO container_stacks (host_id, name, compose, path, revision, verify_command)
+				VALUES ($1,$2,$3,$4,1,$5) RETURNING id, revision`,
+				in.HostID, in.Name, in.Compose, path, in.VerifyCommand).Scan(&id, &rev); err != nil {
 				return err
 			}
 		case err != nil:
 			return err
 		default:
 			path := resolveStackPath(inPath, prevPath, in.Name)
-			if prevCompose == in.Compose && path == prevPath {
+			if prevCompose == in.Compose && path == prevPath && prevVerify == in.VerifyCommand {
 				return nil // nothing changed
 			}
 			next := rev
@@ -190,13 +197,13 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 				next = rev + 1
 			}
 			if _, err := tx.Exec(ctx, `
-				UPDATE container_stacks SET compose=$2, path=$3, revision=$4, updated_at=now()
-				WHERE id=$1`, id, in.Compose, path, next); err != nil {
+				UPDATE container_stacks SET compose=$2, path=$3, revision=$4, verify_command=$5, updated_at=now()
+				WHERE id=$1`, id, in.Compose, path, next, in.VerifyCommand); err != nil {
 				return err
 			}
 			rev = next
 			if prevCompose == in.Compose {
-				return nil // path-only change: no new revision to record
+				return nil // path- or verify-command-only change: no new revision to record
 			}
 		}
 		_, err = tx.Exec(ctx, `
@@ -221,7 +228,7 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 const stackCols = `s.id, s.host_id, COALESCE(h.hostname,''), s.name, s.compose, s.path,
 	s.revision, s.enabled, d.revision, COALESCE(d.state,''), COALESCE(d.detail,''),
 	d.applied_at, s.created_at, s.updated_at,
-	s.host_compose_sha, s.host_checked_at, s.host_check_error`
+	s.host_compose_sha, s.host_checked_at, s.host_check_error, s.verify_command`
 
 const stackFrom = `container_stacks s
 	LEFT JOIN hosts h ON h.id = s.host_id
@@ -232,7 +239,7 @@ func scanStack(row pgx.Row) (*ContainerStack, error) {
 	if err := row.Scan(&st.ID, &st.HostID, &st.Hostname, &st.Name, &st.Compose, &st.Path,
 		&st.Revision, &st.Enabled, &st.Deployed, &st.DeployState, &st.DeployDetail,
 		&st.DeployedAt, &st.CreatedAt, &st.UpdatedAt,
-		&st.HostComposeSHA, &st.HostCheckedAt, &st.HostCheckError); err != nil {
+		&st.HostComposeSHA, &st.HostCheckedAt, &st.HostCheckError, &st.VerifyCommand); err != nil {
 		return nil, mapNotFound(err)
 	}
 	st.HostDiffers = hostDiffers(&st)

@@ -72,6 +72,25 @@ describe("StackEditor", () => {
     });
   });
 
+  // The verify command travels with the save and comes back into the editor, so
+  // a stack's proof-of-working is something an operator can set and see.
+  it("saves the verify command with the stack", async () => {
+    vi.mocked(saveStack).mockResolvedValue({ ...adopted });
+    renderEditor({ ...adopted, verifyCommand: "curl -fsS http://localhost:8080/health" });
+    expect(screen.getByLabelText(/verify command/i)).toHaveValue("curl -fsS http://localhost:8080/health");
+
+    fireEvent.change(screen.getByLabelText(/verify command/i), {
+      target: { value: "docker exec web ./smoke" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saveStack).toHaveBeenCalled());
+    expect(vi.mocked(saveStack).mock.calls[0][0]).toMatchObject({
+      name: "media-stack",
+      verifyCommand: "docker exec web ./smoke",
+    });
+  });
+
   it("shows the operator where the stack is deployed", () => {
     // A path that is never displayed is a path nobody can notice is wrong.
     renderEditor(adopted);

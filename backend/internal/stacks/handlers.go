@@ -128,6 +128,8 @@ type saveReq struct {
 	Compose string `json:"compose"`
 	Path    string `json:"path"`
 	Note    string `json:"note"`
+	// A shell command that proves the stack works; see store.ContainerStack.
+	VerifyCommand string `json:"verifyCommand"`
 }
 
 // save records a definition. It does NOT deploy it.
@@ -150,7 +152,8 @@ func (h *handler) save(w http.ResponseWriter, r *http.Request) {
 	st, err := h.svc.store.UpsertStack(r.Context(), store.StackInput{
 		HostID: hostID, Name: strings.TrimSpace(rq.Name), Compose: rq.Compose,
 		Path: strings.TrimSpace(rq.Path), Note: strings.TrimSpace(rq.Note),
-		AuthorID: &p.UserID, AuthorName: p.Username,
+		VerifyCommand: strings.TrimSpace(rq.VerifyCommand),
+		AuthorID:      &p.UserID, AuthorName: p.Username,
 	})
 	if err != nil {
 		if err == store.ErrInvalidStackName {
