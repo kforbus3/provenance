@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## v2.2.3 — 2026-10-05
+## v2.2.3 — 2026-10-07
 
 ### Container rollouts: the soak reads the logs, and a 24-hour watch follows
 
