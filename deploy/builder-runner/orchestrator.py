@@ -30,6 +30,19 @@ BINFMT_IMAGE = os.environ.get("BINFMT_IMAGE", "tonistiigi/binfmt").strip() or "t
 # /proc/sys/fs/binfmt_misc is empty regardless of what the host has registered.
 BINFMT_VIEW = os.environ.get("BINFMT_VIEW", "/host/binfmt_misc").rstrip("/")
 
+# Every build container gets a sane open-file limit.
+#
+# Docker hands a container whatever RLIMIT_NOFILE the daemon inherited. On a host
+# whose dockerd unit has LimitNOFILE=infinity that is 1073741816, and rpm closes
+# every descriptor from 3 up to the soft limit between fork() and exec() of a
+# scriptlet -- a billion close() calls at 100% CPU, per scriptlet. A build looks
+# hung forever, always at glibc, the first RPM in the bootstrap with a scriptlet.
+#
+# build-image.sh caps this itself so it is right however it is invoked; this sets
+# it at the container so everything else in there gets it too, and so the cap
+# survives a build step that does not go through that script.
+NOFILE_ULIMIT = "--ulimit nofile=65536:65536 "
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -736,7 +749,7 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         _binfmt_prelude(arch)
         + _docker_build("builder", builder_tag, platform, dockerfile=dockerfile)
         + "echo '--- starting image build ---'\n"
-        + f"docker run --rm --name {container_name(JOB_TOKEN)} "
+        + f"docker run --rm --name {container_name(JOB_TOKEN)} " + NOFILE_ULIMIT
         + f"--privileged --platform={platform} -v {_q(host_output_dir())}:/output "
         # Read-only: a build must not be able to change the files it is
         # being customized with.
@@ -764,7 +777,7 @@ def build_imager_cmd(arch: str = "amd64") -> tuple[list[str], str]:
         + _docker_build("imager", f"debian-ab-imager:{arch}", platform,
                         build_args=f"--build-arg KERNEL_PKG={kernel_pkg}")
         + f"echo '--- building {arch} imager ---'\n"
-        + f"docker run --rm --name {container_name(JOB_TOKEN)} "
+        + f"docker run --rm --name {container_name(JOB_TOKEN)} " + NOFILE_ULIMIT
         + f"--platform={platform} -e ARCH={arch} "
         + f"-v {_q(host_output_dir())}:/output debian-ab-imager:{arch}\n"
     )
@@ -937,7 +950,7 @@ def build_bundle_cmd(image: str, version: str = "", description: str = "",
     script = (
         _docker_build("builder", bundler_tag, dockerfile="Dockerfile")
         + "echo '--- building update bundle ---'\n"
-        + f"docker run --rm --name {container_name(JOB_TOKEN)} "
+        + f"docker run --rm --name {container_name(JOB_TOKEN)} " + NOFILE_ULIMIT
         + "--privileged --platform=linux/amd64 "
         + f"-v {_q(host_output_dir())}:/output "
         + ("-e LUKS_PASS " if encrypted else "")

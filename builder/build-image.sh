@@ -250,6 +250,40 @@ log()  { echo -e "\033[0;32m[build]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[build]\033[0m $*"; }
 die()  { echo -e "\033[0;31m[build] ERROR:\033[0m $*" >&2; exit 1; }
 
+# Cap the open-file limit before any package manager runs.
+#
+# rpm closes every file descriptor from 3 up to the soft RLIMIT_NOFILE between
+# fork() and exec() of a scriptlet. Docker hands containers whatever the daemon
+# inherited, and on a host with LimitNOFILE=infinity that is 1073741816 -- so the
+# first package with a scriptlet spins a billion close() calls at 100% CPU and
+# the build appears to hang forever, always at glibc, the first RPM in the
+# bootstrap that has one. It is not the storage, the distro, or the CPU: the same
+# transaction into a plain directory in a stock rockylinux:9 container hangs the
+# same way, and it does not reproduce where the daemon sets a sane limit.
+#
+# Both limits, not just the soft one. Lowering the soft limit alone gets the
+# bootstrap past glibc and then hangs again a few packages later, because rpm
+# raises the soft limit back to the hard one before it closes anything -- so a
+# hard limit still in the billions is the same bug with a longer fuse. That is
+# worth stating plainly because "it got further" reads like progress and is not.
+#
+# Soft first: the kernel rejects a hard limit below the current soft limit, so
+# lowering the ceiling before the floor fails with EINVAL and leaves both huge.
+#
+# 65536 is generous -- a build needing more open files than that has a different
+# problem -- and dpkg has no such loop, but the limit is absurd for either family.
+NOFILE_CAP=65536
+NOFILE_PREV="$(ulimit -Sn)"
+if [ "$NOFILE_PREV" = unlimited ] || [ "$NOFILE_PREV" -gt "$NOFILE_CAP" ] 2>/dev/null; then
+    ulimit -S -n "$NOFILE_CAP" 2>/dev/null || true
+    ulimit -H -n "$NOFILE_CAP" 2>/dev/null || true
+    if [ "$(ulimit -Hn)" = "$NOFILE_CAP" ] && [ "$(ulimit -Sn)" = "$NOFILE_CAP" ]; then
+        log "open-file limit capped at $NOFILE_CAP soft and hard (was $NOFILE_PREV)"
+    else
+        warn "open-file limit is soft=$(ulimit -Sn) hard=$(ulimit -Hn); rpm scriptlets may take hours"
+    fi
+fi
+
 # Machine-readable progress. The web UI parses these lines into a progress bar;
 # on a terminal they read as ordinary step markers. Emitted in addition to the
 # human log so neither consumer depends on parsing prose.
@@ -440,6 +474,73 @@ case "$DISTRO" in
     almalinux|rocky|rhel) FAMILY=rpm;;
     *) die "--distro must be debian, ubuntu, almalinux or rocky (got '$DISTRO')";;
 esac
+
+# --- CPU baseline ------------------------------------------------------------
+#
+# RHEL 10 raised its baseline to x86-64-v3, so every binary in an el10 image --
+# including the ones rpm runs as scriptlets during the build -- needs AVX2, BMI2
+# and FMA. Those arrived with Haswell in 2013.
+#
+# Without this check the failure is not an error at all. dnf installs el10's
+# glibc, runs its scriptlet, and the process spins in userspace forever: no
+# message, no exit, no child, just 100% of a core at package 11 of 122. Two
+# forty-minute hangs and a hypervisor reboot went into finding that out once.
+#
+# Checked against the BUILDER's CPU because that is where the scriptlets execute.
+# It is also the machines' problem -- an image needing v3 will not boot on a v2
+# machine either -- which the message says, because a builder that happens to be
+# newer than the fleet would otherwise produce images nothing can run.
+cpu_level() {
+    # The levels are cumulative and defined by the psABI. Only x86 has them.
+    local f="/proc/cpuinfo" lvl=1
+    grep -q " lm " "$f" 2>/dev/null || { echo 0; return; }
+    for x in cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3; do
+        grep -qm1 " $x " "$f" 2>/dev/null || { echo 1; return; }
+    done
+    lvl=2
+    for x in avx avx2 bmi1 bmi2 f16c fma abm movbe xsave; do
+        grep -qm1 " $x " "$f" 2>/dev/null || { echo 2; return; }
+    done
+    lvl=3
+    for x in avx512f avx512bw avx512cd avx512dq avx512vl; do
+        grep -qm1 " $x " "$f" 2>/dev/null || { echo 3; return; }
+    done
+    echo 4
+}
+
+# What the target needs. Only the RPM family has raised its floor so far; Debian
+# and Ubuntu still build for the original baseline.
+REQUIRED_CPU_LEVEL=1
+if [ "$FAMILY" = rpm ] && [ "$ARCH" = amd64 ]; then
+    case "$SUITE" in
+        10|11|12) REQUIRED_CPU_LEVEL=3;;
+        9)        REQUIRED_CPU_LEVEL=2;;
+    esac
+fi
+
+if [ "$ARCH" = amd64 ] && [ "$REQUIRED_CPU_LEVEL" -gt 1 ]; then
+    HAVE_CPU_LEVEL="$(cpu_level)"
+    if [ "$HAVE_CPU_LEVEL" -lt "$REQUIRED_CPU_LEVEL" ]; then
+        _model="$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed "s/^ *//")"
+        _missing=""
+        for x in avx avx2 bmi1 bmi2 fma movbe abm; do
+            grep -qm1 " $x " /proc/cpuinfo 2>/dev/null || _missing="$_missing $x"
+        done
+        die "$DISTRO $SUITE needs x86-64-v${REQUIRED_CPU_LEVEL}; this CPU provides v${HAVE_CPU_LEVEL}.
+
+    CPU:     ${_model:-unknown}
+    Missing:${_missing:- (see /proc/cpuinfo)}
+
+    Nothing can be configured around this -- it is the processor, not the
+    hypervisor. If this is a VM, check the CPU type is 'host' first, but a chip
+    older than Haswell (2013) cannot provide v3 at all.
+
+    Build $DISTRO 9 instead, which needs only v2. Note that machines imaged from
+    a v3 image would need v3 themselves, so this is the fleet's constraint as
+    much as the builder's."
+    fi
+    log "CPU baseline: x86-64-v${HAVE_CPU_LEVEL} available, v${REQUIRED_CPU_LEVEL} required"
+fi
 
 # RPM images are new. The A/B overlay root and the LUKS bootstrap key now have
 # dracut modules (usr/lib/dracut/modules.d), and the script behind each is the
