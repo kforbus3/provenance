@@ -348,7 +348,11 @@ function ScannerCard({ canConfig }: { canConfig: boolean }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const update = useMutation({
     mutationFn: netTemplatesUpdate,
-    onSuccess: (t) => { setMsg({ sev: "info", text: `Templates updated${t.version ? ` to ${t.version}` : ""}.` }); void refetch(); },
+    onSuccess: (t) => {
+      const v = t.version ? ` (${t.version})` : "";
+      setMsg({ sev: "info", text: t.unchanged ? `Templates were already current${v}; re-downloaded.` : `Templates updated${t.version ? ` to ${t.version}` : ""}.` });
+      void refetch();
+    },
     onError: (e) => setMsg({
       sev: "error",
       text: `${errText(e, "Online update failed.")} If the scanner cannot reach the internet, use "Import offline" with a nuclei-templates archive.`,

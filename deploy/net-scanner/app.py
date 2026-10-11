@@ -229,6 +229,48 @@ def update_cmd(staging: str) -> list[str]:
     return ["nuclei", "-update-templates", "-ud", staging]
 
 
+def update_env(home: str) -> dict:
+    """The environment the template download runs in: a HOME of its own.
+
+    nuclei decides whether to download at all by comparing the version recorded in
+    $HOME/.config/nuclei/.templates-config.json with the latest release. Run with the
+    scanner's real HOME, a second update after a successful one finds the recorded
+    version current, prints "No new updates found", installs nothing into the
+    staging directory and exits 0 -- which this service, finding staging empty,
+    reported as a 502 "update failed" (prod, 2026-10-10: every update and every
+    nightly vulndb refresh failed from the day the templates were current). Worse,
+    the run still recorded the staging directory as THE templates directory in the
+    real config, and staging was then deleted.
+
+    An empty HOME has no recorded version, so nuclei downloads the latest release
+    every time, writes its bookkeeping there, and the real config is never touched.
+    """
+    env = dict(os.environ)
+    env["HOME"] = home
+    return env
+
+
+def update_failure(proc: subprocess.CompletedProcess, staging: str) -> str:
+    """Why an update produced no templates, in a sentence the UI can show.
+
+    The scanner used to return nuclei's banner as the only detail, which the UI
+    rendered as an empty message followed by the offline-import hint."""
+    text = (proc.stdout + proc.stderr).decode(errors="replace")
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    if proc.returncode < 0:
+        return f"nuclei was killed by signal {-proc.returncode} during the download"
+    if proc.returncode != 0:
+        lines = [l.strip() for l in plain.splitlines() if "[ERR]" in l or "[FTL]" in l or "error" in l.lower()]
+        why = lines[-1] if lines else f"exit status {proc.returncode}"
+        return f"template download failed: {why}"
+    if "No new updates found" in plain:
+        return ("nuclei reported the templates current and downloaded nothing; "
+                "its recorded version was stale (expected an isolated HOME)")
+    if not templates_present(staging):
+        return "nuclei exited 0 but the download left no http/ or javascript/ templates behind"
+    return "template update failed"
+
+
 def quick_cmd(target: str, rate: int = PORT_RATE) -> list[str]:
     """The 100 most common ports, briefly: is anything there at all?"""
     return [
@@ -544,8 +586,8 @@ def write_templates_meta(d: str, version: str, source: str) -> None:
                    "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, f)
 
 
-def _nuclei_config_version() -> str:
-    home = os.path.expanduser("~")
+def _nuclei_config_version(home: str | None = None) -> str:
+    home = home or os.path.expanduser("~")
     for p in (os.path.join(home, ".config", "nuclei", ".templates-config.json"),
               os.path.join(home, "Library", "Application Support", "nuclei", ".templates-config.json")):
         try:
@@ -578,7 +620,7 @@ def _find_templates_root(d: str) -> str:
     raise ValueError("archive does not contain nuclei templates (no http/ or javascript/ directory)")
 
 
-def pin_nuclei_config(templates_dir: str = TEMPLATES_DIR) -> None:
+def pin_nuclei_config(templates_dir: str | None = None) -> None:
     """Point nuclei's own config at TEMPLATES_DIR.
 
     `nuclei -update-templates -ud <staging>` records the staging directory as THE
@@ -587,6 +629,7 @@ def pin_nuclei_config(templates_dir: str = TEMPLATES_DIR) -> None:
     install templates from the internet -- which on an air-gapped deployment is a
     scan that hangs on a download before it checks anything.
     """
+    templates_dir = templates_dir or TEMPLATES_DIR
     d = os.path.join(os.path.expanduser("~"), ".config", "nuclei")
     p = os.path.join(d, ".templates-config.json")
     try:
@@ -595,6 +638,11 @@ def pin_nuclei_config(templates_dir: str = TEMPLATES_DIR) -> None:
     except (OSError, ValueError):
         cfg = {}
     cfg["nuclei-templates-directory"] = templates_dir
+    for k in list(cfg):
+        # custom-s3-templates-directory and friends are recorded beneath the
+        # templates directory; a failed update left them under a deleted staging dir.
+        if k.startswith("custom-") and k.endswith("-templates-directory"):
+            cfg[k] = os.path.join(templates_dir, os.path.basename(str(cfg[k])) or k.split("-")[1])
     try:
         os.makedirs(d, exist_ok=True)
         with open(p, "w") as f:
@@ -922,17 +970,26 @@ def templates_status():
 def templates_update():
     with _templates_lock:
         staging = tempfile.mkdtemp(prefix="prov-templates-")
+        home = tempfile.mkdtemp(prefix="prov-nuclei-home-")
         try:
-            proc = subprocess.run(update_cmd(staging), capture_output=True, timeout=TEMPLATES_TIMEOUT)
+            proc = subprocess.run(update_cmd(staging), capture_output=True,
+                                  timeout=TEMPLATES_TIMEOUT, env=update_env(home))
             output = (proc.stdout + proc.stderr).decode(errors="replace")[-4000:]
             if proc.returncode != 0 or not templates_present(staging):
-                return JSONResponse({"ok": False, "output": output}, status_code=502)
-            _swap_in(staging, _nuclei_config_version() or "unknown", "online")
-            return JSONResponse({"ok": True, "output": output, **read_templates_meta()})
+                return JSONResponse({"ok": False, "error": update_failure(proc, staging),
+                                     "output": output}, status_code=502)
+            before = read_templates_meta().get("version")
+            version = _nuclei_config_version(home) or "unknown"
+            _swap_in(staging, version, "online")
+            return JSONResponse({"ok": True, "output": output, "unchanged": before == version,
+                                 **read_templates_meta()})
         except subprocess.TimeoutExpired:
             return JSONResponse({"ok": False, "error": "template update timed out"}, status_code=504)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
+            # Whatever happened, nuclei must keep reading templates from the volume.
+            pin_nuclei_config()
 
 
 @app.post("/templates/import")

@@ -5,6 +5,35 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.4 — 2026-10-10
+
+### Network scanning: updating templates that are already current no longer fails
+
+From the day the nuclei templates reached the latest release (2026-10-08), every
+**Update templates** click and every nightly `vulndb` refresh of them failed with
+`network scanner error (502)` and no explanation. nuclei decides whether to download
+by comparing the version recorded in its own config with the latest release; finding
+them equal it printed "No new updates found", downloaded nothing and exited 0, and
+the scanner, finding its staging directory empty, reported a failure. Each attempt
+also re-pointed nuclei's config at that staging directory, which was deleted on the
+way out.
+
+- **The download runs in a HOME of its own.** With no recorded version, nuclei
+  fetches the current release every time; the scanner's real config is never touched
+  by the download and is re-pinned to the templates volume after every outcome,
+  success or failure.
+- **The response says whether anything changed** (`unchanged`), and the UI reads
+  "Templates were already current (v10.5.0); re-downloaded." instead of an error.
+- **A failed update now says why** — the nuclei error line, the signal that killed
+  it, or that the download left no templates — instead of returning the banner,
+  which the UI showed as an empty message.
+
+Deploy: `make redeploy-single` (or rebuild `net-scanner` with `--no-deps`) plus the
+backend/frontend images. A deployment that already hit this needs no repair beyond
+the upgrade: the first update re-pins the config.
+
+---
+
 ## v2.2.3 — 2026-10-07
 
 ### Container rollouts: the soak reads the logs, and a 24-hour watch follows

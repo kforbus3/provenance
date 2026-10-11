@@ -143,6 +143,8 @@ export interface TemplatesStatus {
   source?: string;
   updatedAt?: string;
   excludedCredentialTemplates: number;
+  /** An online update that re-downloaded the release already installed. */
+  unchanged?: boolean;
 }
 
 export interface NetScanStatusInfo {
