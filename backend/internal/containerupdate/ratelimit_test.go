@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kforbus3/provenance/backend/internal/store"
 )
@@ -42,12 +43,95 @@ func TestARateLimitLeavesTheHostRetryableRatherThanFailed(t *testing.T) {
 		}
 	}
 
-	// And it is genuinely retried, not silently dropped: the next tick starts it
-	// again.
+	// And it is genuinely retried, not silently dropped: once the pause has run
+	// out, a tick starts it again.
 	before := d.calls
+	start := e.now()
+	e.now = func() time.Time { return start.Add(retryDelay(1)) }
 	e.Tick(context.Background())
 	if d.calls == before {
 		t.Error("the host was left pending but never attempted again")
+	}
+}
+
+// The retry waits. Production, 2026-10-10: ghcr.io answered every pull of
+// faster-whisper with "toomanyrequests" for several minutes. The deploy script
+// pulled three times seconds apart, the engine tried the host again on the very
+// next tick, and the host's whole budget -- nine pulls -- was spent inside about
+// three minutes of a registry episode that lasted longer than that. The host
+// failed and the fleet stayed on the old tag.
+//
+// So a host that failed transiently is not claimed again until retryDelay has
+// passed: five minutes after the first attempt, fifteen after the second. The
+// row says so, in minutes, while it waits.
+func TestATransientFailureWaitsBeforeItIsTriedAgain(t *testing.T) {
+	f, rid, _ := fixture(1, store.UpdateRollout{Canary: 0, BatchSize: 1, MaxFailures: 1})
+	d := &fakeDeployer{err: errors.New(rateLimited)}
+	e := newEngine(f, d, &fakeRunner{out: runningNew})
+	start := e.now()
+	at := func(d time.Duration) { e.now = func() time.Time { return start.Add(d) } }
+
+	e.Tick(context.Background()) // attempt 1 fails
+	if d.calls != 1 {
+		t.Fatalf("%d deploys after the first tick, want 1", d.calls)
+	}
+	if got := f.hosts[rid][0].Error; !strings.Contains(got, "in about 5 minutes") {
+		t.Errorf("the waiting host does not say how long it waits: %q", got)
+	}
+
+	// The next few ticks are inside the pause: nothing is tried.
+	for _, m := range []int{1, 2, 4} {
+		at(time.Duration(m) * time.Minute)
+		e.Tick(context.Background())
+	}
+	if d.calls != 1 {
+		t.Fatalf("%d deploys inside the first pause, want 1 -- the host was retried "+
+			"before the registry had a chance to recover", d.calls)
+	}
+	if got := f.hosts[rid][0].State; got != store.UpdateHostPending {
+		t.Fatalf("host is %q while waiting, want pending", got)
+	}
+
+	at(5 * time.Minute) // the pause is over
+	e.Tick(context.Background())
+	if d.calls != 2 {
+		t.Fatalf("%d deploys once the first pause ran out, want 2", d.calls)
+	}
+	if got := f.hosts[rid][0].Error; !strings.Contains(got, "in about 15 minutes") {
+		t.Errorf("after the second failure the row should promise the longer wait: %q", got)
+	}
+
+	at(5*time.Minute + 10*time.Minute) // ten minutes in: still inside the second pause
+	e.Tick(context.Background())
+	if d.calls != 2 {
+		t.Fatalf("%d deploys inside the second pause, want 2", d.calls)
+	}
+
+	at(5*time.Minute + 15*time.Minute)
+	e.Tick(context.Background())
+	if d.calls != 3 {
+		t.Fatalf("%d deploys once the second pause ran out, want 3", d.calls)
+	}
+}
+
+// A resume is an operator saying "now". It resets the attempt count, so the
+// pause does not hold a host somebody has just asked to go again.
+func TestAResumedHostIsNotHeldByTheRetryPause(t *testing.T) {
+	f, rid, _ := fixture(1, store.UpdateRollout{Canary: 0, BatchSize: 1, MaxFailures: 1})
+	d := &fakeDeployer{err: errors.New(rateLimited)}
+	e := newEngine(f, d, &fakeRunner{out: runningNew})
+	e.Tick(context.Background()) // attempt 1 fails, host waits
+
+	// What the store's resume does to a host row.
+	f.mu.Lock()
+	f.hosts[rid][0].Attempts = 0
+	f.hosts[rid][0].Error = ""
+	f.mu.Unlock()
+
+	e.Tick(context.Background())
+	if d.calls != 2 {
+		t.Errorf("%d deploys after a resume, want 2: a resumed host must not sit out "+
+			"a pause from before the resume", d.calls)
 	}
 }
 
@@ -57,7 +141,11 @@ func TestRetriesRunOutAndTheHostFails(t *testing.T) {
 	f, rid, _ := fixture(1, store.UpdateRollout{Canary: 0, BatchSize: 1, MaxFailures: 1})
 	d := &fakeDeployer{err: errors.New(rateLimited)}
 	e := newEngine(f, d, &fakeRunner{out: runningNew})
+	start := e.now()
 	for i := 0; i < MaxAttempts+2; i++ {
+		// Each tick is an hour on, well past any retry pause, so this measures
+		// the attempt ceiling and not the pacing.
+		e.now = func() time.Time { return start.Add(time.Duration(i) * time.Hour) }
 		e.Tick(context.Background())
 	}
 	if got := f.hosts[rid][0].State; got != store.UpdateHostFailed {

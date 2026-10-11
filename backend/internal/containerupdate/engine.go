@@ -86,6 +86,29 @@ var errUnmanageable = errors.New("this container is not managed by any compose f
 // going to.
 const MaxAttempts = 3
 
+// retryDelay is how long a host waits after a transient failure before its
+// next attempt: five minutes after the first, fifteen after the second.
+//
+// The gap used to be one tick, a minute. With the deploy script's own three
+// pulls ten and fifteen seconds apart, a host's whole retry budget -- nine pulls
+// -- was spent inside about three minutes. A registry rate limit that asks to
+// be called back in microseconds does clear in microseconds; a registry having
+// a bad quarter of an hour does not, and ghcr.io had one on 2026-10-10: every
+// one of the nine pulls of faster-whisper came back "toomanyrequests", the host
+// failed, and the fleet was left on the old tag until somebody noticed. Spacing
+// the three attempts across twenty minutes covers the episode that was seen
+// while still ending a host whose registry is genuinely gone within the hour.
+//
+// The first-attempt pause is also the floor under what a retry message
+// promises: "tried again in about five minutes" is a sentence an operator can
+// act on, where "next tick" was not.
+func retryDelay(attempts int) time.Duration {
+	if attempts <= 1 {
+		return 5 * time.Minute
+	}
+	return 15 * time.Minute
+}
+
 type Engine struct {
 	store Store
 	dep   Deployer
@@ -329,6 +352,15 @@ func (e *Engine) advance(ctx context.Context, r store.UpdateRollout) {
 		}
 		if h.Attempts >= MaxAttempts {
 			e.fail(ctx, r.ID, h.HostID, fmt.Sprintf("gave up after %d attempts", h.Attempts))
+			continue
+		}
+		// A host that has been tried already is pending because its last attempt
+		// failed in a way that looked transient (failOrRetry). It waits out the
+		// pause before it is claimed again; retrying on the next tick spent the
+		// whole budget inside a registry's bad few minutes. changed_at is stamped
+		// when the host went back to pending, so this is time since the failure.
+		// A resume resets attempts to zero and so is never held here.
+		if h.Attempts > 0 && now.Sub(h.ChangedAt) < retryDelay(h.Attempts) {
 			continue
 		}
 		mine := make([]pacing.ImageProgress, 0, len(hostImgs[h.HostID]))
@@ -1548,14 +1580,16 @@ func (e *Engine) verifyRunning(ctx context.Context, r store.UpdateRollout, hostI
 }
 
 // failOrRetry records a host's failure -- unless the failure reads like weather,
-// in which case the host goes back to pending and the next tick tries again.
+// in which case the host goes back to pending and is tried again once
+// retryDelay has passed.
 //
 // This is the second half of the rollout that a registry rate limit ended. The
 // deploy script now retries a transient pull within one deploy (see
 // stacks.RenderScript), which covers a limit that clears in milliseconds. It does
 // not cover a registry having a bad ten minutes: those retries all happen inside
 // the same SSH session, seconds apart. So the same judgement is applied again at
-// this level, where the gap between attempts is a tick rather than a sleep.
+// this level, where the gap between attempts is minutes (retryDelay) rather than
+// seconds.
 //
 // A retry leaves the state pending, NOT failed, which matters beyond this host:
 // the failure budget counts failed hosts, so recording a transient error as a
@@ -1632,14 +1666,16 @@ func firstFailure(hosts []store.UpdateRolloutHost) string {
 
 func (e *Engine) failOrRetry(ctx context.Context, rollout, host uuid.UUID, attempts int, msg string) {
 	if attempts < MaxAttempts && transienterr.Is(msg) {
+		wait := retryDelay(attempts)
 		if err := e.store.SetUpdateRolloutHostState(ctx, rollout, host, store.UpdateHostPending,
 			fmt.Sprintf("attempt %d of %d did not get through, and the reason looks temporary; "+
-				"this host will be tried again: %s", attempts, MaxAttempts, msg)); err != nil {
+				"this host will be tried again in about %d minutes: %s",
+				attempts, MaxAttempts, int(wait.Minutes()), msg)); err != nil {
 			e.log.Warn("update rollout: recording a retry", "host", host, "err", err)
 			return
 		}
 		e.log.Info("update rollout: transient failure, will retry",
-			"rollout", rollout, "host", host, "attempt", attempts, "detail", msg)
+			"rollout", rollout, "host", host, "attempt", attempts, "in", wait, "detail", msg)
 		return
 	}
 	e.fail(ctx, rollout, host, msg)
