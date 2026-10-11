@@ -43,6 +43,17 @@ type fakeStore struct {
 	// whatever RolloutImages returns -- as the real columns would be.
 	imgCanary  map[string]time.Time
 	imgChecked map[string]time.Time
+	// The clock changed_at is stamped from, as the real store's now() would.
+	// newEngine points it at the engine's clock so a test that moves time moves
+	// both.
+	now func() time.Time
+}
+
+func (f *fakeStore) stamp() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
 }
 
 func imgKey(rollout uuid.UUID, repo, from string) string {
@@ -125,6 +136,7 @@ func (f *fakeStore) ClaimUpdateRolloutHost(_ context.Context, rollout, host uuid
 		if h.HostID == host && h.State == store.UpdateHostPending {
 			f.hosts[rollout][i].State = store.UpdateHostApplying
 			f.hosts[rollout][i].Attempts++
+			f.hosts[rollout][i].ChangedAt = f.stamp()
 			return true, nil
 		}
 	}
@@ -139,6 +151,7 @@ func (f *fakeStore) SetUpdateRolloutHostState(_ context.Context, rollout, host u
 		if h.HostID == host {
 			f.hosts[rollout][i].State = state
 			f.hosts[rollout][i].Error = errMsg
+			f.hosts[rollout][i].ChangedAt = f.stamp()
 		}
 	}
 	return nil
@@ -355,6 +368,7 @@ const composeNginx = "services:\n  web:\n    image: nginx:1.24\n"
 func newEngine(f *fakeStore, d *fakeDeployer, r *fakeRunner) *Engine {
 	e := New(f, d, r, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.now = func() time.Time { return time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC) }
+	f.now = func() time.Time { return e.now() }
 	return e
 }
 

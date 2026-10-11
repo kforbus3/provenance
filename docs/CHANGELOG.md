@@ -5,6 +5,30 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.5 — 2026-10-11
+
+### Container rollouts: a transient pull failure now waits before it is retried
+
+A rollout of `faster-whisper` on 2026-10-10 met ghcr.io answering every pull
+with `toomanyrequests: retry-after: 873µs` for several minutes. The deploy
+script's three pulls were seconds apart and the engine retried the host on the
+very next tick, so the host's whole budget — nine pulls — was spent inside about
+three minutes of a longer episode. The host failed, the compose file was put
+back correctly, and the fleet stayed on the old tag.
+
+- **A host that failed transiently now waits before its next attempt**: five
+  minutes after the first, fifteen after the second. Three attempts span about
+  twenty minutes instead of three. A failure that is an answer (no such tag,
+  unauthorized) is still final on the first attempt.
+- **The host row says how long it is waiting** ("tried again in about 5
+  minutes") instead of promising an unspecified retry.
+- **Resume still means now**: it resets the attempt count, so a resumed host is
+  never held by a pause from before the resume.
+
+Deploy: backend image only. No schema change.
+
+---
+
 ## v2.2.4 — 2026-10-10
 
 ### Network scanning: updating templates that are already current no longer fails

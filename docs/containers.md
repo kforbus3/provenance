@@ -229,6 +229,28 @@ compared against the digest the rollout targets. A host on the right tag but the
 wrong bytes **fails** — that is exactly the situation the rollout was started to
 fix.
 
+### A registry having a bad few minutes
+
+A pull that fails for a reason that reads as weather — a registry rate limit, a
+5xx, a TLS handshake that timed out, a connection reset mid-layer — is not a
+verdict on the host. The deploy script pulls up to three times, ten and fifteen
+seconds apart, which covers the limit that asks to be retried in microseconds.
+If all three fail the host is **not** marked failed: it goes back to pending and
+is tried again, five minutes later, and after a second such failure fifteen
+minutes after that. The host row says so while it waits ("attempt 1 of 3 did not
+get through … tried again in about 5 minutes"). Three attempts across about
+twenty minutes outlasts the registry episodes that have actually been seen
+(ghcr.io answering every request with `toomanyrequests` for several minutes);
+a registry still refusing after that ends the host, and the failure budget then
+applies as usual.
+
+A failure that is an answer — no such tag, authentication required, a compose
+file compose cannot read — is recorded on the first attempt. Repeating it would
+only bury the message under copies of itself.
+
+**Resume** resets the attempt count, so a host you have just asked to go again
+does not sit out a pause from before you asked.
+
 ### Pausing, resuming, cancelling
 
 - **Pause** stops new hosts starting. Hosts mid-deploy finish.
