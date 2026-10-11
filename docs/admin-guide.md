@@ -1235,9 +1235,12 @@ listener list). An address that matches a managed host is attached to it.
 
 **Templates** are fetched at runtime and persisted in the `netscan-templates`
 volume: **Update templates** (needs internet) or **Import offline** (a `.tar.gz` of
-the nuclei-templates repository) on the Network exposure page. The nightly
-**CVE-database refresh** schedule (`vulndb`) refreshes them too when network
-scanning is configured; templates older than 36 hours are flagged stale.
+the nuclei-templates repository) on the Network exposure page. An online update
+always downloads the current nuclei-templates release in full and reports whether
+it changed anything; the templates being current already is a success, not a
+failure. The nightly **CVE-database refresh** schedule (`vulndb`) refreshes them
+too when network scanning is configured; templates older than 36 hours are flagged
+stale.
 
 **Scheduling and alerts.** Schedule kinds `netscan` (a host or group) and
 `netrange` (every enabled range). The `netscan.exposure` notification fires when a

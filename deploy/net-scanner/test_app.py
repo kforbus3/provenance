@@ -436,15 +436,117 @@ def test_online_update_does_not_disable_itself():
 
 
 # An update that exits 0 without installing anything must be reported as a failure,
-# not swapped in over the working templates.
+# not swapped in over the working templates -- and the failure must say why, not
+# hand the UI nuclei's banner.
 def test_update_that_installs_nothing_is_a_failure(monkeypatch, tmp_path):
     import subprocess as sp
     monkeypatch.setattr(appmod, "TOKEN", "t")
     monkeypatch.setattr(appmod, "TEMPLATES_DIR", str(tmp_path / "live"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(appmod.subprocess, "run",
                         lambda *a, **k: sp.CompletedProcess(a, 0, b"banner only", b""))
     r = TestClient(appmod.app).post("/templates/update", headers={"X-Netscan-Token": "t"})
     assert r.status_code == 502 and r.json()["ok"] is False
+    assert "left no http/" in r.json()["error"]
+
+
+LATEST = "v10.5.0"
+
+
+def _fake_nuclei_update(tmp_path, calls):
+    """nuclei -update-templates as it behaves: it reads the version recorded in
+    $HOME/.config/nuclei/.templates-config.json; when that equals the latest release
+    it prints "No new updates found" and downloads NOTHING (exit 0); otherwise it
+    downloads into -ud and records that directory and the version in the config."""
+    import json
+    import subprocess as sp
+
+    def run(args, **kw):
+        calls.append(kw)
+        home = kw["env"]["HOME"]
+        cfgdir = os.path.join(home, ".config", "nuclei")
+        cfgp = os.path.join(cfgdir, ".templates-config.json")
+        try:
+            cfg = json.load(open(cfgp))
+        except (OSError, ValueError):
+            cfg = {}
+        ud = args[args.index("-ud") + 1]
+        os.makedirs(cfgdir, exist_ok=True)
+        if cfg.get("nuclei-templates-version") == LATEST:
+            cfg["nuclei-templates-directory"] = ud   # recorded even when nothing is downloaded
+            json.dump(cfg, open(cfgp, "w"))
+            return sp.CompletedProcess(args, 0, b"", b"banner\n[\x1b[34mINF\x1b[0m] No new updates found for nuclei templates\n")
+        os.makedirs(os.path.join(ud, "http"))
+        open(os.path.join(ud, "http", "x.yaml"), "w").write("id: x\n")
+        cfg.update({"nuclei-templates-directory": ud, "nuclei-templates-version": LATEST})
+        json.dump(cfg, open(cfgp, "w"))
+        return sp.CompletedProcess(args, 0, b"", b"banner\n[INF] Successfully downloaded nuclei-templates (v10.5.0)\n")
+    return run
+
+
+# Prod, 2026-10-10: templates installed 10-08 at the latest release, nuclei's own
+# config recording that version. Every "Update" and every nightly refresh since
+# returned 502 ("No new updates found" -> empty staging), and each attempt left the
+# config pointing at a staging directory that no longer existed.
+def test_update_when_templates_are_already_current_succeeds(monkeypatch, tmp_path):
+    import json
+    live = tmp_path / "live"
+    home = tmp_path / "home"
+    os.makedirs(live / "http")
+    appmod.write_templates_meta(str(live), LATEST, "online")
+    os.makedirs(home / ".config" / "nuclei")
+    json.dump({"nuclei-templates-directory": str(live), "nuclei-templates-version": LATEST,
+               "custom-s3-templates-directory": str(live / "s3")},
+              open(home / ".config" / "nuclei" / ".templates-config.json", "w"))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(appmod, "TOKEN", "t")
+    monkeypatch.setattr(appmod, "TEMPLATES_DIR", str(live))
+    calls: list = []
+    monkeypatch.setattr(appmod.subprocess, "run", _fake_nuclei_update(tmp_path, calls))
+
+    r = TestClient(appmod.app).post("/templates/update", headers={"X-Netscan-Token": "t"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["version"] == LATEST and body["unchanged"] is True
+    assert body["source"] == "online"
+    # the download ran in a HOME of its own, which is gone afterwards
+    assert calls[0]["env"]["HOME"] != str(home) and not os.path.exists(calls[0]["env"]["HOME"])
+    # the real config still points at the volume, including the custom-* entries
+    cfg = json.load(open(home / ".config" / "nuclei" / ".templates-config.json"))
+    assert cfg["nuclei-templates-directory"] == str(live)
+    assert cfg["nuclei-templates-version"] == LATEST
+    assert cfg["custom-s3-templates-directory"] == str(live / "s3")
+    assert os.path.exists(live / "http" / "x.yaml")
+
+
+# A failed update must leave nuclei's config pointing at the volume: the staging
+# directory it recorded is deleted on the way out, and a nuclei whose configured
+# directory is missing tries to install templates from the internet mid-scan.
+def test_failed_update_repins_nuclei_config(monkeypatch, tmp_path):
+    import json
+    import subprocess as sp
+    live = tmp_path / "live"
+    home = tmp_path / "home"
+    os.makedirs(live / "http")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(appmod, "TOKEN", "t")
+    monkeypatch.setattr(appmod, "TEMPLATES_DIR", str(live))
+
+    def run(args, **kw):
+        # nuclei writes its config in the HOME it was given, even on failure
+        d = os.path.join(kw["env"]["HOME"], ".config", "nuclei")
+        os.makedirs(d, exist_ok=True)
+        json.dump({"nuclei-templates-directory": args[args.index("-ud") + 1]},
+                  open(os.path.join(d, ".templates-config.json"), "w"))
+        return sp.CompletedProcess(args, 1, b"", b"[\x1b[31mERR\x1b[0m] Could not download templates: dial tcp: lookup api.github.com: no such host\n")
+    monkeypatch.setattr(appmod.subprocess, "run", run)
+
+    r = TestClient(appmod.app).post("/templates/update", headers={"X-Netscan-Token": "t"})
+    assert r.status_code == 502
+    assert "api.github.com" in r.json()["error"]
+    cfg = json.load(open(home / ".config" / "nuclei" / ".templates-config.json"))
+    assert cfg["nuclei-templates-directory"] == str(live)
+    assert os.path.isdir(live / "http")   # the working templates were not touched
 
 
 def test_nuclei_rate_is_clamped(monkeypatch):

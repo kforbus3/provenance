@@ -148,6 +148,9 @@ type TemplatesStatus struct {
 	Source                      string `json:"source,omitempty"`
 	UpdatedAt                   string `json:"updatedAt,omitempty"`
 	ExcludedCredentialTemplates int    `json:"excludedCredentialTemplates"`
+	// Unchanged is set by an online update that downloaded the release already
+	// installed: the templates are current, not failed.
+	Unchanged bool `json:"unchanged,omitempty"`
 }
 
 func (c *sidecar) templatesStatus(ctx context.Context) (*TemplatesStatus, error) {
