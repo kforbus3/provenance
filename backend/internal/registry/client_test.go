@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -247,6 +248,58 @@ func TestTagsFollowsPagination(t *testing.T) {
 	}
 	if got := strings.Join(tags, ","); got != "1.0.0,1.1.0,1.2.0" {
 		t.Errorf("tags = %q", got)
+	}
+}
+
+// The shape of ghcr.io/open-webui/open-webui on 2026-10-17: 40,737 tags in pages
+// of 1000 (ghcr ignores a larger `n`), the running v0.11.4 near the end of page
+// 40, and every newer release on page 41. The old bound of forty pages read the
+// running tag and stopped one page short of anything newer.
+func TestALongListingIsReadToItsNewestPage(t *testing.T) {
+	const pages = 41
+	var served int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := 0
+		if last := r.URL.Query().Get("last"); last != "" {
+			fmt.Sscanf(last, "page-%d", &page)
+		}
+		served++
+		tags := make([]string, 0, 1000)
+		for i := 0; i < 1000; i++ {
+			tags = append(tags, fmt.Sprintf("git-%d-%d", page, i))
+		}
+		switch page {
+		case 39:
+			tags[761] = "v0.11.4"
+		case pages - 1:
+			tags[357], tags[731] = "v0.12.0", "v0.12.3"
+			tags = tags[:737]
+		}
+		if page < pages-1 {
+			w.Header().Set("Link", fmt.Sprintf(
+				`</v2/open-webui/open-webui/tags/list?n=1000&last=page-%d>; rel="next"`, page+1))
+		}
+		json.NewEncoder(w).Encode(map[string]any{"tags": tags})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(t, srv)
+	tags, complete, err := c.Tags(context.Background(),
+		strings.TrimPrefix(srv.URL, "http://")+"/open-webui/open-webui")
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if served != pages {
+		t.Errorf("read %d page(s), want %d", served, pages)
+	}
+	if !complete {
+		t.Error("a 40,737-tag listing that reached its last page must report itself complete")
+	}
+	if len(tags) != 40737 {
+		t.Errorf("got %d tags, want 40737", len(tags))
+	}
+	if newest, _ := Newest("v0.11.4", tags); newest != "v0.12.3" {
+		t.Errorf("newest after v0.11.4 = %q, want v0.12.3 from the last page", newest)
 	}
 }
 

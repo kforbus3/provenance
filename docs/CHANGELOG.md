@@ -5,6 +5,26 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.7 — 2026-10-17
+
+### Container updates: very long tag lists are read to the end
+
+**OpenWebUI was never offered an update.** `ghcr.io/open-webui/open-webui` publishes
+a tag per commit beside every release and has 40,737 tags. The registry check stopped
+reading after 40 pages (40,000 tags), after the running `v0.11.4` and before
+`v0.12.0`–`v0.12.3`, found nothing newer, and recorded the image as up to date.
+
+- **Tag lists are now read up to 250 pages** (250,000 tags). ghcr.io serves at most
+  1,000 tags a page, so pages are what the bound counts. Listings are still cached for
+  an hour.
+- **A listing that is cut short is no longer called up to date.** When the bound stops
+  a listing and nothing newer was found, the image is marked *unavailable* with the
+  note "the tag list was too long to read in full", instead of *current*.
+
+Deploy: backend image only. No schema change.
+
+---
+
 ## v2.2.6 — 2026-10-16
 
 ### Session replay: content search finds matches again, and deleted recordings take their commands with them

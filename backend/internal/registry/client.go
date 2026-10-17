@@ -214,12 +214,19 @@ func (c *Client) Digest(ctx context.Context, repo, tag string) (string, error) {
 // the tag actually running. "Nothing newer exists" was then reported with
 // complete confidence about a list that did not contain the present.
 //
-// Ten pages covers bazarr's 9261 tags; jackett needs more than twenty. Forty is
-// room for these to grow and still a bound: a runaway listing costs forty
-// requests, not thousands.
+// Ten pages covers bazarr's 9261 tags; jackett needs more than twenty.
+//
+// Forty pages was the bound until ghcr.io/open-webui/open-webui passed it: 40,737
+// tags (a git-SHA tag per commit beside every release), with the running v0.11.4
+// at position 39,761 and every release from v0.12.0 at 40,357 or later. The
+// listing stopped in between, so the image was never offered an update. ghcr
+// serves at most 1000 tags a page whatever `n` asks for, so pages are the unit
+// that matters. 250 is six times the largest repository seen and still a bound:
+// a runaway listing costs 250 requests once an hour (see tagListMaxAge), not an
+// unbounded number.
 const (
-	maxTagPages = 40
-	maxTags     = 40000
+	maxTagPages = 250
+	maxTags     = maxTagPages * 1000
 )
 
 // Tags lists a repository's tags, following pagination.

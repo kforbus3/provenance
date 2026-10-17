@@ -283,10 +283,18 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	// A truncated listing can support "nothing newer was FOUND", never "nothing
 	// newer exists". Saying the second about the first is how an operator is told
 	// an image is current when the list never reached the present.
+	//
+	// Not "current", either. A truncated listing stops before the newest tags,
+	// which are exactly the ones that would make this row an update, so "nothing
+	// newer found" here is the expected result whether or not a newer version
+	// exists. Recorded as current, it showed as up to date and was hidden from the
+	// default view, which is how open-webui went unoffered with four newer
+	// releases published.
 	if !complete && newest == "" {
 		reason = "the tag list was too long to read in full, so this is what was " +
 			"found rather than everything there is"
 		rec.Note = reason
+		rec.Status = store.ImageStatusUnavailable
 	}
 	if img.Declared {
 		// The digest comparison below asks "did the bytes behind the tag this
