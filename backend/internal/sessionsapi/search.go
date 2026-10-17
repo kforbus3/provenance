@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/kforbus3/provenance/backend/internal/auth"
 	"github.com/kforbus3/provenance/backend/internal/httpx"
 	"github.com/kforbus3/provenance/backend/internal/models"
+	"github.com/kforbus3/provenance/backend/internal/recorder"
 )
 
 // Search bounds — keep a single query's I/O predictable regardless of how many
@@ -142,8 +142,14 @@ func (h *handler) commandSearch(w http.ResponseWriter, r *http.Request) {
 // cleanedRecording reads an asciicast file and returns its output text with ANSI
 // escapes and control characters stripped, bounded in size. Returns "" on any read
 // error (a missing/rotated-out recording is simply skipped).
+//
+// It must open the file through recorder.Open, like every other reader of a
+// recording. It used os.Open, which hands back the ciphertext of an encrypted
+// recording; no line of that parses as an event, so every recording came back ""
+// and was skipped without a word. Production encrypts recordings, so content search
+// reported "scanned 0 of 59" and matched nothing, for every query.
 func (h *handler) cleanedRecording(path string) string {
-	f, err := os.Open(h.resolvePath(path))
+	f, err := recorder.Open(h.resolvePath(path), h.d.Cfg.RecordingEncryptionKey)
 	if err != nil {
 		return ""
 	}

@@ -24,37 +24,85 @@ func (s *Store) RecordingRetentionDays(ctx context.Context) int {
 	return v.RetentionDays
 }
 
-// DeleteRecordingBySession removes the recording row for an SSH session and
-// returns the on-disk path so the caller can delete the file.
+// DeleteRecordingBySession removes the recording row for an SSH session, and the
+// commands indexed from it, and returns the on-disk path so the caller can delete
+// the file.
+//
+// The indexed commands go in the same transaction. They are the recording's
+// keystrokes, copied out of it into plaintext rows, and they used to cascade only
+// from ssh_sessions -- which retention keeps far longer than the recording, or for
+// ever. So deleting a recording deleted the encrypted file and left everything typed
+// in it searchable, months later, on the Commands tab, beside a Replay button that
+// could only say "No recording is available for this session".
 func (s *Store) DeleteRecordingBySession(ctx context.Context, sshSessionID uuid.UUID) (string, error) {
-	var path string
-	err := s.pool.QueryRow(ctx,
-		`DELETE FROM session_recordings WHERE ssh_session_id=$1 RETURNING path`, sshSessionID).Scan(&path)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	var path string
+	if err := tx.QueryRow(ctx,
+		`DELETE FROM session_recordings WHERE ssh_session_id=$1 RETURNING path`, sshSessionID).Scan(&path); err != nil {
 		return "", mapNotFound(err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM session_commands WHERE ssh_session_id=$1`, sshSessionID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
 	}
 	return path, nil
 }
 
-// PruneRecordingsBefore deletes recording rows created before the cutoff and
-// returns their on-disk paths (for file removal) and the total bytes reclaimed.
+// PruneRecordingsBefore deletes recording rows created before the cutoff, and the
+// commands indexed from them, and returns their on-disk paths (for file removal) and
+// the total bytes reclaimed. See DeleteRecordingBySession for why the commands go too.
+//
+// Commands are removed only for sessions left with no recording at all, so a session
+// that somehow holds a newer recording keeps the commands that recording still backs.
+// That check is a second statement, not a CTE beside the DELETE: every part of one
+// statement sees the same snapshot, in which the rows being deleted still exist.
 func (s *Store) PruneRecordingsBefore(ctx context.Context, before time.Time) (paths []string, bytes int64, err error) {
-	rows, err := s.pool.Query(ctx,
-		`DELETE FROM session_recordings WHERE created_at < $1 RETURNING path, size_bytes`, before)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx,
+		`DELETE FROM session_recordings WHERE created_at < $1 RETURNING ssh_session_id, path, size_bytes`, before)
+	if err != nil {
+		return nil, 0, err
+	}
+	var sessions []uuid.UUID
 	for rows.Next() {
+		var id uuid.UUID
 		var p string
 		var sz int64
-		if err := rows.Scan(&p, &sz); err != nil {
+		if err := rows.Scan(&id, &p, &sz); err != nil {
+			rows.Close()
 			return nil, 0, err
 		}
+		sessions = append(sessions, id)
 		paths = append(paths, p)
 		bytes += sz
 	}
-	return paths, bytes, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(sessions) > 0 {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM session_commands sc
+			WHERE sc.ssh_session_id = ANY($1)
+			  AND NOT EXISTS (SELECT 1 FROM session_recordings r WHERE r.ssh_session_id = sc.ssh_session_id)`,
+			sessions); err != nil {
+			return nil, 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, err
+	}
+	return paths, bytes, nil
 }
 
 // RecordingSessionIDs reports which of the given sessions have a recording.
