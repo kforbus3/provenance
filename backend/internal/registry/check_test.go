@@ -24,9 +24,11 @@ type fakeStore struct {
 	tagCache     map[string][]string
 	tagCacheAny  map[string][]string
 	tagCachePuts map[string]int
-	saved        []store.ImageUpdate
-	pruned       [][]store.TrackedImage
-	maxAgeIn     time.Duration
+	// tagCacheIncomplete marks a cached listing as one the bound cut short.
+	tagCacheIncomplete map[string]bool
+	saved              []store.ImageUpdate
+	pruned             [][]store.TrackedImage
+	maxAgeIn           time.Duration
 }
 
 func (f *fakeStore) EnabledStackComposes(context.Context) ([]string, error) {
@@ -39,7 +41,7 @@ func (f *fakeStore) LastCheckedAt(context.Context) (map[string]time.Time, error)
 
 func (f *fakeStore) CachedTags(_ context.Context, repo string, _ time.Duration) ([]string, bool, bool) {
 	t, ok := f.tagCache[repo]
-	return t, true, ok
+	return t, !f.tagCacheIncomplete[repo], ok
 }
 
 func (f *fakeStore) AnyCachedTags(_ context.Context, repo string) ([]string, bool, bool) {
@@ -695,6 +697,33 @@ func TestATagListingIsReusedRatherThanRefetched(t *testing.T) {
 	}
 	if st.tagCachePuts[repo] != 0 {
 		t.Errorf("re-fetched and re-cached a listing that was still fresh")
+	}
+}
+
+// A listing the bound cut short ends before the newest tags, so "nothing newer
+// found" is what it returns whether or not a newer version exists. Recorded as
+// current, open-webui read as up to date and dropped out of the default view
+// with v0.12.0–v0.12.3 published.
+func TestATruncatedListingIsNotCalledCurrent(t *testing.T) {
+	srv := stubRegistry(t, []string{"v0.11.3", "v0.11.4"},
+		map[string]string{"v0.11.4": "sha256:aaa"})
+	repo := repoAt(srv, "open-webui/open-webui")
+	st := &fakeStore{
+		tracked:            []store.TrackedImage{{Repository: repo, Tag: "v0.11.4", Digest: "sha256:aaa"}},
+		tagCache:           map[string][]string{repo: {"v0.11.3", "v0.11.4"}},
+		tagCacheIncomplete: map[string]bool{repo: true},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status == store.ImageStatusCurrent {
+		t.Errorf("a truncated listing was recorded as current (note %q)", got.Note)
+	}
+	if got.Status != store.ImageStatusUnavailable {
+		t.Errorf("status = %q, want %q", got.Status, store.ImageStatusUnavailable)
+	}
+	if !strings.Contains(got.Note, "too long to read in full") {
+		t.Errorf("note = %q, want it to say the listing was cut short", got.Note)
 	}
 }
 
