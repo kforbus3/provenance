@@ -53,12 +53,28 @@ type SessionCommandInput struct {
 // it indexed — in a single transaction, so a recording is never left half-indexed. The
 // session's user/host/username/hostname/start are looked up to denormalize each row.
 // Passing an empty cmds slice still marks the recording indexed (nothing to store).
+//
+// The recording is marked FIRST, and if that matches no row nothing is stored. The
+// indexer reads a recording outside this transaction, so the recording can be deleted
+// (by hand or by retention) between that read and this write; inserting regardless
+// left commands behind for a recording that no longer existed, which is exactly the
+// residue DeleteRecordingBySession exists to prevent. Marking first also takes the
+// row lock, so a delete that arrives during the insert waits for it and then removes
+// what it inserted.
 func (s *Store) IndexRecordingCommands(ctx context.Context, recordingID, sshSessionID uuid.UUID, cmds []SessionCommandInput) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `UPDATE session_recordings SET commands_indexed_at = now() WHERE id = $1`, recordingID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil // the recording was deleted after it was read: nothing to index
+	}
 
 	var (
 		userID   *uuid.UUID
@@ -84,10 +100,6 @@ func (s *Store) IndexRecordingCommands(ctx context.Context, recordingID, sshSess
 			sshSessionID, userID, hostID, username, hostname, ts, c.Text); err != nil {
 			return err
 		}
-	}
-	_, err = tx.Exec(ctx, `UPDATE session_recordings SET commands_indexed_at = now() WHERE id = $1`, recordingID)
-	if err != nil {
-		return err
 	}
 	return tx.Commit(ctx)
 }
