@@ -5,6 +5,37 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.6 — 2026-10-16
+
+### Session replay: content search finds matches again, and deleted recordings take their commands with them
+
+**Content search never matched anything on a deployment that encrypts recordings.**
+Every query reported "scanned 0 of N recent recordings". The search opened each
+recording file directly instead of through the recorder's reader, so on an
+encrypted deployment (the production default) it read ciphertext, parsed no events,
+and skipped every file without saying so. It now decrypts recordings the same way
+replay, download and the command indexer do.
+
+**Deleting a recording left everything typed in it searchable.** The Commands tab
+searches an index of the commands typed in each recording, stored as plaintext rows.
+Those rows were only removed with the SSH session record, which is kept much longer
+than the recording, or for ever. Deleting a recording or pruning it by retention
+removed the encrypted file and kept its commands, each with a Replay button that could
+only say "No recording is available for this session".
+
+- **Deleting or pruning a recording now deletes its indexed commands** in the same
+  transaction.
+- **The indexer no longer stores commands for a recording deleted while it was being
+  indexed.**
+- **Migration 0118 removes the commands earlier deletions left behind**: every indexed
+  command whose session no longer has a recording. This cannot be undone, and it
+  covers every tenant.
+
+Deploy: backend image. Migration 0118 runs on startup and deletes orphaned
+`session_commands` rows.
+
+---
+
 ## v2.2.5 — 2026-10-11
 
 ### Container rollouts: a transient pull failure now waits before it is retried
