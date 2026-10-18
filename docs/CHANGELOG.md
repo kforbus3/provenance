@@ -5,6 +5,48 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.8 — 2026-10-17
+
+The first published release since v2.2.6: v2.2.7 was tagged and deployed by hand but
+never bundled, so its changes (below) reach the update channel with this one.
+
+### Container updates: a database is updated before the application that needs it
+
+**A rollout recreated Nextcloud's database in the middle of Nextcloud's own upgrade.**
+An Update All applied `nextcloud:35.0.2-apache` and then a rebuild of the
+`linuxserver/mariadb` image the same stack runs, about a minute apart. Nextcloud
+migrates its database in its entrypoint after the container is up; the database was
+stopped underneath that migration ("MySQL server has gone away"), the upgrade failed,
+and Nextcloud stayed in maintenance mode until `occ upgrade` was run by hand. The
+host was recorded as verified: the container was running the new image, and its
+health check was still *starting*.
+
+- **A host's images are applied in `depends_on` order**, read from its stack's compose
+  file: a database before the application that depends on it. Dependencies are
+  followed through intermediate services and are scoped to their own project, so two
+  stacks that both call a service `db` are not confused. Images with no dependency
+  between them keep their order.
+- **Each update finishes starting before the same host is given its next image.** A
+  container whose health check reports *starting* is waited on for up to 20 minutes;
+  *healthy*, or no health check at all, continues. One that reports *unhealthy* or
+  stops running ends that host's turn with its remaining images left unapplied, so
+  nothing else is changed underneath it. The last image on a host is not waited on;
+  the soak judges it as before.
+
+### Security updates
+
+- **Go 1.26.9** (from 1.26.6): fixes GO-2026-6611, 6612, 6613 and 6617 in `net/http`.
+- **`golang.org/x/net` v0.60.0** (same advisories), with minor updates to `x/crypto`,
+  `x/sync`, `x/sys` and `x/text`.
+- **OpenTelemetry v1.45.0**: GO-2026-6505, where the trace exporter logged its
+  endpoint URL at info level.
+- **`axios` 1.20.0** in the web interface: twelve advisories, seven of them high
+  (redirect-based SSRF, prototype-pollution gadgets, an HTTP/2 proxy bypass).
+
+Deploy: all images. No schema change.
+
+---
+
 ## v2.2.7 — 2026-10-17
 
 ### Container updates: very long tag lists are read to the end
