@@ -369,6 +369,7 @@ func newEngine(f *fakeStore, d *fakeDeployer, r *fakeRunner) *Engine {
 	e := New(f, d, r, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.now = func() time.Time { return time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC) }
 	f.now = func() time.Time { return e.now() }
+	e.sleep = func(context.Context, time.Duration) error { return nil }
 	return e
 }
 

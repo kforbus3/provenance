@@ -115,6 +115,9 @@ type Engine struct {
 	run   Runner
 	log   *slog.Logger
 	now   func() time.Time
+	// sleep waits between read-backs while an updated container settles (see
+	// settle). A field so the tests do not wait in real time.
+	sleep func(context.Context, time.Duration) error
 	// nfy is optional: an engine with no notifier still runs rollouts, it just
 	// tells nobody when one stops. Nil in the tests that do not care.
 	nfy Notifier
@@ -127,7 +130,7 @@ type Notifier interface {
 }
 
 func New(st Store, dep Deployer, run Runner, log *slog.Logger) *Engine {
-	return &Engine{store: st, dep: dep, run: run, log: log, now: time.Now}
+	return &Engine{store: st, dep: dep, run: run, log: log, now: time.Now, sleep: sleepCtx}
 }
 
 // SetNotifier attaches the notification service.
@@ -654,7 +657,19 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 	// The images that actually moved on this host: what the post-rollout watch
 	// reads the logs of. Not the stuck ones, and not the ones it was already past.
 	var landed []store.RolloutImage
-	for _, im := range images {
+	// A database before the application that depends_on it. See dependencyOrder.
+	ordered := dependencyOrder(images, stacks, containers)
+	// Whether another image is still to come on this host after position i, and so
+	// whether the one at i has to finish starting first. See settle.
+	moreAfter := func(i int) bool {
+		for _, im := range ordered[i+1:] {
+			if applies(im) {
+				return true
+			}
+		}
+		return false
+	}
+	for idx, im := range ordered {
 		if ctx.Err() != nil {
 			return
 		}
@@ -720,6 +735,13 @@ func (e *Engine) applyAll(ctx context.Context, r store.UpdateRollout, images []s
 		}
 		applied++
 		landed = append(landed, im)
+		if moreAfter(idx) {
+			if err := e.settle(ctx, one, hostID); err != nil {
+				e.fail(ctx, r.ID, hostID, fmt.Sprintf("%s:%s → %s: %s",
+					im.Repository, im.FromTag, im.ToTag, err.Error()))
+				return
+			}
+		}
 	}
 
 	if applied == 0 {

@@ -145,6 +145,102 @@ func ServicesFor(compose, repo, tag string) []string {
 	return found
 }
 
+// DependsOn returns, for each service in the file, the services its depends_on
+// names, in file order.
+//
+// All three spellings compose accepts are read: a block list ("- db"), an inline
+// list ("[db, redis]"), and the long form, where each dependency is a key carrying
+// its own condition. Only the names are kept; the condition is compose's business.
+//
+// A rollout needs this to decide ORDER. Nextcloud runs its database migration in
+// its entrypoint, and a rollout that updated nextcloud and then, a minute later,
+// the mariadb it depends_on, recreated the database underneath that migration:
+// "MySQL server has gone away", "Update failed", and the instance left in
+// maintenance mode. The file said which one the other needs. Reading it is how
+// the database goes first.
+func DependsOn(compose string) map[string][]string {
+	out := map[string][]string{}
+	var inServices bool
+	servicesIndent, serviceIndent := 0, -1
+	service := ""
+	inDeps := false
+	depsIndent, depsChild := 0, -1
+
+	add := func(dep string) {
+		dep, _ = SplitTrailingComment(dep)
+		_, dep = Unquote(strings.TrimSpace(dep))
+		if dep = strings.TrimSpace(dep); dep != "" && service != "" {
+			out[service] = append(out[service], dep)
+		}
+	}
+
+	for _, line := range strings.Split(compose, "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(trimmed)
+
+		// The services block, found the same way ServicesFor finds it.
+		if !inServices {
+			if trimmed == "services:" {
+				inServices, servicesIndent = true, indent
+			}
+			continue
+		}
+		if indent <= servicesIndent {
+			break
+		}
+
+		if inDeps {
+			if indent > depsIndent {
+				if depsChild < 0 {
+					depsChild = indent
+				}
+				// Only the first level under depends_on names services; deeper
+				// lines are a long-form entry's condition and restart settings.
+				if indent == depsChild {
+					if item, ok := strings.CutPrefix(trimmed, "- "); ok {
+						add(item)
+					} else if key, _, ok := strings.Cut(trimmed, ":"); ok {
+						add(key)
+					}
+				}
+				continue
+			}
+			inDeps = false
+		}
+
+		key, rest, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		if serviceIndent < 0 {
+			serviceIndent = indent
+		}
+		if indent == serviceIndent {
+			if strings.TrimSpace(rest) == "" {
+				service = key
+			}
+			continue
+		}
+		if service == "" || key != "depends_on" {
+			continue
+		}
+		value, _ := SplitTrailingComment(strings.TrimSpace(rest))
+		value = strings.TrimSpace(value)
+		if inline, ok := strings.CutPrefix(value, "["); ok {
+			for _, dep := range strings.Split(strings.TrimSuffix(inline, "]"), ",") {
+				add(dep)
+			}
+			continue
+		}
+		inDeps, depsIndent, depsChild = true, indent, -1
+	}
+	return out
+}
+
 // SplitImageLine splits a compose "image:" line into the part up to and
 // including the key with its following whitespace, and the value after it.
 func SplitImageLine(line string) (key, value string, ok bool) {
