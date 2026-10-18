@@ -26,7 +26,7 @@ vi.mock("../../api/upgrade", () => ({
 }));
 
 import {
-  previewUpgrade, applyUpgrade, getUpgradeStatus,
+  previewUpgrade, applyUpgrade, getUpgradeStatus, checkForUpdate,
 } from "../../api/upgrade";
 
 async function uploadAndInstall() {
@@ -137,4 +137,40 @@ describe("UpdatesCard", () => {
     );
     expect(poll).toBeGreaterThan(1);
   }, 20000);
+
+  // The channel index was still signed with a release key that had been rotated
+  // out. Every check failed with a 502 -- and the button that runs the check was
+  // only drawn from a SUCCESSFUL check, so it vanished and nothing said why.
+  it("keeps Check for updates and shows why when the channel cannot be read", async () => {
+    vi.mocked(checkForUpdate).mockRejectedValueOnce({
+      response: { status: 502, data: { error: "could not reach the update channel: channel signature: bundle signature does not match any trusted release key" } },
+    });
+    render(<UpdatesCard />);
+    expect(await screen.findByText(/does not match any trusted release key/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Check for updates/ })).toBeInTheDocument();
+    expect(screen.queryByText(/on the latest version/)).not.toBeInTheDocument();
+  });
+
+  it("clears the channel error once a check succeeds and offers the update", async () => {
+    vi.mocked(checkForUpdate)
+      .mockRejectedValueOnce({ response: { status: 502, data: { error: "could not reach the update channel: timeout" } } })
+      .mockResolvedValueOnce({
+        channelEnabled: true, updateAvailable: true, currentVersion: "1.2.3",
+        release: { version: "1.2.4", migrationCompatibility: "additive" },
+      } as never);
+    render(<UpdatesCard />);
+    fireEvent.click(await screen.findByRole("button", { name: /Check for updates/ }));
+    expect(await screen.findByRole("button", { name: /Download & install/ })).toBeInTheDocument();
+    expect(screen.queryByText(/timeout/)).not.toBeInTheDocument();
+  });
+
+  it("still shows no channel section when no channel is configured", async () => {
+    // Its own answer: clearAllMocks keeps queued once-values, so an earlier test
+    // that left one unconsumed would otherwise decide this one.
+    vi.mocked(checkForUpdate).mockReset();
+    vi.mocked(checkForUpdate).mockResolvedValue({ channelEnabled: false, updateAvailable: false } as never);
+    render(<UpdatesCard />);
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /Check for updates/ })).not.toBeInTheDocument();
+  });
 });

@@ -42,13 +42,27 @@ export function UpdatesCard() {
   const dispatchedRef = useRef<string | null>(null);
   const dispatchedAt = useRef<number>(0);
   const [checking, setChecking] = useState(false);
+  // Why the update channel could not be read, when it is configured but failing.
+  //
+  // The check on mount used to swallow every error, and the whole channel section
+  // renders only from a successful check -- so a channel that failed took the
+  // "Check for updates" button away with it and said nothing. That is how a channel
+  // index still signed with a rotated-out release key looked for weeks: no button,
+  // no error, just "Choose bundle". The backend answers 502 only for a configured
+  // channel it could not read (an unconfigured one is a 200 with channelEnabled
+  // false), so a 502 is the signal to keep the section and say why.
+  const [channelError, setChannelError] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
   const polling = useRef<number | null>(null);
 
   useEffect(() => {
     getVersion().then((v) => setCurrent(v.version)).catch(() => {});
     // Best-effort check on mount so an available update surfaces without a click.
-    checkForUpdate().then(setCheck).catch(() => {});
+    checkForUpdate().then(setCheck).catch((e: { response?: { status?: number; data?: { error?: string } } }) => {
+      if (e?.response?.status === 502) {
+        setChannelError(e?.response?.data?.error || "Could not reach the update channel.");
+      }
+    });
     return () => { if (polling.current) window.clearInterval(polling.current); };
   }, []);
 
@@ -56,8 +70,14 @@ export function UpdatesCard() {
     setError(""); setChecking(true);
     try {
       setCheck(await checkForUpdate());
+      setChannelError("");
     } catch (e: any) {
-      setError(e?.response?.data?.error || e?.message || "Could not reach the update channel.");
+      const msg = e?.response?.data?.error || e?.message || "Could not reach the update channel.";
+      if (e?.response?.status === 502) {
+        setChannelError(msg);
+      } else {
+        setError(msg);
+      }
     } finally {
       setChecking(false);
     }
@@ -247,18 +267,21 @@ export function UpdatesCard() {
           </Box>
         ) : (
           <>
-            {check?.channelEnabled && (
+            {(check?.channelEnabled || channelError) && (
               <Box sx={{ mb: 2 }}>
                 <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                   <Button variant="contained" onClick={onCheck} disabled={checking} startIcon={<CloudDownloadIcon />}>
                     Check for updates
                   </Button>
                   {checking && <CircularProgress size={18} />}
-                  {check && !check.updateAvailable && !checking && (
+                  {check && !check.updateAvailable && !checking && !channelError && (
                     <Typography variant="body2" color="text.secondary">You're on the latest version.</Typography>
                   )}
                 </Stack>
-                {check.updateAvailable && check.release && (
+                {channelError && !checking && (
+                  <Alert severity="warning" sx={{ mt: 1.5 }}>{channelError}</Alert>
+                )}
+                {!channelError && check?.updateAvailable && check.release && (
                   <Alert severity="info" sx={{ mt: 1.5 }}
                     action={<Button color="inherit" size="small" onClick={onPull} disabled={busy}>Download &amp; install</Button>}>
                     <b>{check.release.version}</b> is available
