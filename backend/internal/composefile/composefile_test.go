@@ -1,6 +1,9 @@
 package composefile
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // One parser serves the rollout rewriter and the registry checker, so what it
 // finds has to be exactly what the rewriter would edit. A reference the checker
@@ -143,5 +146,62 @@ services:
 `
 	if got := ServiceFor(compose, "redis", "8"); got != "cache" {
 		t.Errorf("got %q, want cache", got)
+	}
+}
+
+// The Nextcloud stack's own file, which is the case that needed this: the app and
+// its cron both depend_on the database, and the order a rollout applies images in
+// has to come from here.
+func TestDependsOnReadsEverySpelling(t *testing.T) {
+	compose := `services:
+  db:
+    image: linuxserver/mariadb:11.8.8
+    healthcheck:
+      test: ["CMD", "true"]
+  nextcloud:
+    image: nextcloud:35.0.2-apache
+    depends_on:
+      - db
+      - "redis"   # lock cache
+    environment:
+      - MYSQL_HOST=db
+  cron:
+    image: nextcloud:35.0.2-apache
+    depends_on: [db, 'redis']
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+        restart: true
+      cache:
+        condition: service_started
+    command: start
+  lonely:
+    image: alpine:3.22
+volumes:
+  depends_on:
+    - not-a-service
+`
+	got := DependsOn(compose)
+	want := map[string][]string{
+		"nextcloud": {"db", "redis"},
+		"cron":      {"db", "redis"},
+		"keycloak":  {"keycloak-db", "cache"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d services with dependencies, want %d: %v", len(got), len(want), got)
+	}
+	for svc, deps := range want {
+		if strings.Join(got[svc], ",") != strings.Join(deps, ",") {
+			t.Errorf("%s depends on %v, want %v", svc, got[svc], deps)
+		}
+	}
+}
+
+func TestDependsOnHandlesFourSpaceIndentation(t *testing.T) {
+	compose := "services:\n    app:\n        image: app:1\n        depends_on:\n            - db\n    db:\n        image: postgres:17\n"
+	if got := DependsOn(compose)["app"]; strings.Join(got, ",") != "db" {
+		t.Fatalf("app depends on %v, want [db]", got)
 	}
 }
