@@ -304,3 +304,67 @@ func SplitRef(ref string) (repo, tag string, ok bool) {
 	}
 	return ref[:colon], ref[colon+1:], true
 }
+
+// Profiled returns the services in the file that declare `profiles:`.
+//
+// A profile-gated service is one compose starts only when its profile is active
+// -- through COMPOSE_PROFILES, usually written to the project's .env. NAMING the
+// service on the command line bypasses that: `docker compose up -d svc` starts a
+// profiled service whatever the active profiles are. A rollout that narrows its
+// deploy to every service on an image therefore has to know which of them are
+// gated, or it starts the ones that were deliberately off. On a GPU host that
+// switches between model servers by profile, that is two model servers on the
+// same cards.
+func Profiled(compose string) map[string]bool {
+	out := map[string]bool{}
+	var inServices bool
+	servicesIndent, serviceIndent := 0, -1
+	service := ""
+	childIndent := -1
+
+	for _, line := range strings.Split(compose, "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(trimmed)
+
+		// The services block, found the same way ServicesFor finds it.
+		if !inServices {
+			if trimmed == "services:" {
+				inServices, servicesIndent = true, indent
+			}
+			continue
+		}
+		if indent <= servicesIndent {
+			break
+		}
+
+		key, rest, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		if serviceIndent < 0 {
+			serviceIndent = indent
+		}
+		if indent == serviceIndent {
+			if strings.TrimSpace(rest) == "" {
+				service, childIndent = key, -1
+			}
+			continue
+		}
+		if service == "" || indent < serviceIndent {
+			continue
+		}
+		// Only a key directly under the service: an environment variable or a
+		// label that happens to be called "profiles" is not the setting.
+		if childIndent < 0 {
+			childIndent = indent
+		}
+		if indent == childIndent && key == "profiles" {
+			out[service] = true
+		}
+	}
+	return out
+}

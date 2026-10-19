@@ -24,6 +24,14 @@ import (
 // to change, and a compose service can be found by its labels whatever its image
 // string says. So ask for them by name.
 
+// readbackGroup is one deployed project's directory and the services the deploy
+// named in it. A rollout can deploy several projects on one host, and a service
+// name means something only inside its own project.
+type readbackGroup struct {
+	dir      string
+	services []string
+}
+
 // serviceReadback appends, to the repository readback, one line per service this
 // deploy named.
 //

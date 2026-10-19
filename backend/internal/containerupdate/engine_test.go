@@ -273,7 +273,8 @@ type fakeDeployer struct {
 	mu       sync.Mutex
 	calls    int
 	err      error
-	services []string // what each deploy was narrowed to
+	services []string    // what each deploy was narrowed to
+	stacks   []uuid.UUID // which stack each deploy was for
 	// out overrides the deploy transcript. The engine reads the script's own
 	// markers out of it to learn what happened to the file ON the host, so a test
 	// about that has to be able to say.
@@ -295,10 +296,11 @@ func (d *fakeDeployer) transcript() string {
 	return "compose output"
 }
 
-func (d *fakeDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
+func (d *fakeDeployer) DeployPullingService(_ context.Context, id uuid.UUID, services ...string) (*store.ContainerStack, string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++
+	d.stacks = append(d.stacks, id)
 	// One entry per CALL, space-separated: a deploy narrowed to several services
 	// is still one deploy, and the existing tests assert how many happened.
 	d.services = append(d.services, strings.Join(services, " "))
