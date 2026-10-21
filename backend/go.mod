@@ -6,7 +6,7 @@ go 1.26.0
 // The Go standard library gets security fixes like anything else, and building
 // on the floor version ships them: govulncheck found 29 reachable stdlib
 // vulnerabilities when CI honoured the `go` line alone.
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/coreos/go-oidc/v3 v3.11.0

@@ -100,10 +100,10 @@ jobs:
           args: --timeout=10m
 
   govulncheck:
-    name: govulncheck (go1.26.9)
+    name: govulncheck (go1.26.10)
     runs-on: ubuntu-latest
     # security.yml also runs govulncheck weekly and on push to main; this keeps
-    # it on the PR path, pinned to the bumped 1.26.9 toolchain the modules
+    # it on the PR path, pinned to the bumped 1.26.10 toolchain the modules
     # declare (via go-version-file), so a newly reachable stdlib CVE is caught
     # before merge.
     strategy:

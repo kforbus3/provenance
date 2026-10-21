@@ -205,3 +205,48 @@ func TestDependsOnHandlesFourSpaceIndentation(t *testing.T) {
 		t.Fatalf("app depends on %v, want [db]", got)
 	}
 }
+
+func TestProfiledFindsOnlyGatedServices(t *testing.T) {
+	compose := `services:
+  coding-mode-guard:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b11718
+    entrypoint: ["sleep", "infinity"]
+  qwen-coder:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b11718
+    profiles: [coding]
+    environment:
+      profiles: not-the-setting
+  creative-llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b11718
+    profiles:
+      - creative
+  plain:
+    image: nginx:1.27
+    labels:
+      profiles: also-not-the-setting
+volumes:
+  profiles:
+`
+	got := Profiled(compose)
+	for _, svc := range []string{"qwen-coder", "creative-llm"} {
+		if !got[svc] {
+			t.Errorf("%s declares profiles but was not reported: %v", svc, got)
+		}
+	}
+	for _, svc := range []string{"coding-mode-guard", "plain"} {
+		if got[svc] {
+			t.Errorf("%s has no profiles of its own but was reported: %v", svc, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("got %v, want exactly qwen-coder and creative-llm", got)
+	}
+}
+
+func TestProfiledHandlesFourSpaceIndentation(t *testing.T) {
+	compose := "services:\n    a:\n        image: x:1\n        profiles: [p]\n    b:\n        image: x:1\n"
+	got := Profiled(compose)
+	if !got["a"] || got["b"] {
+		t.Errorf("got %v, want only a", got)
+	}
+}

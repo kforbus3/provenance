@@ -129,7 +129,8 @@ type saveReq struct {
 	Path    string `json:"path"`
 	Note    string `json:"note"`
 	// A shell command that proves the stack works; see store.ContainerStack.
-	VerifyCommand string `json:"verifyCommand"`
+	// Absent keeps the stored command; "" clears it. See store.StackInput.
+	VerifyCommand *string `json:"verifyCommand"`
 }
 
 // save records a definition. It does NOT deploy it.
@@ -152,7 +153,7 @@ func (h *handler) save(w http.ResponseWriter, r *http.Request) {
 	st, err := h.svc.store.UpsertStack(r.Context(), store.StackInput{
 		HostID: hostID, Name: strings.TrimSpace(rq.Name), Compose: rq.Compose,
 		Path: strings.TrimSpace(rq.Path), Note: strings.TrimSpace(rq.Note),
-		VerifyCommand: strings.TrimSpace(rq.VerifyCommand),
+		VerifyCommand: trimmedOrNil(rq.VerifyCommand),
 		AuthorID:      &p.UserID, AuthorName: p.Username,
 	})
 	if err != nil {
@@ -166,6 +167,15 @@ func (h *handler) save(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "stack.save", st.ID.String(), map[string]any{
 		"host": st.Hostname, "name": st.Name, "revision": st.Revision})
 	httpx.WriteJSON(w, http.StatusOK, st)
+}
+
+// trimmedOrNil trims a field that was sent and leaves one that was not as nil.
+func trimmedOrNil(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*s)
+	return &v
 }
 
 func (h *handler) del(w http.ResponseWriter, r *http.Request) {

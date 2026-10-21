@@ -4,7 +4,7 @@ go 1.26.0
 
 // Build with a current toolchain: the standard library gets security fixes
 // like anything else, and building on the module's floor version ships them.
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.19.0

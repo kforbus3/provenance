@@ -68,13 +68,40 @@ const pullAttempts = 3
 func RenderScript(dir, compose string, revision int, pull bool, services ...string) string {
 	services = narrowTo(services...)
 	var b strings.Builder
+	writeCompose(&b, dir, compose, revision)
+	return renderBringUp(&b, compose, pull, services)
+}
+
+// RenderWriteOnlyScript writes a stack's compose file to its host and starts
+// nothing: no pull, no `up`.
+//
+// For an update rollout reaching a project with nothing of it running. One image
+// is often named by several projects on one host -- a GPU host keeps one per
+// mode, and only one mode is up at a time -- and the update belongs in every one
+// of those files, or the next switch to an idle mode brings it up on the version
+// the rollout moved away from. But a rollout has no business starting a project
+// somebody switched off, and every way of deploying it through `up` does: naming
+// a service starts it whatever its profile says, and a whole-project `up -d`
+// starts every stopped service that has no profile. So the file is written and
+// checked exactly as a deploy writes it, and the script stops there.
+func RenderWriteOnlyScript(dir, compose string, revision int) string {
+	var b strings.Builder
+	writeCompose(&b, dir, compose, revision)
+	b.WriteString("echo '::WRITEONLY::the compose file was written; nothing was pulled or started'\n")
+	return b.String()
+}
+
+// writeCompose is the part of every deploy that puts the file on the host: write
+// it atomically, keep the previous one, record the revision, and refuse a file
+// compose cannot read, putting the previous one back.
+func writeCompose(b *strings.Builder, dir, compose string, revision int) {
 	b.WriteString("set -eu\n")
 	// The heredoc delimiter is quoted, so nothing inside the compose file is
 	// expanded by the shell on the way through. A compose file is full of $ --
 	// ${VAR:-default} is ordinary in one -- and expanding those here would write
 	// something different from what was reviewed.
-	fmt.Fprintf(&b, "mkdir -p %s\n", shellQuote(dir))
-	fmt.Fprintf(&b, "cd %s\n", shellQuote(dir))
+	fmt.Fprintf(b, "mkdir -p %s\n", shellQuote(dir))
+	fmt.Fprintf(b, "cd %s\n", shellQuote(dir))
 
 	// Which compose binary, established once and used for the rotation guard below, the
 	// validation, and the bring-up. The same two-flavour check as everywhere else: a
@@ -86,7 +113,7 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	b.WriteString("else\n")
 	b.WriteString("  echo 'no docker compose on this host' >&2; exit 127\n")
 	b.WriteString("fi\n")
-	fmt.Fprintf(&b, "cat > %s <<'PROVENANCE_COMPOSE_EOF'\n%s\nPROVENANCE_COMPOSE_EOF\n",
+	fmt.Fprintf(b, "cat > %s <<'PROVENANCE_COMPOSE_EOF'\n%s\nPROVENANCE_COMPOSE_EOF\n",
 		shellQuote(dir+"/.docker-compose.yml.new"), compose)
 	// Rotate the current file aside -- unless nothing is running on it.
 	//
@@ -101,14 +128,14 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	// So the question is asked of the machine rather than assumed: if the project has
 	// no running containers, the file sitting there is not one that works, and .prev
 	// already holds something better. Keep it.
-	fmt.Fprintf(&b, "if [ -f %s ]; then\n", shellQuote(dir+"/docker-compose.yml"))
-	fmt.Fprintf(&b, "  if [ -f %s ] && [ -z \"$($_c ps -q 2>/dev/null)\" ]; then\n",
+	fmt.Fprintf(b, "if [ -f %s ]; then\n", shellQuote(dir+"/docker-compose.yml"))
+	fmt.Fprintf(b, "  if [ -f %s ] && [ -z \"$($_c ps -q 2>/dev/null)\" ]; then\n",
 		shellQuote(dir+"/docker-compose.yml.prev"))
 	b.WriteString("    echo '::KEEPINGPREV::nothing is running on the current compose file, so the previous one is kept'\n")
-	fmt.Fprintf(&b, "  else\n    cp -f %s %s\n  fi\nfi\n",
+	fmt.Fprintf(b, "  else\n    cp -f %s %s\n  fi\nfi\n",
 		shellQuote(dir+"/docker-compose.yml"),
 		shellQuote(dir+"/docker-compose.yml.prev"))
-	fmt.Fprintf(&b, "mv -f %s %s\n",
+	fmt.Fprintf(b, "mv -f %s %s\n",
 		shellQuote(dir+"/.docker-compose.yml.new"),
 		shellQuote(dir+"/docker-compose.yml"))
 	// The revision this host has applied, readable from the host itself. So an
@@ -117,9 +144,9 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	// database that may be describing an apply that never landed.
 	// Read before it is overwritten, so a failed deploy can put back the number the
 	// host was actually running rather than guessing at revision-1.
-	fmt.Fprintf(&b, "_prevrev=$(cat %s 2>/dev/null || echo '')\n",
+	fmt.Fprintf(b, "_prevrev=$(cat %s 2>/dev/null || echo '')\n",
 		shellQuote(dir+"/.provenance-revision"))
-	fmt.Fprintf(&b, "printf '%%s\\n' %s > %s\n",
+	fmt.Fprintf(b, "printf '%%s\\n' %s > %s\n",
 		shellQuote(fmt.Sprint(revision)), shellQuote(dir+"/.provenance-revision"))
 
 	// One way back, used by every failure that can leave a file on the host that
@@ -191,7 +218,11 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 	b.WriteString("  echo \"::BADCOMPOSE::$_why\" >&2\n")
 	b.WriteString("  exit 5\n")
 	b.WriteString("fi\n")
+}
 
+// renderBringUp is the rest of a deploy: pull, then bring the named services (or
+// the whole project) up, putting the previous file back if they do not come up.
+func renderBringUp(b *strings.Builder, compose string, pull bool, services []string) string {
 	// What to act on: one service, or the whole project.
 	//
 	// A narrowed deploy still brings anything sharing that service's network
@@ -249,7 +280,7 @@ func RenderScript(dir, compose string, revision int, pull bool, services ...stri
 		b.WriteString("  _pullout=$($_c pull" + pullTarget + " 2>&1) || _pullrc=$?\n")
 		b.WriteString("  printf '%s\\n' \"$_pullout\"\n")
 		b.WriteString("  if [ \"$_pullrc\" -eq 0 ]; then break; fi\n")
-		fmt.Fprintf(&b, "  if [ \"$_try\" -ge %d ]; then break; fi\n", pullAttempts)
+		fmt.Fprintf(b, "  if [ \"$_try\" -ge %d ]; then break; fi\n", pullAttempts)
 		b.WriteString("  case \"$(printf '%s' \"$_pullout\" | tr 'A-Z' 'a-z')\" in\n")
 		b.WriteString("  " + transienterr.ShellCase() + ")\n")
 		b.WriteString("    echo \"::PULLRETRY::attempt $_try hit a transient registry error; trying again\"\n")

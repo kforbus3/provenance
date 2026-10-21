@@ -348,6 +348,7 @@ type realDeployer struct {
 	dir      string
 	compose  func() string
 	services []string
+	written  int // write-only deploys: the file written, nothing started
 }
 
 func (d *realDeployer) DeployPulling(ctx context.Context, id uuid.UUID) (*store.ContainerStack, string, error) {
@@ -361,6 +362,15 @@ func (d *realDeployer) DeployPullingService(_ context.Context, _ uuid.UUID, serv
 	out, code := shRun(stacks.RenderScript(d.dir, d.compose(), 1, true, services...))
 	if code != 0 {
 		return nil, out, fmt.Errorf("deploy exited %d", code)
+	}
+	return nil, out, nil
+}
+
+func (d *realDeployer) WriteOnly(_ context.Context, _ uuid.UUID) (*store.ContainerStack, string, error) {
+	d.written++
+	out, code := shRun(stacks.RenderWriteOnlyScript(d.dir, d.compose(), 1))
+	if code != 0 {
+		return nil, out, fmt.Errorf("write exited %d", code)
 	}
 	return nil, out, nil
 }
@@ -688,5 +698,68 @@ func TestE2EInPlaceUsesTheProjectsOwnComposeFiles(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("in-place failed with the project's own files (%d): %s",
 			code, inPlaceFailure(dir, []string{"probe"}, out))
+	}
+}
+
+// TestE2EWriteOnlyWritesTheFileAndStartsNothing runs the real write-only script
+// against a project that is switched off, the arrangement on a GPU host's idle
+// mode: a profile-gated server and an ungated sibling, nothing running.
+//
+// The file must end up on the new version and nothing may exist afterwards --
+// not the gated server, and not the ungated sibling a whole-project `up -d`
+// would have started.
+func TestE2EWriteOnlyWritesTheFileAndStartsNothing(t *testing.T) {
+	e2eEnabled(t)
+	dir := t.TempDir()
+	compose := func(image string) string {
+		return fmt.Sprintf("services:\n"+
+			"  server:\n    image: %s\n    command: [\"sleep\", \"600\"]\n    profiles: [idle]\n"+
+			"  sibling:\n    image: %s\n    command: [\"sleep\", \"600\"]\n", image, image)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(compose(e2eFrom)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		down := exec.Command("docker", "compose", "down", "-v", "--remove-orphans")
+		down.Dir = dir
+		_ = down.Run()
+	})
+
+	out, code := shRun(stacks.RenderWriteOnlyScript(dir, compose(e2eTo), 2))
+	if code != 0 {
+		t.Fatalf("write-only exited %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "::WRITEONLY::") {
+		t.Errorf("the script did not say it started nothing:\n%s", out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), e2eTo) || strings.Contains(string(got), e2eFrom) {
+		t.Errorf("the file on the host is not the new version:\n%s", got)
+	}
+	if prev, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml.prev")); err != nil ||
+		!strings.Contains(string(prev), e2eFrom) {
+		t.Errorf("the previous file was not kept as .prev (%v):\n%s", err, prev)
+	}
+	if rev, _ := os.ReadFile(filepath.Join(dir, ".provenance-revision")); strings.TrimSpace(string(rev)) != "2" {
+		t.Errorf("revision marker = %q, want 2", rev)
+	}
+	ps := exec.Command("docker", "compose", "ps", "-a", "-q")
+	ps.Dir = dir
+	if ids, err := ps.Output(); err != nil || strings.TrimSpace(string(ids)) != "" {
+		t.Errorf("write-only left containers behind (%v): %q", err, ids)
+	}
+
+	// A file compose cannot read is refused and the previous one put back, as
+	// in every deploy.
+	out, code = shRun(stacks.RenderWriteOnlyScript(dir, "services: [this is not compose", 3))
+	if code == 0 || !strings.Contains(out, "::BADCOMPOSE::") {
+		t.Fatalf("an unreadable file was accepted (exit %d):\n%s", code, out)
+	}
+	got, _ = os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if !strings.Contains(string(got), "services:") || strings.Contains(string(got), "this is not compose") {
+		t.Errorf("the unreadable file was left in place:\n%s", got)
 	}
 }
