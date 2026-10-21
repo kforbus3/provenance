@@ -66,7 +66,7 @@ const (
 )
 
 func (s *Service) Deploy(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, false, Waivers{}, "")
+	return s.deploy(ctx, stackID, bringUp, Waivers{}, "")
 }
 
 // Waivers are the refusals an operator has answered for. Each is separate on purpose:
@@ -87,7 +87,7 @@ type Waivers struct {
 // to it -- reached from the UI only after the dialog has named the image, both
 // versions and the migration involved.
 func (s *Service) DeployWaiving(ctx context.Context, stackID uuid.UUID, w Waivers) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, false, w, "")
+	return s.deploy(ctx, stackID, bringUp, w, "")
 }
 
 // DeployPulling is Deploy, fetching images first.
@@ -95,7 +95,7 @@ func (s *Service) DeployWaiving(ctx context.Context, stackID uuid.UUID, w Waiver
 // For update rollouts. See renderScript's `pull` for why an ordinary deploy does
 // not do this and why an update rollout must.
 func (s *Service) DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
-	return s.deploy(ctx, stackID, true, Waivers{}, "")
+	return s.deploy(ctx, stackID, pullThenBringUp, Waivers{}, "")
 }
 
 // DeployPullingService is DeployPulling narrowed to one compose service.
@@ -107,8 +107,26 @@ func (s *Service) DeployPullingService(ctx context.Context, stackID uuid.UUID, s
 	// is that this decision belongs to a person who has a migration plan.
 	// A rollout waives nothing: every one of these refusals exists because the decision
 	// belongs to a person, and automation has no way to have made it.
-	return s.deploy(ctx, stackID, true, Waivers{}, services...)
+	return s.deploy(ctx, stackID, pullThenBringUp, Waivers{}, services...)
 }
+
+// WriteOnly puts a stack's current revision on its host and starts nothing.
+//
+// For an update rollout reaching a project that has nothing running: the new
+// version belongs in its file, and starting it does not belong to the rollout.
+// See RenderWriteOnlyScript.
+func (s *Service) WriteOnly(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error) {
+	return s.deploy(ctx, stackID, writeOnly, Waivers{})
+}
+
+// deployMode is what a deploy does after writing the file.
+type deployMode int
+
+const (
+	bringUp         deployMode = iota // `up`, as an operator's Deploy does
+	pullThenBringUp                   // pull first: an update rollout, see RenderScript
+	writeOnly                         // write and check the file; pull and start nothing
+)
 
 // Preflight answers every refusal a deploy can raise, on the request itself, before
 // anything is detached and before the host is touched.
@@ -161,7 +179,7 @@ func (s *Service) Preflight(ctx context.Context, stackID uuid.UUID, waive Waiver
 	return nil
 }
 
-func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waive Waivers, services ...string) (*store.ContainerStack, string, error) {
+func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, mode deployMode, waive Waivers, services ...string) (*store.ContainerStack, string, error) {
 	st, err := s.store.GetStack(ctx, stackID)
 	if err != nil {
 		return nil, "", err
@@ -184,7 +202,7 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waiv
 			return st, "", conflict
 		}
 	}
-	if !waive.AlreadyFailed && len(services) == 0 {
+	if !waive.AlreadyFailed && len(services) == 0 && mode != writeOnly {
 		// Whole-project deploys only. A rollout narrowed to one service is a different
 		// input from the failed whole-project attempt, so the failure says nothing
 		// about it.
@@ -201,7 +219,11 @@ func (s *Service) deploy(ctx context.Context, stackID uuid.UUID, pull bool, waiv
 	// run in flight from one that never started. See DeployStateDeploying.
 	_ = s.store.MarkStackDeploying(ctx, st.ID)
 
-	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(RenderScript(st.Path, st.Compose, st.Revision, pull, services...)), h)
+	script := RenderScript(st.Path, st.Compose, st.Revision, mode == pullThenBringUp, services...)
+	if mode == writeOnly {
+		script = RenderWriteOnlyScript(st.Path, st.Compose, st.Revision)
+	}
+	out, code, failed := s.run.RunScript(ctx, hostexec.Privileged(script), h)
 	state := "deployed"
 	if failed || code != 0 {
 		state = "failed"

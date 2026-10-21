@@ -150,7 +150,14 @@ type StackInput struct {
 	Note    string
 	// VerifyCommand is saved with the definition. Changing it alone is not a new
 	// revision: the revision history is the compose file's.
-	VerifyCommand string
+	//
+	// A pointer, because leaving it out is not the same as clearing it. Every
+	// caller but the stack editor writes a stack for some other reason -- a rollout
+	// rewriting one image tag, a path corrected from the host's labels -- and as a
+	// plain string each of those saved "" over the command an operator had set, so
+	// the first automated update of a stack quietly switched its verification off.
+	// nil keeps what is stored; a pointer to "" clears it.
+	VerifyCommand *string
 	AuthorID      *uuid.UUID
 	AuthorName    string
 }
@@ -171,6 +178,12 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 	var st ContainerStack
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		var prevCompose, prevPath, prevVerify string
+		verify := func() string {
+			if in.VerifyCommand == nil {
+				return prevVerify
+			}
+			return *in.VerifyCommand
+		}
 		var id uuid.UUID
 		var rev int
 		err := tx.QueryRow(ctx,
@@ -182,14 +195,14 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO container_stacks (host_id, name, compose, path, revision, verify_command)
 				VALUES ($1,$2,$3,$4,1,$5) RETURNING id, revision`,
-				in.HostID, in.Name, in.Compose, path, in.VerifyCommand).Scan(&id, &rev); err != nil {
+				in.HostID, in.Name, in.Compose, path, verify()).Scan(&id, &rev); err != nil {
 				return err
 			}
 		case err != nil:
 			return err
 		default:
 			path := resolveStackPath(inPath, prevPath, in.Name)
-			if prevCompose == in.Compose && path == prevPath && prevVerify == in.VerifyCommand {
+			if prevCompose == in.Compose && path == prevPath && prevVerify == verify() {
 				return nil // nothing changed
 			}
 			next := rev
@@ -198,7 +211,7 @@ func (s *Store) UpsertStack(ctx context.Context, in StackInput) (*ContainerStack
 			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE container_stacks SET compose=$2, path=$3, revision=$4, verify_command=$5, updated_at=now()
-				WHERE id=$1`, id, in.Compose, path, next, in.VerifyCommand); err != nil {
+				WHERE id=$1`, id, in.Compose, path, next, verify()); err != nil {
 				return err
 			}
 			rev = next

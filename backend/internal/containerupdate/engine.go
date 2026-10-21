@@ -53,6 +53,8 @@ type Store interface {
 type Deployer interface {
 	DeployPulling(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error)
 	DeployPullingService(ctx context.Context, stackID uuid.UUID, services ...string) (*store.ContainerStack, string, error)
+	// WriteOnly writes a stack's compose file to its host and starts nothing.
+	WriteOnly(ctx context.Context, stackID uuid.UUID) (*store.ContainerStack, string, error)
 }
 
 // Runner executes a script on a host, for the verification read-back.
@@ -988,6 +990,21 @@ func (e *Engine) deployStack(ctx context.Context, r store.UpdateRollout, hostID 
 	// writing anything.
 	e.reconcileStackPath(ctx, stack, r)
 
+	// Which services to bring up, decided before anything is recorded: a failure
+	// to tell must not leave the stored compose describing a file the host never
+	// got.
+	services, serr := e.composeServicesFor(ctx, r, hostID, stack.Path, stack.Name, compose)
+	if serr != nil {
+		return nil, serr
+	}
+	upToDate := compose == stack.Compose && stack.Deployed != nil &&
+		*stack.Deployed == stack.Revision && stack.DeployState == "deployed"
+	if len(services) == 0 && upToDate {
+		// Nothing of this project is running and its host already has this file:
+		// there is nothing to write and nothing that may be started.
+		return nil, nil
+	}
+
 	// Only save a new revision when the text actually changed. A digest-only
 	// update -- the same tag rebuilt -- rewrites nothing, and writing an
 	// identical revision would fill the history with entries that record no
@@ -1007,11 +1024,26 @@ func (e *Engine) deployStack(ctx context.Context, r store.UpdateRollout, hostID 
 		}
 	}
 
-	// Narrowed to the service that runs this image. Bringing up the whole project
+	// Narrowed to the services that run this image. Bringing up the whole project
 	// would restart everything beside it — on a host running a model server and a
 	// vector database, updating curl would have restarted both.
-	services := e.composeServicesFor(ctx, r, hostID, stack.Path, compose)
-	if _, out, err := e.dep.DeployPullingService(ctx, stack.ID, services...); err != nil {
+	//
+	// And when none of them is up, the file is written and nothing is started. The
+	// project was switched off by somebody -- a GPU host's idle mode, a service
+	// stopped on purpose -- and the update belongs in its file so it comes up on
+	// the new version whenever it is next started, but starting it is not the
+	// rollout's decision.
+	deploy := func() (string, error) {
+		_, out, err := e.dep.DeployPullingService(ctx, stack.ID, services...)
+		return out, err
+	}
+	if len(services) == 0 {
+		deploy = func() (string, error) {
+			_, out, err := e.dep.WriteOnly(ctx, stack.ID)
+			return out, err
+		}
+	}
+	if out, err := deploy(); err != nil {
 		// The rollout wrote this revision, so the rollout takes it back when the
 		// host would not have it.
 		//
@@ -1036,16 +1068,26 @@ func (e *Engine) deployStack(ctx context.Context, r store.UpdateRollout, hostID 
 		// to be progress bars as the reason anything failed.
 		return nil, fmt.Errorf("%s", explainCompose(err.Error()+"\n"+out))
 	}
+	if len(services) == 0 {
+		e.log.Info("update rollout: wrote a stack's compose file and started nothing, "+
+			"because none of its services is running",
+			"stack", stack.Name, "path", stack.Path,
+			"image", fmt.Sprintf("%s:%s → %s", r.Repository, r.FromTag, r.ToTag))
+	}
 	return services, nil
 }
 
-// composeServicesFor returns EVERY compose service running this image on a host,
-// or nil when none can be established.
+// composeServicesFor returns every compose service in this project that uses the
+// image AND is running -- the services the deploy may name. Empty means none is
+// up, and the caller writes the file without starting anything.
 //
-// Nil means "the whole project", which is the old behaviour and the safe
-// fallback: a deploy that touches more than it needed is recoverable, and one
-// that touches nothing because a name was guessed wrong is an update reported as
-// applied that never happened.
+// It never returns "the whole project". That used to be the fallback when no
+// service could be established, on the reasoning that touching too much is
+// recoverable and touching nothing reports an update that never happened. The
+// second half is still true and is covered elsewhere: the readback fails a host
+// that still runs the from-tag. The first half was not: a whole-project `up -d`
+// starts every stopped service that has no profile, and a project somebody had
+// switched off came back on as a side effect of an image update.
 //
 // ALL of them, not the first. One image backing several services in a project is
 // ordinary, and the tag rewrite is file-wide -- RewriteImageTag changes every
@@ -1062,30 +1104,35 @@ func (e *Engine) deployStack(ctx context.Context, r store.UpdateRollout, hostID 
 // hosts where the recorded paths do not line up, which is how this behaved when
 // it only ever returned one name.
 func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
-	hostID uuid.UUID, stackPath, compose string) []string {
+	hostID uuid.UUID, stackPath, stackName, compose string) ([]string, error) {
 	var fromContainers []string
 	containers, err := e.store.HostContainers(ctx, hostID)
-	if err == nil {
-		var here, anywhere []string
-		seenHere, seenAny := map[string]bool{}, map[string]bool{}
-		for _, c := range containers {
-			if c.Repository != r.Repository || c.Tag != r.FromTag || c.ComposeService == "" {
-				continue
-			}
-			if !seenAny[c.ComposeService] {
-				seenAny[c.ComposeService] = true
-				anywhere = append(anywhere, c.ComposeService)
-			}
-			if stackPath != "" && c.ComposeDir == stackPath && !seenHere[c.ComposeService] {
-				seenHere[c.ComposeService] = true
-				here = append(here, c.ComposeService)
-			}
+	if err != nil {
+		// Which services are running is the one thing this must know: guessing
+		// either way either leaves a running service on the old image or starts a
+		// stopped one. Retried with the host.
+		return nil, fmt.Errorf("could not read which containers are running on this host, "+
+			"so which services to bring up cannot be known: %w", err)
+	}
+	var here, anywhere []string
+	seenHere, seenAny := map[string]bool{}, map[string]bool{}
+	for _, c := range containers {
+		if c.Repository != r.Repository || c.Tag != r.FromTag || c.ComposeService == "" {
+			continue
 		}
-		if len(here) > 0 {
-			fromContainers = here
-		} else {
-			fromContainers = anywhere
+		if !seenAny[c.ComposeService] {
+			seenAny[c.ComposeService] = true
+			anywhere = append(anywhere, c.ComposeService)
 		}
+		if stackPath != "" && c.ComposeDir == stackPath && !seenHere[c.ComposeService] {
+			seenHere[c.ComposeService] = true
+			here = append(here, c.ComposeService)
+		}
+	}
+	if len(here) > 0 {
+		fromContainers = here
+	} else {
+		fromContainers = anywhere
 	}
 
 	// No container is running the from-tag. That is not an edge case: it is the
@@ -1125,42 +1172,50 @@ func (e *Engine) composeServicesFor(ctx context.Context, r store.UpdateRollout,
 		}
 	}
 
-	// Except a profile-gated service that is not up. Naming a service bypasses
-	// compose profiles -- `up -d svc` starts it whatever COMPOSE_PROFILES says --
-	// so the union above, which is right about which services USE the image, was
-	// starting services their own project had switched off. On a GPU host that
-	// selects its model server by profile, a llama.cpp rollout in one mode started
-	// the other mode's server onto cards already in use. Its file is still
-	// rewritten, so the service comes up on the new tag when its profile is next
-	// switched on; it is only not STARTED here.
+	// Except a service that is not up. Naming a service starts it -- past its
+	// compose profile, and whether or not anybody wanted it running -- so the union
+	// above, which is right about which services USE the image, was starting
+	// services their own project had switched off. On a GPU host that selects its
+	// model server by profile, a llama.cpp rollout in one mode started the other
+	// mode's server onto cards already in use. Its file is still rewritten, so the
+	// service comes up on the new tag whenever it is next started; it is only not
+	// STARTED here.
 	//
-	// Up is read from the containers, scoped to this project like the match
-	// above, because a profile can only be active in the project that declares it.
-	profiled := composefile.Profiled(compose)
-	if len(profiled) == 0 {
-		return out
+	// Up is read from the containers, scoped to this project: by its directory, or
+	// by its project name where the recorded path has drifted from the labels.
+	//
+	// One gap: a container on this repository that carries no compose service
+	// label, which the inventory can then not place -- a file pinned ahead of a
+	// container still on :latest, a runtime that does not label. Something IS
+	// running, and nothing says which service it is, so the file's services on the
+	// image are taken as up, except the profile-gated ones: that is the only
+	// evidence there is, and dropping them all would leave the running container
+	// on the old image.
+	inProject := func(c models.Container) bool {
+		return (stackPath != "" && strings.TrimRight(c.ComposeDir, "/") == strings.TrimRight(stackPath, "/")) ||
+			(stackName != "" && c.ComposeProject == stackName)
 	}
 	up := map[string]bool{}
-	if err == nil {
-		for _, c := range containers {
-			if c.ComposeService != "" && (stackPath == "" || c.ComposeDir == stackPath) {
-				up[c.ComposeService] = true
+	unplaced := false
+	for _, c := range containers {
+		if c.ComposeService == "" {
+			if c.Repository == r.Repository && (c.ComposeDir == "" || inProject(c)) {
+				unplaced = true
 			}
+			continue
+		}
+		if inProject(c) {
+			up[c.ComposeService] = true
 		}
 	}
-	kept := out[:0:0]
+	profiled := composefile.Profiled(compose)
+	kept := []string{}
 	for _, svc := range out {
-		if !profiled[svc] || up[svc] {
+		if up[svc] || (unplaced && !profiled[svc]) {
 			kept = append(kept, svc)
 		}
 	}
-	// Nil, not empty, when every service on the image is switched off: nil is
-	// "the whole project", and a whole-project `up -d` is the one form that
-	// honours profiles. It writes the new file and starts nothing that was off.
-	if len(kept) == 0 {
-		return nil
-	}
-	return kept
+	return kept, nil
 }
 
 // adopt reads the host's compose file for this image and records it as a stack.
@@ -1315,12 +1370,13 @@ type targetStack struct {
 // rightly fails a host still running the tag the rollout moves away from, halted
 // the rollout on its own half-finished work. Every llama.cpp release did it.
 //
-// "Running" is what selects them: a stack counts when a running container on the
-// from-tag belongs to it. A stack that merely names the image but has nothing up
-// is not deployed, because deploying it would START it -- a project somebody
-// stopped is not the rollout's to bring back. When no stack has anything running
-// (a service re-pinned ahead of its container, a path the labels disagree with)
-// the first stack naming the image is used, which is what this did before.
+// Every one that NAMES the image, whether or not anything in it is running. A
+// first version took only the stacks with a container up on the from-tag, so on
+// that same host the idle modes' files kept the old tag and the next mode switch
+// started a server on the version the rollout had moved away from. What a stack
+// may have STARTED is decided per stack, by deployStack: only services already
+// running are brought up, and a stack with none gets its file written and nothing
+// started.
 func (e *Engine) targetStacks(ctx context.Context, r store.UpdateRollout, hostID uuid.UUID) ([]targetStack, error) {
 	stacks, err := e.store.ListStacks(ctx, &hostID)
 	if err != nil {
@@ -1359,43 +1415,7 @@ func (e *Engine) targetStacks(ctx context.Context, r store.UpdateRollout, hostID
 				"updatable. Rebuilds of the same tag do not need that",
 			r.Repository, r.FromTag)
 	}
-	if len(candidates) == 1 {
-		return candidates, nil
-	}
-
-	containers, err := e.store.HostContainers(ctx, hostID)
-	if err != nil {
-		return candidates[:1], nil
-	}
-	var running []targetStack
-	for _, c := range candidates {
-		if stackRunsImage(c.stack, containers, r) {
-			running = append(running, c)
-		}
-	}
-	if len(running) == 0 {
-		return candidates[:1], nil
-	}
-	return running, nil
-}
-
-// stackRunsImage reports that a container on the rollout's from-tag belongs to
-// this stack. The inventory is `docker ps`, so every container in it is up (or
-// trying to be: a crash-looping one is listed too, and is as much the stack's) -- by its compose directory, or by its project name when
-// the recorded path has drifted from the labels (reconcileStackPath corrects
-// that path, but only once the stack has been chosen).
-func stackRunsImage(st *store.ContainerStack, containers []models.Container, r store.UpdateRollout) bool {
-	path := strings.TrimRight(st.Path, "/")
-	for _, c := range containers {
-		if c.Repository != r.Repository || c.Tag != r.FromTag {
-			continue
-		}
-		if (path != "" && strings.TrimRight(c.ComposeDir, "/") == path) ||
-			(st.Name != "" && c.ComposeProject == st.Name) {
-			return true
-		}
-	}
-	return false
+	return candidates, nil
 }
 
 // verifyScript reports, for one repository, every container using it: its image

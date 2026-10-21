@@ -2,6 +2,7 @@ package containerupdate
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -179,9 +180,25 @@ func TestAProfileGatedServiceThatIsOffIsNotStarted(t *testing.T) {
 	}
 }
 
-// A project that names the image but has nothing up was stopped by somebody, and
-// deploying it would start it.
-func TestAStoppedProjectNamingTheImageIsNotStarted(t *testing.T) {
+func (h *modeHost) writtenFor(d *fakeDeployer, mode string) bool {
+	for _, id := range d.written {
+		if id == h.stacks[mode] {
+			return true
+		}
+	}
+	return false
+}
+
+// A project that names the image but has nothing up was stopped by somebody. Its
+// file still gets the new version -- otherwise the next time it is started, it
+// starts on the version the rollout moved away from -- but nothing of it is
+// started. keith's rule for ai (2026-10-21): if coding is running creative is not,
+// and vice versa; an update that applies to both is applied to both, and must not
+// start the one that is not already running.
+//
+// A first version of the fix skipped such a project entirely, leaving its file on
+// the old tag.
+func TestAStoppedProjectNamingTheImageIsWrittenButNotStarted(t *testing.T) {
 	h := modeFixture("coding")
 	var kept []models.Container
 	for _, c := range h.f.containers[h.host] {
@@ -194,23 +211,106 @@ func TestAStoppedProjectNamingTheImageIsNotStarted(t *testing.T) {
 	newEngine(h.f, d, h.runner(d)).Tick(context.Background())
 
 	if svcs, ok := h.deployedFor(d, "flash"); ok {
-		t.Errorf("deployed the stopped flash project (%q), which starts it", svcs)
+		t.Errorf("brought up the stopped flash project (%q), which starts it", svcs)
+	}
+	if !h.writtenFor(d, "flash") {
+		t.Errorf("the stopped flash project's file was not written to its host (written: %v)", d.written)
+	}
+	for _, st := range h.f.stacks[h.host] {
+		if st.Name == "flash" && strings.Contains(st.Compose, modeFrom) {
+			t.Errorf("the stopped flash stack still names %s, so starting it later starts the old version:\n%s",
+				modeFrom, st.Compose)
+		}
 	}
 	if got := h.f.hosts[h.rid][0]; got.State != store.UpdateHostVerified {
 		t.Fatalf("host state = %q (%s), want verified", got.State, got.Error)
 	}
 }
 
-// When every service on the image in a project is switched off, the deploy is
-// the whole project: the only `up -d` form that honours profiles. It writes the
-// new file and starts nothing that was off.
-func TestAllServicesSwitchedOffDeploysTheWholeProject(t *testing.T) {
+// When nothing of a project is running, the rollout must not fall back to a
+// whole-project `up -d`. That form honours profiles, which is why it was chosen,
+// but it starts every stopped service WITHOUT one -- a project somebody switched
+// off came back on as a side effect of an image update.
+func TestNothingRunningMeansNoServiceIsNamedAndNothingStarts(t *testing.T) {
 	compose := "services:\n" +
 		"  llm:\n    image: " + modeRepo + ":" + modeFrom + "\n    profiles: [gpu]\n" +
 		"  web:\n    image: nginx:1.27\n"
 	e := newEngine(&fakeStore{containers: map[uuid.UUID][]models.Container{}}, &fakeDeployer{}, &fakeRunner{})
 	r := store.UpdateRollout{Repository: modeRepo, FromTag: modeFrom, ToTag: modeTo}
-	if got := e.composeServicesFor(context.Background(), r, uuid.New(), "/opt/stacks/x", compose); got != nil {
-		t.Errorf("services = %q, want nil (the whole project)", got)
+	got, err := e.composeServicesFor(context.Background(), r, uuid.New(), "/opt/stacks/x", "x", compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("services = %#v, want an empty list (write the file, start nothing) -- nil "+
+			"used to mean the whole project", got)
+	}
+}
+
+// A stopped service WITHOUT a profile is just as off as a gated one. test2 on ai
+// runs llama.cpp beside an ollama nobody has started in weeks; naming the image's
+// services must not bring it, or a stopped sibling on the same image, back.
+func TestAStoppedUngatedServiceOnTheImageIsNotStarted(t *testing.T) {
+	compose := "services:\n" +
+		"  llamacpp:\n    image: " + modeRepo + ":" + modeFrom + "\n" +
+		"  llamacpp-old:\n    image: " + modeRepo + ":" + modeFrom + "\n" +
+		"  ollama:\n    image: ollama/ollama:0.31.2\n"
+	host := uuid.New()
+	f := &fakeStore{containers: map[uuid.UUID][]models.Container{host: {{
+		Name: "llamacpp", Repository: modeRepo, Tag: modeFrom,
+		ComposeProject: "test2", ComposeService: "llamacpp", ComposeDir: "/home/keith/test2"}}}}
+	e := newEngine(f, &fakeDeployer{}, &fakeRunner{})
+	r := store.UpdateRollout{Repository: modeRepo, FromTag: modeFrom, ToTag: modeTo}
+	got, err := e.composeServicesFor(context.Background(), r, host, "/home/keith/test2", "test2", compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != "llamacpp" {
+		t.Errorf("services = %q, want just the running llamacpp", got)
+	}
+}
+
+// Which services are up is the one input that cannot be guessed: guessing "all"
+// starts stopped ones, guessing "none" leaves running ones on the old image.
+func TestUnknownRunningStateIsAnErrorNotAGuess(t *testing.T) {
+	f := &fakeStore{containersErr: errors.New("inventory unavailable")}
+	e := newEngine(f, &fakeDeployer{}, &fakeRunner{})
+	r := store.UpdateRollout{Repository: modeRepo, FromTag: modeFrom, ToTag: modeTo}
+	got, err := e.composeServicesFor(context.Background(), r, uuid.New(), "/opt/stacks/x", "x",
+		modeCompose("coding", "qwen-coder"))
+	if err == nil {
+		t.Fatalf("services = %q with no inventory; want an error", got)
+	}
+}
+
+// A stopped project already on the new version needs nothing: no write, no start.
+// Every later rollout of an unrelated tag must not keep rewriting it.
+func TestAStoppedProjectAlreadyCurrentIsLeftAlone(t *testing.T) {
+	h := modeFixture("coding")
+	var kept []models.Container
+	for _, c := range h.f.containers[h.host] {
+		if c.ComposeProject != "flash" {
+			kept = append(kept, c)
+		}
+	}
+	h.f.containers[h.host] = kept
+	for i := range h.f.stacks[h.host] {
+		st := &h.f.stacks[h.host][i]
+		if st.Name == "flash" {
+			st.Compose = strings.ReplaceAll(st.Compose, modeFrom, modeTo)
+			st.Revision = 4
+			rev := 4
+			st.Deployed, st.DeployState = &rev, "deployed"
+		}
+	}
+	d := &fakeDeployer{}
+	newEngine(h.f, d, h.runner(d)).Tick(context.Background())
+
+	if _, ok := h.deployedFor(d, "flash"); ok || h.writtenFor(d, "flash") {
+		t.Errorf("touched a stopped flash project that was already current (deployed %v, written %v)",
+			d.services, d.written)
+	}
+	if got := h.f.hosts[h.rid][0]; got.State != store.UpdateHostVerified {
+		t.Fatalf("host state = %q (%s), want verified", got.State, got.Error)
 	}
 }

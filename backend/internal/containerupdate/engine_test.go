@@ -34,11 +34,14 @@ type fakeStore struct {
 	containers map[uuid.UUID][]models.Container
 	images     map[uuid.UUID][]store.RolloutImage
 	saved      []string // compose bodies written
-	stateCalls []string // "host:state"
-	rolloutSet []string // "rollout:state:reason"
-	canaryAt   *time.Time
-	claimFail  map[uuid.UUID]bool
-	refreshed  []uuid.UUID // hosts whose containers were re-read after a change
+	// containersErr fails HostContainers: what a host is running is the input a
+	// rollout cannot guess, so a test has to be able to take it away.
+	containersErr error
+	stateCalls    []string // "host:state"
+	rolloutSet    []string // "rollout:state:reason"
+	canaryAt      *time.Time
+	claimFail     map[uuid.UUID]bool
+	refreshed     []uuid.UUID // hosts whose containers were re-read after a change
 	// Per-image pacing stamps, keyed "rollout|repository|fromTag", laid over
 	// whatever RolloutImages returns -- as the real columns would be.
 	imgCanary  map[string]time.Time
@@ -242,6 +245,9 @@ func (f *fakeStore) RolloutImages(_ context.Context, id uuid.UUID) ([]store.Roll
 func (f *fakeStore) HostContainers(_ context.Context, hostID uuid.UUID) ([]models.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.containersErr != nil {
+		return nil, f.containersErr
+	}
 	return f.containers[hostID], nil
 }
 
@@ -279,6 +285,18 @@ type fakeDeployer struct {
 	// markers out of it to learn what happened to the file ON the host, so a test
 	// about that has to be able to say.
 	out string
+	// written lists the stacks whose file was written with nothing started. Kept
+	// apart from stacks/services and out of calls: a write-only deploy brings
+	// nothing up, and counting it as a deploy would let a test about what was
+	// STARTED pass on a project that was only written.
+	written []uuid.UUID
+}
+
+func (d *fakeDeployer) WriteOnly(_ context.Context, id uuid.UUID) (*store.ContainerStack, string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.written = append(d.written, id)
+	return nil, d.transcript(), d.err
 }
 
 func (d *fakeDeployer) DeployPulling(context.Context, uuid.UUID) (*store.ContainerStack, string, error) {
@@ -908,8 +926,12 @@ func TestAnAdoptedStackStillWinsOverInPlace(t *testing.T) {
 	// If Provenance holds the file, that is the definition of record and the one
 	// with a history. In-place is the fallback, not the preference.
 	f, rid, ids := inPlaceFixture("1.24", "1.24")
+	// Named and placed as adoption records it: the container's own project and
+	// directory. A stack with neither cannot exist in the store, and the rollout
+	// reads which of a project's services are up by exactly these two.
 	f.stacks[ids] = []store.ContainerStack{{
-		ID: uuid.New(), HostID: ids, Enabled: true, Compose: composeNginx}}
+		ID: uuid.New(), HostID: ids, Enabled: true, Compose: composeNginx,
+		Name: "site", Path: "/opt/stacks/site"}}
 	d := &fakeDeployer{}
 	newEngine(f, d, &fakeRunner{out: "::OK::\nnginx:1.24\tnginx\trunning\tnginx@sha256:new\n"}).
 		Tick(context.Background())
