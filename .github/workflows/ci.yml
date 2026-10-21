@@ -89,7 +89,7 @@ jobs:
           cache-dependency-path: ${{ matrix.module }}/go.sum
       - name: golangci-lint
         # v8 installs golangci-lint v2, which the .golangci.yml files use (v2 schema).
-        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # Pinned, and matched by `make lint`. `latest` let each new release add
           # rules and fail builds that had not changed, with nothing local to show it.
