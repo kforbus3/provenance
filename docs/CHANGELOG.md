@@ -5,6 +5,58 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.9 — 2026-10-21
+
+### Container updates: every stack that names an image is updated, and nothing stopped is started
+
+**Every llama.cpp release halted "Update all" on a GPU host that keeps one compose
+project per mode.** Each project (coding, creative, flash) names the same llama.cpp
+image, and only one mode runs at a time. The rollout deployed the first project naming
+the image and then failed the host, because the other projects' containers were still
+on the old tag. It happened on three releases in a row.
+
+- **Every managed stack on a host that names the image is updated**, not only the
+  first. Services that are running are recreated on the new version as before.
+- **A stack with nothing running gets its compose file written and nothing started.**
+  The file is written exactly as a deploy writes it, with the previous file kept and
+  an unreadable file refused and put back, so the project comes up on the new version
+  whenever it is next started. Starting it is not the rollout's decision. A stopped
+  stack whose host already has the new file is left alone.
+- **A rollout only ever names services that are already running.** It no longer falls
+  back to bringing up the whole project, which honours compose profiles but starts
+  every stopped service without one. Naming a service starts it past its profile, so
+  a switched-off mode's model server is no longer started onto GPUs another mode is
+  using.
+- **A rollout that cannot read which containers a host is running stops that host**
+  and retries, rather than guessing.
+
+### Stacks: a rollout no longer switches off a stack's verify command
+
+A stack's verify command was erased by the first automated change to the stack. Every
+save a rollout makes (rewriting a tag, correcting a path from the host's labels,
+adopting a compose file, putting back a failed change) left the command out, and
+leaving it out saved it as empty. Leaving the field out now keeps the stored command;
+the stack editor, which always sends it, can still clear it. The API's
+`verifyCommand` field behaves the same way.
+
+### Settings: a channel that cannot be read says so
+
+When the update channel could not be read (for example, an index signed with a
+rotated-out release key), Settings → Updates hid **Check for updates** without a
+word. It now keeps the button and shows why the check failed; a later successful
+check clears the warning.
+
+### Security updates
+
+- **Go 1.26.10** (from 1.26.9): GO-2026-6809 in `crypto/x509`.
+- **`follow-redirects` 1.16.1** in the web interface: GHSA-q3jh-wrc6-jgq8 and
+  GHSA-8r9p-f939-6h3c (both high; credential headers could survive a cross-origin
+  redirect).
+
+Deploy: backend and frontend images. No schema change.
+
+---
+
 ## v2.2.8 — 2026-10-17
 
 The first published release since v2.2.6: v2.2.7 was tagged and deployed by hand but
