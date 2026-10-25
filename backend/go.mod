@@ -23,7 +23,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
 	github.com/microsoft/go-mssqldb v1.7.2
-	github.com/pkg/sftp v1.13.10
+	github.com/pkg/sftp v1.13.11
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/russellhaering/gosaml2 v0.11.0
