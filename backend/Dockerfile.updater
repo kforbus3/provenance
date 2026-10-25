@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w -X github.com/provenance/backend/internal/release.embeddedTrustKeys=${RELEASE_TRUST_KEYS}" \
       -o /out/prov-updater ./cmd/prov-updater
 
-FROM docker:27-cli
+FROM docker:29-cli
 # Ensure the compose plugin is present (the updater shells out to `docker compose`).
 RUN apk add --no-cache docker-cli-compose
 COPY --from=build /out/prov-updater /usr/local/bin/prov-updater
