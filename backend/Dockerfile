@@ -4,7 +4,7 @@
 # Go 1.24+ so the native FIPS 140-3 cryptographic module is compiled in (it ships
 # in every Go 1.24 binary; FIPS mode is a RUNTIME toggle via GODEBUG=fips140=on,
 # set by the entrypoint when PROV_FIPS_MODE=true — one image serves both modes).
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates openssh-client
 # Resolve dependencies first for better layer caching. go.sum is generated here
