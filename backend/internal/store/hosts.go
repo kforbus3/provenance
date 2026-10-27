@@ -109,8 +109,10 @@ func (s *Store) CreateHost(ctx context.Context, in HostInput) (*models.Host, err
 	if in.SSHPort == 0 {
 		in.SSHPort = 22
 	}
+	// Must match the hosts.ssh_user column default (migration 0097). This ran first,
+	// so after the rename new hosts still enrolled under the superseded fleet account.
 	if in.SSHUser == "" {
-		in.SSHUser = "fleet"
+		in.SSHUser = "prov"
 	}
 	if in.Tags == nil {
 		in.Tags = []string{}
@@ -698,9 +700,9 @@ func (s *Store) SetHostEnrolled(ctx context.Context, hostID uuid.UUID, enrolled 
 
 // SetHostSSHUser records the login account enrollment actually used.
 //
-// The host form lets sshUser be empty because enrollment defaults it to "fleet"
+// The host form lets sshUser be empty because enrollment defaults it to "prov"
 // -- and it defaulted only the script's variable, never the record. So the
-// machine got a fleet account and the host row still said nothing, the monitor
+// machine got an account the host row did not name, the monitor
 // then connected as no user at all, and the host reported offline forever with
 // a working SSH server and a valid certificate. Nothing was broken except a
 // field that was never written back.

@@ -16,7 +16,7 @@ resource "prov_host" "web" {
   hostname    = "web-01"
   environment = "production"
   owner       = "platform"
-  ssh_user    = "fleet"
+  ssh_user    = "prov"
   tags        = ["web", "prod"]
 }
 ```

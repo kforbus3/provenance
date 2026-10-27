@@ -39,7 +39,7 @@ the platform issues is accepted — without distributing per-user keys or managi
   "address": "10.0.1.5",
   "wgAddress": "10.9.0.5",
   "sshPort": 22,
-  "sshUser": "fleet",
+  "sshUser": "prov",
   "tags": ["web", "edge"]
 }
 ```
