@@ -255,7 +255,7 @@ rejected for Windows/RDP hosts, whose enrollment script is WireGuard-only.
 ```json
 { "hostname": "web-01", "description": "frontend node", "environment": "production",
   "owner": "platform", "address": "10.0.1.5", "wgAddress": "10.9.0.5",
-  "sshPort": 22, "sshUser": "fleet", "tags": ["web","edge"] }
+  "sshPort": 22, "sshUser": "prov", "tags": ["web","edge"] }
 ```
 → `201` with the created host object.
 
