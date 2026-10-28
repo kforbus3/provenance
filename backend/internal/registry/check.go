@@ -267,6 +267,7 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	}
 
 	newest, reason := Newest(img.Tag, tags)
+	newest = c.latestBuild(ctx, img.Repository, newest, tags)
 	rec.LatestTag = newest
 	rec.Note = reason
 	// Checked against the newest tag of this shape, so an update within the line
@@ -290,7 +291,8 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		// 12.4 -- and calling that up to date hid it from the default view.
 		rec.Status = store.ImageStatusNewScheme
 		reason = elsewhere + " is published under a different tag format than " + img.Tag +
-			", so it cannot be rolled out from here; change the pin to move to it"
+			", so it is not an automatic update; roll it out from this row once you have " +
+			"read its release notes"
 		rec.Note = reason
 	case strings.HasPrefix(reason, "no tag in this repository"):
 		rec.Status = store.ImageStatusUnorderable
@@ -346,6 +348,34 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		}
 	}
 	return rec
+}
+
+// maxBuildProbes bounds the digest requests spent telling same-day builds apart.
+const maxBuildProbes = 8
+
+// latestBuild picks, among builds of newest's version that differ only by commit
+// hash, the one :latest points at. Their names cannot order them, and offering the
+// first of four searxng builds pushed on one day leaves a host on a build that is
+// already superseded -- and, being the same version, never offered the rest.
+// Falls back to newest when :latest is not one of them or cannot be read.
+func (c *Checker) latestBuild(ctx context.Context, repo, newest string, tags []string) string {
+	siblings := sameVersionBuilds(newest, tags)
+	if len(siblings) == 0 {
+		return newest
+	}
+	want, err := c.client.Digest(ctx, repo, "latest")
+	if err != nil || want == "" {
+		return newest
+	}
+	for i, t := range append([]string{newest}, siblings...) {
+		if i >= maxBuildProbes {
+			break
+		}
+		if d, err := c.client.Digest(ctx, repo, t); err == nil && d == want {
+			return t
+		}
+	}
+	return newest
 }
 
 // looksVersioned reports whether a tag is one a version ordering can say

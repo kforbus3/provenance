@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ContainerUpdatesTab, verdictOf } from "./ContainerUpdatesTab";
@@ -22,7 +22,7 @@ const HOST = { hostId: "h1", hostname: "docker", stale: false, protected: false 
 const jellyfin = {
   repository: "jellyfin/jellyfin", tag: "10.11.11", status: "newscheme",
   newerElsewhere: "12.4",
-  note: "12.4 is published under a different tag format than 10.11.11, so it cannot be rolled out from here; change the pin to move to it",
+  note: "12.4 is published under a different tag format than 10.11.11, so it is not an automatic update; roll it out from this row once you have read its release notes",
   checkedAt: "2026-10-27T14:00:00Z", hosts: [HOST],
 };
 const headlamp = {
@@ -56,11 +56,19 @@ describe("a later release under a different tag format", () => {
     await waitFor(() => expect(screen.getByText("12.4 — new tag format")).toBeInTheDocument());
   });
 
-  it("offers no Roll out and is left out of the count", async () => {
+  it("is left out of the count and out of Update all", async () => {
     renderTab();
     await waitFor(() => expect(screen.getByText(/1 image has a newer version\./i)).toBeInTheDocument());
-    // Only headlamp can be rolled out. A button here would move a host to
-    // whatever the row named, across a numbering scheme, as a routine update.
-    expect(screen.getAllByText("Roll out")).toHaveLength(1);
+  });
+
+  it("is rolled out from its own row, to the new-format release, with a warning", async () => {
+    renderTab();
+    await waitFor(() => expect(screen.getAllByText("Roll out")).toHaveLength(2));
+    // Rows sort actionable first, so headlamp's button is the first.
+    fireEvent.click(screen.getAllByText("Roll out")[1]);
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("Moving jellyfin/jellyfin:10.11.11 to 12.4");
+    expect(dialog).toHaveTextContent(/not the same kind of tag/);
   });
 });

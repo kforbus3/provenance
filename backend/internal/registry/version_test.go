@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Deciding one tag is newer than another is where an update bot does damage.
 //
@@ -272,7 +275,6 @@ func TestNewerElsewhereRefusesWhatComparableRefuses(t *testing.T) {
 		// A nightly stamped 2026102610 is a date, not major version two billion.
 		{"a date stamp", "10.11.11", []string{"2026102610", "20231112.10"}},
 		{"a prerelease", "10.11.11", []string{"12.0-rc1", "12.0-rc7"}},
-		{"a build-stamped tag against a plain one", "10.11.11", []string{"12.4.20261026-211555"}},
 		{"a different base image", "15.4-alpine", []string{"16-bookworm"}},
 		{"a different prefix", "v2.1.0", []string{"release-3"}},
 		// Real: linuxserver keeps years-old bare build numbers beside its versions.
@@ -303,5 +305,79 @@ func TestADateStampIsNotAMajorVersion(t *testing.T) {
 	c, _ := ParseVersion("2026101910")
 	if !Comparable(b, c) || !IsNewer(c, b) {
 		t.Errorf("two date stamps must still order against each other")
+	}
+}
+
+// The closer line wins: jellyfin's plain 12.4 over the build-stamped copy of it.
+func TestNewerElsewherePrefersTheRunningLineShape(t *testing.T) {
+	got := NewerElsewhere("10.11.11", []string{"12.4.20261026-211555", "12.4"})
+	if got != "12.4" {
+		t.Errorf("got %q, want 12.4 ahead of its build-stamped twin", got)
+	}
+}
+
+// A refusal to roll out must not be a refusal to say. Each of these sat on this
+// fleet reading "nothing newer" with the release published.
+func TestARefusedMoveIsStillReported(t *testing.T) {
+	cases := []struct {
+		name, current string
+		tags          []string
+		want          string
+	}{
+		{"qbittorrent: the bundled libtorrent moved with the app", "5.2.3_v2.0.13-ls470",
+			[]string{"5.2.3_v2.0.13-ls470", "5.3.0_v2.1.2-ls484", "5.3.0_v2.1.2-ls485",
+				"libtorrentv1-5.3.0_v1.2.20-ls141", "5.3.0-libtorrentv1"}, "5.3.0_v2.1.2-ls485"},
+		{"tika: a revision inside the suffix", "4.1.0-1-full",
+			[]string{"4.1.0-1-full", "4.1.0-2-full", "4.1.0-full", "4.2.1-SNAPSHOT-full", "4.1.0-2"},
+			"4.1.0-2-full"},
+		{"an OS major inside the suffix", "1.31-alpine3.24",
+			[]string{"1.31-alpine3.24", "1.32-alpine4.0"}, "1.32-alpine4.0"},
+		{"a base image that stopped being built", "1.26-bookworm",
+			[]string{"1.26-bookworm", "1.28-trixie", "1.29-rc1-trixie"}, "1.28-trixie"},
+	}
+	for _, c := range cases {
+		if newest, _ := Newest(c.current, c.tags); newest != "" {
+			t.Errorf("%s: Newest offered %q as an automatic update; that refusal stays", c.name, newest)
+		}
+		if got := NewerElsewhere(c.current, c.tags); got != c.want {
+			t.Errorf("%s: NewerElsewhere = %q, want %q", c.name, got, c.want)
+		}
+	}
+	// Not a prerelease of another variant, and not the same version in another
+	// variant: nextcloud 35.0.2-apache beside 35.0.2-fpm is not newer.
+	if got := NewerElsewhere("35.0.2-apache", []string{"35.0.2-fpm", "36.0.0-beta1-apache"}); got != "" {
+		t.Errorf("got %q, want nothing", got)
+	}
+}
+
+// searxng tags every release <date>-<commit>. With the hash read as a variant, no
+// two of its tags were comparable and both hosts sat on September builds.
+func TestACommitHashSuffixIsNotAVariant(t *testing.T) {
+	tags := []string{"2026.9.6-eaf1fcb34", "2026.9.30-a9d990033", "2026.10.27-cb74e7f81",
+		"2026.10.27-ef7bae9dd", "2026.10.27-b5ed73fcb", "latest"}
+	got, reason := Newest("2026.9.6-eaf1fcb34", tags)
+	// One of the newest date's builds; which one is the checker's question.
+	if !strings.HasPrefix(got, "2026.10.27-") {
+		t.Errorf("newest = %q (%s), want a 2026.10.27 build", got, reason)
+	}
+	if sib := sameVersionBuilds(got, tags); len(sib) != 2 {
+		t.Errorf("same-day builds beside %s = %v, want the other two", got, sib)
+	}
+	// Another hash at the running version is not an update anyone can confirm.
+	if got, _ := Newest("2026.10.27-cb74e7f81", tags); got != "" {
+		t.Errorf("offered %q as newer than a build of the same date", got)
+	}
+	// And words are not hashes.
+	for _, w := range []string{"-deadbeef", "-1234567", "-alpine3", "-bookworm"} {
+		if isCommitHash(w) {
+			t.Errorf("%q read as a commit hash", w)
+		}
+	}
+}
+
+func TestTierTwoStaysWithinTheMajor(t *testing.T) {
+	tags := []string{"11.8.9", "110.4.21mariabionic-ls30", "11.8.9-r0-ls238"}
+	if got := NewerElsewhere("11.8.9", tags); got != "" {
+		t.Errorf("got %q from linuxserver/mariadb's real listing, want nothing", got)
 	}
 }

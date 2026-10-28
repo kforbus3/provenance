@@ -33,10 +33,13 @@ type ImageUpdate struct {
 	// NewerElsewhere is a later release under a different tag format than Tag
 	// (jellyfin 10.11.11 -> 12.4). Never LatestTag: that is what a rollout moves
 	// a host to, and crossing a numbering scheme is not a rollout's decision.
-	NewerElsewhere string    `json:"newerElsewhere,omitempty"`
-	Note           string    `json:"note,omitempty"`
-	Error          string    `json:"error,omitempty"`
-	CheckedAt      time.Time `json:"checkedAt"`
+	NewerElsewhere string `json:"newerElsewhere,omitempty"`
+	// Pinned is the digest a container is pinned to, on the rows ImageStatusPinned
+	// describes. Their Tag is empty: a digest reference has none.
+	Pinned    string    `json:"pinned,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CheckedAt time.Time `json:"checkedAt"`
 }
 
 // TrackedImage is one repository:tag a host is running, and the digest it is
@@ -339,7 +342,58 @@ func (s *Store) ImageUpdatesWithHosts(ctx context.Context, selfProject string) (
 	if err := s.attachRebuildDiffs(ctx, out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	pinned, err := s.pinnedImageRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, pinned...), nil
+}
+
+// pinnedImageRows lists the containers running an image pinned by digest.
+//
+// A digest has no newer version, so these carry no tag and nothing above selects
+// them -- the Updates page simply never mentioned them. questarr on `docker` was
+// pinned on 2026-09-28 because that day's :dev build crash-looped, and with
+// Provenance the way this fleet's containers get upgraded, an invisible pin is a
+// container that is never upgraded again. A row says so where people look.
+func (s *Store) pinnedImageRows(ctx context.Context) ([]ImageUpdateRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c->>'repository', c->>'image', h.id::text, h.hostname,
+		       COALESCE(c->>'digest',''), COALESCE(c->>'name','')
+		FROM host_inventory hi
+		JOIN hosts h ON h.id = hi.host_id,
+		     LATERAL jsonb_array_elements(COALESCE(hi.containers, '[]'::jsonb)) AS c
+		WHERE COALESCE(c->>'repository','') <> ''
+		  AND COALESCE(c->>'tag','') = ''
+		  AND COALESCE(c->>'image','') LIKE '%@sha256:%'
+		ORDER BY 2, h.hostname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ImageUpdateRow{}
+	at := map[string]int{}
+	for rows.Next() {
+		var repo, image string
+		var hh ImageUpdateHost
+		if err := rows.Scan(&repo, &image, &hh.HostID, &hh.Hostname, &hh.Digest, &hh.Container); err != nil {
+			return nil, err
+		}
+		i, ok := at[image]
+		if !ok {
+			i = len(out)
+			at[image] = i
+			out = append(out, ImageUpdateRow{ImageUpdate: ImageUpdate{
+				Repository: repo,
+				Status:     ImageStatusPinned,
+				Pinned:     image[strings.LastIndex(image, "@")+1:],
+				Note: "pinned to a digest, which has no newer version, so no update can be " +
+					"offered. Replace the pin with a version tag to have it tracked again.",
+			}, Hosts: []ImageUpdateHost{}})
+		}
+		out[i].Hosts = append(out[i].Hosts, hh)
+	}
+	return out, rows.Err()
 }
 
 // attachRebuildDiffs compares, for every rebuilt tag, the build most of its hosts run
@@ -558,6 +612,9 @@ const (
 	// Nothing newer of the same shape, but a later release under a different
 	// numbering (jellyfin 10.11.11 -> 12.4). Reported, never rolled out.
 	ImageStatusNewScheme = "newscheme"
+	// Pinned to a digest, so no newer version can exist -- shown so the pin is
+	// not forgotten. Never stored; derived from inventory on every read.
+	ImageStatusPinned = "pinned"
 )
 
 // CachedTags returns a repository's cached tag listing when it is fresh enough.

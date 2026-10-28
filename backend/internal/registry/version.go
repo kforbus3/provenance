@@ -62,7 +62,18 @@ var buildCounter = regexp.MustCompile(`^(.*?[^0-9])([0-9]+)$`)
 // version. Refusing those left it unorderable against 5.2.3_v2.0.13-ls470, the
 // very next build -- while "_v2.0.14-ls471" is still refused, since bumping
 // libtorrent changes the stem.
+//
+// A commit hash is not a variant either. searxng tags every release
+// 2026.10.27-b5ed73fcb: the date is the version and the hash names the commit it
+// was built from. Read as a stem, every release had a different one, so no two
+// searxng tags were ever comparable and both hosts running it sat on September
+// builds reading "nothing newer". All hashes share one stem, and carry no counter:
+// a hash orders nothing, so two builds of the same date stay unordered here and
+// the checker asks the registry which of them :latest is (see sameVersionBuilds).
 func suffixParts(suffix string) (stem string, counter int) {
+	if isCommitHash(suffix) {
+		return "#commit", -1
+	}
 	m := buildCounter.FindStringSubmatch(suffix)
 	if m == nil {
 		return suffix, -1
@@ -72,6 +83,16 @@ func suffixParts(suffix string) (stem string, counter int) {
 		return suffix, -1
 	}
 	return m[1], n
+}
+
+// commitHash is an abbreviated or full git hash after a separator.
+var commitHash = regexp.MustCompile(`^[-_.+][0-9a-f]{7,40}$`)
+
+// isCommitHash reports a suffix that is a commit hash: hex, and with both digits
+// and letters in it, which a word ("-deadbeef") or a counter ("-1234567") lacks.
+func isCommitHash(suffix string) bool {
+	return commitHash.MatchString(suffix) &&
+		strings.ContainsAny(suffix, "0123456789") && strings.ContainsAny(suffix, "abcdef")
 }
 
 // ParseVersion reads a tag. ok is false when the tag carries no number at all --
@@ -237,67 +258,111 @@ func Newest(current string, tags []string) (newest string, reason string) {
 // NewerElsewhere returns the newest release that Newest could not order against
 // current but that is plainly later than it, or "" when there is none.
 //
-// Newest refuses to compare across shapes, and the refusal is right: it is what
-// keeps 16-bookworm from being offered over 15-alpine. But a project that changes
-// how it numbers releases strands every running copy on a shape nothing will ever
-// be published in again. Jellyfin went from 10.11.11 to 12.0 and tags releases as
-// 12.4 and 12.4.20261026-211555, neither of which is three plain components, so
-// Newest found only older 10.x.y tags and the row read "up to date" for seven
-// weeks with five releases published.
+// Newest refuses to compare across shapes, and the refusal is right for an
+// automatic update: it is what keeps 16-bookworm from being rolled out over
+// 15-alpine. But a refusal that also stays silent leaves the image on the
+// version it runs forever, and on this fleet Provenance is how images get
+// upgraded at all. Three ways that happened, each answered here:
 //
-// This asks a narrower question than Newest -- not "what should this move to" but
-// "is there plainly something later" -- so a candidate must:
+//  0. The project changed how it numbers releases. jellyfin went from 10.11.11 to
+//     12.0 and tags 12.4, so no tag of the running shape will ever be newer.
+//  1. A version inside the suffix moved. qbittorrent 5.2.3_v2.0.13-ls470 became
+//     5.3.0_v2.1.2-ls485 when the bundled libtorrent did; apache/tika
+//     4.1.0-1-full became 4.1.0-2-full; nginx 1.31-alpine3.24 will become
+//     1.32-alpine4.0. Same suffix with its digits taken out.
+//  2. The variant changed outright, within the same major: 1.26-bookworm to
+//     1.28-trixie once a base image stops being built.
 //
-//   - pass every refusal Comparable makes except the component count: the same
-//     prefix, the same suffix variant, the same calendar-ness;
-//   - have at least two components, since a bare number is too often a build;
-//   - be strictly greater at the first component the two have in common. 12.4 is
-//     later than 10.11.11. 10.11 and 10, the aliases of the line current is on,
-//     are equal there and are not, which is why the component-count rule exists.
+// Earlier tiers win: a candidate closer to the running line is the better answer.
+// Every candidate shares the prefix and calendar-ness (the refusals that guard
+// against a different scheme entirely), has at least two components (a lone
+// number is as often a build counter -- linuxserver/mariadb still carries a bare
+// 158), and is strictly later. In tier 2 it must also not be a prerelease, since
+// its suffix is no longer the running one's and cannot vouch for it.
 //
-// The answer is reported, never rolled out. Crossing a numbering scheme is a
-// decision about which line to be on, and a guess written into a compose file
-// stays there.
+// The answer is reported and offered one row at a time, never swept into Update
+// all: crossing any of these is a decision about which line to be on.
 func NewerElsewhere(current string, tags []string) string {
 	cur, ok := ParseVersion(current)
 	if !ok {
 		return ""
 	}
-	cs, cc := suffixParts(cur.Suffix)
-	var best *Version
+	var best [3]*Version
 	for _, t := range tags {
 		v, ok := ParseVersion(t)
-		if !ok || len(v.Parts) == len(cur.Parts) {
-			continue // not a version, or a shape Newest already ordered
-		}
-		// A lone number is as often a build counter as a version.
-		// linuxserver/mariadb still carries a bare 158 and heimdall a bare 77,
-		// years-old build numbers, and both read as far later than 11.8.9 and
-		// 2.8.3.
-		if len(v.Parts) < 2 {
+		if !ok || v.Prefix != cur.Prefix || looksCalendar(v) != looksCalendar(cur) ||
+			len(v.Parts) < 2 {
 			continue
 		}
-		if v.Prefix != cur.Prefix || looksCalendar(v) != looksCalendar(cur) {
+		same := sameVariant(cur, v)
+		tier := -1
+		switch {
+		case len(v.Parts) != len(cur.Parts):
+			if same {
+				tier = 0
+			}
+		case same:
+			// Newest's own shape; it already ordered these.
+		case skeleton(v.Suffix) == skeleton(cur.Suffix):
+			tier = 1
+		case !prerelease.MatchString(v.Suffix) && v.Parts[0] == cur.Parts[0]:
+			// A different variant AND a different major is two changes at once,
+			// and in practice a malformed tag: linuxserver/mariadb carries
+			// 110.4.21mariabionic-ls30 beside 11.8.9.
+			tier = 2
+		}
+		if tier < 0 || later(cur, v, tier == 1) <= 0 {
 			continue
 		}
-		if vs, vc := suffixParts(v.Suffix); vs != cs || (vc < 0) != (cc < 0) {
-			continue
-		}
-		if leading(cur, v) <= 0 {
-			continue
-		}
-		// Among candidates, the later one; on a tie over the parts they share,
-		// the more specific one -- 12.4.1 says more than 12.4.
-		if best == nil || leading(*best, v) > 0 ||
-			(leading(*best, v) == 0 && len(v.Parts) > len(best.Parts)) {
+		b := best[tier]
+		if b == nil || later(*b, v, tier == 1) > 0 ||
+			(later(*b, v, tier == 1) == 0 && len(v.Parts) > len(b.Parts)) {
 			v := v
-			best = &v
+			best[tier] = &v
 		}
 	}
-	if best == nil {
-		return ""
+	for _, b := range best {
+		if b != nil {
+			return b.Raw
+		}
 	}
-	return best.Raw
+	return ""
+}
+
+// sameVariant is Comparable's suffix rule on its own.
+func sameVariant(a, b Version) bool {
+	as, ac := suffixParts(a.Suffix)
+	bs, bc := suffixParts(b.Suffix)
+	return as == bs && (ac < 0) == (bc < 0)
+}
+
+var digitRun = regexp.MustCompile(`[0-9]+`)
+
+// skeleton is a suffix with its numbers taken out: "_v2.0.13-ls470" -> "_v.-ls".
+func skeleton(suffix string) string { return digitRun.ReplaceAllString(suffix, "") }
+
+// prerelease matches a suffix naming something that is not a release.
+var prerelease = regexp.MustCompile(`(?i)(^|[^a-z])(rc|alpha|beta|snapshot|dev|develop|development|` +
+	`nightly|preview|pre|test|testing|pr|deprecated|unstable|canary|edge|experimental)([^a-z]|$)`)
+
+// later is leading, then -- when the versions tie and withSuffix is set -- the
+// numbers in the suffix: 4.1.0-2-full is later than 4.1.0-1-full.
+func later(a, b Version, withSuffix bool) int {
+	if c := leading(a, b); c != 0 || !withSuffix {
+		return c
+	}
+	an, bn := digitRun.FindAllString(a.Suffix, -1), digitRun.FindAllString(b.Suffix, -1)
+	for i := 0; i < len(an) && i < len(bn); i++ {
+		x, _ := strconv.Atoi(an[i])
+		y, _ := strconv.Atoi(bn[i])
+		switch {
+		case y > x:
+			return 1
+		case y < x:
+			return -1
+		}
+	}
+	return 0
 }
 
 // leading compares a and b over the components they share: 1 when b is later, -1
@@ -312,4 +377,24 @@ func leading(a, b Version) int {
 		}
 	}
 	return 0
+}
+
+// sameVersionBuilds returns the other tags at newest's version that differ from it
+// only by commit hash -- searxng pushes several builds a day as 2026.10.27-<hash>.
+// Their names cannot say which is the latest (registries list tags lexically, not
+// in push order), so the checker resolves them against :latest.
+func sameVersionBuilds(newest string, tags []string) []string {
+	n, ok := ParseVersion(newest)
+	if !ok || !isCommitHash(n.Suffix) {
+		return nil
+	}
+	var out []string
+	for _, t := range tags {
+		v, ok := ParseVersion(t)
+		if ok && t != newest && isCommitHash(v.Suffix) && v.Prefix == n.Prefix &&
+			len(v.Parts) == len(n.Parts) && leading(n, v) == 0 {
+			out = append(out, t)
+		}
+	}
+	return out
 }
