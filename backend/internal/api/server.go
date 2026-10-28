@@ -716,12 +716,12 @@ func (s *Server) containerScanLoop(ctx context.Context) {
 		if !s.isLeader() || s.vulnScan == nil {
 			return
 		}
-		scanned, failed := s.vulnScan.ScanContainerImages(ctx)
+		_, failures := s.vulnScan.ScanContainerImages(ctx)
 		var err error
-		if failed > 0 {
-			err = fmt.Errorf("%d image(s) could not be scanned", failed)
+		if len(failures) > 0 {
+			err = fmt.Errorf("%d image(s) could not be scanned: %s",
+				len(failures), strings.Join(failures, "; "))
 		}
-		_ = scanned
 		s.Jobs.Record("container-image-scan", err)
 	}
 	// A first pass shortly after start, so a new deployment does not wait a day to

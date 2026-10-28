@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,17 +36,23 @@ const containerScanBatch = 25
 // Deduplicated by digest: the same image runs in many places and scanning it per
 // host would multiply the cost for an identical answer.
 //
-// Returns how many were scanned and how many failed. Never fatal -- this runs on
-// a schedule beside everything else, and a registry that will not answer is not
-// a reason to stop.
-func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int) {
+// Returns how many were scanned, and which images failed and why. Never fatal --
+// this runs on a schedule beside everything else, and a registry that will not
+// answer is not a reason to stop.
+//
+// The failures are named because the job's health line is where they are seen.
+// "1 image(s) could not be scanned" sent somebody to a database query to learn it
+// was questarr, pinned to a build its publisher had deleted from ghcr.io -- a
+// fact about that container, not about the scanner, and one that recurs daily
+// until the pin changes.
+func (s *Service) ScanContainerImages(ctx context.Context) (scanned int, failures []string) {
 	refs, err := s.store.DistinctContainerImages(ctx)
 	if err != nil {
 		s.log.Warn("container scan: listing images", "err", err)
-		return 0, 0
+		return 0, nil
 	}
 	if len(refs) == 0 {
-		return 0, 0
+		return 0, nil
 	}
 
 	// Which database produced the last results. A digest that has not changed
@@ -65,7 +72,7 @@ func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int)
 	stale, err := s.store.StaleContainerImages(ctx, refs, dbBuilt, containerScanMaxAge)
 	if err != nil {
 		s.log.Warn("container scan: selecting stale images", "err", err)
-		return 0, 0
+		return 0, nil
 	}
 	if len(stale) > containerScanBatch {
 		stale = stale[:containerScanBatch]
@@ -73,7 +80,7 @@ func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int)
 
 	for _, ref := range stale {
 		if ctx.Err() != nil {
-			return scanned, failed
+			return scanned, failures
 		}
 		res, serr := s.scanImage(ctx, ref.Image)
 		rec := store.ContainerImageScan{Digest: ref.Digest, Image: ref.Image}
@@ -82,8 +89,13 @@ func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int)
 			// credentials, rate limited, deleted from the registry -- must not
 			// read as an image with no vulnerabilities, and the reason is what
 			// tells an operator which of those it was.
+			why := "scan failed"
+			var se *scanError
+			if errors.As(serr, &se) {
+				why = se.why
+			}
 			rec.Error = truncate(serr.Error(), 500)
-			failed++
+			failures = append(failures, shortRef(ref.Image)+" ("+why+")")
 		} else {
 			rec.Findings = res.Findings
 			rec.DBBuilt = res.DBBuilt
@@ -106,11 +118,52 @@ func (s *Service) ScanContainerImages(ctx context.Context) (scanned, failed int)
 			s.log.Warn("container scan: saving result", "digest", ref.Digest, "err", err)
 		}
 	}
-	if scanned > 0 || failed > 0 {
-		s.log.Info("container image scan", "scanned", scanned, "failed", failed,
+	if scanned > 0 || len(failures) > 0 {
+		s.log.Info("container image scan", "scanned", scanned, "failed", len(failures),
 			"stale", len(stale), "total", len(refs))
 	}
-	return scanned, failed
+	return scanned, failures
+}
+
+// scanError is a failed image scan: why, in a few words, then what was said.
+type scanError struct{ why, detail string }
+
+func (e *scanError) Error() string { return e.why + ": " + e.detail }
+
+// unscannableReason says, in a few words, why an image could not be fetched for
+// scanning. Each answer has a different remedy, and the raw error -- grype's,
+// wrapped in the scanner's JSON -- does not lead with any of them.
+//
+// Bare status numbers are not matched: the message carries the image's digest,
+// and "sha256:…404…" is not a 404.
+func unscannableReason(raw string) string {
+	e := strings.ToLower(raw)
+	has := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(e, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("manifest_unknown", "manifest unknown", "name_unknown", "404 not found",
+		"status code 404", "not found: manifest"):
+		return "no longer in its registry; the host runs a copy that cannot be pulled again"
+	case has("toomanyrequests", "too many requests", "status code 429"):
+		return "the registry is rate limiting; retried on the next pass"
+	case has("unauthorized", "denied", "forbidden", "status code 401", "status code 403"):
+		return "the registry refused access; it needs credentials"
+	}
+	return "scan failed"
+}
+
+// shortRef keeps a digest reference readable in one line: repo@sha256:9e179255fa24…
+func shortRef(image string) string {
+	if i := strings.Index(image, "@sha256:"); i >= 0 && len(image) > i+20 {
+		return image[:i+20] + "…"
+	}
+	return image
 }
 
 // currentDBBuilt reports the vulnerability database's build string, or "" if it
@@ -153,13 +206,18 @@ func (s *Service) scanImage(ctx context.Context, ref string) (*imageScanResult, 
 	client := &http.Client{Timeout: 20 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("scanner unreachable: %w", err)
+		return nil, &scanError{why: "the scanner is unreachable", detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("scan failed (%d): %s", resp.StatusCode,
-			truncate(strings.TrimSpace(string(raw)), 300))
+		// The reason is read from the WHOLE reply. The detail kept is cut to 300
+		// characters, and grype's message leads with the image reference and the
+		// request URL -- the registry's own answer comes after them, so the cut
+		// always fell before it and every failure read the same.
+		return nil, &scanError{why: unscannableReason(string(raw)),
+			detail: fmt.Sprintf("scan failed (%d): %s", resp.StatusCode,
+				truncate(strings.TrimSpace(string(raw)), 300))}
 	}
 	var out imageScanResult
 	if err := json.Unmarshal(raw, &out); err != nil {
