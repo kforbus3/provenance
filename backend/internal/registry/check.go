@@ -269,9 +269,29 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	newest, reason := Newest(img.Tag, tags)
 	rec.LatestTag = newest
 	rec.Note = reason
+	// Checked against the newest tag of this shape, so an update within the line
+	// still mentions a later line rather than hiding it behind the smaller move.
+	from := img.Tag
+	if newest != "" {
+		from = newest
+	}
+	elsewhere := NewerElsewhere(from, tags)
+	rec.NewerElsewhere = elsewhere
 	switch {
 	case newest != "":
 		rec.Status = store.ImageStatusUpdate
+		if elsewhere != "" {
+			rec.Note = elsewhere + " is also published, under a different tag format; " +
+				"this update stays on the " + img.Tag + " line"
+		}
+	case elsewhere != "":
+		// Not "current". Newest found nothing newer of this shape because the
+		// project stopped publishing this shape -- jellyfin's 10.11.11 against
+		// 12.4 -- and calling that up to date hid it from the default view.
+		rec.Status = store.ImageStatusNewScheme
+		reason = elsewhere + " is published under a different tag format than " + img.Tag +
+			", so it cannot be rolled out from here; change the pin to move to it"
+		rec.Note = reason
 	case strings.HasPrefix(reason, "no tag in this repository"):
 		rec.Status = store.ImageStatusUnorderable
 	default:
@@ -290,7 +310,9 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 	// exists. Recorded as current, it showed as up to date and was hidden from the
 	// default view, which is how open-webui went unoffered with four newer
 	// releases published.
-	if !complete && newest == "" {
+	//
+	// A later release that WAS found is still found, so that verdict stands.
+	if !complete && newest == "" && elsewhere == "" {
 		reason = "the tag list was too long to read in full, so this is what was " +
 			"found rather than everything there is"
 		rec.Note = reason
@@ -319,6 +341,9 @@ func (c *Checker) checkOne(ctx context.Context, img store.TrackedImage) store.Im
 		// image security update, most often -- looks exactly like this, and it is
 		// the case a version-number comparison alone would miss entirely.
 		rec.Note = "tag moved: rebuilt at the same version"
+		if elsewhere != "" {
+			rec.Note += "; " + reason
+		}
 	}
 	return rec
 }

@@ -230,3 +230,78 @@ func TestABareSuffixAndACountedOneAreNotTheSameShape(t *testing.T) {
 		t.Error("-alpine and -alpine3 must not be comparable")
 	}
 }
+
+// jellyfin's real listing, trimmed: 10.11.11 is the last of its shape, and every
+// release since 12.0 is two components, or three with a build stamp.
+var jellyfinTags = []string{
+	"latest", "unstable", "10", "10.11", "10.11.10", "10.11.11",
+	"12.0-rc1", "12.0-rc1.20260621-234017", "12.0-rc7",
+	"12.0", "12.0.20260908-012347", "12.1", "12.2", "12.3",
+	"12.4", "12.4.20261026-211555", "12.4-amd64.20261026-211555",
+	"2026102610", "2026102610-amd64", "20231112.10-unstable",
+}
+
+// Newest is right to refuse 12.4 against 10.11.11 as an update. What it must not
+// do is let that refusal read as "up to date": the row hid five releases.
+func TestNewerElsewhereFindsALaterLineInADifferentShape(t *testing.T) {
+	if newest, _ := Newest("10.11.11", jellyfinTags); newest != "" {
+		t.Fatalf("Newest offered %q across shapes; that refusal is load-bearing", newest)
+	}
+	if got := NewerElsewhere("10.11.11", jellyfinTags); got != "12.4" {
+		t.Errorf("NewerElsewhere = %q, want 12.4", got)
+	}
+	// From an older patch the answer is the same: the update within the line is
+	// Newest's, the later line is this one's.
+	if got := NewerElsewhere("10.11.9", jellyfinTags); got != "12.4" {
+		t.Errorf("from 10.11.9: %q, want 12.4", got)
+	}
+}
+
+// Every refusal Comparable makes except the component count still holds.
+func TestNewerElsewhereRefusesWhatComparableRefuses(t *testing.T) {
+	cases := []struct {
+		name, current string
+		tags          []string
+	}{
+		// The aliases of the line already running are equal over what they share,
+		// not newer -- the reason component counts are not compared at all.
+		{"aliases of the running line", "10.11.11", []string{"10", "10.11", "10.11.11"}},
+		{"an older line", "10.11.11", []string{"9.2", "9"}},
+		// heimdall: 2021.11.28 is four years older than 2.8.3.
+		{"a calendar version against a semantic one", "2.8.3", []string{"2021.11", "2021.11.28"}},
+		// A nightly stamped 2026102610 is a date, not major version two billion.
+		{"a date stamp", "10.11.11", []string{"2026102610", "20231112.10"}},
+		{"a prerelease", "10.11.11", []string{"12.0-rc1", "12.0-rc7"}},
+		{"a build-stamped tag against a plain one", "10.11.11", []string{"12.4.20261026-211555"}},
+		{"a different base image", "15.4-alpine", []string{"16-bookworm"}},
+		{"a different prefix", "v2.1.0", []string{"release-3"}},
+		// Real: linuxserver keeps years-old bare build numbers beside its versions.
+		{"a bare build number", "11.8.9", []string{"158", "11.8.9", "version-11.8.9-r0", "11.8.9-r0-ls238"}},
+		{"a bare build number, heimdall", "2.8.3", []string{"77", "2.8.3", "v2.8.3-ls369"}},
+		{"no tags", "1.0.0", nil},
+		{"a moving tag is not a version", "latest", []string{"12.4"}},
+	}
+	for _, c := range cases {
+		if got := NewerElsewhere(c.current, c.tags); got != "" {
+			t.Errorf("%s: NewerElsewhere(%q) = %q, want nothing", c.name, c.current, got)
+		}
+	}
+	// And the same suffix variant IS found, so the rule is not simply off.
+	if got := NewerElsewhere("15.4.2-alpine", []string{"16.1-alpine", "16.1-bookworm"}); got != "16.1-alpine" {
+		t.Errorf("same base image, later line: %q, want 16.1-alpine", got)
+	}
+}
+
+// A one-component date stamp compared against a one-component major version used
+// to pass every rule and win: 2026102610 > 15.
+func TestADateStampIsNotAMajorVersion(t *testing.T) {
+	a, _ := ParseVersion("15")
+	b, _ := ParseVersion("2026102610")
+	if Comparable(a, b) {
+		t.Errorf("15 and 2026102610 compared as one scheme")
+	}
+	c, _ := ParseVersion("2026101910")
+	if !Comparable(b, c) || !IsNewer(c, b) {
+		t.Errorf("two date stamps must still order against each other")
+	}
+}

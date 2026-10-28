@@ -763,3 +763,81 @@ func TestARateLimitedDeclaredRowMakesNoClaimAboutWhatWasPulled(t *testing.T) {
 		t.Errorf("a declared row claims something about what the host pulled: %q", got)
 	}
 }
+
+// jellyfin 10.11.11 read as up to date for seven weeks with 12.0-12.4 published,
+// because no later tag has three plain components.
+func TestALaterReleaseInANewTagFormatIsNotCalledCurrent(t *testing.T) {
+	srv := stubRegistry(t, jellyfinTags, map[string]string{"10.11.11": "sha256:aaa"})
+	repo := repoAt(srv, "jellyfin/jellyfin")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "10.11.11", Digest: "sha256:aaa"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status != store.ImageStatusNewScheme {
+		t.Errorf("status = %q, want %q (note %q)", got.Status, store.ImageStatusNewScheme, got.Note)
+	}
+	if got.NewerElsewhere != "12.4" {
+		t.Errorf("newerElsewhere = %q, want 12.4", got.NewerElsewhere)
+	}
+	// LatestTag is what a rollout moves a host TO. A different numbering in it
+	// is one click from writing 12.4 into a compose file as a routine update.
+	if got.LatestTag != "" {
+		t.Errorf("latestTag = %q; a tag of another shape must never become a rollout target", got.LatestTag)
+	}
+}
+
+// An update within the line is still the update; the later line is mentioned,
+// not substituted.
+func TestAnUpdateWithinTheLineStillMentionsTheLaterLine(t *testing.T) {
+	srv := stubRegistry(t, jellyfinTags, map[string]string{"10.11.10": "sha256:aaa"})
+	repo := repoAt(srv, "jellyfin/jellyfin")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "10.11.10", Digest: "sha256:aaa"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status != store.ImageStatusUpdate || got.LatestTag != "10.11.11" {
+		t.Errorf("status/latest = %q/%q, want update/10.11.11", got.Status, got.LatestTag)
+	}
+	if got.NewerElsewhere != "12.4" || !strings.Contains(got.Note, "12.4") {
+		t.Errorf("the later line went unmentioned: newerElsewhere=%q note=%q", got.NewerElsewhere, got.Note)
+	}
+}
+
+// A rebuild is still the actionable verdict, and it must not borrow the later
+// line as its target.
+func TestARebuildWithALaterLineStaysARebuildOfTheSameTag(t *testing.T) {
+	srv := stubRegistry(t, jellyfinTags, map[string]string{"10.11.11": "sha256:new"})
+	repo := repoAt(srv, "jellyfin/jellyfin")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "10.11.11", Digest: "sha256:old"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status != store.ImageStatusMoved || got.LatestTag != "" {
+		t.Errorf("status/latest = %q/%q, want moved with no target", got.Status, got.LatestTag)
+	}
+	if got.NewerElsewhere != "12.4" {
+		t.Errorf("newerElsewhere = %q, want 12.4", got.NewerElsewhere)
+	}
+}
+
+// A truncated listing that nonetheless contains a later line has found it.
+func TestATruncatedListingStillReportsALaterLineItFound(t *testing.T) {
+	srv := stubRegistry(t, nil, map[string]string{"10.11.11": "sha256:aaa"})
+	repo := repoAt(srv, "jellyfin/jellyfin")
+	st := &fakeStore{
+		tracked:            []store.TrackedImage{{Repository: repo, Tag: "10.11.11", Digest: "sha256:aaa"}},
+		tagCache:           map[string][]string{repo: jellyfinTags},
+		tagCacheIncomplete: map[string]bool{repo: true},
+	}
+	newChecker(t, st, srv).Check(context.Background())
+
+	if got := st.saved[0]; got.Status != store.ImageStatusNewScheme || got.NewerElsewhere != "12.4" {
+		t.Errorf("status/newerElsewhere = %q/%q, want newscheme/12.4", got.Status, got.NewerElsewhere)
+	}
+}
