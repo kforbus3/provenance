@@ -35,11 +35,14 @@ type Verdict =
   // as available work nor swept into "roll out everything", where the refusal
   // rejects the whole request and blocks the real updates behind it.
   | "migration"
-  // Nothing newer of this tag's shape, because the project now numbers releases
-  // differently (jellyfin 10.11.11 → 12.4). Shown by default — "up to date" hid it
-  // for seven weeks — and never rolled out: crossing a numbering scheme is a pin
-  // someone changes on purpose.
-  | "newscheme";
+  // Nothing newer of this tag's shape, but a later release in another one:
+  // jellyfin 10.11.11 → 12.4, qbittorrent's bundled libtorrent moving, a base
+  // image that stopped being built. Shown by default — "up to date" hid jellyfin
+  // for seven weeks — and offered one row at a time, never in Update all.
+  | "newscheme"
+  // Pinned by digest: no newer version can exist, and with no tag it used to have
+  // no row at all. Shown so the pin is not forgotten.
+  | "pinned";
 
 // hostsOf normalises the hosts list.
 //
@@ -67,6 +70,10 @@ export function verdictOf(u: ImageUpdate, all: ImageUpdate[] = []): Verdict {
   // claim about something you are running — and this is the row an operator
   // sees immediately after an upgrade, for the tags the upgrade just replaced.
   if (hostsOf(u).length === 0) return "gone";
+  // Never checked against a registry, because there is nothing to check: a
+  // digest has no newer version. Ahead of "unchecked", which it would otherwise
+  // read as forever.
+  if (u.status === "pinned") return "pinned";
   // Running, but no registry has been asked about it yet — a host whose
   // containers have only just become visible. Saying so beats leaving the row
   // out, which is indistinguishable from the host having nothing on it.
@@ -160,7 +167,18 @@ function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
         </Tooltip>
       );
     case "newer":
-      return <Chip label={`${u.latestTag} available`} size="small" color="warning" />;
+      // A later line in another tag format is mentioned beside the in-line update,
+      // which is what Update all applies.
+      return (
+        <Stack direction="row" spacing={0.5}>
+          <Chip label={`${u.latestTag} available`} size="small" color="warning" />
+          {u.newerElsewhere && (
+            <Tooltip title={u.note ?? ""}>
+              <Chip label={`also ${u.newerElsewhere}`} size="small" variant="outlined" />
+            </Tooltip>
+          )}
+        </Stack>
+      );
     case "migration":
       return (
         <Tooltip title={u.note ?? ""}>
@@ -171,6 +189,12 @@ function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
       return (
         <Tooltip title={u.note ?? ""}>
           <Chip label={`${u.newerElsewhere} — new tag format`} size="small" color="warning" variant="outlined" />
+        </Tooltip>
+      );
+    case "pinned":
+      return (
+        <Tooltip title={u.note ?? ""}>
+          <Chip label="pinned by digest — not tracked" size="small" color="warning" variant="outlined" />
         </Tooltip>
       );
     case "moved":
@@ -226,8 +250,12 @@ function UpdateRow({ u, all, canRun, onRollOut }: {
   // Only something actionable can be rolled out. Offering the button on a row
   // that says "up to date" would invite a rollout that deploys the same bytes
   // to every host and reports success for a change nobody made.
-  const canRollOut = canRun && (verdict === "newer" || verdict === "moved") &&
+  const canRollOut = canRun && (verdict === "newer" || verdict === "moved" || verdict === "newscheme") &&
     hosts.length > 0 && !hosts.some((h) => h.protected);
+  // A new-format release is rolled out one row at a time, by someone who chose
+  // it. Its target is not latestTag — that stays empty so nothing else, Update
+  // all included, can ever pick it up — so it is handed to the dialog here.
+  const target = verdict === "newscheme" ? u.newerElsewhere : u.latestTag;
   return (
     <>
       <TableRow hover>
@@ -237,7 +265,7 @@ function UpdateRow({ u, all, canRun, onRollOut }: {
           </IconButton>
         </TableCell>
         <TableCell sx={{ fontFamily: "monospace", fontSize: 12 }}>
-          {u.repository}:{u.tag}
+          {u.pinned ? `${u.repository}@${u.pinned.slice(0, 19)}…` : `${u.repository}:${u.tag}`}
         </TableCell>
         <TableCell><VerdictChip u={u} all={all} /></TableCell>
         <TableCell>
@@ -253,9 +281,11 @@ function UpdateRow({ u, all, canRun, onRollOut }: {
           {canRollOut && (
             <Tooltip title={verdict === "moved"
               ? "Pull the rebuilt image onto these hosts, a few at a time"
-              : `Move these hosts to ${u.latestTag}, a few at a time`}>
+              : `Move these hosts to ${target}, a few at a time`}>
               <Button size="small" startIcon={<RocketLaunchIcon fontSize="small" />}
-                      onClick={() => onRollOut(u)}>Roll out</Button>
+                      onClick={() => onRollOut(verdict === "newscheme" ? { ...u, latestTag: target } : u)}>
+                Roll out
+              </Button>
             </Tooltip>
           )}
         </TableCell>
@@ -374,8 +404,9 @@ export function ContainerUpdatesTab() {
       // can do from here, but it is a decision someone has to make elsewhere, and
       // burying a database that needs migrating among "up to date" rows is how it
       // gets forgotten until the version it is on stops getting security fixes.
-      newer: 0, moved: 1, migration: 2, newscheme: 3, superseded: 4, unavailable: 5,
-      unknown: 6, error: 7, unchecked: 8, current: 9, local: 10, self: 11, gone: 12,
+      newer: 0, moved: 1, migration: 2, newscheme: 3, pinned: 4, superseded: 5,
+      unavailable: 6, unknown: 7, error: 8, unchecked: 9, current: 10, local: 11, self: 12,
+      gone: 13,
     };
     if (!showAll) {
       // Something is available: a newer version, a rebuilt tag, or a major bump
@@ -385,7 +416,13 @@ export function ContainerUpdatesTab() {
       // Rows we could not check stay in too, deliberately. Hiding them would make
       // an empty list mean "nothing to upgrade" when it might mean "we do not
       // know", and the reassuring reading is the dangerous one.
-      const keep = new Set<Verdict>(["newer", "moved", "migration", "newscheme", "error", "unchecked"]);
+      //
+      // "cannot compare" and "registry unavailable" are the same kind of row: no
+      // answer. Hidden, they were images Provenance had stopped upgrading with
+      // nothing on screen to say so — and on this fleet Provenance is the only
+      // thing that upgrades them.
+      const keep = new Set<Verdict>(["newer", "moved", "migration", "newscheme", "pinned",
+        "unknown", "unavailable", "error", "unchecked"]);
       rows = rows.filter((u) => keep.has(verdictOf(u, updates)));
     }
     return [...rows].sort((a, b) =>
@@ -518,7 +555,7 @@ export function ContainerUpdatesTab() {
             </TableHead>
             <TableBody>
               {shown.map((u) => (
-                <UpdateRow key={`${u.repository}:${u.tag}`} u={u} all={updates} canRun={canRun}
+                <UpdateRow key={`${u.repository}:${u.tag}${u.pinned ?? ""}`} u={u} all={updates} canRun={canRun}
                            onRollOut={setRollingOut} />
               ))}
             </TableBody>

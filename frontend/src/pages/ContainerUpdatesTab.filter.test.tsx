@@ -85,6 +85,23 @@ describe("the Updates tab shows what can be upgraded", () => {
     expect(screen.queryByText(/nginx/)).not.toBeInTheDocument();
   });
 
+  // On this fleet Provenance is how containers get upgraded. A row it cannot
+  // answer for, hidden, is a container nobody upgrades.
+  it("keeps every row it cannot vouch for: cannot compare, registry unavailable, pinned", async () => {
+    vi.mocked(listContainerUpdates).mockResolvedValue([
+      row("team/odd", "1.0.0-rc1", "unorderable", { note: "no tag in this repository has the same shape" }),
+      row("ghcr.io/open-webui/open-webui", "v0.11.4", "unavailable", { note: "the tag list was too long" }),
+      row("ghcr.io/doezer/questarr", "", "pinned", { pinned: "sha256:9e179255fa24f2b553c81261d793d8ed", checkedAt: undefined }),
+      row("nginx", "1.31-alpine", "current"),
+    ]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText(/team\/odd/)).toBeInTheDocument());
+    expect(screen.getByText(/open-webui/)).toBeInTheDocument();
+    expect(screen.getByText(/questarr@sha256:9e179255fa24/)).toBeInTheDocument();
+    expect(screen.getByText("pinned by digest — not tracked")).toBeInTheDocument();
+    expect(screen.queryByText(/nginx/)).not.toBeInTheDocument();
+  });
+
   it("shows everything when asked", async () => {
     vi.mocked(listContainerUpdates).mockResolvedValue([
       row("lscr.io/linuxserver/jackett", "v0.24.2624-ls33", "update",

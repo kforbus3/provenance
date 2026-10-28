@@ -841,3 +841,47 @@ func TestATruncatedListingStillReportsALaterLineItFound(t *testing.T) {
 		t.Errorf("status/newerElsewhere = %q/%q, want newscheme/12.4", got.Status, got.NewerElsewhere)
 	}
 }
+
+// searxng pushes several builds a day, 2026.10.27-<hash>. The registry lists them
+// lexically, so which is newest is asked of :latest -- here the third of four.
+func TestSameDayBuildsAreResolvedAgainstLatest(t *testing.T) {
+	tags := []string{"2026.10.27-28423d332", "2026.10.27-b5ed73fcb", "2026.10.27-cb74e7f81",
+		"2026.10.27-ef7bae9dd", "2026.9.6-eaf1fcb34", "latest"}
+	srv := stubRegistry(t, tags, map[string]string{
+		"2026.9.6-eaf1fcb34":   "sha256:old",
+		"2026.10.27-28423d332": "sha256:b",
+		"2026.10.27-b5ed73fcb": "sha256:newest",
+		"2026.10.27-cb74e7f81": "sha256:c",
+		"2026.10.27-ef7bae9dd": "sha256:e",
+		"latest":               "sha256:newest",
+	})
+	repo := repoAt(srv, "searxng/searxng")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "2026.9.6-eaf1fcb34", Digest: "sha256:old"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status != store.ImageStatusUpdate || got.LatestTag != "2026.10.27-b5ed73fcb" {
+		t.Errorf("status/latest = %q/%q, want update/2026.10.27-b5ed73fcb (note %q)",
+			got.Status, got.LatestTag, got.Note)
+	}
+}
+
+// qbittorrent's update moved the bundled libtorrent too, so it is not an
+// automatic update -- and it is still reported, not "current".
+func TestABundledComponentBumpIsReportedNotHidden(t *testing.T) {
+	tags := []string{"5.2.3_v2.0.13-ls470", "5.3.0_v2.1.2-ls485", "libtorrentv1-5.3.0_v1.2.20-ls141"}
+	srv := stubRegistry(t, tags, map[string]string{"5.2.3_v2.0.13-ls470": "sha256:aaa"})
+	repo := repoAt(srv, "lscr.io/linuxserver/qbittorrent")
+	st := &fakeStore{tracked: []store.TrackedImage{
+		{Repository: repo, Tag: "5.2.3_v2.0.13-ls470", Digest: "sha256:aaa"}}}
+
+	newChecker(t, st, srv).Check(context.Background())
+
+	got := st.saved[0]
+	if got.Status != store.ImageStatusNewScheme || got.NewerElsewhere != "5.3.0_v2.1.2-ls485" ||
+		got.LatestTag != "" {
+		t.Errorf("got status=%q elsewhere=%q latest=%q", got.Status, got.NewerElsewhere, got.LatestTag)
+	}
+}

@@ -122,6 +122,14 @@ export function StartRolloutDialog({
           )}
         </Typography>
 
+        {!many && update?.status === "newscheme" && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {toTag} is not the same kind of tag as {update.tag} — {update.note} It
+            is not an automatic update for that reason: read its release notes, and
+            back up the service's data first if it keeps any.
+          </Alert>
+        )}
+
         {many && images.length > 0 && (
           <Box sx={{ maxHeight: 140, overflow: "auto", border: 1, borderColor: "divider",
                      borderRadius: 1, p: 1, mb: 2 }}>

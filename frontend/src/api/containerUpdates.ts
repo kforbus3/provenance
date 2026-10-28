@@ -46,8 +46,11 @@ export interface ImageUpdate {
   // different numbering (jellyfin 10.11.11 → 12.4), named in `newerElsewhere`.
   // Reported, never rolled out — so it is not in `latestTag`, which a rollout
   // reads as its target.
-  status?: "update" | "migration" | "moved" | "current" | "unorderable" | "local" | "unavailable" | "newscheme" | "";
+  // "pinned": the container runs an image pinned by digest; `pinned` is the
+  // digest and `tag` is empty. Nothing newer can exist, so it is shown, not offered.
+  status?: "update" | "migration" | "moved" | "current" | "unorderable" | "local" | "unavailable" | "newscheme" | "pinned" | "";
   newerElsewhere?: string;
+  pinned?: string;
   // What the tag points at in the registry now.
   digest?: string;
   // A newer tag, when one was found AND could be ordered confidently. Empty is a
