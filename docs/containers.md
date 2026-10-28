@@ -78,9 +78,49 @@ count all match. So:
   not two versions
 - `1.2` is never ordered against `1.2.3`
 
+A build counter (`-ls356` → `-ls372`) and a commit hash (searxng's
+`2026.10.27-b5ed73fcb`) are not variants: they identify a build, so those tags
+compare on their version. Several builds of one version told apart only by a hash
+cannot be ordered by name, so Provenance offers the one `:latest` points at.
+
 When tags cannot be ordered, the row reads **"cannot compare"** and says why. It
 does **not** read "up to date". Silence there would be read as an answer, and it
 would be the wrong one.
+
+### A later release in another tag format
+
+A refusal to update automatically is not a refusal to say. When nothing newer
+exists in the running tag's format but a plainly later release exists in another,
+the row reads **"12.4 — new tag format"**:
+
+- the project changed how it numbers releases — jellyfin went from `10.11.11`
+  to `12.4`, so no three-part tag will ever be newer
+- a version inside the suffix moved — qbittorrent `5.2.3_v2.0.13-ls470` to
+  `5.3.0_v2.1.2-ls485` when its bundled libtorrent did, or `-alpine3.24` to
+  `-alpine4.0`
+- the variant changed within the same major — `1.26-bookworm` to `1.28-trixie`
+  once a base image stops being built
+
+These rows are shown by default and can be rolled out **from their own row**, with
+a warning to read the release notes first. They are never part of **Update all**
+and never counted as available updates: crossing any of these is a decision about
+which line to be on. Prereleases and lone numbers (old build counters such as a
+bare `158`) are never offered this way.
+
+When an ordinary update exists as well, it stays the update, and the later line
+is mentioned beside it ("also 12.4").
+
+### Nothing hidden that cannot be vouched for
+
+The Updates tab opens on **Only what can be upgraded**. That view keeps every row
+Provenance cannot vouch for — **cannot compare**, **registry unavailable**,
+**could not check**, **not checked yet** — because an empty list must never mean
+"we do not know".
+
+A container running an image **pinned by digest** (`repo@sha256:…`) has a row
+reading **pinned by digest — not tracked**. A digest has no newer version, so
+nothing can be offered for it; the row is there so the pin is not forgotten.
+Replace the pin with a version tag to have it tracked again.
 
 ## How registries are asked
 
