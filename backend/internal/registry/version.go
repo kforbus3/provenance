@@ -145,11 +145,21 @@ func Comparable(a, b Version) bool {
 // a year outside this range is not one anybody is running — so the window is wide
 // enough to be safe and narrow enough that an ordinary major version cannot fall
 // into it.
+//
+// A date stamp counts too: jellyfin publishes nightly builds as 2026102610, one
+// component that is a date and an hour. Its leading four digits are the year, and a
+// major version of two billion is no more a thing anybody ships than one of 2021.
 func looksCalendar(v Version) bool {
 	if len(v.Parts) == 0 {
 		return false
 	}
-	return v.Parts[0] >= 1990 && v.Parts[0] <= 2200
+	n := v.Parts[0]
+	if n >= 1990_01_01 { // yyyymmdd at the shortest
+		for n >= 10000 {
+			n /= 10
+		}
+	}
+	return n >= 1990 && n <= 2200
 }
 
 // IsNewer reports whether b is a later version of the same thing as a.
@@ -222,4 +232,84 @@ func Newest(current string, tags []string) (newest string, reason string) {
 			"; the repository carries other version tags that cannot be ordered against it"
 	}
 	return "", ""
+}
+
+// NewerElsewhere returns the newest release that Newest could not order against
+// current but that is plainly later than it, or "" when there is none.
+//
+// Newest refuses to compare across shapes, and the refusal is right: it is what
+// keeps 16-bookworm from being offered over 15-alpine. But a project that changes
+// how it numbers releases strands every running copy on a shape nothing will ever
+// be published in again. Jellyfin went from 10.11.11 to 12.0 and tags releases as
+// 12.4 and 12.4.20261026-211555, neither of which is three plain components, so
+// Newest found only older 10.x.y tags and the row read "up to date" for seven
+// weeks with five releases published.
+//
+// This asks a narrower question than Newest -- not "what should this move to" but
+// "is there plainly something later" -- so a candidate must:
+//
+//   - pass every refusal Comparable makes except the component count: the same
+//     prefix, the same suffix variant, the same calendar-ness;
+//   - have at least two components, since a bare number is too often a build;
+//   - be strictly greater at the first component the two have in common. 12.4 is
+//     later than 10.11.11. 10.11 and 10, the aliases of the line current is on,
+//     are equal there and are not, which is why the component-count rule exists.
+//
+// The answer is reported, never rolled out. Crossing a numbering scheme is a
+// decision about which line to be on, and a guess written into a compose file
+// stays there.
+func NewerElsewhere(current string, tags []string) string {
+	cur, ok := ParseVersion(current)
+	if !ok {
+		return ""
+	}
+	cs, cc := suffixParts(cur.Suffix)
+	var best *Version
+	for _, t := range tags {
+		v, ok := ParseVersion(t)
+		if !ok || len(v.Parts) == len(cur.Parts) {
+			continue // not a version, or a shape Newest already ordered
+		}
+		// A lone number is as often a build counter as a version.
+		// linuxserver/mariadb still carries a bare 158 and heimdall a bare 77,
+		// years-old build numbers, and both read as far later than 11.8.9 and
+		// 2.8.3.
+		if len(v.Parts) < 2 {
+			continue
+		}
+		if v.Prefix != cur.Prefix || looksCalendar(v) != looksCalendar(cur) {
+			continue
+		}
+		if vs, vc := suffixParts(v.Suffix); vs != cs || (vc < 0) != (cc < 0) {
+			continue
+		}
+		if leading(cur, v) <= 0 {
+			continue
+		}
+		// Among candidates, the later one; on a tie over the parts they share,
+		// the more specific one -- 12.4.1 says more than 12.4.
+		if best == nil || leading(*best, v) > 0 ||
+			(leading(*best, v) == 0 && len(v.Parts) > len(best.Parts)) {
+			v := v
+			best = &v
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.Raw
+}
+
+// leading compares a and b over the components they share: 1 when b is later, -1
+// when it is earlier, 0 when neither can be told from the other.
+func leading(a, b Version) int {
+	for i := 0; i < len(a.Parts) && i < len(b.Parts); i++ {
+		switch {
+		case b.Parts[i] > a.Parts[i]:
+			return 1
+		case b.Parts[i] < a.Parts[i]:
+			return -1
+		}
+	}
+	return 0
 }

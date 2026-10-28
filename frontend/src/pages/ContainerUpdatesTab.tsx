@@ -34,7 +34,12 @@ type Verdict =
   // image that owns its on-disk format. Its own verdict so it is neither counted
   // as available work nor swept into "roll out everything", where the refusal
   // rejects the whole request and blocks the real updates behind it.
-  | "migration";
+  | "migration"
+  // Nothing newer of this tag's shape, because the project now numbers releases
+  // differently (jellyfin 10.11.11 → 12.4). Shown by default — "up to date" hid it
+  // for seven weeks — and never rolled out: crossing a numbering scheme is a pin
+  // someone changes on purpose.
+  | "newscheme";
 
 // hostsOf normalises the hosts list.
 //
@@ -83,6 +88,7 @@ export function verdictOf(u: ImageUpdate, all: ImageUpdate[] = []): Verdict {
   switch (u.status) {
     case "local": return "local";
     case "migration": return "migration";
+    case "newscheme": return "newscheme";
     case "update": return "newer";
     case "moved": return "moved";
     case "unorderable": return "unknown";
@@ -159,6 +165,12 @@ function VerdictChip({ u, all = [] }: { u: ImageUpdate; all?: ImageUpdate[] }) {
       return (
         <Tooltip title={u.note ?? ""}>
           <Chip label={`${u.latestTag} — migration, not an update`} size="small" color="error" variant="outlined" />
+        </Tooltip>
+      );
+    case "newscheme":
+      return (
+        <Tooltip title={u.note ?? ""}>
+          <Chip label={`${u.newerElsewhere} — new tag format`} size="small" color="warning" variant="outlined" />
         </Tooltip>
       );
     case "moved":
@@ -362,8 +374,8 @@ export function ContainerUpdatesTab() {
       // can do from here, but it is a decision someone has to make elsewhere, and
       // burying a database that needs migrating among "up to date" rows is how it
       // gets forgotten until the version it is on stops getting security fixes.
-      newer: 0, moved: 1, migration: 2, superseded: 3, unavailable: 4, unknown: 5,
-      error: 6, unchecked: 7, current: 8, local: 9, self: 10, gone: 11,
+      newer: 0, moved: 1, migration: 2, newscheme: 3, superseded: 4, unavailable: 5,
+      unknown: 6, error: 7, unchecked: 8, current: 9, local: 10, self: 11, gone: 12,
     };
     if (!showAll) {
       // Something is available: a newer version, a rebuilt tag, or a major bump
@@ -373,7 +385,7 @@ export function ContainerUpdatesTab() {
       // Rows we could not check stay in too, deliberately. Hiding them would make
       // an empty list mean "nothing to upgrade" when it might mean "we do not
       // know", and the reassuring reading is the dangerous one.
-      const keep = new Set<Verdict>(["newer", "moved", "migration", "error", "unchecked"]);
+      const keep = new Set<Verdict>(["newer", "moved", "migration", "newscheme", "error", "unchecked"]);
       rows = rows.filter((u) => keep.has(verdictOf(u, updates)));
     }
     return [...rows].sort((a, b) =>

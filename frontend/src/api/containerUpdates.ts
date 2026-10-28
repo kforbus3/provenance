@@ -42,7 +42,12 @@ export interface ImageUpdate {
   // "migration": a newer tag exists, and it crosses a major version of an image
   // that owns its on-disk format — a rollout refuses it, so the page must not
   // count it as available work or include it in a bulk rollout.
-  status?: "update" | "migration" | "moved" | "current" | "unorderable" | "local" | "unavailable" | "";
+  // "newscheme": nothing newer of this tag's shape, but a later release under a
+  // different numbering (jellyfin 10.11.11 → 12.4), named in `newerElsewhere`.
+  // Reported, never rolled out — so it is not in `latestTag`, which a rollout
+  // reads as its target.
+  status?: "update" | "migration" | "moved" | "current" | "unorderable" | "local" | "unavailable" | "newscheme" | "";
+  newerElsewhere?: string;
   // What the tag points at in the registry now.
   digest?: string;
   // A newer tag, when one was found AND could be ordered confidently. Empty is a

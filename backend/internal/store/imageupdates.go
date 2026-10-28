@@ -27,12 +27,16 @@ type ImageUpdate struct {
 	// ordered against it" means up to date, and rendered identically to a check
 	// that failed -- so twenty-two healthy images read as broken. Note stays as
 	// the explanation a person reads; this is what code reads.
-	Status    string    `json:"status,omitempty"`
-	Digest    string    `json:"digest,omitempty"`
-	LatestTag string    `json:"latestTag,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	CheckedAt time.Time `json:"checkedAt"`
+	Status    string `json:"status,omitempty"`
+	Digest    string `json:"digest,omitempty"`
+	LatestTag string `json:"latestTag,omitempty"`
+	// NewerElsewhere is a later release under a different tag format than Tag
+	// (jellyfin 10.11.11 -> 12.4). Never LatestTag: that is what a rollout moves
+	// a host to, and crossing a numbering scheme is not a rollout's decision.
+	NewerElsewhere string    `json:"newerElsewhere,omitempty"`
+	Note           string    `json:"note,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	CheckedAt      time.Time `json:"checkedAt"`
 }
 
 // TrackedImage is one repository:tag a host is running, and the digest it is
@@ -133,8 +137,9 @@ func (s *Store) TrackedImages(ctx context.Context) ([]TrackedImage, error) {
 func (s *Store) UpsertImageUpdate(ctx context.Context, in ImageUpdate) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO container_image_updates
-		    (repository, tag, current_digest, latest_tag, note, error, declared, status, checked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		    (repository, tag, current_digest, latest_tag, note, error, declared, status,
+		     newer_elsewhere, checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
 		ON CONFLICT (repository, tag) DO UPDATE SET
 		    current_digest = EXCLUDED.current_digest,
 		    latest_tag     = EXCLUDED.latest_tag,
@@ -142,15 +147,18 @@ func (s *Store) UpsertImageUpdate(ctx context.Context, in ImageUpdate) error {
 		    error          = EXCLUDED.error,
 		    declared       = EXCLUDED.declared,
 		    status         = EXCLUDED.status,
+		    newer_elsewhere = EXCLUDED.newer_elsewhere,
 		    checked_at     = now()`,
-		in.Repository, in.Tag, in.Digest, in.LatestTag, in.Note, in.Error, in.Declared, in.Status)
+		in.Repository, in.Tag, in.Digest, in.LatestTag, in.Note, in.Error, in.Declared, in.Status,
+		in.NewerElsewhere)
 	return err
 }
 
 // ImageUpdates returns every recorded check.
 func (s *Store) ImageUpdates(ctx context.Context) ([]ImageUpdate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT repository, tag, current_digest, latest_tag, note, error, declared, status, checked_at
+		SELECT repository, tag, current_digest, latest_tag, note, error, declared, status,
+		       newer_elsewhere, checked_at
 		FROM container_image_updates
 		ORDER BY repository, tag`)
 	if err != nil {
@@ -161,7 +169,7 @@ func (s *Store) ImageUpdates(ctx context.Context) ([]ImageUpdate, error) {
 	for rows.Next() {
 		var u ImageUpdate
 		if err := rows.Scan(&u.Repository, &u.Tag, &u.Digest, &u.LatestTag,
-			&u.Note, &u.Error, &u.Declared, &u.Status, &u.CheckedAt); err != nil {
+			&u.Note, &u.Error, &u.Declared, &u.Status, &u.NewerElsewhere, &u.CheckedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -547,6 +555,9 @@ const (
 	ImageStatusUnorderable = "unorderable" // no tag in the repository can be ordered against this one
 	ImageStatusLocal       = "local"       // built on the host; never in a registry
 	ImageStatusUnavailable = "unavailable" // the registry would not answer in full
+	// Nothing newer of the same shape, but a later release under a different
+	// numbering (jellyfin 10.11.11 -> 12.4). Reported, never rolled out.
+	ImageStatusNewScheme = "newscheme"
 )
 
 // CachedTags returns a repository's cached tag listing when it is fresh enough.
