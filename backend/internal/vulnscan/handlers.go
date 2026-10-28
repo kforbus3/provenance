@@ -494,8 +494,9 @@ func (h *handler) scanContainerImages(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "vuln_scan.container_images", map[string]any{"started": true})
 	go func() {
 		defer cancel()
-		scanned, failed := h.svc.ScanContainerImages(ctx)
-		h.d.Log.Info("container image scan finished", "scanned", scanned, "failed", failed)
+		scanned, failures := h.svc.ScanContainerImages(ctx)
+		h.d.Log.Info("container image scan finished", "scanned", scanned,
+			"failed", len(failures), "failures", failures)
 	}()
 	// Accepted, not done: the caller polls /container-images for results, which is
 	// what the scheduled sweep has always left behind too.
