@@ -243,7 +243,7 @@ Indexes: `idx_hosts_env(environment)`, `idx_hosts_tags` (GIN on `tags`).
 | `address` | INET | routable mgmt address (from jump host) |
 | `wg_address` | INET | WireGuard tunnel address |
 | `ssh_port` | INT | default 22 |
-| `ssh_user` | TEXT | default `fleet` |
+| `ssh_user` | TEXT | default `prov` |
 | `tags` | TEXT[] | default `{}` |
 | `enrolled` | BOOLEAN | set once enrollment succeeds |
 | `created_at` / `updated_at` | TIMESTAMPTZ | |

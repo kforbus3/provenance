@@ -805,7 +805,7 @@ func validAddress(s string) bool {
 // validSSHUser restricts the login account to a conservative POSIX username
 // pattern. It becomes the shell variable LOGIN=... in the root-run enrollment
 // script and the sudo/auth-principals account name, so it must not carry shell
-// metacharacters. Empty is allowed — enrollment defaults it to "fleet".
+// metacharacters. Empty is allowed — the store defaults it to "prov".
 func validSSHUser(s string) bool {
 	if s == "" {
 		return true
