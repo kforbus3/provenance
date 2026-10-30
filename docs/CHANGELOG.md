@@ -5,6 +5,38 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.10 — 2026-10-30
+
+### Hosts: new hosts enroll as `prov`, not the retired `fleet` account
+
+**Every host added with the SSH User field left blank was enrolled under `fleet` and
+`fleet-login`**, the accounts the rename retired on 2026-09-22. The rename moved the
+column default to `prov`, but the store filled a blank user with `"fleet"` before the
+row reached it. A blank SSH user now means `prov`, matching the column, and a typed
+user is kept. Hosts already enrolled as `fleet` keep that account until moved with
+**Hosts → Bulk actions → Migrate login account**, then retire it with **Retire the superseded account…**.
+
+### Container updates: nothing on the Updates page is left un-upgradable
+
+- **A release published under a new tag format is reported** (status `newscheme`)
+  instead of the row reading current: jellyfin 10.11.11 → 12.x. It gets its own
+  per-row Roll out with a warning, and is never part of Update all.
+- **Commit-hash builds compare** (searxng `<date>-<commit>`); same-day builds are
+  ordered by which one `:latest` points at.
+- **Digest-pinned containers get a row**, "pinned by digest — not tracked", instead of
+  no row at all.
+- "Cannot compare" and "registry unavailable" rows are shown by default.
+
+### Vulnerabilities: a failed container scan names the image and the reason
+
+The health page said only "1 image(s) could not be scanned". It now names each image
+and why: deleted from its registry, rate limited, needs credentials, or scanner
+unreachable.
+
+Deploy notes: migration 0119 adds `newer_elsewhere` to image update rows.
+
+---
+
 ## v2.2.9 — 2026-10-21
 
 ### Container updates: every stack that names an image is updated, and nothing stopped is started

@@ -59,7 +59,7 @@ fleet hosts list
 fleet hosts list --json | jq -r '.[] | select(.enrolled==false) | .hostname'
 
 # Register a host
-fleet hosts create --hostname db-02 --env prod --tags db,postgres --ssh-user fleet
+fleet hosts create --hostname db-02 --env prod --tags db,postgres --ssh-user prov
 
 # Dynamic group — membership (and thus access) follows host tags automatically
 fleet groups create --name prod-databases --env prod --tag-all db

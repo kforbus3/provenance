@@ -107,7 +107,7 @@ compatibility (additive/breaking, `--breaking`) drives the cluster/federation or
      (test fabric: `172.30.0.21` for `host-ubuntu`, `172.30.0.22` for `host-rocky`)
    - **WireGuard Address** — leave blank to **auto-assign** the next free overlay address, or
      type a specific one (validated to be in the overlay subnet and not already used)
-   - **SSH user** — `fleet` for the test fabric
+   - **SSH user** — leave blank to use the default `prov` account
 2. Click the **Enroll** (cable) icon on the host row and choose how to reach the host for the
    one-time bootstrap (all install CA trust + WireGuard; full detail in the
    [Host Enrollment Guide](./host-enrollment-guide.md)):
