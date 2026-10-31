@@ -311,14 +311,16 @@ func NewerElsewhere(current string, tags []string) string {
 			// 110.4.21mariabionic-ls30 beside 11.8.9.
 			tier = 2
 		}
-		if tier < 0 || later(cur, v, tier == 1) <= 0 {
+		// tier indexes best; the switch only assigns 0-2, and the bound is checked
+		// here as well. gosec G602 still cannot follow it, hence the nolints below.
+		if tier < 0 || tier >= len(best) || later(cur, v, tier == 1) <= 0 {
 			continue
 		}
-		b := best[tier]
+		b := best[tier] //nolint:gosec // G602: tier is bounds-checked just above
 		if b == nil || later(*b, v, tier == 1) > 0 ||
 			(later(*b, v, tier == 1) == 0 && len(v.Parts) > len(b.Parts)) {
 			v := v
-			best[tier] = &v
+			best[tier] = &v //nolint:gosec // G602: tier is bounds-checked above
 		}
 	}
 	for _, b := range best {
