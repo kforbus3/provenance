@@ -311,7 +311,9 @@ func NewerElsewhere(current string, tags []string) string {
 			// 110.4.21mariabionic-ls30 beside 11.8.9.
 			tier = 2
 		}
-		if tier < 0 || later(cur, v, tier == 1) <= 0 {
+		// tier indexes best; the upper bound is implied by the switch, but stating it
+		// keeps gosec (G602) from reading every best[tier] as out of range.
+		if tier < 0 || tier >= len(best) || later(cur, v, tier == 1) <= 0 {
 			continue
 		}
 		b := best[tier]
