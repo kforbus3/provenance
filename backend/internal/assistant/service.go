@@ -443,6 +443,14 @@ func (s *Service) converse(ctx context.Context, cfg Settings, convoID, question 
 			if tbl != nil {
 				data.table = tbl
 			}
+			// A CVE lookup ("which hosts are vulnerable to CVE-X") carries an answer
+			// built in code: it is an enumeration of hosts plus the coverage caveat,
+			// and a small model drops both.
+			if p, ok := payload.(map[string]any); ok {
+				if ans, ok := p["answer"].(string); ok && ans != "" {
+					directAnswer = ans
+				}
+			}
 			result = payload
 		case "network_exposure":
 			tbl, payload := s.runNetworkExposure(ctx, fargs, who)

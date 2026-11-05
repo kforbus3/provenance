@@ -5,6 +5,44 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## v2.2.11 — 2026-11-04
+
+### Ask: "which hosts are vulnerable to CVE-X?"
+
+**Ask said it had no information about a CVE that the vulnerability scans had
+recorded.** Every question naming a CVE went to the fleet roll-up, which holds only
+per-host counts, and the CVE ID was dropped on the way. Questions such as *"are any
+hosts vulnerable to CVE-2024-6387?"* or *"is web-01 affected by CVE-2024-6387?"* now
+look the ID up and list every affected host with where the CVE was found:
+
+- **Host packages**, from each host's latest completed scan (Windows MSRC findings
+  included), with the installed and fixed-in version and how to fix it (update, or
+  remove an orphaned package).
+- **Running containers** whose image scan reports it.
+- **Network checks** that name it.
+
+A host whose latest scan no longer reports the CVE is not listed. Hosts that have
+never been scanned are named in the answer, since nothing can be said about them.
+Several IDs can be asked about at once, and `GHSA-…` IDs work as well as CVEs.
+
+### Vulnerability scans keep a finding's other IDs
+
+grype keys a Go, npm or PyPI finding on its GitHub advisory (`GHSA-…`) and names the
+CVE only among related vulnerabilities, which the scanner dropped. A search for that
+CVE then missed those packages. The scanner now records the related IDs as
+**aliases**, and a CVE lookup matches on them.
+
+### Fixes
+
+- **"scan web-01 for vulnerabilities" proposes a scan.** A request that starts with
+  "scan" was answered with the host's existing results instead.
+
+Deploy notes: migration 0120 adds `vuln_findings.aliases`. Findings recorded before
+this release have no aliases until each host and image is next scanned. Includes
+follow-redirects 1.16.2 (GHSA-mrwp-f3q8-3g9p) and the gosec G602 fix from #97.
+
+---
+
 ## v2.2.10 — 2026-10-30
 
 ### Hosts: new hosts enroll as `prov`, not the retired `fleet` account

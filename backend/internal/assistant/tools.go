@@ -90,6 +90,9 @@ CHOOSING TOOLS
   scan findings (CVE, package, installed/fixed version, severity, CVSS, and a "Fix"
   classification); without one, the fleet roll-up (counts + max CVSS per host). Use for
   "what CVEs/vulnerabilities are on <host>", "which hosts have critical vulnerabilities".
+  For a SPECIFIC CVE ("which hosts are vulnerable to CVE-2024-6387", "is <host> affected
+  by CVE-…") pass cve=<id>: it searches every host's latest scan, never answer that from
+  the roll-up counts.
   This is CVE exposure — distinct from recent_scans (OpenSCAP compliance). Each finding's
   Fix category tells the operator HOW to remediate: "Update" = an apt/dnf upgrade fixes it;
   "Remove (orphaned)" = the package is installed but in no repository (a leftover from an
@@ -532,11 +535,12 @@ var tools = []toolDef{{
 	Type: "function",
 	Function: toolFunction{
 		Name:        "vulnerabilities",
-		Description: "CVE / vulnerability scan results (from the grype-based vulnerability scanner). With a hostname it returns that host's latest completed scan findings — each CVE with its package, installed vs fixed version, severity, and CVSS — optionally filtered by minimum severity or CVSS. WITHOUT a hostname it returns the fleet vulnerability roll-up: the latest scan per host with critical/high/medium/low counts and max CVSS, worst first. Use for 'what CVEs / vulnerabilities are on <host>', 'which hosts have critical vulnerabilities', 'how bad is <host2>'s vulnerability posture'. This is DISTINCT from recent_scans, which is OpenSCAP compliance/benchmark scanning — vulnerabilities is CVE/patch exposure. Requires the Host.Scan permission.",
+		Description: "CVE / vulnerability scan results (from the grype-based vulnerability scanner). With a hostname it returns that host's latest completed scan findings — each CVE with its package, installed vs fixed version, severity, and CVSS — optionally filtered by minimum severity or CVSS. WITHOUT a hostname it returns the fleet vulnerability roll-up: the latest scan per host with critical/high/medium/low counts and max CVSS, worst first. With cve set it answers which hosts are affected by that specific CVE/GHSA ID. Use for 'what CVEs / vulnerabilities are on <host>', 'which hosts have critical vulnerabilities', 'which hosts are vulnerable to CVE-2024-6387', 'how bad is <host2>'s vulnerability posture'. This is DISTINCT from recent_scans, which is OpenSCAP compliance/benchmark scanning — vulnerabilities is CVE/patch exposure. Requires the Host.Scan permission.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"hostname":    map[string]any{"type": "string", "description": "exact hostname for per-CVE findings; omit for the fleet roll-up"},
+				"cve":         map[string]any{"type": "string", "description": "one or more CVE or GHSA IDs (e.g. CVE-2024-6387). Returns which hosts are affected — host packages, running container images and network checks — and which hosts were never scanned. Combine with hostname to ask about one host."},
 				"minSeverity": map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low"}, "description": "only findings at or above this severity"},
 				"minCvss":     map[string]any{"type": "number", "description": "only findings with CVSS >= this (0-10)"},
 				"limit":       map[string]any{"type": "integer", "description": "max finding rows for a single host (default 100)"},

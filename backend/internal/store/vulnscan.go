@@ -72,9 +72,9 @@ func (s *Store) CompleteVulnScan(ctx context.Context, id uuid.UUID, sum VulnSumm
 		for _, f := range findings {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO vuln_findings
-				  (scan_id, cve, package, source_package, installed_version, fixed_version, fix_state, severity, cvss_score, cvss_vector, data_source, description)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-				id, f.CVE, f.Package, f.SourcePackage, f.InstalledVersion, f.FixedVersion, models.FixStateOf(f), f.Severity, f.CVSSScore, f.CVSSVector, f.DataSource, f.Description); err != nil {
+				  (scan_id, cve, package, source_package, installed_version, fixed_version, fix_state, severity, cvss_score, cvss_vector, data_source, description, aliases)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+				id, f.CVE, f.Package, f.SourcePackage, f.InstalledVersion, f.FixedVersion, models.FixStateOf(f), f.Severity, f.CVSSScore, f.CVSSVector, f.DataSource, f.Description, nonNil(f.Aliases)); err != nil {
 				return err
 			}
 		}
@@ -151,7 +151,8 @@ func (s *Store) GetVulnScan(ctx context.Context, id uuid.UUID) (*models.VulnScan
 // GetVulnFindings returns a scan's findings, highest CVSS first.
 func (s *Store) GetVulnFindings(ctx context.Context, scanID uuid.UUID) ([]models.VulnFinding, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT cve, package, source_package, installed_version, fixed_version, fix_state, severity, cvss_score, cvss_vector, data_source, description
+		SELECT cve, package, source_package, installed_version, fixed_version, fix_state, severity, cvss_score, cvss_vector, data_source, description,
+		       COALESCE(aliases, '{}')
 		FROM vuln_findings WHERE scan_id=$1 ORDER BY cvss_score DESC, cve`, scanID)
 	if err != nil {
 		return nil, err
@@ -161,7 +162,7 @@ func (s *Store) GetVulnFindings(ctx context.Context, scanID uuid.UUID) ([]models
 	for rows.Next() {
 		var f models.VulnFinding
 		if err := rows.Scan(&f.CVE, &f.Package, &f.SourcePackage, &f.InstalledVersion, &f.FixedVersion, &f.FixState, &f.Severity,
-			&f.CVSSScore, &f.CVSSVector, &f.DataSource, &f.Description); err != nil {
+			&f.CVSSScore, &f.CVSSVector, &f.DataSource, &f.Description, &f.Aliases); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
