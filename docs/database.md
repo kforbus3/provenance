@@ -590,6 +590,7 @@ One CVE finding within a scan. Index on `vuln_scan_id`.
 | `cvss_vector` | TEXT | |
 | `data_source` | TEXT | vulnerability data source |
 | `description` | TEXT | |
+| `aliases` | TEXT[] | the other IDs the scanner reported for the same vulnerability (the CVE behind a GHSA-keyed Go/npm/PyPI finding); GIN-indexed; migration 0120, filled from the next scan |
 
 ---
 

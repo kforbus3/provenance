@@ -265,6 +265,15 @@ def _normalize(g: dict) -> dict:
         for rel in m.get("relatedVulnerabilities") or []:
             cvss_all += rel.get("cvss") or []
         score, vector = _best_cvss(cvss_all)
+        # The other IDs this match is known by. A Go/npm/PyPI match is keyed on its
+        # GHSA advisory and names the CVE only here, so without these a "which hosts
+        # have CVE-X" lookup misses it and reports the host clean.
+        own = (v.get("id") or "").strip()
+        aliases = []
+        for rel in m.get("relatedVulnerabilities") or []:
+            rid = (rel.get("id") or "").strip()
+            if rid and rid.upper() != own.upper() and rid.upper() not in (a.upper() for a in aliases):
+                aliases.append(rid)
         fix = v.get("fix") or {}
         fixed = ";".join(fix.get("versions") or [])
         # The distro trackers say a lot more than "is there a version": "wont-fix"
@@ -287,6 +296,7 @@ def _normalize(g: dict) -> dict:
             "cvssVector": vector,
             "dataSource": v.get("dataSource", ""),
             "description": (v.get("description") or "")[:1000],
+            "aliases": aliases,
         })
     db = (g.get("descriptor") or {}).get("db") or {}
     built = db.get("built") or (db.get("status") or {}).get("built", "") if isinstance(db.get("status"), dict) else db.get("built", "")

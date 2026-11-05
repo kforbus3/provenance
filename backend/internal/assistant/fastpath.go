@@ -211,9 +211,21 @@ func fastPathTool(question string) (name string, args json.RawMessage, ok bool) 
 		return "audit_log", a, true
 	}
 
+	// 6a) A question naming a specific CVE/GHSA ID -> vulnerabilities{cve}. Ahead of
+	// the generic CVE branch, which routed these to the fleet roll-up: per-host COUNTS,
+	// the ID discarded, so Ask said it had no information about the CVE at all.
+	if ids := vulnIDsFromText(q); len(ids) > 0 && !isScanActionRequest(lq) {
+		host := ""
+		if !eachHostRE.MatchString(lq) {
+			host = cveHostFromText(lq)
+		}
+		a, _ := json.Marshal(vulnArgs{Hostname: host, CVE: strings.Join(ids, ",")})
+		return "vulnerabilities", a, true
+	}
+
 	// 6) CVE / vulnerability READ questions -> vulnerabilities (not a "run a scan"
 	// request, which the action path handles).
-	if !scanVerbRE.MatchString(lq) && vulnReadIntent(lq) {
+	if !scanVerbRE.MatchString(lq) && !isScanActionRequest(lq) && vulnReadIntent(lq) {
 		host := ""
 		if !eachHostRE.MatchString(lq) {
 			host = hostFromClause(hostAnywhereRE, lq)
@@ -406,6 +418,60 @@ func securityEventsIntent(lq string) bool {
 	return false
 }
 
+// scanActionVerbRE is scanVerbRE without "do": "do any scans show CVE-…" is a
+// question, not a request to run one.
+var scanActionVerbRE = regexp.MustCompile(`(?i)\b(?:run|start|kick|initiate|perform|launch|trigger)\b[^.?!]*\bscan\b`)
+
+// scanReadNouns follow a leading "scan" in a READ: "scan results for web01".
+var scanReadNouns = map[string]bool{"results": true, "result": true, "findings": true, "history": true,
+	"status": true, "report": true, "reports": true, "data": true, "output": true, "summary": true}
+
+// isScanActionRequest reports whether a CVE/vulnerability question is really a
+// request to RUN a scan ("scan web01 for CVE-…", "please rescan debian", "run a
+// vulnerability scan on nas"), which belongs to the action path so the model can
+// propose it — not to the read fast path, which would answer with old results.
+func isScanActionRequest(lq string) bool {
+	if scanActionVerbRE.MatchString(lq) {
+		return true
+	}
+	f := strings.Fields(lq)
+	for len(f) > 0 && (f[0] == "please" || f[0] == "can" || f[0] == "could" || f[0] == "you" || f[0] == "would") {
+		f = f[1:]
+	}
+	if len(f) == 0 || (f[0] != "scan" && f[0] != "rescan") {
+		return false
+	}
+	return len(f) < 2 || !scanReadNouns[strings.Trim(f[1], ".,;:?!")]
+}
+
+// cveHostSubjectRE is the host a CVE question is about when it is the subject:
+// "is web01 vulnerable to …", "does web01 have CVE-…".
+var cveHostSubjectRE = regexp.MustCompile(`(?i)\b(?:is|are|was|were|does|do|did|has)\s+([a-z0-9][a-z0-9._-]*)\s+(?:still\s+|currently\s+|now\s+)?(?:vulnerable|affected|exposed|impacted|patched|fixed|have|has|got|contain|carry|run)\b`)
+
+// cvePronouns are subjects that are never a host ("are WE vulnerable").
+var cvePronouns = map[string]bool{"we": true, "you": true, "they": true, "i": true, "anything": true,
+	"anyone": true, "anybody": true, "somebody": true, "something": true, "there": true}
+
+// cveHostFromText pulls the one host a CVE question is about, or "" for the fleet.
+// The ID itself is never a host: "check for CVE-2024-6387" must not look up a host
+// named cve-2024-6387 and report that it does not exist.
+func cveHostFromText(lq string) string {
+	ok := func(h string) bool {
+		return h != "" && !hostStopWords[h] && !cvePronouns[h] && !vulnIDRE.MatchString(h)
+	}
+	if m := cveHostSubjectRE.FindStringSubmatch(lq); m != nil {
+		if h := strings.ToLower(strings.Trim(m[1], ".,;:'\"?!")); ok(h) {
+			return h
+		}
+	}
+	for _, m := range hostAnywhereRE.FindAllStringSubmatch(lq, -1) {
+		if h := strings.ToLower(strings.Trim(m[1], ".,;:'\"?!")); ok(h) {
+			return h
+		}
+	}
+	return ""
+}
+
 // vulnReadIntent matches CVE/vulnerability questions.
 func vulnReadIntent(lq string) bool {
 	if strings.Contains(lq, "how do") || strings.Contains(lq, "how to") {
@@ -420,7 +486,7 @@ func vulnReadIntent(lq string) bool {
 
 // mentionsVuln reports whether a question uses CVE/vulnerability vocabulary at all.
 func mentionsVuln(lq string) bool {
-	return strings.Contains(lq, "cve") || strings.Contains(lq, "vulnerabilit") || strings.Contains(lq, "vulnerable")
+	return strings.Contains(lq, "cve") || strings.Contains(lq, "ghsa-") || strings.Contains(lq, "vulnerabilit") || strings.Contains(lq, "vulnerable")
 }
 
 // complianceIntent matches OpenSCAP compliance/benchmark questions and reports

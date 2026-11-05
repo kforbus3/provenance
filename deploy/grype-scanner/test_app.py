@@ -90,6 +90,22 @@ def test_normalize_carries_fix_state_and_source():
     assert curl["sourcePackage"] == ""
 
 
+# A Go/npm/PyPI match is keyed on its GitHub advisory; the CVE it fixes is only in
+# relatedVulnerabilities. Dropping it made "which hosts have CVE-X" answer "none"
+# for every Go binary that had it.
+def test_normalize_keeps_related_ids_as_aliases():
+    out = _normalize({"matches": [
+        {"vulnerability": {"id": "GHSA-49gw-vxvf-fc2g", "severity": "Medium"},
+         "relatedVulnerabilities": [{"id": "CVE-2024-24790"}, {"id": "cve-2024-24790"},
+                                    {"id": "GHSA-49gw-vxvf-fc2g"}, {"id": ""}],
+         "artifact": {"name": "stdlib", "version": "go1.22.1"}},
+        {"vulnerability": {"id": "CVE-2024-6387", "severity": "High"},
+         "artifact": {"name": "openssh-server", "version": "1:9.2p1-2"}},
+    ]})["findings"]
+    assert out[0]["aliases"] == ["CVE-2024-24790"]
+    assert out[1]["aliases"] == []
+
+
 def test_normalize_empty_state_reads_as_unknown():
     out = _normalize({"matches": [
         {"vulnerability": {"id": "CVE-1", "severity": "Low", "fix": {}}, "artifact": {"name": "a"}},

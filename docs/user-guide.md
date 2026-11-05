@@ -211,6 +211,12 @@ action" below). You can ask about:
 - **Vulnerabilities (CVEs)** — *"what critical vulnerabilities are on web-01?"* or
   *"which hosts have the worst CVE exposure?"*, from the vulnerability scanner
   (distinct from OpenSCAP compliance scans). Requires the `Host.Scan` permission.
+- **A specific CVE** — *"are any hosts vulnerable to CVE-2024-6387?"* or *"is web-01
+  affected by CVE-2024-6387?"* lists every affected host and where the CVE was found:
+  an installed package (with the fixed-in version and how to fix it), a running
+  container image, or a network check. Each host's latest scan is used, and hosts that
+  have never been scanned are named, because "not found" on an unscanned host means
+  unknown, not safe. GitHub advisory IDs (`GHSA-…`) work too.
 - **Users, roles, and MFA** — *"who are the administrators?"*, *"which accounts have
   no MFA?"*, *"what role does bob have?"* (requires `User.Edit`).
 - **Approvals and just-in-time access** — *"what's waiting for approval?"*, *"who has

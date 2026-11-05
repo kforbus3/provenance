@@ -936,6 +936,11 @@ type VulnFinding struct {
 	CVSSVector  string  `json:"cvssVector,omitempty"`
 	DataSource  string  `json:"dataSource,omitempty"`
 	Description string  `json:"description,omitempty"`
+	// Aliases are the other IDs the scanner reported for the same vulnerability —
+	// the CVE behind a GHSA-keyed finding, most often. Matching on these is what
+	// lets "which hosts have CVE-X" find a Go or npm package whose finding is
+	// keyed on the GitHub advisory instead.
+	Aliases []string `json:"aliases,omitempty"`
 	// Remediation classifies HOW to fix this finding on the specific host, derived at
 	// read time by cross-referencing the host's pending-update and obsolete-package
 	// inventory. Not persisted with the scan. Empty when it can't be determined.

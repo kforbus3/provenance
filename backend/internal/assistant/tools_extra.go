@@ -557,7 +557,10 @@ func (s *Service) securityEventsDirectAnswer(ctx context.Context, question strin
 // ---------------------------------------------------------------------------
 
 type vulnArgs struct {
-	Hostname    string  `json:"hostname"`
+	Hostname string `json:"hostname"`
+	// CVE is one or more CVE/GHSA IDs. When set the tool answers "which hosts are
+	// affected by these" instead of listing findings or the roll-up.
+	CVE         string  `json:"cve,omitempty"`
 	MinSeverity string  `json:"minSeverity"`
 	MinCVSS     float64 `json:"minCvss"`
 	Limit       int     `json:"limit"`
@@ -577,6 +580,10 @@ func (s *Service) runVulnerabilities(ctx context.Context, raw json.RawMessage, w
 	}
 	var a vulnArgs
 	_ = json.Unmarshal(raw, &a)
+	if strings.TrimSpace(a.CVE) != "" {
+		tbl, payload, _ := s.runCVEExposure(ctx, a, who)
+		return tbl, payload
+	}
 	minRank := severityRank[strings.ToLower(strings.TrimSpace(a.MinSeverity))]
 
 	hostname := strings.TrimSpace(a.Hostname)
