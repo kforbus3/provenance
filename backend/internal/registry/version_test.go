@@ -381,3 +381,35 @@ func TestTierTwoStaysWithinTheMajor(t *testing.T) {
 		t.Errorf("got %q from linuxserver/mariadb's real listing, want nothing", got)
 	}
 }
+
+// michaelf34/infinity, as listed on 2026-11-05. The bare tags are the CUDA build;
+// -cpu, -amd and -trt-onnx are flavours published BESIDE each release, not after
+// it. 0.0.78 shipped only as -cpu, and tier 2 offered 0.0.78-cpu as the successor
+// of 0.0.77. A rollout took it: the CPU image runs the ONNX engine, the reranker
+// has no ONNX files, and the container crash-looped on every start.
+var infinityTags = []string{
+	"0.0.78-cpu", "latest-cpu", "0.0.77-trt-onnx", "0.0.77-amd", "latest", "0.0.77",
+	"0.0.77-cpu", "0.0.76.colpali", "latest-trt-onnx", "latest-amd", "0.0.76-trt-onnx",
+	"0.0.76-amd", "0.0.76-cpu", "0.0.76", "0.0.76rc1-cpu", "0.0.75-trt-onnx", "0.0.75-amd",
+	"0.0.75", "0.0.75-cpu", "0.0.74-amd", "0.0.74-trt-onnx", "0.0.74", "0.0.74-cpu",
+}
+
+func TestABareTagIsNotSucceededByAFlavour(t *testing.T) {
+	if got := NewerElsewhere("0.0.77", infinityTags); got != "" {
+		t.Errorf("NewerElsewhere(0.0.77) = %q from infinity's real listing, want nothing: "+
+			"-cpu is a flavour beside the CUDA build, not its successor", got)
+	}
+	if got, _ := Newest("0.0.77", infinityTags); got != "" {
+		t.Errorf("Newest(0.0.77) = %q, want nothing", got)
+	}
+	// The same listing still updates a host that runs the CPU flavour.
+	if got, _ := Newest("0.0.77-cpu", infinityTags); got != "0.0.78-cpu" {
+		t.Errorf("Newest(0.0.77-cpu) = %q, want 0.0.78-cpu", got)
+	}
+	// Generic shape of the same mistake: the default image to a specialised one.
+	for _, c := range [][2]string{{"1.4.2", "1.5.0-alpine"}, {"2.1", "2.3-rootless"}, {"3.0.1", "3.1.0-slim"}} {
+		if got := NewerElsewhere(c[0], []string{c[0], c[1]}); got != "" {
+			t.Errorf("NewerElsewhere(%s) = %q, want nothing", c[0], got)
+		}
+	}
+}

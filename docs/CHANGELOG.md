@@ -5,6 +5,23 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
+## Unreleased
+
+### Updates no longer offer a different flavour of an image as its next release
+
+**A rollout replaced a CUDA image with its CPU build.** `michaelf34/infinity`
+publishes each release twice, `0.0.77` (CUDA) and `0.0.77-cpu`, and `0.0.78` came out
+as `0.0.78-cpu` only. The "later release in another tag format" check read the
+`-cpu` tag as the variant replacing the bare one — the rule meant for
+`1.26-bookworm` to `1.28-trixie` — and offered `0.0.78-cpu` as the next release of
+`0.0.77`. Rolled out, the CPU image ran a different inference engine, could not load
+the reranker model, and restarted on every start.
+
+That rule now applies only when the running tag is itself a named variant. A bare
+tag is a project's default build; a suffix after it (`-cpu`, `-amd`, `-alpine`,
+`-slim`, `-rootless`) names a flavour published beside it. Hosts already running a
+flavour still get its updates (`0.0.77-cpu` to `0.0.78-cpu`).
+
 ## v2.2.11 — 2026-11-04
 
 ### Ask: "which hosts are vulnerable to CVE-X?"
