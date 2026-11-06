@@ -99,7 +99,10 @@ the row reads **"12.4 — new tag format"**:
   `5.3.0_v2.1.2-ls485` when its bundled libtorrent did, or `-alpine3.24` to
   `-alpine4.0`
 - the variant changed within the same major — `1.26-bookworm` to `1.28-trixie`
-  once a base image stops being built
+  once a base image stops being built. Only from one named variant to another: a
+  bare tag such as `0.0.77` is the project's default build, and a suffixed tag such
+  as `0.0.78-cpu` is a flavour published beside it (`-cpu`, `-amd`, `-alpine`,
+  `-slim`), so it is never offered as the next release
 
 These rows are shown by default and can be rolled out **from their own row**, with
 a warning to read the release notes first. They are never part of **Update all**

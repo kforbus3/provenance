@@ -271,7 +271,9 @@ func Newest(current string, tags []string) (newest string, reason string) {
 //     4.1.0-1-full became 4.1.0-2-full; nginx 1.31-alpine3.24 will become
 //     1.32-alpine4.0. Same suffix with its digits taken out.
 //  2. The variant changed outright, within the same major: 1.26-bookworm to
-//     1.28-trixie once a base image stops being built.
+//     1.28-trixie once a base image stops being built. Only from one named
+//     variant to another: a bare tag is the default build, and 0.0.78-cpu is a
+//     flavour beside it, not the release after 0.0.77.
 //
 // Earlier tiers win: a candidate closer to the running line is the better answer.
 // Every candidate shares the prefix and calendar-ness (the refusals that guard
@@ -305,10 +307,19 @@ func NewerElsewhere(current string, tags []string) string {
 			// Newest's own shape; it already ordered these.
 		case skeleton(v.Suffix) == skeleton(cur.Suffix):
 			tier = 1
-		case !prerelease.MatchString(v.Suffix) && v.Parts[0] == cur.Parts[0]:
+		case !prerelease.MatchString(v.Suffix) && v.Parts[0] == cur.Parts[0] && cur.Suffix != "":
 			// A different variant AND a different major is two changes at once,
 			// and in practice a malformed tag: linuxserver/mariadb carries
 			// 110.4.21mariabionic-ls30 beside 11.8.9.
+			//
+			// And the running tag must itself be a variant. Tier 2 is for one
+			// variant REPLACING another (bookworm -> trixie). A bare tag is the
+			// project's default build, and a suffix after it names a flavour
+			// published BESIDE that build -- -cpu, -amd, -alpine, -slim -- never its
+			// successor. michaelf34/infinity ships 0.0.77 (CUDA) and 0.0.77-cpu
+			// side by side; 0.0.78 came out as -cpu only, this offered it as the
+			// next version of 0.0.77, and a rollout put a CPU/ONNX image where a
+			// CUDA reranker had been. It crash-looped on every start.
 			tier = 2
 		}
 		// tier indexes best; the switch only assigns 0-2, and the bound is checked
