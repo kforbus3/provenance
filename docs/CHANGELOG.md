@@ -5,7 +5,7 @@ schema migrations apply automatically on startup; deploy notes call out anything
 
 ---
 
-## Unreleased
+## v2.2.12 — 2026-11-05
 
 ### Updates no longer offer a different flavour of an image as its next release
 
